@@ -15,7 +15,8 @@
 #   INPUT_BAKE_FILE, INPUT_TARGETS, INPUT_SET_LINES, INPUT_UBUNTU_VERSION,
 #   INPUT_PYTHON_VERSION, INPUT_RETRIES, INPUT_RETRY_DELAY_SECONDS,
 #   INPUT_USE_DEFAULT_BUILDER, INPUT_VALIDATE_IMAGES, INPUT_ENABLE_ATTESTATIONS,
-#   INPUT_ENRICH_SBOM, INPUT_HARBOR_PREFIX
+#   INPUT_ENRICH_SBOM, INPUT_HARBOR_PREFIX, INPUT_SBOM_GENERATOR_IMAGE,
+#   INPUT_ORAS_IMAGE
 #
 # Requires: docker (buildx), jq, numfmt; oras + syft are installed on demand for
 # SBOM enrichment. Registry auth is taken from the ambient docker credential
@@ -47,19 +48,30 @@ ORAS_SHA256="${ORAS_SHA256:-9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917c
 # auth-walling anonymous pulls from CI runner IPs, both attempts failed the
 # same way (UNAUTHORIZED / dial-tcp timeout).
 #
+# Preferred fix: callers pass sbom-generator-image (INPUT_SBOM_GENERATOR_IMAGE)
+# pointing at our own self-hosted copy on GHCR (dockerfile/Dockerfile.tools'
+# syft-scanner target, an unmodified re-publish of the upstream Apache-2.0
+# image - see docker-bake.hcl). That gets the SAME Harbor pull-through +
+# GHCR-direct-fallback treatment as every other tool image below, with no
+# Docker Hub dependency at all.
+#
+# Callers that haven't been migrated yet fall back to the previous fix:
 # Harbor does NOT proxy docker.io (only ghcr.io - see check-harbor.yaml /
-# INPUT_HARBOR_PREFIX), so this can't be routed through the Harbor prefix like
-# the ghcr.io-hosted tool images. Instead this follows the same precedent
-# already used elsewhere in this repo for Docker Hub images (see
+# INPUT_HARBOR_PREFIX), so the un-migrated primary attempt instead uses the
+# same precedent used elsewhere in this repo for Docker Hub images (see
 # dockerfile/Dockerfile's `mirror.gcr.io/ubuntu` base and
 # llk-build-docker-images.sh's LLK_UBUNTU_BASE_IMAGE): Google's public,
-# anonymous, unauthenticated mirror of Docker Hub. The direct-docker.io
-# fallback path is kept as a second line of defense and now runs
-# authenticated (see the "Login to Docker Hub" step in
+# anonymous, unauthenticated mirror of Docker Hub. Its direct-docker.io
+# fallback path runs authenticated (see the "Login to Docker Hub" step in
 # publish-release-image.yaml) instead of anonymous.
 SBOM_GENERATOR_PATH="docker/buildkit-syft-scanner:stable-1"
-SBOM_GENERATOR_PRIMARY="mirror.gcr.io/${SBOM_GENERATOR_PATH}"
-SBOM_GENERATOR_FALLBACK="docker.io/${SBOM_GENERATOR_PATH}"
+if [ -n "${INPUT_SBOM_GENERATOR_IMAGE}" ]; then
+  SBOM_GENERATOR_PRIMARY="${INPUT_HARBOR_PREFIX}${INPUT_SBOM_GENERATOR_IMAGE}"
+  SBOM_GENERATOR_FALLBACK="${INPUT_SBOM_GENERATOR_IMAGE}"
+else
+  SBOM_GENERATOR_PRIMARY="mirror.gcr.io/${SBOM_GENERATOR_PATH}"
+  SBOM_GENERATOR_FALLBACK="docker.io/${SBOM_GENERATOR_PATH}"
+fi
 
 # Populated by parse_inputs; referenced by later functions.
 CLEAN_TARGETS=()
@@ -158,6 +170,27 @@ install_pinned_binary() {
   rm -rf "$tmp_dir"
 }
 
+# --- pull a self-hosted (Harbor-prefixable) tool image and extract one file
+# from it via `docker create`+`docker cp` - works even for FROM-scratch
+# images with no CMD/ENTRYPOINT (e.g. dockerfile/Dockerfile.tools' oras
+# target), since the container this creates is never started, only used as
+# a filesystem to copy from. Falls back to a direct (unprefixed) pull if the
+# Harbor pull-through fails, same as the bake retries below. ---
+# Usage: extract_from_hosted_image <canonical-image> <path-in-image> <dest-path>
+extract_from_hosted_image() {
+  local image="$1" path_in_image="$2" dest="$3"
+  local pull_ref="${INPUT_HARBOR_PREFIX}${image}"
+  local cid
+  if ! docker pull "$pull_ref" >&2; then
+    echo "  Harbor pull-through failed for ${pull_ref}, falling back to direct ${image}" >&2
+    pull_ref="$image"
+    docker pull "$pull_ref" >&2
+  fi
+  cid=$(docker create "$pull_ref" noop)
+  docker cp "${cid}:${path_in_image}" "$dest"
+  docker rm "$cid" > /dev/null
+}
+
 # --- install syft + oras into a writable temp dir when enrichment is on ---
 install_bake_tools() {
   if [ "${INPUT_ENRICH_SBOM}" = "true" ] && [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
@@ -177,10 +210,16 @@ install_bake_tools() {
         "$SYFT_SHA256" "syft" "$TOOL_BIN_DIR"
     fi
     if ! command -v oras >/dev/null 2>&1; then
-      echo "Installing oras v${ORAS_VERSION} (sha256-verified)..."
-      install_pinned_binary \
-        "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
-        "$ORAS_SHA256" "oras" "$TOOL_BIN_DIR"
+      if [ -n "${INPUT_ORAS_IMAGE}" ]; then
+        echo "Installing oras from self-hosted tool image (${INPUT_ORAS_IMAGE})..."
+        extract_from_hosted_image "${INPUT_ORAS_IMAGE}" "/install/bin/oras" "${TOOL_BIN_DIR}/oras"
+        chmod +x "${TOOL_BIN_DIR}/oras"
+      else
+        echo "Installing oras v${ORAS_VERSION} (sha256-verified)..."
+        install_pinned_binary \
+          "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
+          "$ORAS_SHA256" "oras" "$TOOL_BIN_DIR"
+      fi
     fi
   fi
 }

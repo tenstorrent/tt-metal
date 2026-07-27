@@ -162,8 +162,25 @@ target "openmpi" {
   tags       = ["tool-openmpi:local"]
 }
 
+target "oras" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.tools"
+  target     = "oras"
+  tags       = ["tool-oras:local"]
+}
+
+# Single-stage passthrough re-hosting docker/buildkit-syft-scanner (see the
+# Dockerfile.tools comment on this target for why it isn't extracted/copied
+# like the other tools).
+target "syft-scanner" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.tools"
+  target     = "syft-scanner"
+  tags       = ["tool-syft-scanner:local"]
+}
+
 group "tools" {
-  targets = ["ccache", "clangbuildanalyzer", "cmake", "doxygen", "gdb", "mold", "openmpi", "sfpi", "yq", "zstd"]
+  targets = ["ccache", "clangbuildanalyzer", "cmake", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
 }
 
 # =============================================================================

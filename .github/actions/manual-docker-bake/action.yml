@@ -67,6 +67,27 @@ inputs:
       stripped from all docker-image:// context URIs (GHCR direct fallback).
     required: false
     default: ""
+  sbom-generator-image:
+    description: >-
+      Canonical (unprefixed) ghcr.io tag for a self-hosted copy of the SBOM
+      attest generator (dockerfile/Dockerfile.tools' syft-scanner target - an
+      unmodified re-publish of docker/buildkit-syft-scanner). When set, the
+      generator is pulled through harbor-prefix like every other tool image,
+      falling back to a direct (already GHCR-authenticated) pull instead of
+      docker.io. When empty (the default), falls back to a public
+      mirror.gcr.io pull with an authenticated docker.io retry - see
+      manual-docker-bake.sh for the full rationale.
+    required: false
+    default: ""
+  oras-image:
+    description: >-
+      Canonical (unprefixed) ghcr.io tag for a self-hosted copy of oras
+      (dockerfile/Dockerfile.tools' oras target), used to extract the oras
+      binary for SBOM enrichment instead of downloading a release tarball
+      from github.com on every run. When empty (the default), falls back to
+      the pinned GitHub-release download.
+    required: false
+    default: ""
 
   enrich-sbom:
     description: >-
@@ -104,6 +125,8 @@ runs:
         INPUT_ENABLE_ATTESTATIONS: ${{ inputs.enable-attestations }}
         INPUT_ENRICH_SBOM: ${{ inputs.enrich-sbom }}
         INPUT_HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+        INPUT_SBOM_GENERATOR_IMAGE: ${{ inputs.sbom-generator-image }}
+        INPUT_ORAS_IMAGE: ${{ inputs.oras-image }}
       run: |
         set -euo pipefail
         # All logic lives in .github/scripts/manual-docker-bake.sh (kept small
