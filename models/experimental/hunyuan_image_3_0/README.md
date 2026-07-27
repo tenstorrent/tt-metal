@@ -116,7 +116,7 @@ full sequence length**, targeting the default **1024×1024** image size (product
 | Patch-embed conv configs | `ttnn/image_gen/patch_embed_conv_configs.py` | Conv program configs for patch embed |
 | Timestep embedder | `ttnn/image_gen/timestep_embedder.py` | Diffusion timestep → embedding |
 | Sequence scatter | `ttnn/image_gen/sequence_scatter.py` | Scatter image latent into the token sequence |
-| Input / cond instantiation | `ttnn/image_gen/input_instantiate.py`, `ttnn/image_gen/cond_instantiate.py` | Build gen-image / cond input tensors |
+| Cond instantiation | `ttnn/image_gen/cond_instantiate.py` | Build gen-image / cond input tensors |
 | Flow-matching scheduler | `ttnn/scheduler.py` | Euler flow-matching denoise scheduler |
 | Init-noise sampling | `ttnn/noise.py` | On-device `ttnn.randn` initial latent noise |
 | Denoise pipeline | `ttnn/pipeline.py` | Single denoise step + multi-step `denoise_loop` |
@@ -126,8 +126,9 @@ full sequence length**, targeting the default **1024×1024** image size (product
 | Module | File path | Description |
 |--------|-----------|-------------|
 | Conv3D primitive | `ttnn/vae/conv3d.py`, `ttnn/vae/conv3d_blockings.py` | 3D convolution + blocking/tiling configs |
-| Encoder | `ttnn/vae/encoder.py`, `ttnn/vae/encoder_weights.py` | VAE encoder blocks + weight loading |
-| Decoder | `ttnn/vae/decoder.py`, `ttnn/vae/decoder_weights.py` | VAE decoder blocks + weight loading |
+| Encoder | `ttnn/vae/encoder.py` | VAE encoder blocks |
+| Decoder | `ttnn/vae/decoder.py` | VAE decoder blocks |
+| Encoder + decoder weights | `ttnn/vae/weights.py` | Shared VAE weight loading (ResNet/attn blocks, GroupNorm affine) |
 | ResNet conv / pointwise | `ttnn/vae/resnet_conv.py`, `ttnn/vae/pointwise.py` | ResNet conv and pointwise conv helpers |
 | Spatial-parallel decode | `ttnn/vae/spatial.py` | Full-res H/W-spatial-parallel decode across mesh |
 | Cond posterior | `ttnn/vae/cond_posterior.py` | I2I conditioning latent encode (posterior) |
@@ -139,7 +140,7 @@ full sequence length**, targeting the default **1024×1024** image size (product
 | SigLIP2 vision encoder | `ttnn/vision/siglip2.py` | SigLIP2 encoder + vision→4096 aligner |
 | Cond-vision injection | `ttnn/vision/inject.py` | Scatter vision embeddings into the sequence |
 | Image preprocess / bridge | `ttnn/vision/preprocess.py` | Device bridge + `<img>` span lookup |
-| I2I pipeline assembly | `ttnn/vision/i2i.py`, `ttnn/vision/i2i_bundle.py` | Assemble image→encode→inject→forward |
+| I2I pipeline assembly | `ttnn/vision/i2i_bundle.py` | Assemble image→encode→inject→forward |
 
 ### Generation, sampling & recaption
 
@@ -155,9 +156,8 @@ full sequence length**, targeting the default **1024×1024** image size (product
 | Module | File path | Description |
 |--------|-----------|-------------|
 | Stage trace | `ttnn/stage_trace.py`, `ttnn/trace_config.py` | CQ0 `execute_trace` for denoise / VAE + config |
-| Denoise dual-CQ | `ttnn/denoise_dual_cq.py` | 2CQ async latent D2H for denoise |
-| VAE dual-CQ | `ttnn/vae_dual_cq.py` | 2CQ async RGB D2H for VAE decode |
-| AR dual-CQ / trace | `ttnn/ar_dual_cq.py`, `ttnn/ar_trace.py` | 2CQ async logits D2H + AR decode trace |
+| Dual-CQ (AR / denoise / VAE) | `ttnn/dual_cq.py` | 2CQ async D2H: logits, latent, RGB output |
+| AR decode trace | `ttnn/ar_trace.py` | AR decode `execute_trace` |
 | Cond-encode trace | `ttnn/cond_encode_trace.py` | Trace for I2I cond VAE + ViT encode |
 | Mesh / parallel utilities | `ttnn/parallel_utils.py`, `ttnn/matmul_utils.py` | Mesh sharding + matmul program-config helpers |
 
@@ -498,8 +498,6 @@ both names are listed.
 | `HY_COND` | — | I2I cond image path(s), comma-separated (also `--cond`) |
 | `HY_IMAGE_SIZE` | base size | Output image size (also `--image-size`) |
 | `HY_OUT` | per-demo | Output PNG path (also `--out`) |
-| `HY_OUT_LATENT` | `real_latent_<size>.pt` | Output latent dump path |
-| `HY_LATENT` | — | Load a precomputed latent instead of denoising |
 | `HY_SAVE_LATENT` | — | Optional `.pt` path to dump the denoised latent |
 | `HY_MODEL` | `base` | Variant selector in `test_e2e` (`base` / `instruct` / …) |
 
@@ -615,7 +613,7 @@ both names are listed.
 | `HUNYUAN_MODEL_DIR` | Base checkpoint dir (else HF `tencent/HunyuanImage-3.0`) |
 | `HUNYUAN_INSTRUCT_MODEL_DIR` | Instruct checkpoint dir (else HF `…-Instruct`) |
 | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` | Distil checkpoint dir (else HF `…-Instruct-Distil`) |
-| `HUNYUAN_UPSTREAM` / `HUNYUAN_SRC` | Local clone of the `hunyuan_image_3` package (parity tests) |
+| `HUNYUAN_UPSTREAM` | Local clone of the `hunyuan_image_3` package (parity tests) |
 | `HUNYUAN_VOCAB` | Override tokenizer vocab path |
 | `HUNYUAN_EXACT_BLOCKINGS` / `HUNYUAN_DECODER_EXACT_BLOCKINGS` / `HUNYUAN_CHANNEL_BLOCKINGS` | Conv3D blocking overrides |
 

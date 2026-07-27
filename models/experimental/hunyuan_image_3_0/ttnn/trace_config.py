@@ -123,7 +123,7 @@ def recaption_trace_enabled(*, sp_factor: int = 1, use_kv_cache: bool = True) ->
 def recaption_2cq_enabled(device) -> bool:
     if not hy_trace_enabled():
         return False
-    from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import device_num_command_queues
+    from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import device_num_command_queues
 
     n = device_num_command_queues(device)
     if n < 2:
@@ -135,7 +135,7 @@ def recaption_2cq_enabled(device) -> bool:
 def denoise_2cq_enabled(device) -> bool:
     if not hy_trace_enabled():
         return False
-    from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import device_num_command_queues
+    from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import device_num_command_queues
 
     n = device_num_command_queues(device)
     if n < 2:
@@ -147,7 +147,7 @@ def denoise_2cq_enabled(device) -> bool:
 def vae_2cq_enabled(device) -> bool:
     if not hy_trace_enabled():
         return False
-    from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import device_num_command_queues
+    from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import device_num_command_queues
 
     n = device_num_command_queues(device)
     if n < 2:
@@ -170,7 +170,7 @@ def trace_region_size() -> int:
 
 def open_traced_mesh(mesh_shape, *, l1_small_size: int = 32768, num_cq: int | None = None):
     """Open a 2x2 mesh with optional trace region and 2 command queues."""
-    from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import (
+    from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import (
         _stash_mesh_command_queues,
         device_num_command_queues,
     )

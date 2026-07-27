@@ -43,7 +43,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.vae.encoder import (
     EncoderMidBlockTTNN,
     VAEEncoderTTNN,
 )
-from models.experimental.hunyuan_image_3_0.ttnn.vae.encoder_weights import load_down_block as load_tt_down_block
+from models.experimental.hunyuan_image_3_0.ttnn.vae.weights import load_down_block as load_tt_down_block
 
 PCC_THRESHOLD = 0.998
 

@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""VAE decoder weight loading from PyTorch reference checkpoints."""
+"""VAE encoder + decoder weight loading from PyTorch reference checkpoints.
+
+Encoder and decoder share the ResNet/attention block loaders and the GroupNorm3D
+affine stashing (``_load_gn``), so both live here in one module.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,12 @@ from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
     load_decoder_tail,
     load_decoder_up,
     load_mid,
+)
+from models.experimental.hunyuan_image_3_0.ref.vae.encoder import (
+    load_conv_in as load_encoder_conv_in,
+    load_encoder_down,
+    load_encoder_head,
+    load_mid as load_encoder_mid,
 )
 
 _REF_DTYPE = torch.float32
@@ -54,10 +64,9 @@ def _load_gn(module, state_dict) -> None:
     )
 
 
-def init_conv_in(module) -> None:
-    ref = load_conv_in(dtype=_REF_DTYPE)
-    _load_state(module.conv, ref.conv.state_dict())
-    del ref
+# ---------------------------------------------------------------------------------------
+# Shared blocks (used by both the encoder and the decoder)
+# ---------------------------------------------------------------------------------------
 
 
 def load_resnet_block(module, ref_block) -> None:
@@ -87,6 +96,17 @@ def load_attn_block(module, ref_block) -> None:
     _load_gn(module.norm, ref_block.norm.state_dict())
     module.qkv.load_torch_state_dict(_fuse_qkv_state(ref_block.q, ref_block.k, ref_block.v))
     _load_state(module.proj_out, ref_block.proj_out.state_dict())
+
+
+# ---------------------------------------------------------------------------------------
+# Decoder
+# ---------------------------------------------------------------------------------------
+
+
+def init_conv_in(module) -> None:
+    ref = load_conv_in(dtype=_REF_DTYPE)
+    _load_state(module.conv, ref.conv.state_dict())
+    del ref
 
 
 def init_mid_block(module) -> None:
@@ -127,4 +147,48 @@ def init_decoder_up(module) -> None:
     ref = load_decoder_up(dtype=_REF_DTYPE)
     for tt_block, pt_block in zip(module.up_blocks, ref.up):
         load_up_block(tt_block, pt_block)
+    del ref
+
+
+# ---------------------------------------------------------------------------------------
+# Encoder
+# ---------------------------------------------------------------------------------------
+
+
+def init_encoder_conv_in(module) -> None:
+    ref = load_encoder_conv_in(dtype=_REF_DTYPE)
+    _load_state(module.conv, ref.conv.state_dict())
+    del ref
+
+
+def load_downsample(module, ref_downsample) -> None:
+    _load_state(module.conv, ref_downsample.conv.state_dict())
+
+
+def load_down_block(module, ref_block) -> None:
+    for tt_block, pt_block in zip(module.blocks, ref_block.block):
+        load_resnet_block(tt_block, pt_block)
+    if module.downsample is not None:
+        load_downsample(module.downsample, ref_block.downsample)
+
+
+def init_encoder_down(module) -> None:
+    ref = load_encoder_down(dtype=_REF_DTYPE)
+    for tt_block, pt_block in zip(module.down_blocks, ref.down):
+        load_down_block(tt_block, pt_block)
+    del ref
+
+
+def init_encoder_mid(module) -> None:
+    ref = load_encoder_mid(dtype=_REF_DTYPE)
+    load_resnet_block(module.block_1, ref.block_1)
+    load_attn_block(module.attn_1, ref.attn_1)
+    load_resnet_block(module.block_2, ref.block_2)
+    del ref
+
+
+def init_encoder_head(module) -> None:
+    ref = load_encoder_head(dtype=_REF_DTYPE)
+    _load_gn(module.norm_out, ref.norm_out.state_dict())
+    _load_state(module.conv_out, ref.conv_out.state_dict())
     del ref

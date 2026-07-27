@@ -39,10 +39,15 @@ import ttnn
 from models.experimental.hunyuan_image_3_0.ref.model_config import VAE_SCALING_FACTOR
 
 from .attention.mask import build_attention_mask_tt
-from .denoise_dual_cq import DenoiseDualCQCoordinator, denoise_2cq_enabled, latent_tt_to_torch
+from .dual_cq import (
+    DenoiseDualCQCoordinator,
+    VaeDualCQCoordinator,
+    denoise_2cq_enabled,
+    latent_tt_to_torch,
+    vae_2cq_enabled,
+)
 from .matmul_utils import spill_resident_emb_to_dram
 from .scheduler import classifier_free_guidance_tt
-from .vae_dual_cq import VaeDualCQCoordinator, vae_2cq_enabled
 
 
 def _ttnn_embed_dtype(ref: ttnn.Tensor) -> ttnn.DataType:
