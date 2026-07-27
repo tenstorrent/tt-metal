@@ -523,3 +523,198 @@ def test_sharded_nlp_create_qkv_heads_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+"""
+#48928 override_runtime_arguments regression: on a program-cache HIT the op must re-derive and
+re-apply the per-dispatch tensor buffer addresses (input QKV + q/k/v outputs). For the Sharded
+factory these include address-derived Q/KV base+start slots that a plain Buffer* binding cannot
+express. If they are frozen at the first (cache-miss) dispatch, a same-shape re-run with a
+differently-addressed input tensor would read/write stale addresses and produce wrong outputs.
+"""
+
+
+def _build_interleaved_qkv_inputs(
+    batch, seq_len, head_dim, num_q_heads, num_kv_heads, read_from_input_tensor_kv, dtype, mem_config, device, seed
+):
+    torch.manual_seed(seed)
+    if read_from_input_tensor_kv:
+        in0_shape = [batch, 1, seq_len, num_q_heads * head_dim]
+        in1_shape = [batch, 1, seq_len, 2 * num_kv_heads * head_dim]
+        A = torch.randn(in0_shape)
+        B = torch.randn(in1_shape)
+        in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        in1_t = ttnn.Tensor(B, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        ref_q = A
+        (ref_k, ref_v) = torch.split(B, [num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1)
+    else:
+        in0_shape = [batch, 1, seq_len, (num_q_heads + 2 * num_kv_heads) * head_dim]
+        A = torch.randn(in0_shape)
+        in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        in1_t = None
+        (ref_q, ref_k, ref_v) = torch.split(
+            A, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
+        )
+
+    ref_q = torch.reshape(ref_q, [batch, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
+    ref_k = torch.reshape(ref_k, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    ref_v = torch.reshape(ref_v, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    return in0_t, in1_t, (ref_q, ref_k, ref_v)
+
+
+def _build_sharded_qkv_inputs(
+    batch, seq_len, head_dim, num_q_heads, num_kv_heads, read_from_input_tensor_kv, dtype, device, seed
+):
+    torch.manual_seed(seed)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    num_cores = num_kv_heads
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+    q_shape = [seq_len, 1, batch, num_cores, num_q_heads // num_cores * head_dim]
+    kv_shape = [seq_len, 1, batch, num_cores, num_kv_heads // num_cores * head_dim]
+    Q = torch.randn(q_shape)
+    K = torch.randn(kv_shape)
+    V = torch.randn(kv_shape)
+
+    if read_from_input_tensor_kv:
+        A = torch.concat([Q.flatten(-2, -1)], -1)
+        B = torch.concat([K.flatten(-2, -1), V.flatten(-2, -1)], -1)
+        A_interleaved = torch.concat([Q], -1).flatten(-2, -1)
+        B_interleaved = torch.concat([K, V], -1).flatten(-2, -1)
+        in0_shard_spec = ttnn.ShardSpec(
+            shard_grid, [seq_len * batch, A_interleaved.shape[-1] // num_cores], ttnn.ShardOrientation.ROW_MAJOR
+        )
+        in1_shard_spec = ttnn.ShardSpec(
+            shard_grid, [seq_len * batch, B_interleaved.shape[-1] // num_cores], ttnn.ShardOrientation.ROW_MAJOR
+        )
+        in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+        in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in1_shard_spec)
+        in0_t = ttnn.Tensor(A_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
+        in1_t = ttnn.Tensor(B_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in1_mem_config)
+        ref_q = A
+        (ref_k, ref_v) = torch.split(B, [num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1)
+    else:
+        A = torch.concat([Q.flatten(-2, -1), K.flatten(-2, -1), V.flatten(-2, -1)], -1)
+        A_interleaved = torch.concat([Q, K, V], -1).flatten(-2, -1)
+        in0_shard_spec = ttnn.ShardSpec(
+            shard_grid, [seq_len * batch, A_interleaved.shape[-1] // num_cores], ttnn.ShardOrientation.ROW_MAJOR
+        )
+        in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+        in0_t = ttnn.Tensor(A_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
+        in1_t = None
+        in1_shard_spec = in0_shard_spec
+        (ref_q, ref_k, ref_v) = torch.split(
+            A, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
+        )
+
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+
+    ref_q = torch.reshape(ref_q, [seq_len, batch, num_q_heads, head_dim]).transpose(-3, -2)
+    ref_k = torch.reshape(ref_k, [seq_len, batch, num_kv_heads, head_dim]).transpose(-3, -2)
+    ref_v = torch.reshape(ref_v, [seq_len, batch, num_kv_heads, head_dim]).transpose(-3, -2)
+    return in0_t, in1_t, out_mem_config, (ref_q, ref_k, ref_v)
+
+
+def _check_qkv_against_refs(q, k, v, refs, pcc):
+    ref_q, ref_k, ref_v = refs
+    passing_q, out_q = comp_pcc(tt2torch_tensor(q), ref_q, pcc)
+    passing_k, out_k = comp_pcc(tt2torch_tensor(k), ref_k, pcc)
+    passing_v, out_v = comp_pcc(tt2torch_tensor(v), ref_v, pcc)
+    logger.debug(f"Q pcc={out_q} K pcc={out_k} V pcc={out_v}")
+    assert passing_q, f"Q pcc failed: {out_q}"
+    assert passing_k, f"K pcc failed: {out_k}"
+    assert passing_v, f"V pcc failed: {out_v}"
+
+
+@pytest.mark.parametrize(
+    "read_from_input_tensor_kv",
+    (False, True),
+    ids=["fused_qkv", "separate_kv"],
+)
+def test_nlp_create_qkv_heads_cache_hit_interleaved(read_from_input_tensor_kv, device):
+    """Interleaved path: a same-shape cache-HIT dispatch on a freshly-allocated (differently-addressed)
+    input tensor must re-apply the input/output buffer addresses (via override_runtime_arguments) and
+    stay numerically correct without growing the program cache."""
+    dtype = ttnn.bfloat16
+    pcc = 1.0
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
+    batch, seq_len, head_dim, num_q_heads, num_kv_heads = 1, 128, 64, 71, 1
+
+    def run(seed):
+        in0_t, in1_t, refs = _build_interleaved_qkv_inputs(
+            batch,
+            seq_len,
+            head_dim,
+            num_q_heads,
+            num_kv_heads,
+            read_from_input_tensor_kv,
+            dtype,
+            mem_config,
+            device,
+            seed,
+        )
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            in0_t,
+            in1_t,
+            num_heads=num_q_heads,
+            num_kv_heads=num_kv_heads,
+            transpose_k_heads=False,
+            memory_config=mem_config,
+        )
+        _check_qkv_against_refs(q, k, v, refs, pcc)
+        return in0_t, in1_t
+
+    # Prime the cache; HOLD the inputs so the cache-hit run's fresh allocations get different addresses.
+    keep0, keep1 = run(seed=1234)
+    entries_after_prime = device.num_program_cache_entries()
+    assert entries_after_prime > 0, "expected a cached program to hit"
+
+    # Cache HIT: same shapes, fresh (differently-addressed) input tensor. Correct outputs prove the
+    # buffer addresses were re-applied on the hit, not frozen at the first (miss) dispatch.
+    hit0, hit1 = run(seed=5678)
+    assert hit0.buffer_address() != keep0.buffer_address(), "second input must land at a different address"
+    assert (
+        device.num_program_cache_entries() == entries_after_prime
+    ), "identical-shape cache-hit dispatch unexpectedly grew the program cache"
+
+
+@pytest.mark.parametrize(
+    "read_from_input_tensor_kv",
+    (False, True),
+    ids=["fused_qkv", "separate_kv"],
+)
+def test_sharded_nlp_create_qkv_heads_cache_hit(read_from_input_tensor_kv, device):
+    """Sharded path (the address-sensitive factory): a same-shape cache-HIT dispatch on a freshly-
+    allocated (differently-addressed) input tensor must re-derive and re-apply the address-derived
+    Q/KV base+start runtime-arg slots (via override_runtime_arguments) and stay numerically correct
+    without growing the program cache."""
+    dtype = ttnn.bfloat16
+    pcc = 1.0
+    batch, seq_len, head_dim, num_q_heads, num_kv_heads = 32, 1, 64, 16, 8
+
+    def run(seed):
+        in0_t, in1_t, out_mem_config, refs = _build_sharded_qkv_inputs(
+            batch, seq_len, head_dim, num_q_heads, num_kv_heads, read_from_input_tensor_kv, dtype, device, seed
+        )
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            in0_t,
+            in1_t,
+            num_heads=num_q_heads,
+            num_kv_heads=num_kv_heads,
+            transpose_k_heads=False,
+            memory_config=out_mem_config,
+        )
+        _check_qkv_against_refs(q, k, v, refs, pcc)
+        return in0_t, in1_t
+
+    # Prime the cache; HOLD the inputs so the cache-hit run's fresh allocations get different addresses.
+    keep0, keep1 = run(seed=1234)
+    entries_after_prime = device.num_program_cache_entries()
+    assert entries_after_prime > 0, "expected a cached program to hit"
+
+    # Cache HIT: same shapes, fresh (differently-addressed) input tensor. Correct outputs prove the
+    # Sharded factory's address-derived slots were re-applied on the hit, not frozen at first miss.
+    hit0, hit1 = run(seed=5678)
+    assert hit0.buffer_address() != keep0.buffer_address(), "second input must land at a different address"
+    assert (
+        device.num_program_cache_entries() == entries_after_prime
+    ), "identical-shape cache-hit dispatch unexpectedly grew the program cache"
