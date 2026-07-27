@@ -92,13 +92,15 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    float pad_value) {
+    float pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dims = dims,
             .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-            .pad_value = pad_value},
+            .pad_value = pad_value,
+            .sub_core_grids = sub_core_grids},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)});
 }

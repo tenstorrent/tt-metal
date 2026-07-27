@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_hc_rm_program_factory.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_device_operation_types.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -121,7 +122,7 @@ void set_runtime_args_hc_rm(
 }  // namespace
 
 TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::create(
-    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
@@ -139,7 +140,8 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
 
     IDevice* device = input_tensor.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = ttnn::prim::transpose_effective_grid(
+        device->compute_with_storage_grid_size(), operation_attributes.sub_core_grids);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;

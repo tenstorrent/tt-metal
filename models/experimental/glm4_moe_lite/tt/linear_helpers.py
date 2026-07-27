@@ -22,6 +22,32 @@ from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfi
 # be clamped without importing the prefetcher module on the hot path.
 WORKER_GRID_X = 6
 
+# Memoised worker CoreRangeSets, keyed by device grid. Built once per grid shape rather
+# than per call: the decode path asks for this at ~30 sites x 47 layers per token.
+_WORKER_SCG_CACHE: dict[tuple[int, int], Any] = {}
+
+
+def worker_sub_core_grids(device: Any, cfg: Glm4RuntimeConfig) -> Any | None:
+    """CoreRangeSet of the prefetcher's worker region, or None when prefetch is off.
+
+    Pass as `sub_core_grids=` to permute/transpose. Those ops size their grid from the
+    full device grid, which under the prefetcher's SubDevice is rejected with
+    "Kernel group cores do not match sub device cores"; sub_core_grids was added to ttnn
+    for this. Returning None keeps the default full-grid behaviour when prefetch is off,
+    so call sites need no conditional.
+    """
+    if not cfg.prefetch:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    key = (int(grid.x), int(grid.y))
+    scg = _WORKER_SCG_CACHE.get(key)
+    if scg is None:
+        scg = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(min(WORKER_GRID_X, key[0]) - 1, key[1] - 1))]
+        )
+        _WORKER_SCG_CACHE[key] = scg
+    return scg
+
 
 def compute_1d_prog_cfg(
     device: Any,

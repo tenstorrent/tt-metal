@@ -27,6 +27,10 @@ void bind_permute(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             pad_value (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict the op to these Tensix cores.
+                Required under an active SubDevice, where the default full-grid kernel group is
+                rejected with "Kernel group cores do not match sub device cores". Must be a single
+                rectangle anchored at (0, 0). Defaults to `None` (full compute grid).
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -40,12 +44,14 @@ void bind_permute(nb::module_& mod) {
                 const ttnn::Tensor&,
                 const ttnn::SmallVector<int64_t>&,
                 const std::optional<ttnn::MemoryConfig>&,
-                float>(&ttnn::permute),
+                float,
+                const std::optional<ttnn::CoreRangeSet>&>(&ttnn::permute),
             nb::arg("input_tensor").noconvert(),
             nb::arg("dims"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = 0.0f),
+            nb::arg("pad_value") = 0.0f,
+            nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<const ttnn::Tensor&, const ttnn::SmallVector<int64_t>&, float>(&ttnn::permute),
             nb::arg("input_tensor").noconvert(),

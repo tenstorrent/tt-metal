@@ -538,6 +538,14 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     if use_decode_rope and rope_dim % ttnn.TILE_SIZE != 0:
         raise ValueError(f"decode RoPE requires rope_dim divisible by {ttnn.TILE_SIZE}, got rope_dim={rope_dim}")
 
+    # ---- GlobalCB prefetch: worker-core restrictions (None when prefetch is off) ----
+    # Defined before the RoPE closure below, which captures _worker_scg. permute and
+    # transpose size their grid from the full device grid unless given sub_core_grids,
+    # which fails under the prefetcher's worker SubDevice; the sharded norm needs a
+    # rectangle that avoids the sender columns.
+    _norm_grid = prefetch.norm_core_grid if prefetch is not None else None
+    _worker_scg = prefetch.worker_scg if prefetch is not None else None
+
     # Build the decode-mode RoPE closure (captures sharded cos/sin/trans tensors)
     owns_decode_rope_inputs = False
     rope_decode_fn = None
@@ -570,7 +578,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             assert rope_sharded_cfg is not None
             if int(t.shape[-1]) != rope_dim:
                 raise ValueError(f"rope tensor dim mismatch: expected {rope_dim}, got {int(t.shape[-1])}")
-            t = ttnn.permute(t, (0, 2, 1, 3))
+            t = ttnn.permute(t, (0, 2, 1, 3), sub_core_grids=_worker_scg)
             heads = int(heads)
             pad_h = ttnn.TILE_SIZE - heads
             if isinstance(cos_decode, (list, tuple)):
@@ -611,12 +619,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 t = ttnn.to_memory_config(t, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
                 if pad_h:
                     t = ttnn.slice(t, [0, 0, 0, 0], [1, batch, heads, rope_dim])
-            t = ttnn.permute(t, (0, 2, 1, 3))
+            t = ttnn.permute(t, (0, 2, 1, 3), sub_core_grids=_worker_scg)
             return t
-
-    # Under the GlobalCB prefetcher every decode op must fit inside worker columns 0-5,
-    # so the sharded norm needs a rectangle that avoids the sender columns.
-    _norm_grid = prefetch.norm_core_grid if prefetch is not None else None
 
     # ---- Input LayerNorm ----
     if use_signpost:
@@ -1301,6 +1305,9 @@ def run_decoder_layer_prefill_update_cache_tt(
                 moe_w=w.moe,
                 rt=moe_runtime,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # Prefill runs before the prefetcher's SubDevice manager is loaded and
+                # needs the full grid, so no core restriction here.
+                sub_core_grids=None,
             )
         _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
 

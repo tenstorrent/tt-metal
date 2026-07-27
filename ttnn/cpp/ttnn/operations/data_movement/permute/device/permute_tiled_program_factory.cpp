@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/hal.hpp>
@@ -112,7 +113,8 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     uint32_t rank = operation_attributes.dims.size();
     bool swap_hw = operation_attributes.dims[rank - 2] == rank - 1 && operation_attributes.dims[rank - 1] == rank - 2;
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = ttnn::prim::transpose_effective_grid(
+        input_tensor.device()->compute_with_storage_grid_size(), operation_attributes.sub_core_grids);
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
@@ -310,7 +312,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     uint32_t padded_num_tensor_tiles =
         num_output_tiles / (padded_output_shape[rank - 2] / tile_shape[0]);  // only last row of Xt should have padding
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = ttnn::prim::transpose_effective_grid(
+        input_tensor.device()->compute_with_storage_grid_size(), operation_attributes.sub_core_grids);
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
     auto
@@ -681,7 +684,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     uint32_t num_input_pages_to_read = 2;
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = ttnn::prim::transpose_effective_grid(
+        input_tensor.device()->compute_with_storage_grid_size(), operation_attributes.sub_core_grids);
     // CoreCoord compute_with_storage_grid_size = {1u, 1u};
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, xw_blocks);

@@ -1617,6 +1617,10 @@ def moe_sparse_experts_forward_tt(
     collective_epilogue_a: ttnn.Tensor | None = None,
     collective_epilogue_b: ttnn.Tensor | None = None,
     use_buffered_all_reduce: bool = False,
+    # Confines permute to the GlobalCB prefetcher's worker cores; None when prefetch is
+    # off. permute sizes its grid from the full device grid otherwise, which the worker
+    # SubDevice rejects. Threaded in because this function has no Glm4RuntimeConfig.
+    sub_core_grids: Any | None = None,
 ) -> ttnn.Tensor:
     """Run routed experts and return routed output [1,1,T,H] TILE.
 
@@ -2084,6 +2088,7 @@ def moe_sparse_experts_forward_tt(
         local_weights_blocked = ttnn.permute(
             local_weights_blocked,
             (0, 2, 1, 3),
+            sub_core_grids=sub_core_grids,
         )
         ttnn.deallocate(local_weights_rm, force=False)
         down_post_scale = ttnn.to_layout(local_weights_blocked, ttnn.TILE_LAYOUT)
@@ -2121,10 +2126,10 @@ def moe_sparse_experts_forward_tt(
     if num_blocks == 1:
         expert_output = ttnn.reshape(expert_output_sparse, _target_eo_shape)
     elif skip_defensive_clones:
-        expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))
+        expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3), sub_core_grids=sub_core_grids)
         expert_output = ttnn.reshape(expert_output, _target_eo_shape)
     else:
-        expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))
+        expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3), sub_core_grids=sub_core_grids)
         expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
         ttnn.deallocate(expert_output_view, force=False)
         ttnn.deallocate(expert_output_sparse, force=False)
@@ -2161,7 +2166,7 @@ def moe_sparse_experts_forward_tt(
 
         topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(topk_expert_weights, force=False)
-        topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0))  # [K,1,tokens,1]
+        topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0), sub_core_grids=sub_core_grids)  # [K,1,tokens,1]
         topk_weights = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_weights_rm, force=False)
 
@@ -2196,7 +2201,7 @@ def moe_sparse_experts_forward_tt(
         if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
             local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(local_weights, force=False)
-        local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E,1,T,1]
+        local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0), sub_core_grids=sub_core_grids)  # [E,1,T,1]
         local_weights_tiled = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(local_weights_rm, force=False)
 

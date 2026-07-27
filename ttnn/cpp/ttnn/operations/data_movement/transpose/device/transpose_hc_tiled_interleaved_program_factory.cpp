@@ -42,7 +42,12 @@ void set_runtime_args_hc_tiled_interleaved(
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    // Derive the work-split grid from total_cores rather than querying the device: both
+    // callers already pass the confined rectangle (see transpose_effective_grid), so this
+    // stays consistent with the cores the kernels were actually created on. Querying the
+    // device here would re-claim the full grid and desync the runtime args from the
+    // kernel group under an active SubDevice.
+    CoreCoord compute_with_storage_grid_size(total_cores.end_coord.x + 1, total_cores.end_coord.y + 1);
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
     auto
@@ -123,7 +128,8 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = transpose_effective_grid(
+        input_tensor.device()->compute_with_storage_grid_size(), operation_attributes.sub_core_grids);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -221,12 +227,13 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
 
 void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const TransposeParams& /*operation_attributes*/,
+    const TransposeParams& operation_attributes,
     const TransposeInputs& tensor_args,
     Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
-    auto compute_with_storage_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = transpose_effective_grid(
+        tensor_args.input.device()->compute_with_storage_grid_size(), operation_attributes.sub_core_grids);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_cn_program_factory.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_device_operation_types.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -15,7 +16,7 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
-    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
     auto input_shape = input_tensor.padded_shape();
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
@@ -39,7 +40,8 @@ TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
 
     uint32_t num_tensor_pages = input_tensor.physical_volume() / page_size;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = ttnn::prim::transpose_effective_grid(
+        device->compute_with_storage_grid_size(), operation_attributes.sub_core_grids);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;

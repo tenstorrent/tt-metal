@@ -20,12 +20,14 @@ ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config,
-    float pad_value = 0.0f) {
+    float pad_value = 0.0f,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     // Get the device
     uint32_t rank = a.logical_shape().rank();
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_config.value_or(a.memory_config()), std::nullopt, pad_value);
+        return ttnn::prim::permute(
+            input, dims, output_mem_config.value_or(a.memory_config()), std::nullopt, pad_value, sub_core_grids);
     };
 
     if (rank > 4) {
@@ -48,16 +50,16 @@ ttnn::Tensor permute_impl(
     auto output = formatted_input_tensor;
     auto transpose_wh = [&](const ttnn::Tensor& input,
                             const std::optional<MemoryConfig>& mem_config = std::nullopt) -> ttnn::Tensor {
-        return ttnn::transpose(input, -2, -1, mem_config, 0.0f);
+        return ttnn::transpose(input, -2, -1, mem_config, 0.0f, sub_core_grids);
     };
 
     auto transpose_hc = [&](const ttnn::Tensor& input,
                             const std::optional<MemoryConfig>& mem_config = std::nullopt) -> ttnn::Tensor {
-        return ttnn::transpose(input, 1, -2, mem_config, pad_value);
+        return ttnn::transpose(input, 1, -2, mem_config, pad_value, sub_core_grids);
     };
 
     auto transpose_cn = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::transpose(input, 0, 1, output_mem_config, 0.0f);
+        return ttnn::transpose(input, 0, 1, output_mem_config, 0.0f, sub_core_grids);
     };
 
     // Keep limited sharding support with recursive calls
@@ -99,8 +101,9 @@ ttnn::Tensor permute_launch(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config,
-    float pad_value = 0.0f) {
-    return permute_impl(a, dims, output_mem_config, pad_value);
+    float pad_value = 0.0f,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return permute_impl(a, dims, output_mem_config, pad_value, sub_core_grids);
 }
 
 bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& dims) {
@@ -161,7 +164,8 @@ ttnn::Tensor permute(
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
-    float pad_value) {
+    float pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -201,7 +205,8 @@ ttnn::Tensor permute(
             "Shard page size must be aligned to {}B for L1 Tensor",
             l1_alignment);
     }
-    auto output_tensor = operations::data_movement::detail::permute_launch(itensor, iorder, memory_config, pad_value);
+    auto output_tensor =
+        operations::data_movement::detail::permute_launch(itensor, iorder, memory_config, pad_value, sub_core_grids);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {
@@ -212,7 +217,7 @@ ttnn::Tensor permute(
 }
 
 ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims, float pad_value) {
-    return permute(input_tensor, dims, std::nullopt, pad_value);
+    return permute(input_tensor, dims, std::nullopt, pad_value, std::nullopt);
 }
 
 }  // namespace ttnn

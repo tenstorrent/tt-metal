@@ -21,6 +21,8 @@ struct PermuteDeviceOperation {
         const SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
         const float pad_value = 0.0f;
+        // Confine the op to a subset of Tensix cores; see transpose_effective_grid.
+        const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
     };
     struct tensor_args_t {
         const Tensor& input_tensor;
@@ -180,5 +182,6 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    float pad_value = 0.0f);
+    float pad_value = 0.0f,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim

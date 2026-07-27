@@ -20,7 +20,12 @@ import torch
 
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.experimental.glm4_moe_lite.tt.linear_helpers import attn_linear, mlp_linear, tp_row_parallel_linear
+from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    attn_linear,
+    mlp_linear,
+    tp_row_parallel_linear,
+    worker_sub_core_grids,
+)
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
 
@@ -270,7 +275,7 @@ def q_projection(
     ttnn.deallocate(q_a, force=False)
 
     q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
-    q = ttnn.permute(q, (0, 2, 1, 3))  # [1,H,B,qk_head_dim]
+    q = ttnn.permute(q, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))  # [1,H,B,qk_head_dim]
 
     q_nope = _safe_slice(
         q,
@@ -352,9 +357,9 @@ def flash_mla_and_output(
 
     # Prepare Q for decode: [1,H,B,kvpe_dim] -> [1,B,H,kvpe_dim]
     if cfg.skip_defensive_clones:
-        q_for_decode = ttnn.permute(q_kvpe, (0, 2, 1, 3))
+        q_for_decode = ttnn.permute(q_kvpe, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
     else:
-        q_for_decode_view = ttnn.permute(q_kvpe, (0, 2, 1, 3))
+        q_for_decode_view = ttnn.permute(q_kvpe, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
         q_for_decode = ttnn.clone(q_for_decode_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(q_kvpe, force=False)
         q_kvpe = None
@@ -510,7 +515,9 @@ def flash_mla_and_output(
     )
     if not cfg.skip_defensive_clones:
         ttnn.deallocate(attn_latent_padded, force=False)
-    attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
+    attn_latent = ttnn.permute(
+        attn_latent, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg)
+    )  # [1,H,B,kv_lora_rank]
 
     # kv_b2 + output projection
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -529,9 +536,9 @@ def flash_mla_and_output(
             v = ttnn.transformer.concatenate_heads(v)
             v = ttnn.reshape(v, (1, 1, batch, flat_dim))
         else:
-            v = ttnn.permute(v, (0, 2, 1, 3))
+            v = ttnn.permute(v, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
             v = ttnn.reshape(v, (1, batch, 1, flat_dim))
-            v = ttnn.permute(v, (0, 2, 1, 3))
+            v = ttnn.permute(v, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
         # TP decode path: an ordinary matmul, so it needs the interleaved copy when
         # prefetch has made w_o DRAM-sharded. (Prefetch rejects TP up front, so this is
         # belt-and-braces rather than a live combination.)
@@ -561,9 +568,9 @@ def flash_mla_and_output(
             v = ttnn.transformer.concatenate_heads(v)
             v = ttnn.reshape(v, (1, 1, batch, int(num_heads * hparams.v_head_dim)))
         else:
-            v = ttnn.permute(v, (0, 2, 1, 3))
+            v = ttnn.permute(v, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
             v = ttnn.reshape(v, (1, batch, 1, int(num_heads * hparams.v_head_dim)))
-            v = ttnn.permute(v, (0, 2, 1, 3))
+            v = ttnn.permute(v, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
         attn_out = attn_linear(v, w.w_o, device=device, cfg=cfg, prefetch=prefetch)
         ttnn.deallocate(v, force=False)
         if prefetch is not None:

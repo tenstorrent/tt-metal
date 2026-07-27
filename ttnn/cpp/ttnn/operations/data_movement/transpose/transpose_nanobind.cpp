@@ -43,14 +43,20 @@ void bind_transpose(nb::module_& mod) {
 
         // Overload 1: with memory_config
         ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, int64_t, int64_t, const std::optional<ttnn::MemoryConfig>&, float>(
-                &ttnn::transpose),
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                int64_t,
+                int64_t,
+                const std::optional<ttnn::MemoryConfig>&,
+                float,
+                const std::optional<ttnn::CoreRangeSet>&>(&ttnn::transpose),
             nb::arg("input_tensor"),
             nb::arg("dim1"),
             nb::arg("dim2"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = 0.0f),
+            nb::arg("pad_value") = 0.0f,
+            nb::arg("sub_core_grids") = nb::none()),
 
         // Overload 2: without memory_config
         ttnn::overload_t(
