@@ -48,7 +48,8 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async_wrapper(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+    const std::optional<const ttnn::CoreGrid> core_grid,
+    const std::optional<uint32_t> cluster_axis) {
     return ttnn::experimental::matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,
@@ -71,7 +72,8 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async_wrapper(
         program_config,
         activation,
         compute_kernel_config,
-        core_grid);
+        core_grid,
+        cluster_axis);
 }
 
 }  // namespace
@@ -101,6 +103,7 @@ void bind_matmul_reduce_scatter_async(nb::module_& mod) {
             * :attr:`activation` (Optional[str])
             * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig])
             * :attr:`core_grid` (Optional[ttnn.CoreGrid])
+            * :attr:`cluster_axis` (int, optional): mesh axis for reduce-scatter; default uses the full device line.
         )doc",
         matmul_reduce_scatter_async_wrapper,
         nb::arg("input_tensor"),
@@ -125,7 +128,8 @@ void bind_matmul_reduce_scatter_async(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("activation") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("core_grid") = nb::none());
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("cluster_axis") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -37,10 +37,19 @@ def load_kda_weights(
     config: KDAConfig,
     state_dict: Mapping[str, torch.Tensor],
     tensor_cache_path: Path | None = None,
+    *,
+    tensor_parallel_axis: int = 1,
 ) -> KDAWeights:
     """Fuse compatible projections and place whole-head shards on device."""
     validate_reference_weights(state_dict, config)
-    tensor_parallel_size = device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1
+    if tensor_parallel_axis not in (0, 1):
+        raise ValueError(f"tensor_parallel_axis must be 0 or 1, got {tensor_parallel_axis}")
+    if isinstance(device, ttnn.MeshDevice):
+        mesh_shape = tuple(device.shape)
+        tensor_parallel_size = mesh_shape[tensor_parallel_axis]
+    else:
+        mesh_shape = (1, 1)
+        tensor_parallel_size = 1
     if config.num_heads % tensor_parallel_size != 0:
         raise ValueError(
             f"num_heads {config.num_heads} must be divisible by tensor parallel size {tensor_parallel_size}"
@@ -53,15 +62,13 @@ def load_kda_weights(
         dtype: ttnn.DataType = ttnn.bfloat16,
         shard_dim: int | None = None,
     ) -> ttnn.Tensor:
-        cache_name = f"{name}.tp{tensor_parallel_size}" if tensor_parallel_size > 1 else name
+        cache_name = f"{name}.tp{tensor_parallel_size}.axis{tensor_parallel_axis}" if tensor_parallel_size > 1 else name
         cache_file = tensor_cache_path / cache_name if tensor_cache_path is not None else None
         mesh_mapper = None
         if tensor_parallel_size > 1:
-            mesh_mapper = (
-                ttnn.ReplicateTensorToMesh(device)
-                if shard_dim is None
-                else ttnn.ShardTensorToMesh(device, dim=shard_dim)
-            )
+            mesh_dims = [None, None]
+            mesh_dims[tensor_parallel_axis] = shard_dim
+            mesh_mapper = ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape)
         return ttnn.as_tensor(
             tensor.contiguous(),
             dtype=dtype,
@@ -166,7 +173,15 @@ def load_kda_weights(
             convolution_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0) if tensor_parallel_size > 1 else None,
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(
+                    device,
+                    dims=tuple(0 if axis == tensor_parallel_axis else None for axis in range(2)),
+                    mesh_shape=mesh_shape,
+                )
+                if tensor_parallel_size > 1
+                else None
+            ),
         ),
         tensor_parallel_size=tensor_parallel_size,
     )

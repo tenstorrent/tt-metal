@@ -405,7 +405,7 @@ def matmul_reduce_scatter_decode(
     return ttnn.clone(rs_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
+def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype, topology, cluster_axis=None):
     """Lazily allocate (and cache on tt_ccl) shared persistent buffers for the prefill fused out-proj.
 
     Prefill M (=chunk seq, e.g. 2048) makes per-layer buffers huge (fp32 [1,1,2048,5120]≈42MB × 64
@@ -416,22 +416,25 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     if cache is None:
         cache = {}
         tt_ccl._qwen36_mmrs_prefill_bufs = cache
-    key = (M, N, nd, str(dtype))
+    key = (M, N, nd, str(dtype), topology, cluster_axis)
     if key not in cache:
         mesh = tt_ccl.mesh_device
-        mk = lambda w: ttnn.from_torch(
-            torch.zeros(1, 1, M, w),
+        mk = lambda w, batches=1: ttnn.from_torch(
+            torch.zeros(batches, 1, M, w),
             device=mesh,
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
-        cache[key] = (mk(N), mk(N // nd))
+        intermediate_batches = 2 if topology == ttnn.Topology.Linear else 1
+        cache[key] = (mk(N, intermediate_batches), mk(N // nd))
     return cache[key]
 
 
-def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
+def matmul_reduce_scatter_prefill(
+    x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8), cluster_axis=None
+):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
@@ -440,11 +443,11 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
-    interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
     x4 = ttnn.reshape(x, (1, 1, M, K_local))
-    # RS-bound: 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max; traced_8k win).
-    # grid (8,8) leaves rows 8-9 for the 2 RS worker rows.
-    num_links = 2
+    usable_topology = ttnn.get_usable_topology(x4, topology=topology, cluster_axis=cluster_axis)
+    interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype, usable_topology, cluster_axis)
+    # Use every link available on the selected mesh axis. The worker row starts below the 8x8 matmul grid.
+    num_links = tt_ccl.get_num_links(cluster_axis)
     per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -467,16 +470,17 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         persistent_intermediate_buffer=interm,
         persistent_output_buffer=out_buf,
         dim=3,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
         reduce_scatter_core_grid_offset=rs_offset,
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
         num_links=num_links,
         memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
-        topology=topology,
+        topology=usable_topology,
         subdevice_id=None,
         memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
         program_config=pc,
         compute_kernel_config=compute_cfg,
+        cluster_axis=cluster_axis,
     )
     return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

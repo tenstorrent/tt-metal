@@ -138,6 +138,14 @@ tt::tt_fabric::Topology get_axis_topology(
         }
     } else {
         axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+        // A 1D fabric has one global ring. It cannot provide independent wrap links for
+        // repeated lines of a multi-dimensional mesh.
+        const auto mesh_shape = tensor.device()->shape();
+        for (uint32_t other_axis = 0; other_axis < mesh_shape.dims(); ++other_axis) {
+            if (other_axis != axis && mesh_shape[other_axis] > 1) {
+                axis_can_wrap = false;
+            }
+        }
     }
 
     // Ring only if the fabric can wrap this axis AND the device set spans [0..size-1].
@@ -152,6 +160,12 @@ tt::tt_fabric::Topology get_usable_topology(
     const std::optional<uint32_t>& cluster_axis) {
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
+        if (cluster_axis.has_value() &&
+            get_axis_topology(tensor, tt::tt_fabric::GetFabricConfig(), cluster_axis.value()) ==
+                tt::tt_fabric::Topology::Linear) {
+            return topology_ == tt::tt_fabric::Topology::Torus ? tt::tt_fabric::Topology::Mesh
+                                                               : tt::tt_fabric::Topology::Linear;
+        }
         auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
         if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
             return topology_;

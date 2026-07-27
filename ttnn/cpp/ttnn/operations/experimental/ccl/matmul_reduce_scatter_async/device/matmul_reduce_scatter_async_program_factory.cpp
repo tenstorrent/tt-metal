@@ -80,8 +80,12 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     auto resolved_reduce_scatter_compute_kernel_config =
         ttnn::ccl::resolve_fp32_acc_compute_kernel_config(std::nullopt, output_tensors.mm.dtype());
 
-    // Reduce Scatter - use the new artifacts-based helper
-    auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
+    // Match the standalone reduce-scatter factory after Ring-to-Linear topology normalization.
+    const auto build_reduce_scatter =
+        topology == ttnn::ccl::Topology::Linear
+            ? ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts
+            : ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts;
+    auto reduce_scatter_artifacts = build_reduce_scatter(
         program,
         output_tensors.mm,
         tensor_args.persistent_intermediate,
@@ -99,9 +103,9 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         using_persistent_buffers,
         sub_device_id,
         reduce_scatter_fused_op_signaler,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
+        args.reduce_scatter_params.chunks_per_sync,
+        args.reduce_scatter_params.num_workers_per_link,
+        args.reduce_scatter_params.num_buffers_per_channel,
         args.reduce_scatter_core_grid_offset,
         resolved_reduce_scatter_compute_kernel_config);
 
@@ -152,8 +156,11 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
              .optional_output_tensors = {output_tensors.mm}},
             matmul_output_tensors);
 
-        // Call reduce scatter runtime arguments override directly using artifacts
-        ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        const auto override_reduce_scatter =
+            args.reduce_scatter_params.topology == ttnn::ccl::Topology::Linear
+                ? ttnn::experimental::prim::line_reduce_scatter_minimal_async_helper_override_runtime_arguments
+                : ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+        override_reduce_scatter(
             program,
             shared_vars.reduce_scatter_artifacts.reader_kernel_id,
             shared_vars.reduce_scatter_artifacts.writer_kernel_id,

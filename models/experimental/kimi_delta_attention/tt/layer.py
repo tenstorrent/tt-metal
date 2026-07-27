@@ -40,17 +40,23 @@ class KimiDeltaAttention:
         state_dict: Mapping[str, torch.Tensor],
         tensor_cache_path: Path | None = None,
         tt_ccl: TT_CCL | None = None,
+        tensor_parallel_axis: int = 1,
         summary_group_chunks: int = 8,
     ) -> None:
+        if tensor_parallel_axis not in (0, 1):
+            raise ValueError(f"tensor_parallel_axis must be 0 or 1, got {tensor_parallel_axis}")
         if summary_group_chunks <= 0:
             raise ValueError(f"summary_group_chunks must be positive, got {summary_group_chunks}")
         self.device = mesh_device
+        self.tensor_parallel_axis = tensor_parallel_axis
+        self.sequence_parallel_axis = 1 - tensor_parallel_axis
         self.summary_group_chunks = summary_group_chunks
         self.weights: KDAWeights = load_kda_weights(
             mesh_device,
             config,
             state_dict,
             tensor_cache_path,
+            tensor_parallel_axis=tensor_parallel_axis,
         )
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.global_config = config
@@ -456,6 +462,7 @@ class KimiDeltaAttention:
                 ttnn.Topology.Ring,
                 self.tensor_parallel_size,
                 output.dtype,
+                cluster_axis=self.tensor_parallel_axis,
             )
         else:
             output = ttnn.linear(
@@ -471,7 +478,7 @@ class KimiDeltaAttention:
                 output,
                 self.device,
                 self.tt_ccl,
-                cluster_axis=0,
+                cluster_axis=self.tensor_parallel_axis,
                 dim=3,
                 topology=ttnn.Topology.Linear,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
