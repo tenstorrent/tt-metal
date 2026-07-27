@@ -81,7 +81,10 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     constexpr float C3 = 0.166666667f;
     constexpr float C4 = 0.0416666667f;
     constexpr float C5 = 0.00833333333f;
-    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4, C5);
+    // Force plain Horner (threshold > 6 coeffs): this helper is shared with the register-tight
+    // non-approx gelu-derivative tail (adds a reciprocal correction), where the even/odd split's
+    // ~2 extra live LRegs overflow the 8-register SFPU budget and fail to compile (register spill).
+    sfpi::vFloat poly = PolynomialEvaluator::eval<10>(r, 1.0f, 1.0f, C2, C3, C4, C5);
 
     // Step 4: FUSED MULTIPLY - multiply by x BEFORE exponent shift!
     // This is the key to avoiding intermediate underflow.
@@ -435,7 +438,10 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
         sfpi::vFloat u = x * x;
-        sfpi::vFloat h = PolynomialEvaluator::eval(
+        // Force plain Horner (threshold > 9 coeffs): the even/odd split needs ~2 extra live
+        // LRegs, which, on top of this function's reciprocal correction and the unroll-8 loop,
+        // overflows the 8-register SFPU budget and fails to compile (register spill).
+        sfpi::vFloat h = PolynomialEvaluator::eval<10>(
             u,
             GELU_DERIV_H0,
             GELU_DERIV_H1,

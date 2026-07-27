@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
@@ -168,7 +169,8 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
     sfpi::vFloat r_hi = k * LN2_HI + val;
     sfpi::vFloat r = k * LN2_LO + r_hi;
 
-    sfpi::vFloat p = PolynomialEvaluator::eval(
+    // Force plain Horner (eval<10>): avoid the even/odd split's extra LRegs (register spill).
+    sfpi::vFloat p = PolynomialEvaluator::eval<10>(
         r, 1.0f, 1.0f, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
 
     sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
@@ -215,7 +217,8 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     // r = f * ln2 in extended precision (2**f = e**(f*ln2)).
     sfpi::vFloat r = f * LN2_HI + f * LN2_LO;
 
-    sfpi::vFloat p = PolynomialEvaluator::eval(
+    // Force plain Horner (eval<10>): avoid the even/odd split's extra LRegs (register spill).
+    sfpi::vFloat p = PolynomialEvaluator::eval<10>(
         r, 1.0f, 1.0f, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
 
     sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
@@ -263,7 +266,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     // Compute z**2 for polynomial evaluation
     sfpi::vFloat z2 = z * z;
     // Polynomial approximation using odd powers
-    sfpi::vFloat p = PolynomialEvaluator::eval(
+    // Force plain Horner (eval<10>): avoid the even/odd split's extra LRegs (register spill).
+    sfpi::vFloat p = PolynomialEvaluator::eval<10>(
         z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
     sfpi::vFloat ln_m = 2.0f * (z * p);
 
@@ -327,7 +331,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 }
 
 template <int ITERATIONS>
-inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
+inline void _sfpu_unary_power_bf16_(const std::uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
@@ -350,7 +354,7 @@ inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
 }
 
 template <int ITERATIONS>
-inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
+inline void _sfpu_unary_power_fp32_(const std::uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
@@ -380,7 +384,7 @@ inline void power_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
  * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_unary_power(const uint32_t exponent) {
+inline void calculate_unary_power(const std::uint32_t exponent) {
     if constexpr (is_fp32_dest_acc_en) {
         _sfpu_unary_power_fp32_<ITERATIONS>(exponent);
     } else {
@@ -394,7 +398,7 @@ inline void calculate_unary_power(const uint32_t exponent) {
  * @param exponent Non-negative integer exponent value
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_power_iterative(const uint32_t exponent) {
+inline void calculate_unary_power_iterative(const std::uint32_t exponent) {
     // iterative approach for positive integer exponents
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -403,7 +407,7 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
             sfpi::dst_reg[0] = 1.0f;
         } else {
             sfpi::vFloat result = in;
-            uint32_t exp = exponent - 1;
+            std::uint32_t exp = exponent - 1;
 
             while (exp > 0) {
                 if (exp & 1) {

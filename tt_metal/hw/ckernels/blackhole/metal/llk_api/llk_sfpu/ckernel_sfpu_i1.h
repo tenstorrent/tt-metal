@@ -18,8 +18,8 @@ namespace ckernel::sfpu {
 //
 // Two-region implementation, exploiting that i1 is odd: i1(-x) = -i1(x).
 //   |x| ≤ 10:  rational p(t)/q(t) on t = x², result = x · p(t)/q(t)
-//              BF16: 4 numer + 4 denom coeffs in t (= n7/d6 in x) → 0.02 BF16 ULP analytical
-//              FP32: 7 numer + 8 denom coeffs in t (= n13/d14 in x) → <0.001 FP32 ULP analytical
+//              BF16: 4 number + 4 denom coeffs in t (= n7/d6 in x) → 0.02 BF16 ULP analytical
+//              FP32: 7 number + 8 denom coeffs in t (= n13/d14 in x) → <0.001 FP32 ULP analytical
 //   |x| > 10:  asymptotic expansion
 //                i1(x) = sign(x) · exp(|x|) / sqrt(|x|) · P(1/|x|)
 //              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 88.5].
@@ -69,7 +69,9 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
 
     // P(y), degree-5 minimax fit on y ∈ [1/88.5, 0.1]; max rel err ~1e-9.
     // This outlined function does not stress the main loop's LRA, so full precision is safe.
-    const sfpi::vFloat correction = PolynomialEvaluator::eval(
+    // Force plain Horner (eval<10>): the even/odd split's ~2 extra live LRegs overflow the
+    // 8-register SFPU budget in the i1 path and fail to compile (register spill).
+    const sfpi::vFloat correction = PolynomialEvaluator::eval<10>(
         inv_abs_x,
         3.9894228967e-01f,
         -1.4960495444e-01f,
@@ -103,7 +105,8 @@ inline void calculate_i1() {
         {
             const sfpi::vFloat t = x * x;
 #ifdef INP_FLOAT32
-            sfpi::vFloat numer = PolynomialEvaluator::eval(
+            // Force plain Horner (eval<10>): avoid the even/odd split's extra LRegs (register spill).
+            sfpi::vFloat number = PolynomialEvaluator::eval<10>(
                 t,
                 5.0000000000e-01f,
                 5.6819390506e-02f,
@@ -112,7 +115,8 @@ inline void calculate_i1() {
                 2.0916867527e-07f,
                 7.7937084564e-10f,
                 1.2293555930e-12f);
-            sfpi::vFloat denom = PolynomialEvaluator::eval(
+            // Force plain Horner (eval<10>): avoid the even/odd split's extra LRegs (register spill).
+            sfpi::vFloat denom = PolynomialEvaluator::eval<10>(
                 t,
                 1.0f,
                 -1.1361218989e-02f,
@@ -123,12 +127,12 @@ inline void calculate_i1() {
                 -3.0635529988e-16f,
                 7.4301498523e-19f);
 #else
-            sfpi::vFloat numer = PolynomialEvaluator::eval(
+            sfpi::vFloat number = PolynomialEvaluator::eval(
                 t, 4.9992737740e-01f, 5.4503594600e-02f, 1.6126291630e-03f, 2.0223499130e-05f);
             sfpi::vFloat denom =
                 PolynomialEvaluator::eval(t, 1.0f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
 #endif
-            val = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
+            val = number * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         }
 
         // ─── Asymptotic overwrite for OOD lanes (|x| > 10) ───────────────

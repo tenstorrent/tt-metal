@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
@@ -62,7 +63,8 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // exp(r) ~= 1 + r + r²/2! + r³/3! + r⁴/4! + r⁵/5! + r⁶/6! + r⁷/7!
     // Use 7th order polynomial (Taylor series coefficients) for < 1 ULP accuracy
     // Coefficients in ascending order of powers: c0, c1, c2, c3, c4, c5, c6, c7
-    sfpi::vFloat p = PolynomialEvaluator::eval(
+    // Force plain Horner (eval<10>): avoid the even/odd split's extra LRegs (register spill).
+    sfpi::vFloat p = PolynomialEvaluator::eval<10>(
         r,
         1.0f,           // c0 = 1
         1.0f,           // c1 = 1
@@ -116,7 +118,7 @@ sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloa
  *        --> alpha_n * (expm1(minimum(x, eps)) - x) + beta * x
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
+inline void calculate_xielu(const std::uint32_t param0, const std::uint32_t param1) {
     sfpi::vFloat alpha_p = Converter::as_float(param0);
     sfpi::vFloat alpha_n = Converter::as_float(param1);
     for (int d = 0; d < ITERATIONS; d++) {
@@ -136,8 +138,9 @@ inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
             // > fpminimax(exp(x)-1, [|1,2,3,4,5,6,7|], [|single...|], [-0.5; -2^(-40)] + [2^(-40); 0.5], relative);
             // expm1(x) = 0 + x + c2*x^2 + c3*x^3 + ... + c7*x^7
             // Hence, expm1(x)-x = c2*x^2 + ... + c7*x^7 = x^2 * (c2 + c3*x + c4*x^2 + ... + c7*x^5)
+            // Force plain Horner (eval<10>): avoid the even/odd split's extra LRegs (register spill).
             sfpi::vFloat exp_term = x * x *
-                                    PolynomialEvaluator::eval(
+                                    PolynomialEvaluator::eval<10>(
                                         x,
                                         0.500000059604644775390625f,
                                         0.16666667163372039794921875f,
