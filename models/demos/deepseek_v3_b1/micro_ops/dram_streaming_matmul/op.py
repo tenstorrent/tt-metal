@@ -134,6 +134,7 @@ class DRAMStreamingMatmul:
         scalar_tensor: ttnn.Tensor = None,  # Optional scalar tensor (16x16 tile) to multiply after mul
         num_loop_iters: int = 1,  # Number of inner kernel loop iterations (for testing CB wrapping)
         working_buf_tensor: ttnn.Tensor = None,  # Tensor-backed working buffer for CB1 (required when num_loop_iters > 1)
+        in0_tile: ttnn.Tile = None,  # Override in0's tile spec; CB0 views input_a's memory with this tile
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -162,8 +163,13 @@ class DRAMStreamingMatmul:
                 f"The kernel uses the working buffer address for CB1 boundary wrapping."
             )
 
-        # Get tiles
-        in0_tile = input_a.get_tile()
+        # Get tiles. in0_tile may be overridden by the caller so that CB0 views
+        # input_a's memory with a different tile than the tensor declares. A [1,32]
+        # tile is 2 faces of [1,16], i.e. 32 contiguous values, so a ROW_MAJOR row
+        # is byte-identical to a [1,32]-tiled row and can be viewed as one. This
+        # lets a caller feed a standard row-major activation without a retile op,
+        # the same trick CB4/6/7 below use to view [1,32] memory as [16,16].
+        in0_tile = in0_tile if in0_tile is not None else input_a.get_tile()
         in1_tile = input_b.get_tile()
 
         in0_tile_shape = in0_tile.tile_shape
@@ -265,6 +271,10 @@ class DRAMStreamingMatmul:
 
         # CB 0: in0 - BACKED BY INPUT TENSOR (replicated)
         cb0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(0, input_a)
+        if in0_tile != input_a.get_tile():
+            in0_tile_size = in0_tile.get_tile_size(input_a.dtype)
+            cb0_descriptor.format_descriptors[0].tile = ttnn.TileDescriptor(in0_tile)
+            cb0_descriptor.format_descriptors[0].page_size = in0_tile_size
 
         # CB 1: in1 - working buffer for DRAM reads (K tiles triple buffered)
         if working_buf_tensor is not None:
