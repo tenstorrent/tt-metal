@@ -210,11 +210,16 @@ void kernel_main() {
     else if constexpr (SEQ_ID == SEQ_PAD) {
         const auto* a = reinterpret_cast<const ArgsPad*>(get_arg_addr(0));
 
-        // Fill pad tile in scratch CB
+        // Fill pad tile in scratch CB. The bound and the fill value are hoisted because the
+        // volatile store may alias the L1 runtime args `a` points at: left in the loop, the
+        // compiler reloads both from L1 and repeats the divide on every iteration, which costs
+        // ~20 cycles per store instead of ~2 and dominates the whole kernel.
         {
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(a->cb_pad));
-            for (uint32_t i = 0; i < a->tile_bytes / 4; ++i) {
-                ptr[i] = a->packed_pad_val;
+            const uint32_t fill_words = a->tile_bytes / sizeof(uint32_t);
+            const uint32_t fill_value = a->packed_pad_val;
+            for (uint32_t i = 0; i < fill_words; ++i) {
+                ptr[i] = fill_value;
             }
         }
         uint64_t pad_noc_addr = get_noc_addr(get_read_ptr(a->cb_pad));
