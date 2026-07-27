@@ -6,7 +6,6 @@ from typing import Optional, AsyncIterator, Iterator, TextIO
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
 from asyncio import StreamReader
-from dateutil import parser
 from enum import Enum, auto
 from sys import stdout
 import fileinput
@@ -353,6 +352,7 @@ async def main():
 
     logpath = opts.l if opts.l else None
     logf = open(logpath, "w") if logpath else None
+    exit_status = 0
 
     if opts.q:
         global print_logs
@@ -375,7 +375,7 @@ async def main():
 
         proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
-        p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout, logf))
+        exit_status, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout, logf))
 
     # pprint.pp(evs)
     bdfs = {}
@@ -394,6 +394,8 @@ async def main():
 
     if logf:
         logf.close()
+
+    exit(exit_status)
 
 
 if __name__ == "__main__":
