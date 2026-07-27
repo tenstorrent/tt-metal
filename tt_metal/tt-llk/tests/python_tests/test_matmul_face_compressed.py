@@ -3,6 +3,7 @@
 
 import numpy as np
 import pytest
+from conftest import blackhole_only
 from helpers.compressed_utils import (  # noqa: F401 (autouse fixture — imported to activate in this module)
     DEEPSEEK_T420,
     FMT_CODE,
@@ -17,8 +18,6 @@ from helpers.compressed_utils import (  # noqa: F401 (autouse fixture — import
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.tile_constants import FACE_C_DIM
-
-from conftest import blackhole_only
 
 
 def promote_assignment(assignment, ct):
