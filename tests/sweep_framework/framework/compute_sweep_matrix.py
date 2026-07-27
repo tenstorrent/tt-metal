@@ -38,11 +38,12 @@ from matrix_runner_config import (
     SCHEDULE_TYPES,
     SUPPORTED_VECTOR_GROUPING_MODES,
     SWEEP_TYPES,
+    get_batch_timeout,
     get_lead_models_test_group_name_for_hardware_group,
     get_mesh_test_group_map,
     get_runner_config,
+    get_sku_total_budget,
     get_test_group_name_for_hardware_group,
-    get_timeout_for,
 )
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
@@ -427,12 +428,46 @@ def main():
         suite_name = None if run_type == "comprehensive" else run_type  # "nightly" or None
         include_entries, batches, ccl_batches = compute_standard_matrix(modules, batch_size, suite_name)
 
-    # Stamp the per-job timeout (minutes) onto every matrix entry so the workflow
-    # enforces it at the GitHub job level (timeout-minutes). Source of truth is
-    # tests/pipeline_reorg/ttnn_sweep_tests.yaml keyed by (target=run_type, sku),
-    # the same file verify_time_budget.py checks against .github/time_budget.yaml.
+    # Stamp the per-batch timeout (minutes) onto every matrix entry so the workflow
+    # enforces it at the GitHub job level (timeout-minutes). Each batch's ceiling is
+    # the sum of its ops' per-op ceilings, sourced from the batch policy in
+    # tests/pipeline_reorg/ttnn_sweep_tests.yaml keyed by (target=run_type, sku).
     for entry in include_entries:
-        entry["timeout"] = get_timeout_for(run_type, entry.get("sku"))
+        entry["timeout"] = get_batch_timeout(run_type, entry.get("sku"), entry.get("module_selector", ""))
+
+    # Budget telemetry: the sum of a SKU's per-batch timeouts is that SKU's total
+    # time for this run. Report it against the per-run budget declared for the
+    # (target, sku) in ttnn_sweep_tests.yaml (skus.<sku>.timeout) — the same number
+    # verify_time_budget.py enforces (statically) against .github/time_budget.yaml.
+    # Because the batch count is dynamic, the live sum can only be checked here, not
+    # statically; this surfaces it per run so the declared budgets can be calibrated
+    # against real module sets. Untracked (target, sku) pairs (nightly/comprehensive)
+    # have no declared budget and are skipped. This is intentionally non-fatal — the
+    # static verify_time_budget.py step is the hard gate; flip the `over_budget`
+    # branch below to sys.exit(1) once the budgets are calibrated on a full run.
+    sku_totals = defaultdict(int)
+    for entry in include_entries:
+        sku_totals[entry.get("sku")] += entry["timeout"]
+    for sku, requested in sorted(sku_totals.items()):
+        budget = get_sku_total_budget(run_type, sku)
+        if budget is None:
+            continue
+        over_budget = requested > budget
+        status = "OVER BUDGET" if over_budget else "OK"
+        print(
+            f"[budget] {run_type} sku={sku}: this run needs {requested} min across "
+            f"its batches, per-run budget is {budget} min -> {status}",
+            file=sys.stderr,
+        )
+        if over_budget:
+            print(
+                f"[budget][WARNING] {run_type} / {sku}: the sum of this run's per-batch "
+                f"timeouts ({requested} min) exceeds the per-run budget of {budget} min "
+                f"declared in tests/pipeline_reorg/ttnn_sweep_tests.yaml. Raise "
+                f"skus.{sku}.timeout there (and the matching .github/time_budget.yaml "
+                f"ttnn.sweep entry) or lower the per-op ceilings.",
+                file=sys.stderr,
+            )
 
     # Validate GitHub Actions limits
     for label, count in [("batch", len(batches)), ("matrix entry", len(include_entries))]:

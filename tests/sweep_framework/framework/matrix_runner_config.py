@@ -175,14 +175,40 @@ def _resolve_runs_on(sku_name):
     return labels
 
 
-# ── Per-job timeout from the pipeline-reorg test yaml ─────────────────────────
-# The single source of truth for each job's timeout is
-# tests/pipeline_reorg/ttnn_sweep_tests.yaml, keyed by (target, sku). The same
-# file is checked against .github/time_budget.yaml by verify_time_budget.py. We
-# read the per-(target, sku) timeout here and stamp it onto every matrix entry so
-# the workflow can enforce it at the GitHub job level (timeout-minutes), aligning
-# sweeps with the other pipeline-reorg pipelines (single-source-of-truth timeout).
+# ── Timeouts + budget from the pipeline-reorg test yaml ───────────────────────
+# The single source of truth is tests/pipeline_reorg/ttnn_sweep_tests.yaml, keyed
+# by (target, sku). It carries two independent numbers (see that file's header):
+#
+#   skus.<sku>.timeout   — the TOTAL budget (minutes) for that target's jobs on
+#                          that SKU for ONE run (sum of every batch's timeout).
+#                          verify_time_budget.py sums it per (team, sku) against
+#                          .github/time_budget.yaml -> ttnn.sweep.
+#   batch.default/overrides — the PER-BATCH (per-op) timeout policy used to size
+#                          each GH job's timeout-minutes.
+#
+# The batch count is dynamic (modules are discovered from the generated vector
+# files at runtime), so a job's timeout is built up from its ops rather than by
+# dividing the SKU total by the batch count — dividing would shrink every long
+# batch's ceiling as soon as the run produced more (shorter) batches.
 DEFAULT_JOB_TIMEOUT_MIN = 60
+DEFAULT_PER_OP_TIMEOUT_MIN = 4
+
+# Fallback per-op policy for (target, sku) pairs not tracked in the yaml (e.g.
+# nightly / comprehensive runs). Mirrors the yaml's shared _batch_defaults so an
+# untracked lane still right-sizes heavy ops instead of one flat ceiling.
+DEFAULT_BATCH_POLICY = {
+    "default": DEFAULT_PER_OP_TIMEOUT_MIN,
+    "overrides": {
+        "all_gather_async": 30,
+        "conv2d": 26,
+        "reduce_scatter": 24,
+        "all_reduce": 24,
+        "matmul": 15,
+        "linear": 15,
+        "reshape": 12,
+        "split": 12,
+    },
+}
 
 
 def _sweep_tests_yaml_path():
@@ -198,21 +224,26 @@ def _sweep_tests_yaml_path():
 
 
 @functools.lru_cache(maxsize=1)
-def _sweep_timeout_map():
-    """Return {(target, sku): timeout_min} parsed from ttnn_sweep_tests.yaml.
+def _sweep_tests_entries():
+    """Parse ttnn_sweep_tests.yaml into a list of entries.
 
-    Missing/unreadable file → empty map (callers fall back to DEFAULT_JOB_TIMEOUT_MIN),
-    so matrix generation never hard-fails on a timeout lookup."""
+    Missing/unreadable file → empty list, so matrix generation never hard-fails
+    on a timeout/budget lookup (callers fall back to the defaults above)."""
     import yaml
 
-    path = _sweep_tests_yaml_path()
     try:
-        with open(path) as f:
+        with open(_sweep_tests_yaml_path()) as f:
             entries = yaml.safe_load(f) or []
     except (OSError, yaml.YAMLError):
-        return {}
+        return []
+    return entries if isinstance(entries, list) else []
+
+
+@functools.lru_cache(maxsize=1)
+def _sweep_total_budget_map():
+    """Return {(target, sku): total_budget_min} from skus.<sku>.timeout."""
     out = {}
-    for entry in entries if isinstance(entries, list) else []:
+    for entry in _sweep_tests_entries():
         target = entry.get("target")
         for sku_name, sku_cfg in (entry.get("skus") or {}).items():
             if isinstance(sku_cfg, dict) and "timeout" in sku_cfg:
@@ -220,13 +251,63 @@ def _sweep_timeout_map():
     return out
 
 
-def get_timeout_for(target, sku, default=DEFAULT_JOB_TIMEOUT_MIN):
-    """Per-job timeout (minutes) for a (target, sku) pair from ttnn_sweep_tests.yaml.
+@functools.lru_cache(maxsize=1)
+def _sweep_batch_policy_map():
+    """Return {(target, sku): {"default": int, "overrides": {op: int}}}.
 
-    ``target`` is the run type (``lead_models`` / ``model_traced``). Nightly and
-    comprehensive runs are not budget-tracked in the yaml, so they fall back to the
-    default hard job ceiling."""
-    return _sweep_timeout_map().get((target, sku), default)
+    A per-SKU ``batch`` block wins over the target-level ``batch`` block; either
+    may be absent, in which case callers fall back to DEFAULT_BATCH_POLICY."""
+    out = {}
+    for entry in _sweep_tests_entries():
+        target = entry.get("target")
+        entry_policy = entry.get("batch") if isinstance(entry.get("batch"), dict) else None
+        for sku_name, sku_cfg in (entry.get("skus") or {}).items():
+            sku_policy = sku_cfg.get("batch") if isinstance(sku_cfg, dict) else None
+            policy = sku_policy if isinstance(sku_policy, dict) else entry_policy
+            if isinstance(policy, dict):
+                out[(target, sku_name)] = policy
+    return out
+
+
+def _op_timeout_min(module_token, policy):
+    """Per-op ceiling (minutes) for one module token under a batch policy.
+
+    ``overrides`` keys are matched as substrings of the module token (vector-file
+    stems carry a grouping suffix, e.g. ``model_traced.all_gather_async_model_traced``),
+    so ``all_gather_async`` matches that token. If several keys match, the largest
+    ceiling wins; otherwise the policy default applies."""
+    default = policy.get("default", DEFAULT_PER_OP_TIMEOUT_MIN)
+    overrides = policy.get("overrides") or {}
+    matched = [minutes for op_key, minutes in overrides.items() if op_key in module_token]
+    return max(matched) if matched else default
+
+
+def get_batch_timeout(target, sku, module_selector, default=DEFAULT_JOB_TIMEOUT_MIN):
+    """Per-batch (per-GH-job) timeout in minutes for one matrix entry.
+
+    ``module_selector`` is the comma-joined set of module tokens in the batch.
+    Ops in a batch run sequentially, so the batch ceiling is the SUM of its ops'
+    per-op ceilings. An empty selector falls back to the hard job ceiling."""
+    policy = _sweep_batch_policy_map().get((target, sku)) or DEFAULT_BATCH_POLICY
+    tokens = [t for t in (module_selector or "").split(",") if t]
+    if not tokens:
+        return default
+    total = sum(_op_timeout_min(t, policy) for t in tokens)
+    return max(1, int(round(total)))
+
+
+def get_sku_total_budget(target, sku):
+    """Total per-run budget (minutes) declared for a (target, sku), or None if the
+    pair is not budget-tracked in the yaml (e.g. nightly / comprehensive)."""
+    return _sweep_total_budget_map().get((target, sku))
+
+
+def get_timeout_for(target, sku, default=DEFAULT_JOB_TIMEOUT_MIN):
+    """Back-compat accessor for the (target, sku) TOTAL budget (minutes).
+
+    Prefer get_batch_timeout() for per-job stamping and get_sku_total_budget()
+    for the per-run budget; retained for any external callers."""
+    return _sweep_total_budget_map().get((target, sku), default)
 
 
 # ── Logical test groups ───────────────────────────────────────────────────────
