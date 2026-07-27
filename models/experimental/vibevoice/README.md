@@ -46,11 +46,6 @@ vibevoice/
 
 ## Dependencies
 
-Pin `transformers` — **4.57+** breaks `generate()` KV-cache behavior for this model.
-
-```bash
-pip install 'transformers==4.51.3' torch accelerate diffusers tqdm librosa scipy huggingface_hub
-```
 
 The processor also pulls **Qwen/Qwen2.5-1.5B** tokenizer assets from the Hugging Face cache (`QWEN_TOKENIZER` in `common/config.py`).
 
@@ -294,6 +289,27 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min \
   --isl 1024 --warmup
 # omit --max_new_tokens for until-EOS / max_length_times×ISL (same as the sweep)
 ```
+
+## CI (nightly, single P150)
+
+VibeVoice is wired into the **Blackhole demo tests** pipeline
+([`.github/workflows/blackhole-demo-tests.yaml`](../../../.github/workflows/blackhole-demo-tests.yaml)
+→ entries in [`tests/pipeline_reorg/blackhole_demo_tests.yaml`](../../../tests/pipeline_reorg/blackhole_demo_tests.yaml)),
+which runs nightly (04:00 UTC) and on manual dispatch. Only single-P150 (`bh_p150b_civ2`) is
+targeted. The three jobs run as **independent parallel matrix jobs** (`fail-fast: false`, one
+`test-group` per entry) — the same fan-out the seamless-m4t-v2 model uses; actual concurrency
+depends on the P150b runner-pool size.
+
+| Job | Command | Gate | Timeout |
+|-----|---------|------|---------|
+| demo `4p_climate_100min` | `demo.py --demo 4p_climate_100min --trace` | full long-form render completes | 120 min |
+| e2e WER | `pytest tests/pcc/test_e2e_wer.py` (`VV_WER_MAX_NEW_TOKENS=256`) | TT-vs-reference WER ≤ 0.05 | 60 min |
+| speaker similarity | `pytest tests/pcc/test_e2e_sim.py` | SIM target floor 0.5 / margin 0.05 | 45 min |
+
+Weights (`microsoft/VibeVoice-1.5B`) + demo text/voices auto-download and cache under `HF_HOME`;
+WER/sim additionally pull Whisper (`openai/whisper-medium`) and the SV model
+(`microsoft/wavlm-base-plus-sv`). Trigger manually with **Actions → (Blackhole) Demo tests →
+Run workflow → model: `vibevoice-1.5b`** (optionally system-type `bh_p150b_civ2`).
 
 ## Porting notes
 
