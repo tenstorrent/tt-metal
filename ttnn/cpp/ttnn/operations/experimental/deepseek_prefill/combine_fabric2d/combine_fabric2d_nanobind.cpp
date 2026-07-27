@@ -33,7 +33,7 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("num_slots") = 32,
         nb::arg("axis") = 0,
         nb::arg("stall_telemetry") = 0,
-        nb::arg("variant") = 0,
+        nb::arg("variant") = 3,
         nb::arg("topology") = nb::none());
 
     // Telemetry readback. Returns {"clock_mhz": int, "workers": [ {...}, ... ]} — plain Python data so
