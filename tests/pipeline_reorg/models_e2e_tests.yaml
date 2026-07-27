@@ -840,10 +840,16 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    export VBENCH_CACHE_DIR=/tmp/vbench TORCH_HOME=/tmp/vbench/torch_hub  # /mnt/MLPerf not writable on exabox workers (see #48682); use worker-local writable cache
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub  # /mnt/MLPerf not writable on exabox workers (see #48682); use worker-local writable cache
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    mpirun --pernode --tag-output bash -lc '
+      mkdir -p /mnt/models/vbench 2>/dev/null
+      m=/mnt/models/vbench/.wan_probe_$(hostname)
+      [ -f "$m" ] && echo "PERSIST: prior marker on $(hostname): $(cat "$m")" || echo "PERSIST: none on $(hostname) (first run)"
+      date > "$m" 2>/dev/null && echo "WRITE OK on $(hostname)" || echo "WRITE FAILED on $(hostname)"
+    '
     python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --tcp-interface ens5f0np0 --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --force-rediscovery \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
     python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --tcp-interface ens5f0np0 --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --force-rediscovery \
@@ -861,7 +867,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    export VBENCH_CACHE_DIR=/tmp/vbench TORCH_HOME=/tmp/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"

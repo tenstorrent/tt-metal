@@ -24,6 +24,7 @@ from ....utils.test import (
     ring_params_req_exact_devices,
     skip_if_unsupported_num_links,
 )
+from .common import check_output_sanity
 
 
 def create_fractal_image(width: int, height: int) -> Image.Image:
@@ -129,45 +130,6 @@ def test_pipeline_inference(
 
     prompt = "The cat in the hat runs up the hill to the house."
 
-    def check_output_sanity(frames):
-        """Guard against a distributed I2V path that 'runs' but emits corrupt/blank/frozen frames.
-
-        These are cheap, reference-free statistical checks (shape, finiteness, range, spatial
-        variance, temporal motion) -- not a full quality gate. A richer VBench gate (video-intrinsic
-        metrics, a better fit for I2V than CLIP since the CI seed image is a fractal) is a follow-up.
-        Thresholds sit well below any real video so they only fire on genuinely broken output.
-        """
-        if isinstance(frames, torch.Tensor):
-            frames = frames.cpu().numpy()
-        frames = np.asarray(frames)
-
-        # Geometry: the distributed VAE decode must produce the full requested video.
-        expected_shape = (num_frames, height, width, 3)
-        assert frames.shape == expected_shape, f"Unexpected output shape {frames.shape}, expected {expected_shape}"
-
-        # No NaN/Inf. uint8 can't carry them, but guard in case the pipeline hands back a float buffer.
-        if np.issubdtype(frames.dtype, np.floating):
-            assert np.isfinite(frames).all(), "Output video contains NaN/Inf"
-
-        vmin, vmax = int(frames.min()), int(frames.max())
-        assert 0 <= vmin and vmax <= 255, f"Output outside uint8 range: [{vmin}, {vmax}]"
-
-        # Not a flat/blank buffer (all-black or a single constant colour) -- a common corruption mode.
-        global_std = float(frames.std())
-        assert global_std > 1.0, f"Output has near-zero variance (std={global_std:.3f}); frames look blank/corrupt"
-
-        # Temporal motion: I2V must animate the seed image, not repeat one static frame.
-        # int16 cast avoids uint8 wraparound in the difference.
-        mean_frame_delta = float(np.abs(np.diff(frames.astype(np.int16), axis=0)).mean())
-        assert (
-            mean_frame_delta > 0.5
-        ), f"Consecutive frames are near-identical (mean delta={mean_frame_delta:.3f}); video appears frozen/static"
-
-        logger.info(
-            f"Output sanity OK: shape={frames.shape}, range=[{vmin},{vmax}], "
-            f"std={global_std:.2f}, mean_frame_delta={mean_frame_delta:.2f}"
-        )
-
     def run(*, prompt, number, seed):
         logger.info(f"Running inference with prompt: '{prompt}'")
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
@@ -196,7 +158,7 @@ def test_pipeline_inference(
         # Remove batch dimension
         frames = frames[0]
         if int(ttnn.distributed_context_get_rank()) == 0:
-            check_output_sanity(frames)
+            check_output_sanity(frames, num_frames=num_frames, height=height, width=width)
         output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
         try:
             from models.tt_dit.utils.video import export_to_video
