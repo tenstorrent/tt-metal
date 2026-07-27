@@ -121,9 +121,25 @@ Exit gate: all 8 v1 opcodes exercised end-to-end with automated byte-exact + err
 
 ## Phase 3 — Performance to target (close the measured gaps)
 
-- **3.1 RX BW** — coalesce `noc_async_write` for contiguous same-MR frames, cut per-poll overhead
-  (stats/pace out of the hot loop), and **multi-rail RX aggregate** (both external rails, like TX's 397G).
-  Target: push past ~16 Gbps/rail toward the parse ceiling; re-measure against the 143G DOCA sender.
+- **3.1 RX BW — line-rate via the Tensix drainer pool.** *(Rewritten 2026-07-26 after the RX line-rate
+  investigation — see `tt-rdma-rx-linerate-research.md`. The old "make the single eth RISC faster" target
+  was the wrong approach: one ~1 GHz RISC cannot hit 6M frames/s. The answer is to fan the per-frame work
+  out to a Tensix worker pool, with the eth RISC as control plane.)* **Feasibility proven on silicon** —
+  three green experiments: ingress MAC→L1 **198 Gbps drop-free** (exp 1), eth L1 sustains **200 G write +
+  619 G read concurrent** drop-free (exp 2), Tensix pool processes (read+parse+`rkey`→MR+validate) at
+  **~99 Gbps/worker linear → ~2–3 workers per 200 G link** (exp 3). Tools: `bh1_ingest_probe`,
+  `bh1_l1_bw_test`, `bh1_rx_worker_test`. Build steps (research doc §7):
+  - **3.1a** Port the Phase-1 per-frame body (parse / `rkey`→MR / validate / land) into the worker kernel
+    (`bh_rdma_rx_worker.cpp` is the prototype). **Done (prototype).**
+  - **3.1b** Shared MR table (RISC1 writes on registration, workers read) + atomic multi-consumer ring
+    claim (NoC-atomic head) + framing (recommend fixed-size TT frames from the gateway → zero framing
+    overhead; else RISC1 posts `(offset,len)` descriptors).
+  - **3.1c** Remote-dest landing: worker `noc_read`(eth ring)→`noc_write`(arbitrary MR) (~2× workers).
+  - **3.1d** Worker-posted completions → host RxWqeRing (extends Phase 1.2a).
+  - **3.1e** RISC1 as control plane only (MR mgmt, exceptions, ACK, READ_RESP) — off the per-frame path.
+  - **3.1f** Fold in PFC-lossless (Phase 2.1); acceptance: sustained **200 Gbps/link** vs the DOCA sender,
+    drop=0, byte-exact landing. Multi-rail then aggregates N links for more BW / redundancy.
+  - The Phase-1 single-RISC1 dispatch stays as the correctness reference + control-plane + regression oracle.
 - **3.2 TX** — replace `pace` with real accept-ahead depth; characterize + remove the unpaced wedge; confirm
   sustained line rate without the safety throttle.
 - **3.3 Jumbo end-to-end persisted** (folds into 0.1); confirm line-rate both directions at 4080B.

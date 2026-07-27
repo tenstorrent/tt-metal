@@ -181,6 +181,71 @@ flow-control correctness layer, (b) the per-worker `rkey`→MR + remote-dest `no
 HW classifier (exp 4) to steer `0x1AF6` and take the eth RISC out of ingest routing too. TX is already
 200 G HW-driven, so this closes the last open question for a 200 G/link bidirectional TT-NIC endpoint.
 
+## 7. Production integration — the two-tier RX architecture
+
+The experiments change the RX design from "make the single eth RISC faster" (the old Phase 3.1) to a
+**two-tier split**: the eth-core RISC becomes a *control plane*, and a **Tensix worker pool** is the
+*data plane*. The correctness logic already built + validated in Phase 1 (`bh_rdma_rx_dispatch.cpp` —
+header parse, `rkey`→MR resolve + access/bounds, WRITE/SEND/READ dispatch, CRC) is **not thrown away**:
+it is the reference, and its per-frame body is what the worker kernel runs, parallelized.
+
+### Data plane — Tensix drainer pool (the bulk path)
+- MAC lands `0x1AF6` frames into the eth-core L1 ring (raw BUF_WRAP), as today (exp 1: 198 G drop-free).
+- **K Tensix workers** drain the ring: each atomically claims the next frame, NoC-reads it (= the
+  compute-local landing) or NoC-read→NoC-write to a remote MR dest, parses the 32B header, resolves
+  `rkey`→a **shared MR table**, validates access/bounds, and posts a completion if the opcode needs one.
+- **Sizing (measured, exp 3):** ~99 Gbps/worker compute-local → **K ≈ 2–3 for 200 G/link**; remote MR
+  dest adds one NoC write → **K ≈ 4–6**. Trivial against ~140 Tensix cores. The eth L1 sustains the
+  drain (exp 2: 619 G read while MAC writes 200 G, drop-free).
+
+### Control plane — eth RISC1 (the slow path, off the per-frame datapath)
+- MR register/deregister (CONTROL opcode), `rkey` table lifecycle → writes the **shared MR table** the
+  workers read (Phase 1.6).
+- Exception + reliability handling: CRC-fail frames, unknown opcodes, ring-overflow resync, ACK
+  accounting (Phase 1.4 / Phase 2).
+- READ_REQ → READ_RESP egress (already on RISC1; low rate, keep it there or hand to a worker).
+- RISC0 is unchanged (link maintenance). RISC1 no longer touches each frame — it coordinates.
+
+### The load-bearing design choice — framing
+The worker pool needs frame boundaries without a per-frame RISC bottleneck. Two options:
+- **(A, recommended) Fixed-size TT frames on the BH↔BF3 link.** The gateway already reframes RoCE→TT,
+  so it can emit a uniform MTU. Then framing is pure arithmetic — worker claims frame *N* by atomic
+  index, offset = `N·stride`. Zero framing overhead (this is exactly what exp 3 used). Best fit for the
+  gateway topology.
+- **(B) Variable-size frames.** RISC1 (or RXQ packet-mode HW) posts `(offset,len)` descriptors to a work
+  queue the pool consumes — RISC1 does ~1 header-read/frame (framing only, ~10× cheaper than full
+  processing). Fallback if fixed-size framing isn't acceptable.
+
+### Multi-consumer + flow control (the correctness layer to build)
+- **Atomic claim:** a shared consumer head (NoC atomic increment / semaphore); workers fetch-and-add to
+  grab the next frame index. Prevents double-processing (exp 3 used static round-robin — no atomics — as
+  a throughput stand-in; production needs the atomic head for correctness, cost is negligible).
+- **Producer/consumer flow control:** workers must not read past the MAC write pointer nor let the ring
+  lap. Lossy → drop + Phase 2 ARQ retransmit; **lossless → PFC (Phase 2.1)** pauses the sender when the
+  ring fills. PFC is the production choice and folds straight in.
+- **Completions:** WRITE_IMM/SEND post a CQE to the host RxWqeRing (Phase 1.2b/1.5) — a worker writes the
+  slot + bumps the producer index (the mechanism proven in Phase 1.2a T6).
+
+### What to reuse vs build
+| Piece | Status |
+|---|---|
+| Per-frame parse + `rkey`→MR + validate | ✅ built (Phase 1 / exp 3 worker) — reuse |
+| MAC→L1 ingress at line rate | ✅ proven (exp 1) |
+| eth L1 concurrent write+read bandwidth | ✅ proven (exp 2) |
+| Pool throughput + sizing | ✅ measured (exp 3) |
+| Shared MR table (workers read, RISC1 writes) | build |
+| Atomic multi-consumer ring claim + framing | build |
+| Remote-dest `noc_write` landing | build (~2× workers) |
+| Completions from workers → host RxWqeRing | build (extends Phase 1.2a) |
+| Flow control (PFC-lossless / ARQ-lossy) | build (Phase 2.1) |
+| HW classifier steering `0x1AF6` (RISC out of ingest routing) | optional (exp 4) |
+
+### Relationship to the phase plan
+- **Phase 1 (RISC1 dispatch)** stays as the **correctness reference + control-plane** implementation and
+  the regression oracle (T1–T7). It is not superseded — its logic is the worker's logic.
+- **Phase 3.1** is rewritten from "make the single RISC faster" to **"line-rate RX via the Tensix
+  drainer pool"** (the architecture above), gated on exps 1–3 (green). See production-plan §3.1.
+
 ## 6. Recommendation / scheduling
 
 - **Now (cheap, high-value):** run experiment **1** (ingress ceiling) and **2** (ICRC) — a few hours,

@@ -31,6 +31,15 @@ descriptor — and **never copies a payload byte**. This is the RX analog of the
 HW moves." Consequence of push: **no inherent back-pressure to the sender** — the BH absorbs bursts
 with a deep ring and throttles the sender only via out-of-band PFC (BH.6), never by pulling.
 
+> **Scaling note (2026-07-26): this single-RISC dispatch is the correctness reference, not the
+> line-rate data plane.** One ~1 GHz eth RISC caps at ~13–18 Gbps (the per-frame O(1) work × 6M frames/s
+> at 200 G exceeds one RISC). For **line-rate (200 Gbps/link) RX**, the *same* per-frame logic fans out to
+> a **Tensix worker pool** (~2–3 workers/200 G, measured), with this eth RISC demoted to control plane
+> (MR mgmt, exceptions, ACK, READ_RESP). The MAC→L1 ingress (198 G drop-free) and eth-L1 concurrent
+> write+read (619 G) that make this work are proven on silicon. Architecture + phasing:
+> `tt-rdma-rx-linerate-research.md §7` and production-plan §3.1. The rest of this spec describes the
+> single-RISC reference path; the pool reuses its parse/`rkey`→MR/land body verbatim.
+
 ## 2. Actors
 
 | Actor | Role | On the per-byte datapath? |
