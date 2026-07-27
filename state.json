@@ -1,34 +1,34 @@
 {
-  "last_run": "2026-07-25T06:39:00Z",
-  "run_id": "30147764461",
-  "tasks_run": ["task1_triage", "task2_comment", "task3_fix_issues", "task6_stale_prs", "task8_monthly_summary"],
+  "last_run": "2026-07-27T06:54:09Z",
+  "run_id": "30244126524",
+  "tasks_run": ["task1_triage", "task2_comment", "task6_stale_prs", "task8_monthly_summary"],
   "monthly_activity_issue": {
     "number": 50956,
     "month": "2026-07",
     "status": "updated"
   },
-  "issues_labeled": [9364, 9865, 11090, 11873, 12892, 50487, 50684, 50616, 50972, 50973, 50974, 51080],
-  "issues_commented": [9364, 50897, 50955, 50684, 51083, 51080],
+  "issues_labeled": [9364, 9865, 11090, 11873, 12892, 50487, 50684, 50616, 50972, 50973, 50974, 51080, 51133, 51127, 51123],
+  "issues_commented": [9364, 50897, 50955, 50684, 51083, 51080, 51133, 51137],
   "welcomed_contributors": [50955, 50943, 50897],
   "stale_pr_actions": {
     "49800": {"action": "author_nudge", "timestamp": "2026-07-24T06:42:39Z"},
-    "49892": {"action": "codeowners_ping", "timestamp": "2026-07-24T06:42:39Z"},
+    "49892": {"action": "codeowners_ping", "timestamp": "2026-07-27T06:54:09Z"},
     "50525": {"action": "author_nudge", "timestamp": "2026-07-25T06:39:00Z"}
   },
   "backlog_cursor": {
-    "issues": 51083,
-    "last_processed_date": "2026-07-25"
+    "issues": 51137,
+    "last_processed_date": "2026-07-27"
   },
   "open_prs": [
     {
-      "temporary_id": "#aw_pr51083fix",
       "branch": "repo-assist/fix-issue-51083-repeat-last-dim-precedence",
       "issue": 51083,
+      "pr_number": 51111,
       "title": "[repo-assist] fix(data_movement): correct operator-precedence bug in repeat_program_factory_last_dim",
       "created": "2026-07-25T06:39:00Z",
-      "ci_status": "queued"
+      "ci_status": "unknown - check pr-gate runs on PR 51111"
     }
   ],
-  "next_tasks": ["task5_maintain_prs", "task7_welcome", "task4_improvements"],
-  "notes": "DeepWiki cache note: for repeat kernel questions check repeat_program_factory_*.cpp directly. Last verified 2026-07-25."
+  "next_tasks": ["task5_maintain_prs", "task7_welcome", "task3_fix_issues", "task4_improvements"],
+  "notes": "DeepWiki cache note: for repeat kernel questions check repeat_program_factory_*.cpp directly. Last verified 2026-07-25. Issue 51133 is a well-documented bug about from_torch dropping per-core allocation on on-device path. Issue 51127 covers ten defects in tt_metal/impl spanning 7 subsystems."
 }
