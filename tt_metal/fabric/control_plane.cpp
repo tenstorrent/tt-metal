@@ -496,7 +496,7 @@ void ControlPlane::init_control_plane(
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
     try {
@@ -505,7 +505,7 @@ void ControlPlane::init_control_plane(
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
-    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
@@ -524,7 +524,7 @@ void ControlPlane::init_control_plane(
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
     // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
     {
-        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" /
                                                        "fabric" /
                                                        ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
                                                         "_of_" + std::to_string(world_size) + ".yaml");
@@ -611,7 +611,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
     try {
@@ -620,7 +620,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
-    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
@@ -639,7 +639,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
     // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
     {
-        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" /
                                                        "fabric" /
                                                        ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
                                                         "_of_" + std::to_string(world_size) + ".yaml");
