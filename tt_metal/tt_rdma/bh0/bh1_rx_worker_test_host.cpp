@@ -93,6 +93,7 @@ int main(int argc, char** argv) {
     // + worker-readable (slot 0 works). The RCB/DBG regions are owned/churned by the base FW so writes there
     // didn't reach the workers. The worker never uses slot 63 as an MR (test rkey -> slot 0).
     const uint32_t kMrGen = kSharedMr + 63u * 32u;
+    const uint32_t kRegReq = kSharedMr + 62u * 32u;  // 3.1e: registration request the control-plane RISC1 fulfils
     // 3.1c remote-dest landing: MR slot 0 points at a landing region on a Tensix core NOT in the pool
     // (row 1). Workers noc_write each valid payload there. Verify byte-exact 'TTWR' after the run.
     const CoreCoord land = device->worker_core_from_logical_core(CoreCoord{0, 1});
@@ -102,32 +103,35 @@ int main(int argc, char** argv) {
     const uint32_t kCqBase = 0x30000u;
     const uint32_t kCqSlots = 64u;
     const uint32_t kCqProdIdx = 0x48000u;  // shared prod_idx counter on the cq core (past the 64x1536 ring)
-    std::vector<uint32_t> mrtab(kMrSlots * 8, 0u);
-    mrtab[0] = kLandBase;         // slot 0 base L1 addr on the dest core
-    mrtab[2] = 0x100000u;         // slot 0 length lo (1 MB)
-    mrtab[4] = kRkey;             // slot 0 rkey
-    mrtab[5] = 0x2u;              // slot 0 access = REMOTE_WRITE
-    mrtab[6] = (uint32_t)land.x;  // slot 0 dest NoC core x
-    mrtab[7] = (uint32_t)land.y;  // slot 0 dest NoC core y
-    mrtab[63 * 8] = 1u;           // slot 63 word 0 = MR generation = 1
+    // 3.1e: the shared table + generation are OWNED BY THE CONTROL-PLANE RISC1. The host does NOT write
+    // slot 0 directly -- it posts a registration REQUEST and RISC1 writes the MR entry + bumps the gen.
+    // Shared table + workers' local cache start EMPTY, so a worker only has a valid MR once RISC1 registers.
+    std::vector<uint32_t> mrempty(kMrSlots * 8, 0u);
     cluster.write_core(device->id(), land, std::vector<uint32_t>(8, 0u), kLandBase);  // clear the landing spot
     cluster.write_core(
         device->id(), cqc, std::vector<uint32_t>(kCqSlots * 1536u / 4u, 0u), kCqBase);  // clear the whole ring
 
     std::vector<uint32_t> z9(9, 0u), z8(8, 0u);
     cluster.write_core(device->id(), eth_phys, z9, (uint32_t)eth_stats_addr);
-    cluster.write_core(device->id(), eth_phys, mrtab, kSharedMr);  // shared table (incl. gen=1 in slot 63)
+    cluster.write_core(device->id(), eth_phys, mrempty, kSharedMr);  // empty table; RISC1 registers slot 0
+    // Registration request: [go, slot, base, len, rkey, access, dest_x, dest_y]. RISC1 fulfils it -> slot 0.
+    std::vector<uint32_t> reg{1u, 0u, kLandBase, 0x100000u, kRkey, 0x2u, (uint32_t)land.x, (uint32_t)land.y};
+    cluster.write_core(device->id(), eth_phys, reg, kRegReq);
     for (uint32_t i = 0; i < nworkers; ++i) {
         cluster.write_core(device->id(), wphys[i], z8, kWStats);
         cluster.write_core(device->id(), wphys[i], std::vector<uint32_t>{0u}, kWStop);
-        cluster.write_core(device->id(), wphys[i], mrtab, kWMr);  // pre-seed the local cache (refreshed anyway)
+        cluster.write_core(device->id(), wphys[i], mrempty, kWMr);  // empty cache; refreshed from RISC1 on gen bump
     }
 
     Program program = CreateProgram();
     const EthernetConfig ecfg{.noc = NOC::NOC_1, .processor = DataMovementProcessor::RISCV_1};
     const KernelHandle ek =
-        CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_ingest_probe.cpp", eth_logical, ecfg);
-    SetRuntimeArgs(program, ek, eth_logical, {(uint32_t)eth_stats_addr, TT_RDMA_STOP_ADDR, ring_addr, ring_size});
+        CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_rx_ctrl.cpp", eth_logical, ecfg);
+    SetRuntimeArgs(
+        program,
+        ek,
+        eth_logical,
+        {(uint32_t)eth_stats_addr, TT_RDMA_STOP_ADDR, ring_addr, ring_size, kSharedMr, kRegReq});
 
     const DataMovementConfig dcfg{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
     for (uint32_t i = 0; i < nworkers; ++i) {
@@ -197,12 +201,14 @@ int main(int argc, char** argv) {
         // generation. Correct shared-table behavior: all workers refresh their cache and slot-0 WRITEs
         // stop validating -> aggregate `valid` freezes, and every worker's cached_gen advances to 2.
         if (!mr_changed && s == steps / 2) {
-            cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>{0u}, kSharedMr + 4u * 4u);  // slot0 rkey=0
-            cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>{2u}, kMrGen);               // gen -> 2
+            // Ask the CONTROL-PLANE RISC1 to re-register slot 0 with rkey=0 (invalidate). RISC1 bumps the
+            // generation -> workers refresh -> slot-0 WRITEs stop validating (valid freezes).
+            std::vector<uint32_t> regi{1u, 0u, kLandBase, 0x100000u, 0u, 0x2u, (uint32_t)land.x, (uint32_t)land.y};
+            cluster.write_core(device->id(), eth_phys, regi, kRegReq);
             valid_at_change = valid;
             mr_changed = true;
             std::printf(
-                "  >> [t=%2ds] invalidated shared MR slot 0 (rkey->0), gen->2; valid was %llu\n",
+                "  >> [t=%2ds] posted RISC1 re-register slot 0 (rkey->0); valid was %llu\n",
                 (s + 1) / 4,
                 (unsigned long long)valid);
         }
@@ -267,6 +273,19 @@ int main(int argc, char** argv) {
         (unsigned long long)valid_at_change,
         (unsigned long long)final_valid,
         shared_mr_ok ? "SHARED-TABLE OK (central update seen by all workers)" : "SHARED-TABLE FAIL");
+    // 3.1e control plane: RISC1 (not the host) fulfilled the MR registrations. stats[9]=n_reg on the eth
+    // core; the shared-table gen (slot 63) should be 2 (initial register + invalidate), both done by RISC1.
+    auto ereg =
+        cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)eth_stats_addr + 9u * 4u, sizeof(uint32_t));
+    auto egen = cluster.read_core<uint32_t>(device->id(), eth_phys, kMrGen, sizeof(uint32_t));
+    const uint32_t n_reg = ereg.empty() ? 0u : ereg[0];
+    const uint32_t eth_gen = egen.empty() ? 0u : egen[0];
+    const bool ctrl_ok = (n_reg >= 2u) && (eth_gen == 2u) && (workers_on_gen2 == nworkers);
+    std::printf(
+        "  control plane: RISC1 registrations n_reg=%u, eth gen=%u -> %s\n",
+        n_reg,
+        eth_gen,
+        ctrl_ok ? "RISC1 OWNS MR REGISTRATION (host never wrote the table)" : "CTRL-PLANE FAIL");
     // 3.1c remote-dest landing: the payload must have landed byte-exact at the MR dest (off-core, not just
     // compute-local). Sender roff=0 -> every WRITE lands at kLandBase; check word0 = 'TTWR' (0x52575454).
     auto lz = cluster.read_core<uint32_t>(device->id(), land, kLandBase, 4 * sizeof(uint32_t));
