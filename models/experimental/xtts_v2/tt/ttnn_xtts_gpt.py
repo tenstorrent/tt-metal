@@ -52,19 +52,30 @@ def _compute_config(math_fidelity=ttnn.MathFidelity.HiFi4):
     )
 
 
+def mesh_replicate_mapper(device):
+    """Weight/state distribution for the (data-parallel) mesh: replicate to every device on a
+    multi-device MeshDevice, or a no-op on a single card (MeshDevice(1,1) -> get_num_devices()==1),
+    so the same code runs on one dev card and on a 1xN mesh unchanged."""
+    n = getattr(device, "get_num_devices", lambda: 1)()
+    return ttnn.ReplicateTensorToMesh(device) if n > 1 else None
+
+
 def preprocess_gpt_parameters(device, ckpt_path=None, dtype=ttnn.bfloat16):
     """Load the transformer-core weights from the XTTS checkpoint into TTNN tensors."""
     core = load_gpt_core_state(ckpt_path) if ckpt_path else load_gpt_core_state()
     cfg = TTNNGPTConfig()
+    mapper = mesh_replicate_mapper(device)
 
     def lin(w, b):
         return {
-            "weight": ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
-            "bias": ttnn.from_torch(b.reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+            "weight": ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper),
+            "bias": ttnn.from_torch(
+                b.reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+            ),
         }
 
     def norm(w, b):
-        return TTNNLayerNorm(device, w, b, cfg.n_embd, eps=cfg.layer_norm_eps, dtype=dtype)
+        return TTNNLayerNorm(device, w, b, cfg.n_embd, eps=cfg.layer_norm_eps, dtype=dtype, mesh_mapper=mapper)
 
     params = {"blocks": []}
     for i in range(cfg.n_layer):
@@ -95,6 +106,7 @@ class TTNNGPTCore:
         attention="sdpa",
     ):
         self.device = device
+        self.mesh_mapper = mesh_replicate_mapper(device)  # None on a single card; replicate on a mesh
         self.params = parameters
         self.config = config or TTNNGPTConfig()
         self.compute_kernel_config = _compute_config(math_fidelity)
@@ -114,7 +126,11 @@ class TTNNGPTCore:
             m = torch.zeros(1, 1, S, S)
             m.masked_fill_(torch.triu(torch.ones(S, S), diagonal=1).bool(), -1e9)
             self._causal_mask[S] = ttnn.from_torch(
-                m, dtype=self.activation_dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+                m,
+                dtype=self.activation_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=self.mesh_mapper,
             )
         return self._causal_mask[S]
 

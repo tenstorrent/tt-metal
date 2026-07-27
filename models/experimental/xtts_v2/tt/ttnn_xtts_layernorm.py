@@ -32,8 +32,11 @@ def _default_compute_config():
 
 
 class TTNNLayerNorm:
-    def __init__(self, device, weight_t, bias_t, dim, eps=1e-5, dtype=ttnn.bfloat16, shard_height=_TILE):
+    def __init__(
+        self, device, weight_t, bias_t, dim, eps=1e-5, dtype=ttnn.bfloat16, shard_height=_TILE, mesh_mapper=None
+    ):
         self.device = device
+        self.mesh_mapper = mesh_mapper  # replicate weights across a mesh; None on a single card
         self.dim = dim
         self.eps = eps
         self.dtype = dtype
@@ -42,8 +45,12 @@ class TTNNLayerNorm:
         # keep host copies for the (lazy) sharded weight expansion
         self._w_torch = weight_t.reshape(-1).contiguous()
         self._b_torch = bias_t.reshape(-1).contiguous()
-        self.weight = ttnn.from_torch(self._w_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.bias = ttnn.from_torch(self._b_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.weight = ttnn.from_torch(
+            self._w_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mesh_mapper
+        )
+        self.bias = ttnn.from_torch(
+            self._b_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mesh_mapper
+        )
         self._sharded = None  # (weight, bias, mem_config, program_config), built on first sharded call
 
     def _build_sharded(self):
@@ -71,12 +78,14 @@ class TTNNLayerNorm:
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
+            mesh_mapper=self.mesh_mapper,
         )
         be = ttnn.from_torch(
             self._b_torch.view(1, 1, self.dim).expand(1, sh, self.dim).contiguous(),
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
+            mesh_mapper=self.mesh_mapper,
         )
         self._sharded = (we, be, mem_config, program_config)
 

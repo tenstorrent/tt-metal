@@ -29,6 +29,7 @@ import ttnn
 import torch
 
 from models.experimental.xtts_v2.reference.xtts_cond_ref import load_cond_state
+from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import mesh_replicate_mapper
 
 DIM = 1024
 HEADS = 8
@@ -56,12 +57,15 @@ def _compute_config():
 
 def preprocess_perceiver_parameters(device, ckpt_path=None, dtype=ttnn.float32):
     w = load_cond_state(ckpt_path) if ckpt_path else load_cond_state()
+    mapper = mesh_replicate_mapper(device)
 
     def linT(name):  # nn.Linear weight [out,in] -> ttnn [in,out] for x@W
-        return ttnn.from_torch(w[name].t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(
+            w[name].t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+        )
 
     def t(x):
-        return ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper)
 
     params = {
         "latents": t(w["latents"].unsqueeze(0)),  # [1,32,1024]
@@ -85,14 +89,21 @@ def preprocess_perceiver_parameters(device, ckpt_path=None, dtype=ttnn.float32):
 
 def preprocess_encoder_parameters(device, ckpt_path=None, dtype=ttnn.float32):
     w = load_cond_state(ckpt_path) if ckpt_path else load_cond_state()
+    mapper = mesh_replicate_mapper(device)
 
     def convT(name):  # Conv1d weight [out,in,1] -> ttnn [in,out] for x@W
         return ttnn.from_torch(
-            w[name].squeeze(-1).t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            w[name].squeeze(-1).t().contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mapper,
         )
 
     def vec(x):
-        return ttnn.from_torch(x.reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(
+            x.reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+        )
 
     params = {
         "init_w": convT("init.weight"),
@@ -124,14 +135,19 @@ class TTNNConditioningEncoder:
         self.t_real = t_real
         self.s_pad = s_pad
         self.scale = ENC_DH**-0.5
+        self.mesh_mapper = mesh_replicate_mapper(device)  # None on a single card; replicate on a mesh
         # time mask [1, S, 1]: 1 for real frames, 0 for padded
         tm = torch.zeros(1, s_pad, 1)
         tm[:, :t_real, :] = 1.0
-        self.time_mask = ttnn.from_torch(tm, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        self.time_mask = ttnn.from_torch(
+            tm, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=self.mesh_mapper
+        )
         # additive key mask [1,1,1,S]: 0 for real keys, -inf for padded
         km = torch.zeros(1, 1, 1, s_pad)
         km[:, :, :, t_real:] = -1e9
-        self.key_mask = ttnn.from_torch(km, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        self.key_mask = ttnn.from_torch(
+            km, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=self.mesh_mapper
+        )
         self.n = float(t_real * GN_CH)  # elements per group (real T x channels/group)
 
     def _group_norm(self, x, gn_w, gn_b):
@@ -187,6 +203,7 @@ class TTNNPerceiver:
         self.p = parameters
         self.cc = _compute_config()
         self.scale = DH**-0.5
+        self.mesh_mapper = mesh_replicate_mapper(device)  # None on a single card; replicate on a mesh
 
     def _to_heads(self, x, n):  # [1, n, INNER] -> [1, HEADS, n, DH]
         x = ttnn.reshape(x, (1, n, HEADS, DH))

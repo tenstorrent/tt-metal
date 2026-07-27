@@ -166,6 +166,58 @@ host-side (input tilization/copy, latent readback, CPU sampling head), which now
   decode latent 0.99972→0.99968, generate latent 0.99955→0.99931 (both still >0.999 gate),
   from the different (multi-core) reduction order. Prefill/interleaved PCC unchanged.
 
+## Mesh / data-parallel serving — model/driver boundary (design)
+The model stays **DP-flavor-agnostic**; the pipeline / inference stack picks the flavor per
+use case (matches tt-metal's own layering: mesh-agnostic modules + `Generator`/`create_submeshes`
+on top). Target serving shape: **pure DP, one request per chip, batch 32 across a 1x32 mesh**
+(the small GPT fits per chip, so no tensor-parallelism, zero cross-chip comm — each request is
+pinned to one chip for its whole pipeline). Two flavors, both realized by the *same* model:
+- **SPMD over the mesh:** one model instance on `(1,32)`, input `ShardTensorToMesh(dim=0)`
+  (`[32,..]` -> `[1,..]`/chip), weights replicated, **one** `execute_trace` fans out to all 32,
+  driver reads back a gathered `[32]` token tensor and runs **one batched loop** (lockstep;
+  per-request stop is a mask; continuous batching = overwrite slot i of the shared batched
+  input + reset slot i of the KV cache).
+- **Independent replicas:** 32 instances on `(1,1)` submeshes (`create_submeshes`), each the
+  plain single-card b1 code (mappers no-op), driven by **independent async loops / threads**;
+  continuous batching = host prefills a new request into whichever chip finished, without
+  touching the other 31 (no lockstep, no straggler waste, no ragged padding).
+
+Key point: with **one request per chip, per-chip batch = 1 in both flavors**, so the model's
+per-chip compute is identical either way — the flavor is purely (mesh shape, #instances, loop
+driver), all *above* the model.
+
+**Contract that keeps the model flavor-agnostic:**
+1. Accept any `mesh_device` + guarded mappers — **done** (`mesh_replicate_mapper`: replicate on
+   a mesh, no-op on `(1,1)`; threaded through weights/LayerNorm/KV-cache/`_pos`/`_in`).
+2. Keep per-chip shapes `[1, ..]` — **already true** (the hardcoded `(1,1,nh,hd)` reshapes *are*
+   the per-chip shape, correct in both flavors).
+3. **Don't own the host<->device boundary or the loop — done.** `TTNNGPTTracedDecoder` now
+   exposes only the device-in -> device-out primitive `step_device(emb_dev, pos) -> latent_dev`
+   (plus `set_pos` for cache-position control, `capture`, `reset_caches`); the old torch-coupled
+   `step`/`decode_sequence`/`_set_input` were removed. The `from_torch`/`to_torch` + loop moved to
+   the **driver**: `ttnn_xtts_gpt_generate.traced_decode_sequence(decoder, inputs_embeds)` (teacher-
+   forced; used by `test_gpt_trace_pcc`), and the pipeline's own `step()` wrapper for the free-
+   running sampling loop. The non-traced `TTNNGPTDecoder.decode_step(x_t)` was *already* device-in/
+   out (its driver is `TTNNGPTGenerator`). PCC unchanged; 5/5 GPT tests pass.
+
+### Status (2026-07-23)
+- **Mesh threading: done across all 5 blocks** — GPT, conditioning, speaker, HiFi-GAN all use the
+  same guarded `mesh_replicate_mapper` on their weight/state `from_torch` sites (no-op on `(1,1)`,
+  so all PCCs unchanged; full pipeline re-run coherent). Verified only on the `(1,1)` degenerate
+  path (no multi-device machine yet). *Watch item for a real mesh:* the speaker block threaded the
+  mapper onto a couple of **host** `from_torch`s later consumed by `ttnn.conv2d` — confirm that
+  replicate-on-host-then-conv behaves as intended on `>1` devices.
+- **I/O lift: only the GPT needed it (done).** The other three blocks are **already device-in ->
+  device-out** — they're single-shot forwards (no loop), so their `__call__`s take/return device
+  tensors and the driver already owns the boundary. Non-weight `from_torch`/`to_torch` inside those
+  classes are limited to: conditioning's persistent `time_mask`/`key_mask` in `__init__` (constants,
+  mesh-threaded — not data I/O), and HiFi-GAN's opt-in `return_intermediates` debug `to_torch`
+  (off the production path). No lift required for them.
+- **Remaining for actual mesh serving** (pipeline-level, not model-level): input `ShardTensorToMesh`
+  / output gather, per-chip position/penalty state, and the continuous-batching scheduler — all in
+  the driver. The GPT is one of five stages; each block still needs its host<->device I/O owned by
+  the pipeline for a full on-mesh request.
+
 ## Known bugs
 - **BUG-1 (FIXED 2026-07-20):** decode returned garbage when `max_seq` was an **odd number of
   32-tiles** (e.g. 736 = 23 tiles → PCC 0.63; 256 = 8 tiles worked by luck). Root cause was

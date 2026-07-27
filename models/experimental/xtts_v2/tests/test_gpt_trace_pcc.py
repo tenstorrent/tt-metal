@@ -21,6 +21,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import preprocess_gpt_parameters
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTTracedDecoder
+from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_generate import traced_decode_sequence
 
 GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden", "gpt")
 TARGET_PCC = 0.999
@@ -36,7 +37,7 @@ def run_trace_pcc(device):
         device, preprocess_gpt_parameters(device, dtype=ttnn.bfloat16), max_seq=((S + 31) // 32) * 32
     )
     dec.capture()
-    latents = dec.decode_sequence(inputs_embeds)
+    latents = traced_decode_sequence(dec, inputs_embeds)  # driver owns the I/O + loop
 
     passed, pcc_msg = comp_pcc(golden, latents, pcc=TARGET_PCC)
     print(f"[traced decode] latents {tuple(latents.shape)} pcc: {pcc_msg}")

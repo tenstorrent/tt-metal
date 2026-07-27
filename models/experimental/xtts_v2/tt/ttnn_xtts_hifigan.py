@@ -41,6 +41,7 @@ from models.experimental.xtts_v2.reference.xtts_hifigan_ref import (
     _pad,
     load_hifigan_state,
 )
+from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import mesh_replicate_mapper
 
 LRELU = 0.1  # LRELU_SLOPE used everywhere except the final activation
 FINAL_LRELU = 0.01  # coqui uses torch's DEFAULT leaky_relu slope before conv_post (GOTCHA)
@@ -61,24 +62,31 @@ def _compute_config():
 def preprocess_hifigan_parameters(device, ckpt_path=None, conv_dtype=ttnn.float32, lin_dtype=ttnn.float32):
     """Build TTNN host/device weights from the (already weight-norm folded) generator state."""
     w = load_hifigan_state(ckpt_path) if ckpt_path else load_hifigan_state()
+    mapper = mesh_replicate_mapper(device)  # None on a single card; replicate on a mesh
 
     def conv_w(name):  # Conv1d weight [out,in,k] -> ttnn host row-major (conv1d takes it as-is)
-        return ttnn.from_torch(w[name], dtype=conv_dtype)
+        return ttnn.from_torch(w[name], dtype=conv_dtype, mesh_mapper=mapper)
 
     def convT_w(name):  # ConvTranspose1d weight [in,out,k] -> IOHW [in,out,1,k]
         t = w[name]
-        return ttnn.from_torch(t.reshape(t.shape[0], t.shape[1], 1, t.shape[2]), dtype=conv_dtype)
+        return ttnn.from_torch(t.reshape(t.shape[0], t.shape[1], 1, t.shape[2]), dtype=conv_dtype, mesh_mapper=mapper)
 
     def bias4(name):  # conv bias [out] -> [1,1,1,out]
-        return ttnn.from_torch(w[name].reshape(1, 1, 1, -1), dtype=conv_dtype)
+        return ttnn.from_torch(w[name].reshape(1, 1, 1, -1), dtype=conv_dtype, mesh_mapper=mapper)
 
     def cond_linT(name):  # 1x1 conv weight [out,in,1] -> linear weight [in,out] on device (TILE)
         return ttnn.from_torch(
-            w[name].squeeze(-1).t().contiguous(), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device
+            w[name].squeeze(-1).t().contiguous(),
+            dtype=lin_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mapper,
         )
 
     def vec(name):  # bias [out] -> [1,out] on device (TILE)
-        return ttnn.from_torch(w[name].reshape(1, -1), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(
+            w[name].reshape(1, -1), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+        )
 
     p = {
         "conv_pre_w": conv_w("conv_pre.weight"),
@@ -111,6 +119,7 @@ def preprocess_hifigan_parameters(device, ckpt_path=None, conv_dtype=ttnn.float3
 class TTNNHifiganGenerator:
     def __init__(self, device, parameters, dtype=ttnn.float32, weights_dtype=None):
         self.device = device
+        self.mesh_mapper = mesh_replicate_mapper(device)  # None on a single card; replicate on a mesh
         self.p = parameters
         self.cc = _compute_config()
         self.dtype = dtype  # activation dtype
