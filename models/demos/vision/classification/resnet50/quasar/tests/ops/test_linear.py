@@ -162,3 +162,79 @@ def test_resnet50_fc_linear(mesh_device):
     assert tuple(got.shape) == (1, 1, M, N_padded), got.shape
     # bf16 + LoFi over a K=2048 reduction is noisy -> 0.98 (raise toward 0.99 once LLK is happy).
     assert_with_pcc(golden, got, pcc=0.98)
+
+
+# --- [#48552] layer3 conv2 matmul probe: the f6b15a (16-bit ring) payoff, in isolation ---------------------
+# layer3 conv2 = 256->256 3x3 -> the split's Program B matmul is K=72 tiles, N=8 tiles. On the height-sharded
+# split it keeps the FULL per-core weights resident: in1 ring = out_block_w * in0_block_w. With out_block_w =
+# full N (8) and in0_block_w = full K (72) -> 576 tiles > 511 (the old uint16 ring extent), so this config
+# ONLY works with f6b15a's uint32 ring (576*2048 = 1.18 MB, well under L1). Full N per core also exercises the
+# wide-N (>=8) fused bias+RELU epilogue -- the one documented risk for the layer3 height split. Clean [M,N]
+# readback (no conv spatial padding). PASS => f6b15a + the wide-N epilogue work => layer3 height split is sound;
+# HANG/low-PCC => the wide-N bias epilogue is the blocker (hand to LLK).
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_layer3_conv2_matmul_wide_ring(mesh_device):
+    device = mesh_device
+    torch.manual_seed(0)
+
+    k_tiles = 72  # layer3 Cin*3*3 = 2304
+    n_tiles = 8  # layer3 Cout = 256
+    K = k_tiles * 32
+    N = n_tiles * 32
+    M = 32
+
+    matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(1, 1),  # single core: in0_block_w == full K -> single K-block, no spill
+        in0_block_w=k_tiles,  # 72 = full K
+        out_subblock_h=1,
+        out_subblock_w=4,  # divides out_block_w(8), <=8 dest tiles
+        out_block_h=1,
+        out_block_w=n_tiles,  # 8 = FULL N (no shrink) -> in1 ring 8*72=576 > 511 -> REQUIRES f6b15a
+        per_core_M=1,
+        per_core_N=n_tiles,
+        fuse_batch=True,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),  # folded-BN + RELU like the conv
+        mcast_in0=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    act_torch = torch.randn((1, 1, M, K), dtype=torch.bfloat16)
+    weight_torch = torch.randn((1, 1, K, N), dtype=torch.bfloat16)
+    bias_torch = torch.randn((1, 1, 1, N), dtype=torch.bfloat16)
+    golden = torch.relu(torch.matmul(act_torch.float(), weight_torch.float()) + bias_torch.float())
+
+    act_mem_config = ttnn.create_sharded_memory_config_(
+        [nearest_32(M), K],  # single core -> full K width on one core
+        ttnn.CoreGrid(x=1, y=1),
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        tile_layout=True,
+        use_height_and_width_as_shard_shape=True,
+    )
+    act = ttnn.from_torch(act_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device, act_mem_config)
+    weight = ttnn.from_torch(
+        weight_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bias = ttnn.from_torch(
+        bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    out = ttnn.experimental.quasar.linear(
+        act,
+        weight,
+        bias=bias,
+        program_config=matmul_config,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    got = ttnn.to_torch(out).float()
+    assert tuple(got.shape) == (1, 1, M, N), got.shape
+    assert_with_pcc(golden, got, pcc=0.98)

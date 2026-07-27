@@ -1238,10 +1238,12 @@ class resnet50:
             layer_module="layer3_module6",
         )
 
-        # [#48552] Quasar: layer4 conv2 uses the HEIGHT-sharded split too (see the layer3 note; f6b15a's
-        # 16-bit ring widen lets the full per-core weights fit resident). WH/BH keep block-sharding below.
+        # [#48552] Quasar: layer4 conv2 STAYS block-sharded (fused conv / LLK path). Unlike layer3, layer4's
+        # full per-core weights (K=144 x N=16 = 2304 tiles ~= 4.7 MB) EXCEED Quasar's ~4 MB unreserved L1, so
+        # even with f6b15a's uint32 ring they don't physically fit the single-K-block height split
+        # (dataflow_buffer.cpp:812 FATAL ring_bytes <= unreserved_l1_size). Needs N-split (block) to fit.
         reshard = is_quasar()
-        height_shard = is_quasar()
+        height_shard = False
 
         if is_wormhole_b0():
             block_mem_config = ttnn.create_sharded_memory_config(
@@ -1281,7 +1283,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer4_module2",
         )
 
@@ -1292,7 +1293,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer4_module3",
         )
 

@@ -32,14 +32,14 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# (layer, in_ch, out_ch, spatial, id) — height-sharded 3x3 conv2 of each layer.
-# layer3/4 join the height-sharded split once f6b15a (16-bit ring widen) lets their full per-core weights
-# (K=72/N=8, K=144/N=16) fit the compute-DFB ring; before f6b15a they had to block-shard + fused conv.
+# (layer, in_ch, out_ch, spatial, id) — height-sharded 3x3 conv2 of layer1/2 (the split-path convs).
+# NOTE: layer3 also uses the height split (f6b15a lets its K=72/N=8 weights fit) but its 14x14=196 output
+# isn't tile-aligned so this test's naive reshape can't read it back -> validate layer3 via the clean
+# matmul probe test_linear.py::test_layer3_conv2_matmul_wide_ring instead. layer4 (K=144/N=16 ~4.7MB) exceeds
+# L1 so it can't do the height split at all (stays block-sharded / fused).
 LAYER_CONV2 = [
     (1, 64, 64, 56, "layer1"),
     (2, 128, 128, 28, "layer2"),
-    (3, 256, 256, 14, "layer3"),
-    (4, 512, 512, 7, "layer4"),
 ]
 
 
