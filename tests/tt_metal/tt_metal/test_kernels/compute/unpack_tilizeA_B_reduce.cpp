@@ -18,8 +18,13 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
     compute_kernel_hw_startup(dfb::in_data, dfb::in_scaler, dfb::out);
+#ifdef USE_SHORT_INIT
+    tilizeA_B_reduce_init_short<true /*neginf_srcA*/, false /*zero_srcA_reduce*/>(
+        dfb::in_data, dfb::in_scaler, per_core_block_tile_cnt);
+#else
     tilizeA_B_reduce_init<true /*neginf_srcA*/, false /*zero_srcA_reduce*/>(
         dfb::in_data, dfb::in_scaler, per_core_block_tile_cnt, dfb::out);
+#endif
 
     dfb_in_scaler.wait_front(1);
 
