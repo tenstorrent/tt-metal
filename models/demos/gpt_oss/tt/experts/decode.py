@@ -65,56 +65,33 @@ def decode_forward(
     output_tile = ttnn.Tile([32, 32])
 
     # Gate projection
+    # Fused gate+up: one sparse_matmul over the concatenated [gate|up] weight.
     gate = ttnn.sparse_matmul(
         hidden_states,
-        weights.gate_proj,
+        weights.gate_up_proj,
         sparsity=sparsity,
-        # nnz intentionally omitted (None -> inferred at runtime). Passing a static
-        # nnz makes the sparse_matmul in0-mcast receivers loop a fixed count while the
-        # sender only mcasts for the *actual* non-zero `sparsity` entries. The decode
-        # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
-        # on Blackhole (small weights flush to 0), so a static nnz != actual count and
-        # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
-        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
+        # nnz=None (runtime-inferred): static nnz deadlocks when actual non-zero
+        # sparsity count < k (BH flushes small routing weights to 0). See #45943/#45052.
         nnz=None,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=program_config.get_decode_gate_up_config(
-            hidden_states.shape[2], weights.gate_proj.shape[3], k=hidden_states.shape[-1]
-        ),
-        dtype=activation_dtype,
-    )
-    # Note: reshape/transpose operations return views - do not deallocate originals
-    gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
-    gate = ttnn.transpose(gate, 1, 2)
-    gate = ttnn.reshape(gate, (batch_size, config.num_experts, weights.intermediate_size_per_device))
-    gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
-
-    # Up projection
-    up = ttnn.sparse_matmul(
-        hidden_states,
-        weights.up_proj,
-        sparsity=sparsity,
-        # nnz intentionally omitted (None -> inferred at runtime). Passing a static
-        # nnz makes the sparse_matmul in0-mcast receivers loop a fixed count while the
-        # sender only mcasts for the *actual* non-zero `sparsity` entries. The decode
-        # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
-        # on Blackhole (small weights flush to 0), so a static nnz != actual count and
-        # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
-        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
-        nnz=None,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(
-            hidden_states.shape[2], weights.up_proj.shape[3], k=hidden_states.shape[-1]
+            hidden_states.shape[2], weights.gate_up_proj.shape[3], k=hidden_states.shape[-1]
         ),
         dtype=activation_dtype,
     )
     hidden_states.deallocate(True)
-    # Note: reshape/transpose operations return views - do not deallocate originals
-    up = ttnn.reshape(up, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
-    up = ttnn.transpose(up, 1, 2)
-    up = ttnn.reshape(up, (batch_size, config.num_experts, weights.intermediate_size_per_device))
+    # Fused output is [.., 2*I]; split into gate/up along the last dim after the
+    # shared reshape/transpose (halves the gate/up sparse_matmul launches).
+    I = weights.intermediate_size_per_device
+    gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, 2 * I))
+    gate = ttnn.transpose(gate, 1, 2)
+    gate = ttnn.reshape(gate, (batch_size, config.num_experts, 2 * I))
+    gate_up = gate
+    gate = ttnn.slice(gate_up, (0, 0, 0), (batch_size, config.num_experts, I))
+    up = ttnn.slice(gate_up, (0, 0, I), (batch_size, config.num_experts, 2 * I))
+    gate_up.deallocate(True)
+    gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
     up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
 
     # Apply SwiGLU activation (consumes gate and up internally)

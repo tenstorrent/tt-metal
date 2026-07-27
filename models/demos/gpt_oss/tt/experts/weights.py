@@ -25,6 +25,9 @@ class ExpertWeights:
     up_proj_bias: ttnn.Tensor
     down_proj_bias: ttnn.Tensor
     intermediate_size_per_device: int
+    # Fused gate+up weight (concat along N) built ON-DEVICE from the cached gate/up
+    # tensors, so one sparse_matmul produces [gate|up]; output splits [..,:I]/[..,I:].
+    gate_up_proj: ttnn.Tensor = None
 
 
 def load_expert_weights(
@@ -152,6 +155,12 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Build the fused gate+up weight on-device by concatenating the (already cached /
+    # loaded) gate and up tensors along the output dim. Works with warm cache
+    # (state_dict=None) since gate_proj_tt/up_proj_tt exist as device tensors. One-time
+    # at model build. Halves the gate/up sparse_matmul launches at inference.
+    gate_up_proj_tt = ttnn.concat([gate_proj_tt, up_proj_tt], dim=3)
+
     return ExpertWeights(
         gate_proj=gate_proj_tt,
         up_proj=up_proj_tt,
@@ -160,4 +169,5 @@ def load_expert_weights(
         up_proj_bias=up_proj_bias_tt,
         down_proj_bias=down_proj_bias_tt,
         intermediate_size_per_device=intermediate_size_per_device,
+        gate_up_proj=gate_up_proj_tt,
     )
