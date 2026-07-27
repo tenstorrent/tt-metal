@@ -90,3 +90,82 @@ def run_nlp_create_qkv_heads_boltz_test(batch, seq_len, head_dim, n_heads, dtype
 @pytest.mark.timeout(120)
 def test_nlp_create_qkv_heads_boltz(batch, seq_len, n_heads, head_dim, dtype, in0_mem_config, request, device):
     run_nlp_create_qkv_heads_boltz_test(batch, seq_len, head_dim, n_heads, dtype, in0_mem_config, device)
+
+
+"""
+#48928 override_runtime_arguments regression: on a program-cache HIT the op must re-derive and
+re-apply the per-dispatch tensor buffer addresses (fused QKV input + q/k/v outputs). The migration
+replaced the deprecated get_dynamic_runtime_args() cache-hit hook with override_runtime_arguments(),
+which re-runs the selected factory's create_descriptor and re-applies its runtime args (the
+Interleaved reader/writer bind the input/output buffers via Buffer* runtime args). If those addresses
+were frozen at the first (cache-miss) dispatch, a same-shape re-run against a freshly-allocated
+(differently-addressed) input tensor would read/write stale addresses and produce wrong outputs.
+"""
+
+
+def _build_boltz_qkv_inputs(batch, seq_len, head_dim, n_heads, dtype, in0_mem_config, device, seed):
+    torch.manual_seed(seed)
+    heads_num = n_heads
+
+    qkvg_shape = [batch, seq_len, seq_len, heads_num * head_dim * 3]
+    qkvg = torch.randn(qkvg_shape)
+
+    ref_q = qkvg[:, :, :, : heads_num * head_dim]
+    ref_k = qkvg[:, :, :, heads_num * head_dim : 2 * heads_num * head_dim]
+    ref_v = qkvg[:, :, :, 2 * heads_num * head_dim :]
+
+    ref_q = torch.reshape(ref_q, [seq_len, seq_len, heads_num, head_dim]).permute(2, 0, 1, 3)
+    ref_k = torch.reshape(ref_k, [seq_len, seq_len, heads_num, head_dim]).permute(2, 0, 1, 3)
+    ref_v = torch.reshape(ref_v, [seq_len, seq_len, heads_num, head_dim]).permute(2, 0, 1, 3)
+
+    qkvg_ttnn = ttnn.Tensor(qkvg, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
+    return qkvg_ttnn, (ref_q, ref_k, ref_v)
+
+
+def _check_boltz_qkv_against_refs(q_ttnn, k_ttnn, v_ttnn, refs, pcc):
+    ref_q, ref_k, ref_v = refs
+    out_pass_q, output_pcc_q = comp_pcc(tt2torch_tensor(q_ttnn), ref_q, pcc)
+    out_pass_k, output_pcc_k = comp_pcc(tt2torch_tensor(k_ttnn), ref_k, pcc)
+    out_pass_v, output_pcc_v = comp_pcc(tt2torch_tensor(v_ttnn), ref_v, pcc)
+    logger.debug(f"Q pcc={output_pcc_q} K pcc={output_pcc_k} V pcc={output_pcc_v}")
+    assert out_pass_q, f"Q tensor quality check failed with PCC: {output_pcc_q}"
+    assert out_pass_k, f"K tensor quality check failed with PCC: {output_pcc_k}"
+    assert out_pass_v, f"V tensor quality check failed with PCC: {output_pcc_v}"
+
+
+@pytest.mark.timeout(120)
+def test_nlp_create_qkv_heads_boltz_cache_hit(device):
+    """Interleaved path: a same-shape cache-HIT dispatch on a freshly-allocated (differently-addressed)
+    fused QKV input tensor must re-apply the input/output buffer addresses (via
+    override_runtime_arguments) and stay numerically correct without growing the program cache."""
+    dtype = ttnn.bfloat16
+    pcc = 0.99
+    in0_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    batch, seq_len, n_heads, head_dim = 1, 768, 4, 32
+
+    def run(seed):
+        qkvg_ttnn, refs = _build_boltz_qkv_inputs(
+            batch, seq_len, head_dim, n_heads, dtype, in0_mem_config, device, seed
+        )
+        q_ttnn, k_ttnn, v_ttnn = ttnn.experimental.nlp_create_qkv_heads_boltz(
+            qkvg_ttnn,
+            num_heads=n_heads,
+            num_kv_heads=n_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        _check_boltz_qkv_against_refs(q_ttnn, k_ttnn, v_ttnn, refs, pcc)
+        return qkvg_ttnn
+
+    # Prime the cache; HOLD the input so the cache-hit run's fresh allocation gets a different address.
+    keep = run(seed=1234)
+    entries_after_prime = device.num_program_cache_entries()
+    assert entries_after_prime > 0, "expected a cached program to hit"
+
+    # Cache HIT: same shape, fresh (differently-addressed) input tensor. Correct outputs prove the
+    # buffer addresses were re-applied on the hit, not frozen at the first (miss) dispatch.
+    hit = run(seed=5678)
+    assert hit.buffer_address() != keep.buffer_address(), "second input must land at a different address"
+    assert (
+        device.num_program_cache_entries() == entries_after_prime
+    ), "identical-shape cache-hit dispatch unexpectedly grew the program cache"
