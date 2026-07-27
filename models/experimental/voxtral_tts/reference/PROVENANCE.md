@@ -182,8 +182,40 @@ No `vllm`, `vllm_omni`, `mistral_common`, `transformers`, `einops`, `safetensors
   0.0% WER. Two reasons: the frame rate is 12.5 Hz rather than 21.53 Hz, and the window is
   ~1500 frames (~120 s) rather than 605 codes. Also tekken is far denser — 139 text tokens for
   the paragraph that cost XTTS 391.
-- **Numerical vs upstream: still NOT done.** Everything above is self-consistency plus an
-  end-to-end intelligibility check — strong evidence the architecture is right, but not a
-  per-block PCC gate against vLLM-Omni. That needs `vllm` + `vllm-omni` + `flash-attn` in a
-  separate venv comparing against dumped activations, and remains the next step. 0.0% WER does
-  not rule out a subtly wrong op that the model is robust to.
+- **Numerical vs upstream: DONE — 27/27 checks pass.** Harness and setup in
+  `scripts/upstream_compare/`. This is the gate the XTTS-v2 references cleared against coqui.
+
+  Block 1 vs **`mistral_inference`** (Mistral's own reference, reads the same
+  consolidated/params.json format) — 12/12:
+
+  | check | PCC |
+  |---|---|
+  | RoPE table, real + imag part | 1.0 (bit-exact) |
+  | `apply_rope` on Q / on K | 1.0 (bit-exact) |
+  | RMSNorm (eps 1e-5) | 1.0 (bit-exact) |
+  | SwiGLU FeedForward 3072→9216→3072 | 1.0 (bit-exact) |
+  | `repeat_kv` GQA 32/8 interleaved | 1.0 (bit-exact) |
+  | full TransformerBlock, layers 0 / 1 / 13 / 25 | ≥ 0.9999993 |
+  | **full 26-layer stack + final norm** | **0.99999988** |
+
+  Blocks 2 and 3 vs **vLLM-Omni's own `nn.Module`s** — 15/15:
+
+  | check | result |
+  |---|---|
+  | b2 semantic logits / masked argmax | 1.0 / **exact code match** |
+  | b2 time embedding, `predict_velocity` | 1.0 |
+  | **b2 full frame, 37 codes** | **bit-identical integers** |
+  | b3 `quantizer.decode` → latents | 1.0 (bit-exact) |
+  | **b3 full decode → waveform** | **0.99999982** |
+  | b3 each of the 8 decoder stages | ≥ 0.99999 |
+
+  **This settles the RoPE convention empirically**: our interleaved-pair rotation is bit-exact
+  against `mistral_inference`, so finding 3 is confirmed rather than inferred. It also
+  independently corroborates finding 1 — upstream's own `VoxtralTTSAudioTokenizer` reports 114
+  encoder tensors missing when loading the released checkpoint.
+
+  Two CPU substitutions were required and are documented in the scripts: vLLM/mistral_common
+  imports are stubbed (the classes under test never touch them at runtime), and xformers'
+  `memory_efficient_attention` is replaced by `torch`'s SDPA inside `mistral_inference` (no CPU
+  kernel). The latter is a *third* implementation, independent of both ours and xformers', so
+  agreement validates our attention too rather than being circular.

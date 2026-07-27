@@ -9,6 +9,10 @@ golden/
 # Generated audio
 generated/
 
+# Third-party vLLM-Omni source fetched for the upstream comparison (Apache-2.0). Not vendored —
+# re-fetch from the pinned commit with scripts/upstream_compare/fetch_upstream.py.
+scripts/upstream_compare/upstream_src/
+
 # Python caches
 __pycache__/
 *.pyc
