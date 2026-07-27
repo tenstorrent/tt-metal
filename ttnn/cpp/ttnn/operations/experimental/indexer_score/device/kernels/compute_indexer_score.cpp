@@ -464,150 +464,156 @@ void kernel_main() {
     // max_bands for q-mcast lockstep: a phantom band [num_bands, max_bands) only drains the re-issued q
     // (no k/compute/output). Resident never pads.
     const uint32_t band_iters = stream_heads ? max_bands : num_bands;
-    for (uint32_t phase = 0; phase < num_groups; ++phase) {
-        const uint32_t group = row_group0 + phase * group_stride;
-        for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
-            uint32_t band = band_i;
-            if constexpr (fused_ring_enabled) {
-                // Reordered band-visit order (local-first, then remote by ring arrival), IDENTICAL to
-                // reader/writer so the cb_k / cb_out FIFOs stay in lockstep. Permutation starts at rt slot 10.
-                band = get_arg_val<uint32_t>(10 + band_i);
-            }
-            if constexpr (stream_heads) {
-                if (band >= num_bands) {
-                    drain_phantom_band_q();  // q-mcast rendezvous only; no compute/output
-                    continue;
+    // Batch (q dim 0) is the OUTERMOST loop, mirroring reader/writer so all three stay in lockstep. Compute
+    // itself is batch-agnostic -- it does no DRAM addressing, and the causal geometry (chunk_start_tiles,
+    // kv_len_tiles, straddle) is uniform across the batch -- so a batch is simply another pass over the same
+    // rectangle, consuming the next batch's q/w/k from the CBs. batch_size == 1 is the original single walk.
+    for (uint32_t b = 0; b < batch_size; ++b) {
+        for (uint32_t phase = 0; phase < num_groups; ++phase) {
+            const uint32_t group = row_group0 + phase * group_stride;
+            for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
+                uint32_t band = band_i;
+                if constexpr (fused_ring_enabled) {
+                    // Reordered band-visit order (local-first, then remote by ring arrival), IDENTICAL to
+                    // reader/writer so the cb_k / cb_out FIFOs stay in lockstep. Permutation starts at rt slot 10.
+                    band = get_arg_val<uint32_t>(10 + band_i);
                 }
-            }
-            span.set(group, band0 + band);
-            // Fused + streamed k waits incrementally inside the matmul (overlap the DRAM read); all other
-            // paths wait the whole chunk here.
-            if constexpr (!fuse_single || !fused_stream_k) {
-                k.wait_front(k_chunk_tiles);
-            }
-            const uint32_t k_tiles_in_unit = span.k_tiles();
-
-            // Fused single-head: gate resident q by w IN PLACE once per group load (band 0; q is reused
-            // across bands, so per-band scaling would compound w). One pass per output plane's head.
-            if constexpr (fuse_single) {
-                if (band == 0) {
-                    for (uint32_t g = 0; g < num_out_groups; ++g) {
-                        scale_q_by_w_inplace(g * reduce_heads);
+                if constexpr (stream_heads) {
+                    if (band >= num_bands) {
+                        drain_phantom_band_q();  // q-mcast rendezvous only; no compute/output
+                        continue;
                     }
                 }
-            }
+                span.set(group, band0 + band);
+                // Fused + streamed k waits incrementally inside the matmul (overlap the DRAM read); all other
+                // paths wait the whole chunk here.
+                if constexpr (!fuse_single || !fused_stream_k) {
+                    k.wait_front(k_chunk_tiles);
+                }
+                const uint32_t k_tiles_in_unit = span.k_tiles();
 
-            // One output plane per group (g-major): group g sums only its reduce_heads heads into the
-            // accumulator, then untilizes/pools its own plane. num_out_groups==1 = head-summed (one plane);
-            // >1 = per-group planes. k/q/w resident across all groups.
-            for (uint32_t g = 0; g < num_out_groups; ++g) {
-                const uint32_t head_base = g * reduce_heads;
+                // Fused single-head: gate resident q by w IN PLACE once per group load (band 0; q is reused
+                // across bands, so per-band scaling would compound w). One pass per output plane's head.
                 if constexpr (fuse_single) {
-                    // Matmul the whole unit straight to the accumulator (q pre-gated). Matmul-all then
-                    // mask-all keeps ONE matmul-mode set and ONE srcA reconfig.
-                    acc.reserve_back(unit_strip);
-                    set_matmul_to_acc_mode<cb_q, cb_k, cb_acc_strip>();
-                    {
-                        // mm_col_batch: DEST column batch (half-sync bf16 capacity), shared with the reader's
-                        // k-stream chunk so producer/consumer granularities match (indexer_score_common.hpp).
-                        // Column-outer: wait only this sub-chunk's k tiles, matmul for ALL rows, then next --
-                        // consuming k as the reader streams it. k indexed absolutely into cb_k.
-                        for (uint32_t c = 0; c < k_tiles_per_unit; c += mm_col_batch) {
-                            const uint32_t c_end =
-                                (c + mm_col_batch <= k_tiles_per_unit) ? (c + mm_col_batch) : k_tiles_per_unit;
-                            const uint32_t n = c_end - c;
-                            if constexpr (fused_stream_k) {
-                                k.wait_front(c_end * head_dim_tiles);  // streamed: wait k cols [0, c_end)
-                            }
-                            for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(
-                                    head_base, r, c, n, r * k_tiles_per_unit + c);
-                            }
+                    if (band == 0) {
+                        for (uint32_t g = 0; g < num_out_groups; ++g) {
+                            scale_q_by_w_inplace(g * reduce_heads);
                         }
                     }
-                    // Matmul left srcA in k's format; the mask copies a bf16 -inf tile -> reconfig srcA to bf16.
-                    reconfig_data_format_srca(cb_k, cb_mask);
-                    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                        stamp_masked_suffix(
-                            span,
-                            r,
-                            r * k_tiles_per_unit,
-                            k_tiles_in_unit,
-                            chunk_start_tiles,
-                            straddle_q_tile,
-                            straddle_jump_tiles);
-                    }
-                    acc.push_back(unit_strip);
-                } else {
-                    acc.reserve_back(unit_strip);
-                    for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
-                        // wait q rows 0..q_row only (reader pushes per row), so row 0 runs while row 1
-                        // arrives. Cumulative + non-consuming -> immediate once resident; no-op for g>0.
-                        if constexpr (!stream_heads) {
-                            q.wait_front((q_row + 1) * q_row_tiles);
-                        }
-                        const uint32_t slot_base = q_row * k_tiles_per_unit;
-
-                        // PHASE 1 (matmul) + PHASE 2 (mul) per k-col batch (cb_qk holds one batch, so they
-                        // alternate); a whole-row batch = one of each per row.
-                        if constexpr (qk_col_batch > 1) {
-                            for (uint32_t col_base = 0; col_base < k_tiles_per_unit; col_base += qk_col_batch) {
-                                const uint32_t cols = (col_base + qk_col_batch <= k_tiles_per_unit)
-                                                          ? qk_col_batch
-                                                          : (k_tiles_per_unit - col_base);
-                                matmul_phase(q_row, col_base, cols, head_base);          // act(q.kT)->cb_qk
-                                mul_phase(q_row, slot_base, col_base, cols, head_base);  // gate-mul + reduce
-                            }
-                        } else {
-                            // head-streaming / KC==1 fallback (all heads -> one plane; G==1 only).
-                            accumulate_row_streaming(q_row, slot_base);
-                        }
-
-                        stamp_masked_suffix(
-                            span,
-                            q_row,
-                            slot_base,
-                            k_tiles_in_unit,
-                            chunk_start_tiles,
-                            straddle_q_tile,
-                            straddle_jump_tiles);
-                    }
-                    acc.push_back(unit_strip);
                 }
 
-                // PHASE 3 -- emit this plane's output. block_size==0: untilize the QC strips in one
-                // pack_untilize bracket. block-pool: reduce<MAX,REDUCE_ROW> over the masked unit, each block
-                // folded to one col-0 tile (writer reads col 0). Future keys are -inf so straddling/future
-                // blocks pool correctly.
-                if constexpr (block_pool) {
-                    // Batch all blocks of a q-row into one DEST acquire when they fit (<= 8 half-sync);
-                    // else the library reduce (one acquire per block).
-                    if constexpr (blocks_per_unit <= 8) {
-                        block_max_pool_batched<cb_acc_strip, cb_scaler, cb_out_strip>(unit_strip);
+                // One output plane per group (g-major): group g sums only its reduce_heads heads into the
+                // accumulator, then untilizes/pools its own plane. num_out_groups==1 = head-summed (one plane);
+                // >1 = per-group planes. k/q/w resident across all groups.
+                for (uint32_t g = 0; g < num_out_groups; ++g) {
+                    const uint32_t head_base = g * reduce_heads;
+                    if constexpr (fuse_single) {
+                        // Matmul the whole unit straight to the accumulator (q pre-gated). Matmul-all then
+                        // mask-all keeps ONE matmul-mode set and ONE srcA reconfig.
+                        acc.reserve_back(unit_strip);
+                        set_matmul_to_acc_mode<cb_q, cb_k, cb_acc_strip>();
+                        {
+                            // mm_col_batch: DEST column batch (half-sync bf16 capacity), shared with the reader's
+                            // k-stream chunk so producer/consumer granularities match (indexer_score_common.hpp).
+                            // Column-outer: wait only this sub-chunk's k tiles, matmul for ALL rows, then next --
+                            // consuming k as the reader streams it. k indexed absolutely into cb_k.
+                            for (uint32_t c = 0; c < k_tiles_per_unit; c += mm_col_batch) {
+                                const uint32_t c_end =
+                                    (c + mm_col_batch <= k_tiles_per_unit) ? (c + mm_col_batch) : k_tiles_per_unit;
+                                const uint32_t n = c_end - c;
+                                if constexpr (fused_stream_k) {
+                                    k.wait_front(c_end * head_dim_tiles);  // streamed: wait k cols [0, c_end)
+                                }
+                                for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+                                    matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(
+                                        head_base, r, c, n, r * k_tiles_per_unit + c);
+                                }
+                            }
+                        }
+                        // Matmul left srcA in k's format; the mask copies a bf16 -inf tile -> reconfig srcA to bf16.
+                        reconfig_data_format_srca(cb_k, cb_mask);
+                        for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+                            stamp_masked_suffix(
+                                span,
+                                r,
+                                r * k_tiles_per_unit,
+                                k_tiles_in_unit,
+                                chunk_start_tiles,
+                                straddle_q_tile,
+                                straddle_jump_tiles);
+                        }
+                        acc.push_back(unit_strip);
                     } else {
-                        compute_kernel_lib::reduce<
-                            PoolType::MAX,
-                            ReduceDim::REDUCE_ROW,
-                            cb_acc_strip,
-                            cb_scaler,
-                            cb_out_strip,
-                            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-                            compute_kernel_lib::ReduceInputBlockShape::of(
-                                /*rows = blocks/row */ blocks_per_unit,
-                                /*cols = tiles/block */ block_tiles,
-                                /*batches = q-rows */ q_tiles_per_unit));
-                    }
-                } else {
-                    compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
-                }
-            }
+                        acc.reserve_back(unit_strip);
+                        for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
+                            // wait q rows 0..q_row only (reader pushes per row), so row 0 runs while row 1
+                            // arrives. Cumulative + non-consuming -> immediate once resident; no-op for g>0.
+                            if constexpr (!stream_heads) {
+                                q.wait_front((q_row + 1) * q_row_tiles);
+                            }
+                            const uint32_t slot_base = q_row * k_tiles_per_unit;
 
-            k.pop_front(k_chunk_tiles);
-        }
-        // group's bands done: release its resident q/w (one block per group).
-        CircularBuffer(cb_w).pop_front(w_group_tiles);  // gates waited in the mul/scale phase
-        if constexpr (!stream_heads) {
-            q.pop_front(q_group_tiles);
+                            // PHASE 1 (matmul) + PHASE 2 (mul) per k-col batch (cb_qk holds one batch, so they
+                            // alternate); a whole-row batch = one of each per row.
+                            if constexpr (qk_col_batch > 1) {
+                                for (uint32_t col_base = 0; col_base < k_tiles_per_unit; col_base += qk_col_batch) {
+                                    const uint32_t cols = (col_base + qk_col_batch <= k_tiles_per_unit)
+                                                              ? qk_col_batch
+                                                              : (k_tiles_per_unit - col_base);
+                                    matmul_phase(q_row, col_base, cols, head_base);          // act(q.kT)->cb_qk
+                                    mul_phase(q_row, slot_base, col_base, cols, head_base);  // gate-mul + reduce
+                                }
+                            } else {
+                                // head-streaming / KC==1 fallback (all heads -> one plane; G==1 only).
+                                accumulate_row_streaming(q_row, slot_base);
+                            }
+
+                            stamp_masked_suffix(
+                                span,
+                                q_row,
+                                slot_base,
+                                k_tiles_in_unit,
+                                chunk_start_tiles,
+                                straddle_q_tile,
+                                straddle_jump_tiles);
+                        }
+                        acc.push_back(unit_strip);
+                    }
+
+                    // PHASE 3 -- emit this plane's output. block_size==0: untilize the QC strips in one
+                    // pack_untilize bracket. block-pool: reduce<MAX,REDUCE_ROW> over the masked unit, each block
+                    // folded to one col-0 tile (writer reads col 0). Future keys are -inf so straddling/future
+                    // blocks pool correctly.
+                    if constexpr (block_pool) {
+                        // Batch all blocks of a q-row into one DEST acquire when they fit (<= 8 half-sync);
+                        // else the library reduce (one acquire per block).
+                        if constexpr (blocks_per_unit <= 8) {
+                            block_max_pool_batched<cb_acc_strip, cb_scaler, cb_out_strip>(unit_strip);
+                        } else {
+                            compute_kernel_lib::reduce<
+                                PoolType::MAX,
+                                ReduceDim::REDUCE_ROW,
+                                cb_acc_strip,
+                                cb_scaler,
+                                cb_out_strip,
+                                compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+                                compute_kernel_lib::ReduceInputBlockShape::of(
+                                    /*rows = blocks/row */ blocks_per_unit,
+                                    /*cols = tiles/block */ block_tiles,
+                                    /*batches = q-rows */ q_tiles_per_unit));
+                        }
+                    } else {
+                        compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
+                    }
+                }
+
+                k.pop_front(k_chunk_tiles);
+            }
+            // group's bands done: release its resident q/w (one block per group).
+            CircularBuffer(cb_w).pop_front(w_group_tiles);  // gates waited in the mul/scale phase
+            if constexpr (!stream_heads) {
+                q.pop_front(q_group_tiles);
+            }
         }
     }
 }

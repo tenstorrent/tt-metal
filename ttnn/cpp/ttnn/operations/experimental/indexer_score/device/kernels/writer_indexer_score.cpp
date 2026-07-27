@@ -143,43 +143,49 @@ void kernel_main() {
     WorkUnitSpan span;
     span.set_valid_k_len_tiles(kv_len_tiles);
 
-    // Output [B, num_out_groups, Sq, T]: plane g occupies rows [g*Sq, (g+1)*Sq). Compute pushes
+    // Output [B, num_out_groups, Sq, T]: plane g of batch b occupies rows [(b*G + g)*Sq, +Sq). Compute pushes
     // num_out_groups * QC strips per cell in g-major order; drain them the same way.
     constexpr uint32_t sq_rows = q_len_tiles * tt::constants::TILE_HEIGHT;  // rows per plane (Sq)
+    constexpr uint32_t out_batch_rows = num_out_groups * sq_rows;           // rows per batch (G planes)
 
-    for (uint32_t phase = 0; phase < num_groups; ++phase) {
-        const uint32_t group = row_group0 + phase * group_stride;
-        for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
-            uint32_t band = band_i;
-            if constexpr (fused_ring_enabled) {
-                // Reordered band-visit order, IDENTICAL to reader/compute (perm starts at rt slot 11).
-                band = get_arg_val<uint32_t>(11 + band_i);
-            }
-            span.set(group, band0 + band);
-            const uint32_t k_tile0 = span.k_tile_start();
-            const uint32_t valid_w = span.k_tiles();  // == KC for interior bands, < KC for a partial last band
-            // block-pool: this band's slice starts at block-column k_tile0/block_tiles, width valid_blocks.
-            const uint32_t col_off_blocks = block_pool ? (k_tile0 / block_tiles) : 0;
-            const uint32_t valid_blocks = block_pool ? (valid_w / block_tiles) : 0;  // == blocks_per_unit (no partial)
-            for (uint32_t g = 0; g < num_out_groups; ++g) {
-                const uint32_t plane_row0 = g * sq_rows;
-                for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
-                    const uint32_t q_seq_row0 =
-                        (span.q_tile_start() + q_row) * tt::constants::TILE_HEIGHT;  // within Sq
-                    const uint32_t page_row_start = plane_row0 + q_seq_row0;
-                    if constexpr (block_pool) {
-                        write_pooled_strip(
-                            noc,
-                            out_acc,
-                            page_row_start,
-                            q_seq_row0,
-                            col_off_blocks,
-                            valid_blocks,
-                            chunk_start_keys,
-                            straddle_q_keys,
-                            straddle_jump_keys);
-                    } else {
-                        write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
+    // Batch (q dim 0) is the OUTERMOST loop, mirroring reader/compute so all three stay in lockstep; the only
+    // batch-dependent value is the output row base below. batch_size == 1 makes that term 0.
+    for (uint32_t b = 0; b < batch_size; ++b) {
+        for (uint32_t phase = 0; phase < num_groups; ++phase) {
+            const uint32_t group = row_group0 + phase * group_stride;
+            for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
+                uint32_t band = band_i;
+                if constexpr (fused_ring_enabled) {
+                    // Reordered band-visit order, IDENTICAL to reader/compute (perm starts at rt slot 11).
+                    band = get_arg_val<uint32_t>(11 + band_i);
+                }
+                span.set(group, band0 + band);
+                const uint32_t k_tile0 = span.k_tile_start();
+                const uint32_t valid_w = span.k_tiles();  // == KC for interior bands, < KC for a partial last band
+                // block-pool: this band's slice starts at block-column k_tile0/block_tiles, width valid_blocks.
+                const uint32_t col_off_blocks = block_pool ? (k_tile0 / block_tiles) : 0;
+                const uint32_t valid_blocks =
+                    block_pool ? (valid_w / block_tiles) : 0;  // == blocks_per_unit (no partial)
+                for (uint32_t g = 0; g < num_out_groups; ++g) {
+                    const uint32_t plane_row0 = b * out_batch_rows + g * sq_rows;
+                    for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
+                        const uint32_t q_seq_row0 =
+                            (span.q_tile_start() + q_row) * tt::constants::TILE_HEIGHT;  // within Sq
+                        const uint32_t page_row_start = plane_row0 + q_seq_row0;
+                        if constexpr (block_pool) {
+                            write_pooled_strip(
+                                noc,
+                                out_acc,
+                                page_row_start,
+                                q_seq_row0,
+                                col_off_blocks,
+                                valid_blocks,
+                                chunk_start_keys,
+                                straddle_q_keys,
+                                straddle_jump_keys);
+                        } else {
+                            write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
+                        }
                     }
                 }
             }

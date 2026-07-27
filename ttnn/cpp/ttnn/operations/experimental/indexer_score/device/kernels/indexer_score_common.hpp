@@ -25,7 +25,12 @@ constexpr uint32_t k_tiles_per_unit = get_compile_time_arg_val(5);  // k tiles p
 constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);   // heads resident at once (head_group knob)
 constexpr uint32_t num_out_groups = get_compile_time_arg_val(7);    // output groups; score [B, num_out_groups, Sq, T]
 constexpr uint32_t block_tiles = get_compile_time_arg_val(8);       // block-max-pool width in k-tiles; 0 = no pooling
-constexpr uint32_t num_dim_args = 9;
+// Batch (q's dim 0). Every kernel walks the whole (group-phase x band) rectangle once PER BATCH -- an OUTER
+// loop around the phase loop, so the banded schedule and both multicast rectangles are batch-independent and
+// every core's push/pop sequence stays uniform (the mcast rendezvous holds by construction). 1 = the original
+// single-batch walk, with all the per-batch page offsets below identically 0.
+constexpr uint32_t batch_size = get_compile_time_arg_val(9);
+constexpr uint32_t num_dim_args = 10;
 
 // Heads summed per output plane. num_out_groups==1 sums all heads into one plane; >1 partitions into
 // num_out_groups groups of reduce_heads each, summed within a group (per-group planes).
@@ -63,10 +68,17 @@ constexpr bool stream_heads = heads_per_group < num_heads;
 // Shared so the producer (reader) and consumer (compute) granularities can't drift apart.
 constexpr uint32_t mm_col_batch = 8;
 
-// Derived tile counts for the per-unit circular-buffer blocks.
+// Derived tile counts for the per-unit circular-buffer blocks. Batch does NOT scale these -- a batch is a
+// separate pass over the same buffers, not more resident data.
 constexpr uint32_t q_group_tiles = heads_per_group * q_tiles_per_unit * head_dim_tiles;  // [QC][HB][Dt]
 constexpr uint32_t w_group_tiles = num_heads * q_tiles_per_unit;                         // [QC][Hi]
 constexpr uint32_t k_chunk_tiles = k_tiles_per_unit * head_dim_tiles;                    // [KC][Dt]
+
+// Per-batch page strides for the reader's DRAM addressing: q pages are [B][Hi][Sqt][Dt] and w pages
+// [B][Hi][Sqt], so batch b starts b of these in. (k's stride is reader-local -- it may be 0 for a shared
+// single-slot cache -- and the output's is writer-local, in rows rather than pages.)
+constexpr uint32_t q_batch_pages = num_heads * q_len_tiles * head_dim_tiles;
+constexpr uint32_t w_batch_pages = num_heads * q_len_tiles;
 
 // Thin wrapper binding the shared work-split formula to this kernel's CT dims: unmasked prefix
 // k-tiles of absolute q-tile-row q_row_abs in a unit. chunk_start_tiles is the per-device runtime

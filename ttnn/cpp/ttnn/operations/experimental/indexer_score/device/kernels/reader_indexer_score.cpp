@@ -6,6 +6,9 @@
 // group pushes resident w + (if all heads fit) q, per band pushes the k chunk. Builds the [diag, full]
 // -inf mask tiles once, plus a 1.0 reduce-scaler when block-max-pooling. G-agnostic.
 //
+// Batch (q dim 0) is an OUTER loop over that whole rectangle, applying a per-batch page base to q, w and k
+// (k's is 0 for a shared single-slot cache). The masks/scaler are built once outside it.
+//
 // Banded-product multicast: a grid ROW shares q/w (q-mcast), a COLUMN shares the k-band (k-mcast). role
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
 // (column) mcast are independent; either may be off.
@@ -63,6 +66,11 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
+// Batch > 1 k mapping: 1 = ONE shared context ([1,1,T,D] k, every q batch scores the same keys), so the
+// per-batch page stride is 0. 0 = per-batch slots ([B,1,T,D], or a B-wide window of a multi-slot cache), so
+// batch b steps a whole T-slot in. Host-decided from k's batch vs q's (both hashed), hence compile-time.
+constexpr uint32_t k_batch_broadcast = get_compile_time_arg_val(bc_ct_base + 5);
+constexpr uint32_t k_batch_pages = k_batch_broadcast ? 0u : (k_len_tiles * head_dim_tiles);
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -157,11 +165,12 @@ inline void build_mask_tiles(Noc noc) {
 
 /** Read ONE q-row (heads_per_group heads x head_dim_tiles tiles from first_head) into L1 at `ptr`;
  *  returns the advanced ptr. Shared by resident (read_q_rows) and streaming (read_q_block) paths.
- *  q page layout is [Hi][q_len_tiles][head_dim_tiles]. */
+ *  q page layout is [B][Hi][q_len_tiles][head_dim_tiles]; q_page_base selects the batch (0 at B==1). */
 template <typename QAcc>
-inline uint32_t read_q_row_into(Noc noc, const QAcc& q_acc, uint32_t ptr, uint32_t q_row_abs, uint32_t first_head) {
+inline uint32_t read_q_row_into(
+    Noc noc, const QAcc& q_acc, uint32_t ptr, uint32_t q_row_abs, uint32_t first_head, uint32_t q_page_base) {
     for (uint32_t head = first_head; head < first_head + heads_per_group; ++head) {
-        const uint32_t base = head * q_len_tiles * head_dim_tiles + q_row_abs * head_dim_tiles;
+        const uint32_t base = q_page_base + head * q_len_tiles * head_dim_tiles + q_row_abs * head_dim_tiles;
         for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
             noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), q_tile_bytes, {.page_id = base + dim_tile}, {});
             ptr += q_tile_bytes;
@@ -173,12 +182,18 @@ inline uint32_t read_q_row_into(Noc noc, const QAcc& q_acc, uint32_t ptr, uint32
 /** q head-group block [QC][heads_per_group][head_dim_tiles], role-aware (q row mcast). ONE block / ONE
  *  mcast handshake (unit-0 startup is bound by the rendezvous count). */
 template <typename QAcc>
-inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint32_t first_head, const McastDir& q_dir) {
+inline void read_q_block(
+    Noc noc,
+    const QAcc& q_acc,
+    uint32_t q_row_start,
+    uint32_t first_head,
+    const McastDir& q_dir,
+    uint32_t q_page_base) {
     read_block_or_mcast<cb_q, q_mcast_on, q_send_sem, q_recv_sem, q_valid_sem>(
         noc, q_group_tiles, q_group_tiles * q_tile_bytes, q_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
-                ptr = read_q_row_into(noc, q_acc, ptr, q_row_start + q_row, first_head);
+                ptr = read_q_row_into(noc, q_acc, ptr, q_row_start + q_row, first_head, q_page_base);
             }
         });
 }
@@ -186,7 +201,7 @@ inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint3
 /** Resident-heads q, read/mcast ONE q-row at a time (QC pushes) so compute starts row-0 matmuls while
  *  row 1 drains. One mcast rendezvous per row. QC==1 is byte-identical to read_q_block. */
 template <typename QAcc>
-inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const McastDir& q_dir) {
+inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const McastDir& q_dir, uint32_t q_page_base) {
     constexpr uint32_t row_tiles = heads_per_group * head_dim_tiles;  // one q-row across all resident heads
     CircularBuffer cb(cb_q);
     cb.reserve_back(q_group_tiles);
@@ -200,7 +215,7 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
                 continue;
             }
         }
-        read_q_row_into(noc, q_acc, row_addr, q_row_start + q_row, /*first_head=*/0);
+        read_q_row_into(noc, q_acc, row_addr, q_row_start + q_row, /*first_head=*/0, q_page_base);
         noc.async_read_barrier();
         if constexpr (q_mcast_on) {
             if (q_dir.role == iscore::mcast_role_sender) {  // broadcast this row down the grid row
@@ -227,9 +242,10 @@ inline void fill_w_group_const() {
 /** resident w (gates) group [q_tiles_per_unit][num_heads], role-aware (q row mcast). MSA fills a constant
  *  scale in L1 instead (no weights tensor); the q placeholder accessor is then unused. */
 template <typename WAcc>
-inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const McastDir& q_dir) {
+inline void read_w_group(
+    Noc noc, const WAcc& w_acc, uint32_t q_row_start, const McastDir& q_dir, uint32_t w_page_base) {
     if constexpr (synthesize_gate) {
-        fill_w_group_const();
+        fill_w_group_const();  // constant scale -- batch-independent, no page base
         return;
     }
     read_block_or_mcast<cb_w, q_mcast_on, q_send_sem, q_recv_sem, q_valid_sem>(
@@ -241,7 +257,7 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
                         w_acc,
                         CoreLocalMem<uint32_t>(ptr),
                         bf16_tile_bytes,
-                        {.page_id = head * q_len_tiles + q_row_start + q_row},
+                        {.page_id = w_page_base + head * q_len_tiles + q_row_start + q_row},
                         {});
                     ptr += bf16_tile_bytes;
                 }
@@ -270,8 +286,8 @@ inline void read_k_chunk(
     const McastDir& k_dir,
     uint32_t k_batch_page_offset) {
     // Reserves/pushes the full k_chunk_tiles (keeps the 2-chunk ring half-aligned) but reads only the
-    // k_tiles_in_unit valid cols (pad slots stale, compute masks them). k_batch_page_offset = indexed-cache
-    // slot shift; 0 when not indexed.
+    // k_tiles_in_unit valid cols (pad slots stale, compute masks them). k_batch_page_offset = the slot shift
+    // for this read: indexed-cache base + this batch's slot step; 0 when neither indexed nor batched.
     read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
@@ -308,8 +324,10 @@ inline void read_k_chunk_fused(
                 const uint32_t seq_tile = bc_ktile(k_tile_start + k_col);
                 const uint32_t shard = seq_tile / tiles_per_shard;
                 if (shard == ring_index) {
-                    // Indexed multi-user cache: the remote branch adds k_batch_page_offset (= cache_batch_idx *
-                    // Tt * Dt, a full-T slot stride) into the gathered [B,1,T,D] buffer. k_local is [B,1,sll,D]
+                    // Indexed multi-user cache: the remote branch adds k_batch_page_offset (= (cache_batch_idx
+                    // + batch) * Tt * Dt, a full-T slot stride) into the gathered [B,1,T,D] buffer. The batch
+                    // term is likewise a whole number of slots, so the divisibility below is unaffected (and
+                    // the fused path is B==1 today anyway). k_local is [B,1,sll,D]
                     // with sll = T/ring_size, so its per-slot stride is 1/ring_size of the gathered one; T =
                     // ring_size * sll EXACTLY (validate-pinned), so the division is integral. Offset 0 when not
                     // indexed. ASSERT the integrality as a REQUIREMENT (not just an observation): if the offset
@@ -497,46 +515,56 @@ void kernel_main() {
         WorkUnitSpan span;
         span.set_valid_k_len_tiles(kv_len_tiles);
         const uint32_t band_iters = stream_heads ? max_bands : num_bands;
-        for (uint32_t phase = 0; phase < num_groups; ++phase) {
-            const uint32_t group = row_group0 + phase * group_stride;
-            const uint32_t q_row_start = group * q_tiles_per_unit;
-            if constexpr (fuse_single) {
-                read_q_rows(noc, q_acc, q_row_start, q_dir);
-                read_w_group(noc, w_acc, q_row_start, q_dir);
-            }
-            if constexpr (stream_heads) {
-                read_w_group(noc, w_acc, q_row_start, q_dir);
-            }
-            if constexpr (fused_ring_enabled) {
-                // Complete q/w multicast before waiting on per-band fabric arrival.
-                read_q_rows(noc, q_acc, q_row_start, q_dir);
-                read_w_group(noc, w_acc, q_row_start, q_dir);
-            }
-            for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
+        // Batch is the OUTERMOST loop: each batch re-walks this core's whole (group-phase x band) rectangle
+        // against its own q/w/k pages. The mask tiles and reduce scaler above are batch-independent and stay
+        // hoisted out. Every core runs the same batch count, so the mcast rendezvous stays in lockstep.
+        for (uint32_t b = 0; b < batch_size; ++b) {
+            const uint32_t q_page_base = b * q_batch_pages;
+            const uint32_t w_page_base = b * w_batch_pages;
+            // k's per-batch slot rides on the indexed-cache base (cache_batch_idx * Tt * Dt): batch b scores
+            // slot base + b, or the one shared slot when k_batch_pages == 0. Folded here so every k reader
+            // below keeps its existing signature.
+            const uint32_t k_page_base = k_batch_page_offset + b * k_batch_pages;
+            for (uint32_t phase = 0; phase < num_groups; ++phase) {
+                const uint32_t group = row_group0 + phase * group_stride;
+                const uint32_t q_row_start = group * q_tiles_per_unit;
+                if constexpr (fuse_single) {
+                    read_q_rows(noc, q_acc, q_row_start, q_dir, q_page_base);
+                    read_w_group(noc, w_acc, q_row_start, q_dir, w_page_base);
+                }
+                if constexpr (stream_heads) {
+                    read_w_group(noc, w_acc, q_row_start, q_dir, w_page_base);
+                }
                 if constexpr (fused_ring_enabled) {
-                    const uint32_t band = gate->band(band_i);
-                    span.set(group, band0 + band);
-                    gate->read_k(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
-                } else {
-                    const uint32_t band = band_i;
-                    const bool real_band = band < num_bands;
-                    if (real_band) {
+                    // Complete q/w multicast before waiting on per-band fabric arrival.
+                    read_q_rows(noc, q_acc, q_row_start, q_dir, q_page_base);
+                    read_w_group(noc, w_acc, q_row_start, q_dir, w_page_base);
+                }
+                for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
+                    if constexpr (fused_ring_enabled) {
+                        const uint32_t band = gate->band(band_i);
                         span.set(group, band0 + band);
-                        if constexpr (fuse_single && fused_stream_k) {
-                            read_k_chunk_streaming(
-                                noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
-                        } else {
-                            read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                        gate->read_k(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_page_base);
+                    } else {
+                        const uint32_t band = band_i;
+                        const bool real_band = band < num_bands;
+                        if (real_band) {
+                            span.set(group, band0 + band);
+                            if constexpr (fuse_single && fused_stream_k) {
+                                read_k_chunk_streaming(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_page_base);
+                            } else {
+                                read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_page_base);
+                            }
+                            if (band == 0 && !stream_heads && !fuse_single) {
+                                read_q_rows(noc, q_acc, q_row_start, q_dir, q_page_base);
+                                read_w_group(noc, w_acc, q_row_start, q_dir, w_page_base);
+                            }
                         }
-                        if (band == 0 && !stream_heads && !fuse_single) {
-                            read_q_rows(noc, q_acc, q_row_start, q_dir);
-                            read_w_group(noc, w_acc, q_row_start, q_dir);
-                        }
-                    }
-                    if constexpr (stream_heads) {
-                        for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
-                            for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
-                                read_q_block(noc, q_acc, q_row_start, first_head, q_dir);
+                        if constexpr (stream_heads) {
+                            for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
+                                for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
+                                    read_q_block(noc, q_acc, q_row_start, first_head, q_dir, q_page_base);
+                                }
                             }
                         }
                     }

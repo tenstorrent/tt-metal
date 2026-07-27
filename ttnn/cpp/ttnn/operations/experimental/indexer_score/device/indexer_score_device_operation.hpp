@@ -90,6 +90,12 @@ namespace ttnn::experimental {
 // q [B,Hi,Sq,D], k [B,1,T,D], weights [B,Hi,Sq,1] -> score [B,1,Sq,T] (all heads relu'd + summed).
 // cache_batch_idx/kv_len/chunk_start_idx are re-applied each dispatch and hash-excluded (no recompile); see
 // the nanobind docs for their full semantics. OMIT chunk_start_idx on a mesh (deduced as T - sp_ring*Sq).
+//
+// BATCH: B >= 1, scored in one dispatch (each kernel walks its work rectangle once per batch). k is either
+// [B,1,T,D] -- batch b scoring slot cache_batch_idx + b -- or [1,1,T,D], one shared context for every batch;
+// without cache_batch_idx a k batch that is neither 1 nor B is rejected as ambiguous. The causal geometry
+// (chunk_start_idx / kv_len / straddle) is UNIFORM across the batch, so all B batches must sit at the same
+// sequence position. B comes from q's shape and is therefore hashed: each batch size gets its own program.
 ttnn::Tensor indexer_score_dsa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -112,6 +118,8 @@ ttnn::Tensor indexer_score_dsa(
 // chunk_start_idx / seq_shard_axes / cache_batch_idx / kv_len: same semantics as indexer_score_dsa (the last
 // two are runtime, hash-excluded pass-throughs -- no recompile when the slot or valid length changes). MSA
 // has no TP sub-shard, so seq_shard_axes takes at most one axis ([sp]).
+// BATCH: B >= 1 with the same k pairing + uniform-causal-geometry rules as indexer_score_dsa (one shared
+// factory + kernels), composing with num_groups/block_size -> [B,G,Sq,T_out].
 // num_groups is required (no default): per-GQA-group selection is MSA's purpose, so the caller must state
 // the group count explicitly. It is placed before the defaulted optionals so the signature stays well-formed.
 ttnn::Tensor indexer_score_msa(
@@ -138,6 +146,9 @@ ttnn::Tensor indexer_score_msa(
 // block-cyclic remap as indexer_score_dsa. Ring runs over `cluster_axis` (the SP mesh axis) on `topology`
 // (Linear on a non-torus grid). `ag_multi_device_global_semaphore` are the all-gather's own out-ready
 // semaphores; `ag_sub_device_id` scopes the AG worker cores (kept disjoint from the compute rectangle).
+// BATCH: q batch must be 1 (unlike indexer_score_dsa). The per-band gate waits on the all-gather's
+// per-shard arrival semaphore, which is not verified to cover every batch slot of a shard, so B > 1 is
+// rejected in validate rather than silently scoring stale keys for b > 0.
 ttnn::Tensor ring_indexer_score_dsa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,

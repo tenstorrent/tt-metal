@@ -72,10 +72,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     // Inputs and knobs are validated in IndexerScoreDeviceOperation::validate_on_program_cache_miss;
     // here we only derive tile dims and the one build-specific (subblock) constraint.
+    const uint32_t B = q.logical_shape()[0];
     const uint32_t Hi = q.logical_shape()[1];
     const uint32_t Sq = q.logical_shape()[2];
     const uint32_t D = q.logical_shape()[3];
     const uint32_t T = k.logical_shape()[2];
+    // k batch: B per-batch slots (batch b scores slot cache_batch_idx + b) or 1 shared context scored by every
+    // q batch. Validate pins it to exactly those two; the reader turns the flag into a 0 / Tt*Dt page stride.
+    const uint32_t k_batch_broadcast = (k.logical_shape()[0] == 1) ? 1u : 0u;
 
     // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
     // arg, so the binary is identical across coords and steps. tp_index = its rank along the TP axis
@@ -289,8 +293,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
-    // Common args: 9 dims then the CB indices in CbArg order. chunk_t is NOT here (per-device runtime arg).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles};
+    // Common args: 10 dims then the CB indices in CbArg order. chunk_t is NOT here (per-device runtime arg).
+    // B is a dim (all three kernels loop it outermost); it comes from q's shape, so it is hashed already.
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles, B};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     // MSA synthesizes the constant gate in-kernel (no weights tensor / no fill op): the reader fills cb_w
@@ -337,6 +342,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    reader_ct.push_back(k_batch_broadcast);  // 1 = one shared k slot (page stride 0), 0 = per-batch slots
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off

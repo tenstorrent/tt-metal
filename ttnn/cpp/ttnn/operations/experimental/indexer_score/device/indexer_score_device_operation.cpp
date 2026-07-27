@@ -69,10 +69,21 @@ void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t
     TT_FATAL(
         q.device() == k.device() && q.device() == w.device(), "indexer_score q, k, weights must be on the same device");
 
-    // Non-indexed k must be single-slot [1,1,T,D] (the indexed slot < B check is runtime -> below).
+    // k's batch vs q's. Two legal shapes (both hash-pinned, so a hit can't differ):
+    //   * kB == 1  -> ONE shared context, scored by every q batch (page stride 0).
+    //   * kB == qB -> per-batch slots, q batch b scoring k slot b.
+    // Naming a slot (cache_batch_idx) lifts the equality to "a qB-wide window fits", checked at runtime below
+    // since the index itself is hash-excluded. Without one, a kB that is neither 1 nor qB is ambiguous (which
+    // slots?) and rejected -- the B==1 case of that is the original single-slot guard.
     if (!attrs.cache_batch_idx.has_value()) {
         const uint32_t kB = k.logical_shape()[0];
-        TT_FATAL(kB == 1, "indexer_score k batch must be 1 unless cache_batch_idx is set (got {})", kB);
+        const uint32_t qB = q.logical_shape()[0];
+        TT_FATAL(
+            kB == 1 || kB == qB,
+            "indexer_score k batch must be 1 (one shared context) or equal to q batch {} unless cache_batch_idx "
+            "is set (got {})",
+            qB,
+            kB);
     }
 }
 
@@ -80,13 +91,24 @@ void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t
 void validate_runtime_values(const operation_attributes_t& attrs, const tensor_args_t& t) {
     const auto& k = t.k;
 
-    // Indexed KV cache: cache_batch_idx picks a slot of [B,1,T,D] k; an out-of-range slot offsets pages OOB.
-    if (attrs.cache_batch_idx.has_value()) {
-        const uint32_t kB = k.logical_shape()[0];
+    // Indexed KV cache: cache_batch_idx is the BASE slot of this dispatch's batch window -- q batch b reads
+    // slot cache_batch_idx + b -- so the whole [base, base + qB) window must fit k's slots, else the reader
+    // offsets pages OOB. At qB == 1 this is exactly the original `cache_batch_idx < kB` bound. A single-slot k
+    // is the shared-context case (stride 0): there is nothing to select, so only base 0 is meaningful.
+    const uint32_t kB = k.logical_shape()[0];
+    const uint32_t qB = t.q.logical_shape()[0];
+    const uint32_t slot_base = attrs.cache_batch_idx.value_or(0);
+    if (kB == 1) {
         TT_FATAL(
-            attrs.cache_batch_idx.value() < kB,
-            "indexer_score cache_batch_idx ({}) must be < k batch slots ({})",
-            attrs.cache_batch_idx.value(),
+            slot_base == 0,
+            "indexer_score cache_batch_idx ({}) must be 0 for a single-slot k (one shared context)",
+            slot_base);
+    } else {
+        TT_FATAL(
+            slot_base + qB <= kB,
+            "indexer_score batch window [cache_batch_idx={}, +q batch {}) exceeds k batch slots ({})",
+            slot_base,
+            qB,
             kB);
     }
 
@@ -322,6 +344,13 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         const auto& kl = *tensor_args.k_local;
         const auto& kls = kl.logical_shape();
         const auto& ks = k.logical_shape();
+        // Batch > 1 is unverified on the fused path: the all-gather's per-shard "arrived" semaphore gates the
+        // reader's per-band read, and that it covers EVERY batch slot of a shard (not just slot 0) has not been
+        // confirmed on hardware. Reject loudly rather than silently score stale keys for b > 0.
+        TT_FATAL(
+            q_shape[0] == 1,
+            "indexer_score fused: q batch 1 only (ring_indexer_score_dsa does not support B>1), got {}",
+            q_shape[0]);
         TT_FATAL(ks.rank() == 4, "indexer_score fused: gathered k must be rank 4");  // guard before indexing ks below
         TT_FATAL(kls.rank() == 4 && kls[1] == 1, "indexer_score fused: k_local must be [B,1,sll,D]");
         // k_local and the gathered k must share the batch dim: the reader offsets the LOCAL shard read by
@@ -371,7 +400,10 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4, "q, k must be rank 4");
     TT_FATAL(k_shape[1] == 1, "k must be single-head [B, 1, T, D], got {} heads", k_shape[1]);
     TT_FATAL(q_shape[3] == k_shape[3], "q head dim {} != k head dim {}", q_shape[3], k_shape[3]);
-    TT_FATAL(q_shape[0] == 1, "q batch 1 only, got {}", q_shape[0]);
+    // q batch B >= 1: the kernels walk their whole (group-phase x band) rectangle once per batch. The causal
+    // geometry (chunk_start_idx / kv_len / straddle) is UNIFORM across the batch, so every batch must sit at the
+    // same sequence position. k's batch pairing is checked in validate_static / validate_runtime_values.
+    TT_FATAL(q_shape[0] >= 1, "q batch must be >= 1, got {}", q_shape[0]);
     // The learned-gate weights are validated only when present; MSA synthesizes a constant gate in-kernel
     // (the weights handle is an unused q placeholder), so its shape/dtype carry no meaning.
     if (!attrs.synthesize_gate) {

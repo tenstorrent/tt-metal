@@ -20,7 +20,7 @@
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"        // RingSDPAFusedOpSignaler
+#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"                // RingSDPAFusedOpSignaler
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // host replay for band arrival order
 #include "ttnn/operations/ccl/ccl_common.hpp"     // linearized index / neighbor / fwd-bwd config
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"  // AllGatherFusedOpSignaler
@@ -371,8 +371,10 @@ ProgramDescriptor build_ring_program_descriptor(
     sdpa_sig.num_fused_op_cores_to_signal = static_cast<uint32_t>(sdpa_sig.fused_op_receiver_cores_noc.size());
     sdpa_sig.initialized_fused_op = true;
 
-    // Compile-time args (common dims + CB indices).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, /*block_tiles=*/0u};
+    // Compile-time args (common dims + CB indices). batch is pinned to 1: validate rejects B>1 on the fused
+    // path (the all-gather's per-shard arrival signal is not verified to cover multiple batch slots), but the
+    // arg must still be supplied because all three kernels are shared with the classic factory.
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, /*block_tiles=*/0u, /*batch=*/1u};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     std::vector<uint32_t> reader_ct = common_ct;
@@ -407,6 +409,9 @@ ProgramDescriptor build_ring_program_descriptor(
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    // k_batch_broadcast: inert at batch==1 (the reader's per-batch stride is only ever multiplied by b==0).
+    // Kept at the classic factory's value so the two readers' compile-time arg layouts stay identical.
+    reader_ct.push_back((k.logical_shape()[0] == 1) ? 1u : 0u);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on

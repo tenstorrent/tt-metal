@@ -340,30 +340,62 @@ def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
         _close_ring4_ccl(parent, submesh, stall_group)
 
 
-def test_indexer_score_ring4_fused_rejects_head_streaming(expect_error):
-    """The fused path requires all heads resident; a streaming config (0 < head_group_size < Hi) must be
-    rejected at validate, not silently mis-scheduled. head-independent -> one representative case (dsv32)."""
+def test_indexer_score_ring4_fused_rejects_unsupported(expect_error):
+    """The two fused-path restrictions, both checked on ONE fabric open/close cycle:
+
+      * head streaming (0 < head_group_size < Hi) -- the fused band reorder assumes all heads resident, so a
+        streaming config must be rejected at validate, not silently mis-scheduled.
+      * batch > 1 -- unlike indexer_score_dsa, the reader's per-band gate waits on the all-gather's per-shard
+        arrival semaphore, which is NOT verified to cover every batch slot of a shard, so B>1 must be rejected
+        rather than silently scoring stale keys for b > 0. k_local / k_gathered stay batch-1 (itself a legal
+        shared-context shape), so the q-batch guard is what fires here, not a k pairing check.
+
+    They SHARE one _open_ring4_ccl() deliberately. This file's per-test CCL setup does not fully release
+    between tests, and the residue only bites the LAST test in the file: a 14th open/close cycle fails in
+    set_fabric_config with `!devices_still_open` (pre-existing -- reproducible by appending any new
+    mesh-opening test here, and unrelated to what the test itself dispatches). Folding the batch check in
+    keeps the file at its original cycle count. head-independent -> one representative case (dsv32).
+    """
     heads = 16  # dsv32; head_group_size=8 is a streaming config (0 < 8 < 16)
     submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
     try:
         q_g, k_nat, w_g = _global_inputs(heads, CHUNK_GLOBAL, T, seed=42)
         q_dev, w_dev, k_local, k_gathered = _fused_dev_inputs(submesh, q_g, w_g, k_nat)
         base = glx_config(heads)
-        streaming_cfg = ttnn.IndexerScoreProgramConfig(
-            q_chunk_size=base.q_chunk_size, k_chunk_size=base.k_chunk_size, head_group_size=heads // 2
-        )
-        with expect_error(RuntimeError, "head_group_size must be 0 or Hi"):
-            ttnn.experimental.ring_indexer_score_dsa(
-                q_dev,
+
+        def _dispatch(q, w, cfg):
+            return ttnn.experimental.ring_indexer_score_dsa(
+                q,
                 k_gathered,
-                w_dev,
+                w,
                 k_local,
                 ccl_semaphores,
                 cluster_axis=SP_AXIS,
                 topology=ttnn.Topology.Linear,
                 num_links=1,
                 ag_sub_device_id=subdevice_id,
-                program_config=streaming_cfg,
+                program_config=cfg,
             )
+
+        streaming_cfg = ttnn.IndexerScoreProgramConfig(
+            q_chunk_size=base.q_chunk_size, k_chunk_size=base.k_chunk_size, head_group_size=heads // 2
+        )
+        with expect_error(RuntimeError, "head_group_size must be 0 or Hi"):
+            _dispatch(q_dev, w_dev, streaming_cfg)
+
+        # Batch-2 q/w over the same seq shard (k stays batch-1, reusing the buffers above).
+        shard = ttnn.ShardTensorToMesh(submesh, dim=2)
+        q_dev_b2, w_dev_b2 = (
+            ttnn.from_torch(
+                torch.cat([t, t], dim=0),
+                device=submesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=shard,
+            )
+            for t in (q_g, w_g)
+        )
+        with expect_error(RuntimeError, "q batch 1 only"):
+            _dispatch(q_dev_b2, w_dev_b2, base)
     finally:
         _close_ring4_ccl(parent, submesh, stall_group)

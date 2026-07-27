@@ -35,9 +35,20 @@ void bind_indexer_score(nb::module_& mod) {
         index heads into one shared selection row [B, 1, Sq, T]. For MiniMax M3's
         raw-dot, per-GQA-group indexer, use ``indexer_score_msa`` instead.
 
+        BATCH (B > 1): scores all B batches in one dispatch. ``k`` is either
+        [B, 1, T, D] -- batch b scoring slot ``cache_batch_idx + b`` -- or
+        [1, 1, T, D], one shared context scored by every batch. Without
+        ``cache_batch_idx``, a k batch that is neither 1 nor B is rejected as
+        ambiguous. The causal geometry is UNIFORM across the batch: one
+        ``chunk_start_idx`` / ``kv_len`` for all B, so every batch must sit at the
+        same sequence position (per-batch positions are not supported). B is part
+        of q's shape, hence hashed -- each distinct batch size compiles its own
+        program.
+
         Args:
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
-            k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
+            k: [B, 1, T, D] (per-batch slots) or [1, 1, T, D] (shared context),
+                bf16 or bfp8_b tiled, single shared head
             weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
                 pre-folded)
             chunk_start_idx: absolute global position of rank 0's query row 0
@@ -52,15 +63,18 @@ void bind_indexer_score(nb::module_& mod) {
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
                 stay false (the custom LLK is validated for bf16 DEST half-sync).
-            cache_batch_idx: optional int. Selects the batch slot of a shared
-                [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
-                banks). Re-applied each dispatch, so switching slots does not
-                recompile.
+            cache_batch_idx: optional int. The BASE batch slot of a shared
+                [num_slots, 1, T, D] k cache (which may then be ND-sharded across
+                DRAM banks): q batch b reads slot cache_batch_idx + b, so the whole
+                window [cache_batch_idx, +B) must fit num_slots. At B == 1 this is
+                just "the slot to score". Re-applied each dispatch, so switching
+                slots does not recompile. Must be 0 (or unset) for a single-slot k.
             kv_len: optional int. Valid prefix of a k allocated at its full T;
                 the rest is masked out. Tile-aligned, in (0, T], with
                 chunk_start_idx + Sq <= kv_len. Re-applied each dispatch, so a
                 serving loop growing kv_len (<= T) reuses one program -- no
-                recompile. Only output columns [0, kv_len) are written.
+                recompile. Only output columns [0, kv_len) are written. Applies to
+                every batch alike (no per-batch valid length).
             seq_shard_axes: the mesh axes the query seq is sharded over, outermost
                 (SP ring) first: [] = linear device order (single device / whole-mesh
                 ring, chunk_start_idx used as-is), [sp] = 1D SP ring, [sp, tp] = 2D SP
@@ -120,9 +134,16 @@ void bind_indexer_score(nb::module_& mod) {
         For DeepSeek-V3.2 / GLM-5's relu + gated + head-summed indexer, use
         ``indexer_score_dsa`` instead.
 
+        BATCH (B > 1): same semantics as indexer_score_dsa (the two frontends share
+        one program factory and the same three kernels) -- k is [B, 1, T, D] with
+        batch b scoring slot ``cache_batch_idx + b``, or [1, 1, T, D] shared by every
+        batch, and the causal geometry is uniform across the batch. Composes with
+        ``num_groups`` and ``block_size``: the output is [B, G, Sq, T_out].
+
         Args:
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
-            k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
+            k: [B, 1, T, D] (per-batch slots) or [1, 1, T, D] (shared context),
+                bf16 or bfp8_b tiled, single shared head
             chunk_start_idx: absolute global position of rank 0's query row 0
                 (causality: key t visible to query s iff t <= chunk_start + s).
                 OMIT on a mesh -> deduced as T - sp_ring*Sq; single device: set to
@@ -144,8 +165,9 @@ void bind_indexer_score(nb::module_& mod) {
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
                 stay false (the custom LLK is validated for bf16 DEST half-sync).
-            cache_batch_idx: optional int. Selects the batch slot of a shared
-                [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
+            cache_batch_idx: optional int. The BASE batch slot of a shared
+                [num_slots, 1, T, D] k cache (q batch b reads cache_batch_idx + b;
+                which may then be ND-sharded across DRAM
                 banks). Re-applied each dispatch, so switching slots does not
                 recompile. Same semantics as indexer_score_dsa.
             kv_len: optional int. Valid prefix of a k allocated at its full T;
@@ -196,6 +218,11 @@ void bind_indexer_score(nb::module_& mod) {
         co-schedules the ring_attention all-gather with the indexer compute so fabric transport overlaps
         scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
         arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
+
+        BATCH: q batch must be 1. Unlike ``indexer_score_dsa``, this path does not support B > 1: the
+        reader's per-band gate waits on the all-gather's per-shard arrival semaphore, and that signal has
+        not been verified to cover every batch slot of a shard. B > 1 is rejected rather than silently
+        scoring stale keys.
 
         Args:
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa

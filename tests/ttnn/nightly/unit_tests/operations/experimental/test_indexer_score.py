@@ -99,16 +99,21 @@ def indexer_score_msa_ref(q, k, w, chunk_start, num_groups=1, block_size=0):
     return msa_block_max_pool(scores, block_size, chunk_start) if block_size else scores
 
 
-def make_inputs(heads, dim, sq, t, seed=42):
-    """q [1,Hi,Sq,D], k [1,1,T,D], weights [1,Hi,Sq,1], all bf16.
+def make_inputs(heads, dim, sq, t, seed=42, batch=1, k_batch=None):
+    """q [B,Hi,Sq,D], k [kB,1,T,D], weights [B,Hi,Sq,1], all bf16.
 
     Weights are random so some gates are negative: -inf padding must stay distinguishable from
     low-but-valid (negative) scores by topk.
+
+    batch/k_batch drive the B>1 cases: k_batch defaults to batch (per-batch slots, q[b] scoring k[b]);
+    pass k_batch=1 for the shared-context broadcast. Every batch/slot is drawn independently, so a batch
+    reading the wrong q, w or k slot fails the per-batch reference.
     """
+    kb = batch if k_batch is None else k_batch
     g = torch.Generator().manual_seed(seed)
-    q = torch.randn(1, heads, sq, dim, generator=g, dtype=torch.bfloat16)
-    k = torch.randn(1, 1, t, dim, generator=g, dtype=torch.bfloat16)
-    w = torch.randn(1, heads, sq, 1, generator=g, dtype=torch.bfloat16)
+    q = torch.randn(batch, heads, sq, dim, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(kb, 1, t, dim, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(batch, heads, sq, 1, generator=g, dtype=torch.bfloat16)
     return q, k, w
 
 
@@ -224,6 +229,31 @@ def assert_pooled_match(out, ref, num_groups, sq, nblocks, pcc_floor=0.999):
     a, b = out[keep].flatten().float(), ref[keep].flatten().float()
     pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
     assert pcc >= pcc_floor, f"PCC {pcc} < {pcc_floor}"
+
+
+# B>1 checks reuse the batch-1 helpers above on each slice, so every batch must independently match ITS
+# reference. That is deliberately stronger than one whole-tensor PCC: a batch reading another batch's q/w/k
+# pages (the failure mode the per-batch page offsets exist to prevent) would be diluted by a global PCC but
+# fails a per-slice one outright. The -inf map is exact either way.
+def assert_batched_match(out, ref, sq, t, check_neg=False):
+    """Per-batch [B,1,Sq,T] DSA check."""
+    assert out.shape == ref.shape, f"{out.shape} != {ref.shape}"
+    for b in range(out.shape[0]):
+        assert_indexer_match(out[b : b + 1], ref[b : b + 1], sq, t, check_neg=check_neg)
+
+
+def assert_batched_grouped_match(out, ref, num_groups, sq, t):
+    """Per-batch [B,G,Sq,T] grouped (MSA) check."""
+    assert out.shape == ref.shape, f"{out.shape} != {ref.shape}"
+    for b in range(out.shape[0]):
+        assert_grouped_match(out[b : b + 1], ref[b : b + 1], num_groups, sq, t)
+
+
+def assert_batched_pooled_match(out, ref, num_groups, sq, nblocks, pcc_floor=0.999):
+    """Per-batch [B,G,Sq,nblocks] pooled (MSA block-selection) check."""
+    assert out.shape == ref.shape, f"{out.shape} != {ref.shape}"
+    for b in range(out.shape[0]):
+        assert_pooled_match(out[b : b + 1], ref[b : b + 1], num_groups, sq, nblocks, pcc_floor=pcc_floor)
 
 
 def glx_config(heads):
@@ -450,6 +480,138 @@ def test_indexer_score_indexed_cache_requires_idx_for_multislot(device, expect_e
     q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k_cache, device)
     with expect_error(RuntimeError, "batch must be 1"):
         ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# Batch (B > 1): all B batches scored in ONE dispatch. Each kernel walks its whole (group-phase x band)
+# rectangle once per batch, applying a per-batch page base to q/w (always) and to k (unless k is a single
+# shared slot). The banded schedule and both multicasts are batch-independent. The causal geometry is
+# UNIFORM across the batch, so every batch sits at the same chunk_start / kv_len.
+# ---------------------------------------------------------------------------
+BATCH_SHAPE = dict(heads=16, dim=128, sq=64, t=256, chunk_start=128)
+
+
+@pytest.mark.parametrize("batch", [2, 4], ids=["b2", "b4"])
+@pytest.mark.parametrize(
+    "q_chunk, k_chunk, head_group",
+    [
+        (32, 32, 0),  # all heads resident, single-tile chunks
+        (32, 32, 4),  # head streaming: per-band q re-reads + phantom-band drain, now per batch
+        (64, 128, 0),  # QC=2 multi-row group + KC=4 chunked k with a partial edge chunk
+    ],
+    ids=["hb_all", "hb_stream", "qc2_kc4"],
+)
+def test_indexer_score_dsa_batch(device, batch, q_chunk, k_chunk, head_group):
+    """Per-batch k ([B,1,T,D]): batch b must score k[b] against q[b] gated by w[b]. Every batch's q/w/k is
+    drawn independently, so ANY crossed page base fails that batch's reference. Swept over the resident,
+    head-streaming and multi-row/chunked paths because each reads q by a different route in the reader."""
+    s = BATCH_SHAPE
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
+    q, k, w = make_inputs(s["heads"], s["dim"], s["sq"], s["t"], batch=batch)
+    out = run_dsa(q, k, w, s["chunk_start"], device, program_config=cfg)
+    ref = indexer_score_dsa_ref(q, k, w, s["chunk_start"])
+    assert_batched_match(out, ref, s["sq"], s["t"], check_neg=True)
+
+
+def test_indexer_score_dsa_batch_shared_k(device):
+    """kB == 1 with B > 1: one shared context scored by every batch (the reader's k page stride is 0, so no
+    batch steps off slot 0). q/w still advance per batch, so the output planes differ despite identical keys
+    -- a k stride wrongly applied here would read past the single slot."""
+    s = BATCH_SHAPE
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k, w = make_inputs(s["heads"], s["dim"], s["sq"], s["t"], batch=4, k_batch=1)
+    assert k.shape[0] == 1
+    out = run_dsa(q, k, w, s["chunk_start"], device, program_config=cfg)
+    ref = indexer_score_dsa_ref(q, k, w, s["chunk_start"])  # torch broadcasts the single k slot over batch
+    assert_batched_match(out, ref, s["sq"], s["t"], check_neg=True)
+
+
+@pytest.mark.parametrize("slot_base", [0, 3], ids=["base0", "base3"])
+def test_indexer_score_dsa_batch_indexed_window(device, slot_base):
+    """cache_batch_idx is the BASE of the batch window: q batch b scores slot cache_batch_idx + b of a
+    larger cache. Compared against the exact [slot_base, slot_base + B) slice, so a dropped base or an
+    off-by-one window fails. base0 vs base3 also pins that the base and the batch step compose."""
+    s = BATCH_SHAPE
+    batch, num_slots = 2, 8
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k_cache, w = make_inputs(s["heads"], s["dim"], s["sq"], s["t"], batch=batch, k_batch=num_slots)
+    out = ttnn.experimental.indexer_score_dsa(
+        to_device(q, device),
+        to_device(k_cache, device),
+        to_device(w, device),
+        chunk_start_idx=s["chunk_start"],
+        program_config=cfg,
+        cache_batch_idx=slot_base,
+    )
+    ref = indexer_score_dsa_ref(q, k_cache[slot_base : slot_base + batch], w, s["chunk_start"])
+    assert_batched_match(ttnn.to_torch(out), ref, s["sq"], s["t"], check_neg=True)
+
+
+def test_indexer_score_msa_batch_fused_stream_k(device):
+    """B > 1 on the fused single-head STREAMED-k path. One head per plane with no relu enables the fuse (the
+    gate is folded onto q and the matmul writes straight to the accumulator), and a 1x1 core rectangle
+    (single band, single group -> both multicasts off) is what selects the streaming k read. That read applies
+    the per-batch k page base in a DIFFERENT reader function from the multicast path, so it needs its own
+    batch coverage; the mcast path is covered by the DSA cases above."""
+    heads, dim, sq, t, batch = 1, GLX_DIM, 32, 256, 3
+    chunk_start = 128
+    scale = dim**-0.5
+    q, k, _ = make_inputs(heads, dim, sq, t, batch=batch)
+    # k_chunk == T -> one band; Sq == q_chunk -> one group. Both multicasts off, so k streams.
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=t, head_group_size=0)
+    out = run_msa(q, k, chunk_start, device, scale=scale, num_groups=1, program_config=cfg)
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups=1)
+    assert_batched_grouped_match(out, ref, 1, sq, t)
+
+
+def test_indexer_score_batch_program_cache(device):
+    """B comes from q's shape, so it IS hashed: a new batch size compiles its own program, while repeating a
+    seen one reuses it. (Contrast cache_batch_idx / kv_len, deliberately hash-EXCLUDED so a serving loop can
+    vary them without recompiling -- a batch size cannot.) Uses a k_chunk no other case uses so the counts
+    are not perturbed by an already-warm entry."""
+    s = BATCH_SHAPE
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=256, head_group_size=0)
+
+    def dispatch(batch):
+        q, k, w = make_inputs(s["heads"], s["dim"], s["sq"], s["t"], batch=batch)
+        run_dsa(q, k, w, s["chunk_start"], device, program_config=cfg)
+
+    dispatch(1)
+    after_b1 = device.num_program_cache_entries()
+    dispatch(1)
+    assert device.num_program_cache_entries() == after_b1, "re-dispatching the same batch size recompiled"
+    dispatch(2)
+    assert device.num_program_cache_entries() == after_b1 + 1, "a distinct batch size must get its own program"
+
+
+def test_indexer_score_batch_window_rejected(device, expect_error):
+    """A batch window overrunning the cache (cache_batch_idx + B > num_slots) is rejected -- the reader would
+    offset k pages past the end of the buffer. Checked on a WARM cache: the base is hash-excluded while the
+    shapes are not, so an overrunning base hits the same program and must still be caught on the hit path."""
+    s = BATCH_SHAPE
+    batch, num_slots = 2, 4
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k_cache, w = make_inputs(s["heads"], s["dim"], s["sq"], s["t"], batch=batch, k_batch=num_slots)
+    q_dev, k_dev, w_dev = to_device(q, device), to_device(k_cache, device), to_device(w, device)
+    ttnn.experimental.indexer_score_dsa(  # in-range window warms the program
+        q_dev, k_dev, w_dev, chunk_start_idx=s["chunk_start"], program_config=cfg, cache_batch_idx=0
+    )
+    with expect_error(RuntimeError, "cache_batch_idx"):  # base 3 + B 2 > 4 slots
+        ttnn.experimental.indexer_score_dsa(
+            q_dev, k_dev, w_dev, chunk_start_idx=s["chunk_start"], program_config=cfg, cache_batch_idx=num_slots - 1
+        )
+
+
+def test_indexer_score_batch_k_mismatch_rejected(device, expect_error):
+    """Without cache_batch_idx to name a window, a k batch that is neither 1 (shared context) nor B
+    (per-batch slots) is ambiguous -- which slots would batch b read? The B == 1 case of this same guard is
+    the multi-slot-without-index rejection above."""
+    s = BATCH_SHAPE
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k, w = make_inputs(s["heads"], s["dim"], s["sq"], s["t"], batch=2, k_batch=3)
+    with expect_error(RuntimeError, "batch must be 1"):
+        run_dsa(q, k, w, s["chunk_start"], device, program_config=cfg)
 
 
 def test_indexer_score_rejects_sharded_q(device, expect_error):
@@ -1417,6 +1579,29 @@ def test_indexer_score_block_pool_m3(device, k_dtype, sp_rank):
     # 0.995 floor: block-max amplifies the bf16 raw-dot error; the exact pool logic is pinned by the -inf
     # map here and by test_indexer_score_block_pool_exact_vs_unpooled.
     assert_pooled_match(out, ref, heads, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
+
+
+@pytest.mark.parametrize("block_size", [0, BLOCK_POOL_BS], ids=["unpooled", "pooled"])
+def test_indexer_score_msa_batch(device, block_size):
+    """MSA B > 1 with per-GQA-group planes -> [B,G,Sq,T_out]. (Lives here, not with the other batch cases,
+    so BLOCK_POOL_BS is in scope for the parametrize.) Covers the writer's batch row offset on BOTH output
+    paths: the plain untilized strip and the block-max-pooled strip, whose forced-local +inf stamp must land
+    in the right batch's rows. MSA also synthesizes its gate in-kernel (no weights tensor), so this pins that
+    the constant fill stays batch-independent while q/k still advance per batch."""
+    heads, dim, sq, t, batch, num_groups = 4, GLX_DIM, 128, 2048, 2, 4
+    chunk_start = 512  # leaves fully-future blocks for early queries + a straddling block
+    scale = dim**-0.5
+    q, k, _ = make_inputs(heads, dim, sq, t, batch=batch)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    out = run_msa(
+        q, k, chunk_start, device, scale=scale, num_groups=num_groups, block_size=block_size, program_config=cfg
+    )
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # batch-1: broadcasts in the ref
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups, block_size=block_size)
+    if block_size:
+        assert_batched_pooled_match(out, ref, num_groups, sq, t // block_size, pcc_floor=0.995)
+    else:
+        assert_batched_grouped_match(out, ref, num_groups, sq, t)
 
 
 def test_indexer_score_block_pool_exact_vs_unpooled(device):
