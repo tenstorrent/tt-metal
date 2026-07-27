@@ -509,11 +509,6 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
-    // Kernel-entry base of the dedicated matmul_partials_cb. We reset rd/wr back here at the top of
-    // each outer iter so every output block's L1_ACC accumulation lands at the same fixed base — the
-    // dedicated one-block region then makes the helper's non-pin FIFO wrap to this base each K-block.
-    UNPACK(const uint32_t partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
-    PACK(const uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
 
     // Last-block pack target for the matmul helper:
     //   FUSE_BIAS                → Interm: pack to matmul_partials_cb so bias-add can read it.
@@ -527,12 +522,9 @@ void kernel_main() {
         : untilize_out                 ? compute_kernel_lib::LastBlockTarget::Interm
                                        : compute_kernel_lib::LastBlockTarget::Out;
 
-    // The matmul helper packs in place (single internal reserve/push, per-K-block L1_ACC accumulation,
-    // no per-block reserve/push/drain) whenever the config is (TileRowMajor + packer_l1_acc + Interm).
-    // The kernel must match that on its own bookkeeping: skip the per-iter partials rd/wr rewind and the
-    // caller-side reserve/push. This predicate is exactly the former CONV_CALLER_OWNS_PACK_TARGET class
-    // (the factory emits TileRowMajor for the deep-K packer_l1_acc INTERM-target convs — fuse_bias ||
-    // untilize_out — which are the ones that satisfy this).
+    // This predicate identifies the former CONV_CALLER_OWNS_PACK_TARGET class. The factory emits
+    // TileRowMajor for the deep-K packer_l1_acc INTERM-target convs (fuse_bias || untilize_out), which
+    // are the ones that satisfy it. It also selects the downstream in-place bias path below.
     constexpr bool packs_in_place = (conv_output_layout == compute_kernel_lib::OutputCBLayout::TileRowMajor) &&
                                     packer_l1_acc && (last_block_target == compute_kernel_lib::LastBlockTarget::Interm);
 
@@ -592,20 +584,6 @@ void kernel_main() {
                 // for each output block we start we relu disabled so that intermediate results are not relu'd
                 PACK((llk_pack_relu_config(ReluConfig::none())));
             }
-            // Dedicated one-block matmul_partials_cb: force its rd/wr ptrs back to the kernel-entry
-            // base each outer iter so every output block's L1_ACC accumulation lands at the same
-            // fixed L1 address. Within the K-loop the helper's non-pin FIFO reserves/pushes/pops in
-            // one-block increments, which — because the region holds exactly one output block —
-            // wraps back to this base each K-block (matmul's dedicated-partials reset model).
-            //
-            // packs_in_place: the helper's own single reserve_back/push_back advance the partials FIFO by
-            // exactly one output block per outer iter, and the bias-add's pop drains it — so the FIFO wraps
-            // to its base naturally and this manual rewind is both unnecessary and would desync the
-            // helper-owned wr_ptr from its reserve.
-            if constexpr (!packs_in_place) {
-                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
-                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
-            }
 
             // ── skip-compute fast path: tilize each K-block, drop the activation, skip the
             // matmul + bias + untilize. Used on input-grid cores that only drive tilize for
@@ -648,11 +626,10 @@ void kernel_main() {
             // packer_l1_acc==false convs main skips, a uniform per-call tax. matmul_block_init is
             // independent of the reconfig gate, so it still fires under None (matmul_block_helpers.inl).
             //
-            // matmul_partials_cb is a DEDICATED one-block region (the factory dropped the out_cb
-            // alias + sized it to one output block). The helper's FIFO reserves/pushes/pops in
-            // one-block increments, which wrap back to the per-iter base (reset at the top of this
-            // loop) every K-block — so packer_l1_acc accumulates at a fixed address across K-blocks
-            // for multi-output-block convs too, matching matmul's dedicated single-block interm0.
+            // matmul_partials_cb is normally a DEDICATED one-block region (the factory dropped the
+            // out_cb alias + sized it to one output block). The helper owns its FIFO lifecycle; the
+            // single-reserve L1_ACC path keeps a fixed accumulation region within the K-loop, while
+            // the software-reload path uses the live circular-buffer pointers.
             // packs_in_place (TileRowMajor + packer_l1_acc + Interm): the helper does its own single
             // reserve_back over the whole output block before the K-loop + push_back after, manages the
             // per-K-block llk_pack_reconfig_l1_acc itself, and issues the closing pack_reconfig_l1_acc(0)
