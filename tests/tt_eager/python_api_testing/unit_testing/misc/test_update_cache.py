@@ -184,17 +184,17 @@ def test_update_cache_decode_program_cache_hits(in_sharded, input_dtype, device)
 
     UpdateKVCacheOperation::compute_program_hash excludes update_idx (cache_idx)
     and batch_offset, so repeated update_cache calls that differ ONLY in those
-    values hit the program cache. get_dynamic_runtime_args must re-apply the
-    per-dispatch write/read offsets (cache_start_id / tile_update_offset /
-    batch_read_offset) on every hit; if any froze at the first cache-miss value
-    the update would land at (or read from) the wrong position and the
-    per-iteration comp_equal below would fail. We also assert the program cache
-    grew by exactly ONE entry, i.e. every call after the first was a genuine hit
-    (not a recompile that would silently mask a freeze).
+    values hit the program cache. UpdateKVCacheOperation::override_runtime_arguments
+    must re-apply the per-dispatch write/read offsets (cache_start_id /
+    tile_update_offset / batch_read_offset) on every hit; if any froze at the
+    first cache-miss value the update would land at (or read from) the wrong
+    position and the per-iteration comp_equal below would fail. We also assert the
+    program cache grew by exactly ONE entry, i.e. every call after the first was a
+    genuine hit (not a recompile that would silently mask a freeze).
 
     This exercises the branch the reviewer flagged: the pre-existing
     test_update_cache_decode calls update_cache only once per (freshly built)
-    program, so the get_dynamic re-application path is never taken.
+    program, so the override_runtime_arguments re-application path is never taken.
     """
     head_dim = 64
     max_seq_len = 4096
@@ -269,7 +269,96 @@ def test_update_cache_decode_program_cache_hits(in_sharded, input_dtype, device)
     assert eq_cache, out_cache
 
     # Exactly one program built: the first call missed, all later calls were
-    # genuine cache hits (so get_dynamic_runtime_args re-applied the offsets).
+    # genuine cache hits (so override_runtime_arguments re-applied the offsets).
+    assert (
+        num_new_cache_entries == 1
+    ), f"Expected a single program-cache entry (genuine hits after first), got {num_new_cache_entries}"
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.parametrize("in_sharded", [False, True])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+def test_fill_cache_program_cache_hits(in_sharded, input_dtype, device):
+    """Cache-hit coverage for the FILL path's hash-excluded cache_start_id.
+
+    UpdateKVCacheOperation::compute_program_hash excludes batch_idx and
+    update_idx, so repeated fill_cache calls that differ ONLY in those values
+    hit the program cache. The FillCacheMultiCoreProgramFactory bakes the
+    derived per-core cache_start_id (which encodes batch_idx * seq + update_idx)
+    into a writer runtime arg; UpdateKVCacheOperation::override_runtime_arguments
+    must re-derive and re-apply it on every hit. If it froze at the first
+    cache-miss value every fill after the first would land at the wrong
+    user/seq slot and the per-iteration comp_equal below would fail. We also
+    assert the program cache grew by exactly ONE entry, i.e. every call after
+    the first was a genuine hit (not a recompile that would mask a freeze).
+    """
+    head_dim = 64
+    max_seq_len = 4096
+    num_users = 8
+    num_heads = 2
+    slab_seq_len = 128
+    cache_dtype = input_dtype
+
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.zeros(cache_shape).bfloat16().float()
+    cachett = ttnn.Tensor(cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
+
+    # Each (batch_idx, update_idx) writes a full slab to a DIFFERENT user and/or
+    # sequence offset while tensor shapes/dtype/sharding stay identical -> all
+    # iterations share a single cached program. All (batch_idx, update_idx) pairs
+    # are distinct and non-overlapping so the whole cache must accumulate every
+    # fill. update_idx + slab_seq_len <= max_seq_len for each.
+    positions = [(0, 0), (1, 128), (3, 256), (7, 0), (2, 384)]
+
+    input_shape = [1, num_heads, slab_seq_len, head_dim]
+    num_new_cache_entries = 0
+    for batch_idx, update_idx in positions:
+        x = torch.randn(input_shape).bfloat16().float()
+        xt = ttnn.Tensor(x, input_dtype).to(ttnn.TILE_LAYOUT)
+        if in_sharded:
+            compute_grid_size = device.compute_with_storage_grid_size()
+            num_cores = min(slab_seq_len // 32 * num_heads, 32)
+            shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+            input_shard_spec = ttnn.ShardSpec(
+                shard_grid,
+                [
+                    xt.volume() // xt.padded_shape[-1] // num_cores,
+                    xt.padded_shape[-1],
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+            )
+            xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
+
+        entries_before = device.num_program_cache_entries()
+        cachett = ttnn.fill_cache(cachett, xt, batch_idx, update_idx=update_idx)
+        num_new_cache_entries += device.num_program_cache_entries() - entries_before
+
+        # Mirror the fill into the torch reference at the SAME user/seq slot.
+        cache[batch_idx : batch_idx + 1, :, update_idx : update_idx + slab_seq_len, :] = x
+
+        # This iteration's slab must land at its own (batch_idx, update_idx). A
+        # frozen cache_start_id would corrupt this slice.
+        tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        eq_slab, out_slab = comp_equal(
+            x, tt_got_back[batch_idx : batch_idx + 1, :, update_idx : update_idx + slab_seq_len, :]
+        )
+        logger.info(f"batch_idx={batch_idx} update_idx={update_idx}: {out_slab}")
+        assert eq_slab, out_slab
+
+    # The full cache must reflect EVERY fill at its own position (catches a
+    # cache_start_id frozen at a prior iteration's value that clobbered elsewhere).
+    tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    eq_cache, out_cache = comp_equal(cache, tt_got_back)
+    logger.info(out_cache)
+    assert eq_cache, out_cache
+
+    # Exactly one program built: the first call missed, all later calls were
+    # genuine cache hits (so override_runtime_arguments re-applied cache_start_id).
     assert (
         num_new_cache_entries == 1
     ), f"Expected a single program-cache entry (genuine hits after first), got {num_new_cache_entries}"
