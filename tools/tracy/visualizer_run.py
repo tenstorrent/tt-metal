@@ -57,22 +57,16 @@ stamp_memory_run_id = _run_id.stamp_memory_run_id
 stamp_report_dir_run_id = _run_id.stamp_report_dir_run_id
 
 
-def _safe_manifest_path(report_dir: Path | str) -> str:
-    """Return a realpath to ``manifest.json`` under ``report_dir``, or raise if it escapes.
+def _write_manifest_json(payload: dict[str, Any], *, report_dir: Path | str) -> Path:
+    """Write ``manifest.json`` under ``report_dir`` only (fixed basename; no caller path).
 
-    Uses ``os.path.realpath`` + ``startswith`` so SAST tools recognise the containment check.
-    Basename is a fixed constant — never taken from caller input.
+    Containment uses ``os.path.realpath`` + ``startswith`` in this function (same
+    scope as ``open``) so SAST path-injection checks can see the sanitiser.
     """
     base = os.path.realpath(str(report_dir))
     target = os.path.realpath(os.path.join(base, MANIFEST_FILENAME))
     if not target.startswith(base + os.sep):
         raise ValueError(f"Refusing to write outside base directory: {target} not under {base}")
-    return target
-
-
-def _write_manifest_json(payload: dict[str, Any], *, report_dir: Path | str) -> Path:
-    """Write ``manifest.json`` under ``report_dir`` only (fixed basename; no caller path)."""
-    target = _safe_manifest_path(report_dir)
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)

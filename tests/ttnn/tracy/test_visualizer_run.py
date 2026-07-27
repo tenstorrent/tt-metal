@@ -20,7 +20,6 @@ from tracy.visualizer_run import (
     peek_run_id,
     stamp_memory_run_id,
     stamp_report_dir_run_id,
-    _safe_manifest_path,
     _write_manifest_json,
     write_performance_manifest,
 )
@@ -205,7 +204,7 @@ def test_write_manifest_json_writes_fixed_basename(tmp_path):
     assert json.loads(written.read_text(encoding="utf-8"))[RUN_ID_METADATA_KEY] == "x"
 
 
-def test_safe_manifest_path_rejects_symlink_escape(tmp_path):
+def test_write_manifest_json_rejects_symlink_escape(tmp_path):
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
     outside = tmp_path / "elsewhere" / MANIFEST_FILENAME
@@ -213,5 +212,5 @@ def test_safe_manifest_path_rejects_symlink_escape(tmp_path):
     (report_dir / MANIFEST_FILENAME).symlink_to(outside)
 
     with pytest.raises(ValueError, match="outside base directory"):
-        _safe_manifest_path(report_dir)
+        _write_manifest_json({RUN_ID_METADATA_KEY: "x"}, report_dir=report_dir)
     assert not outside.exists()
