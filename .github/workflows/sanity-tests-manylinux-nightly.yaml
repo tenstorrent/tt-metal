@@ -10,16 +10,19 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
-  contents: write
-  pull-requests: write
-  pages: write
-  id-token: write
-  packages: write
-  checks: write
+  contents: read
 
 jobs:
   sanity-manylinux:
+    # Elevated scopes only where the reusable build/test job needs them.
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+      pages: write
+      id-token: write
+      packages: write
+      checks: write
     uses: ./.github/workflows/sanity-tests.yaml
     with:
       build-inplace-wheel: false # force the real manylinux build-wheel
@@ -29,6 +32,8 @@ jobs:
     needs: sanity-manylinux
     if: ${{ failure() }}
     runs-on: ubuntu-slim
+    permissions:
+      contents: read
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         with:
