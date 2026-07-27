@@ -148,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
+        // L1_TO_L1 / MATH_ISOLATE keep the math↔pack handshake: set up FPU→PACK dest-dvalid.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -177,7 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _perf_math_loop_clear_valid<true, true>(INPUT_TILE_CNT * num_faces);
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
@@ -200,32 +200,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 global_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE, is_fp32_dest_acc_en /*clear_fp32_mode*/);
                         }
                     }
-                }
-            }
-        }
-        else
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1);
-                for (int i = 0; i < num_total_tiles; ++i)
-                {
-                    _llk_math_eltwise_unary_datacopy_(i);
-                }
-
-                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE);
-                for (int block = 0; block < num_blocks; block++)
-                {
-                    for (int n = 0; n < num_tiles_accum; n++)
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
                     {
-                        for (int tile = 0; tile < tiles_in_block; tile++)
-                        {
-                            const int global_tile_idx = block * tiles_in_block + tile;
-                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, REUSE_DEST_TYPE>(
-                                global_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE, is_fp32_dest_acc_en /*clear_fp32_mode*/);
-                        }
+                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                     }
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                 }
             }
         }
@@ -296,21 +274,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                for (int block = 0; block < output_num_blocks; block++)
-                {
-                    for (int tile = 0; tile < output_tiles_in_block; tile++)
-                    {
-                        int res_tile_idx = (block * output_tiles_in_block) + tile;
-                        _llk_pack_(res_tile_idx, res_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
-                    }
-                }
-            }
-        }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -322,7 +285,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         int res_tile_idx = (block * output_tiles_in_block) + tile;
                         _llk_pack_(res_tile_idx, res_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
                     }
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                    {
+                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

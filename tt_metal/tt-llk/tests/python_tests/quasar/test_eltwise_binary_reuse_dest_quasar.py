@@ -78,14 +78,6 @@ def reuse_dest_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def reuse_dest_input_dimensions(*, is_perf=False):
-    return INPUT_DIMENSIONS if is_perf else INPUT_DIMENSIONS
-
-
-def reuse_dest_output_dimensions(*, is_perf=False):
-    return OUTPUT_DIMENSIONS if is_perf else OUTPUT_DIMENSIONS
-
-
 def reuse_dest_mathops(formats, *, is_perf=False):
     if is_perf:
         return [MathOperation.Elwadd]
