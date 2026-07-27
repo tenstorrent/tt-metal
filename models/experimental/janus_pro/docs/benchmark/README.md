@@ -73,9 +73,9 @@ What must match so a TT (or server) score is comparable to **65.81**. Impact = h
 | Scoring path (rule-based ± GPT fallback) | **Yes** | **High** — without GPT key, unparsable answers become random letters | OK if same `gpt_eval_score` path; set `OPENAI_API_KEY` for fallback parity |
 | CircularEval on/off | **Yes** | **High** — CircularEval scores are not comparable to single-pass | OK — `mmbench_en_dev` is single-pass |
 | Greedy decoding (`temperature=0`) | **Yes** | **High** — sampling changes answers | OK — task default + our intent |
-| Chat / conversation template (Janus roles, image placeholder) | **Yes** | **High** — changes what the model actually sees | **Risk** — we serve via `openai_compatible` chat API; community #205 did not publish their adapter. Need Janus chat template on the server. |
+| Chat / conversation template (Janus roles, image placeholder) | **Yes** | **High** — changes what the model actually sees | **Risk** — we serve via `openai_compatible` chat API; community #205 did not publish their adapter. Need Janus chat template on the server. This is separate from the TT vLLM model bridge and its paged-KV handling described below. |
 | Image preprocessing (384², mean/std, pad) | **Yes** | **Medium–High** | OK if processor matches HF config |
-| EOS / stop tokens | **Yes** | **Medium** — wrong stop (e.g. Llama `<\|eot_id\|>`) can truncate or over-generate | **Fixed in eval config** → `<｜end▁of▁sentence｜>` (was Llama copy-paste) |
+| EOS / stop tokens | **Yes** | **Medium** — wrong stop (e.g. Llama `<\|eot_id\|>`) can truncate or over-generate | **Fixed in tt-inference-server eval config** → `<｜end▁of▁sentence｜>` (was Llama copy-paste) |
 | `max_new_tokens` | Prefer match | **Low** for MCQ letters (512 vs task default 1024) | 512 in server config — fine for letter answers |
 | Model weights revision | Prefer match | **Medium** if checkpoints differ | Use `deepseek-community/Janus-Pro-7B` |
 | lmms-eval version | Prefer close | **Low–Medium** — task YAML drift | Pin EVALS_VISION venv |
@@ -177,6 +177,59 @@ Direct `lmms-eval` against a TT generator (no server) is a fallback if the vLLM 
 4. **Sign-off** — score within agreed tolerance of the community reference = pass.
 
 Optional later: HF CPU (or GPU) parity under the same `lmms-eval` task, if we want TT↔HF delta in addition to TT↔community.
+
+### Observed N150 release report and determinism finding
+
+tt-inference-server Release run `89723173754` on N150 produced:
+
+| Result | Observed | Reference |
+|---|---:|---:|
+| `mmbench_en_dev` | **50.945** | Community `lmms-eval`: **65.81** |
+| `mmmu_val` | **35.444** | Paper: **41.0** |
+| ISL/OSL 127/128 | **118.342 ms TTFT**, **22.811 tok/s** | Concurrency 1 |
+| ISL/OSL 1023/128 | **283.547 ms TTFT**, **21.540 tok/s** | Concurrency 1 |
+
+The report failed both accuracy checks. Repeated greedy multimodal probes then
+showed valid answers alternating with punctuation and prose loops, while
+text-only probes were stable. This demonstrates why the determinism gate
+(≥3 identical runs with the same machine, configuration, and input) is required
+before interpreting an aggregate eval score as a numerics gap.
+
+Examples from the pre-fix MMBench predictions included `A!**!**!**!***…`,
+`B!轻盈轻盈轻盈…`. `轻盈` is a real tokenizer output repeated in a
+decoder loop, not broken text encoding. Approximately 12% of predictions
+contained `!`/`*` loops and 42 contained CJK tokens.
+
+The repeated two-token probe produced a four-request cycle. With a 634-token
+prompt and 64-token blocks, the first 10 entries were active; entries 11–16
+were excess padding entries:
+
+| Request | Prediction | `active_blocks` | Excess entries in `full_page_table` | Active/padding overlap |
+|---:|---|---|---|---|
+| 9 | `The answer` | `[2,1,8,7,6,5,4,3,16,15]` | `[14,13,12,11,0,0]` | none |
+| 10 | `The!` | `[14,13,12,11,10,9,15,16,3,4]` | `[14,13,12,11,0,0]` | **11, 12, 13, 14** |
+| 11 | `The answer` | `[5,6,7,8,1,2,4,3,16,15]` | `[14,13,12,11,0,0]` | none |
+| 12 | `The two` | `[9,10,11,12,13,14,15,16,3,4]` | `[14,13,12,11,0,0]` | **11, 12, 13, 14** |
+
+For example, request 12 logged:
+
+```text
+active_blocks=[[9,10,11,12,13,14,15,16,3,4]]
+full_page_table=[[9,10,11,12,13,14,15,16,3,4, | 14,13,12,11,0,0]]
+                                                       ^ excess padding entries
+```
+
+The shared TT `Generator` padded the 634-token prompt to 1024 tokens for
+prefill, then exposed 16 page-table entries although vLLM had allocated only 10
+KV blocks for the real prompt. In bad runs, excess entries 11–16 reused active
+physical blocks, so `paged_fill_cache` overwrote prompt K/V values with padding.
+The Janus bridge now slices the table to the real `prefill_len`; this removed
+the aliasing and produced `The answer` in all 20 repeated probes.
+
+These accuracy scores are therefore pre-fix diagnostics and the complete eval
+must be rerun. Separately, the chat adapter must still preserve Janus roles,
+image placeholders, EOS, and stop handling; community #205 did not publish that
+adapter, so template comparability remains an independent risk.
 
 ---
 
