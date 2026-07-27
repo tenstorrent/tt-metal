@@ -4,14 +4,14 @@
 
 #include "untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
 
-#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 
@@ -20,12 +20,27 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts
+UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifacts(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
+    using namespace tt::tt_metal::experimental;
+
+    // Metal 2.0 named resources. Function-local: ttnn_op_data_movement is a unity-build target, so
+    // anonymous-namespace symbols from every factory .cpp would merge into one scope.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_FULL{"compute_full"};
+    const KernelSpecName COMPUTE_CLIFF{"compute_cliff"};
+    const DFBSpecName IN_DFB{"in"};
+    const DFBSpecName OUT_DFB{"out"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+
     const auto& a = input;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
-    ProgramDescriptor desc;
+    const auto& input_mesh_tensor = input.mesh_tensor();
+    const auto& output_mesh_tensor = output.mesh_tensor();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -61,121 +76,104 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
     }
 
-    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_tiles_per_row * input_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_tiles_per_row * output_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-    });
+    DataflowBufferSpec in_dfb_spec{
+        .unique_id = IN_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_tiles_per_row,
+        .data_format_metadata = input_cb_data_format,
+    };
+    DataflowBufferSpec out_dfb_spec{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_tiles_per_row,
+        .data_format_metadata = output_cb_data_format,
+    };
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     /** reader
      */
-
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                        "reader_unary_interleaved_start_id_metal2.cpp"},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IN_DFB,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
     /** writer
      */
-    // BLOCK/WIDTH-sharded outputs split a logical row across shards - the writer's
-    // noc_async_write_sharded needs the per-shard page size (shard width in bytes), not the full
-    // row size, to do that split correctly. HEIGHT-sharded and interleaved outputs keep a whole row
-    // per page, same as the full row size.
-    uint32_t writer_page_size = unpadded_row_size_bytes;
-    const auto& out_mem_config = output.memory_config();
-    if (out_mem_config.is_sharded() && (out_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                                        out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
-        writer_page_size = out_mem_config.shard_spec().value().shape[1] * output.element_size();
-    }
-    std::vector<uint32_t> writer_ct_args = {
-        (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
-         input_cb_data_format == tt::DataFormat::Int32),
-        unpadded_row_size_bytes,
-        writer_page_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
-        "writer_unary_stick_layout_split_rows_multicore.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source =
+            std::filesystem::path{
+                "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+                "writer_unary_stick_layout_split_rows_multicore.cpp"},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_DFB,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
+        .compile_time_args =
+            {{"float32_dtype",
+              static_cast<uint32_t>(
+                  input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
+                  input_cb_data_format == tt::DataFormat::Int32)},
+             {"unpadded_X_size", unpadded_row_size_bytes}},
+        .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "start_stick_id", "n_block_reps"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
     /** compute
      */
-    KernelDescriptor::Defines compute_kernel_defines;
+    KernelSpec::CompilerOptions::Defines compute_kernel_defines;
     if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
         input_cb_data_format == tt::DataFormat::Float32) {
-        compute_kernel_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 exactly when fp32_dest_acc_en; every
+    // other CB stayed Default (== UnpackMode::UnpackToSrc, expressed by omitting the entry).
+    ComputeUnpackModes unpack_modes;
     if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
     }
-    const std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+    const std::filesystem::path compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp");
 
-    // Track compute kernel indices in case both full and cliff exist; we push them after the
-    // dataflow kernels so reader stays at index 0 and writer at index 1.
-    int full_compute_idx = -1;
-    int cliff_compute_idx = -1;
-
-    if (!core_range.empty()) {
-        KernelDescriptor compute_desc;
-        compute_desc.kernel_source = compute_kernel;
-        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc.core_ranges = core_range;
-        compute_desc.compile_time_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16};
-        compute_desc.defines = compute_kernel_defines;
-        compute_desc.config = ComputeConfigDescriptor{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
+    // One KernelSpec per legacy compute KernelDescriptor, preserving the work-split multiplicity:
+    // the per-group block count stays a compile-time arg (never demoted to an RTA).
+    auto make_compute_spec = [&](const KernelSpecName& unique_id, uint32_t per_core_block_cnt) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = compute_kernel,
+            .compiler_options = {.defines = compute_kernel_defines},
+            .dfb_bindings =
+                {DFBBinding{
+                     .dfb_spec_name = IN_DFB,
+                     .accessor_name = "in",
+                     .endpoint_type = DFBEndpointType::CONSUMER,
+                 },
+                 DFBBinding{
+                     .dfb_spec_name = OUT_DFB,
+                     .accessor_name = "out",
+                     .endpoint_type = DFBEndpointType::PRODUCER,
+                 }},
+            .compile_time_args =
+                {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_tile_cnt", num_tiles_per_row}},
+            .hw_config =
+                ComputeGen1Config{
+                    .enable_32_bit_dest = fp32_dest_acc_en,
+                    .unpack_modes = unpack_modes,
+                },
         };
-        full_compute_idx = 2 + static_cast<int>(desc.kernels.size());  // reader at 0, writer at 1 once pushed
-        (void)full_compute_idx;
-        desc.kernels.push_back(std::move(compute_desc));
-    }
-    if (has_cliff) {
-        KernelDescriptor cliff_desc;
-        cliff_desc.kernel_source = compute_kernel;
-        cliff_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        cliff_desc.core_ranges = core_range_cliff;
-        cliff_desc.compile_time_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16};
-        cliff_desc.defines = std::move(compute_kernel_defines);
-        cliff_desc.config = ComputeConfigDescriptor{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-        };
-        cliff_compute_idx = 2 + static_cast<int>(desc.kernels.size());
-        (void)cliff_compute_idx;
-        desc.kernels.push_back(std::move(cliff_desc));
-    }
+    };
 
     uint32_t tile_height = input.tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
@@ -185,18 +183,21 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
     uint32_t row_start_id = 0;
 
     const auto& cores = corerange_to_cores(available_grid);
-    reader_desc.runtime_args.reserve(ncores);
-    writer_desc.runtime_args.reserve(ncores);
+
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+    // The writer's per-group 5-tuple block is a genuine vararg: its length varies per node with the
+    // block assignment, so the count is declared per node rather than by the scalar schema field.
+    Table<Nodes, uint32_t> writer_varargs_per_node;
+
     for (uint32_t i = 0; i < ncores; ++i) {
         const auto& core = cores[i];
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
-        // writer runtime args
-        KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(dst_buffer);
-        writer_rt_args.push_back(padded_row_size_bytes);
-        writer_rt_args.push_back(row_start_id);
-        writer_rt_args.push_back(static_cast<uint32_t>(assignment.size()));
+        // start_stick_id is the running row cursor *before* this core's blocks are accounted for.
+        const uint32_t core_start_stick_id = row_start_id;
+
+        std::vector<uint32_t> writer_varargs;
 
         uint32_t nblocks_per_core_core = 0;
 
@@ -209,36 +210,73 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
                 count_repeated++;
             } else {
                 // push back information for previous elements
-                writer_rt_args.push_back(ref_el.n_data);
-                writer_rt_args.push_back(ref_el.n_mixed);
-                writer_rt_args.push_back(ref_el.n_pads);
-                writer_rt_args.push_back(ref_el.times);
-                writer_rt_args.push_back(count_repeated);
+                writer_varargs.push_back(ref_el.n_data);
+                writer_varargs.push_back(ref_el.n_mixed);
+                writer_varargs.push_back(ref_el.n_pads);
+                writer_varargs.push_back(ref_el.times);
+                writer_varargs.push_back(count_repeated);
                 // Set up assignment for this element
                 ref_el = el;
                 count_repeated = 1;
             }
         }
-        writer_rt_args.push_back(ref_el.n_data);
-        writer_rt_args.push_back(ref_el.n_mixed);
-        writer_rt_args.push_back(ref_el.n_pads);
-        writer_rt_args.push_back(ref_el.times);
-        writer_rt_args.push_back(count_repeated);
+        writer_varargs.push_back(ref_el.n_data);
+        writer_varargs.push_back(ref_el.n_mixed);
+        writer_varargs.push_back(ref_el.n_pads);
+        writer_varargs.push_back(ref_el.times);
+        writer_varargs.push_back(count_repeated);
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
 
         // reader runtime args
-        reader_desc.emplace_runtime_args(core, {src0_buffer, num_tiles_per_core, tile_start_id});
-        writer_desc.emplace_runtime_args(core, writer_rt_args);
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values, core, {{"num_pages", num_tiles_per_core}, {"start_id", tile_start_id}});
+        // writer runtime args
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            core,
+            {{"padded_X_size", padded_row_size_bytes},
+             {"start_stick_id", core_start_stick_id},
+             {"n_block_reps", static_cast<uint32_t>(assignment.size())}});
+        writer_varargs_per_node.emplace(Nodes{core}, static_cast<uint32_t>(writer_varargs.size()));
+        writer_run.advanced_options.runtime_varargs.emplace(core, std::move(writer_varargs));
 
         tile_start_id += num_tiles_per_core;
     }
 
-    // Insert reader+writer at the beginning so they occupy descriptor positions 0 and 1.
-    desc.kernels.insert(desc.kernels.begin(), std::move(writer_desc));
-    desc.kernels.insert(desc.kernels.begin(), std::move(reader_desc));
+    writer_spec.advanced_options.num_runtime_varargs_per_node = std::move(writer_varargs_per_node);
 
-    return desc;
+    ProgramSpec spec{
+        .name = "untilize_with_unpadding_multi_core_interleaved",
+        .kernels = {std::move(reader_spec), std::move(writer_spec)},
+        .dataflow_buffers = {std::move(in_dfb_spec), std::move(out_dfb_spec)},
+        .tensor_parameters =
+            {TensorParameter{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()},
+             TensorParameter{.unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec()}},
+    };
+
+    if (!core_range.empty()) {
+        spec.kernels.push_back(make_compute_spec(COMPUTE_FULL, nblocks_per_core));
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "full",
+            .kernels = {READER, WRITER, COMPUTE_FULL},
+            .target_nodes = core_range,
+        });
+    }
+    if (has_cliff) {
+        spec.kernels.push_back(make_compute_spec(COMPUTE_CLIFF, nblocks_per_core_cliff));
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "cliff",
+            .kernels = {READER, WRITER, COMPUTE_CLIFF},
+            .target_nodes = core_range_cliff,
+        });
+    }
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run)};
+    run_args.tensor_args = {{INPUT, input_mesh_tensor}, {OUTPUT, output_mesh_tensor}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

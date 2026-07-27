@@ -10,31 +10,29 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t dfb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-    const uint32_t n_block_reps = get_arg_val<uint32_t>(3);
+    const uint32_t padded_X_size = get_arg(args::padded_X_size);
+    const uint32_t start_stick_id = get_arg(args::start_stick_id);
+    const uint32_t n_block_reps = get_arg(args::n_block_reps);
 
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    // Per-shard page size in bytes: shard width for BLOCK/WIDTH-sharded output (a logical row
-    // spans multiple shards), full unpadded row otherwise. Feeds noc_async_write_sharded's
-    // multi-shard row split, same mechanism used by the ROW_MAJOR-input factory.
-    constexpr uint32_t writer_page_size = get_compile_time_arg_val(2);
-    constexpr auto dst_args = TensorAccessorArgs<3>();
+    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
+    constexpr auto unpadded_X_size = get_arg(args::unpadded_X_size);
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, writer_page_size);
+    // The output page the accessor walks is the per-shard page for BLOCK/WIDTH-sharded output (a
+    // logical row spans multiple shards) and the full unpadded row otherwise. That page size now
+    // rides on the tensor binding, so noc_async_write_sharded's multi-shard row split is fed
+    // automatically -- same mechanism as the ROW_MAJOR-input factory.
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb_out0(dfb_id_out0);
+    DataflowBuffer dfb_out0(dfb::out);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
@@ -62,7 +60,9 @@ void kernel_main() {
     };
 
     uint32_t stick_id = start_stick_id;
-    uint32_t rt_arg_idx = 4;
+    // Vararg block: n_block_reps groups of 5, each {n_data, n_mixed, n_pads, times, repeat_count}.
+    // The group count varies per node with the block assignment, so this stays positional.
+    uint32_t rt_arg_idx = 0;
     uint32_t count = 1;
     constexpr int32_t n_mixed_idx = 1;
     constexpr int32_t n_pad_idx = 2;
@@ -71,13 +71,11 @@ void kernel_main() {
     constexpr int32_t num_rt_idx = 5;
 
     for (uint32_t block_rep_idx = 0; block_rep_idx < n_block_reps; ++block_rep_idx) {
-        const uint32_t repeat_count = get_arg_val<uint32_t>(rt_arg_idx + repeat_ct_idx);
-        const uint32_t n_data = get_arg_val<uint32_t>(rt_arg_idx);  // number of full tile-rows
-        const uint32_t n_mixed =
-            get_arg_val<uint32_t>(rt_arg_idx + n_mixed_idx);  // number of rows in a partially filled tile-row
-        const uint32_t n_pads = get_arg_val<uint32_t>(rt_arg_idx + n_pad_idx);  // number of padding tile-rows
-        const uint32_t times =
-            get_arg_val<uint32_t>(rt_arg_idx + times_idx);  // number of times the pattern of tile-rows repeats
+        const uint32_t repeat_count = get_vararg(rt_arg_idx + repeat_ct_idx);
+        const uint32_t n_data = get_vararg(rt_arg_idx);                 // number of full tile-rows
+        const uint32_t n_mixed = get_vararg(rt_arg_idx + n_mixed_idx);  // number of rows in a partially filled tile-row
+        const uint32_t n_pads = get_vararg(rt_arg_idx + n_pad_idx);     // number of padding tile-rows
+        const uint32_t times = get_vararg(rt_arg_idx + times_idx);  // number of times the pattern of tile-rows repeats
         if (count == repeat_count) {
             rt_arg_idx = rt_arg_idx + num_rt_idx;
             count = 1;
