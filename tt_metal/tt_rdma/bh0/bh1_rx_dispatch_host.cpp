@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
         verify_core = eth_phys;
         verify_addr = TT_RDMA_TX_BUF0_ADDR;
         mode = "noc-loopback(own eth L1)";
-    } else if (noc_target == 2 || noc_target == 5) {  // off-core Tensix L1 via NoC (the real RDMA case)
+    } else if (noc_target == 2 || noc_target == 5 || noc_target == 7) {  // off-core Tensix L1 via NoC (real RDMA case)
         const CoreCoord w = device->worker_core_from_logical_core(CoreCoord{0, 0});
         noc_x = (uint32_t)w.x;
         noc_y = (uint32_t)w.y;
@@ -146,10 +146,19 @@ int main(int argc, char** argv) {
     // with tcpdump on the receiving rail (ether proto 0x1af6, op byte 0x21, 'READ' pattern).
     // noc_target == 6 (Phase 1.3b READ INITIATOR) reuses the dst_mac + Tensix land target below, but sets
     // init_enable instead of read_enable: BH sends READ_REQ and lands the READ_RESP payloads here.
+    // Phase 2.2a ARQ-receiver mode (noc_target == 7): reliable WRITEs land off-core (mode-2 path above)
+    // and BH emits cumulative ACKs back to dst_mac. arq_enable + ack_coal drive the Go-Back-N receiver.
     uint32_t read_enable = 0, dst_mac_hi = 0, dst_mac_lo = 0, rd_src_x = 0, rd_src_y = 0, rd_src_base = 0;
     uint32_t init_enable = 0, init_nreqs = 0, init_rkey = 0, init_len = 0;
+    const uint32_t arq_enable = (noc_target == 7) ? 1u : 0u;
+    const uint32_t ack_coal = (argc > 10) ? std::strtoul(argv[10], nullptr, 0) : 4u;  // ACK every N in-order frames
+    // Phase 2.2b ARQ-initiator mode (noc_target == 8): BH sends init_nreqs reliable WRITEs (seq 1..N) to
+    // dst_mac and Go-Back-N retransmits on ACK timeout. RTO in us -> wall-clock cycles (eth clock 1 GHz).
+    const uint32_t arq_init_enable = (noc_target == 8) ? 1u : 0u;
+    const uint32_t arq_rto_us = (argc > 11) ? std::strtoul(argv[11], nullptr, 0) : 2000u;
+    const uint32_t arq_rto_cycles = arq_rto_us * 1000u;
     CoreCoord rd_core = eth_phys;
-    if (noc_target == 4 || noc_target == 6) {
+    if (noc_target == 4 || noc_target == 6 || noc_target == 7 || noc_target == 8) {
         unsigned m[6] = {0};
         if (std::sscanf(dst_mac_s, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6) {
             std::fprintf(stderr, "bad dst mac '%s'\n", dst_mac_s);
@@ -179,6 +188,28 @@ int main(int argc, char** argv) {
                 rd_src_y,
                 rd_src_base,
                 init_len);
+        } else if (noc_target == 8) {
+            init_nreqs = 32u;  // reliable WRITEs seq 1..32
+            init_rkey = kRkey;
+            init_len = 64u;  // small reliable payload
+            mode = "arq-initiator(BH sends reliable WRITEs + Go-Back-N retransmit)";
+            std::printf(
+                "  ARQ-initiator: %u reliable WRITEs (seq 1..%u) -> %s, RTO=%uus (%u cyc)\n",
+                init_nreqs,
+                init_nreqs,
+                dst_mac_s,
+                arq_rto_us,
+                arq_rto_cycles);
+        } else if (noc_target == 7) {
+            mode = "arq-receiver(land tensix + cumulative ACK)";
+            std::printf(
+                "  ARQ-receiver: reliable WRITEs land @core(%u,%u):0x20000  ACK -> %s (hi=0x%x lo=0x%x) coal=%u\n",
+                noc_x,
+                noc_y,
+                dst_mac_s,
+                dst_mac_hi,
+                dst_mac_lo,
+                ack_coal);
         } else {
             mode = "read-target(tensix 0,0 L1)";
             std::printf(
@@ -230,7 +261,7 @@ int main(int argc, char** argv) {
     // Clear the WRITE landing target (on its own core) + the stats region.
     std::vector<uint32_t> zeros(kMrLen / 4, 0u);
     cluster.write_core(device->id(), verify_core, zeros, verify_addr);
-    std::vector<uint32_t> zstats(23, 0u);
+    std::vector<uint32_t> zstats(28, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
     // Clear the SEND/completion ring + prod_idx on its core.
     if (noc_target == 3 || noc_target == 5) {
@@ -272,7 +303,11 @@ int main(int argc, char** argv) {
          init_enable,
          init_nreqs,
          init_rkey,
-         init_len});
+         init_len,
+         arq_enable,
+         ack_coal,
+         arq_init_enable,
+         arq_rto_cycles});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -282,15 +317,16 @@ int main(int argc, char** argv) {
     std::cout << "BH.2-RX: dispatch kernel up. Now send TT-RDMA frames from the BF3. Stats:\n";
 
     for (int s = 0; s < hold_s; ++s) {
-        // READ-initiator: ring the doorbell at s==4 -- by now the external READ responder is listening.
-        if (noc_target == 6 && s == 4) {
+        // READ / ARQ initiator: ring the doorbell at s==4 -- by now the external responder is listening.
+        if ((noc_target == 6 || noc_target == 8) && s == 4) {
             cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>{1u}, TT_RDMA_RCB_ADDR + 0x8u);
         }
-        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 23 * sizeof(uint32_t));
+        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 28 * sizeof(uint32_t));
         std::printf(
             "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u crc_err=%u last_op=0x%02x read_pos=%u "
             "read_req=%u read_resp=%u ack=%u ack_seq=%u wimm=%u  rkey_miss=%u rkey_access=%u rkey_bounds=%u "
-            "ctrl=%u mr_reg=%u mr_dereg=%u  init_req=%u resp_ok=%u resp_unm=%u\n",
+            "ctrl=%u mr_reg=%u mr_dereg=%u  init_req=%u resp_ok=%u resp_unm=%u  arq_ack_tx=%u rx_last=%u ooo=%u "
+            "dup=%u\n",
             s,
             st[0],
             st[1],
@@ -314,7 +350,11 @@ int main(int argc, char** argv) {
             st[19],
             st[20],
             st[21],
-            st[22]);
+            st[22],
+            st[23],
+            st[24],
+            st[25],
+            st[26]);
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
@@ -369,7 +409,7 @@ int main(int argc, char** argv) {
         std::printf("  ring: %u/%u shown slots valid\n", ok, nshow);
     } else if (noc_target == 6) {
         // READ-initiator: each matched READ_RESP landed its payload ('READ'...) at land+i*init_len.
-        auto fin = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 23 * sizeof(uint32_t));
+        auto fin = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 28 * sizeof(uint32_t));
         uint32_t ok = 0;
         for (uint32_t i = 0; i < init_nreqs; ++i) {
             auto p = cluster.read_core<uint32_t>(device->id(), rd_core, rd_src_base + i * init_len, sizeof(uint32_t));
@@ -383,6 +423,34 @@ int main(int argc, char** argv) {
             fin[22],
             ok,
             init_nreqs);
+    } else if (noc_target == 7) {
+        // Phase 2.2a ARQ receiver: reliable WRITEs landed off-core (byte-exact TTWR) AND BH emitted
+        // cumulative ACKs whose watermark tracked the in-order sequence. rx_last = highest contiguous seq.
+        auto fin = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 28 * sizeof(uint32_t));
+        auto land = cluster.read_core<uint32_t>(device->id(), verify_core, verify_addr, 4 * sizeof(uint32_t));
+        const bool land_ok = (!land.empty() && land[0] == 0x52575454u);  // 'TTWR'
+        std::printf(
+            "  ARQ-receiver: write=%u write_ok=%u  arq_ack_tx=%u rx_last=%u ooo=%u dup=%u  land[0]=%08x %s\n",
+            fin[2],
+            fin[3],
+            fin[23],
+            fin[24],
+            fin[25],
+            fin[26],
+            land[0],
+            land_ok ? "OK" : "BAD");
+    } else if (noc_target == 8) {
+        // Phase 2.2b ARQ initiator: BH sent init_nreqs reliable WRITEs and Go-Back-N retransmitted on the
+        // ACK timeout. With the responder dropping one frame once, n_retx>=1 and the final ack watermark
+        // (fin[12]) must reach init_nreqs -- every frame eventually acknowledged.
+        auto fin = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 28 * sizeof(uint32_t));
+        std::printf(
+            "  ARQ-initiator: sent %u reliable WRITEs, ack_watermark=%u/%u  n_retx=%u  %s\n",
+            init_nreqs,
+            fin[12],
+            init_nreqs,
+            fin[27],
+            (fin[12] >= init_nreqs ? "ALL-ACKED" : "INCOMPLETE"));
     } else {
         // Verify the WRITE landing (on the resolved target core): first 8 bytes should be "TTWR" + 0x04..0x07.
         auto land = cluster.read_core<uint32_t>(device->id(), verify_core, verify_addr, 4 * sizeof(uint32_t));

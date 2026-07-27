@@ -17,6 +17,7 @@ BIN=./build_Release/tests/tt_metal/tt_metal/tt_rdma_bh0
 ALLOW=/home/alex/tenstorrent/tt-metal-external-eth/tt_metal/tt_rdma/bh0/tt_rdma_bf3_send
 P0=enp193s0f0np0                       # host tt-rail for BH ext idx2
 DMAC=02:00:00:00:00:02                 # unicast -> BH RXQ2
+HOSTMAC=$(cat /sys/class/net/$P0/address 2>/dev/null)  # ACK egress dest (Phase 2.2 ARQ)
 RKEY=0x00CAFE42
 D=$(mktemp -d)
 trap 'rm -rf "$D"' EXIT
@@ -196,6 +197,53 @@ if wait_up "$OUT"; then
     && pass "READ initiator correlation (resp_ok=$ro, $n/$m landed byte-exact)" \
     || fail "READ initiator ($ln / resp_ok=${ro:-0})"
 else fail "RX kernel did not come up (T12)"; kill $DPID 2>/dev/null; fi
+
+echo "== T13a: RX software-ARQ receiver -- reorder-tolerant cumulative ACK (Phase 2.2a) =="
+OUT=$D/rx13.txt; SND=$D/snd13.txt
+timeout 40 "$BIN/bh1_rx_dispatch" 1 ext 12 1 1 7 1 $HOSTMAC 0 4 >"$OUT" 2>&1 &   # noc_target=7 (ARQ recv), coal=4
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 64 $DMAC 0x1af6 0x10 256 $RKEY 0 1 1 0 0 0xFFFFFFFF 0 1 0 0 >"$SND" 2>&1  # 64 reliable WRITEs
+  wait $DPID
+  rl=$(grep "ARQ-receiver:" "$OUT" | tail -1 | grep -oE 'rx_last=[0-9]+' | cut -d= -f2)
+  fa=$(grep -c "FULL-ACK" "$SND")
+  land=$(grep "ARQ-receiver:" "$OUT" | tail -1 | grep -oE 'land\[0\]=52575454 OK')
+  [ "${rl:-0}" -eq 64 ] && [ "${fa:-0}" -ge 1 ] && [ -n "$land" ] \
+    && pass "ARQ receiver reorder-tolerant full ACK (rx_last=$rl, FULL-ACK, byte-exact TTWR)" \
+    || fail "ARQ receiver full ACK (rx_last=${rl:-0}, full_ack=${fa:-0}, land='$land')"
+else fail "RX kernel did not come up (T13a)"; kill $DPID 2>/dev/null; fi
+
+echo "== T13b: RX software-ARQ receiver -- watermark stalls at a lost frame + dup-ACKs (Phase 2.2a) =="
+OUT=$D/rx13b.txt; SND=$D/snd13b.txt
+timeout 40 "$BIN/bh1_rx_dispatch" 1 ext 12 1 1 7 1 $HOSTMAC 0 1 >"$OUT" 2>&1 &   # coal=1 (ACK each frame)
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 40 $DMAC 0x1af6 0x10 256 $RKEY 0 1 1 0 0 0xFFFFFFFF 0 1 20 300 >"$SND" 2>&1  # drop seq 20
+  wait $DPID
+  rl=$(grep "ARQ-receiver:" "$OUT" | tail -1 | grep -oE 'rx_last=[0-9]+' | cut -d= -f2)
+  st=$(grep -c "STALLED-AT-GAP" "$SND")
+  [ "${rl:-0}" -eq 19 ] && [ "${st:-0}" -ge 1 ] \
+    && pass "ARQ receiver stalls at loss + emits dup-ACKs (rx_last=$rl, STALLED-AT-GAP)" \
+    || fail "ARQ receiver loss stall (rx_last=${rl:-0}, stalled=${st:-0})"
+else fail "RX kernel did not come up (T13b)"; kill $DPID 2>/dev/null; fi
+
+echo "== T14: RX software-ARQ initiator -- Go-Back-N retransmit on ACK timeout (Phase 2.2b) =="
+OUT=$D/rx14.txt; SND=$D/snd14.txt
+timeout 40 "$BIN/bh1_rx_dispatch" 1 ext 16 1 1 8 1 $HOSTMAC 0 4 2000 >"$OUT" 2>&1 &   # noc_target=8 (ARQ init), RTO 2ms
+DPID=$!
+if wait_up "$OUT"; then
+  # ARQ responder: ACK BH's 32 reliable WRITEs, drop seq 15 once -> forces one Go-Back-N resend.
+  sudo -n "$ALLOW" $P0 1 $DMAC 0x1af6 0x10 64 0 0 1 1 0 0 0 0 0 0 0 32 15 >"$SND" 2>&1 &
+  RPID=$!
+  wait $DPID
+  kill $RPID 2>/dev/null; wait $RPID 2>/dev/null
+  aw=$(grep "ARQ-initiator:" "$OUT" | tail -1 | grep -oE 'ack_watermark=[0-9]+' | cut -d= -f2)
+  rtx=$(grep "ARQ-initiator:" "$OUT" | tail -1 | grep -oE 'n_retx=[0-9]+' | cut -d= -f2)
+  aa=$(grep -c "ALL-ACKED" "$SND")
+  [ "${aw:-0}" -eq 32 ] && [ "${rtx:-0}" -ge 1 ] && [ "${aa:-0}" -ge 1 ] \
+    && pass "ARQ initiator Go-Back-N retransmit (ack_watermark=$aw/32, n_retx=$rtx, responder ALL-ACKED)" \
+    || fail "ARQ initiator retransmit (watermark=${aw:-0}, n_retx=${rtx:-0}, allacked=${aa:-0})"
+else fail "RX kernel did not come up (T14)"; kill $DPID 2>/dev/null; fi
 
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"

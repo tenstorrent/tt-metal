@@ -105,6 +105,39 @@ static inline void rxwqe_publish(
     noc_async_write_barrier();
 }
 
+// Phase 2.2a: emit a cumulative ACK (0x40) back to the sender. `ack_seq` is the highest in-order
+// sequence number this receiver has accepted (Go-Back-N cumulative). Header-only frame; the seq rides
+// in word 2 (same field the initiator's ack_watermark reads). Staged in TX_BUF1 so it never clobbers
+// TX_BUF0 (READ_RESP / READ_REQ / RxWqeRing staging) -- ACK egress can interleave with those on TXQ2.
+static inline void arq_send_ack(uint32_t ack_seq) {
+    volatile tt_l1_ptr uint32_t* ah = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF1_ADDR);
+    ah[0] = (uint32_t)TT_OP_ACK | ((uint32_t)TT_RDMA_VERSION << 8);  // op | ver<<8 | tag=0
+    ah[1] = 0u;                                                      // length (semantic; header-only on the wire)
+    ah[2] = ack_seq;  // cumulative ack_seq (highest in-order seq received)
+    ah[3] = 0u;
+    ah[4] = 0u;
+    ah[5] = 0u;
+    ah[6] = 0u;
+    ah[7] = tt_rdma_crc32(reinterpret_cast<const uint8_t*>(TT_RDMA_TX_BUF1_ADDR), 28u);
+    tt_rdma_send_raw(TT_RDMA_TX_QUEUE, TT_RDMA_TX_BUF1_ADDR, TT_RDMA_HDR_ONLY_BYTES);
+}
+
+// Phase 2.2b: emit one reliable WRITE (0x10) frame carrying sequence `seq`, staged in TX_BUF0. The
+// payload area (TX_BUF0+32) is filled once by the caller and persists across sends -- only the header
+// (seq + CRC over [0..27]) is rewritten per frame, so retransmits are cheap. Used by the ARQ initiator.
+static inline void arq_send_write(uint32_t seq, uint32_t rkey, uint32_t len, uint32_t roff) {
+    volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR);
+    w[0] = (uint32_t)TT_OP_WRITE | ((uint32_t)TT_RDMA_VERSION << 8);  // op | ver<<8 | tag=0
+    w[1] = len;
+    w[2] = seq;  // reliable sequence number
+    w[3] = rkey;
+    w[4] = roff;
+    w[5] = 0u;
+    w[6] = 0u;
+    w[7] = tt_rdma_crc32(reinterpret_cast<const uint8_t*>(TT_RDMA_TX_BUF0_ADDR), 28u);
+    tt_rdma_send_raw(TT_RDMA_TX_QUEUE, TT_RDMA_TX_BUF0_ADDR, TT_RDMA_HDR_BYTES + len);
+}
+
 void kernel_main() {
     // arg0 = hb L1 addr (total frames dispatched)   arg1 = stop flag   arg2 = stats base (8 u32)
     // arg3 = rx buffer L1 byte addr   arg4 = rx buffer size bytes   arg5 = MR table L1 byte addr
@@ -178,6 +211,36 @@ void kernel_main() {
     // wraparound-safe signed comparison -- the "acked up to" watermark the TX/initiator side reads to
     // free retransmit buffers + complete sends. Monotonic: stale / duplicate / reordered ACKs are ignored.
     uint32_t n_ack = 0, ack_watermark = 0;
+    // Phase 2.2a: software ARQ receiver (Go-Back-N cumulative-ACK GENERATION). The HW seq/resend path
+    // (eth_enable_packet_mode) only works TT<->TT; against a BF3/NIC the far end is not a TT ETH_TXQ, so
+    // reliability lives here in software. When arq_enable, each reliable data op (SEND/WRITE +_IMM) carries
+    // a 1-based seq in hw[2]; we track rx_last = highest CONTIGUOUS seq accepted and emit a cumulative ACK
+    // carrying rx_last. In-order ACKs are coalesced (every ack_coal frames + a trailing flush per poll);
+    // any out-of-order (gap) or duplicate frame flushes an immediate dup-ACK of rx_last so the sender can
+    // Go-Back-N retransmit without waiting for its RTO. Landing itself is unchanged/idempotent (Go-Back-N
+    // resends the same bytes to the same MR offset). arq_enable == 0 -> exact Phase 1 behavior.
+    const uint32_t arq_enable = get_arg_val<uint32_t>(27);
+    const uint32_t ack_coal = get_arg_val<uint32_t>(28) ? get_arg_val<uint32_t>(28) : 1u;
+    uint32_t rx_last = 0, ack_pending = 0, n_arq_ack_tx = 0, n_arq_ooo = 0, n_arq_dup = 0;
+    // Reorder-tolerant receive window: the path (host NIC multi-queue TX / qdisc) reorders frames even
+    // when paced -- a strict Go-Back-N receiver would reject the entire window behind one late frame. So
+    // we buffer early (in-window) frames in a bitmap and advance rx_last over the contiguous prefix as the
+    // gaps fill (selective-repeat receiver). WINDOW is a power of two >= the max outstanding/reorder span.
+    constexpr uint32_t TT_ARQ_WINDOW = 2048u;  // bits; 256 B bitmap. seq in (rx_last, rx_last+WINDOW] buffered.
+    uint32_t recv_bm[TT_ARQ_WINDOW / 32u];
+    for (uint32_t i = 0; i < TT_ARQ_WINDOW / 32u; ++i) {
+        recv_bm[i] = 0u;
+    }
+    // Phase 2.2b: software ARQ INITIATOR (Go-Back-N sender). On the init_go doorbell, BH sends init_nreqs
+    // reliable WRITEs (seq 1..N) to dst_mac, then retransmits on an ACK timeout. Single-timer Go-Back-N:
+    // the timer covers the window base (oldest un-acked = ack_watermark+1); on RTO expiry with the window
+    // still open, resend base..N and restart the timer; the inbound cumulative ACK (ack_watermark, updated
+    // by the ACK handler) advances the base and restarts the timer. Terminates when ack_watermark >= N.
+    // RTO is passed pre-converted to wall-clock cycles (eth clock = 1 GHz, so cycles = us * 1000).
+    const uint32_t arq_init_enable = get_arg_val<uint32_t>(29);
+    const uint32_t arq_rto_cycles = get_arg_val<uint32_t>(30);
+    uint32_t arq_init_started = 0, n_retx = 0;
+    uint64_t arq_base_time = 0;
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
@@ -188,13 +251,24 @@ void kernel_main() {
     }
 
     tt_rdma_rxq_init(TT_RDMA_RX_QUEUE, rx_buf, rx_buf_size, wrap);  // raw; L2-stripped landing
-    if (read_enable || init_enable) {  // configure TXQ2 raw egress once (dst MAC + 0x1AF6) for READ_RESP/READ_REQ
+    if (read_enable || init_enable ||
+        arq_enable) {  // configure TXQ2 raw egress once (dst MAC + 0x1AF6) for READ_RESP/READ_REQ/ACK
         const uint64_t dst_mac = ((uint64_t)dst_mac_hi << 32) | (uint64_t)dst_mac_lo;
         tt_rdma_txpkt_config(TT_RDMA_TX_QUEUE, dst_mac, (uint16_t)TT_RDMA_ETHERTYPE);
         tt_rdma_set_max_pkt_size(TT_RDMA_TX_QUEUE, TT_RDMA_MAX_PAYLOAD + TT_RDMA_HDR_BYTES);
     }
-    if (init_enable) {
-        *init_go = 0;  // host raises this once the READ responder is listening
+    if (init_enable || arq_init_enable) {
+        *init_go = 0;  // host raises this once the (READ / ARQ) responder is listening
+    }
+    if (arq_init_enable) {
+        // Fill the reliable-WRITE payload once (TTWR + ramp); it persists across all (re)transmits since
+        // arq_send_write only rewrites the 32B header. Capped fill keeps init O(payload) one-time.
+        volatile tt_l1_ptr uint32_t* pay0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR + 32u);
+        const uint32_t nw = (init_len < 256u ? init_len : 256u) >> 2;
+        pay0[0] = 0x52575454u;  // 'TTWR'
+        for (uint32_t i = 1; i < nw; ++i) {
+            pay0[i] = i;
+        }
     }
 
     uint32_t read_pos = 0;  // byte position in the ring (mod buf_size in wrap mode)
@@ -224,6 +298,27 @@ void kernel_main() {
                 ++n_init_req;
             }
             init_done = 1u;
+        }
+        // Phase 2.2b ARQ initiator: on the doorbell, send seq 1..N reliable WRITEs once, then Go-Back-N
+        // retransmit on ACK timeout until the inbound cumulative watermark (ack_watermark) covers all N.
+        if (arq_init_enable && *init_go) {
+            if (!arq_init_started) {
+                for (uint32_t seq = 1; seq <= init_nreqs; ++seq) {
+                    arq_send_write(seq, init_rkey, init_len, 0u);
+                }
+                arq_base_time = eth_read_wall_clock();
+                arq_init_started = 1u;
+            } else if (ack_watermark < init_nreqs) {
+                const uint64_t now = eth_read_wall_clock();
+                if ((now - arq_base_time) > (uint64_t)arq_rto_cycles) {
+                    // RTO expired with the window still open: resend the un-acked suffix (base..N).
+                    for (uint32_t seq = ack_watermark + 1u; seq <= init_nreqs; ++seq) {
+                        arq_send_write(seq, init_rkey, init_len, 0u);
+                    }
+                    arq_base_time = now;
+                    ++n_retx;
+                }
+            }
         }
         const uint32_t wp = tt_rdma_rxq_bufptr(TT_RDMA_RX_QUEUE);  // bytes written by HW
         uint32_t avail = wrap ? ((wp + rx_buf_size - read_pos) % rx_buf_size) : (wp - read_pos);
@@ -447,6 +542,45 @@ void kernel_main() {
             } else {
                 ++n_unknown;
             }
+            // Phase 2.2a: Go-Back-N receiver accounting for reliable data ops. seq rides in hw[2].
+            if (arq_enable &&
+                (op == TT_OP_SEND || op == TT_OP_SEND_IMM || op == TT_OP_WRITE || op == TT_OP_WRITE_IMM)) {
+                const uint32_t seq = hw[2];
+                if ((int32_t)(seq - rx_last) <= 0) {
+                    // Duplicate (<= rx_last, already delivered): re-ACK cumulative so the sender advances.
+                    ++n_arq_dup;
+                    arq_send_ack(rx_last);
+                    ack_pending = 0;
+                    ++n_arq_ack_tx;
+                } else if (seq - rx_last > TT_ARQ_WINDOW) {
+                    // Beyond the reorder window -- cannot buffer. Dup-ACK to signal the sender to back off.
+                    ++n_arq_ooo;
+                    arq_send_ack(rx_last);
+                    ack_pending = 0;
+                    ++n_arq_ack_tx;
+                } else {
+                    // In window: record the seq, then advance rx_last over the now-contiguous prefix. A
+                    // frame arriving early (seq != rx_last+1) is buffered, not rejected -- reorder-tolerant.
+                    const uint32_t b = seq & (TT_ARQ_WINDOW - 1u);
+                    recv_bm[b >> 5] |= (1u << (b & 31u));
+                    if (seq != rx_last + 1u) {
+                        ++n_arq_ooo;  // reorder event (buffered); observability only
+                    }
+                    for (;;) {
+                        const uint32_t nb = (rx_last + 1u) & (TT_ARQ_WINDOW - 1u);
+                        if (!(recv_bm[nb >> 5] & (1u << (nb & 31u)))) {
+                            break;
+                        }
+                        recv_bm[nb >> 5] &= ~(1u << (nb & 31u));
+                        ++rx_last;
+                    }
+                    if (++ack_pending >= ack_coal) {  // coalesce the cumulative ACK
+                        arq_send_ack(rx_last);
+                        ack_pending = 0;
+                        ++n_arq_ack_tx;
+                    }
+                }
+            }
             last_op = op;
             ++total;
             read_pos = wrap ? ((read_pos + frame) % rx_buf_size) : (read_pos + frame);
@@ -455,6 +589,13 @@ void kernel_main() {
 
         if (use_noc) {
             noc_async_write_barrier();  // drain this batch's off-core writes (bounds outstanding NoC cmds)
+        }
+        // Phase 2.2a: flush a trailing coalesced ACK so rx_last is always promptly acknowledged even if
+        // the batch ended below the coalesce threshold (else the sender's window could stall at the tail).
+        if (arq_enable && ack_pending > 0) {
+            arq_send_ack(rx_last);
+            ack_pending = 0;
+            ++n_arq_ack_tx;
         }
 
         *hb = total;
@@ -481,6 +622,11 @@ void kernel_main() {
         stats[20] = n_init_req;
         stats[21] = n_resp_ok;
         stats[22] = n_resp_unmatched;
+        stats[23] = n_arq_ack_tx;  // Phase 2.2a: cumulative ACKs emitted as receiver
+        stats[24] = rx_last;       // highest contiguous seq accepted (the value ACK'd)
+        stats[25] = n_arq_ooo;     // out-of-order (gap) frames -> dup-ACK to trigger resend
+        stats[26] = n_arq_dup;     // duplicate frames (already delivered) -> dup-ACK
+        stats[27] = n_retx;        // Phase 2.2b: ARQ initiator Go-Back-N retransmit events
 
         if (stop != nullptr && *stop != 0) {
             break;

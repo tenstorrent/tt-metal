@@ -152,6 +152,20 @@ int main(int argc, char** argv) {
     // (0x20) frames from the BH, reply each with a READ_RESP (0x21) carrying the echoed tag/seq + a
     // 'READ' payload of the requested length. dst_mac (arg[3]) is the BH RXQ2 MAC (02:...:02).
     const int readresp = (argc > 14) ? atoi(argv[14]) : 0;
+    // arg[15] arqsend=N>0: Phase 2.2a software-ARQ SENDER. Emit `count` reliable WRITE (0x10) frames with
+    // monotonic seq 1..count (word2), landing at the BH MR, then collect the BH's cumulative ACKs (0x40)
+    // and report the highest ack_seq reached. arg[16] gapseq=K>0: skip sending seq K once (simulate loss)
+    // so the BH receiver stalls at K-1 and emits dup-ACKs (its ooo counter rises) -- exercises the
+    // out-of-order path. With gapseq=0 the in-order run must drive the BH watermark to `count`.
+    const int arqsend = (argc > 15) ? atoi(argv[15]) : 0;
+    const uint32_t gapseq = (argc > 16) ? (uint32_t)strtoul(argv[16], NULL, 0) : 0u;
+    const int arqpace = (argc > 17) ? atoi(argv[17]) : 0;  // inter-frame gap (µs) for the ARQ sender
+    // arg[18] arqresp=N>0: Phase 2.2b ARQ RESPONDER for the BH-initiator retransmit test. Receive reliable
+    // WRITE (0x10) frames from BH, track the in-order cumulative rx_last, and send a cumulative ACK (0x40)
+    // back to BH's RXQ2 (dst_mac) per frame. arg[19] dropreq=K>0: drop the frame with seq K on its FIRST
+    // arrival once (simulate loss) so the BH watermark stalls at K-1 and its RTO fires a Go-Back-N resend.
+    const int arqresp = (argc > 18) ? atoi(argv[18]) : 0;
+    const uint32_t dropreq = (argc > 19) ? (uint32_t)strtoul(argv[19], NULL, 0) : 0u;
 
     unsigned dm[6] = {0};
     if (sscanf(dmac_s, "%x:%x:%x:%x:%x:%x", &dm[0], &dm[1], &dm[2], &dm[3], &dm[4], &dm[5]) != 6) {
@@ -287,6 +301,154 @@ int main(int argc, char** argv) {
             served++;
         }
         printf("readresp: served %d/%d READ_REQ -> READ_RESP\n", served, readresp);
+        close(fd);
+        return 0;
+    }
+
+    // ---- ARQ SENDER (Phase 2.2a): send `count` reliable WRITEs seq 1..count, collect cumulative ACKs. ----
+    if (arqsend > 0) {
+        struct sockaddr_ll sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sll_family = AF_PACKET;
+        sa.sll_ifindex = ifindex;
+        sa.sll_halen = 6;
+        memcpy(sa.sll_addr, frame, 6);  // dst = BH RXQ2 (02:...:02)
+        if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+            perror("bind");
+        }
+        struct packet_mreq pmr;
+        memset(&pmr, 0, sizeof(pmr));
+        pmr.mr_ifindex = ifindex;
+        pmr.mr_type = PACKET_MR_PROMISC;  // BH's ACK dst MAC is the initiator's; grab it regardless
+        setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &pmr, sizeof(pmr));
+        // Build a WRITE (0x10) template landing at the MR (rkey/roff from args; payload TTWR...).
+        unsigned char* h = frame + 14;
+        h[0] = 0x10;
+        h[1] = 0x01;
+        put_u16(h + 2, 0);
+        put_u32(h + 4, plen);
+        put_u32(h + 12, rkey);
+        put_u64(h + 16, roff);
+        put_u32(h + 24, 0);
+        unsigned char* pay = frame + 14 + 32;
+        pay[0] = 'T';
+        pay[1] = 'T';
+        pay[2] = 'W';
+        pay[3] = 'R';
+        for (unsigned i = 4; i < plen; i++) {
+            pay[i] = (unsigned char)(i & 0xff);
+        }
+        const uint32_t N = (uint32_t)count;
+        uint32_t sent = 0;
+        for (uint32_t seq = 1; seq <= N; seq++) {
+            if (gapseq != 0u && seq == gapseq) {
+                continue;  // simulate loss of this frame (permanent gap for the in-order receiver)
+            }
+            put_u32(h + 8, seq);               // reliable sequence number (word2)
+            put_u32(h + 28, tt_crc32(h, 28));  // recompute header CRC for this seq
+            sendto(fd, frame, 14u + 32u + plen, 0, (struct sockaddr*)&sa, sizeof(sa));
+            sent++;
+            if (arqpace > 0) {
+                usleep((useconds_t)arqpace);  // inter-frame gap (µs) to keep the in-order test un-reordered
+            }
+        }
+        // Collect cumulative ACKs (0x40) for up to ~2s idle; track the highest ack_seq the BH reached.
+        struct timeval rto = {2, 0};
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+        unsigned char rb[128];
+        uint32_t max_ack = 0, n_ack = 0;
+        for (;;) {
+            ssize_t r = recv(fd, rb, sizeof(rb), 0);
+            if (r < 0) {
+                break;  // idle timeout -> done collecting
+            }
+            if (r < 14 + 32 || rb[12] != 0x1a || rb[13] != 0xf6 || rb[14] != 0x40) {
+                continue;  // not an ACK
+            }
+            const unsigned char* a = rb + 14;
+            uint32_t ack_seq = a[8] | (a[9] << 8) | (a[10] << 16) | (a[11] << 24);
+            if (ack_seq > max_ack) {
+                max_ack = ack_seq;
+            }
+            n_ack++;
+            if (gapseq == 0u && max_ack >= N) {
+                break;  // in-order run fully acknowledged
+            }
+        }
+        printf(
+            "arqsend: sent %u/%u (gapseq=%u) acks_rx=%u max_ack=%u %s\n",
+            sent,
+            N,
+            gapseq,
+            n_ack,
+            max_ack,
+            (gapseq == 0u ? (max_ack >= N ? "FULL-ACK" : "INCOMPLETE")
+                          : (max_ack == gapseq - 1u ? "STALLED-AT-GAP" : "UNEXPECTED")));
+        close(fd);
+        return 0;
+    }
+
+    // ---- ARQ RESPONDER (Phase 2.2b): ACK BH's reliable WRITEs; drop one to force a Go-Back-N resend. ----
+    if (arqresp > 0) {
+        struct sockaddr_ll sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sll_family = AF_PACKET;
+        sa.sll_ifindex = ifindex;
+        sa.sll_halen = 6;
+        memcpy(sa.sll_addr, frame, 6);  // ACK dst = BH RXQ2 (02:...:02)
+        if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+            perror("bind");
+        }
+        struct packet_mreq pmr;
+        memset(&pmr, 0, sizeof(pmr));
+        pmr.mr_ifindex = ifindex;
+        pmr.mr_type = PACKET_MR_PROMISC;
+        setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &pmr, sizeof(pmr));
+        struct timeval rto = {6, 0};  // give up after 6s idle
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+        unsigned char rb[4200];
+        uint32_t rx_last = 0, n_rx = 0, n_acktx = 0, dropped = 0;
+        while ((int)rx_last < arqresp) {
+            ssize_t r = recv(fd, rb, sizeof(rb), 0);
+            if (r < 0) {
+                break;  // idle timeout
+            }
+            if (r < 14 + 32 || rb[12] != 0x1a || rb[13] != 0xf6 || rb[14] != 0x10) {
+                continue;  // not a reliable WRITE
+            }
+            const unsigned char* w = rb + 14;
+            uint32_t seq = w[8] | (w[9] << 8) | (w[10] << 16) | (w[11] << 24);
+            n_rx++;
+            if (dropreq != 0u && seq == dropreq && dropped == 0u) {
+                dropped = 1u;  // drop this frame once (simulate loss) -- do not ACK past it
+                continue;
+            }
+            if (seq == rx_last + 1u) {
+                rx_last = seq;  // in-order (BH resends the suffix in order after the gap)
+            }
+            // Send a cumulative ACK(rx_last) back to the BH initiator.
+            unsigned char* h = frame + 14;
+            h[0] = 0x40;  // ACK
+            h[1] = 0x01;
+            put_u16(h + 2, 0);
+            put_u32(h + 4, 0);
+            put_u32(h + 8, rx_last);  // cumulative ack_seq
+            put_u32(h + 12, 0);
+            put_u64(h + 16, 0);
+            put_u32(h + 24, 0);
+            put_u32(h + 28, tt_crc32(h, 28));
+            memset(frame + 14 + 32, 0, 16);  // header-only: pad to 48B (runt-safe)
+            sendto(fd, frame, 14u + 48u, 0, (struct sockaddr*)&sa, sizeof(sa));
+            n_acktx++;
+        }
+        printf(
+            "arqresp: rx=%u rx_last=%u/%d acks_tx=%u dropped=%u %s\n",
+            n_rx,
+            rx_last,
+            arqresp,
+            n_acktx,
+            dropped,
+            ((int)rx_last >= arqresp ? "ALL-ACKED" : "INCOMPLETE"));
         close(fd);
         return 0;
     }
