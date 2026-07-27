@@ -97,9 +97,9 @@ void PerfDebugTracyHandler::PreCreateContexts(
 
 void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::WorkerZonePacket& zone) {
 #if defined(TRACY_ENABLE)
-    if (!tracy::GetProfiler().IsConnected()) {
-        return;
-    }
+    // if (!tracy::GetProfiler().IsConnected()) {
+    //     return;
+    // }
     TracyTTCtx ctx = GetOrCreateContext(
         zone.chip_id,
         zone.core_noc0_x,

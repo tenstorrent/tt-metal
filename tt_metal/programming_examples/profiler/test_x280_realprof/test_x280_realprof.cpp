@@ -81,6 +81,9 @@ static void pin_thread_to_core(std::thread& t, int core) {
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>   // D2HSocket (production D2H transport, --socket)
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
 #include <umd/device/types/core_coordinates.hpp>
+#include <span>
+
+#include "tt_metal/common/broadcast_ring.hpp"
 
 #include "prof_packet.h"
 
@@ -143,11 +146,12 @@ static std::vector<uint8_t> read_file(const std::string& path) {
 // consumers are STATELESS (any consumer can process any batch -> a shared MPMC works). `type` is the packet
 // type (PP_ZONE_START/END/TOTAL), `zone` the 16-bit srcloc hash naming the zone, `ts` the full device
 // timestamp, `prog` the runtime host-id in effect. This is the record a Tracy emitter would consume.
+// ts first: packs Rec to 24 B (vs 32 padded), shrinking the per-record bytes moved writer->reader on publish.
 struct Rec {
+    uint64_t ts;
     uint32_t lane;
     uint32_t type;
     uint32_t zone;
-    uint64_t ts;
     uint32_t prog;
 };
 using Batch = std::vector<Rec>;
@@ -202,6 +206,7 @@ int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     int device_id = 0, l2cpu = 0, pll = 1000, nodes = 1;  // --nodes N: drive N L2CPU clusters in parallel (1-4)
     uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull, ndrain = 1;
+    uint32_t max_pages_per_read = 1024;  // --maxpages: per-socket page cap per read (0 = unbounded, drain whole FIFO)
     uint64_t win_stride = DEFAULT_WIN_STRIDE;  // --winmb: host-ring budget (rings share it); capped by chan_sz/2
     uint32_t prog_id = 0xA5A5A5A5u, hring_words = 1048576, prod_delay = 0;  // 4 MiB/ring (nwin=3: data spans 2
     // windows, the +64 B SENT trailer spills into a 3rd -> 3 TLB windows/ring, so nread<=2 at the default).
@@ -228,6 +233,7 @@ int main(int argc, char** argv) {
                                    // their ring never fills -- keep --nmarkers small (< RING_CAP/2 = 256).
     bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
     bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
+    bool iso_consumer = false;  // --isoconsumer: 2nd independent sink Reader alongside the primary consumer -- validate BroadcastRing isolation
     bool split_noc = false;    // --splitnoc: drain hart h reads its slice over NoC (h&1) to relieve read contention
     bool wnoc1 = false;        // --wnoc1: route the posted PCIe write over NoC1 (reads stay NoC0)
     bool nodrain = false;      // --nodrain: diagnostic -- relay ignores host flow control + no host consumer
@@ -245,7 +251,7 @@ int main(int argc, char** argv) {
     int mpmc = 0;              // --mpmc M: real host pipeline -- 2 per-socket flush+demux threads -> record MPMC
                                // -> M consumer threads (0 = old offline capture+demux path)
     int cwork = 0;             // --cwork N: busy-wait N iters/record in each consumer (simulate Tracy-emit load)
-    int mq_cap = 640;          // --mqcap N: depth (in batches) of the record MPMC between flushers and consumers.
+    int mq_cap = 1 << 20;      // --mqcap N: BroadcastRing capacity in RECORDS (rounded up to a power of two).
                                // Deeper absorbs consumer bursts before back-pressuring the drain (64->640 took
                                // --csv from ~438 knee stalls to 0). ~BATCH_RECS*N*sizeof(Rec) max footprint.
     bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
@@ -256,6 +262,12 @@ int main(int argc, char** argv) {
     bool do_calib = false;     // --calib: boot in CALIB mode (hart0 co-samples X280 rdcycle vs a reference Tensix
                                // wall clock), read the pairs, least-squares the X280<->Tensix (freq scale, drift), exit
     bool do_hartzones = false;  // --hartzones: harts emit busy/idle spans while draining; read+map+dump at teardown
+    bool count_only = false;    // --countonly: the writer only tallies X280-STALL zones (no decode/records/publish)
+    bool no_publish = false;    // --nopublish: full decode + Rec build but skip the ring publish (ablation)
+    bool verify = false;        // --verify: per-record bench self-checks (zone depth/START-END balance, ts
+                               // monotonicity, prog-id carry). Off by default: 2 lane-indexed RMWs + ~6 branches
+                               // per record that a production decoder never does, so they distort the host cost.
+                               // mk/stall/consumed/dropped are always tallied -- losslessness stays checked.
     bool bringup = false;      // --bringup: STEP1 -- boot profzone as a PERSISTENT active FW and confirm it
                                // stays resident (idle FW never re-entered); no workload, no P_STOP, exit resident.
     bool do_pin = false;       // --pin: bind each flusher to its own core (0,1,...). Pair with `taskset -c 2-N`
@@ -277,6 +289,8 @@ int main(int argc, char** argv) {
             nmarkers = std::stoull(next());
         } else if (a == "--nread") {
             nread = std::stoull(next());
+        } else if (a == "--maxpages") {
+            max_pages_per_read = (uint32_t)std::stoul(next());
         } else if (a == "--hring") {
             hring_words = (uint32_t)std::stoul(next());
         } else if (a == "--winmb") {
@@ -328,6 +342,10 @@ int main(int argc, char** argv) {
             direct = true;
         } else if (a == "--rrconsumer") {
             rr_consumer = true;
+        } else if (a == "--isoconsumer") {
+            iso_consumer = true;
+        } else if (a == "--verify") {
+            verify = true;
         } else if (a == "--splitnoc") {
             split_noc = true;
             direct = true;
@@ -362,6 +380,10 @@ int main(int argc, char** argv) {
             do_calib = true;  // CALIB mode: measure X280<->Tensix clock relation, then exit
         } else if (a == "--hartzones") {
             do_hartzones = true;  // harts emit busy/idle spans while draining; read+map+dump at teardown
+        } else if (a == "--countonly") {
+            count_only = true;
+        } else if (a == "--nopublish") {
+            no_publish = true;
         } else if (a == "--tracy") {
             do_tracy = true;
         } else if (a == "--pin") {
@@ -449,6 +471,8 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> gcore;                      // band-local core idx -> GLOBAL full-grid core idx (so
                                                           // the flusher emits a global lane; column bands are
                                                           // strided in global space, so a flat offset won't do)
+        std::vector<uint32_t> glane_lut;                  // band-local lane -> GLOBAL lane; precomputes the
+                                                          // gcore[]*NRISC+risc div/mod off the per-record hot path
         uint32_t bcx0 = 0, bcy0 = 0, bcx1 = 0, bcy1 = 0;  // this band's logical column range (full cy)
         uint32_t num_cores = 0, NL = 0;                   // this band's cores / lanes
         uint64_t nharts = 0;
@@ -611,6 +635,10 @@ int main(int argc, char** argv) {
                 nc.noc0y[bidx] = (uint32_t)n0.y;
                 bidx++;
             }
+        }
+        nc.glane_lut.assign(nc.NL, 0);
+        for (uint32_t lane = 0; lane < nc.NL; lane++) {
+            nc.glane_lut[lane] = nc.gcore[lane / (uint32_t)NRISC] * (uint32_t)NRISC + (lane % (uint32_t)NRISC);
         }
         if (nodes > 1) {
             CoreCoord ltile = pz::x280_l2cpu_tile(nc.l2cpu);
@@ -900,6 +928,9 @@ int main(int argc, char** argv) {
     }
     std::atomic<uint64_t> total_words{0};
     std::atomic<uint64_t> overflow{0};
+    // writer-phase wall time, one clock pair per drain (not per record) so the probe itself is ~0.02 ns/record.
+    // Written only by the single writer thread; read after its join.
+    uint64_t t_read_ns = 0, t_decode_ns = 0, t_publish_ns = 0;
     // per-ring op timing (summed for the report); disjoint indices -> lock-free across threads
     std::vector<uint64_t> h_polls_v(ndh, 0), h_us_hsent_v(ndh, 0), h_us_ring_v(ndh, 0), h_us_hacked_v(ndh, 0);
     auto us = [](auto a, auto b) {
@@ -974,11 +1005,14 @@ int main(int argc, char** argv) {
             h_us_hacked_v[h] += us(th, std::chrono::steady_clock::now());
         }
     };
-    // ---- --mpmc pipeline: per-socket flush+demux -> device-record MPMC -> M consumers ----
-    const size_t BATCH_RECS = 4096;  // records per batch (amortizes the MPMC lock)
-    BatchQ mq((size_t)mq_cap);       // bounded MPMC (--mqcap batches): full -> flusher blocks = back-pressure.
-                                     // Deeper absorbs consumer bursts before stalling the drain (default 640).
+    const size_t kReadChunkRecs =
+        max_pages_per_read ? (size_t)max_pages_per_read * 16 : (size_t)hring_words;  // upper bound on records/read (words >= records)
+    using RecRing = tt::tt_metal::BroadcastRing<Rec>;
+    RecRing ring((size_t)mq_cap);
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> reader_dropped{0};
     std::atomic<uint64_t> consumed{0}, sink_total{0};
+    std::atomic<uint64_t> iso_consumed{0}, iso_dropped{0}, iso_sink{0};  // --isoconsumer: independent 2nd reader's own tallies
     // per-flusher (per-socket) verify results live PER NODE (each node's flusher tallies its own band's lanes).
     for (auto& nc : node) {
         nc.fl_mk.assign(ndh, 0);
@@ -1003,29 +1037,71 @@ int main(int argc, char** argv) {
     // fully-resolved device records + per-lane seq verify (this socket owns its band's lanes), push record
     // batches to the ONE shared MPMC. Demux MUST live here (sticky-src is in-order per stream); records are
     // self-contained so the M consumers are stateless. All lane bounds/counters/driver/sockets are nc's.
-    auto flusher = [&](NodeCtx& nc, uint64_t h) {
-        {
-            char tn[24];
-            std::snprintf(tn, sizeof(tn), "x280-flush%llu", (unsigned long long)h);
-            tracy::SetThreadName(tn);  // host thread row in the capture
+    struct LaneHot {
+        uint32_t glane = 0, cur_hi = 0;
+    };
+    struct FlushState {
+        NodeCtx* nc;
+        uint64_t h, hoff, soff;
+        uint32_t NL, acked = 0, cur_prog = 0, cur_lane = 0xFFFFFFFF;
+        std::vector<LaneHot> lh;
+        std::vector<uint32_t> buf, resid;
+        std::vector<int32_t> depth;
+        std::vector<uint64_t> last_ts;
+        uint64_t mk = 0, starts = 0, ends = 0, prog_ok = 0, ts_bad = 0, stall = 0, ts_bad_stall = 0, ts_bad_big = 0;
+        bool done = false;
+    };
+    std::vector<FlushState> fs;
+    for (int n = 0; n < nodes; n++) {
+        for (uint64_t hh = 0; hh < ndh; hh++) {
+            FlushState s;
+            s.nc = &node[n];
+            s.h = hh;
+            s.NL = node[n].NL;
+            s.hoff = data_off + hh * ring_stride;
+            s.soff = sent_off(hh);
+            s.lh.assign(s.NL, LaneHot{});
+            for (uint32_t L = 0; L < s.NL; L++) {
+                s.lh[L].glane = node[n].glane_lut[L];
+            }
+            s.depth.assign(s.NL, 0);
+            s.last_ts.assign(s.NL, 0);
+            fs.push_back(std::move(s));
         }
-        const uint32_t NL = nc.NL;  // this node's band lanes (shadows the full-grid NL for lane bounds below)
-        uint64_t hoff = data_off + h * ring_stride, soff = sent_off(h);
-        uint32_t acked = 0;
-        std::vector<uint32_t> cur_hi(NL, 0);   // per-lane wall-clock high half (STICKY_TIMER)
-        std::vector<int32_t> depth(NL, 0);     // per-lane zone nesting (START ++ / END --); 0 at end = balanced
-        std::vector<uint64_t> last_ts(NL, 0);  // per-lane last timestamp (monotonicity check)
-        uint32_t cur_prog = 0;                 // GLOBAL: runtime host-id (BRISC-only STICKY_PROG, program-global)
-        uint64_t mk = 0, starts = 0, ends = 0, prog_ok = 0, ts_bad = 0, stall = 0;
-        uint64_t ts_bad_stall = 0, ts_bad_big = 0;  // DIAG: regressions that land on a STALL zone / are ~2^32-scale
-        Batch batch;
-        batch.reserve(BATCH_RECS);
-        std::vector<uint32_t> buf;
-        std::vector<uint32_t> resid;  // --socket: partial packet carried across reads (socket pages are 16-word
-                                      // aligned, NOT packet-aligned like the raw ring's packet-boundary SENT)
-        uint32_t cur_lane = 0xFFFFFFFF;
+    }
+    Batch batch;
+    batch.resize(kReadChunkRecs);  // pre-sized to the per-read upper bound; filled via a raw cursor (below)
+    auto& wr = ring.writer();
+    // ONE read+decode pass over socket state s; decoded records go to the ring (data-driven publish per read).
+    auto drain_pass = [&](FlushState& s) -> bool {
+        NodeCtx& nc = *s.nc;
+        const uint32_t NL = s.NL;
+        const uint64_t h = s.h, hoff = s.hoff, soff = s.soff;
+        uint32_t& acked = s.acked;
+        uint32_t& cur_prog = s.cur_prog;
+        uint32_t& cur_lane = s.cur_lane;
+        auto& lh = s.lh;
+        auto& depth = s.depth;
+        auto& last_ts = s.last_ts;
+        auto& buf = s.buf;
+        auto& resid = s.resid;
+        uint64_t& mk = s.mk;
+        uint64_t& starts = s.starts;
+        uint64_t& ends = s.ends;
+        uint64_t& prog_ok = s.prog_ok;
+        uint64_t& ts_bad = s.ts_bad;
+        uint64_t& stall = s.stall;
+        uint64_t& ts_bad_stall = s.ts_bad_stall;
+        uint64_t& ts_bad_big = s.ts_bad_big;
+        Rec* bcur = batch.data();  // fill cursor into the pre-sized batch (kReadChunkRecs bounds one drain's records)
         auto emit = [&](uint32_t lane, uint32_t w0, uint32_t w1) {
             if (lane >= NL) {
+                return;
+            }
+            if (count_only) {
+                if (pp_type(w0) == PP_ZONE_START && (pp_low27(w0) & 0xFFFFu) == 0x7FFFu) {
+                    stall++;
+                }
                 return;
             }
             uint32_t type = pp_type(w0);
@@ -1034,107 +1110,102 @@ int main(int argc, char** argv) {
                 return;
             }
             if (type == PP_STICKY_TIMER) {  // this lane's wall-clock high half
-                cur_hi[lane] = pp_timer_hi(w0);
+                lh[lane].cur_hi = pp_timer_hi(w0);
                 return;
             }
             if (type == PP_STICKY_META) {  // legacy combined sticky (real producer never emits it -- be robust)
-                cur_hi[lane] = pp_low27(w0);
+                lh[lane].cur_hi = pp_low27(w0);
                 cur_prog = w1;
                 return;
             }
             // marker: type = ZONE_START/END/TOTAL, zone = 16-bit srcloc hash, ts = full device timestamp
             uint32_t zone = pp_low27(w0) & 0xFFFFu;
-            uint64_t ts = pp_full_ts(cur_hi[lane], w1);
+            uint64_t ts = pp_full_ts(lh[lane].cur_hi, w1);
             if (zone == 0x7FFFu && type == PP_ZONE_START) {
                 stall++;  // X280-STALL zone (PROFILER_STALL_ZONE_ID) = producer back-pressure event
             }
-            if (type == PP_ZONE_START) {
-                depth[lane]++;
-                starts++;
-            } else if (type == PP_ZONE_END) {
-                depth[lane]--;
-                ends++;
-            }
-            if (cur_prog == prog_id) {
-                prog_ok++;
-            }
-            if (ts < last_ts[lane]) {
-                ts_bad++;
-                if (zone == 0x7FFFu) {
-                    ts_bad_stall++;  // regressing record is itself a STALL zone
+            if (verify) {
+                if (type == PP_ZONE_START) {
+                    depth[lane]++;
+                    starts++;
+                } else if (type == PP_ZONE_END) {
+                    depth[lane]--;
+                    ends++;
                 }
-                if (last_ts[lane] - ts >= (1ull << 31)) {
-                    ts_bad_big++;  // ~2^32-scale backward jump (a dropped timer_hi tick)
+                if (cur_prog == prog_id) {
+                    prog_ok++;
                 }
+                if (ts < last_ts[lane]) {
+                    ts_bad++;
+                    if (zone == 0x7FFFu) {
+                        ts_bad_stall++;  // regressing record is itself a STALL zone
+                    }
+                    if (last_ts[lane] - ts >= (1ull << 31)) {
+                        ts_bad_big++;  // ~2^32-scale backward jump (a dropped timer_hi tick)
+                    }
+                }
+                last_ts[lane] = ts;
             }
-            last_ts[lane] = ts;
             mk++;
             // Per-node arrays (cur_hi/depth/last_ts) index by the band-LOCAL lane; the Rec pushed to the shared
             // MPMC must carry the GLOBAL lane so a single (core,risc) maps to one Tracy thread across nodes.
-            uint32_t glane = nc.gcore[lane / (uint32_t)NRISC] * (uint32_t)NRISC + (lane % (uint32_t)NRISC);
-            batch.push_back(Rec{glane, type, zone, ts, cur_prog});
-            if (batch.size() >= BATCH_RECS) {
-                mq.push(std::move(batch));
-                batch = Batch();
-                batch.reserve(BATCH_RECS);
-            }
+            uint32_t glane = lh[lane].glane;
+            *bcur++ = Rec{.ts = ts, .lane = glane, .type = type, .zone = zone, .prog = cur_prog};
         };
-        auto start = std::chrono::steady_clock::now();  // reset on every drain -> this is a NO-PROGRESS watchdog,
-        for (;;) {                                      // not a total-runtime cap (long runs at 50k+ markers are fine)
-            auto now = std::chrono::steady_clock::now();
-            if (now - start > std::chrono::seconds(120)) {
-                printf("  [flusher %llu] WALL TIMEOUT (120 s no progress)\n", (unsigned long long)h);
-                break;
+        bcur = batch.data();  // reset the cursor: one data-driven publish per socket-drain (like the manager's publish_pages)
+        if (socket_mode) {
+            // --socket: read whole 64 B pages from the D2HSocket FIFO (read() auto-acks the sender via
+            // bytes_acked). Pages are 16-word aligned, NOT packet-aligned, so prepend the residual partial
+            // packet carried from the last read; the walk below consumes whole packets and re-saves the tail.
+            uint32_t np = nc.socks[h]->pages_available();
+            if (np == 0) {
+                if (device_done.load()) {  // FW idle => sender's final bytes_sent is in; FIFO drained => done
+                    s.done = true;
+                }
+                return false;
             }
-            if (socket_mode) {
-                // --socket: read whole 64 B pages from the D2HSocket FIFO (read() auto-acks the sender via
-                // bytes_acked). Pages are 16-word aligned, NOT packet-aligned, so prepend the residual partial
-                // packet carried from the last read; the walk below consumes whole packets and re-saves the tail.
-                uint32_t np = nc.socks[h]->pages_available();
-                if (np == 0) {
-                    if (device_done.load()) {  // FW idle => sender's final bytes_sent is in; FIFO drained => done
-                        break;
-                    }
-                    continue;  // spin
+            // Guard: never request more than the FIFO holds. read() TT_FATALs if num_bytes > fifo_curr_size,
+            // and pages_available() can transiently spike above the FIFO (a bytes_acked-vs-bytes_sent race
+            // during concurrent draining). Bound each read to (fifo pages - 1); the next pass takes the rest.
+            uint32_t fifo_pages = nc.socks[h]->get_fifo_curr_size() / nc.socks[h]->get_page_size();
+            if (np >= fifo_pages) {
+                np = fifo_pages - 1u;
+            }
+            if (max_pages_per_read && np > max_pages_per_read) {
+                np = max_pages_per_read;
+            }
+            uint32_t dw = np * 16u;  // 64 B page = 16 words
+            buf.resize(resid.size() + dw);
+            if (!resid.empty()) {
+                std::copy(resid.begin(), resid.end(), buf.begin());
+            }
+            {
+                ZoneScopedNC("sock-read", 0x27AE60);  // green: flusher reading pages off the D2H socket
+                auto t0 = std::chrono::steady_clock::now();
+                nc.socks[h]->read(reinterpret_cast<void*>(buf.data() + resid.size()), np);  // notify_sender=true
+                t_read_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now() - t0)
+                                 .count();
+            }
+            total_words.fetch_add(dw);
+            nc.fl_pages[h] += np;  // reliable host-side signal: did the relay deliver anything to this socket?
+            resid.clear();
+        } else {
+            uint32_t hsent;
+            cluster.read_sysmem(reinterpret_cast<uint8_t*>(&hsent), 4, soff, device_id, 0);  // SENT from sysmem
+            if (hsent == acked) {
+                if (device_done.load()) {  // FW idle => sent is final; caught up => done
+                    s.done = true;
                 }
-                // Guard: never request more than the FIFO holds. read() TT_FATALs if num_bytes > fifo_curr_size,
-                // and pages_available() can transiently spike above the FIFO (a bytes_acked-vs-bytes_sent race
-                // during concurrent draining). Bound each read to (fifo pages - 1); the loop takes the rest next
-                // iteration. Without this a single spike walks the circular FIFO repeatedly -> runaway garbage.
-                uint32_t fifo_pages = nc.socks[h]->get_fifo_curr_size() / nc.socks[h]->get_page_size();
-                if (np >= fifo_pages) {
-                    np = fifo_pages - 1u;
-                }
-                start = now;             // made progress -> reset the no-progress watchdog
-                uint32_t dw = np * 16u;  // 64 B page = 16 words
-                buf.resize(resid.size() + dw);
-                if (!resid.empty()) {
-                    std::copy(resid.begin(), resid.end(), buf.begin());
-                }
-                {
-                    ZoneScopedNC("sock-read", 0x27AE60);  // green: flusher reading pages off the D2H socket
-                    nc.socks[h]->read(reinterpret_cast<void*>(buf.data() + resid.size()), np);  // notify_sender=true
-                }
-                total_words.fetch_add(dw);
-                nc.fl_pages[h] += np;  // reliable host-side signal: did the relay deliver anything to this socket?
-                resid.clear();
-            } else {
-                uint32_t hsent;
-                cluster.read_sysmem(reinterpret_cast<uint8_t*>(&hsent), 4, soff, device_id, 0);  // SENT from sysmem
-                if (hsent == acked) {
-                    if (device_done.load()) {  // FW idle => sent is final; caught up => done
-                        break;
-                    }
-                    continue;  // spin
-                }
-                uint32_t avail = hsent - acked;
-                start = now;  // made progress -> reset the no-progress watchdog
-                if (avail > hring_words) {
-                    overflow.fetch_add(1);
-                    acked = hsent;
-                    nc.drv->write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
-                    continue;
-                }
+                return false;
+            }
+            uint32_t avail = hsent - acked;
+            if (avail > hring_words) {
+                overflow.fetch_add(1);
+                acked = hsent;
+                nc.drv->write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
+                return true;
+            }
                 // sent is always published on a packet boundary, so avail is a whole number of packet-words;
                 // drain all of it (packets are now VARIABLE length -- SRC/TIMER are 1 word -- so no even-align).
                 uint32_t drain = avail;
@@ -1156,6 +1227,9 @@ int main(int argc, char** argv) {
             }
             // decode buf (whole frames): variable-length walk. SRC/TIMER are 1 word; PROG/markers 2; BULK
             // has its own framing. Advance by the decoded length so packet boundaries stay in sync.
+            {
+            ZoneScopedNC("decode", 0x8E44AD);  // purple: demux + emit this read's frames into records
+            auto td0 = std::chrono::steady_clock::now();
             size_t p = 0, sz = buf.size();
             while (p < sz) {
                 uint32_t w0 = buf[p];
@@ -1184,7 +1258,7 @@ int main(int argc, char** argv) {
                             uint32_t rw0 = ring[(head_mod + i) % RING_CAP];
                             if (pp_is_timer(rw0)) {
                                 if (lane < NL) {
-                                    cur_hi[lane] = pp_timer_hi(rw0);
+                                    lh[lane].cur_hi = pp_timer_hi(rw0);
                                 }
                                 i += 1;
                                 continue;
@@ -1202,7 +1276,7 @@ int main(int argc, char** argv) {
                     p += 1;
                 } else if (pp_is_timer(w0)) {  // 1 word: refresh the current lane's wall-clock high half
                     if (cur_lane < NL) {
-                        cur_hi[cur_lane] = pp_timer_hi(w0);
+                        lh[cur_lane].cur_hi = pp_timer_hi(w0);
                     }
                     p += 1;
                 } else if (pp_is_x280(w0)) {  // 3 words: X280 hart zone (rdcycle) -> route to the per-X280 context
@@ -1227,70 +1301,145 @@ int main(int argc, char** argv) {
                 // trailing partial packet (socket pages aren't packet-aligned) -> carry to the next read
                 resid.assign(buf.begin() + (std::ptrdiff_t)p, buf.end());
             }
+            t_decode_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now() - td0)
+                               .count();
+            }  // end decode zone
+        size_t bn = (size_t)(bcur - batch.data());  // records this drain produced
+        if (!no_publish && bn != 0) {
+            ZoneScopedNC("publish", 0xE67E22);  // orange: publish this read's records to the BroadcastRing
+            auto tp0 = std::chrono::steady_clock::now();
+            wr.publish_batch(std::span<const Rec>(batch.data(), bn));  // publish THIS read's records as one data-driven batch
+            t_publish_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - tp0)
+                                .count();
         }
-        if (!batch.empty()) {
-            mq.push(std::move(batch));
-        }
-        uint64_t unbal = 0;
-        for (uint32_t L = 0; L < NL; L++) {
-            if (depth[L] != 0) {
-                unbal++;  // a lane whose START/END did not balance = a dropped/torn marker
+        return true;
+    };
+    // the single writer thread: round-robin all sockets; each drain_pass publishes its own read (data-driven),
+    // then wake readers once per sweep (mirrors drain_all_devices). Idle sweeps back off 1->100 us.
+    auto writer_thread = [&]() {
+        tracy::SetThreadName("x280-writer");
+        auto watchdog = std::chrono::steady_clock::now();
+        std::chrono::microseconds backoff{1};
+        for (;;) {
+            bool any = false, all_done = true;
+            for (auto& s : fs) {
+                if (s.done) {
+                    continue;
+                }
+                all_done = false;
+                if (drain_pass(s)) {
+                    any = true;
+                }
+            }
+            if (!no_publish && any) {
+                wr.wake_readers();
+            }
+            if (all_done) {
+                break;
+            }
+            auto now = std::chrono::steady_clock::now();
+            if (any) {
+                watchdog = now;
+                backoff = std::chrono::microseconds{1};
+            } else {
+                if (now - watchdog > std::chrono::seconds(120)) {
+                    printf("  [writer] WALL TIMEOUT (120 s no progress)\n");
+                    break;
+                }
+                std::this_thread::sleep_for(backoff);
+                backoff += std::max(backoff / 4, std::chrono::microseconds{1});
+                backoff = std::min(backoff, std::chrono::microseconds{100});
             }
         }
-        nc.fl_mk[h] = mk;
-        nc.fl_start[h] = starts;
-        nc.fl_end[h] = ends;
-        nc.fl_prog_ok[h] = prog_ok;
-        nc.fl_ts_bad[h] = ts_bad;
-        nc.fl_unbal[h] = unbal;
-        nc.fl_stall[h] = stall;
-        if (ts_bad) {
-            printf(
-                "  [flusher %llu DIAG] ts_bad=%llu  on-stall-zone=%llu  ~2^32-jump=%llu\n",
-                (unsigned long long)h,
-                (unsigned long long)ts_bad,
-                (unsigned long long)ts_bad_stall,
-                (unsigned long long)ts_bad_big);
+        for (auto& s : fs) {
+            uint64_t unbal = 0;
+            for (uint32_t L = 0; L < s.NL; L++) {
+                if (s.depth[L] != 0) {
+                    unbal++;
+                }
+            }
+            s.nc->fl_mk[s.h] = s.mk;
+            s.nc->fl_start[s.h] = s.starts;
+            s.nc->fl_end[s.h] = s.ends;
+            s.nc->fl_prog_ok[s.h] = s.prog_ok;
+            s.nc->fl_ts_bad[s.h] = s.ts_bad;
+            s.nc->fl_unbal[s.h] = unbal;
+            s.nc->fl_stall[s.h] = s.stall;
         }
     };
-    // Consumer: pop record batches, do the "sink" work (a real profiler emits Tracy zones here). We do a
-    // representative touch of every record so the compiler can't elide it and the cost is real-ish.
-    auto consumer = [&]() {
-        Batch b;
-        uint64_t cnt = 0, sink = 0;
-        while (mq.pop(b)) {
+    // Consumer = a BroadcastRing Reader: sees the full record stream, oldest-first. Drains until `stop` (writer
+    // done) AND caught up; a lagging reader drops (Reader::dropped()) -- the writer never waits on it. on_batch
+    // gets each read's records so a per-batch host CPU zone (tracy-emit) still brackets the right work.
+    auto drain_reader = [&](auto&& on_batch,
+                            std::atomic<uint64_t>* cnt_out = nullptr,
+                            std::atomic<uint64_t>* drop_out = nullptr) {
+        auto rd = ring.make_reader();
+        std::vector<Rec> scratch(kReadChunkRecs);
+        uint64_t cnt = 0;
+        for (;;) {
+            auto tok = rd.wait_token();
+            auto got = rd.read_batch(std::span<Rec>(scratch));
+            if (!got.empty()) {
+                on_batch(got);
+                cnt += got.size();
+                continue;
+            }
+            if (stop.load(std::memory_order_acquire)) {  // writer done -> drain the tail, then exit
+                for (;;) {
+                    auto g = rd.read_batch(std::span<Rec>(scratch));
+                    if (g.empty()) {
+                        break;
+                    }
+                    on_batch(g);
+                    cnt += g.size();
+                }
+                break;
+            }
+            rd.wait(tok);
+        }
+        (cnt_out ? *cnt_out : consumed).fetch_add(cnt);
+        (drop_out ? *drop_out : reader_dropped).fetch_add(rd.dropped());
+    };
+    auto sink_reader = [&]() {
+        uint64_t sink = 0;
+        drain_reader([&](std::span<Rec> b) {
             for (auto& r : b) {
                 sink += r.ts ^ ((uint64_t)r.lane << 32) ^ ((uint64_t)r.zone << 16) ^ r.type ^ r.prog;
                 for (int d = 0; d < cwork; d++) {  // simulate per-record emit cost
                     __asm__ volatile("" ::: "memory");
                 }
-                cnt++;
             }
-        }
-        consumed.fetch_add(cnt);
+        });
         sink_total.fetch_add(sink);
     };
-
-    // ---- CSV consumer (--csv): hold decoded records in memory and write them to CSV in large batches AFTER
-    // the drain. The hot-path callback is a bulk vector-append (a memcpy of the whole batch) -- no formatting,
-    // no I/O -- so it never back-pressures the X280 (like the sink). Pre-reserved so no realloc mid-run. A
-    // SINGLE consumer owns the buffer (no lock). The CSV formatting + file write happen post-run (see below).
-    // Append records into ONE pre-reserved contiguous buffer. Counterintuitively this beats moving whole
-    // batch buffers: the popped batch is FREED after the copy so the allocator recycles it for the flusher's
-    // next batch (bounded churn), whereas retaining batch buffers forces the flushers -- on the critical drain
-    // path -- to malloc fresh each time (more pressure -> more stalls). Reserved up front so no realloc mid-run.
+    // --csv: append every record into ONE pre-reserved buffer on the hot path; format + write post-run.
     std::vector<Rec> csv_recs;
     if (do_csv) {
         csv_recs.reserve((size_t)NL * ((size_t)nmarkers + 16) * 2);  // kernel markers + slack (FW/stall/2 words)
     }
-    auto csv_consumer = [&]() {
-        Batch b;
-        uint64_t cnt = 0;
-        while (mq.pop(b)) {
-            csv_recs.insert(csv_recs.end(), b.begin(), b.end());  // copy into the pre-reserved buffer; batch freed
-            cnt += b.size();
-        }
-        consumed.fetch_add(cnt);
+    auto csv_reader = [&]() {
+        drain_reader([&](std::span<Rec> b) { csv_recs.insert(csv_recs.end(), b.begin(), b.end()); });
+    };
+    // --isoconsumer: a cheap sink (no cwork) draining its OWN Reader, run next to the primary (Tracy/CSV)
+    // consumer. If the primary lags and drops while this stays lossless, the BroadcastRing is isolating
+    // consumers as designed (and neither back-pressures the writer).
+    auto iso_reader = [&]() {
+#if defined(TRACY_ENABLE)
+        tracy::SetThreadName("x280-iso");  // own host row: its read cost sits next to the primary consumer's
+#endif
+        uint64_t s = 0;
+        drain_reader(
+            [&](std::span<Rec> b) {
+                ZoneScopedNC("iso-read", 0x16A085);  // teal: the isolation consumer draining its own Reader
+                for (auto& r : b) {
+                    s += r.ts ^ ((uint64_t)r.lane << 32) ^ ((uint64_t)r.zone << 16) ^ r.type ^ r.prog;
+                }
+            },
+            &iso_consumed,
+            &iso_dropped);
+        iso_sink.fetch_add(s);
     };
 
 #if defined(TRACY_ENABLE)
@@ -1329,29 +1478,26 @@ int main(int argc, char** argv) {
     uint64_t x280_ts_base = 0;    // shared rebase origin (first RISC marker ts); X280 hart zones rebase identically
     uint64_t x280_ts_max = 0;     // diag: max RISC marker ts seen -> device timeline span
     int64_t launch_tracy_ns = 0;  // tracy-time captured just before EnqueueMeshWorkload (diag: delay to 1st marker)
-    auto tracy_consumer = [&]() {
+    auto tracy_reader = [&]() {
         tracy::SetThreadName("x280-consume");  // host thread row: where device zones get pushed into Tracy
-        Batch b;
         uint64_t& ts_base = x280_ts_base;  // hoisted: the X280-hart push (post-join) rebases by the same origin
-        (void)0;                           // (first device timestamp seen; markers rebased so the device
-        bool anchored = false;      // timeline starts at the capture origin (the context anchor's gpuTime=0),
-        bool names_loaded = false;  // not ~device-ts (~seconds) into the trace. Durations are unaffected.
-        uint64_t cnt = 0;
-        while (mq.pop(b)) {
+        bool anchored = false;             // markers rebased so the device timeline starts at the capture origin
+        bool names_loaded = false;         // (context anchor gpuTime=0), not ~device-ts. Durations unaffected.
+        drain_reader([&](std::span<Rec> b) {
             if (!names_loaded) {
                 // Resolve real zone names NOW (first batch) -- the kernels have JIT-compiled by the time any
                 // marker arrives, so their zone-source-location hashes are in the build log. Loading at tracy
                 // setup (before dispatch) was too early -> everything fell back to "Zone_0x<hash>".
                 names_loaded = true;
                 try {
-                    for (auto& [h, md] : tt::tt_metal::generateZoneSourceLocationsHashes()) {
-                        zone_names.emplace((uint32_t)h, md.marker_name);
+                    for (auto& [hh, md] : tt::tt_metal::generateZoneSourceLocationsHashes()) {
+                        zone_names.emplace((uint32_t)hh, md.marker_name);
                     }
                 } catch (const std::exception&) {
                 }
             }
-            ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch's zones into the Tracy client --
-                                                   // when this is the bottleneck the MPMC fills -> flusher blocks
+            ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this read's zones into the Tracy client --
+                                                   // when this is the bottleneck the reader lags and drops
             for (auto& r : b) {
                 uint32_t ci = r.lane / (uint32_t)NRISC, risc = r.lane % (uint32_t)NRISC;
                 if (ci >= num_cores) {
@@ -1362,10 +1508,10 @@ int main(int argc, char** argv) {
                     anchored = true;
                     // Anchor host_start = NOW (real Tracy time of the first marker's arrival). This is the
                     // closest cheap proxy for "the device started producing", so device zones land on the same
-                    // host timeline as the host CPU zones (flusher/consumer) instead of ~590 ms before them
-                    // (EnqueueMeshWorkload JIT+dispatch delayed the first marker that far past launch). Must run
-                    // BEFORE the first HandleWorkerZone below (it creates the context with this anchor). The
-                    // X280-hart zones (pushed at teardown) share ts_base + this anchor, so they align too.
+                    // host timeline as the host CPU zones instead of ~590 ms before them (EnqueueMeshWorkload
+                    // JIT+dispatch delayed the first marker that far past launch). Must run BEFORE the first
+                    // HandleWorkerZone (it creates the context with this anchor). The X280-hart zones (pushed
+                    // at teardown) share ts_base + this anchor, so they align too.
                     int64_t now_ns = tracy::Profiler::GetTime();
                     tracy_handler->AddDevice((uint32_t)device_id, now_ns, 0.0, tracy_freq);
                     printf(
@@ -1394,10 +1540,8 @@ int main(int argc, char** argv) {
                 if (r.ts > x280_ts_max) {
                     x280_ts_max = r.ts;
                 }
-                cnt++;
             }
-        }
-        consumed.fetch_add(cnt);
+        });
         printf(
             "[tracy] device timeline span = %.1f ms (%llu tensix cyc @ %.3f GHz); host processing wall from "
             "first-marker = %.1f ms\n",
@@ -1408,54 +1552,47 @@ int main(int argc, char** argv) {
     };
 #endif
 
-    std::vector<std::thread> flushers, mconsumers;  // --mpmc threads
+    std::thread writer, consumer_th, iso_th;  // single-writer + primary reader (+ optional isolation reader)
 
     // One host thread PER ring (default) -> ring 1 is never ack-starved by ring 0's servicing. --rrconsumer
     // falls back to a single thread round-robining all rings (the original behavior) for A/B comparison.
     std::vector<std::thread> consumers;
     if (mpmc > 0) {
-        // ndh flushers per node (== sockets/node) = ndh*nodes total, each bound to its node + socket, all
-        // pushing to the ONE shared mq. nodes==1 spawns exactly the old ndh flushers over node[0].
-        for (int n = 0; n < nodes; n++) {
-            for (uint64_t h = 0; h < ndh; h++) {
-                flushers.emplace_back(flusher, std::ref(node[n]), h);
-            }
-        }
+        writer = std::thread(writer_thread);
         if (do_pin) {
-            for (size_t f = 0; f < flushers.size(); f++) {
-                pin_thread_to_core(flushers[f], (int)f);  // flusher f -> core f (0,1,...); leave rest to the OS
+            pin_thread_to_core(writer, 0);  // pin the writer to core 0; run under taskset -c 1-N to isolate it
+        }
+        const char* sink_desc = "sink";
+        if (count_only || no_publish) {
+            printf(
+                "[bcast] writer decodes only -- no ring reader (%s)\n", count_only ? "countonly" : "nopublish");
+        } else {
+            if (do_csv) {
+                consumer_th = std::thread(csv_reader);
+                sink_desc = "CSV";
+            }
+#if defined(TRACY_ENABLE)
+            else if (do_tracy) {
+                consumer_th = std::thread(tracy_reader);
+                sink_desc = "Tracy";
+            }
+#endif
+            else {
+                if (do_tracy) {
+                    printf("[tracy] build lacks TRACY_ENABLE -- falling back to sink reader (no zones emitted)\n");
+                }
+                consumer_th = std::thread(sink_reader);
             }
             printf(
-                "[pin] pinned %zu flusher(s) to cores 0..%zu (run under taskset -c 2-N to keep them empty)\n",
-                flushers.size(),
-                flushers.size() - 1);
-        }
-        bool special_spawned = false;
-        const char* consumer_desc = nullptr;
-        if (do_csv) {
-            mconsumers.emplace_back(csv_consumer);  // ONE consumer: bulk-append records to memory (write at end)
-            special_spawned = true;
-            consumer_desc = "1 CSV consumer (in-memory -> batched CSV at end)";
-        }
-#if defined(TRACY_ENABLE)
-        if (!special_spawned && do_tracy) {
-            mconsumers.emplace_back(tracy_consumer);  // ONE ordered consumer -> Tracy zones
-            special_spawned = true;
-            consumer_desc = "1 Tracy consumer";
-        }
-#endif
-        if (!special_spawned) {
-            if (do_tracy) {
-                printf("[tracy] build lacks TRACY_ENABLE -- falling back to sink consumers (no zones emitted)\n");
-            }
-            for (int i = 0; i < mpmc; i++) {
-                mconsumers.emplace_back(consumer);
+                "[bcast] 1 writer round-robins %llu socket(s) -> 1 %s reader (ring cap %zu records)\n",
+                (unsigned long long)(ndh * (uint64_t)nodes),
+                sink_desc,
+                ring.capacity());
+            if (iso_consumer) {
+                iso_th = std::thread(iso_reader);
+                printf("[bcast] + isolation consumer: 2nd independent sink Reader on the same ring\n");
             }
         }
-        printf(
-            "[mpmc] %llu flush+demux -> record MPMC -> %s\n",
-            (unsigned long long)(ndh * (uint64_t)nodes),
-            special_spawned ? consumer_desc : (std::to_string(mpmc) + " consumers").c_str());
     } else if (nodrain) {
         printf("[nodrain] host consumer DISABLED, relay ignores flow control -- diagnostic (lossy)\n");
     } else if (rr_consumer) {
@@ -1657,13 +1794,15 @@ int main(int argc, char** argv) {
     }
     auto wall_end = wall_start;  // set once the drain completes (all flushers joined); used for aggregate BW
     if (mpmc > 0) {
-        for (auto& t : flushers) {
-            t.join();  // flushers finish draining first
-        }
+        writer.join();
         wall_end = std::chrono::steady_clock::now();  // drain done -> close the concurrent-window wall clock
-        mq.close();  // then signal consumers no more batches are coming
-        for (auto& t : mconsumers) {
-            t.join();  // flushers already decoded the in-band X280 zones into hz_raw during the drain
+        stop.store(true, std::memory_order_release);  // then tell the reader no more records are coming
+        ring.writer().wake_readers();                 // wake it from wait() so it drains the tail and exits
+        if (consumer_th.joinable()) {
+            consumer_th.join();
+        }
+        if (iso_th.joinable()) {
+            iso_th.join();
         }
         if (do_csv) {
             // POST-drain CSV write, off the hot path: format rows into a reused buffer and fwrite in ~1 MB
@@ -1844,6 +1983,14 @@ int main(int argc, char** argv) {
             // (some ZONE_ENDs) was cut -> zones left OPEN -> Tracy extends them to the trace end -> giant
             // parent zones swallowing later ones. Instead do Tracy's DETERMINISTIC shutdown handshake: request
             // shutdown, then wait until the client has flushed its queue and the server acked (bounded cap).
+            // The drain (~seconds) is too fast to attach a live tracy-capture in time, and RequestShutdown only
+            // flushes to an ALREADY-connected server -- so hold here until a capture attaches (the full trace is
+            // buffered in the Tracy client meanwhile), then flush. Proceeds after the cap if none connects.
+            printf("[tracy] waiting up to 120s for a tracy-capture to connect (so it gets the full trace)...\n");
+            auto cdl = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+            while (!tracy::GetProfiler().IsConnected() && std::chrono::steady_clock::now() < cdl) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
             printf("[tracy] flushing zones to Tracy client (shutdown handshake)...\n");
             tracy::GetProfiler().RequestShutdown();
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
@@ -1961,13 +2108,16 @@ int main(int argc, char** argv) {
         // markers precede the BRISC PROG sticky (prog=0), so allow up to one open zone per lane and require
         // prog only on the kernel-zone markers.
         uint64_t kernel_min = 2ull * (uint64_t)active_lanes * nmarkers;
-        bool ok = (mk >= kernel_min) && (ts_bad == 0) && (consumed.load() == mk) && (starts >= ends) &&
-                  ((starts - ends) <= (uint64_t)active_lanes) && (prog_ok >= kernel_min);
+        // Losslessness (count + delivery) is always checked; the per-record self-checks only when --verify.
+        bool ok = (mk >= kernel_min) && (consumed.load() == mk);
+        if (verify) {
+            ok = ok && (ts_bad == 0) && (starts >= ends) && ((starts - ends) <= (uint64_t)active_lanes) &&
+                 (prog_ok >= kernel_min);
+        }
         run_ok = ok;
         printf(
-            "\n=== X280 REAL profiler pipeline (--mpmc: %llu flush+demux -> record MPMC -> %d consumers) ===\n",
-            (unsigned long long)ndh,
-            mpmc);
+            "\n=== X280 REAL profiler pipeline (BroadcastRing: %llu socket(s) -> 1 writer -> 1 reader) ===\n",
+            (unsigned long long)(ndh * (uint64_t)nodes));
         printf(
             "  markers      : %llu decoded / %llu consumed  (>= %llu kernel zones*2)%s\n",
             (unsigned long long)mk,
@@ -1988,30 +2138,58 @@ int main(int argc, char** argv) {
                 (unsigned long long)node[0].fl_pages[0],
                 (unsigned long long)(ndh > 1 ? node[0].fl_pages[1] : 0));
         }
-        printf(
-            "  zones        : %llu START / %llu END   unbalanced lanes: %llu\n",
-            (unsigned long long)starts,
-            (unsigned long long)ends,
-            (unsigned long long)unbal);
+        if (verify) {
+            printf(
+                "  zones        : %llu START / %llu END   unbalanced lanes: %llu\n",
+                (unsigned long long)starts,
+                (unsigned long long)ends,
+                (unsigned long long)unbal);
+        } else {
+            printf("  zones        : not checked (--verify off)\n");
+        }
         printf(
             "  X280-STALL   : %llu back-pressure zones  (delay=%u/marker)  [0 = drain fully kept up]\n",
             (unsigned long long)stall,
             prod_delay);
         printf(
-            "  MPMC (mq)    : peak %zu / cap %zu batches   flusher push-blocks: %llu  [0 blocks => MPMC never the "
-            "bottleneck]\n",
-            mq.peak,
-            mq.cap,
-            (unsigned long long)mq.push_blocks);
-        printf(
-            "  prog id      : %llu/%llu markers carried 0x%x   ts regressions: %llu   ring overflow: %llu  (sink "
-            "%llx)\n",
-            (unsigned long long)prog_ok,
-            (unsigned long long)mk,
-            prog_id,
-            (unsigned long long)ts_bad,
-            (unsigned long long)overflow.load(),
-            (unsigned long long)sink_total.load());
+            "  BroadcastRing: cap %zu records   reader dropped: %llu  [0 dropped => lossless]\n",
+            ring.capacity(),
+            (unsigned long long)reader_dropped.load());
+        {
+            double per = mk ? 1.0 / (double)mk : 0.0;
+            printf(
+                "  writer phases: read %.0f ms (%.1f ns/rec)   decode %.0f ms (%.1f ns/rec)   publish %.0f ms (%.1f "
+                "ns/rec)\n",
+                (double)t_read_ns / 1e6,
+                (double)t_read_ns * per,
+                (double)t_decode_ns / 1e6,
+                (double)t_decode_ns * per,
+                (double)t_publish_ns / 1e6,
+                (double)t_publish_ns * per);
+        }
+        if (iso_consumer) {
+            printf(
+                "  iso consumer : %llu consumed   dropped: %llu  [independent 2nd reader -- isolated if it stays "
+                "lossless while the primary drops]\n",
+                (unsigned long long)iso_consumed.load(),
+                (unsigned long long)iso_dropped.load());
+        }
+        if (verify) {
+            printf(
+                "  prog id      : %llu/%llu markers carried 0x%x   ts regressions: %llu   ring overflow: %llu  (sink "
+                "%llx)\n",
+                (unsigned long long)prog_ok,
+                (unsigned long long)mk,
+                prog_id,
+                (unsigned long long)ts_bad,
+                (unsigned long long)overflow.load(),
+                (unsigned long long)sink_total.load());
+        } else {
+            printf(
+                "  prog id / ts : not checked (--verify off)   ring overflow: %llu  (sink %llx)\n",
+                (unsigned long long)overflow.load(),
+                (unsigned long long)sink_total.load());
+        }
         // ---- AGGREGATE drain bandwidth over the concurrent producer+drain window (total bytes / wall). This is
         // the headline for multi-node: every node's sockets fed the one shared MPMC, so total_words is already
         // the summed drained word count across all 2N sockets. Gated on nodes>1 so the single-node report is
