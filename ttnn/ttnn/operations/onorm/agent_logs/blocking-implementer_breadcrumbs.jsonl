@@ -1,0 +1,1 @@
+{"event":"test_run","mode":"dev+prod","result":"pass","detail":"11/11 acceptance tests pass in both --dev and production timing; no races","ts":"2026-07-27T14:23:49+00:00"}
