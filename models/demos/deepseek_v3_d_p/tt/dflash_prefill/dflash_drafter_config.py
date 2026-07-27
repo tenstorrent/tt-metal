@@ -50,6 +50,37 @@ class DFlashDrafterConfig:
     def target_feature_size(self) -> int:
         return len(self.target_layer_ids) * self.hidden_size  # 6 * 7168 = 43008
 
+    @classmethod
+    def from_pretrained(cls, path: str) -> "DFlashDrafterConfig":
+        """Build the device drafter config from a HF checkpoint dir (``$DFLASH_HF_MODEL``): reads
+        ``config.json`` for dims + rope params (+ ``dflash_config.target_layer_ids``). The device rope is
+        built from these scalar params via :func:`build_drafter_rope_hf_config` (NOT the transformers
+        ROPE_INIT_FUNCTIONS), so only the numeric rope params are extracted here — no rope-type remapping is
+        needed on the device side. Mirrors the test conftest's ``_drafter_cfg_from_hf`` so the production
+        runtime, the standalone test, and the HF reference all consume identical dims/rope."""
+        from transformers import AutoConfig
+
+        c = AutoConfig.from_pretrained(path, trust_remote_code=True)
+        rs = dict(getattr(c, "rope_scaling", None) or getattr(c, "rope_parameters", None) or {})
+        dfc = dict(getattr(c, "dflash_config", None) or {})
+        d = cls()  # defaults fill anything the checkpoint config omits
+        return cls(
+            hidden_size=c.hidden_size,
+            head_dim=getattr(c, "head_dim", c.hidden_size // c.num_attention_heads),
+            num_attention_heads=c.num_attention_heads,
+            num_key_value_heads=c.num_key_value_heads,
+            num_hidden_layers=c.num_hidden_layers,
+            rms_norm_eps=c.rms_norm_eps,
+            target_layer_ids=tuple(dfc.get("target_layer_ids", d.target_layer_ids)),
+            rope_theta=float(rs.get("rope_theta") or getattr(c, "rope_theta", None) or d.rope_theta),
+            rope_factor=float(rs.get("factor", d.rope_factor)),
+            rope_beta_fast=float(rs.get("beta_fast", d.rope_beta_fast)),
+            rope_beta_slow=float(rs.get("beta_slow", d.rope_beta_slow)),
+            rope_orig_max_pos=int(rs.get("original_max_position_embeddings", d.rope_orig_max_pos)),
+            rope_mscale=float(rs.get("mscale", d.rope_mscale)),
+            rope_mscale_all_dim=float(rs.get("mscale_all_dim", d.rope_mscale_all_dim)),
+        )
+
 
 def build_drafter_rope_hf_config(cfg: DFlashDrafterConfig, max_seq_len: int) -> types.SimpleNamespace:
     """SimpleNamespace shaped like the ``hf_config`` that ``rope.get_cos_sin_matrix`` consumes.
@@ -71,3 +102,47 @@ def build_drafter_rope_hf_config(cfg: DFlashDrafterConfig, max_seq_len: int) -> 
             "mscale_all_dim": cfg.rope_mscale_all_dim,
         },
     )
+
+
+def load_drafter_state_dict(path: str, *, build_kv_tail: bool = True) -> dict:
+    """Load exactly the prefill-subset weights the device drafter consumes from
+    ``$DFLASH_HF_MODEL/model.safetensors`` (see ``TtDFlashDrafter._load_weights``):
+
+      * ``fc.weight`` — always (every pipeline rank slices its owned column blocks out of it);
+      * ``hidden_norm.weight`` + per-draft-layer ``self_attn.{k_proj,v_proj,k_norm}.weight`` — only when
+        ``build_kv_tail`` (the last rank, which builds the KV tail). Non-tail ranks accumulate + forward
+        the FC partial and skip the tail, so only ``fc.weight`` is read into host RAM.
+
+    The drafter's decode-only weights (q_proj/o_proj/mlp/embeddings/lm_head) are never read here. Uses
+    ``safe_open`` so unwanted tensors stay on disk. Mirrors the test conftest's safetensors reader so the
+    device drafter and the HF reference consume identical weights."""
+    import os
+
+    from safetensors import safe_open
+
+    st = os.path.join(path, "model.safetensors")
+    if not os.path.exists(st):
+        raise FileNotFoundError(
+            f"drafter weights not found: {st} (set DFLASH_HF_MODEL to a dir with config.json + model.safetensors)"
+        )
+
+    def _wanted(k: str) -> bool:
+        if k == "fc.weight":
+            return True
+        if not build_kv_tail:
+            return False
+        if k == "hidden_norm.weight":
+            return True
+        return (
+            k.startswith("layers.")
+            and k.endswith(".weight")
+            and any(f".self_attn.{p}." in k for p in ("k_proj", "v_proj", "k_norm"))
+        )
+
+    sd: dict = {}
+    with safe_open(st, framework="pt") as f:
+        for k in f.keys():
+            if _wanted(k):
+                sd[k] = f.get_tensor(k)
+    assert "fc.weight" in sd, f"drafter checkpoint {st} missing fc.weight"
+    return sd
