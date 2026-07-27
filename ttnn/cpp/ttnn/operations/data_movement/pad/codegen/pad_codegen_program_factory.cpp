@@ -326,7 +326,13 @@ ProgramDescriptor create_descriptor_rm(
     const uint32_t stick_size_out = W_out * elem_size;
     const uint32_t front_pad_w_bytes = front_w * elem_size;
     const uint32_t back_pad_w_bytes = (W_out - W - front_w) * elem_size;
-    const uint32_t stick_size_out_aligned = tt::align(stick_size_out, kL1Align);
+    // Page pitch, so also every l1_addr the reader targets. A NOC read settles its destination to
+    // the enclosing granule, so this must be a dram_alignment multiple, not merely kL1Align: at 16B
+    // one stick's data read reaches past its own length into the pad bytes the next fields hold.
+    // Deliberately not the page size that build_pad_codegen_params budgets L1 against -- that one
+    // keys the cache and stays bit-identical to the generator's; this exceeds it by <dram_alignment
+    // per page, well inside the headroom kL1FirmwareOverhead already reserves.
+    const uint32_t stick_size_out_aligned = tt::align(stick_size_out, dram_alignment);
 
     const uint32_t total_out_sticks = N_out * C_out * H_out;
     TT_FATAL(total_out_sticks > 0, "pad_codegen (RM): zero-volume output");
