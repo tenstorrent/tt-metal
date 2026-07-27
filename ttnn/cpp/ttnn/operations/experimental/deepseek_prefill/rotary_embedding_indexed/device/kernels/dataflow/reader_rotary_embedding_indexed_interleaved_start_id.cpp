@@ -89,6 +89,15 @@ static void run_reader() {
         cb_meta.reserve_back(1);
         noc.async_read(s_meta, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        // The metadata tensor lives at a FIXED DRAM address reused across every chunk/layer/rope call;
+        // the host updates its contents in place each chunk. After the NoC writes the fresh value into
+        // this core's cb_meta L1 page, the RISC data cache may still hold the PREVIOUS chunk's value for
+        // that L1 line: async_read_barrier orders the DMA but does NOT invalidate the RISC cache, and
+        // `volatile` forces a load but still reads the cached line. Whether the line was evicted is
+        // timing-dependent, so without this invalidate the read is intermittently STALE -> a wrong
+        // rotation offset that compounds (the L61 metadata KV-PCC run-to-run non-determinism).
+        // invalidate_l1_cache() forces a refetch of the freshly-DMA'd value.
+        invalidate_l1_cache();
         CoreLocalMem<volatile uint32_t> meta(cb_meta.get_write_ptr());
         kv_actual_global = meta[0];  // the 1-element tensor holds kv_actual_global directly
         cb_meta.push_back(1);
