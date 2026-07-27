@@ -103,6 +103,9 @@ struct TestConfig {
     // Pre-generated source data; if empty, create_arange_vector_of_bfloat16 is used.
     std::vector<std::uint32_t> src0_data;
     GoldenFunc golden_function;
+    // Optional override for the auto-derived compute-kernel path: swap in a
+    // from-scratch re-implementation without duplicating the harness.
+    std::optional<std::string> compute_kernel_override = std::nullopt;
 };
 
 // Compute golden + validate; shared between the Metal 2.0 helper and the Gen1-only
@@ -330,6 +333,12 @@ void run_single_core_tilize_program(
                              : "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
     } else {
         log_fatal(tt::LogTest, "run_single_core_tilize_program: unsupported config (UNPACK_A_B uses dedicated helper)");
+    }
+
+    // Static-state-tracking: override the auto-derived kernel path with a
+    // from-scratch re-implementation (compiled against the same spec bindings).
+    if (test_config.compute_kernel_override.has_value()) {
+        compute_kernel = test_config.compute_kernel_override.value();
     }
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -1398,6 +1407,27 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDst) {
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
                 .output_fmt = tt::DataFormat::Float16_b,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
+    }
+}
+
+// Static-state-tracking test — same input/output config as TensixComputePackUntilizeDst,
+// but the JIT-compiled compute kernel is the from-scratch static-state-tracking
+// implementation at experiments/static-state-tracking/kernels/dst_untilize_sst.cpp.
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstStaticState) {
+    vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
+    for (auto num_tile : num_tiles) {
+        for (bool dst_full_sync_en : {true, false}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                .golden_function = ::unit_tests::compute::gold_standard_untilize,
+                .compute_kernel_override = "experiments/static-state-tracking/kernels/dst_untilize_sst.cpp"};
             unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
         }
     }
