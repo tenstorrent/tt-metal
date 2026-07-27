@@ -153,7 +153,7 @@ def run_single_routed_expert(
     logger.debug(f"Running TTNN forward ({perf_iters} iters)...")
     for _ in range(perf_iters):
         tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
-    ttnn.synchronize_device(mesh_device)
+    ttnn.synchronize_device(device)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
 
     if _perf_toggle_makes_output_garbage():
