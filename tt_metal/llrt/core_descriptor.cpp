@@ -29,6 +29,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 namespace tt {
 
@@ -104,25 +105,28 @@ inline std::string get_core_descriptor_file(
     return "";
 }
 
-const core_descriptor_t& get_core_descriptor_config(
-    tt::tt_metal::MetalEnvImpl& env,
-    ChipId device_id,
-    const uint8_t num_hw_cqs,
-    const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    // {arch : {product : {dispatch core axis: {fabric tensix config: {num_hw_cqs : {fast_dispatch : config}}}}}}
-    static std::unordered_map<
-        ARCH,
-        std::unordered_map<
-            std::string,
-            std::unordered_map<
-                tt_metal::DispatchCoreConfig,
-                std::unordered_map<
-                    tt_fabric::FabricTensixConfig,
-                    std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>>>>>
-        config_by_arch;
+}  // namespace tt
 
-    ARCH arch = env.get_cluster().arch();
-    uint32_t harvesting_mask = env.get_cluster().get_harvesting_mask(device_id);
+namespace tt::tt_metal {
+
+using tt_metal::RelativeCoreCoord;
+
+bool MetalEnvImpl::CoreDescriptorCacheKey::operator==(const CoreDescriptorCacheKey& other) const {
+    return product_name == other.product_name && dispatch_core_config == other.dispatch_core_config &&
+           fabric_tensix_config == other.fabric_tensix_config && num_hw_cqs == other.num_hw_cqs &&
+           fast_dispatch == other.fast_dispatch;
+}
+
+std::size_t MetalEnvImpl::CoreDescriptorCacheKeyHash::operator()(const CoreDescriptorCacheKey& key) const {
+    return std::hash<std::string>{}(key.product_name) ^ std::hash<DispatchCoreConfig>{}(key.dispatch_core_config) ^
+           (static_cast<std::size_t>(key.fabric_tensix_config) << 1) ^
+           (static_cast<std::size_t>(key.num_hw_cqs) << 8) ^ (static_cast<std::size_t>(key.fast_dispatch) << 16);
+}
+
+const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
+    ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
+    ARCH arch = get_cluster().arch();
+    uint32_t harvesting_mask = get_cluster().get_harvesting_mask(device_id);
     std::bitset<32> mask_bitset(harvesting_mask);
     uint32_t num_harvested_on_axis = mask_bitset.count();
 
@@ -131,39 +135,52 @@ const core_descriptor_t& get_core_descriptor_config(
             "At most two rows or cols can be harvested, but detected {} along harvested axis", num_harvested_on_axis);
     }
 
-    std::string product_name = get_product_name(arch, num_harvested_on_axis);
-    if (env.get_cluster().is_galaxy_cluster()) {
-        if (env.get_cluster().get_board_type(device_id) == BoardType::N150) {
+    std::string product_name = tt::get_product_name(arch, num_harvested_on_axis);
+    if (get_cluster().is_galaxy_cluster()) {
+        if (get_cluster().get_board_type(device_id) == BoardType::N150) {
             // some Galaxy machines are setup with N150s that have 0 harvested rows.
             // get_product_name ( ) returns those chips as galaxy. Override that to nebula_x1.
             product_name = "nebula_x1";
         } else {
             TT_ASSERT(
-                env.get_cluster().get_board_type(device_id) == BoardType::GALAXY,
+                get_cluster().get_board_type(device_id) == BoardType::GALAXY,
                 "Invalid Board Type in Galaxy Cluster. Only GALAXY and N150 are supported.");
         }
     }
 
-    tt_fabric::FabricTensixConfig fabric_tensix_config = env.get_fabric_tensix_config();
-    bool fast_dispatch = env.get_rtoptions().get_fast_dispatch();
+    tt_fabric::FabricTensixConfig fabric_tensix_config = get_fabric_tensix_config();
+    bool fast_dispatch = get_rtoptions().get_fast_dispatch();
+    // Only Quasar registers HalProgrammableCoreType::DISPATCH; resolve_dispatch_core_type returns DISPATCH only then.
+    const bool quasar_dispatch_engine_fd =
+        fast_dispatch && !get_rtoptions().get_use_quasar_tensix_dispatch_cores() &&
+        tt::tt_metal::detail::resolve_dispatch_core_type(
+            arch,
+            dispatch_core_config,
+            get_cluster().get_soc_desc(device_id),
+            /*use_quasar_tensix_dispatch_cores=*/false) == tt::CoreType::DISPATCH;
 
     tt_metal::DispatchCoreAxis resolved_axis =
         tt_metal::resolve_dispatch_core_axis(dispatch_core_config, arch, fabric_tensix_config);
 
-    std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>& config_by_num_cqs =
-        config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
-    if (config_by_num_cqs[num_hw_cqs].contains(fast_dispatch)) {
-        return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
+    const CoreDescriptorCacheKey cache_key{
+        .product_name = product_name,
+        .dispatch_core_config = dispatch_core_config,
+        .fabric_tensix_config = fabric_tensix_config,
+        .num_hw_cqs = num_hw_cqs,
+        .fast_dispatch = fast_dispatch,
+    };
+    if (core_descriptor_cache_.contains(cache_key)) {
+        return core_descriptor_cache_.at(cache_key);
     }
 
-    YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(env, arch, dispatch_core_config));
+    YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(*this, arch, dispatch_core_config));
     YAML::Node desc_yaml =
         core_descriptor_yaml[product_name][(resolved_axis == tt_metal::DispatchCoreAxis::ROW) ? "row" : "col"]
                             [std::to_string(num_hw_cqs)];
 
     auto compute_with_storage_start = desc_yaml["compute_with_storage_grid_range"]["start"];
     auto compute_with_storage_end = desc_yaml["compute_with_storage_grid_range"]["end"];
-    if (env.get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
+    if (get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
         compute_with_storage_start = desc_yaml["tg_compute_with_storage_grid_range"]["start"];
         compute_with_storage_end = desc_yaml["tg_compute_with_storage_grid_range"]["end"];
     }
@@ -171,9 +188,9 @@ const core_descriptor_t& get_core_descriptor_config(
     TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
     // // Adjusts the core grid configuration based on the value of the environment variable
-    if (env.get_rtoptions().is_core_grid_override_todeprecate()) {
+    if (get_rtoptions().is_core_grid_override_todeprecate()) {
         auto compute_with_storage_end_override =
-            string_to_yaml_node(env.get_rtoptions().get_core_grid_override_todeprecate());
+            string_to_yaml_node(get_rtoptions().get_core_grid_override_todeprecate());
         TT_FATAL(
             compute_with_storage_end_override.IsSequence(),
             "compute_with_storage_end_override must be a YAML sequence");
@@ -210,14 +227,25 @@ const core_descriptor_t& get_core_descriptor_config(
     size_t start_y = compute_with_storage_start[1].as<size_t>();
 
     tt::tt_metal::CoreCoord compute_grid_size;
-    // When slow dispatch is on, use full logical grid (no dispatch cores to reserve)
-    if (!fast_dispatch && !env.get_rtoptions().is_simulator_or_emulated()) {
-        compute_grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-        log_info(
-            tt::LogDevice,
-            "Slow dispatch mode: Using full logical grid ({}, {})",
-            compute_grid_size.x,
-            compute_grid_size.y);
+    // When slow dispatch is on, use full logical grid (no dispatch cores to reserve).
+    // Quasar dispatch-engine FD uses dedicated dispatch tiles from the soc `dispatch:` list, so
+    // Tensix workers listed under dispatch_cores in the fast-dispatch core descriptor YAML are not
+    // reserved (same effective worker pool as slow dispatch).
+    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) || quasar_dispatch_engine_fd) {
+        compute_grid_size = get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+        if (quasar_dispatch_engine_fd) {
+            log_info(
+                tt::LogDevice,
+                "Quasar dispatch-engine FD: using full worker grid ({}, {})",
+                compute_grid_size.x,
+                compute_grid_size.y);
+        } else {
+            log_info(
+                tt::LogDevice,
+                "Slow dispatch mode: Using full logical grid ({}, {})",
+                compute_grid_size.x,
+                compute_grid_size.y);
+        }
     } else {
         compute_grid_size = tt::tt_metal::CoreCoord((end_x - start_x) + 1, (end_y - start_y) + 1);
     }
@@ -232,15 +260,15 @@ const core_descriptor_t& get_core_descriptor_config(
 
     std::vector<RelativeCoreCoord> dispatch_cores;
     const auto* dispatch_cores_string = "dispatch_cores";
-    if (env.get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
+    if (get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
         dispatch_cores_string = "tg_dispatch_cores";
     }
 
-    tt::tt_metal::CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    tt::tt_metal::CoreCoord grid_size = get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     // For mock devices, control plane doesn't exist, use empty set
     std::unordered_set<tt::tt_metal::CoreCoord> logical_active_eth_cores;
-    if (!env.get_cluster().is_mock_or_emulated()) {
-        logical_active_eth_cores = env.get_control_plane().get_active_ethernet_cores(device_id);
+    if (!get_cluster().is_mock_or_emulated()) {
+        logical_active_eth_cores = get_control_plane().get_active_ethernet_cores(device_id);
     }
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
@@ -260,7 +288,7 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        !dispatch_cores.empty() || env.get_rtoptions().is_simulator_or_emulated(),
+        !dispatch_cores.empty() || get_rtoptions().is_simulator_or_emulated(),
         "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
@@ -286,8 +314,9 @@ const core_descriptor_t& get_core_descriptor_config(
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
     std::vector<tt::tt_metal::CoreCoord> logical_dispatch_cores;
-    // In slow dispatch mode, no cores are reserved for dispatch
-    if (fast_dispatch) {
+    // In slow dispatch mode, no cores are reserved for dispatch. Quasar dispatch-engine FD sources
+    // dispatch cores from the soc descriptor via get_quasar_dispatch_cores(), not Tensix YAML entries.
+    if (fast_dispatch && !quasar_dispatch_engine_fd) {
         logical_dispatch_cores.reserve(dispatch_cores.size());
         std::transform(
             dispatch_cores.cbegin(),
@@ -305,7 +334,7 @@ const core_descriptor_t& get_core_descriptor_config(
         std::back_inserter(logical_fabric_mux_cores),
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
-    core_descriptor_t config{
+    tt::core_descriptor_t config{
         .compute_grid_size = compute_grid_size,
         .relative_compute_cores = std::move(compute_cores),
         .relative_dispatch_cores = std::move(dispatch_cores),
@@ -314,9 +343,13 @@ const core_descriptor_t& get_core_descriptor_config(
         .logical_dispatch_cores = std::move(logical_dispatch_cores),
         .logical_fabric_mux_cores = std::move(logical_fabric_mux_cores),
     };
-    config_by_num_cqs[num_hw_cqs][fast_dispatch] = std::move(config);
-    return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
+    core_descriptor_cache_.emplace(cache_key, std::move(config));
+    return core_descriptor_cache_.at(cache_key);
 }
+
+}  // namespace tt::tt_metal
+
+namespace tt {
 
 std::vector<tt::tt_metal::CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
     tt::tt_metal::MetalEnvImpl& env,
