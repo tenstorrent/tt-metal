@@ -341,8 +341,25 @@ def _ledger_line(kind: str, title: str, model: str = "", task: str = ""):
     try:
         led = _ledger()
         a, b = _ledger_pair(kind, model, task)
-        if not a or not b:
+        if not a and not b:
             return None
+        if a and not b:
+            # A before with no after yet is the normal state for most of a run. Returning None here
+            # printed "not measured" over a reading the ledger actually held, hiding the anchor until
+            # the first after landed.
+            _d = str(a.get("depth") or "unknown")
+            return "%s (%s):  %.2f ms  ->  (after not measured yet)" % (
+                title,
+                "all layers" if _d == "all" else "%s layers" % _d,
+                a.get("value_ms"),
+            )
+        if b and not a:
+            _d = str(b.get("depth") or "unknown")
+            return "%s (%s):  (before not measured)  ->  %.2f ms" % (
+                title,
+                "all layers" if _d == "all" else "%s layers" % _d,
+                b.get("value_ms"),
+            )
         av, bv = a.get("value_ms"), b.get("value_ms")
         depth = a.get("depth") or "unknown"
         dl = "all layers" if str(depth) == "all" else "%s layers" % depth

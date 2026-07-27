@@ -252,3 +252,25 @@ def test_the_ledger_key_is_never_the_literal_model_placeholder(tmp_path, monkeyp
     name = m.ledger_path().name
     assert "llama3_1_8b_p150" in name, name
     assert name != "perf_measurements_model_main.jsonl", "fell back to the shared placeholder key"
+
+
+def test_a_before_with_no_after_yet_is_still_reported(tmp_path, monkeypatch):
+    """For most of a run only the BEFORE exists. Requiring both rows printed "not measured" over a
+    reading the ledger actually held, hiding the anchor until the first after landed."""
+    import importlib.util as ilu
+    import json as _json
+
+    m = _led(tmp_path, monkeypatch)
+    m.record(m.KIND_EAGER, m.PHASE_BEFORE, 2464.18, depth="16", mode="eager", model="mdl")
+    spec = ilu.spec_from_file_location("summary_partial_ut", _ROOT / "cc_optimize" / "summary.py")
+    sm = ilu.module_from_spec(spec)
+    sys.modules["summary_partial_ut"] = sm
+    spec.loader.exec_module(sm)
+    kl = tmp_path / "kl.json"
+    kl.write_text(
+        _json.dumps([{"op_signature": "M", "kernel_kind": "dtype", "measured_ms": 1.0, "beat_baseline": True}])
+    )
+    line = next(l for l in sm.render_summary(kl, model="mdl", task="main").splitlines() if "eager per-op" in l)
+    assert "2464.18" in line, line
+    assert "not measured yet" in line, line
+    assert line.strip() != "eager per-op device time: not measured (no ledger reading for this run)"

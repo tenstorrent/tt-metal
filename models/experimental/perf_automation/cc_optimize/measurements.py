@@ -32,6 +32,7 @@ unreportable the moment you restart.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -59,7 +60,7 @@ def ledger_path(model: str = "", task: str = "") -> Path:
         or Path(os.environ.get("PERF_MCP_MODEL_ROOT", "") or "model").name
     )
     task = task or os.environ.get("PERF_MCP_TASK", "main")
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", "%s_%s" % (model, task))
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", "%s_%s" % (model, task)).strip("_") or "model_main"
     return Path(tempfile.gettempdir()) / ("perf_measurements_%s.jsonl" % safe)
 
 
@@ -85,7 +86,9 @@ def record(
         v = float(value_ms)
     except (TypeError, ValueError):
         return False
-    if v <= 0:
+    if not math.isfinite(v) or v <= 0:
+        # NaN slips past a `v <= 0` test -- every comparison with NaN is False -- so an unusable
+        # reading could become the PERMANENT anchor, and no later run could dislodge it.
         return False
     if not str(depth).strip() or not str(mode).strip():
         return False
