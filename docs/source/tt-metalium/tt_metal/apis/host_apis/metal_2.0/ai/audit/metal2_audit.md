@@ -59,7 +59,7 @@ Porting an op is a workflow split across two documents:
 1. **Feasibility audit.** *(This document.)* Assess this op's Metal 2.0 portability and capture findings — including what work will be required if the port can't proceed yet. Output: write `METAL2_PREPORT_AUDIT.md` (team-facing, always) — and, when the audit clears every gate, `METAL2_PORT_BRIEF.md` (porter-facing) — to the op directory, then STOP.
 2. **Port recipe** — legacy inventory, spec planning, construction, and verification. Lives in [`port/metal2_port.md`](../port/metal2_port.md). Loaded only after the audit clears with explicit user go-ahead.
 
-You do not skip the audit. You do not pre-load the recipe document. The audit is its own unit of work.
+You do not skip the audit. You do not pre-load the recipe document. The audit is its own unit of work. *(The `shared/` reference docs are a different matter — read them freely when a finding needs them. In particular, read [Caution: Porting a shared kernel](../shared/port_patterns.md#caution-porting-a-shared-kernel) before writing the brief's shared-kernel line: it defines the rung vocabulary that line is written in.)*
 
 ---
 
@@ -99,7 +99,8 @@ For the op in scope, work through the audit in twelve subjects. The three **prer
 | CB endpoints — endpoint legality (per CB, per node) | **PORT WORK** + **FYI-P** | brief (Construct + Watch-for) + team |
 | Cross-op / shared-kernel flags | **FYI-P** | brief (Watch-for) + team |
 | RTA varargs | **FYI-P** | brief (Watch-for) + team |
-| Out-of-directory coupling & donor shape analysis | **FYI-U** | team only |
+| Out-of-directory coupling — borrowed *kernel files* + `_metal2` fork status | **FYI-P** | brief (Watch-for) + team |
+| Out-of-directory coupling — the by-shape *donor function-call* analysis | **FYI-U** | team only |
 | Relaxation candidates mined from a custom hash (fallible; gated ops) | **FYI-U** | team only |
 | Incidental code anomalies — dead RTAs, dead-but-hashed attributes, suspicious constants | **FYI-U** | team only |
 
@@ -425,7 +426,7 @@ The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2
 2. **`ttnn/cpp/ttnn/kernel_lib/`** — official shared kernel library; lib team handles internally.
 3. **`ttnn/cpp/ttnn/kernel/`** (singular) — a second shared-kernel pool. Treat as shared-lib class.
 4. **`ttnn/cpp/ttnn/operations/kernel_helper_functions/`** — small shared utility pool.
-5. **In-family shared** — kernels within the same op family. In-family escapes don't *gate* the Metal 2.0 port; you port the family together. (This concerns the Metal 2.0 *syntax* rewrite, not Device 2.0 — in-family kernels remain fully subject to the [Device 2.0 gate](#device-20-prerequisite), which is location-independent.)
+5. **In-family shared** — kernels within the same op family. An in-family *function-call* escape doesn't gate the Metal 2.0 port: the boundary features bridge the named handles into the donor's signature, and the donor header itself is not rewritten. (This concerns the Metal 2.0 *syntax* rewrite, not Device 2.0 — in-family kernels remain fully subject to the [Device 2.0 gate](#device-20-prerequisite), which is location-independent. It also says nothing about in-family *file-path* sharing — a kernel `.cpp` that several family members instantiate is governed by the fork convention below, not by porting the family together.)
 6. **Cross-family donor** — kernels in another op family's directory.
 
 **Per-call shape analysis.** For each donor file consumed by the op, identify which public functions the op's kernels actually call, and classify each by the shape of the resource handles in its signature.
@@ -457,8 +458,9 @@ Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that
 - The kernel file's path.
 - The owning op family (or shared pool).
 - Whether the file is also instantiated by other ops (broadly-shared) or is a one-off borrow — and, where cheap to determine, *which* other ops.
+- Whether a **`_metal2` fork already exists beside it** (same stem, `_metal2` suffix, same directory) — a one-line check that tells the porter whether it reuses an existing fork or creates the first one. The test is deliberately locational: `_metal2` files under `experimental/quasar/**` belong to whole-op pre-port copies and **do not count** — don't report them as forks to reuse (see [Caution: Porting a shared kernel](../shared/port_patterns.md#caution-porting-a-shared-kernel)).
 
-This signal **does not gate the port**, but it induces a **port-the-family-together coupling that must be reported**. A shared kernel's Metal 2.0 rewrite (CB→DFB, named-token bindings, etc.) is a *single* rewrite: every op that instantiates that kernel must adopt it in the same change, or the co-borrowers break the instant one op migrates in isolation. So the set of ops sharing a kernel forms a Metal 2.0 **port-together set** — report that set (or as much of it as is cheap to find) so planners can sequence the shared rewrite as one unit. Surface this even when the function-call escape roll-up is `✓ clean` — file-path coupling is independent. (This is distinct from the [Device 2.0 gate](#device-20-prerequisite), which applies to every one of these kernels regardless of coupling.)
+This signal **does not gate the port**, but it induces a **cross-op coordination cost that must be reported**. A shared kernel cannot be half-converted: the Metal 2.0 rewrite (CB→DFB, named-token bindings, etc.) changes the entry point's contract, so an op that migrated the file in place would break every co-borrower still on legacy. The port recipe resolves this with a **checked-in `_metal2` fork alongside the original** — the first port to reach the kernel creates it, later ports bind the same one, and the legacy copy is deleted when the last consumer migrates (see [Caution: Porting a shared kernel](../shared/port_patterns.md#caution-porting-a-shared-kernel)). So the set of ops sharing a kernel is **not** a must-port-together bundle — it is the coordination and sunset list. Report that set (or as much of it as is cheap to find) so planners can sequence the migration and know when the legacy copy can go — and label it in the brief as a **sunset list**, since the port recipe's in-place rung is unlocked by an explicit bundled-port assignment and an unlabelled consumer list can be misread as exactly that authorization. Surface this even when the function-call escape roll-up is `✓ clean` — file-path coupling is independent. (This is distinct from the [Device 2.0 gate](#device-20-prerequisite), which applies to every one of these kernels regardless of coupling.)
 
 ### RTA varargs
 
@@ -652,7 +654,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); 
 ## Watch for
 
 - **CB endpoints (multi-binding):** <each multi-binding CB → hunt the hidden 2nd writer (a raw co-fill, semaphore-gated) before setting the flag; `(CB, config)` | none>
-- **Cross-op / shared kernels:** <path → caution per [pattern]; port the shared kernel as one unit | none>
+- **Cross-op / shared kernels:** <path → caution per [pattern]; `_metal2` fork already exists at `<path>` — bind it, don't re-fork | no fork yet — this port creates it beside the original | none>; other binding ops: <list — **sunset list, not authorization to convert the kernel in place**>
 - **RTA varargs:** <kernel → prefer named RTAs | none>
 ````
 
