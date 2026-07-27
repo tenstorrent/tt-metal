@@ -1,0 +1,14 @@
+# Model weights — 8 GB and CC BY-NC 4.0 (non-commercial) licensed; never commit.
+# Download from HF mistralai/Voxtral-4B-TTS-2603 (see reference/PROVENANCE.md).
+# NB: reference/CKPT_MANIFEST.json IS tracked — it is tensor metadata (name/dtype/shape), not weights.
+reference/weights/
+
+# Golden tensors — regenerable by running the reference block scripts against the checkpoint.
+golden/
+
+# Generated audio
+generated/
+
+# Python caches
+__pycache__/
+*.pyc
