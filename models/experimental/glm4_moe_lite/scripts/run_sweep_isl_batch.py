@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from models.experimental.glm4_moe_lite.tt.perf_defaults import CODE_DEFAULT_ON, PINNED_OFF, WINNING_DEFAULTS
+
 # ISL (input sequence length) in tokens - replicate prompt to reach these
 ISL_VALUES = [128, 512, 1024, 2048, 4096, 8192]
 B1_EXTRA_ISL_VALUES = [16384, 32768, 65536]
@@ -73,42 +75,18 @@ def run_one(
         "sampling",
     ]
     env = os.environ.copy()
-    env["GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES"] = "1"
-    env["GLM4_MOE_LITE_FUSE_QKV_A"] = "1"
-    env["GLM4_MOE_LITE_FUSE_SHARED_GATE_UP"] = "1"
-    env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "1"
-    env["GLM4_MOE_LITE_DECODE_L1_ACT"] = "1"
-    env["GLM4_MOE_LITE_EP_L1"] = "1"
-    env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
-    # env["GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP"] = "1"
-    env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "1"
-    # env["GLM4_MOE_LITE_TP"] = "1"
-    # env["GLM4_MOE_LITE_EXPERTS_TT_DTYPE"] = "bf4"
-    env["GLM4_MOE_LITE_CCL_NUM_LINKS"] = "4"
-    env["GLM4_MOE_LITE_CCL_TOPOLOGY"] = "ring"
-    env["GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE"] = "1"
-    env["GLM4_MOE_LITE_SKIP_TYPECAST"] = "1"
-    # Validated decode wins (the sweep previously omitted these — notably BF8 dense).
-    # BF8 dense weights (~7%) + fused MoE collective epilogue + buffered all-reduce +
-    # top-k scale folded into sparse down-proj + width-sharded multi-core RMSNorm.
-    env["GLM4_MOE_LITE_DENSE_TT_DTYPE"] = "bf8"
-    env["GLM4_MOE_LITE_FUSED_COLLECTIVE_EPILOGUE"] = "1"
-    env["GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE"] = "1"
-    env["GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE"] = "1"
-    env["GLM4_MOE_LITE_SHARDED_NORM"] = "1"
-    env["GLM4_MOE_LITE_NORM_L1"] = "1"
-    env["GLM4_MOE_LITE_ROUTER_L1"] = "1"
-    # Validated B1-only fused router. Unsupported batch sizes automatically
-    # retain the standard router path.
-    env["GLM4_MOE_LITE_FUSED_ROUTER"] = "1"
-    # Keep known regressions/incorrect paths explicitly disabled so a caller's
-    # inherited environment cannot contaminate the winning sweep.
-    env["GLM4_MOE_LITE_FUSED_KV_BRANCH"] = "0"
-    env["GLM4_MOE_LITE_TRACE_2CQ"] = "0"
-    env["GLM4_MOE_LITE_LMHEAD_SHARD"] = "0"
-    env["GLM4_MOE_LITE_TP"] = "0"
+    # Force the validated winning flag set for every cell. Unlike the child script's
+    # setdefault block, these are hard assignments: an inherited environment must not
+    # be able to contaminate a sweep, or the resulting CSV silently describes a
+    # different configuration than the one it claims to.
+    env.update(WINNING_DEFAULTS)
+    env.update(CODE_DEFAULT_ON)
+    # Known-incorrect / regressive / neutral experiments, pinned off for the same reason.
+    env.update({name: "0" for name in PINNED_OFF})
     env["GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS"] = "0"
     env["GLM4_MOE_LITE_DRAM_SHARDED_ATTN"] = "0"
+    # Sweep-specific: bound the prefill chunk so long-ISL cells stay within L1.
+    env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
 
     result = {
         "isl": isl,

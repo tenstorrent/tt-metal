@@ -15,8 +15,24 @@ import ttnn
 
 import models.experimental.glm4_moe_lite.tt.debug_runtime  # noqa: F401
 
-from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT, _torch_dtype_to_ttnn
-from models.experimental.glm4_moe_lite.tt.weights import resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe_lite.tt.perf_defaults import apply_perf_defaults, overridden_defaults
+
+# Serving runs on the same validated configuration as the benchmarks. Without this,
+# vLLM would fall back to code defaults and lose the whole optimization stack
+# (bf16 dense weights, unfused router, 1-link linear CCL, no L1 activations, and
+# -- most seriously -- ENABLE_MOE off, which skips the routed experts entirely).
+#
+# Applied at import time, before the model imports below: some modules snapshot
+# their GLM4_MOE_LITE_* knobs into module-level constants on import (e.g.
+# decoder_layer_tt._SHARDED_NORM). setdefault semantics mean a deployment can
+# still override any individual flag from the environment.
+_applied_perf_defaults = apply_perf_defaults(enable_moe=True, pin_off_experiments=True)
+
+from models.experimental.glm4_moe_lite.tt.model_tt import (  # noqa: E402
+    Glm4MoeLiteDenseOnlyTT,
+    _torch_dtype_to_ttnn,
+)
+from models.experimental.glm4_moe_lite.tt.weights import resolve_best_effort_snapshot_dir  # noqa: E402
 
 
 class Glm4MoeLiteForCausalLM(nn.Module):
@@ -92,6 +108,21 @@ class Glm4MoeLiteForCausalLM(nn.Module):
 
         shutil.rmtree(cache_dir, ignore_errors=True)
         cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Make the effective perf configuration auditable from a serving log: report
+        # what we defaulted, and which flags the deployment overrode.
+        logger.info(
+            "GLM perf defaults: applied {} vars ({})",
+            len(_applied_perf_defaults),
+            ", ".join(f"{k}={v}" for k, v in sorted(_applied_perf_defaults.items())) or "none",
+        )
+        _overridden = overridden_defaults()
+        if _overridden:
+            logger.warning(
+                "GLM perf defaults overridden by the environment: {}. "
+                "Published performance numbers assume the defaults.",
+                ", ".join(f"{k}={os.environ[k]} (default {v})" for k, v in sorted(_overridden.items())),
+            )
 
         logger.info(
             "Initializing GLM TT model (skeleton): model_id={} snapshot_dir={} cache_dir={} max_batch={} max_seq_len={} dp={} opt={}",

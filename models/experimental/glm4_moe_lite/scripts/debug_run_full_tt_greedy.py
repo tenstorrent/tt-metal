@@ -14,42 +14,25 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.experimental.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table, _round_up
-from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT
-from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe_lite.tt.perf_defaults import apply_perf_defaults
 
-# Enable the validated production perf flags by default for this debug harness,
-# including BF8 dense weights (a measured ~7% bs=1 decode win, coherence-verified).
-# `setdefault` means an explicit value in the environment still overrides.
-for _default_key, _default_val in {
-    "GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES": "1",
-    "GLM4_MOE_LITE_FUSE_QKV_A": "1",
-    "GLM4_MOE_LITE_FUSE_SHARED_GATE_UP": "1",
-    "GLM4_MOE_LITE_BATCHED_PREFILL": "1",
-    "GLM4_MOE_LITE_DECODE_L1_ACT": "1",
-    "GLM4_MOE_LITE_EP_L1": "1",
-    "GLM4_MOE_LITE_CCL_NUM_LINKS": "4",
-    "GLM4_MOE_LITE_CCL_TOPOLOGY": "ring",
-    "GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE": "1",
-    "GLM4_MOE_LITE_SKIP_TYPECAST": "1",
-    "GLM4_MOE_LITE_DENSE_TT_DTYPE": "bf8",
-    # Validated decode wins (also code-default-on; listed explicitly for visibility).
-    # Fused MoE collective epilogue + buffered per-axis all-reduce + top-k scale
-    # folded into the sparse down-projection + width-sharded multi-core RMSNorm.
-    "GLM4_MOE_LITE_FUSED_COLLECTIVE_EPILOGUE": "1",
-    "GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE": "1",
-    "GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE": "1",
-    "GLM4_MOE_LITE_SHARDED_NORM": "1",
-    "GLM4_MOE_LITE_EXPLICIT_PROG_CFG": "1",
-    # Fused router (topk_router_gpt op) is the one winning flag whose *code* default
-    # is off, so set it explicitly here. The others below are already code-default-on;
-    # listed for visibility so the harness default matches the validated run command.
-    "GLM4_MOE_LITE_FUSED_ROUTER": "1",
-    "GLM4_MOE_LITE_EXPERTS_TT_DTYPE": "bf8",
-    "GLM4_MOE_LITE_ROUTER_L1": "1",
-    "GLM4_MOE_LITE_NORM_L1": "1",
-}.items():
-    os.environ.setdefault(_default_key, _default_val)
+# Enable the validated production perf flags by default for this debug harness.
+# The flag set itself lives in tt/perf_defaults.py so that this harness, the
+# sweep, and the vLLM entry point cannot drift apart. `setdefault` semantics mean
+# an explicit value in the environment still overrides (needed for A/B bisecting).
+#
+# This runs BEFORE the model imports below on purpose: some modules snapshot their
+# GLM4_MOE_LITE_* knobs into module-level constants at import time (e.g.
+# decoder_layer_tt._SHARDED_NORM), so defaults applied after the import would not
+# be seen by them.
+apply_perf_defaults()
+
+from models.experimental.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table, _round_up  # noqa: E402
+from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT  # noqa: E402
+from models.experimental.glm4_moe_lite.tt.weights import (  # noqa: E402
+    find_missing_shards,
+    resolve_best_effort_snapshot_dir,
+)
 
 _profiler_read_interval = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
 
