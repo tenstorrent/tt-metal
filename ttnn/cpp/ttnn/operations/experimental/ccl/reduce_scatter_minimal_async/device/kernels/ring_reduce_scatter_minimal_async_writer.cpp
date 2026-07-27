@@ -189,9 +189,6 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    // Atomic-increment packet state for pkt_hdr_seminc (value 1, single 1-hop unicast). Configured once
-    // and shared by both the per-link barrier below and the per-slice out_ready_sem increments in the
-    // data loop; the route was already set on pkt_hdr_seminc above.
     fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_seminc,
@@ -201,14 +198,7 @@ void kernel_main() {
             static_cast<uint32_t>(1)});  // increment 1
 
     if (use_barrier_sem) {
-        // Per-link 1-hop barrier that does NOT assume the logical ring is a contiguous physical ring.
-        // The old path multicast a fixed hop-range in one physical direction, which breaks on a
-        // reshaped/bent ring (e.g. a 2x2 block flattened to 1x4). Instead each worker sends a single
-        // 1-hop atomic-inc -- routed like the data path (unicast_route_info, distance 1) -- to the
-        // opposite-direction worker on its immediate ring neighbour. The two workers sharing a ring
-        // link handshake with each other: each sends one and waits for one. Only 1-hop sends are used,
-        // so this works on any valid ring, including one formed by a reshaped submesh. The atomic-inc
-        // packet state (value 1, single 1-hop unicast) is configured once above and reused here.
+        // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
         uint64_t opposite_barrier_sem_noc_addr = safe_get_noc_addr(opposite_core_x, opposite_core_y, barrier_sem, 0);
         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_direction_connection,
@@ -231,8 +221,6 @@ void kernel_main() {
 
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
         pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
-
-    // (pkt_hdr_seminc atomic-inc state is set once above, before the barrier — see note there.)
 
     // Fused-packet state: payload size, increment value (1) and flush are constant across the run;
     // only the write and semaphore destination addresses are patched per packet via with_state.
@@ -330,11 +318,8 @@ void kernel_main() {
         return false;
     };
 
-    // Monotonic target for the per-link batch-ready handshake below. The batch_ready_sem is incremented
-    // once per batch by the opposite-direction neighbour; instead of resetting it with set(0) after every
-    // batch (which races a fast neighbour's next-batch increment and non-deterministically hangs the ring),
-    // we wait for a strictly increasing target and never reset mid-loop. Mirrors the reader's out_ready_sem
-    // handling. The semaphore is reset once after the batch loop for the next dispatch.
+    // The batch_ready_sem is incremented once per batch by the opposite-direction neighbour;
+    // instead of resetting it with set(0) after every batch
     uint32_t batch_ready_target = 0;
 
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
@@ -558,12 +543,7 @@ void kernel_main() {
         // final batch — there is no next batch to protect, and the reader gates receive-side completion.
         // input_tensor_B is a compile-time constant, so this whole block compiles away for B == 1.
         if (b + 1 < input_tensor_B) {
-            // Per-link 1-hop handshake (same scheme as the barrier near the top of this kernel): a
-            // multi-hop multicast would break on a reshaped/bent ring. Each worker sends one 1-hop
-            // atomic-inc to the opposite-direction worker on its immediate ring neighbour and waits for
-            // one, so neighbouring workers agree the current batch is fully consumed before the next
-            // batch reuses the shared intermediate scratch / out_ready_sem. pkt_hdr_seminc is already
-            // configured for a distance-1 unicast atomic-inc above; only the dst address changes here.
+            // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
             uint64_t opposite_batch_ready_sem_noc_addr =
                 safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
             fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
@@ -572,17 +552,12 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
             noc_obj.async_writes_flushed();
 
-            // Cumulative target (see note before the batch loop): wait for the neighbour's increment for
-            // THIS batch without resetting, so an early next-batch increment is preserved instead of being
-            // clobbered by a set(0) reset (which previously caused a non-deterministic hang).
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ++batch_ready_target);
         }
     }
 
-    // Reset batch_ready_sem once, after all batches, so the next dispatch / trace iteration starts from a
-    // known-zero baseline. Safe here (unlike a mid-loop reset): a full op separates this from any
-    // neighbour's next-iteration increment. Compiles away for B == 1 (handshake never runs).
+    // Reset the out_ready semaphores once, only after all batches
     if constexpr (input_tensor_B > 1) {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
     }

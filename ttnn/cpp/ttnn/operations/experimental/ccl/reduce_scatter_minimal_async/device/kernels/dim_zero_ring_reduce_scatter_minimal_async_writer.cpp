@@ -75,8 +75,6 @@ void kernel_main() {
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    // Opposite-direction worker core on this device; used by the per-link 1-hop barriers to reach the
-    // worker on the immediate neighbour that shares the ring link (see the barriers below).
     const uint32_t opposite_core_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t opposite_core_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -178,11 +176,7 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
     if (use_barrier_sem) {
-        // Per-link 1-hop barrier that does NOT assume the logical ring is a contiguous physical ring.
-        // The old path multicast a fixed hop-range in one physical direction, which breaks on a
-        // reshaped/bent ring. Instead each worker sends a single 1-hop atomic-inc (unicast_route_info,
-        // distance 1) to the opposite-direction worker on its immediate ring neighbour; the two workers
-        // sharing the link handshake (each sends one, waits for one). Works on any valid ring.
+        // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
         fabric_unicast_noc_unicast_atomic_inc_set_state<
             UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
@@ -400,10 +394,7 @@ void kernel_main() {
         }
     }
 
-    // Per-link 1-hop barrier (same scheme as the barrier near the top): a multi-hop multicast would
-    // break on a reshaped/bent ring. Send one 1-hop atomic-inc to the opposite-direction worker on the
-    // immediate ring neighbour and wait for one. pkt_hdr_seminc is already configured for a distance-1
-    // unicast atomic-inc by the data loop above; only the dst address changes here.
+    // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
     uint64_t opposite_batch_ready_sem_noc_addr =
         safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(

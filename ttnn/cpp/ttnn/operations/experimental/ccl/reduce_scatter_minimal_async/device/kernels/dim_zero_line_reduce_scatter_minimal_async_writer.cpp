@@ -123,8 +123,6 @@ void kernel_main() {
     CircularBuffer cb_reader_output(cb_reader_output_id);
 
     const auto& unicast_route_info = (is_forward) ? forward_unicast_route_info : backward_unicast_route_info;
-    // Retained so the compile-time route-arg offsets (which count the multicast args) stay valid;
-    // the barrier now uses a per-link 1-hop unicast handshake instead of a line-multicast.
     [[maybe_unused]] const auto& multicast_route_info =
         (is_forward) ? forward_multicast_route_info : backward_multicast_route_info;
 
@@ -218,11 +216,7 @@ void kernel_main() {
 
     if (use_barrier_sem) {
         if (num_targets_in_direction) {
-            // Per-link 1-hop barrier that does NOT assume the logical line is a contiguous physical line.
-            // Instead of a multi-hop line-multicast (which breaks on a reshaped/bent line), each worker
-            // sends a single 1-hop atomic-inc (unicast_route_info, distance 1) to the opposite-direction
-            // worker on its immediate neighbour; the two workers sharing the link handshake (each sends
-            // one, waits for one). Works on any valid line, reshaped or not.
+            // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
             ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
             fabric_unicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(

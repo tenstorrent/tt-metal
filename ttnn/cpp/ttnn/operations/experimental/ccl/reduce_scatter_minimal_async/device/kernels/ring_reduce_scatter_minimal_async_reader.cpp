@@ -299,11 +299,7 @@ void kernel_main() {
         }
     }
 
-    // Reset the out_ready semaphores once, after all batches (mirrors the line reader). They are NOT reset
-    // per batch: sem_target/sem2_target grow monotonically across batches, so a fast writer's next-batch
-    // increment cannot be clobbered by a mid-loop set(0) (that per-batch reset raced the writer and caused
-    // a non-deterministic hang). Safe here — each dispatch uses a fresh semaphore set and nothing increments
-    // these again after this point.
+    // Reset the out_ready semaphores once, only after all batches
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem), 0);
 }

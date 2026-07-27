@@ -124,8 +124,6 @@ void kernel_main() {
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     const auto& unicast_route_info = (is_forward) ? forward_unicast_route_info : backward_unicast_route_info;
-    // Retained so the compile-time route-arg offsets (which count the multicast args) stay valid.
-    // The barrier no longer uses a line-multicast; see the per-link 1-hop handshake below.
     [[maybe_unused]] const auto& multicast_route_info =
         (is_forward) ? forward_multicast_route_info : backward_multicast_route_info;
 
@@ -223,14 +221,7 @@ void kernel_main() {
 
     if (use_barrier_sem) {
         if (num_targets_in_direction) {
-            // Per-link barrier that does NOT assume the logical line is a contiguous physical line.
-            // Instead of a multi-hop line-multicast (which sprays a fixed number of hops in one
-            // physical direction and breaks on a reshaped/bent line), each worker does a single
-            // 1-hop send -- routed exactly like the data path (unicast_route_info, distance 1) --
-            // to the opposite-direction worker on its immediate neighbor. The two workers that
-            // share the link between this device and the next thus handshake with each other:
-            // each sends one atomic-inc and waits for one. Because only 1-hop sends are used, the
-            // barrier works on any valid line, including a submesh reshaped into a non-physical line.
+            // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
             ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
             fabric_unicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
