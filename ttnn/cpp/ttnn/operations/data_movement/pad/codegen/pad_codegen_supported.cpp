@@ -82,23 +82,18 @@ bool is_demoted(const PadCodegenParams& operation_attributes, const PadCodegenIn
         return false;
     }
 
-    // Mirror of NEEDS_STAGE in reader_pad_rm_interleaved.cpp, evaluated from the same host
-    // expressions the program factory feeds it. Off its fast path that reader pays, per stick, a
-    // pad prefill read, an aligned DRAM read and a RISC memmove, with a barrier after each read,
-    // so nothing pipelines: measured 0.51-0.76x of native on Blackhole, holding to at least 1.3MB
-    // rather than amortizing away, against 1.23-1.46x for the fast path itself. The gate is the
-    // NOC granularity, so it moves with the buffer: a width that stages against a 64B DRAM
-    // alignment can take the fast path against a 32B one.
+    // An input row that is not a multiple of the NOC transfer granularity cannot be read directly:
+    // reader_pad_rm_interleaved.cpp has to pull the alignment-padded page into scratch and RISC-
+    // memmove the real bytes out, which costs a barrier and a byte copy per stick and measures
+    // 0.55-0.67x of native on Blackhole at every size tried up to 1.3MB. Every other shape reaches
+    // that reader's batched fast path and wins 1.25-1.57x. The bound is the NOC granularity, so it
+    // moves with the buffer: a width that stages against a 64B DRAM alignment can run direct
+    // against a 32B one.
     //
     // tensor_args.input is always the 4D-unsqueezed tensor (try_pad_codegen builds
     // PadCodegenInputs from input_4d), so logical_shape()[3] is W directly.
-    const uint32_t W = input.logical_shape()[3];
-    const uint32_t elem_size = input.element_size();
-    const uint32_t alignment = input.buffer()->alignment();
-    const uint32_t stick_size = W * elem_size;
-    const uint32_t front_pad_w_bytes = operation_attributes.front_w * elem_size;
-    const uint32_t back_pad_w_bytes = (operation_attributes.W_out - W - operation_attributes.front_w) * elem_size;
-    return front_pad_w_bytes > 0 || stick_size % alignment != 0 || back_pad_w_bytes % alignment != 0;
+    const uint32_t stick_size = input.logical_shape()[3] * input.element_size();
+    return stick_size % input.buffer()->alignment() != 0;
 }
 
 ImplementationSelector parse_implementation(std::string_view implementation) {
