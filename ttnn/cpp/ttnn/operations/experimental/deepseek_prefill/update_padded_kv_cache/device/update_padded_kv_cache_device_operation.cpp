@@ -316,8 +316,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         }}},
     });
 
-    // Reader kernel descriptor.
-    KernelDescriptor::CompileTimeArgs reader_compile_args;
+    // Reader kernel descriptor. tile_height leads (the reader divides kv_actual_global by it, same as
+    // the writer) so the tensor accessor args start at index 1.
+    KernelDescriptor::CompileTimeArgs reader_compile_args = {writer_tile_height};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
 
     KernelDescriptor reader_kernel;
@@ -357,6 +358,19 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         args.kv_actual_global,
     });
 
+    // Reader common args: the structural quantities its source-row mapping needs, plus the per-call
+    // kv_actual_global (index 7, patched on cache hits alongside the writer's).
+    reader_kernel.emplace_common_runtime_args({
+        linear_coord,
+        linear_factor,
+        chunk_local_t,
+        input_Ht,
+        sp_factor,
+        tp_factor,
+        Wt,
+        args.kv_actual_global,
+    });
+
     // Per-core runtime args. Buffers are passed as Buffer* bindings (not raw addresses) so cache hits
     // take the fast path that patches addresses and skips create_descriptor. The per-call scalars
     // (slot_idx, kv_actual_global) are common args patched by override_runtime_arguments, so no per-core
@@ -369,19 +383,15 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     reader_kernel.runtime_args.reserve(num_cores);
     writer_kernel.runtime_args.reserve(num_cores);
 
-    // TP-sharded reads start at this chip's 1/tp window of the (single-head, TP-replicated) input:
-    // seq-tiles [tp_coord*chunk_local_t, +chunk_local_t). Contiguous in page space because C==1 is
-    // enforced for tp_factor>1. Zero when tp_factor==1, so the read range is unchanged for SP-only.
-    const uint32_t input_read_base_blocks = tp_coord * chunk_local_t;
-
     uint32_t num_blocks_written = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         const uint32_t num_blocks_per_core = (i < g1_numcores) ? num_blocks_per_core_g1 : num_blocks_per_core_g2;
 
-        // Reader: (src_addr, num_tiles, src_start_tile_id) -- offset into this chip's TP window.
-        reader_kernel.emplace_runtime_args(
-            core, {src_buffer, num_blocks_per_core * Wt, (input_read_base_blocks + num_blocks_written) * Wt});
+        // Reader: (src_addr, num_pages, core_blocks_written) -- it derives which input rows this chip
+        // owns from the common args + kv_actual_global, because a TP-sharded chip's source rows depend
+        // on the chunk start (a sub-stripe start offset shears the naive contiguous 1/tp slice).
+        reader_kernel.emplace_runtime_args(core, {src_buffer, num_blocks_per_core * Wt, num_blocks_written});
 
         // Writer: (dst_addr, num_pages, core_blocks_written) — kernel derives update_idxt + head
         // offset from the slot_idx/kv_actual_global common args.
@@ -413,9 +423,13 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
     // The writer's common runtime args 8/9 hold slot_idx/kv_actual_global -- the per-call values the
     // buffer-binding fast path would otherwise leave stale. Patch them on every cached program.
-    constexpr uint32_t kWriterKernelHandle = 1;  // writer is pushed second in create_descriptor
+    constexpr uint32_t kReaderKernelHandle = 0;  // reader is pushed first in create_descriptor
+    constexpr uint32_t kWriterKernelHandle = 1;  // writer is pushed second
     constexpr uint32_t kSlotIdxCommonArgIdx = 8;
     constexpr uint32_t kKvActualGlobalCommonArgIdx = 9;
+    // The READER also derives from kv_actual_global (its source-row mapping depends on the chunk start),
+    // so its copy must be patched too or a cache hit at a new chunk start reads the previous call's rows.
+    constexpr uint32_t kReaderKvActualGlobalCommonArgIdx = 7;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);
         TT_FATAL(
@@ -423,6 +437,12 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
             "update_padded_kv_cache writer is missing the slot_idx/kv_actual_global common args");
         writer_common[kSlotIdxCommonArgIdx] = args.slot_idx;
         writer_common[kKvActualGlobalCommonArgIdx] = args.kv_actual_global;
+
+        auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelHandle);
+        TT_FATAL(
+            kReaderKvActualGlobalCommonArgIdx < reader_common.size(),
+            "update_padded_kv_cache reader is missing the kv_actual_global common arg");
+        reader_common[kReaderKvActualGlobalCommonArgIdx] = args.kv_actual_global;
     }
 }
 
