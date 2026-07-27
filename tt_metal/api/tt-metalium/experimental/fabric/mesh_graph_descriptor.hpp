@@ -96,9 +96,8 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 
 // A many-to-many ASIC pinning group parsed from a single AsicPinning entry in the MGD. Any of
 // `fabric_nodes` may map to any of `asic_positions` (all-to-all); the topology solver still enforces a
-// bijection, so distinct nodes land on distinct ASICs. Downstream consumers enumerate a group into the
-// existing 1:many pinning format -- one (fabric_node -> asic_positions) entry per node. A group with a
-// single node and a single position is the classic one-to-one pin.
+// bijection, so distinct nodes land on distinct ASICs. A group with a single node and a single position is
+// the classic one-to-one pin. The same shape is used as TopologyMappingConfig::PinningConstraint.
 struct AsicPinningGroup {
     std::vector<FabricNodeId> fabric_nodes;
     std::vector<AsicPosition> asic_positions;

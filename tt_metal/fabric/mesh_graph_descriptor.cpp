@@ -1638,6 +1638,57 @@ std::vector<uint32_t> expand_id_pattern(const std::string& pattern, const std::v
     }
     return out;
 }
+
+constexpr uint32_t kPhysicalIdDomainMax = 255;
+
+const std::vector<uint32_t>& physical_id_domain() {
+    static const std::vector<uint32_t> domain = []() {
+        std::vector<uint32_t> ids;
+        ids.reserve(kPhysicalIdDomainMax + 1);
+        for (uint32_t i = 0; i <= kPhysicalIdDomainMax; ++i) {
+            ids.push_back(i);
+        }
+        return ids;
+    }();
+    return domain;
+}
+
+std::vector<AsicPosition> expand_physical_asic_positions(
+    const google::protobuf::RepeatedPtrField<proto::PhysicalAsicPosition>& physical_positions) {
+    const auto& domain = physical_id_domain();
+    std::vector<AsicPosition> positions;
+    std::set<std::pair<uint32_t, uint32_t>> seen;
+    for (const auto& physical_pos : physical_positions) {
+        const std::vector<uint32_t> trays = physical_pos.tray_id_regex().empty()
+                                                ? std::vector<uint32_t>{physical_pos.tray_id()}
+                                                : expand_id_pattern(physical_pos.tray_id_regex(), domain);
+        const std::vector<uint32_t> asic_locs = physical_pos.asic_location_regex().empty()
+                                                    ? std::vector<uint32_t>{physical_pos.asic_location()}
+                                                    : expand_id_pattern(physical_pos.asic_location_regex(), domain);
+        for (uint32_t tray : trays) {
+            for (uint32_t loc : asic_locs) {
+                if (seen.insert({tray, loc}).second) {
+                    positions.emplace_back(tt::tt_metal::TrayID{tray}, tt::tt_metal::ASICLocation{loc});
+                }
+            }
+        }
+    }
+    return positions;
+}
+
+bool pinning_entry_uses_regex(const proto::AsicPinning& pinning) {
+    for (const auto& n : pinning.logical_fabric_node_id()) {
+        if (!n.mesh_id_regex().empty() || !n.chip_id_regex().empty()) {
+            return true;
+        }
+    }
+    for (const auto& p : pinning.physical_asic_position()) {
+        if (!p.tray_id_regex().empty() || !p.asic_location_regex().empty()) {
+            return true;
+        }
+    }
+    return false;
+}
 }  // namespace
 
 void MeshGraphDescriptor::populate_pinnings() {
@@ -1663,23 +1714,11 @@ void MeshGraphDescriptor::populate_pinnings() {
     // one (fabric_node -> asic_positions) entry per node -- so no downstream interface changes. A
     // single-node/single-position entry reproduces the classic one-to-one pin.
     for (const auto& pinning : proto_->pinnings()) {
-        // Physical positions are shared by every group produced from this entry.
-        std::vector<AsicPosition> positions;
-        positions.reserve(pinning.physical_asic_position().size());
-        for (const auto& physical_pos : pinning.physical_asic_position()) {
-            positions.emplace_back(
-                tt::tt_metal::TrayID{physical_pos.tray_id()}, tt::tt_metal::ASICLocation{physical_pos.asic_location()});
-        }
+        // Physical positions are shared by every group produced from this entry (regex-expanded when used).
+        const std::vector<AsicPosition> positions = expand_physical_asic_positions(pinning.physical_asic_position());
 
         // Fast path: no regex fields anywhere in this entry -> preserve the original single-group behavior.
-        bool uses_regex = false;
-        for (const auto& n : pinning.logical_fabric_node_id()) {
-            if (!n.mesh_id_regex().empty() || !n.chip_id_regex().empty()) {
-                uses_regex = true;
-                break;
-            }
-        }
-        if (!uses_regex) {
+        if (!pinning_entry_uses_regex(pinning)) {
             AsicPinningGroup group;
             group.fabric_nodes.reserve(pinning.logical_fabric_node_id().size());
             for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
@@ -1691,7 +1730,7 @@ void MeshGraphDescriptor::populate_pinnings() {
         }
 
         // Regex path: expand into concrete (mesh_id -> chips), grouped BY MESH so each matched mesh gets its
-        // own all-to-all group (preserving the per-mesh bijection). A *_regex OVERRIDES its numeric field.
+        // own all-to-all group (preserving the per-mesh bijection).
         std::map<uint32_t, std::vector<uint32_t>> mesh_to_chips;  // ordered mesh -> ordered unique chips
         std::map<uint32_t, std::set<uint32_t>> seen_chips;
         for (const auto& n : pinning.logical_fabric_node_id()) {
@@ -1762,6 +1801,43 @@ void MeshGraphDescriptor::validate_pinnings(
         if (has_regex_node && has_non_regex_node) {
             error_messages.push_back(
                 "Pinning entry mixes regex and non-regex logical_fabric_node_id fields; use separate entries");
+        }
+
+        for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+            if (!logical_node_id.mesh_id_regex().empty() && logical_node_id.has_mesh_id()) {
+                error_messages.push_back(
+                    "logical_fabric_node_id sets both mesh_id_regex and mesh_id; use one or the other");
+            }
+            if (!logical_node_id.chip_id_regex().empty() && logical_node_id.has_chip_id()) {
+                error_messages.push_back(
+                    "logical_fabric_node_id sets both chip_id_regex and chip_id; use one or the other");
+            }
+        }
+
+        // A single pinning entry must not mix regex and non-regex physical_asic_position fields.
+        bool has_regex_physical = false;
+        bool has_non_regex_physical = false;
+        for (const auto& physical_pos : pinning.physical_asic_position()) {
+            if (!physical_pos.tray_id_regex().empty() || !physical_pos.asic_location_regex().empty()) {
+                has_regex_physical = true;
+            } else {
+                has_non_regex_physical = true;
+            }
+        }
+        if (has_regex_physical && has_non_regex_physical) {
+            error_messages.push_back(
+                "Pinning entry mixes regex and non-regex physical_asic_position fields; use separate entries");
+        }
+
+        for (const auto& physical_pos : pinning.physical_asic_position()) {
+            if (!physical_pos.tray_id_regex().empty() && physical_pos.has_tray_id()) {
+                error_messages.push_back(
+                    "physical_asic_position sets both tray_id_regex and tray_id; use one or the other");
+            }
+            if (!physical_pos.asic_location_regex().empty() && physical_pos.has_asic_location()) {
+                error_messages.push_back(
+                    "physical_asic_position sets both asic_location_regex and asic_location; use one or the other");
+            }
         }
 
         for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {

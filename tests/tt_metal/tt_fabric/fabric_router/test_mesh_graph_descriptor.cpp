@@ -2031,6 +2031,223 @@ TEST(MeshGraphDescriptorTests, PinningsRegexMixedWithNonRegexError) {
             ::testing::HasSubstr("mixes regex and non-regex"))));
 }
 
+TEST(MeshGraphDescriptorTests, PinningsRegexMeshIdAndNumericMeshIdError) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+        }
+        pinnings: {
+          logical_fabric_node_id { mesh_id_regex: "0-1" mesh_id: 0 chip_id: 0 }
+          physical_asic_position { tray_id: 1 asic_location: 1 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("mesh_id_regex and mesh_id"))));
+}
+
+TEST(MeshGraphDescriptorTests, PinningsRegexChipIdAndNumericChipIdError) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+        pinnings: {
+          logical_fabric_node_id { mesh_id: 0 chip_id: 1 chip_id_regex: "0-3" }
+          physical_asic_position { tray_id: 1 asic_location: 1 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("chip_id_regex and chip_id"))));
+}
+
+TEST(MeshGraphDescriptorTests, PinningsPhysicalTrayIdRegexExpands) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          physical_asic_position: { tray_id_regex: "1-4" asic_location: 3 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& pinnings = desc.get_pinnings();
+    ASSERT_EQ(pinnings.size(), 1u);
+    ASSERT_EQ(pinnings[0].asic_positions.size(), 4u);
+    auto has_position = [&](uint32_t tray_id, uint32_t asic_location) {
+        for (const auto& pos : pinnings[0].asic_positions) {
+            if (*pos.first == tray_id && *pos.second == asic_location) {
+                return true;
+            }
+        }
+        return false;
+    };
+    EXPECT_TRUE(has_position(1, 3));
+    EXPECT_TRUE(has_position(2, 3));
+    EXPECT_TRUE(has_position(3, 3));
+    EXPECT_TRUE(has_position(4, 3));
+}
+
+TEST(MeshGraphDescriptorTests, PinningsPhysicalAsicLocationRegexExpands) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          physical_asic_position: { tray_id: 1 asic_location_regex: "2,3,6,7" }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& pinnings = desc.get_pinnings();
+    ASSERT_EQ(pinnings.size(), 1u);
+    ASSERT_EQ(pinnings[0].asic_positions.size(), 4u);
+    for (uint32_t loc : {2u, 3u, 6u, 7u}) {
+        bool found = false;
+        for (const auto& pos : pinnings[0].asic_positions) {
+            if (*pos.first == 1u && *pos.second == loc) {
+                found = true;
+            }
+        }
+        EXPECT_TRUE(found) << "Expected tray 1 asic_location " << loc;
+    }
+}
+
+TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexMixedWithNonRegexError) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          physical_asic_position: { tray_id_regex: "1-4" asic_location: 3 }
+          physical_asic_position: { tray_id: 1 asic_location: 7 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("mixes regex and non-regex physical_asic_position"))));
+}
+
+TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexTrayIdAndNumericTrayIdError) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          physical_asic_position { tray_id_regex: "1-4" tray_id: 1 asic_location: 3 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("tray_id_regex and tray_id"))));
+}
+
+TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexAsicLocationAndNumericAsicLocationError) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          physical_asic_position { tray_id: 1 asic_location: 3 asic_location_regex: "2,3" }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("asic_location_regex and asic_location"))));
+}
+
 TEST(MeshGraphDescriptorTests, PinningsMultipleMeshes) {
     // Test pinnings for multiple meshes
     const std::string text_proto = R"proto(

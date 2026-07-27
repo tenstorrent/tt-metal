@@ -317,32 +317,18 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 # wiring, so the per-mesh blocks collapse to just two regex entries below.
 #
 # mesh_id_regex expands PER matched mesh (one all-to-all group each). '[0-9]*[02468]' = even mesh ids,
-# '[0-9]*[13579]' = odd mesh ids. (Ranges like "0-8" and comma lists like "0,2,4-6" are also supported.)
+# '[0-9]*[13579]' = odd mesh ids. chip_id_regex and tray_id_regex use the same range/list/regex syntax.
 
 # Even mesh ids -> asic_location 3 column
 pinnings {
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 0 }
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 1 }
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 3 }
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 12 }
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 15 }
-  physical_asic_position { tray_id: 1 asic_location: 3 }
-  physical_asic_position { tray_id: 1 asic_location: 7 }
-  physical_asic_position { tray_id: 2 asic_location: 3 }
-  physical_asic_position { tray_id: 3 asic_location: 3 }
-  physical_asic_position { tray_id: 4 asic_location: 3 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id_regex: "0,1,3,12,15" }
+  physical_asic_position { tray_id_regex: "1-4" asic_location: 3 }
+  physical_asic_position { tray_id_regex: "1" asic_location: 7 } # Extra pin to ensure rotation and folding does not occur
 }
 
 # Odd mesh ids -> asic_location 2 column
 pinnings {
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id: 0 }
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id: 1 }
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id: 3 }
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id: 12 }
-  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id: 15 }
-  physical_asic_position { tray_id: 1 asic_location: 2 }
-  physical_asic_position { tray_id: 1 asic_location: 6 }
-  physical_asic_position { tray_id: 2 asic_location: 2 }
-  physical_asic_position { tray_id: 3 asic_location: 2 }
-  physical_asic_position { tray_id: 4 asic_location: 2 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id_regex: "0,1,3,12,15" }
+  physical_asic_position { tray_id_regex: "1-4" asic_location: 2 }
+  physical_asic_position { tray_id_regex: "1" asic_location: 6 } # Extra pin to ensure rotation and folding does not occur
 }

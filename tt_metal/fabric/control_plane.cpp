@@ -452,7 +452,7 @@ void ControlPlane::init_control_plane(
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
         // Generate corner pinning for full host galaxy systems
-        std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+        std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups;
 
         // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
         if (cluster.is_ubb_galaxy()) {
@@ -462,29 +462,21 @@ void ControlPlane::init_control_plane(
                 const size_t mesh_chip_count = mesh_shape.mesh_size();
 
                 if (!is_1d && mesh_chip_count % 32 == 0) {
-                    auto mesh_pinnings =
+                    auto mesh_pinning_groups =
                         tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
                             mesh_id,
                             mesh_shape,
                             /*hard_pin_node_0=*/world_size == 1,
                             /*nw_corner_only=*/false);
-                    fixed_asic_position_pinnings.insert(
-                        fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                    pinning_groups.insert(pinning_groups.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
                 }
             }
         }
 
-        // Add MGD pinnings to the topology mapper (only if mesh graph descriptor is available).
-        // MGD pinnings are many-to-many groups; enumerate each group into the 1:many format the mapper
-        // expects -- one (fabric_node -> asic_positions) entry per node -- so any node in the group may
-        // map to any position in the group.
+        // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
-            const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
-            for (const auto& group : pinnings) {
-                for (const auto& fabric_node : group.fabric_nodes) {
-                    fixed_asic_position_pinnings.emplace_back(fabric_node, group.asic_positions);
-                }
-            }
+            const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            pinning_groups.insert(pinning_groups.end(), mgd_pinnings.begin(), mgd_pinnings.end());
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
@@ -493,7 +485,7 @@ void ControlPlane::init_control_plane(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
-            fixed_asic_position_pinnings,
+            pinning_groups,
             topology_mapping_timeout);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
@@ -585,7 +577,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
     // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
     // bisect a device.
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+    std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups;
 
     // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
     if (cluster.is_ubb_galaxy()) {
@@ -595,11 +587,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
             const size_t mesh_chip_count = mesh_shape.mesh_size();
 
             if (!is_1d && mesh_chip_count % 32 == 0) {
-                auto mesh_pinnings =
+                auto mesh_pinning_groups =
                     tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
                         mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
-                fixed_asic_position_pinnings.insert(
-                    fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                pinning_groups.insert(pinning_groups.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
             }
         }
     }
@@ -610,7 +601,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
         *this->mesh_graph_,
         *this->physical_system_descriptor_,
         this->local_mesh_binding_,
-        fixed_asic_position_pinnings,
+        pinning_groups,
         topology_mapping_timeout);
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
 

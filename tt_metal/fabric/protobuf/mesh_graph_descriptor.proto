@@ -36,13 +36,13 @@ package tt.tt_fabric.proto;
 // - chip_id: The chip identifier within that mesh, enumerated in row-major order
 //            based on the mesh's device_topology dimensions
 message LogicalFabricNodeId {
-    uint32 mesh_id = 1;    // Mesh identifier
-    uint32 chip_id = 2;    // Chip identifier within the mesh
+    optional uint32 mesh_id = 1;    // Mesh identifier (mutually exclusive with mesh_id_regex)
+    optional uint32 chip_id = 2;    // Chip identifier within the mesh (mutually exclusive with chip_id_regex)
 
-    // Optional pattern alternatives to mesh_id / chip_id. When a *_regex string is
-    // non-empty it OVERRIDES the corresponding numeric field and is expanded against
-    // the valid domain (instantiated mesh ids for mesh_id_regex; 0..chip_count-1 of the
-    // matched mesh for chip_id_regex). Supported syntax:
+    // Pattern alternatives to mesh_id / chip_id. When a *_regex string is non-empty it must be
+    // the sole selector for that dimension -- do not also set the corresponding numeric field.
+    // Expanded against the valid domain (instantiated mesh ids for mesh_id_regex; 0..chip_count-1
+    // of the matched mesh for chip_id_regex). Supported syntax:
     //   - inclusive numeric range   "0-8"        -> 0,1,...,8
     //   - comma list of the above   "0,2,4-6"    -> 0,2,4,5,6
     //   - regex (std::regex) match  "\\d*[02468]" -> every even id (matched full-string)
@@ -59,8 +59,16 @@ message LogicalFabricNodeId {
 // - tray_id: The tray identifier from the cluster descriptor
 // - asic_location: The ASIC location within that tray, as defined in the cluster descriptor
 message PhysicalAsicPosition {
-    uint32 tray_id = 1;         // Tray identifier
-    uint32 asic_location = 2;   // ASIC location within the tray
+    optional uint32 tray_id = 1;         // Tray identifier (mutually exclusive with tray_id_regex)
+    optional uint32 asic_location = 2;   // ASIC location within the tray (mutually exclusive with asic_location_regex)
+
+    // Pattern alternatives to tray_id / asic_location. When a *_regex string is non-empty it must be
+    // the sole selector for that dimension -- do not also set the corresponding numeric field.
+    // Expanded against ids 0..255 (cluster-valid positions are filtered later at mapping time).
+    // Supported syntax matches LogicalFabricNodeId: inclusive ranges ("1-4"), comma lists ("2,3,6,7"),
+    // and full-string std::regex matches.
+    string tray_id_regex = 3;
+    string asic_location_regex = 4;
 }
 
 // -----------------------------------------------------------------------------
