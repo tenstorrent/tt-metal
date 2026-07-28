@@ -2497,6 +2497,24 @@ def _record_committed_win(message: str) -> None:
             # rather than trusting the commit as proof. The commit still succeeds; it just is not
             # claimed as a speedup.
             return
+        # RECORD THE COMMITTED STATE IN THE LEDGER TOO. The ledger only saw profile_model readings,
+        # but a banked win is measured by measure_candidate -- so the ledger lagged the real state and
+        # the headline understated the gain: llama3_1_8b_p150 rendered "-> 664.17 ms" (the last full
+        # profile) while the run had already committed 654.43 and then 615.69. A commit is the moment
+        # the current state changes, so it is exactly when the ledger should learn the new number.
+        try:
+            _led = _ledger()
+            _led.record(
+                _led.KIND_EAGER,
+                _led.PHASE_AFTER,
+                t.get("measured_ms"),
+                depth=(os.environ.get("TT_PERF_LAYERS") or "").strip() or "all",
+                mode="eager",
+                source="git_commit",
+                model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+            )
+        except Exception:  # noqa: BLE001
+            pass
         _append_attempt(
             {
                 "op_signature": op,

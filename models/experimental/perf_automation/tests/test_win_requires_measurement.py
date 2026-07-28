@@ -86,3 +86,55 @@ def test_a_measured_win_still_renders_a_tick(tmp_path):
     out = sm.render_summary(kl, model="m", task="main", finalized=True)
     row = next(l for l in out.splitlines() if l.startswith("Matmul"))
     assert "✓win" in row, row
+
+
+def test_a_committed_win_updates_the_ledger(tmp_path, monkeypatch):
+    """The ledger saw only profile_model readings, so it lagged the real state: llama3_1_8b_p150's
+    headline rendered "-> 664.17 ms" (the last full profile) while the run had already committed
+    654.43 and then 615.69. A commit is when the current state changes, so it is when the ledger
+    must learn the number."""
+    import importlib.util as ilu
+
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "led.jsonl"))
+    monkeypatch.setenv("TT_PERF_LAYERS", "16")
+    pm = _pm(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        pm, "_load_target", lambda: {"op": "MatmulDeviceOperation", "rung": "knob:grid", "measured_ms": 615.69}
+    )
+    pm._record_committed_win("run ff1/ff3 on the full core grid")
+
+    spec = ilu.spec_from_file_location("meas_lag_ut", _ROOT / "cc_optimize" / "measurements.py")
+    led = ilu.module_from_spec(spec)
+    spec.loader.exec_module(led)
+    row = led.last(led.KIND_EAGER, led.PHASE_AFTER)
+    assert row and row["value_ms"] == 615.69, row
+    assert row["source"] == "git_commit" and row["depth"] == "16"
+
+
+def test_an_unmeasured_commit_does_not_touch_the_ledger(tmp_path, monkeypatch):
+    """The same guard as the win mark: no measurement, no ledger row."""
+
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "led.jsonl"))
+    pm = _pm(tmp_path, monkeypatch)
+    monkeypatch.setattr(pm, "_load_target", lambda: {"op": "Matmul", "rung": "knob:fidelity"})
+    pm._record_committed_win("record the measured dead ends  Comment-only.")
+    assert not (tmp_path / "led.jsonl").exists()
+
+
+def test_the_original_before_survives_committed_wins(tmp_path, monkeypatch):
+    """Committed wins append as 'after'; the seeded original must stay the anchor."""
+    import importlib.util as ilu
+
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "led.jsonl"))
+    monkeypatch.setenv("TT_PERF_LAYERS", "16")
+    spec = ilu.spec_from_file_location("meas_lag2_ut", _ROOT / "cc_optimize" / "measurements.py")
+    led = ilu.module_from_spec(spec)
+    spec.loader.exec_module(led)
+    led.record(led.KIND_EAGER, led.PHASE_BEFORE, 2464.18, depth="16", mode="eager", source="seed")
+
+    pm = _pm(tmp_path, monkeypatch)
+    for ms in (654.43, 615.69):
+        monkeypatch.setattr(pm, "_load_target", lambda ms=ms: {"op": "M", "rung": "knob:grid", "measured_ms": ms})
+        pm._record_committed_win("win")
+    assert led.first(led.KIND_EAGER, led.PHASE_BEFORE)["value_ms"] == 2464.18
+    assert led.last(led.KIND_EAGER, led.PHASE_AFTER)["value_ms"] == 615.69
