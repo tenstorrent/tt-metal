@@ -74,6 +74,8 @@ inline void accumulate_compute_loop(
         constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
         if constexpr (swap_operands) {
             reconfig_data_format(cb_scalar.get_cb_id(), cb.get_cb_id());
+        } else {
+            reconfig_data_format(cb.get_cb_id(), cb_scalar.get_cb_id());
         }
         reduce_init<reduce_type, reduce_dim>(cb.get_cb_id(), cb_scalar.get_cb_id(), cb_out.get_cb_id());
         for (auto block : generic::blocks(num_tiles, block_size)) {
@@ -107,10 +109,10 @@ inline void accumulate_compute_loop(
     }
 
     reduce_uninit();
-    reconfig_data_format(cb_in.get_cb_id(), cb_scalar.get_cb_id());
 }
 
 }  // namespace detail
+
 
 /**
  * @brief Accumulate (sum) along the rows of tiles in a CB, apply
@@ -169,7 +171,6 @@ inline void row_wise_accumulate_with_epilogue(
     const auto last_tile_partial = N % tile_width > 0;
     const uint32_t num_scaler_tiles_needed = last_tile_partial ? 2 : 1;
     cb_scalar.wait_front(num_scaler_tiles_needed);
-    reconfig_data_format(cb_in.get_cb_id(), cb_scalar.get_cb_id());
     tile_regs_acquire();
 
     detail::accumulate_compute_loop<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy>(
