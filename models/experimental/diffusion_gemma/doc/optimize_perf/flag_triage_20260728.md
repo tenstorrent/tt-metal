@@ -88,9 +88,35 @@ Two consequences, both adopted:
 ## Final state
 
 * 742 host tests pass, 124 skipped, 0 failures.
-* On device, **both** arms are bit-identical to their pre-deletion baselines:
+* On device, **both** denoise arms are bit-identical to their pre-deletion baselines:
   `concat` (`DG_MOE_CONCAT=1 DG_NORM_FULLCANVAS=1`) `7b29837d637ec26b` at 9.449 s/block, and
   `default` `1c1934f6f781bb75` at 21.030 s/block.
+* **The vLLM serving path is byte-identical too.** The sweep does not exercise `generator_vllm`, the
+  `serving.py` prefill after the prefix-cache removal, the degeneracy guard, or the batched commit,
+  so the same 2-question `run_upfront_gpqa.sh smoke` was run at the pre-deletion tree
+  (`25057cda4c4`) and at `afea6ce090e`, and the generated text matches exactly:
+
+  | q | pre-deletion | post-deletion |
+  |---|---|---|
+  | q0 | 3884 chars, `6c35a0607c7acde1` | 3884 chars, `6c35a0607c7acde1` |
+  | q1 | 6268 chars, `429e93c2ad708381` | 6268 chars, `429e93c2ad708381` |
+
+* A full 198-sample GPQA ran end to end on the post-deletion tree (3 h 42 m, no crash, no import
+  error, no device fault) and scored `exact_match,none` = **6.57%** (stderr 1.76%). **That score is
+  not evidence about this work in either direction** and must not be quoted as such: there is no
+  same-metric pre-deletion baseline on this box (the 07-23 attempt aborted at 1/15), and the number
+  is dominated by output format rather than reasoning — only **4 of 198** responses contain a
+  `\boxed{}` at all, which is what the strict `none` filter extracts. The reference numbers this
+  document quotes (70.71% / 70.20%) are `gpqa_diamond_cot_zeroshot` with `flexible-extract`, a
+  different task and a different filter.
+
+  What the run *is* evidence of: the integration holds after 4,400 lines were removed. And it
+  reconfirms the #48291 state — generations open correctly and then collapse (one sample sets up the
+  Heisenberg uncertainty relation correctly, then emits
+  `$t = 2$HM and U = luyê,S = eV/Hif and c =...`), with 146 guard fires clustered at blocks 0-3 and
+  26 at block 0 exactly. `DG_DENOISE_HIDE_PREFILL_PADS` — a correctness fix measured at 7 of 7 on
+  precisely those block-0 collapses — is still **default OFF**. Flipping it should precede any perf
+  flip.
 
 ## The convention that would stop the next one
 
