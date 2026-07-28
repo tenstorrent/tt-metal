@@ -946,35 +946,40 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     // directly instead of materializing the full affine-transform prefix.
     if (sp_size == 4 && tp_size == 2) {
         auto entry_state = ttnn::clone(initial_state, std::nullopt, out_mem, compute_kernel_config);
+        auto entry_state_transport = ttnn::typecast(entry_state, DataType::BFLOAT16, out_mem);
         auto carry = matmul_fp32(transform_a, initial_state);
         carry = ttnn::add(carry, transform_b, std::nullopt, out_mem);
         for (uint32_t destination = 1; destination < sp_size; ++destination) {
+            const auto carry_transport = ttnn::typecast(carry, DataType::BFLOAT16, out_mem);
             for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
-                entry_state = ttnn::point_to_point(
-                    carry,
+                entry_state_transport = ttnn::point_to_point(
+                    carry_transport,
                     coordinate(destination, tp_rank),
                     coordinate(destination - 1, tp_rank),
                     ttnn::ccl::Topology::Linear,
-                    entry_state,
+                    entry_state_transport,
                     std::nullopt);
             }
+            entry_state = ttnn::typecast(entry_state_transport, DataType::FLOAT32, out_mem);
             carry = matmul_fp32(transform_a, entry_state);
             carry = ttnn::add(carry, transform_b, std::nullopt, out_mem);
         }
 
-        auto final_state = ttnn::clone(zero_b, std::nullopt, out_mem, compute_kernel_config);
+        auto final_state_transport = ttnn::typecast(zero_b, DataType::BFLOAT16, out_mem);
+        const auto final_carry_transport = ttnn::typecast(carry, DataType::BFLOAT16, out_mem);
         for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
             const auto sender_coord = coordinate(sp_size - 1, tp_rank);
             for (uint32_t destination = 0; destination < sp_size; ++destination) {
-                final_state = ttnn::point_to_point(
-                    carry,
+                final_state_transport = ttnn::point_to_point(
+                    final_carry_transport,
                     coordinate(destination, tp_rank),
                     sender_coord,
                     ttnn::ccl::Topology::Linear,
-                    final_state,
+                    final_state_transport,
                     std::nullopt);
             }
         }
+        auto final_state = ttnn::typecast(final_state_transport, DataType::FLOAT32, out_mem);
         return {entry_state, final_state};
     }
 

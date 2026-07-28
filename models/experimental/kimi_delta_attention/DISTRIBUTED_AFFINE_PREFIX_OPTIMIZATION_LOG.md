@@ -96,7 +96,7 @@ Decision 1: target P2P implementation before matmul. Source evidence shows each 
 
 ## Experiment 2: FP32 tiled multi-link point-to-point
 
-Verdict: keep. The hardware exposes two forwarding links on the tested routes; striping FP32 tiled packets across them reduces every non-local P2P kernel median by 49.8--50.2% and reduces exact affine-prefix device time by 40.86%. The path is deliberately restricted to FP32 TILE transfers; all other P2P types retain the original single-worker, routing-plane-0 implementation. Worker count is capped by available links, four, and total packet count.
+Verdict: keep. The hardware exposes two forwarding links on the tested routes; striping FP32 tiled packets across them reduces every non-local P2P kernel median by 49.8--50.2% and reduces exact affine-prefix device time by 40.86%. The path was initially restricted to FP32 TILE transfers; Experiment 4 extends it to all TILE transfers after BF16 TILE coverage passed. ROW_MAJOR transfers retain the original single-worker, routing-plane-0 implementation. Worker count is capped by available links, four, and total packet count.
 
 Validation:
 
@@ -130,6 +130,22 @@ Decision 2: reduce broadcast hop-work next. The current final-state loop sends r
 ## Experiment 3: chained final-state broadcast
 
 Verdict: reject and revert. The chain `3 -> 2 -> 1 -> 0` halved nominal broadcast fabric hops from twelve to six and passed both TP-axis correctness cases, repeat, and trace with unchanged PCC/error. It did not improve performance: raw CSV `generated/profiler/reports/2026_07_28_15_27_33/ops_perf_results_2026_07_28_15_27_33.csv` measured a 2,540.412 us exact median versus 2,539.813 us for independent sends (0.02% slower, noise). Evidence rejects hop count as the limiting variable here: independent routed sends overlap, whereas the chain introduces data dependencies between one-hop transfers. No source change retained.
+
+## Experiment 4: BF16 affine-state transport
+
+Verdict: keep. FP32 remains the input, recurrence-compute, and returned-state dtype; only the communicated carry and P2P destination buffers are BF16. Each transfer payload falls from 3.146 MB to 1.573 MB. Tiled BF16 P2P uses the two-link path; the full generic P2P suite remains identical to the clean control at 28 passed plus the one pre-existing BF16 ROW_MAJOR failure.
+
+Validation:
+
+- `./build_metal.sh`: PASS.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_distributed_affine_prefix.py -q -s`: 2 passed, `SAFE_PYTEST_RESULT: PASS`; both TP axes, repeat, and trace passed. TP-axis 0 worst PCC changed from 0.999999 to 0.999996 and max absolute error from 1.904368e-4 to 3.162287e-4. TP-axis 1 remained at PCC 1.000000 and max absolute error 9.099394e-5.
+- `PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_distributed_affine_prefix_perf.py -q -s`: 1 passed, `SAFE_PYTEST_RESULT: PASS`. Raw CSV: `generated/profiler/reports/2026_07_28_15_32_25/ops_perf_results_2026_07_28_15_32_25.csv`.
+
+Median exact device time is 2,191.986 us, down from 2,539.813 us (13.70%) and from the original 10,524.204 us (4.801x, 79.17%). Fixed-floor efficiency is 31.76%; reaching 1,160.300 us still requires 1.889x. Per-device medians are 2,187.613, 2,189.978, 2,186.934, 2,185.344, 2,186.814, 2,189.602, 2,186.615, and 2,185.656 us. Typecast kernels cost a median 11.529 us.
+
+Remaining P2P critical kernels, sorted by median duration: 1,019.147 us (TP1 broadcast 3 hops), 1,016.393 us (TP0 broadcast 3 hops), 882.776/881.337 us (2-hop broadcasts), 853.023/851.916 us (rank 2-to-3 relay), 745.916/745.779 us (1-hop broadcasts), 429.810/427.565 us (rank 1-to-2 relay), and 313.446/313.417 us (rank 0-to-1 relay). These calls overlap across devices and are not additive.
+
+Decision 3: composite P2P launch structure is now the dominant issue. Payload compression and both physical forwarding links are already used, yet a 1.573 MB routed call remains 0.31--1.02 ms and exact time is 1.889x above target. Survey the existing persistent socket/direct-send KDA prototypes before designing a fused relay/prefix primitive; another rearrangement of the same composite calls is not supported by Experiment 3.
 
 ## Backlog
 

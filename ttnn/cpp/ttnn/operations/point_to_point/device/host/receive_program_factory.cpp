@@ -39,7 +39,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     const auto forwarding_link_indices = tt::tt_fabric::get_forwarding_link_indices(this_fabric_id, next_fabric_id);
     TT_FATAL(!forwarding_link_indices.empty(), "No forwarding links available for point-to-point transfer");
     constexpr uint32_t max_workers = 4;
-    const bool use_multilink = output_tensor.dtype() == DataType::FLOAT32 && output_tensor.layout() == Layout::TILE;
+    const bool use_multilink = output_tensor.layout() == Layout::TILE;
     const uint32_t num_workers =
         use_multilink
             ? std::min<uint32_t>({max_workers, static_cast<uint32_t>(forwarding_link_indices.size()), total_packets})
