@@ -675,6 +675,14 @@ def _sweep_interleaved(
     "(default 900 = 15 min; 0 disables). Already-found solutions still run.",
 )
 @click.option(
+    "--solve-timeout",
+    type=float,
+    default=None,
+    help="Max seconds for a single solve, reset for every solution. If a solve exceeds this without "
+    "finding the next solution, stop gracefully: report 'no more solutions within the timeout' and exit 0 "
+    "(no error) even when zero solutions were found. Overrides --solution-search-timeout when set.",
+)
+@click.option(
     "--stop-on-failure/--continue-on-failure",
     default=False,
     help="Stop the sweep (and generation) on the first failing solution (default: continue).",
@@ -707,6 +715,7 @@ def main(
     limit,
     per_solution_timeout,
     solution_search_timeout,
+    solve_timeout,
     stop_on_failure,
     interleave,
     dry_run,
@@ -790,7 +799,12 @@ def main(
         "workload_command": " ".join(shlex.quote(p) for p in program),
         "solutions_dir": str(out),
     }
-    search_timeout = solution_search_timeout if solution_search_timeout and solution_search_timeout > 0 else None
+    # --solve-timeout, when set, is the per-solution solve budget (reset for every solution) AND makes a
+    # timeout that finds no (further) solutions a graceful exit-0 rather than an error. It takes precedence
+    # over --solution-search-timeout. With neither set, behaviour is unchanged (900s cap, exit 1 on empty).
+    graceful_solve_timeout = solve_timeout is not None and solve_timeout > 0
+    effective_search_timeout = solve_timeout if graceful_solve_timeout else solution_search_timeout
+    search_timeout = effective_search_timeout if effective_search_timeout and effective_search_timeout > 0 else None
     results, outcome = _sweep_interleaved(
         producer=producer,
         solutions_dir=out,
@@ -841,6 +855,12 @@ def main(
         click.echo(f"{PREFIX} WARNING: producer (generation) exited rc={gen_rc}; see {generate_log}")
 
     if not results:
+        if graceful_solve_timeout and outcome.get("search_timed_out"):
+            click.echo(
+                f"{PREFIX} No solution found within the {int(solve_timeout)}s solve timeout — "
+                f"no more solutions. Returning 0."
+            )
+            return
         click.echo(f"{PREFIX} No solutions were produced.")
         sys.exit(1)
     if not dry_run and (failed or timed_out):
