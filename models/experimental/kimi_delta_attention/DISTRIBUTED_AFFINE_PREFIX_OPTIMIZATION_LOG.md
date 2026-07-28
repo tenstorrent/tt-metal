@@ -147,6 +147,18 @@ Remaining P2P critical kernels, sorted by median duration: 1,019.147 us (TP1 bro
 
 Decision 3: composite P2P launch structure is now the dominant issue. Payload compression and both physical forwarding links are already used, yet a 1.573 MB routed call remains 0.31--1.02 ms and exact time is 1.889x above target. Survey the existing persistent socket/direct-send KDA prototypes before designing a fused relay/prefix primitive; another rearrangement of the same composite calls is not supported by Experiment 3.
 
-## Backlog
+## Experiment 5: L1 affine-state transport buffers
 
-- Test BF16 affine summaries/state transport. Hypothesis: halving each per-device tensor from 3.146 MB to 1.573 MB reduces both fabric and DRAM traffic and may improve matmul throughput. Required evidence: remove or specialize the current FP32 invariant only in the local fast path, validate serial/all-gather PCC and max absolute error over repeat and trace replay, then profile exact SP4xTP2. Reject if recurrent error is materially worse even when performance improves.
+Verdict: keep. Preserve the Experiment 4 BF16 transport dtype, but place communicated carry and destination buffers in interleaved L1 instead of DRAM. The 1.573 MB per-device tensor fits across distributed L1 and removes the transport endpoint DRAM round trips; FP32 matmul, add, and public return buffers remain unchanged.
+
+Validation:
+
+- `./build_metal.sh`: PASS.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_distributed_affine_prefix.py -q -s`: 2 passed, `SAFE_PYTEST_RESULT: PASS`; both TP axes, repeat, and trace passed. Precision is unchanged from Experiment 4: TP-axis 0 worst PCC 0.999996 and max absolute error 3.162287e-4; TP-axis 1 PCC 1.000000 and max absolute error 9.099394e-5.
+- `PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_distributed_affine_prefix_perf.py -q -s`: 1 passed, `SAFE_PYTEST_RESULT: PASS`. Raw CSV: `generated/profiler/reports/2026_07_28_15_38_58/ops_perf_results_2026_07_28_15_38_58.csv`.
+
+Median exact device time over measured sessions 2--11 is 1,901.893 us, down from 2,191.986 us (13.23%) and from the original 10,524.204 us (5.533x, 81.93%). Fixed-floor efficiency is 36.60%; reaching 1,160.300 us still requires 1.639x. Per-device medians over measured sessions 2--11 are 1,898.127, 1,900.009, 1,897.976, 1,896.303, 1,898.263, 1,900.602, 1,898.207, and 1,897.168 us.
+
+Diagnosis: L1 exposes that steady P2P payload movement is no longer the primary limit. Most sender kernels are approximately 119.6--120.3 us for 1.573 MB (about 13.1 GB/s), while receiver program durations grow to 0.59--0.82 ms because they are queued early and wait for dependent relay computation or earlier sends. The next highest-gain target is redundant final-state broadcast work: rank 3 currently sends the same tensor independently to ranks 0, 1, and 2 on each TP line. Survey an existing fabric line-multicast primitive before implementing a dedicated broadcast.
+
+## Backlog
