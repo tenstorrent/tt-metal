@@ -24,9 +24,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     tdma_descriptor_t td_val_A, td_val_B;
-    const std::uint32_t buf_desc_id_a        = 0;
-    const std::uint32_t buf_desc_id_b        = 1;
-    const std::uint32_t num_tiles_per_unpack = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t buf_desc_id_a  = 0;
+    const std::uint32_t buf_desc_id_b  = 1;
+    const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.INPUT_NUM_BLOCKS);
 
     // Setup data valid scheme
     if (unpack_to_dest)
@@ -57,10 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(
-        unpack_to_dest ? buf_desc_id_a : buf_desc_id_b, num_tiles_per_unpack);
-
-    const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.INPUT_NUM_BLOCKS);
+        unpack_to_dest ? buf_desc_id_a : buf_desc_id_b, tiles_in_block /* num tiles per unpack */);
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
@@ -162,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
-    _llk_pack_init_(buf_desc_id, tensor_shape, 1);
+    _llk_pack_init_(buf_desc_id, tensor_shape, num_tiles_per_pack);
 
     const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;

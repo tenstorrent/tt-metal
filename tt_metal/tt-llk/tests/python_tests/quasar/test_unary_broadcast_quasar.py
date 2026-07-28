@@ -46,14 +46,11 @@ TILE_DIMENSIONS = [32, 32]
 
 def get_valid_dest_acc_unary_broadcast(formats):
     """Valid dest accumulation modes for unary broadcast."""
-    # accs = list(get_valid_dest_accumulation_modes(formats))
     if formats.input_format.is_32_bit():
         return [DestAccumulation.Yes]
-    #     accs = [a for a in accs if a == DestAccumulation.Yes]
-    # elif formats.output_format == DataFormat.Float32:
-    #     accs = [a for a in accs if a == DestAccumulation.Yes]
-    # return accs if accs else [DestAccumulation.Yes]
-    return [DestAccumulation.No]
+    return [
+        DestAccumulation.No
+    ]  # 32bit dest is not supported for the non-unpack to dest case
 
 
 @pytest.mark.quasar
@@ -61,13 +58,13 @@ def get_valid_dest_acc_unary_broadcast(formats):
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            # DataFormat.Float32,  # Buggy functionality for Float32 (unpack_to_dest=True) tbd
-            # DataFormat.MxFp8R,
-            # DataFormat.MxFp8P,
-            # DataFormat.MxFp4,
-            # DataFormat.MxInt8,
-            # DataFormat.MxInt4,
-            # DataFormat.MxInt2,
+            DataFormat.Float32,
+            DataFormat.MxFp8R,
+            DataFormat.MxFp8P,
+            DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
         same=True,
     ),
@@ -95,7 +92,7 @@ def test_unary_broadcast_quasar(
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
-    input_dimensions = [32, 64] if unpack_to_dest else [512, 32]
+    input_dimensions = [32, 96] if unpack_to_dest else [512, 32]
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(

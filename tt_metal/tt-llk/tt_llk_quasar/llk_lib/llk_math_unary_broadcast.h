@@ -49,7 +49,7 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
         if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
         {
             addr_mod_t {
-                .srcb = {.incr = static_cast<std::uint8_t>(tensor_shape.face_r_dim)},
+                .srcb = {.incr = 0},
                 .dest = {.incr = static_cast<std::uint16_t>(tensor_shape.face_r_dim)},
             }
                 .set(ADDR_MOD_3);
@@ -66,7 +66,7 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
         {
             addr_mod_t {
                 .srcb = {.incr = 0},
-                .dest = {.incr = 8},
+                .dest = {.incr = row_step},
             }
                 .set(ADDR_MOD_3);
         }
@@ -102,21 +102,25 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
+                    // Read F0/F1 hi16 from DEST → SrcB[0:15]
                     TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
                     TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
 
+                    // Read F0/F1 lo16 from DEST → SrcB[16:31]
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
 
+                    // Write hi16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
                     TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
                     TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24);
 
+                    // Write lo16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24); // dst += 2* face_r_dim, F0 → F2
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -129,18 +133,21 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
+                    // Read F0/F1 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
                     TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
 
+                    // Write hi16 to DEST F0,F2/F1,F3 from SrcB[0:7] (row broadcast ON)
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1);
 
+                    // Write lo16 to DEST F0,F2/F1,F3 from SrcB[8:15] (row broadcast ON)
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1); // dst += face_r_dim, F0 → F1
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -153,11 +160,13 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
+                    // Read F0 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
                     TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
 
+                    // Write hi16 and lo0 to DEST[0:63] from SrcB[0:15] (row and column broadcast ON)
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1); // dst += 8
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 8 /* mop_inner_loop */, TT_OP_REPLAY(2, 2, 0, 0, 0, 0));
@@ -173,11 +182,13 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
         const std::uint32_t outer = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : static_cast<std::uint32_t>(tensor_shape.total_num_faces());
         const std::uint32_t inner = num_rows >> rows_log2(ELTWISE_MATH_ROWS);
 
-        const std::uint32_t dst_addr      = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
+        const std::uint32_t bcast_row     = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
         constexpr std::uint32_t bcast_col = (BROADCAST_TYPE != BroadcastType::ROW) ? 1U : 0U;
 
-        const auto bcast_instr = [bcast_col, dst_addr](std::uint8_t addr_mod)
-        { return TT_OP_MOVB2D(0, 0, addr_mod, p_mov_src_to_dest::MOV_8_ROWS, bcast_col, dst_addr); };
+        const auto bcast_instr = [bcast_col, bcast_row](std::uint8_t addr_mod)
+        {
+            return TT_OP_MOVB2D(0, 0, addr_mod, p_mov_src_to_dest::MOV_8_ROWS, bcast_col, bcast_row /* dst_addr */);
+        }; // adding 1 to dst_addr enables row broadcast
 
         ckernel_template temp(outer, inner, bcast_instr(ADDR_MOD_0));
         temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
