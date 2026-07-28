@@ -28,15 +28,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         "fused_rms_minimal requires a pre-allocated stats tensor; passing stats=None is not supported. It backs "
         "an internal globally-allocated circular buffer.");
 
-    // The stats tensor backs the compute pipeline's stats circular buffer (cb_stats) directly, and that CB is
-    // shared with the cross-device all-gather. Its element format is therefore the compute accumulation format:
-    // FLOAT32 when fp32_dest_acc_en is enabled, otherwise BFLOAT16. A mismatched stats dtype sizes the globally
-    // allocated CB against the wrong backing buffer (host-side "Cannot set circular buffer size" crash) or, once
-    // that is worked around, desyncs the compute <-> all-gather handshake and deadlocks the fabric ring. Reject it
-    // here with a clear message rather than letting it fail cryptically downstream. See GitHub #38206.
     {
-        // get_compute_kernel_config_args returns {math_fidelity, math_approx_mode, fp32_dest_acc_en,
-        // packer_l1_acc, dst_full_sync_en}; only fp32_dest_acc_en (index 2) matters here.
         const bool fp32_dest_acc_en =
             std::get<2>(get_compute_kernel_config_args(a.device()->arch(), args.compute_kernel_config));
         const auto expected_stats_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
