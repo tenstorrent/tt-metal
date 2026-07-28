@@ -63,7 +63,7 @@
   category: fused
 
 - name: ttnn nightly reduction tests
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py -xv --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 45

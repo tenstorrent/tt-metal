@@ -86,7 +86,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
-        LOGURU_LEVEL: INFO
+        LOGURU_LEVEL: DEBUG
         HF_HUB_CACHE: ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '' || '/mnt/MLPerf/huggingface/hub' }}
         TT_MM_THROTTLE_PERF: ${{ contains(matrix.test-group.sku, 'bh_') && '0' || '5' }}
       volumes:
