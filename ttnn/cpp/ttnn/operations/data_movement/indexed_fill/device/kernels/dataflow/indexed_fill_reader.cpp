@@ -11,20 +11,15 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/validation_helpers.hpp"
 
-// EXPERIMENT (union-schema guardrail): this reader shares one source across four modes, so its
-// runtime-arg schema is the union of every path's names (see the factory). That would let a path
-// read an arg another path owns and silently get the placeholder 0. To turn such a wrong-path read
-// into a hard compile error, upgrade the deprecation diagnostic to an error and declare each arg a
-// path does NOT own as a deprecated local: reading it fails to compile, while leaving it unread is
-// fine (maybe_unused). The token still exists for the union schema; only the local is poisoned.
-// push/pop confines the change to this file: the kernel compiles inside a firmware-wrapper TU that
-// includes more headers after it, and an un-popped pragma would leak into them.
+// This reader shares one source across four modes, so its runtime-arg schema is the union of every
+// path's names (see the factory). Each path declares the arg names it does NOT own with
+// INVALID_VALUE_PLACEHOLDER_ARG (from validation_helpers.hpp), and the pragma below upgrades a read
+// of any such placeholder to a hard compile error, so a wrong-path read cannot silently pass. The
+// push/pop confines that to this file (the kernel compiles inside a firmware-wrapper TU).
 #pragma GCC diagnostic push
 #pragma GCC diagnostic error "-Wdeprecated-declarations"
-#define PLACEHOLDER_ARG(name)                                                                         \
-    [[maybe_unused, deprecated("arg '" #name "' is a placeholder on this kernel path; do not read")]] \
-    const uint32_t name = 0
 
 void kernel_main() {
     uint32_t batch_id_size = get_arg(args::batch_id_size);
@@ -77,10 +72,10 @@ void kernel_main() {
         const uint32_t shard_ppb = batch_size_in_pages;
 
         // Generic-path args are placeholders on the shard-local path.
-        PLACEHOLDER_ARG(outer_count);
-        PLACEHOLDER_ARG(outer_stride_a);
-        PLACEHOLDER_ARG(outer_stride_b);
-        PLACEHOLDER_ARG(num_slices);
+        INVALID_VALUE_PLACEHOLDER_ARG(outer_count);
+        INVALID_VALUE_PLACEHOLDER_ARG(outer_stride_a);
+        INVALID_VALUE_PLACEHOLDER_ARG(outer_stride_b);
+        INVALID_VALUE_PLACEHOLDER_ARG(num_slices);
 
         // Raw SRAM base addresses for this core's shard (Case 2 bindings): direct-address
         // arithmetic into input_a (both shard-local modes) and input_b (same-sharded mode only).
@@ -163,17 +158,17 @@ void kernel_main() {
     } else {
         if constexpr (IS_NATIVE) {
             // Native reads only the common args; every path-specific name is a placeholder here.
-            PLACEHOLDER_ARG(outer_count);
-            PLACEHOLDER_ARG(outer_stride_a);
-            PLACEHOLDER_ARG(outer_stride_b);
-            PLACEHOLDER_ARG(num_slices);
-            PLACEHOLDER_ARG(batch_offset_a);
-            PLACEHOLDER_ARG(total_local_batches);
-            PLACEHOLDER_ARG(b_full_ppb);
-            PLACEHOLDER_ARG(shard_tile_w);
-            PLACEHOLDER_ARG(full_tile_w);
-            PLACEHOLDER_ARG(col_page_offset);
-            PLACEHOLDER_ARG(col_byte_offset);
+            INVALID_VALUE_PLACEHOLDER_ARG(outer_count);
+            INVALID_VALUE_PLACEHOLDER_ARG(outer_stride_a);
+            INVALID_VALUE_PLACEHOLDER_ARG(outer_stride_b);
+            INVALID_VALUE_PLACEHOLDER_ARG(num_slices);
+            INVALID_VALUE_PLACEHOLDER_ARG(batch_offset_a);
+            INVALID_VALUE_PLACEHOLDER_ARG(total_local_batches);
+            INVALID_VALUE_PLACEHOLDER_ARG(b_full_ppb);
+            INVALID_VALUE_PLACEHOLDER_ARG(shard_tile_w);
+            INVALID_VALUE_PLACEHOLDER_ARG(full_tile_w);
+            INVALID_VALUE_PLACEHOLDER_ARG(col_page_offset);
+            INVALID_VALUE_PLACEHOLDER_ARG(col_byte_offset);
 
             bool replace_batch = false;
             uint32_t batch_to_replace_id = 0;
@@ -227,13 +222,13 @@ void kernel_main() {
             const uint32_t inner_count = batch_size_in_pages;
 
             // Shard-local-path args are placeholders on the generic path.
-            PLACEHOLDER_ARG(batch_offset_a);
-            PLACEHOLDER_ARG(total_local_batches);
-            PLACEHOLDER_ARG(b_full_ppb);
-            PLACEHOLDER_ARG(shard_tile_w);
-            PLACEHOLDER_ARG(full_tile_w);
-            PLACEHOLDER_ARG(col_page_offset);
-            PLACEHOLDER_ARG(col_byte_offset);
+            INVALID_VALUE_PLACEHOLDER_ARG(batch_offset_a);
+            INVALID_VALUE_PLACEHOLDER_ARG(total_local_batches);
+            INVALID_VALUE_PLACEHOLDER_ARG(b_full_ppb);
+            INVALID_VALUE_PLACEHOLDER_ARG(shard_tile_w);
+            INVALID_VALUE_PLACEHOLDER_ARG(full_tile_w);
+            INVALID_VALUE_PLACEHOLDER_ARG(col_page_offset);
+            INVALID_VALUE_PLACEHOLDER_ARG(col_byte_offset);
 
             if (num_slices == 0) {
                 return;
@@ -272,5 +267,4 @@ void kernel_main() {
     }
 }
 
-#undef PLACEHOLDER_ARG
 #pragma GCC diagnostic pop
