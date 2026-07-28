@@ -840,13 +840,13 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    # VBench cache MUST live on a writable path. The exabox /mnt/models NFS is mounted READ-ONLY
-    # (the workflow only asserts `test -r /mnt/models`), and vbench's init_submodules() does an
-    # un-wrapped os.makedirs(VBENCH_CACHE_DIR) -> OSError on a read-only mount (see #48682, same
-    # failure previously hit /mnt/MLPerf/vbench). Use ${HOME}/.cache, where the job already keeps
-    # its other caches (TT_METAL_CACHE, pip).
-    export VBENCH_CACHE_DIR="${HOME}/.cache/vbench" TORCH_HOME="${HOME}/.cache/vbench/torch_hub"
-    mkdir -p "${TORCH_HOME}"
+    # VBench reads its model weights from the infra-provisioned, pre-populated /mnt/models/vbench cache.
+    # /mnt/models is a READ-ONLY NFS mount, but that is fine now that the dir EXISTS and is populated:
+    # vbench's os.makedirs(CACHE_DIR, exist_ok=True) becomes a no-op (CPython swallows the mkdir EROFS
+    # when the dir already exists), and our assert_vbench_quality writes results to a tempdir, not the
+    # cache -- so usage is read-only. Same pattern as the WH-galaxy WAN tests (/mnt/MLPerf/vbench). This
+    # cache (models + torch_hub) must stay populated; #48682 was just the dir-missing case.
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     # Legacy tt-run using the rank_bindings.yaml + rankfile that the bh_sc4-mgd SKU pre-stages on the
@@ -878,10 +878,9 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    # VBench cache on a writable path (${HOME}/.cache) -- /mnt/models is read-only on exabox and vbench
-    # os.makedirs() would crash there. See the T2V entry above (#48682) for the full rationale.
-    export VBENCH_CACHE_DIR="${HOME}/.cache/vbench" TORCH_HOME="${HOME}/.cache/vbench/torch_hub"
-    mkdir -p "${TORCH_HOME}"
+    # VBench reads models from the pre-populated read-only /mnt/models/vbench cache -- see the T2V entry
+    # above for why a RO mount is fine once the dir exists (makedirs no-op; results go to a tempdir).
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     # Legacy tt-run reading the bh_sc4-mgd pre-staged /etc/ttop bindings -- see the T2V entry above for the
