@@ -261,11 +261,24 @@ def _setup_upstream_path(model_dir: Path) -> None:
         sys.path.insert(0, upstream)
 
 
+def _checkpoint_json(model_dir: Path, filename: str) -> dict:
+    """Read a JSON file out of the checkpoint dir. The only ``open`` on ``model_dir`` here.
+
+    The join and the containment check are written out rather than delegated, so the
+    path reaching ``open`` is visibly constrained to the absolute checkpoint directory.
+    """
+    base_dir = os.path.abspath(str(model_dir))
+    path = os.path.abspath(os.path.join(base_dir, filename))
+    if not path.startswith(base_dir + os.sep):
+        raise ValueError(f"refusing path {path!r}: outside checkpoint directory {base_dir!r}")
+    with open(path) as f:
+        return json.load(f)
+
+
 def _default_steps(model_dir: Path, *, distil: bool) -> int:
-    gen_cfg = safe_join(model_dir, "generation_config.json")
-    if gen_cfg.is_file():
-        with open(gen_cfg) as f:
-            return int(json.load(f).get("diff_infer_steps", 8 if distil else 50))
+    if safe_join(model_dir, "generation_config.json").is_file():
+        gen_cfg = _checkpoint_json(model_dir, "generation_config.json")
+        return int(gen_cfg.get("diff_infer_steps", 8 if distil else 50))
     return 8 if distil else 50
 
 
@@ -277,8 +290,7 @@ def _model_flags(model_dir: Path) -> tuple[bool, bool]:
 class _WeightLoader:
     def __init__(self, model_dir: Path):
         self.model_dir = model_dir
-        with open(safe_join(model_dir, "model.safetensors.index.json")) as f:
-            self._wmap = json.load(f)["weight_map"]
+        self._wmap = _checkpoint_json(model_dir, "model.safetensors.index.json")["weight_map"]
         self._open: dict = {}
 
     def load(self, key):
@@ -757,8 +769,7 @@ def main():
     down_sd, up_sd = weights.load_prefix("patch_embed"), weights.load_prefix("final_layer")
     LATENT, HID, HSZ = _pe_dims(down_sd)
 
-    with open(safe_join(model_dir, "config.json")) as f:
-        proc = HunyuanImage3ImageProcessor(json.load(f))
+    proc = HunyuanImage3ImageProcessor(_checkpoint_json(model_dir, "config.json"))
     cond_list, pil_list = _load_cond_images(proc, args.cond, infer_align=args.infer_align_image_size)
     cond_for_bundle = cond_list if len(cond_list) > 1 else cond_list[0]
 

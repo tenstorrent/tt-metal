@@ -12,6 +12,13 @@ Containment is checked on the *lexical* absolute path (``os.path.abspath``), not
 ``Path.resolve()``: HF hub snapshots populate a directory with symlinks into a
 sibling ``blobs/`` tree, and resolving them would make every legitimate shard
 look like an escape.
+
+Scope: these helpers cover path *construction* — existence checks, ``safe_open``
+targets, mkdir targets. The handful of call sites that hand a checkpoint-derived
+path straight to ``open`` write the same join-and-check out inline instead, so the
+constraint is visible in the same function as the read (see
+``weights._read_weight_index``, ``model_config.load_config``,
+``demo_i2i._checkpoint_json``). Keep the two in step if this logic changes.
 """
 
 from __future__ import annotations
