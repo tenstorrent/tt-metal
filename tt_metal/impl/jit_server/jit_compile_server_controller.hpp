@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -38,6 +39,12 @@ private:
     std::mutex server_start_mutex_;
     std::atomic<bool> server_start_finished_{false};
     std::string server_start_error_message_;
+
+    // Cross-thread shutdown trigger. run_server() installs a closure (set on the event-loop
+    // thread) that fulfills a kj cross-thread promise; stop() invokes it to wake the blocking
+    // event loop. Kept as a std::function so kj headers don't leak into this header.
+    std::mutex shutdown_mutex_;
+    std::function<void()> shutdown_signal_;
 
     std::string address_;
 };
