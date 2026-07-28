@@ -260,7 +260,7 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
     // offset that renders zones off-screen). Matches test_x280_realprof / the RT handler's anchoring.
     uint64_t ts_base = 0;
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
-    uint64_t dbg_iters = 0, dbg_pages = 0, dbg_emit = 0;
+    uint64_t dbg_iters = 0, dbg_pages = 0, dbg_emit = 0, dbg_stall = 0;
 
     // Drain-to-empty on stop: after stop_ is set (stop() sends the X280 P_STOP first, so it stops
     // producing), keep reading until the socket has been empty for a sustained window instead of exiting
@@ -328,6 +328,12 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                     return;  // only START/END for now (DeviceZoneScopedN)
                 }
                 dbg_emit++;
+                if (hash == 0x7FFFu && type == kernel_profiler::ZONE_START) {
+                    dbg_stall++;  // PROFILER_STALL_ZONE_ID: a producer RISC blocked on a FULL ring, i.e. the
+                                  // X280 drain did not keep up. Non-zero => the capture PERTURBS the workload
+                                  // (kernels elongate by the stall); it is still lossless (the ring blocks
+                                  // rather than dropping), but the timings are no longer clean.
+                }
                 const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
                 if (ci >= ctx.core_virt.size()) {
                     return;
@@ -382,11 +388,13 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
     // markers_emitted is the device-zone count that actually reached Tracy.
     log_info(
         tt::LogMetal,
-        "[perf-debug profiler] socket {} drained: {} pages, {} markers -> Tracy ({} drain iterations)",
+        "[perf-debug profiler] socket {} drained: {} pages, {} markers -> Tracy ({} drain iterations); "
+        "producer stall zones: {} [0 = X280 kept up, non-zero = capture perturbed the workload]",
         sock_idx,
         dbg_pages,
         dbg_emit,
-        dbg_iters);
+        dbg_iters,
+        dbg_stall);
 }
 
 void PerfDebugProfiler::stop() {
