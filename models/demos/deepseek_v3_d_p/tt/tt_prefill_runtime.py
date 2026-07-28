@@ -325,6 +325,13 @@ class TtPrefillRuntime:
 
         self._on_layer_complete = on_layer_complete
 
+    def kv_migration_base_address(self, kv_caches: MlaKvCaches) -> int:
+        """This stage's KV base DRAM address — the engine's per-rank anchor for the migration
+        all-gather (it holds the cache but must not introspect its layout). The pipeline-parallel
+        path migrates the primary KVPE cache, so that is the base; `.kvpe` is an MlaKvCache wrapper
+        rather than a bare tensor, hence `.storage`."""
+        return int(kv_caches.kvpe.storage.buffer_address())
+
     def build_kv_chunk_table(
         self,
         kv_caches: MlaKvCaches,

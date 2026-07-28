@@ -242,7 +242,7 @@ def get_num_dram_banks(mesh_device):
 
 
 def create_kv_chunk_address_table_ds(
-    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users=1
+    config, mesh_device, mesh_shape, seq_len, sp_axis, kvpe_cache, chunk_size_bytes, num_users=1
 ):
     """
     Create and populate a KV chunk address table for disaggregation.
@@ -253,7 +253,7 @@ def create_kv_chunk_address_table_ds(
         mesh_shape: Shape of mesh device
         seq_len: Sequence length
         sp_axis: Sequence parallel axis
-        tt_kvpe_cache: Initialized KVPE cache on device
+        kvpe_cache: Initialized KVPE cache on device
         chunk_size_bytes: Size of each chunk in bytes
         num_users: number of per-user cache slots (multi-user balanced layout is a follow-up;
             only num_users == 1 is supported here)
@@ -335,8 +335,8 @@ def create_kv_chunk_address_table_ds(
     chunks_per_device_group = num_chunks_in_strip * 2
     logger.debug("chunks_per_device_group = ", chunks_per_device_group)
 
-    logger.debug(f"kvpe cache shape is: {tt_kvpe_cache.shape}")
-    dram_bank_base_addr = tt_kvpe_cache.buffer_address()
+    logger.debug(f"kvpe cache shape is: {kvpe_cache.shape}")
+    dram_bank_base_addr = kvpe_cache.buffer_address()
     # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
     num_dram_banks = get_num_dram_banks(mesh_device)
     for row in range(len(device_group_idx_per_row)):
@@ -384,7 +384,7 @@ def create_kv_chunk_address_table_kimi(
     mesh_shape,
     seq_len,
     sp_axis,
-    tt_kvpe_cache,
+    kvpe_cache,
     chunk_size_bytes,
     num_users=1,
     first_layer_idx=0,
@@ -405,7 +405,7 @@ def create_kv_chunk_address_table_kimi(
         config: KvChunkAddressTableConfig (its num_layers is overwritten with the gathered global total)
         mesh_device: this rank's MeshDevice (its full SP x TP mesh)
         mesh_shape: (rows, cols) of that mesh; rows == SP, cols == TP
-        seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users: as before
+        seq_len, sp_axis, kvpe_cache, chunk_size_bytes, num_users: as before
         first_layer_idx: this rank's first global layer id (from compute_layer_split)
         num_my_layers: this rank's layer count (defaults to config.num_layers for single-stage callers)
         stage_layout: optional pre-gathered per-rank stage layout from allgather_kv_stage_layout().
@@ -421,14 +421,16 @@ def create_kv_chunk_address_table_kimi(
     # KV base + host. The merge below then covers every layer across every stage. The publish path
     # hoists this so all ranks participate while only rank 0 builds; tests/single-rank run it inline.
     if stage_layout is None:
-        stage_layout = allgather_kv_stage_layout(mesh_device, tt_kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
+        stage_layout = allgather_kv_stage_layout(
+            mesh_device, int(kvpe_cache.buffer_address()), mesh_shape, first_layer_idx, num_my_layers
+        )
 
     rows = mesh_shape[0]
 
     # This (building) rank's cache must hold exactly its own stage's layers, folded with num_users.
     assert (
-        tt_kvpe_cache.shape[0] == num_users * num_my_layers
-    ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_my_layers({num_my_layers})"
+        kvpe_cache.shape[0] == num_users * num_my_layers
+    ), f"cache batch dim {kvpe_cache.shape[0]} != num_users({num_users}) * num_my_layers({num_my_layers})"
 
     # Stages must tile [0, effective_num_layers) contiguously, no gaps/overlaps (tt-blaze's
     # missing-layer guard). compute_layer_split produces a contiguous partition, so this should hold.
@@ -452,7 +454,7 @@ def create_kv_chunk_address_table_kimi(
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
+        kvpe_cache=kvpe_cache,
         chunk_size_bytes=chunk_size_bytes,
         num_users=num_users,
         config_id=0,
@@ -467,7 +469,7 @@ def populate_kv_chunk_address_table_kimi(
     mesh_shape,
     seq_len,
     sp_axis,
-    tt_kvpe_cache,
+    kvpe_cache,
     chunk_size_bytes,
     num_users=1,
     config_id=0,
@@ -576,7 +578,7 @@ def init_kvpe_cache(
         layout: Cache layout (default TILE_LAYOUT). ROW_MAJOR required for fp8_e4m3.
 
     Returns:
-        tt_kvpe_cache: Initialized KVPE cache on device
+        kvpe_cache: Initialized KVPE cache on device
     """
     # hack in num_users * num_layers into batch size, so each user's layers are contiguous in memory
     num_layers = num_kvpe_cache_layers
@@ -604,14 +606,14 @@ def init_kvpe_cache(
     # num_users; a device kernel zeros it instead with no host transfer. Allocating
     # directly in the requested dtype/layout also sidesteps the mesh-mapper from_torch
     # path that forces TILE for fp8_e4m3 (so fp8 rides on ROW_MAJOR).
-    tt_kvpe_cache = ttnn.allocate_tensor_on_device(
+    kvpe_cache = ttnn.allocate_tensor_on_device(
         ttnn.Shape([num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]),
         dtype,
         layout,
         mesh_device,
         kv_mem_config,
     )
-    DRAMZeroFill.op(tt_kvpe_cache)
+    DRAMZeroFill.op(kvpe_cache)
 
     # allocate_tensor_on_device assigns a default 2D fully-replicated topology, but the rest
     # of the model produces replicated tensors via ReplicateTensorToMesh, which is a 1D
@@ -623,9 +625,9 @@ def init_kvpe_cache(
     placements = [ttnn.PlacementReplicate()]
     physical_mesh_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
     coords = list(ttnn.MeshCoordinateRange(physical_mesh_shape))
-    tt_kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
+    kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
 
-    return tt_kvpe_cache
+    return kvpe_cache
 
 
 def init_mla_kv_cache(

@@ -276,12 +276,15 @@ def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
 
 
 def deliver_device_map_and_gather_stage_layout(
-    mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers, rank
+    mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers, rank
 ):
     """ALL RANKS run this (the runner drives it for every rank). Deliver THIS rank's local FNID->UMD
     device map to its co-located worker, then join the collective all-gather that merges every stage
     into one table. Returns the gathered ``stage_layout`` (the runner passes it to rank 0's
     ``runtime.build_kv_chunk_table``; non-rank-0 callers just needed to join the collective).
+
+    ``kv_base_addr`` is this stage's KV base address, supplied by the model via
+    ``runtime.kv_migration_base_address`` -- the engine never introspects the cache struct itself.
 
     The delivery happens BEFORE the gather so every rank's map is in place before rank 0 SET_TABLEs;
     the all-gather doubles as the barrier that guarantees it. The gather is an MPI collective -- EVERY
@@ -289,7 +292,7 @@ def deliver_device_map_and_gather_stage_layout(
     """
     device_map = _build_device_map(mesh_device, mesh_shape)
     _deliver_local_device_map(device_map, rank)
-    return allgather_kv_stage_layout(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
+    return allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers)
 
 
 def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeout_ms: int = 120_000):
@@ -327,14 +330,14 @@ def _host_tag_int():
     return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
 
 
-def allgather_kv_stage_layout(mesh_device, tt_kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
+def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers):
     """COLLECTIVE (all ranks): all-gather each rank's pipeline-STAGE layout so one merged table can
     span every layer across every host -- tt-blaze's layer->mesh merge strategy.
 
     In this pipeline-parallel deployment each rank owns a contiguous LAYER range
     ``[first_layer_idx, first_layer_idx + num_my_layers)`` and holds the KV for those layers across
     its FULL mesh (all SP rows x TP cols). A migration worker needs ONE table covering every layer,
-    but ``mesh_device``/``buffer_address()`` only expose THIS rank's mesh + KV base. So every rank
+    but ``mesh_device``/``kv_base_addr`` only describe THIS rank's mesh + KV base. So every rank
     contributes, via ``allgather_int``:
 
       * its layer range ``(first_layer_idx, num_my_layers)`` -- the analog of tt-blaze's my_layer_id
@@ -349,7 +352,7 @@ def allgather_kv_stage_layout(mesh_device, tt_kvpe_cache, mesh_shape, first_laye
     """
     rows = mesh_shape[0]
     cols = mesh_shape[1]
-    base_addr = int(tt_kvpe_cache.buffer_address())
+    base_addr = int(kv_base_addr)
     num_banks = get_num_dram_banks(mesh_device)
 
     all_first = ttnn.distributed_context_allgather_int(int(first_layer_idx))

@@ -898,10 +898,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     producer (prefill_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
     mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
     and that it runs forever.
+    """
 
-    Migration (KV-chunk-table publish) + per-layer LayerAck are wired for the single-rank case only;
-    they are disabled for num_ranks>1 (pipelined migration is future work). Shutdown for num_ranks>1 is
-    rough: downstream ranks block in D2D recv when rank 0 stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
@@ -945,7 +943,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     #     request_id} completions into a host-local LayerCompletionQueue; a per-host
     #     LayerCompletionRouter forwards them to the master rank, which re-emits them in
     #     global seq order into the SAME counter channel the scheduler connects to. See
-    #     build_layer_completion_sink() and ttnn._experimental.layer_completion.
+    #     build_layer_completion_sink() and ttnn._ttnn.layer_completion.
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
@@ -1027,8 +1025,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
         # ALL RANKS: deliver local device map + contribute this stage to the merged table (barrier).
+        # Ask the runtime for this stage's KV base -- the engine must not introspect the opaque
+        # KvCaches struct, whose shape is per-model
+        if not hasattr(runtime, "kv_migration_base_address"):
+            raise RuntimeError(
+                f"migration enabled but runtime {type(runtime).__name__} implements no "
+                "kv_migration_base_address (see docs/ADDING_A_PREFILL_MODEL.md §2)."
+            )
+        kv_base_addr = runtime.kv_migration_base_address(kv_caches)
         stage_layout = deliver_device_map_and_gather_stage_layout(
-            mesh_device, kv_caches.kvpe.storage, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
+            mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
         )
 
         if is_first_rank:
