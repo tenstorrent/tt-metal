@@ -10,9 +10,10 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 > **TL;DR.** The text backbone is identical to the in-repo **Gemma-4 26B-A4B MoE** (`models/demos/gemma4/`). The real work is the **generation procedure**, not the backbone: a block-autoregressive multi-canvas *text-diffusion* loop with **bidirectional canvas attention**, a **three-phase KV-cache state machine**, **entropy-budget acceptance sampling**, and **self-conditioning**. Bring up text-first on QB2.
 
 **How this document is organized:**
-- **Part 0 — Current execution contract + dated status history** — the 2026-07-22 launch,
-  metric, quality, and prefill contract is authoritative; older RUN-first/two-gap narratives are
-  retained below as history. **Read first.**
+- **Part 0 — Current execution contract + dated status history** — the **2026-07-28** flag-triage
+  and perf section comes first and narrows what follows; the 2026-07-22 launch, metric, quality and
+  prefill contract is otherwise authoritative; older RUN-first/two-gap narratives are retained below
+  as history. **Read first.**
 - **Part I — The plan** — goals, model summary, reuse-vs-build, milestones, the issue-level dependency graph, per-issue workstreams, validation strategy, the risk register, serving notes, and references.
 - **Part II — Device execution spec** — the `/loop` protocol, env/run recipe, ground rules, the decision-fidelity bar, and the W1–W4 device workstream specs + acceptance.
 - **Part III — Implementation status** — environment constraints, the per-workstream status table, session notes, the 2026-06-26 / 06-29 / 06-30 code reviews + fix verification, and build order.
@@ -23,6 +24,41 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 ---
 
 ## Part 0 — Current status & roadmap
+### 2026-07-28 — flag triage: 24 deleted, and two measured levers waiting on the quality gate
+
+**Read this before the 2026-07-22 contract below; it does not replace that contract, it narrows it.**
+
+*Codebase.* Every default-OFF `DG_*` flag was triaged into ENABLE / KEEP / DELETE. **24 deleted,
+~4,400 lines, python-only `DG_*` names 106 → 91** (`99c154f0df8..66166060146`). Full list and the
+per-flag evidence: [`doc/optimize_perf/flag_triage_20260728.md`](./doc/optimize_perf/flag_triage_20260728.md).
+The count of *silently inert* switches this module has shipped is now **six**, not the three known
+on 07-27. If a flag below is not in the tree any more, that document says why.
+
+*Perf, measured on QB2* (30L, canvas 256, `device` Gumbel, `reveal_pmax` 4096, 48 forced steps):
+
+| lever | effect | state |
+|---|---|---|
+| `DG_SDPA_GRID=device` | **−8.8%, bit-exact** | **default flipped** |
+| `DG_MOE_CONCAT=1` | **−29.9%**, fold verified at PCC 0.9999218 | default OFF — needs the gate |
+| `DG_NORM_FULLCANVAS=1` | **−17.9%**, also cuts commit 2.04 s → 0.37 s | default OFF — needs the gate |
+
+Together the two pending flips are ~1.9×. Both change committed tokens, so neither flips on a
+TT-vs-TT bit-identity comparison — the gate is the absolute GPQA arm against the CUDA reference
+(`doc/decision_fidelity/gate/gpu_reference.jsonl`, bar **70.71% / 70.20%** flexible-extract over two
+reps, resolution ~0.5–1 pp).
+
+*Where the time is now.* At 238 ms/step: MoE 75.5, attention 29.6, shared MLP 9.1,
+self-conditioning 2.3 — and **~120 ms outside the layer stack**. Layer matmul is no longer the
+bottleneck. Commit is 0.27–0.37 s/block (7–10%), not the 2.0 s quoted before `NORM_FULLCANVAS`.
+
+*Measurement contract, learned the hard way.* Any device verification must include a plain
+`default:` arm alongside whatever is being optimized — two deleted symbols broke the **default-ON**
+sparse dispatch for four commits because every check used `DG_MOE_CONCAT=1`, which bypasses it, and
+the host tests mock it. Also: `--upfront` **forces 48 denoise steps** (`--max-denoising-steps` is
+ignored there); the shipped early halt fires at ~2–9 steps, so use
+`serving_smoke --entropy-stop-threshold -1` for a per-step A/B; and `host` vs `device` Gumbel is
+**1.94×**, so any absolute ms/step from a host-Gumbel run is ~2× the served figure.
+
 ### Current execution contract (2026-07-22 — authoritative)
 
 Read this section before using any older status table or benchmark below. Dated July-02/10/13
@@ -59,8 +95,9 @@ not an additional trace type.
   Metal takes it as an open-time constructor argument with no getter, so this process cannot read
   the reservation back, defaulting it would silence the guard without reserving anything, and a
   trace-region overflow poisons the device (needs `tt-smi -r`).
-- Now **defaulted / optional**: `DG_UPFRONT_CAPTURE` (default `1`), `DG_VLLM_MAX_DENOISE_STEPS`
-  (the model config is already 48), and `DG_DENOISE_REVEAL_PMAX` — when the env var is unset the
+- Now **defaulted / optional**: `DG_UPFRONT_CAPTURE` (default `1`) and `DG_DENOISE_REVEAL_PMAX`
+  (`DG_VLLM_MAX_DENOISE_STEPS` was **deleted 2026-07-28** — the up-front validator rejected every
+  value but 48, so the export was ritual; the model config is already 48) — when the env var is unset the
   fixed reveal span is derived as `max_model_len` (vLLM `--max-model-len`) rounded **down** to a
   tile and logged — the KV cache seq dim is `max_model_len` verbatim (ttnn keeps the unpadded
   logical shape), so rounding up would exceed the allocated span and abort startup;
