@@ -37,7 +37,11 @@ def test_module_floor_form_when_not_llm():
     assert "modeled floor       : 8.90 ms" in out
     assert "measured            : 11.82 ms" in out
     assert "at-floor            : 75%" in out  # 8.90 / 11.82
-    assert "tok/s/u — N/A" in out
+    # No tok/s figure in the ms form. The reason line used to assert "not an LLM decode pipeline"
+    # unconditionally, which was false for Llama-3.1-8B; with no active_bytes it now says the
+    # numerator is missing instead of inventing a property of the model.
+    assert "tok/s/u" in out and "tok/s/u   (1000 /" not in out
+    assert "active_bytes not computed" in out
 
 
 def test_floor_form_shows_the_achievable_band_not_just_the_floor():

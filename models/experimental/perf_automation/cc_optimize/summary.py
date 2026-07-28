@@ -417,7 +417,34 @@ def _baseline_trace_ms(baseline_profile: dict | None):
     return None
 
 
-def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
+def _floor_basis(profile: dict | None) -> str:
+    """What the floor actually is, and how much of the profile it covers.
+
+    "Σ per-op roofline floors" reads like an arbitrary sum. It is physics -- each op's floor is
+    max(FLOPs/peak, bytes/bandwidth, count x dispatch) -- and for a weight-streaming model the memory
+    term dominates, so the total is essentially bytes/bandwidth. But it sums each bucket's top_ops,
+    not every op, and skips host_overhead as non-device work: on llama3_1_8b_p150 that is 86% of
+    device time, so the number is a LOWER bound. A confirmation report should state the coverage
+    rather than let the figure read as complete.
+    """
+    base = "Σ per-op max(FLOPs/peak, bytes/BW, dispatch)"
+    try:
+        buckets = (profile or {}).get("buckets") or []
+        total = float((profile or {}).get("device_ms") or 0.0)
+        covered = sum(
+            float(o.get("device_ms") or 0.0)
+            for b in buckets
+            if b.get("id") != "host_overhead"
+            for o in (b.get("top_ops") or [])
+        )
+        if total > 0 and covered > 0:
+            return "%s; covers %.0f%% of device time" % (base, covered / total * 100.0)
+    except Exception:  # noqa: BLE001
+        pass
+    return base
+
+
+def _roofline_lines(throughput: dict | None, forward_ms: float | None, profile: dict | None = None) -> list:
     """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
     at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
     target snapshot in `throughput` — so a stale measured can never leak in, and any missing/zero
@@ -458,7 +485,7 @@ def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
         floor = throughput.get("modeled_floor_ms")
         have_floor = isinstance(floor, (int, float)) and floor > 0
         out.append(
-            f"  modeled floor       : {floor:.2f} ms   (Σ per-op roofline floors)"
+            f"  modeled floor       : {floor:.2f} ms   ({_floor_basis(profile)})"
             if have_floor
             else "  modeled floor       : n/a"
         )
@@ -493,7 +520,20 @@ def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
                     f"  at-floor            : {floor / fm * 100:.0f}%   ({fm - floor:.2f} ms reachable headroom)"
                 )
                 out.append(f"  status              : {status} — {_hint}")
-        out.append("  (tok/s/u — N/A: not an LLM decode pipeline)")
+        # Do not assert WHY unless it is known. This line claimed "not an LLM decode pipeline" for
+        # Llama-3.1-8B, which is false -- the pipeline runs a real traced KV-cache decode. The ms
+        # branch is taken whenever the tok/s target is unavailable, and for this model that is because
+        # active_bytes is 0: perf_target_inputs.json was never produced, so the weight-bytes-per-token
+        # physics has no numerator. A report that goes out for confirmation must not explain a missing
+        # input by inventing a property of the model.
+        _ab = throughput.get("active_bytes") if isinstance(throughput, dict) else None
+        if not _ab:
+            out.append(
+                "  (tok/s/u — unavailable: active_bytes not computed for this pipeline, so the "
+                "per-token weight-bytes target has no numerator)"
+            )
+        else:
+            out.append("  (tok/s/u — N/A: not an LLM decode pipeline)")
     out.append("")
     return out
 
@@ -616,7 +656,7 @@ def render_summary(
 
     if not isinstance(throughput, dict):
         throughput = _throughput_from_profile(baseline_profile)
-    lines.extend(_roofline_lines(throughput, final_ms))
+    lines.extend(_roofline_lines(throughput, final_ms, baseline_profile))
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
     _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
