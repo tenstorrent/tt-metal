@@ -66,6 +66,12 @@ python codegen/scripts/optional_wave_debug.py \
   --fsdb "$FSDB"
 ```
 
+The tester's fixed policy is attempts 1–3 without waveform tooling, followed by
+waveform-assisted attempts 4–5 only if the first three simulator attempts
+failed. Do not invoke this bridge for attempts 1–3; it independently enforces
+the boundary and returns `status=skipped` without reading an FSDB or writing
+tester artifacts.
+
 Omit `--fsdb` when `LLK_DEBUG_FSDB` is set or the existing
 `test_logs_cycleN/run.log` names the waveform. The bridge appends to the
 existing `agent_tester_cycleN.md` and writes private output under

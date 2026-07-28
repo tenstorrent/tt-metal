@@ -45,13 +45,16 @@ LLK_CODEGEN_PRIVATE_ROOT=/path/to/llk_code_gen \
 python codegen/scripts/llk_debug.py --help
 ```
 
-For eligible Quasar runtime failures, the tester invokes
-`codegen/scripts/optional_wave_debug.py`. The bridge appends its status and any
-deterministic findings to the existing `agent_tester_cycleN.md`; private command
-output and evidence stay below the existing `test_logs_cycleN/` directory. It
-does not add a dashboard step or modify `run.json`. Missing private tooling,
-missing FSDBs, backend errors, and timeouts are recorded and remain non-fatal,
-so normal code generation and refinement continue.
+The tester reserves its first three simulator attempts for normal log/source
+debugging. Only after all three fail do attempts 4 and 5 become
+waveform-assisted. For an eligible runtime failure in those late attempts, it
+invokes `codegen/scripts/optional_wave_debug.py`. The bridge enforces this
+boundary, appends its status and deterministic findings to the existing
+`agent_tester_cycleN.md`, and keeps private output below the existing
+`test_logs_cycleN/` directory. It does not add a dashboard step or modify
+`run.json`. Missing private tooling, missing FSDBs, backend errors, and timeouts
+are recorded and remain non-fatal, so normal code generation and refinement
+continue.
 
 For interactive Claude Code use, invoke
 `/llk-wave-debug /path/to/failure.fsdb failure=hang`. The skill is defined in

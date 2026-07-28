@@ -17,6 +17,8 @@ from typing import Sequence
 
 FSDB_ENV = "LLK_DEBUG_FSDB"
 INSECURE_HOST_KEY_ENV = "LLK_DEBUG_INSECURE_HOST_KEY"
+SIMULATOR_ATTEMPT_LIMIT = 5
+WAVE_DEBUG_FIRST_ATTEMPT = 4
 _FSDB_PATH = re.compile(r"(/[^\s\"'`]+?\.fsdb)(?=$|[\s\"'`,;:)])")
 
 
@@ -25,6 +27,17 @@ class WaveDebugOutcome:
     status: str
     summary: str
     evidence_path: Path | None = None
+
+
+def wave_debug_eligible(attempt: int) -> bool:
+    """Return whether this simulator attempt belongs to the wave-assisted phase."""
+
+    if not 1 <= attempt <= SIMULATOR_ATTEMPT_LIMIT:
+        raise ValueError(
+            "simulator attempt must be between 1 and "
+            f"{SIMULATOR_ATTEMPT_LIMIT}, got {attempt}"
+        )
+    return attempt >= WAVE_DEBUG_FIRST_ATTEMPT
 
 
 def _single_line(value: object) -> str:
@@ -120,9 +133,19 @@ def run_optional_wave_debug(
     timeout_seconds: int,
     environment: dict[str, str] | None = None,
 ) -> WaveDebugOutcome:
-    """Run private diagnosis if possible and always leave a tester-log breadcrumb."""
+    """Run private diagnosis only during attempts 4-5; always remain fail-open."""
 
     env = dict(os.environ if environment is None else environment)
+    if not wave_debug_eligible(attempt):
+        return WaveDebugOutcome(
+            "skipped",
+            (
+                f"attempt {attempt} is in the log/source-only phase; waveform "
+                f"debugging starts after {WAVE_DEBUG_FIRST_ATTEMPT - 1} failed "
+                "simulator attempts"
+            ),
+        )
+
     agent_log = log_dir / f"agent_tester_cycle{cycle}.md"
     test_log_dir = log_dir / f"test_logs_cycle{cycle}"
     run_log = test_log_dir / "run.log"

@@ -23,19 +23,46 @@ def _run(
     tmp_path: Path,
     *,
     launcher: Path,
+    attempt: int = 4,
     fsdb: str | None = None,
     environment: dict[str, str] | None = None,
 ) -> wave.WaveDebugOutcome:
     return wave.run_optional_wave_debug(
         log_dir=tmp_path / "run",
         cycle=2,
-        attempt=3,
+        attempt=attempt,
         failure_kind="hang",
         fsdb=fsdb,
         launcher=launcher,
         timeout_seconds=10,
         environment=environment or {},
     )
+
+
+def test_first_three_attempts_skip_waves_without_touching_outputs(tmp_path):
+    launcher = tmp_path / "must-not-run.py"
+    marker = tmp_path / "launcher-ran"
+    launcher.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"
+    )
+
+    for attempt in (1, 2, 3):
+        outcome = _run(tmp_path, launcher=launcher, attempt=attempt)
+        assert outcome.status == "skipped"
+        assert "log/source-only phase" in outcome.summary
+
+    assert not marker.exists()
+    assert not (tmp_path / "run").exists()
+
+
+def test_only_attempts_four_and_five_are_wave_debug_eligible():
+    assert [wave.wave_debug_eligible(attempt) for attempt in range(1, 6)] == [
+        False,
+        False,
+        False,
+        True,
+        True,
+    ]
 
 
 def test_missing_fsdb_is_recorded_and_nonfatal(tmp_path):
@@ -110,7 +137,7 @@ out.mkdir(parents=True, exist_ok=True)
 
     assert outcome.status == "findings"
     assert outcome.evidence_path == (
-        tmp_path / "run" / "test_logs_cycle2" / "wave_debug_attempt3" / "evidence.json"
+        tmp_path / "run" / "test_logs_cycle2" / "wave_debug_attempt4" / "evidence.json"
     )
     log = (tmp_path / "run" / "agent_tester_cycle2.md").read_text()
     assert "synthetic_terminal_stall" in log
@@ -153,7 +180,7 @@ def test_cli_continues_when_private_checkout_is_missing(tmp_path):
             "--cycle",
             "1",
             "--attempt",
-            "1",
+            "4",
             "--failure-kind",
             "hang",
             "--fsdb",
@@ -170,3 +197,28 @@ def test_cli_continues_when_private_checkout_is_missing(tmp_path):
     assert "Status: `failed`" in log
     assert "LLK waveform debugger is not available" in log
     assert "continue the normal tester/refiner flow" in log
+
+
+def test_cli_skips_wave_debug_during_first_three_attempts(tmp_path):
+    log_dir = tmp_path / "run"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--log-dir",
+            str(log_dir),
+            "--cycle",
+            "1",
+            "--attempt",
+            "3",
+            "--failure-kind",
+            "hang",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "WAVE_DEBUG status=skipped" in result.stdout
+    assert not log_dir.exists()

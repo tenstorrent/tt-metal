@@ -55,6 +55,14 @@ When `LOCK_TESTS` is `true` (from Inputs), the existing test is the immutable so
 
 Keep an `ATTEMPT` counter starting at **0**. Only a run that reaches the simulator (compile succeeded, simulator executed) increments it. A compile-step failure does **not** consume an attempt — diagnose, fix, re-run. A pass returns `PASS` immediately. A runtime failure → diagnose, apply one fix, run again. **Never exceed 5 simulator runs.** On attempt 5's failure, return `STUCK`.
 
+The simulator budget has two fixed debugging phases:
+
+- **Attempts 1–3: log/source-only.** Do not invoke waveform tooling, search for
+  an FSDB, or spend time interpreting waves.
+- **Attempts 4–5: waveform-assisted.** Reaching attempt 4 proves that three
+  simulator attempts failed. After an eligible runtime failure in either of
+  these attempts, run §2.5 before choosing the next fix or returning `STUCK`.
+
 A separate guard caps **consecutive compile-step failures at 5**: if the harness cannot be made to compile after 5 compile attempts, return `STUCK` (category `COMPILE_ERROR`).
 
 ```
@@ -69,6 +77,8 @@ while ATTEMPT < 5:
     COMPILE_FAILS = 0
     ATTEMPT += 1                  # only simulator runs consume budget
     if result == PASS: return success(ATTEMPT)
+    if ATTEMPT >= 4:
+        collect_optional_wave_evidence(result)  # §2.5; fail-open
     apply(diagnose(result))      # Step 3 + 4
 return stuck(last_result)
 ```
@@ -278,11 +288,16 @@ Feed the pattern — not one variant — into Step 3. When `--maxfail` truncated
 
 ### 2.5 — Optional deterministic waveform evidence
 
-After a kernel-specific `HANG`/`TIMEOUT`, make one best-effort waveform call for
-that simulator attempt before choosing a fix. For `DATA_MISMATCH`, make the call
-when `LLK_DEBUG_FSDB` is set or `run.log` contains an existing `.fsdb` path.
-Never run it for a compile failure, pre-ready `ENV_ERROR`, or sibling-confirmed
-environment failure.
+This step is allowed **only for simulator attempts 4 and 5**. Attempts 1–3 must
+use the normal logs, test pattern, source, and authoritative references without
+calling waveform tooling. Do not retroactively analyze an FSDB from attempts
+1–3 after entering the waveform-assisted phase.
+
+After a kernel-specific `HANG`/`TIMEOUT` in attempt 4 or 5, make one best-effort
+waveform call for that simulator attempt before choosing a fix or returning
+`STUCK`. For `DATA_MISMATCH`, make the call when `LLK_DEBUG_FSDB` is set or
+`run.log` contains an existing `.fsdb` path. Never run it for a compile failure,
+pre-ready `ENV_ERROR`, or sibling-confirmed environment failure.
 
 The bridge uses the existing tester outputs:
 
@@ -317,7 +332,10 @@ python "$WORKTREE_DIR/tt_metal/tt-llk/codegen/scripts/optional_wave_debug.py" \
 This stage is strictly fail-open. A missing launcher, missing private checkout,
 missing FSDB, backend failure, timeout, invalid evidence file, or bridge error
 must be recorded and then ignored for control flow. It does not consume a
-simulator attempt and never changes `PASS`/`STUCK`/`ENV_ERROR`.
+simulator attempt, never launches an additional simulator run, and never changes
+`PASS`/`STUCK`/`ENV_ERROR`. The bridge itself enforces the attempt boundary:
+calls with `--attempt 1`, `2`, or `3` return `status=skipped` without touching
+waveform inputs or tester output files.
 
 When the status is `findings`, read the listed classification, summary, and
 `evidence.json` before Step 3. Treat it as deterministic positive evidence, but
@@ -517,7 +535,7 @@ State the kernel and test paths literally so downstream steps / humans can inspe
 14. **Contradiction check before every hypothesis (§3.0.a).**
 15. **Harness-first on uniform failures (§3.0.b).**
 16. **Test-locked mode (`LOCK_TESTS=true`): the existing test is immutable** — author or modify no test, golden, or input-prep; missing test infrastructure is a terminal `STUCK` (§ Test-Locked Mode).
-17. **Waveform debugging is optional and fail-open (§2.5).** Record unavailable/failed/inconclusive status, then continue; it never consumes an attempt or changes the tester outcome.
+17. **Waveform debugging is attempts 4–5 only and fail-open (§2.5).** Never invoke it during attempts 1–3. In attempts 4–5, record unavailable/failed/inconclusive status and continue; it never consumes an attempt or changes the tester outcome.
 
 ---
 
@@ -577,8 +595,9 @@ Things the optimizer / refiner / human must verify. Write "none" if none.
 
 ## Optional waveform debugging
 The deterministic bridge appends one subsection per attempted waveform
-diagnosis. Preserve those appended sections when filling this template. If no
-eligible runtime failure had an FSDB, write "not run".
+diagnosis during attempts 4–5. Preserve those appended sections when filling
+this template. If the run passed in attempts 1–3, or no eligible late runtime
+failure had an FSDB, write "not run".
 
 ## Final outcome
 - Result: PASS | STUCK | ENV_ERROR
