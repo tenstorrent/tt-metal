@@ -21,18 +21,20 @@
 # final answer (only the letter A, B, C, or D) within \boxed{}" and its flexible-extract filter reads
 # the boxed value first, then explicit answer markers, and only accepts A-D.
 #
-# The collapse rate is still reported and still decides when the scores are close: the 07-28 baseline
-# fired the degeneracy guard on 146 of 198 requests (clustered at blocks 0-3) and left 26 responses
-# empty. Those are per-request binaries at n=198, so SE is ~3 pp and a regression of the magnitude
-# that matters (#51080 moved 56 of 64) is detectable. NOTE that the 146/26 baseline was recorded on
-# the r1 task; the first CoT `base` arm re-establishes it, which is why `base` should be run.
+# The collapse rate is reported alongside as a within-arm diagnostic -- guard fires and empty
+# responses, per-request binaries at n=198 -- because they are what explains a low score (the 07-28
+# r1 run fired the guard on 146 of 198, clustered at blocks 0-3, with 26 empty). Not the bar.
 #
-# THREE ARMS, one variable each vs the shipped defaults, so any delta is attributable:
-#   base    shipped defaults (SDPA grid already flipped; both levers off)
+# THE BASELINE IS THE A100 CUDA RESULT, not a TT arm: 70.71% and 70.20% flexible-extract over two
+# reference reps in thinking mode. Each TT arm is scored directly against that. Do NOT spend 3.7 h of
+# device time re-measuring a TT baseline -- the `base` arm below exists only for someone who
+# explicitly wants the shipped-default TT number for its own sake, and it is not the bar.
+#
+# ARMS, one variable each vs the shipped defaults, so any delta is attributable:
+#   both    + DG_MOE_CONCAT=1 DG_NORM_FULLCANVAS=1 -- what would actually ship; run this first
 #   concat  + DG_MOE_CONCAT=1
 #   norm    + DG_NORM_FULLCANVAS=1
-# and optionally
-#   both    + both, which is what would actually ship
+#   base    shipped defaults -- OPTIONAL
 #
 # The `both` arm is not redundant. The levers touch different things (MoE layout vs norm shape) but
 # both perturb the same bf16 reductions feeding the same argmax, so their fidelity effects are not
@@ -50,7 +52,7 @@
 # A pass on this gate is a pass on two components, not one.
 #
 # Usage:
-#   perf_flip_arm.sh                    # all four arms, sequential, ~4 h each
+#   perf_flip_arm.sh                    # both, concat, norm -- sequential, ~4 h each
 #   ARMS="base concat" perf_flip_arm.sh # subset
 #
 # Each arm is a full 198-sample run through the real vLLM server via run_upfront_gpqa.sh, so the
@@ -63,7 +65,7 @@ R=${TT_METAL_ROOT:-/home/zni/tt-metal}
 TTSMI=${TT_SMI_BIN:-/home/zni/ttis-verify/.workflow_venvs/.venv_tt_smi/bin/tt-smi}
 OUT_ROOT=${OUT_ROOT:-/home/zni/dg_runs/perf_flip_gate}
 TRACE=${TRACE_REGION_SIZE:-4294967296}
-ARMS=${ARMS:-"base concat norm both"}
+ARMS=${ARMS:-"both concat norm"}
 
 # A case rather than an associative array: under `set -u`, an empty value in a
 # `declare -A` literal is reported as an unbound variable on this bash, and `base` must be empty.
@@ -96,6 +98,7 @@ for arm in $ARMS; do
         TT_SMI_BIN="$TTSMI" \
         TRACE_REGION_SIZE="$TRACE" \
         RESET_BEFORE=1 RESET_AFTER=1 \
+        THINKING_MODE=1 \
         OUTPUT_ROOT="$out" \
         bash "$R/models/experimental/diffusion_gemma/doc/optimize_perf/run_upfront_gpqa.sh" full \
         > "$OUT_ROOT/${arm}.out" 2>&1
@@ -110,8 +113,9 @@ import json, pathlib, re, sys
 root = pathlib.Path(sys.argv[1])
 arms = sys.argv[2:]
 
-# The 2026-07-28 run on the shipped defaults, so a single-arm run still has something to compare to.
-BASELINE = {"guard": 146, "empty": 26, "boxed": 4, "exact": 0.0657, "n": 198, "filter": "none"}
+# THE BAR: the A100 CUDA reference, flexible-extract, thinking, two reps. Not a TT arm.
+CUDA_REF = (0.7071, 0.7020)
+CUDA_SPREAD = abs(CUDA_REF[0] - CUDA_REF[1]) * 100.0  # 0.5 pp -- the reference's own repeatability
 
 
 def measure(arm):
@@ -149,23 +153,36 @@ for arm in arms:
     print(hdr % (arm, m.get("n"), "%.4f (%s)" % (m.get("exact", float("nan")), m.get("filter", "?")),
                  m["guard"], m["empty"], m["boxed"]))
 
-ref = got.get("base", BASELINE)
-src = "this run" if "base" in got else "the 07-28 baseline"
+bar = sum(CUDA_REF) / len(CUDA_REF)
 print()
-print("  Deciding signals are guard fires and empty responses (n=198 per-request binaries, SE ~3 pp).")
-print("  exact_match is for the record only: with 4 positives at baseline it cannot separate arms.")
-print("  Compared against %s (guard=%d, empty=%d)." % (src, ref["guard"], ref["empty"]))
+print("  BAR: A100 CUDA reference %.2f%% / %.2f%% flexible-extract (thinking, 2 reps)," % (
+    CUDA_REF[0] * 100, CUDA_REF[1] * 100))
+print("       mean %.2f%%, own repeatability %.1f pp. Each TT arm is scored against this," % (
+    bar * 100, CUDA_SPREAD))
+print("       NOT against a TT baseline.")
+print()
 for arm in arms:
-    if arm == "base" or arm not in got:
+    if arm not in got:
         continue
     m = got[arm]
-    dg, de = m["guard"] - ref["guard"], m["empty"] - ref["empty"]
-    if dg > 12:                     # ~2 SE on the guard count
-        verdict = "REGRESSION - do not flip"
-    elif dg < -12:
-        verdict = "IMPROVEMENT"
+    exact = m.get("exact")
+    if exact is None:
+        print("    %-8s no exact_match in the results file" % arm)
+        continue
+    gap = (exact - bar) * 100.0
+    # A TT arm at or above the reference is unambiguous. Below it, the question is whether THIS
+    # lever is responsible, which needs the other arms -- so report the gap and say so rather than
+    # pronouncing on a single number.
+    if gap >= -CUDA_SPREAD:
+        verdict = "at the reference bar"
+    elif gap >= -5.0:
+        verdict = "within 5 pp of the bar"
     else:
-        verdict = "no detectable change - flip is safe on this evidence"
-    print("    %-8s guard %+d  empty %+d   %s" % (arm, dg, de, verdict))
+        verdict = "%0.1f pp below the bar" % -gap
+    print("    %-8s %.2f%%  (%+.2f pp vs bar)  %s   [guard %d/%s, empty %d, boxed %d]" % (
+        arm, exact * 100, gap, verdict, m["guard"], m.get("n"), m["empty"], m["boxed"]))
+print()
+print("  A gap below the bar is not by itself attributable to the lever under test: the shipped")
+print("  defaults are themselves below it (#48291). Run the single-flag arms to attribute.")
 PYEOF
 echo "DG_PERF_FLIP_GATE_END $(date -u +%FT%TZ)"
