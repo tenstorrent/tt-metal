@@ -178,7 +178,7 @@ def _ttml_main() -> None:
         bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        system_prompt = "You are a wordy professor. Explain in 3 long sentences before saying Yes or No."
+        system_prompt = "Answer the question. Your answer should begin with either a Yes or a No. Then, explain why you answered Yes or No."
 
         def format_boolq(example):
             messages = [
