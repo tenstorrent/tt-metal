@@ -73,10 +73,18 @@ if HY_MODEL not in _MODEL_ENV:
 # eagerly, so a bad override would kick off a multi-hundred-GB HuggingFace download
 # before this file could report the mistake.
 _env_var = _MODEL_ENV[HY_MODEL]
-if (_override := os.environ.get(_env_var)) and not os.path.isfile(
-    os.path.join(_override, "model.safetensors.index.json")
-):
-    raise SystemExit(f"{_env_var}={_override!r} has no model.safetensors.index.json")
+if _override := os.environ.get(_env_var):
+    # Operator-supplied checkpoint root. It is deliberately an arbitrary absolute path
+    # (CI points it at an NFS mount), so a fixed safelist root does not apply. Canonicalize
+    # once so '..' segments and symlinks are resolved, require a real directory holding the
+    # weight index, then write the canonical form back so the resolvers below act on exactly
+    # the path validated here.
+    _override = os.path.realpath(_override)
+    if not os.path.isdir(_override):
+        raise SystemExit(f"{_env_var}={_override!r} is not a directory")
+    if not os.path.isfile(os.path.join(_override, "model.safetensors.index.json")):
+        raise SystemExit(f"{_env_var}={_override!r} has no model.safetensors.index.json")
+    os.environ[_env_var] = _override
 
 from models.experimental.hunyuan_image_3_0.ref.weights import (  # noqa: E402
     resolve_base_model_dir,

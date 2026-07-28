@@ -33,13 +33,18 @@ def test_t2i_demo(prompt, tmp_path):
     backbone layers are overridable via HY_STEPS / HY_NUM_LAYERS (fast CI defaults
     applied when the env does not already set them)."""
     out_png = tmp_path / "hy_t2i_ci.png"
+    # The prompt travels in HY_PROMPT rather than argv, so the argv list stays fully
+    # literal (interpreter + resolved demo.py path). demo.py's precedence is
+    # HY_PROMPT_FILE > argv[1] > HY_PROMPT, so with no argv[1] this is what it reads.
     env = {
         **os.environ,
         "HY_STEPS": os.environ.get("HY_STEPS", "8"),
         "HY_NUM_LAYERS": os.environ.get("HY_NUM_LAYERS", "32"),
         "HY_GUIDANCE": os.environ.get("HY_GUIDANCE", "5.0"),
         "HY_OUT": str(out_png),
+        "HY_PROMPT": prompt,
     }
-    result = subprocess.run([sys.executable, str(_DEMO), prompt], cwd=str(_ROOT), env=env)
+    env.pop("HY_PROMPT_FILE", None)
+    result = subprocess.run([sys.executable, str(_DEMO)], cwd=str(_ROOT), env=env, shell=False)
     assert result.returncode == 0, f"demo.py exited with {result.returncode}"
     assert out_png.is_file() and out_png.stat().st_size > 0, f"no output image written to {out_png}"

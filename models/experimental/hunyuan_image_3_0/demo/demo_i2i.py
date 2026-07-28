@@ -89,6 +89,7 @@ _bootstrap_vae_model_dir()
 import ttnn
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
+from models.experimental.hunyuan_image_3_0.ref.safe_paths import safe_join
 from models.experimental.hunyuan_image_3_0.ref.image_gen.model_loaders import (
     load_timestep_embedder,
 )
@@ -261,9 +262,10 @@ def _setup_upstream_path(model_dir: Path) -> None:
 
 
 def _default_steps(model_dir: Path, *, distil: bool) -> int:
-    gen_cfg = model_dir / "generation_config.json"
+    gen_cfg = safe_join(model_dir, "generation_config.json")
     if gen_cfg.is_file():
-        return int(json.load(open(gen_cfg)).get("diff_infer_steps", 8 if distil else 50))
+        with open(gen_cfg) as f:
+            return int(json.load(f).get("diff_infer_steps", 8 if distil else 50))
     return 8 if distil else 50
 
 
@@ -275,12 +277,16 @@ def _model_flags(model_dir: Path) -> tuple[bool, bool]:
 class _WeightLoader:
     def __init__(self, model_dir: Path):
         self.model_dir = model_dir
-        self._wmap = json.load(open(model_dir / "model.safetensors.index.json"))["weight_map"]
+        with open(safe_join(model_dir, "model.safetensors.index.json")) as f:
+            self._wmap = json.load(f)["weight_map"]
         self._open: dict = {}
 
     def load(self, key):
+        # Shard names come from the index JSON; pin them under model_dir.
         shard = self._wmap[key]
-        f = self._open.get(shard) or self._open.setdefault(shard, safe_open(self.model_dir / shard, framework="pt"))
+        f = self._open.get(shard) or self._open.setdefault(
+            shard, safe_open(safe_join(self.model_dir, shard), framework="pt")
+        )
         return f.get_tensor(key)
 
     def load_prefix(self, prefix):
@@ -751,7 +757,8 @@ def main():
     down_sd, up_sd = weights.load_prefix("patch_embed"), weights.load_prefix("final_layer")
     LATENT, HID, HSZ = _pe_dims(down_sd)
 
-    proc = HunyuanImage3ImageProcessor(json.load(open(model_dir / "config.json")))
+    with open(safe_join(model_dir, "config.json")) as f:
+        proc = HunyuanImage3ImageProcessor(json.load(f))
     cond_list, pil_list = _load_cond_images(proc, args.cond, infer_align=args.infer_align_image_size)
     cond_for_bundle = cond_list if len(cond_list) > 1 else cond_list[0]
 
