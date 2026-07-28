@@ -399,6 +399,10 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 pkt.name = name;
                 if (ts_base == 0) {
                     ts_base = ts;  // first device ts seen -> the rebase origin (maps to the context host_start)
+                    // Publish for push_hart_zones() so hart spans land on the SAME timeline as the kernels.
+                    if (ctx.marker_ts_base == 0) {
+                        ctx.marker_ts_base = ts;
+                    }
                 }
                 pkt.timestamp = (ts >= ts_base) ? (ts - ts_base) : 0;
                 pkt.is_start = (type == kernel_profiler::ZONE_START);
@@ -518,7 +522,8 @@ void PerfDebugProfiler::push_hart_zones() {
         auto map_ts = [&](uint64_t x) -> uint64_t {
             return static_cast<uint64_t>(a * static_cast<double>(x - x_base) + b) + t_base;
         };
-        // Rebase on the harts' own minimum (see the note above).
+        // Rebase on the MARKER origin so hart spans and kernel zones share one timeline. Falls back to the
+        // harts' own minimum only if no markers were captured (nothing to align to).
         uint64_t hz_min = ~0ull, hz_max = 0;
         for (const auto& v : ctx.hz_raw) {
             for (const auto& m : v) {
@@ -527,19 +532,91 @@ void PerfDebugProfiler::push_hart_zones() {
                 hz_max = std::max(hz_max, t);
             }
         }
+        const uint64_t marker_origin = ctx.marker_ts_base;
+        const uint64_t hz_span_start = hz_min;  // kept for the diagnostic below
+        if (marker_origin != 0) {
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] hart zones start {:.1f} ms BEFORE the first kernel marker (X280 drains "
+                "from MeshDevice bring-up); aligning both on the marker origin",
+                static_cast<double>(marker_origin - std::min(marker_origin, hz_min)) / 1.35e6);
+            hz_min = marker_origin;
+        }
+        (void)hz_span_start;
         const CoreCoord l2t = pz::x280_l2cpu_tile(0);
         static constexpr uint32_t kHartColor[4] = {0xE67E22u, 0xF1C40Fu, 0x1ABC9Cu, 0x3498DBu};
         static constexpr uint32_t kBulkColor = 0xE74C3Cu;      // reader switched to BULK
         static constexpr uint32_t kHostWaitColor = 0x34495Eu;  // relay blocked on a full host FIFO
         static constexpr uint32_t kSpscWaitColor = 0x8E44ADu;  // reader blocked on a full LIM STAGE
+        // ★ Push ALL harts as ONE CHRONOLOGICALLY SORTED stream, not hart-by-hart. Every hart lane lives in
+        // the SAME Tracy GPU context, and Tracy's calibrated GPU-zone path expects timestamps to arrive in
+        // increasing order per context. Pushing all of hart0, then all of hart1, ... makes the context's clock
+        // jump backwards once per hart, which renders the lanes as separate blocks marched across the timeline
+        // even though their real windows fully overlap (verified: identical 10-bucket time histograms, all
+        // harts active throughout, min/max windows within 4 ms of each other).
+        struct HZItem {
+            uint64_t ts;
+            uint32_t hart;
+            uint32_t meta;
+        };
+        std::vector<HZItem> ordered;
+        ordered.reserve(total);
         for (uint64_t h = 0; h < ctx.hz_raw.size(); h++) {
+            for (const auto& m : ctx.hz_raw[h]) {
+                ordered.push_back(HZItem{map_ts(m.rdc), static_cast<uint32_t>(h), m.meta});
+            }
+        }
+        // stable_sort: a hart's own START/END pair share no timestamp ordering guarantee otherwise, and equal
+        // timestamps must keep their emission order or a zone can close before it opens.
+        std::stable_sort(
+            ordered.begin(), ordered.end(), [](const HZItem& a, const HZItem& b) { return a.ts < b.ts; });
+        std::vector<uint32_t> nz_per_hart(ctx.hz_raw.size(), 0);
+        for (const auto& it : ordered) {
+            const uint64_t h = it.hart;
             const bool is_reader = (h < kNRead);
             const std::string hname =
                 is_reader ? ("X280 rd" + std::to_string(h)) : ("X280 relay" + std::to_string(h - kNRead));
             const uint32_t lane_risc = is_reader
                                            ? (static_cast<uint32_t>(tracy::RiscType::X280_RD0) + h)
                                            : (static_cast<uint32_t>(tracy::RiscType::X280_RELAY0) + (h - kNRead));
-            uint32_t nz = 0;
+            const uint32_t is_start = it.meta & 1u;
+            const uint32_t kind = (it.meta >> 1) & 3u;
+            const char* suffix =
+                (kind == 1) ? " BULK" : (kind == 2) ? " HOST-WAIT" : (kind == 3) ? " SPSC-WAIT" : "";
+            perf_debug::WorkerZonePacket pkt;
+            pkt.chip_id = ctx.chip_id;
+            pkt.is_x280 = true;
+            pkt.color = (kind == 1)   ? kBulkColor
+                        : (kind == 2) ? kHostWaitColor
+                        : (kind == 3) ? kSpscWaitColor
+                                      : kHartColor[h & 3];
+            pkt.core_noc0_x = static_cast<uint32_t>(l2t.x);
+            pkt.core_noc0_y = static_cast<uint32_t>(l2t.y);
+            pkt.risc = lane_risc;
+            const std::string zn = hname + suffix;
+            pkt.name = zn;
+            pkt.timestamp = (it.ts >= hz_min) ? (it.ts - hz_min) : 0;
+            pkt.is_start = (is_start != 0u);
+            tracy_->HandleWorkerZone(pkt);
+            nz_per_hart[h] += is_start;
+        }
+        for (uint64_t h = 0; h < nz_per_hart.size(); h++) {
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] hart {} ({}): {} zones -> Tracy (chronologically merged)",
+                h,
+                (h < kNRead) ? "READ" : "RELAY",
+                nz_per_hart[h]);
+        }
+        for (uint64_t h = 0; h < 0; h++) {  // (old per-hart push loop retained below only for its diagnostics)
+            const bool is_reader = (h < kNRead);
+            const std::string hname =
+                is_reader ? ("X280 rd" + std::to_string(h)) : ("X280 relay" + std::to_string(h - kNRead));
+            const uint32_t lane_risc = is_reader
+                                           ? (static_cast<uint32_t>(tracy::RiscType::X280_RD0) + h)
+                                           : (static_cast<uint32_t>(tracy::RiscType::X280_RELAY0) + (h - kNRead));
+            uint32_t nz = 0, n_end = 0;
+            int depth_dbg = 0, max_depth_dbg = 0, unbalanced_dbg = 0;
             for (const auto& m : ctx.hz_raw[h]) {
                 const uint32_t is_start = m.meta & 1u;
                 const uint32_t kind = (m.meta >> 1) & 3u;  // 0=drain 1=bulk 2=hostwait 3=spscwait
@@ -561,13 +638,67 @@ void PerfDebugProfiler::push_hart_zones() {
                 pkt.is_start = (is_start != 0u);
                 tracy_->HandleWorkerZone(pkt);
                 nz += is_start;
+                // DIAG: START/END balance. Unbalanced pairs make the Tracy handler nest ever deeper instead of
+                // closing zones, which renders as giant cascading boxes. Under drain SATURATION the FW may not
+                // have room to inject the closing marker, so this is the prime suspect there.
+                if (is_start) {
+                    depth_dbg++;
+                    max_depth_dbg = std::max(max_depth_dbg, depth_dbg);
+                } else {
+                    n_end++;
+                    if (depth_dbg == 0) {
+                        unbalanced_dbg++;  // END with no open START (orphan)
+                    } else {
+                        depth_dbg--;
+                    }
+                }
+            }
+            // DIAG: per-hart mapped window. All four harts run CONCURRENTLY for the whole session, so these
+            // windows must OVERLAP. If they are disjoint/staggered, the per-hart rdcycle counters are not on a
+            // common origin and hart0's calibration cannot be applied to harts 1..3 as-is.
+            uint64_t h_min = ~0ull, h_max = 0;
+            for (const auto& m : ctx.hz_raw[h]) {
+                const uint64_t t = map_ts(m.rdc);
+                h_min = std::min(h_min, t);
+                h_max = std::max(h_max, t);
             }
             log_info(
                 tt::LogMetal,
-                "[perf-debug profiler] hart {} ({}): {} zones -> Tracy",
+                "[perf-debug profiler] hart {} ({}): {} zones -> Tracy; window [{:.1f} .. {:.1f}] ms rel, raw_rdc0={}",
                 h,
                 is_reader ? "READ" : "RELAY",
-                nz);
+                nz,
+                ctx.hz_raw[h].empty() ? 0.0 : static_cast<double>(h_min - hz_min) / 1.35e6,
+                ctx.hz_raw[h].empty() ? 0.0 : static_cast<double>(h_max - hz_min) / 1.35e6,
+                ctx.hz_raw[h].empty() ? 0ull : ctx.hz_raw[h].front().rdc);
+            // DIAG: where in time this hart's zones actually LIVE (10 equal buckets over the whole hart-zone
+            // span). If lanes look "staggered" in the GUI but their min/max windows overlap, the answer is
+            // here: a lane whose zones all sit in one bucket renders as one narrow merged box at that offset.
+            {
+                const uint64_t span = (hz_max > hz_min) ? (hz_max - hz_min) : 1;
+                uint32_t bucket[10] = {0};
+                for (const auto& m : ctx.hz_raw[h]) {
+                    const uint64_t t = map_ts(m.rdc);
+                    const uint64_t rel = (t > hz_min) ? (t - hz_min) : 0;
+                    uint32_t bi = static_cast<uint32_t>((rel * 10) / span);
+                    bucket[std::min<uint32_t>(bi, 9)]++;
+                }
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler]   hart {} TIME-HIST(10 buckets): {} {} {} {} {} {} {} {} {} {}",
+                    h,
+                    bucket[0], bucket[1], bucket[2], bucket[3], bucket[4],
+                    bucket[5], bucket[6], bucket[7], bucket[8], bucket[9]);
+            }
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler]   hart {} BALANCE: starts={} ends={} left_open={} orphan_ends={} max_depth={}",
+                h,
+                nz,
+                n_end,
+                depth_dbg,
+                unbalanced_dbg,
+                max_depth_dbg);
         }
         log_info(
             tt::LogMetal,

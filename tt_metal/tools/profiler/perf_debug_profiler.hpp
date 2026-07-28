@@ -101,6 +101,14 @@ private:
         };
         std::vector<std::vector<HZMark>> hz_raw;  // sized kNRead + kNRelay when enabled
         uint64_t nharts = 0;
+        // Marker rebase origin (first worker-kernel device ts seen by ANY socket), published so the hart-zone
+        // push can share it. The hart spans MUST use the same origin as the markers: the X280 starts draining
+        // at MeshDevice bring-up, seconds before the model runs, so rebasing the harts on their own first span
+        // shifts their whole lane left of the kernels.
+        // Plain (not atomic): DeviceCtx must stay movable, and the only contention is two drain threads both
+        // wanting to record "the first marker ts". Whichever wins differs by microseconds -- irrelevant for an
+        // origin, so the benign race is preferable to making the struct unmovable.
+        uint64_t marker_ts_base = 0;
 
         DeviceCtx();
         ~DeviceCtx();
