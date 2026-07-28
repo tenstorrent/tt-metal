@@ -371,6 +371,35 @@ def test_l1_single_layer_pcc(mesh_device):
                 pass
 
 
+@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_walltime_l1_single_layer(mesh_device):
+    """L1 decode_all traced-replay wall-clock only — runs at ANY tile height.
+
+    The l1-vs-dram walltime test below needs the DRAM path and so is 32x32-only, which leaves no
+    way to compare tile geometries. This one times just the L1 stage, so
+    ``PI05_TILE_HEIGHT=32`` vs ``=16`` gives the tiny-tile speedup directly.
+    """
+    config, ah, suffix_len, bw, ref_blocks, adarms_cond, hidden, prefix_kv, mask, _ = _setup(mesh_device)
+
+    l1_dev, l1_fwd = _build_l1(
+        mesh_device, ref_blocks, config.expert_config, config, suffix_len, ah, adarms_cond, prefix_kv, mask
+    )
+    x = from_torch_pi05(hidden, dtype=ttnn.bfloat16, device=mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    l1_dev.append(x)
+    try:
+        l1_med = _time_replay(mesh_device, l1_fwd, x)
+    finally:
+        for t in l1_dev:
+            try:
+                ttnn.deallocate(t)
+            except Exception:
+                pass
+        ttnn.synchronize_device(mesh_device)
+
+    print(f"\n[walltime L1 single-layer] TILE_HEIGHT={TILE_HEIGHT} suffix_len={suffix_len} L1={l1_med:.3f} ms")
+
+
 @_DRAM_PATH_NEEDS_TILE32
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)

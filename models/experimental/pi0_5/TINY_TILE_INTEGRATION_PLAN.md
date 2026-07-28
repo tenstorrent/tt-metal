@@ -106,6 +106,42 @@ Deferred: the full 713-item `test_tilize.py` sweep (~5 h at ~25 s/param since ea
 32-chip mesh). 35/35 passed before it was stopped; re-run it and the `i2s`/`s2i` regressions
 out-of-band.
 
+### Stage 5/6 — model correctness + perf
+
+`test_l1_single_layer_pcc` (the reference gate) **passes at both tile heights, PCC 0.9999** vs the
+torch oracle. At `TILE_HEIGHT=32` all three tests pass, so the merge did not regress the existing
+32×32 path.
+
+Three more defects had to be fixed to get there — see the commit log. The notable one:
+**`concat_heads_matmul` was never bound to Python.** It is built and in `sources.cmake`, and
+`bind_concat_heads_matmul` is declared *and defined*, but `experimental_nanobind.cpp` only called
+`bind_concat_heads_matmul_decode`. `ttnn_gemma.py` called it directly and unguarded, so the DRAM
+ExpertChunkSlice denoise path was broken — **pre-existing on our branch, not a merge regression**
+(pre-merge made the same call with the same missing bind). Fixing the bind restored that path.
+
+Perf, L1 single-layer traced replay (`test_walltime_l1_single_layer`, added because the existing
+walltime test needs the DRAM path and so is 32×32-only):
+
+| Configuration | median | note |
+|---|---|---|
+| tile-32, **fused** rope | 0.1825 ms | current baseline |
+| tile-32, unfused rope | 0.2130 ms (n=3, 0.212–0.214) | |
+| tile-16, unfused rope | 0.2010 ms (n=3, 0.198–0.201) | |
+
+Two independent deltas:
+- **The tile geometry is a real ~5.6% win** (tile-16 beats tile-32 on identical code; ranges do not
+  overlap across 4 paired runs).
+- **Losing the fused rope costs ~0.030 ms / +17%** — the `nlp_create_qkv_heads_rope` fallback turns
+  1 dispatch into 3.
+
+So tiny tile as integrated is ~10% slower than baseline *entirely because of the defusion*, not the
+geometry. Making the rope op tiny-tile aware should land tile-16 near ~0.171 ms vs the 0.1825 ms
+baseline (~6% better) — consistent with the measured geometry win.
+
+The gain is ~5%, not the ~2× that "half the M-work" would suggest, because SDPA forces
+`subblock_w == 1` on partial-face tiles and the hot path pays a retile (`ttnn.tilize` + `ttnn.slice`
+on the SDPA output). Both are documented LLK/kernel limitations, not tuning knobs.
+
 ## Conflict resolution notes
 
 All 18 resolved as follows.
