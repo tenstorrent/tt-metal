@@ -116,15 +116,10 @@ def test_masked_bincount(
             hist = torch_masked_bincount(chip_indices, dispatch_table[group], n_routed_experts)
             torch_histograms[(group, chip)] = hist
 
-    # Height-shard config matching the gate module pattern: 8x8 core grid
+    # masked_bincount consumes the gate's output directly: UINT16, TILE, L1-interleaved. The op
+    # untiles in-kernel and splits the token rows across a fixed 8x8 (64-core) grid internally.
     num_cores = 64
     assert sp_dim % num_cores == 0, f"sp_dim={sp_dim} must be divisible by {num_cores}"
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(sp_dim // num_cores, topk),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
 
     # Shard dim 0 across the dispatch axis, replicate across TP axis
     mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -133,15 +128,15 @@ def test_masked_bincount(
         dims=(0, None) if sp_axis == 0 else (None, 0),
     )
 
-    # UINT16 as required by the kernel
+    # UINT16, TILE, L1-interleaved: mirrors the gate's actual indices output that the op consumes.
     tt_indices = ttnn.from_torch(
         indices.to(torch.int16),
         mesh_mapper=mesh_mapper,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.uint16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    tt_indices = ttnn.to_memory_config(tt_indices, sharded_mem_config)
 
     tt_dispatch_table = ttnn.from_torch(
         dispatch_table,
@@ -230,14 +225,6 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
     for e in range(num_present):
         dispatch_table[0, e] = 0
 
-    # Height-shard config matching the gate module pattern: 8x8 core grid
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(rows_per_core, topk),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
-
     # Place dispatch table on device (static across iterations)
     tt_dispatch_table = ttnn.from_torch(
         dispatch_table,
@@ -267,15 +254,15 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
         # Torch reference
         reference = torch_masked_bincount(indices, dispatch_table[0], n_routed_experts)
 
-        # Place indices on device
+        # Place indices on device: UINT16, TILE, L1-interleaved (as the gate emits; untiled in-kernel)
         tt_indices = ttnn.from_torch(
             indices.to(torch.int16),
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             dtype=ttnn.uint16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        tt_indices = ttnn.to_memory_config(tt_indices, sharded_mem_config)
 
         # Run TTNN op
         tt_hist = ttnn.experimental.deepseek_prefill.masked_bincount(
