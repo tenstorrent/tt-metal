@@ -49,15 +49,12 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.dropout_prob = dropout
         self.rope_params = rope_params
         self.sequence_parallel = sequence_parallel
+        # Distinct mask per device only when each holds distinct data.
+        self.dropout_per_device_seed = sequence_parallel or not use_tp
 
         head_dim = embedding_size // num_heads
-        # GLOBAL head counts: the fused [Q|K|V] weight is built full-size, then sharded by
-        # ColumnParallelLinear and interleaved per device so each shard is a self-contained
-        # [local-Q | local-K | local-V].
         qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
 
-        # Stored counts are LOCAL (per-device) for heads_creation. Both must divide the TP size
-        # evenly, or a device gets a fractional head/group and attention is silently wrong.
         if use_tp:
             tp_size = ttml.mesh().axis_size("tp")
             if num_heads % tp_size != 0:
@@ -118,8 +115,7 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            # SP: per-device seed so each sequence shard is masked independently.
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self.sequence_parallel)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self.dropout_per_device_seed)
 
         return out
 
@@ -168,8 +164,7 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            # SP: per-device seed so each sequence shard is masked independently.
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self.sequence_parallel)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self.dropout_per_device_seed)
 
         return out
 
