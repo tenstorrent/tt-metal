@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
     const uint32_t ring_size = TT_RDMA_RX_RING_BIG_SIZE;
     constexpr uint32_t kWStats = 0x40000u;
     constexpr uint32_t kWStop = 0x40040u;
+    constexpr uint32_t kWHead = 0x40080u;  // 3.1f: RISC1 pushes the produce head here (worker-local)
     constexpr uint32_t kWScratch = 0x50000u;
     constexpr uint32_t kWMr = 0x60000u;
     constexpr uint32_t kMrSlots = 64u;
@@ -120,6 +121,7 @@ int main(int argc, char** argv) {
     for (uint32_t i = 0; i < nworkers; ++i) {
         cluster.write_core(device->id(), wphys[i], z10, kWStats);
         cluster.write_core(device->id(), wphys[i], std::vector<uint32_t>{0u}, kWStop);
+        cluster.write_core(device->id(), wphys[i], std::vector<uint32_t>{0u}, kWHead);  // head=0 until RISC1 pushes
         cluster.write_core(device->id(), wphys[i], mrempty, kWMr);  // empty cache; refreshed from RISC1 on gen bump
     }
 
@@ -127,11 +129,13 @@ int main(int argc, char** argv) {
     const EthernetConfig ecfg{.noc = NOC::NOC_1, .processor = DataMovementProcessor::RISCV_1};
     const KernelHandle ek =
         CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_rx_ctrl.cpp", eth_logical, ecfg);
-    SetRuntimeArgs(
-        program,
-        ek,
-        eth_logical,
-        {(uint32_t)eth_stats_addr, TT_RDMA_STOP_ADDR, ring_addr, ring_size, kSharedMr, kRegReq});
+    std::vector<uint32_t> ctrl_args{
+        (uint32_t)eth_stats_addr, TT_RDMA_STOP_ADDR, ring_addr, ring_size, kSharedMr, kRegReq, nworkers, kWHead};
+    for (uint32_t i = 0; i < nworkers; ++i) {  // worker NoC coords so RISC1 can push the head to each
+        ctrl_args.push_back((uint32_t)wphys[i].x);
+        ctrl_args.push_back((uint32_t)wphys[i].y);
+    }
+    SetRuntimeArgs(program, ek, eth_logical, ctrl_args);
 
     const DataMovementConfig dcfg{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
     for (uint32_t i = 0; i < nworkers; ++i) {
@@ -153,7 +157,7 @@ int main(int argc, char** argv) {
              kWScratch,
              kWMr,
              kMrSlots,
-             (uint32_t)eth_stats_addr + 8u,  // produce head = ingest kernel's PKT_END_CNT (stats[2])
+             kWHead,  // 3.1f: produce head is worker-LOCAL (RISC1 pushes PKT_END here) -- no NoC read
              kSharedMr,                      // shared MR table on the eth core
              kMrGen,                         // MR generation counter on the eth core
              (uint32_t)cqc.x,                // completion ring core x
@@ -254,13 +258,12 @@ int main(int argc, char** argv) {
             ++workers_on_gen2;
         }
         std::printf(
-            "    worker %u: produced_seen=%u first_produced=%u phead_addr=0x%x processed=%u lapped=%u completions=%u\n",
+            "    worker %u: produced_seen=%u processed=%u lapped=%u valid=%u completions=%u\n",
             i,
             w[5],
-            w[8],
-            w[9],
             w[3],
             w[4],
+            w[2],
             w[7]);
     }
     // Shared-MR-table check: after the central invalidate, every worker must have refreshed to gen 2 and

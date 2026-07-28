@@ -57,8 +57,10 @@ void kernel_main() {
         *stop = 0;
     }
     volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-    // Local mirror of the produce head; NoC-read from the eth core's published PKT_END_CNT.
-    volatile tt_l1_ptr uint32_t* ph = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x3000u);
+    // Produce head: the control-plane RISC1 PUSHES the live PKT_END into this LOCAL L1 slot every iteration,
+    // so the worker reads it locally -- NO NoC read of the eth core (that returned stale values at large
+    // frame stride). phead_addr is now a local (this-worker) L1 address, not an eth-core address.
+    volatile tt_l1_ptr uint32_t* ph = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(phead_addr);
     // Local mirror of the MR generation counter (separate scratch slot from the produce head).
     volatile tt_l1_ptr uint32_t* mg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x3010u);
 
@@ -83,14 +85,8 @@ void kernel_main() {
             cached_gen = mg[0];
         }
 
-        // Refresh the produce head (PKT_END_CNT) from the eth core. Cheap: one NoC read per claim batch.
-        noc_async_read(get_noc_addr(src_x, src_y, phead_addr), scratch + 0x3000u, 4u);
-        noc_async_read_barrier();
+        // Read the produce head from LOCAL L1 (pushed by RISC1) -- no NoC read, no stale-read hazard.
         produced = ph[0];
-        if (poll == 0u) {
-            stats[8] = produced;    // DEBUG: first produce-head read
-            stats[9] = phead_addr;  // DEBUG: the phead L1 addr this worker was given
-        }
 
         // Lapping guard: if the MAC has advanced > (nslots - N) frames past our next index, our claimed
         // slot is already overwritten -> jump to the freshest index we own and count the skipped gap.

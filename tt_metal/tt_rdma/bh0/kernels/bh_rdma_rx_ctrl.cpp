@@ -13,18 +13,29 @@
 
 #include <cstdint>
 
+#include "internal/ethernet/dataflow_api.h"  // noc_async_write + get_noc_addr (push the head to workers)
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_eth_rx.h"
 
 void kernel_main() {
     // arg0 stats base (L1)  arg1 stop flag  arg2 rx_buf byte addr  arg3 rx_buf size bytes
     // arg4 shared MR table L1 addr (this core)  arg5 registration-request L1 addr (this core)
+    // arg6 num workers  arg7 head L1 addr on EACH worker  arg8+2i worker[i] NoC x  arg9+2i worker[i] NoC y
     const uint32_t stats_addr = get_arg_val<uint32_t>(0);
     const uint32_t stop_addr = get_arg_val<uint32_t>(1);
     const uint32_t rx_buf = get_arg_val<uint32_t>(2);
     const uint32_t rx_buf_size = get_arg_val<uint32_t>(3);
     const uint32_t mr_table = get_arg_val<uint32_t>(4);
     const uint32_t reg_req = get_arg_val<uint32_t>(5);
+    const uint32_t nworkers = get_arg_val<uint32_t>(6);
+    const uint32_t head_local = get_arg_val<uint32_t>(7);  // where on each worker to write the produce head
+    // Cache the worker NoC coords (max 16) so we don't re-read args every loop iteration.
+    uint32_t wx[16], wy[16];
+    const uint32_t nw = (nworkers < 16u) ? nworkers : 16u;
+    for (uint32_t w = 0; w < nw; ++w) {
+        wx[w] = get_arg_val<uint32_t>(8u + 2u * w);
+        wy[w] = get_arg_val<uint32_t>(9u + 2u * w);
+    }
 
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
     volatile tt_l1_ptr uint32_t* stop =
@@ -50,6 +61,14 @@ void kernel_main() {
         stats[4] = TT_ETH_REG32(qb + TT_ETH_RXQ_BUF_PTR);
         stats[8] = ++iters;
         stats[9] = n_reg;  // MR registrations fulfilled by the control plane
+
+        // 3.1f: PUSH the produce head (PKT_END) to each worker's LOCAL L1. Workers then read it locally --
+        // no NoC read of this eth core (that returned stale values at large frame stride). Source is the
+        // just-written stats[2] in this core's L1 (NoC-write source must be L1). Cheap: N x 4-byte writes.
+        for (uint32_t w = 0; w < nw; ++w) {
+            noc_async_write(stats_addr + 8u, get_noc_addr(wx[w], wy[w], head_local), 4u);
+        }
+        noc_async_write_barrier();
 
         // Control op: MR registration. On the doorbell, write the MR entry into the shared table and bump
         // the generation so every worker refreshes its cache -- RISC1 is the registration authority.
