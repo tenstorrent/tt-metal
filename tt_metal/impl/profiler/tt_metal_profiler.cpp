@@ -822,7 +822,11 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     const ChipId device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
-    const CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    const CoreType dispatch_core_type =
+        resolve_dispatch_core_type(
+            MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
+            device_id,
+            dispatch_core_config);
     std::vector<CoreCoord> dispatch_cores;
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(
              MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
@@ -1066,7 +1070,8 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
     }
 
     if (env.get_rtoptions().get_profiler_do_dispatch_cores()) {
-        const CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+        const CoreType dispatch_core_type =
+            resolve_dispatch_core_type(env, device_id, dispatch_core_config);
         for (const CoreCoord& core :
              tt::get_logical_dispatch_cores(env, device_id, device_num_hw_cqs, dispatch_core_config)) {
             const CoreCoord curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
