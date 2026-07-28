@@ -993,23 +993,21 @@ def test_glm_prefill_block(
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
     experts_per_chip = GLM51Config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
     effective_cache = (weight_cache_path / f"{sp_factor}x{tp_factor}") if weight_cache_path is not None else None
+    # The isolated MoE block is only meaningful on RANDOM weights, so it never consults the ttnn cache:
+    # a random block input drives GLM's trained near-degenerate top-8 gate to pick different experts on
+    # device vs the CPU reference (block PCC collapses to ~0.1), though the same layer scores ~0.995
+    # in-context in test_glm_prefill_transformer — a real-weight-gate x random-input artifact, not an
+    # op/weight bug. On random weights the gate is non-degenerate and the block matches (~0.99). Forcing
+    # random here keeps the MoE path exercised regardless of what the cache holds; real-weight MoE-gate
+    # coverage lives in test_glm_prefill_transformer and test_ttnn_moe. The dense case still loads real
+    # weights when the cache is complete.
     use_pretrained = False
     if effective_cache is not None:
         effective_cache.mkdir(parents=True, exist_ok=True)
         init_checker(effective_cache)  # required before check_cache_complete / pattern_exists
-        use_pretrained = TtPrefillBlock.check_cache_complete(effective_cache, layer_idx, not is_moe, experts_per_chip)
+        if not is_moe:
+            use_pretrained = TtPrefillBlock.check_cache_complete(effective_cache, layer_idx, True, experts_per_chip)
     logger.info(f"[glm block {layer_type}] use_pretrained={use_pretrained} (ttnn cache={effective_cache})")
-
-    # Real-weight isolated MoE block: skip. A random block input drives GLM's trained near-degenerate
-    # top-8 gate to pick different experts on device vs the CPU reference (block PCC collapses to ~0.1),
-    # though the same layer scores ~0.995 in-context in test_glm_prefill_transformer. Not an op/weight
-    # bug — a real-weight-gate x random-input artifact. On RANDOM weights the gate is non-degenerate and
-    # the block matches (~0.99), so CI (empty cache -> random) still exercises the MoE path here; the
-    # real-weight MoE gate is covered by test_glm_prefill_transformer and test_ttnn_moe.
-    if is_moe and use_pretrained:
-        pytest.skip(
-            "isolated real-weight MoE block diverges under the degenerate top-8 gate on random input (see comment)"
-        )
 
     if use_pretrained:
         # Device loads real weights from the cache; reference uses matching host weights from the checkpoint.
