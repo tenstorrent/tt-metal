@@ -237,7 +237,12 @@ class _Blocking:
         # Extra resident depth overlaps row-block hb+1's read with hb's compute,
         # so it likewise needs NH_core > 1 — and needs spare latency to hide
         # (see the grid_full note above).
-        if self.x_resident and not self.grid_full and self.nh_core_max > 1:
+        #
+        # It is also meaningless on the RM path: there cb_input_tiles is produced
+        # by compute's own tilize and consumed by compute's square/mul, so its
+        # producer and consumer are the SAME RISC. A second strip cannot be
+        # filled ahead — it would only cost L1 (and can evict gamma).
+        if self.x_resident and not self.is_rm and not self.grid_full and self.nh_core_max > 1:
             for depth in range(X_RESIDENT_DEPTH, self.x_res_depth, -1):
                 if self._cb_total(depth, self.gamma_resident) <= L1_CB_BUDGET_BYTES:
                     self.x_res_depth = depth
@@ -355,11 +360,14 @@ def _x_read_chunks(blk):
     return blk.nw if blk.grid_full else 1
 
 
-def _core_assignment(device, ht_total):
-    """§5: split the independent tile-row axis over the whole compute grid."""
-    grid = device.compute_with_storage_grid_size()
+def _core_assignment(grid, ht_total):
+    """§5: split the independent tile-row axis over the whole compute grid.
+
+    `grid` is the ONE grid object the caller also sized the blocking against —
+    never re-derived here, so `grid_full` and the actual split can't disagree.
+    """
     (
-        _num_cores,
+        _split_num_cores,
         all_cores,
         group_1,
         group_2,
@@ -376,7 +384,7 @@ def _core_assignment(device, ht_total):
             assignment.append((core, start, per_core))
             start += per_core
     assert start == ht_total, f"work split covered {start} of {ht_total} tile-rows"
-    return all_cores, assignment, len(assignment), grid.x * grid.y
+    return all_cores, assignment
 
 
 def create_program_descriptor(
@@ -394,9 +402,8 @@ def create_program_descriptor(
         else input_tensor.device().compute_with_storage_grid_size()
     )
     blk = _derive_blocking(input_tensor, gamma, grid.x * grid.y)
-    device = device if device is not None else input_tensor.device()
 
-    all_cores, assignment, _num_cores, _grid_cores = _core_assignment(device, blk.ht_total)
+    all_cores, assignment = _core_assignment(grid, blk.ht_total)
     x_read_chunks = _x_read_chunks(blk)
 
     # ---------- circular buffers ----------
@@ -431,8 +438,11 @@ def create_program_descriptor(
     ]
     knobs = [blk.Wt, blk.wt_chunk, blk.wt_last, blk.nw, blk.ht_block, x_read_chunks]
 
-    # ---------- reader (NCRISC / NoC0) ----------
-    reader_ct_args = (
+    # The reader and the writer share ONE compile-time-arg layout (indices 0..17,
+    # TensorAccessorArgs from 18). Built once here so a knob added to either
+    # kernel cannot drift between the two — the CT index each kernel reads is
+    # then guaranteed to name the same quantity.
+    dataflow_ct_args = (
         regime
         + knobs
         + [
@@ -444,6 +454,14 @@ def create_program_descriptor(
             blk.total_sticks,
         ]
     )
+    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<18>
+    assert DATAFLOW_ACCESSOR_ARG_BASE == 18, (
+        "rms_norm: reader/writer read TensorAccessorArgs<18>; the shared CT block "
+        f"is now {DATAFLOW_ACCESSOR_ARG_BASE} long — update both kernels together"
+    )
+
+    # ---------- reader (NCRISC / NoC0) ----------
+    reader_ct_args = list(dataflow_ct_args)
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -473,18 +491,7 @@ def create_program_descriptor(
     )
 
     # ---------- writer (BRISC / NoC1) ----------
-    writer_ct_args = (
-        regime
-        + knobs
-        + [
-            blk.w_valid_last,
-            chunk_row_bytes,
-            last_row_bytes,
-            g_chunk_row_bytes,
-            g_last_row_bytes,
-            blk.total_sticks,
-        ]
-    )
+    writer_ct_args = list(dataflow_ct_args)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_kernel = ttnn.KernelDescriptor(
