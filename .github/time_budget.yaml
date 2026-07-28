@@ -237,7 +237,7 @@ runtime:
     bh_p150b_civ2: 214
     bh_p300: 69
     bh_p150b_civ2_viommu: 11
-    bh_p100a_civ2_viommu: 74
+    bh_p100a_civ2_viommu: 79
     bh_loudbox: 20
     wh_galaxy: 39
   integration:
@@ -369,7 +369,8 @@ models:
     wh_galaxy_perf: 150
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
-    bh_sc1: 480
+    bh_sc1: 377
+    bh_sc1_high_power: 108
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
