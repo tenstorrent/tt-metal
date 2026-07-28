@@ -173,6 +173,12 @@ enum class DstTileShape : std::uint8_t
     Tile32x32 = 6
 };
 
+constexpr std::uint32_t get_dest_tile_size_log2(const DstTileShape tile_shape)
+{
+    return ckernel::to_underlying(tile_shape) < ckernel::to_underlying(DstTileShape::Tile32x8) ? ckernel::to_underlying(DstTileShape::Tile32x8)
+                                                                                               : ckernel::to_underlying(tile_shape);
+}
+
 /**
  * @brief Calculates the maximum number of tiles that fit in the math destination region.
  *
@@ -187,14 +193,11 @@ enum class DstTileShape : std::uint8_t
 template <ckernel::DstSync SYNC_MODE, bool ACCUM_MODE, DstTileShape TILE_SHAPE>
 constexpr std::uint32_t get_dest_max_tiles()
 {
-    constexpr std::uint32_t DEST_REGISTER_SIZE  = SYNC_MODE == ckernel::DstSync::SyncHalf
-                                                      ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
-                                                      : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
-    constexpr std::uint32_t DEST_TILE_SIZE_LOG2 = ckernel::to_underlying(TILE_SHAPE) < ckernel::to_underlying(DstTileShape::Tile32x8)
-                                                      ? ckernel::to_underlying(DstTileShape::Tile32x8)
-                                                      : ckernel::to_underlying(TILE_SHAPE);
+    constexpr std::uint32_t DEST_REGISTER_SIZE = SYNC_MODE == ckernel::DstSync::SyncHalf
+                                                     ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                     : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
 
-    return DEST_REGISTER_SIZE >> DEST_TILE_SIZE_LOG2;
+    return DEST_REGISTER_SIZE >> get_dest_tile_size_log2(TILE_SHAPE);
 }
 
 /**
