@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -137,7 +137,6 @@ def _to_host(output_tensor, mesh_device):
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 2048}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_two_matmul_pipeline_transfer_host_time(mesh_device):
     torch.manual_seed(0)
 
