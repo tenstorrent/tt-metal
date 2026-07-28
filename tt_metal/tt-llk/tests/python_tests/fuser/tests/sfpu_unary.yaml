@@ -5,13 +5,13 @@ dest_acc: true
 
 operands:
   - name: "input_A"
-    dims: [32, 32]
+    dims: [64, 64]
     format: "Float32"
   - name: "input_B"
-    dims: [32, 32]
+    dims: [64, 64]
     format: "Float32"
   - name: "datacopy_out"
-    dims: [32, 32]
+    dims: [64, 64]
     format: "Float32"
 
 operations:
@@ -27,7 +27,7 @@ operations:
         operation: "Exp"
         approximation_mode: false
         iterations: 32
-    block_size: [32, 32]
+    block_size: [64, 64]
     pack:
       - output: "datacopy_out"
         packer: "Packer"

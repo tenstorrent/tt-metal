@@ -201,8 +201,8 @@ class FuserConfigSchema(BaseModel):
             )
 
         for i, operation in enumerate(pipeline):
-            operation.has_pack_consumer = any(
-                pipeline[j].needs_pack_sync for j in range(i + 1, num_stages)
+            operation.has_pack_consumer = (
+                i + 1 < num_stages and pipeline[i + 1].needs_pack_sync
             )
 
         return FuserConfig(

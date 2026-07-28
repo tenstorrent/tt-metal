@@ -109,7 +109,6 @@ operations:
         operation: "Neg"
         approximation_mode: false
         iterations: 32
-    dest_sync: "SyncFull"
 
     pack:
       - output: "elwadd_output"

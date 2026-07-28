@@ -27,6 +27,7 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     Transpose,
+    UnpackToDest,
 )
 from pydantic import Field
 
@@ -47,10 +48,18 @@ _no_broadcast = (
     "Quasar does not support broadcast in fuser",
 )
 
-_no_transpose = (
-    lambda s, a, b: s.unpack_transpose_faces == Transpose.Yes
-    or s.unpack_transpose_within_face == Transpose.Yes,
-    "Quasar does not support transpose in unpack",
+_no_transpose_unpack_to_dest = (
+    lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes
+    and (
+        s.unpack_transpose_faces == Transpose.Yes
+        or s.unpack_transpose_within_face == Transpose.Yes
+    ),
+    "Quasar does not support transpose with unpack_to_dest",
+)
+
+_no_transpose_mismatch = (
+    lambda s, a, b: s.unpack_transpose_faces != s.unpack_transpose_within_face,
+    "Quasar requires both transpose_faces and transpose_within_face to have the same value",
 )
 
 _dest_to_srca_needs_acc = (
@@ -86,7 +95,8 @@ _no_broadcast_acc_to_dest = (
 )
 
 _eltwise_checks = [
-    _no_transpose,
+    _no_transpose_unpack_to_dest,
+    _no_transpose_mismatch,
     _dest_to_srca_needs_acc,
     _eltwise_unpacker_reuse,
     _eltwise_unpacker_default,
@@ -135,15 +145,15 @@ _reduce_params = (
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(),
-        [_no_transpose],
+        [_no_transpose_unpack_to_dest, _no_transpose_mismatch],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        [_no_transpose],
+        [_no_transpose_unpack_to_dest, _no_transpose_mismatch],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
-        [_no_transpose],
+        [_no_transpose_unpack_to_dest, _no_transpose_mismatch],
     ),
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
@@ -166,7 +176,13 @@ FPU_MAP = {
     ),
     "Datacopy": (
         lambda s: DatacopyFpu(),
-        [_no_reuse_dest, _datacopy_unpacker, _no_broadcast, _no_transpose],
+        [
+            _no_reuse_dest,
+            _datacopy_unpacker,
+            _no_broadcast,
+            _no_transpose_unpack_to_dest,
+            _no_transpose_mismatch,
+        ],
     ),
     "Matmul": (
         lambda s: MatmulFpu(),
@@ -278,10 +294,4 @@ class OperationSchema(OperationSchemaBase):
     pack: List[PackEntrySchema] = Field(..., min_length=1)
 
     def _arch_validate(self):
-        for m in self.math:
-            if isinstance(m, FpuMathSchema):
-                if (
-                    m.unpack_transpose_faces == Transpose.Yes
-                    or m.unpack_transpose_within_face == Transpose.Yes
-                ):
-                    raise ValueError("Quasar does not support transpose in unpack")
+        pass

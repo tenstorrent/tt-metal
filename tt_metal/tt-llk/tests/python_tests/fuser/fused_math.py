@@ -375,9 +375,7 @@ class ComputePipeline:
 
     def _pack_reduce_mask_config(self, operation: "FusedOperation") -> str:
         if operation.reduce_dim is not None:
-            reduce_dim = operation.reduce_dim.cpp_enum_value
-            tensor_shape = operation.tile_shape.cpp_value
-            return f"_llk_pack_reduce_mask_config_<{reduce_dim}>({tensor_shape});\n"
+            return pack_common.pack_reduce_mask_config(operation)
         return ""
 
     def _pack_reduce_mask_clear(self, operation: "FusedOperation") -> str:
@@ -406,9 +404,9 @@ class ComputePipeline:
         hoist_reconfig = hoist or self._all_same_pack_formats()
 
         init_code = config.sentinel.hw_configure_pack(config, operation, pack_only)
-        init_code += self._pack_reduce_mask_config(operation)
         if hoist_reconfig and pack_only:
             init_code += pack_only[0].reconfig(operation, config)
+        init_code += self._pack_reduce_mask_config(operation)
         init_code += self._pack_dest_init(operation, config)
         if hoist:
             init_code += pack_only[0].configure(operation, config, None)
