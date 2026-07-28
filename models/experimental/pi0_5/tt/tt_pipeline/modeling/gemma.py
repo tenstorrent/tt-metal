@@ -50,8 +50,15 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 def _linear_weight_to_tt(
     w: torch.Tensor, dtype: "ttnn.DataType" = ttnn.bfloat8_b, tile: "Optional[ttnn.Tile]" = None
 ) -> ttnn.Tensor:
-    """Transpose a torch ``[out, in]`` linear weight to ttnn ``[in, out]`` host tensor."""
-    return from_torch_pi05(w.t().contiguous(), dtype=dtype, tile=tile)
+    """Transpose a torch ``[out, in]`` linear weight to ttnn ``[in, out]`` host tensor.
+
+    Defaults to the FULL 32x32 tile, not the model tile: every consumer of these weights is a
+    plain ``ttnn.linear``/matmul, whose device op requires ``in1_tile.get_height() == TILE_WIDTH``
+    (matmul_device_operation.cpp). Only the activation (inputA) rides the tiny tile -- see the tile
+    design rule in TINY_TILE_INTEGRATION_PLAN.md. matmul_decode weights are built separately by
+    denoise_block._pws_B, which pins 32x32 itself. Pass `tile` explicitly to override.
+    """
+    return from_torch_pi05(w.t().contiguous(), dtype=dtype, tile=tile or ttnn.Tile((32, 32)))
 
 
 def _norm_weight_to_tt(w: torch.Tensor) -> ttnn.Tensor:

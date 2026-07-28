@@ -30,7 +30,8 @@ all in the denoise path. `tt_bh_glx/pipeline_16_decode.py:22-27` imports `denois
 32-prefix / 16-suffix mismatch (own CB pair per phase, shared online-softmax state), so the
 prefill→denoise handoff needs no retile.
 
-Switch: `tt/tile_config.py:11 TILE_HEIGHT = 16`. No env var; set to `32` to revert.
+Switch: `tt/tile_config.py` `TILE_HEIGHT`, overridable via **`PI05_TILE_HEIGHT`** (16 or 32) so the
+A/B runs against one build.
 
 The win: `perf_suffix_len(ah=10, 16) = 16` instead of 32. A 16×32 tile has 2 faces not 4, so
 denoise matmul M-work roughly halves. Pushback: SDPA forces `subblock_w == 1` on partial-face
@@ -141,6 +142,67 @@ baseline (~6% better) — consistent with the measured geometry win.
 The gain is ~5%, not the ~2× that "half the M-work" would suggest, because SDPA forces
 `subblock_w == 1` on partial-face tiles and the hot path pays a retile (`ttnn.tilize` + `ttnn.slice`
 on the SDPA output). Both are documented LLK/kernel limitations, not tuning knobs.
+
+### Stage 7 — production 16-chip path: BLOCKED, and why
+
+Measured with the user's commands (`PI0_NUM_CAMERAS={2,3} PERF_ITERS=20`):
+
+| 3-cam 16-chip e2e | result |
+|---|---|
+| **pre-merge**, DECODE_ALL=1 (our **fused** block) | 28.52 ms (2-cam 25.31 ms) |
+| post-merge, DECODE_ALL=1 (their **unfused** block) | **L1 clash** |
+| post-merge, DECODE_ALL=0 (plain linear) | 31.03 ms |
+
+`Statically allocated circular buffers ... clash with L1 buffers on core range [0-0 - 7-0]. L1
+buffer allocated at 592576 and static circular buffer region ends at 800512`
+
+**Root cause: the defusion, not the tile geometry and not main drift.** Ruled out by measurement:
+bf8 32×32 is 1088 bytes both pre- and post-merge (only 16×32 grows, 544→576); the
+`interleaved_to_sharded` CB rewrite is byte-identical at 32×32; and the 1×8 path still passes
+post-merge. The unfused path materializes L1 intermediates our fused ops folded away —
+`_matmul_decode_pws` does an explicit `to_memory_config(a, width_sharded_l1_config(...))` per matmul
+(5×/layer) where `matmul_decode` resharded inside its reader; `nlp_concat_heads` produces a real
+tensor where `concat_heads_matmul_decode` used a free view; plus separate `gate`/`up`/`hid`. With
+2–3 layers pinned per chip, L1 overflows. **Re-fusion is a hard requirement for 16-chip L1 to fit,
+not a perf nicety.**
+
+NOTE: `TILE_HEIGHT=32` is NOT a pre-merge control — it runs *their* block at 32×32. Only the
+pre-merge tree is a true control, which is why it had to be built.
+
+#### Tiny-tile gaps found in the multi-stage path (all fixed here)
+
+The source branch's only model test builds ONE stage with `suffix=None`, `is_last=False`, via
+`build_single_stage_reference`. **The multi-stage `build_n_stage_pipeline` path — the one the 16-chip
+pipeline uses — was never run at 16×32 upstream**, so everything outside that subset was unexercised:
+
+1. `_bind_prefix_kv` swept to `from_torch_pi05` (would put prefix KV on the tiny tile); their own
+   test hand-injects 32×32 to work around it. Kept prefix KV at 32×32.
+2. `_build_stages`: `assert suffix_len % 32 == 0` → `% TILE_HEIGHT` (2 sites).
+3. `_linear_weight_to_tt` defaulted to the model tile, so 5 weights feeding plain `ttnn.linear` got
+   16×32 (`_tt_final_mod_w` + all 4 suffix-embedding weights) → `in1_tile.get_height() == TILE_WIDTH`.
+   Inverted the default to 32×32.
+4. `pipeline_16_decode._action_horizon_padded` hardcoded `((ah+31)//32)*32` = 32 while the stages
+   were told `perf_suffix_len` = 16 → `kv_sdpa: query length must be exactly one tile (16); got 32`.
+5. The 4 suffix-embedding linears passed no program_config/core_grid → generic MatmulMultiCore, the
+   only factory that rejects a tiny outer tile. Supply `core_grid` when the activation is tiny.
+6. Still open: `The last two dimensions of the first tensor and the last dimension of the second
+   tensor must be a multiple of tile size`.
+
+Stage 7 is deferred until after stage 8 (re-fusion), since re-fusion is required for L1 anyway and
+removes most of the unfused/generic-matmul call sites generating these gaps.
+
+#### Environment hazards worth recording
+
+- `PYTHONPATH` cannot override an editable install: the venv's `__editable__.ttnn-*.pth` registers a
+  `sys.meta_path` finder, which wins over `sys.path`. A second build tree needs the finder stripped
+  (see `run_isolated.py`) or it silently tests the wrong build.
+- A second build tree must pin system Python — `Python3_EXECUTABLE=/usr/bin/python3`,
+  `Python3_INCLUDE_DIR=/usr/include/python3.10`,
+  `Python3_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.10.so` — or `_ttnn.so` gets
+  `undefined symbol: PyObject_Vectorcall`.
+- Worktrees share `.git/modules`: running `git submodule update --init` in one **rewinds the other's**
+  submodules (it moved `tt-cluster-descriptors` in the main tree, which governs Galaxy cluster
+  descriptors). Re-check `git submodule status --recursive` afterwards; plain `git status` hid it.
 
 ## Conflict resolution notes
 

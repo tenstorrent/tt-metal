@@ -35,6 +35,20 @@ def _bias_to_tt(b: Optional["ttnn.Tensor"]) -> Optional[ttnn.Tensor]:
     return from_torch_pi05(b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16)
 
 
+def _linear_kwargs(x: ttnn.Tensor) -> dict:
+    """Extra ``ttnn.linear`` kwargs needed for a tiny-tile activation.
+
+    With no program_config/core_grid, matmul picks the generic MatmulMultiCore factory, which
+    rejects a tiny outer tile outright ("matmul with non-optimized program config does not support
+    tiny tile"). Supplying core_grid routes to an optimized multi-core-reuse factory, which is
+    tiny-tile aware. Returns {} at the standard tile so the 32x32 path is byte-identical.
+    """
+    if int(x.get_tile().tile_shape[0]) == 32:
+        return {}
+    grid = x.device().compute_with_storage_grid_size()
+    return {"core_grid": ttnn.CoreGrid(y=1, x=min(8, grid.x))}
+
+
 class TTNNPi05SuffixEmbedding(StatelessTTNNModule):
     """pi0.5 suffix embedding (action + timestep) for the action expert."""
 
@@ -83,7 +97,10 @@ class TTNNPi05SuffixEmbedding(StatelessTTNNModule):
     @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)
     def embed_actions(self, noisy_actions: ttnn.Tensor) -> ttnn.Tensor:
         """(B, action_horizon, action_dim) -> (B, action_horizon, expert_width)."""
-        return ttnn.linear(noisy_actions, self.tt_action_in_w, bias=self.tt_action_in_b, memory_config=_L1)
+        return ttnn.linear(
+            noisy_actions, self.tt_action_in_w, bias=self.tt_action_in_b, memory_config=_L1,
+            **_linear_kwargs(noisy_actions),
+        )
 
     @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)
     def embed_adarms_cond(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
@@ -91,16 +108,25 @@ class TTNNPi05SuffixEmbedding(StatelessTTNNModule):
         sincos = create_sinusoidal_pos_embedding(
             timestep, self._expert_width, self.device, min_period=4e-3, max_period=4.0
         )
-        x = ttnn.linear(sincos, self.tt_time_mlp_in_w, bias=self.tt_time_mlp_in_b, memory_config=_L1)
+        x = ttnn.linear(
+            sincos, self.tt_time_mlp_in_w, bias=self.tt_time_mlp_in_b, memory_config=_L1,
+            **_linear_kwargs(sincos),
+        )
         ttnn.deallocate(sincos)
         x = ttnn.silu(x, memory_config=_L1)
-        x = ttnn.linear(x, self.tt_time_mlp_out_w, bias=self.tt_time_mlp_out_b, memory_config=_L1)
+        x = ttnn.linear(
+            x, self.tt_time_mlp_out_w, bias=self.tt_time_mlp_out_b, memory_config=_L1,
+            **_linear_kwargs(x),
+        )
         return ttnn.silu(x, memory_config=_L1)
 
     @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)
     def project_output(self, expert_output: ttnn.Tensor) -> ttnn.Tensor:
         """(B, action_horizon, expert_width) -> (B, action_horizon, action_dim)."""
-        return ttnn.linear(expert_output, self.tt_action_out_w, bias=self.tt_action_out_b, memory_config=_L1)
+        return ttnn.linear(
+            expert_output, self.tt_action_out_w, bias=self.tt_action_out_b, memory_config=_L1,
+            **_linear_kwargs(expert_output),
+        )
 
     @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)
     def embed_suffix(self, noisy_actions: ttnn.Tensor, timestep: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:

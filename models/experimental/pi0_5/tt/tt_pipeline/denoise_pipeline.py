@@ -326,7 +326,9 @@ def _build_stages(
     ec = config.expert_config
     n = len(splits)
     assert n >= 2 and sum(splits) == len(reference_blocks) == 18
-    assert prefix_len % 32 == 0 and suffix_len % 32 == 0 and suffix_len <= 96
+    # prefix stays on the 32x32 tile; the suffix rides the model tile (16 under tiny tile), so its
+    # alignment is TILE_HEIGHT, not 32. The <=96 cap is a tile-count bound and holds either way.
+    assert prefix_len % 32 == 0 and suffix_len % TILE_HEIGHT == 0 and suffix_len <= 96
 
     tt_blocks = [block_cls.from_torch(b, ec) for b in reference_blocks]
     bounds, acc = [], 0
@@ -554,7 +556,9 @@ def build_single_stage_reference(
 ) -> TTNNPi05DenoisePipelineStage:
     ec = config.expert_config
     assert len(reference_blocks) == 18
-    assert prefix_len % 32 == 0 and suffix_len % 32 == 0 and suffix_len <= 96
+    # prefix stays on the 32x32 tile; the suffix rides the model tile (16 under tiny tile), so its
+    # alignment is TILE_HEIGHT, not 32. The <=96 cap is a tile-count bound and holds either way.
+    assert prefix_len % 32 == 0 and suffix_len % TILE_HEIGHT == 0 and suffix_len <= 96
     assert attention_mask_torch is not None
     tt_blocks = [block_cls.from_torch(b, ec) for b in reference_blocks]
     suffix = TTNNPi05SuffixEmbedding.from_torch(reference_suffix, suffix_config)

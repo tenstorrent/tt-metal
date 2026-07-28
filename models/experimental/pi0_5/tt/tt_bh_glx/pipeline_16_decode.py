@@ -55,7 +55,11 @@ class Pi0_5GLX16DecodePipeline:
         self.num_denoising_steps = config.num_denoising_steps
         self.action_horizon = config.action_horizon
         self.action_dim = config.action_dim
-        self._action_horizon_padded = ((config.action_horizon + 31) // 32) * 32
+        # Must agree with the suffix_len handed to the denoise stages below (perf_suffix_len), which
+        # pads to the MODEL tile height, not a hardcoded 32. Hardcoding 32 here built the expert mask
+        # and noise 32 rows tall while the stage was told suffix_len=16, so q reached kv_sdpa with 32
+        # rows against a 16-row tile ("query length must be exactly one tile (16); got 32").
+        self._action_horizon_padded = perf_suffix_len(config.action_horizon)
         self._patch_size = config.siglip_config.patch_size
         self._vlm_hidden = config.vlm_config.width
 
