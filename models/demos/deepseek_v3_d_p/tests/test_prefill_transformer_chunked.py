@@ -437,6 +437,7 @@ def run_chunked_transformer_padded_trace(
     num_links,
     topology,
     routing_use_l1_small_for_semaphores=False,
+    mode="traced",
 ):
     """Trace+metadata twin of run_chunked_transformer_padded. On ONE kv_only build it runs the same
     VARIABLE/partial-chunk prefill TWICE:
@@ -581,8 +582,16 @@ def run_chunked_transformer_padded_trace(
         kvpe_dim,
         config.kv_lora_rank,
         return_per_layer=True,
+        assert_threshold=(LAYER_PCC_THRESHOLD if mode == "scalar" else None),
+        assert_layer_depth=(GATED_LAYER_DEPTH if (mode == "scalar" and num_layers > GATED_LAYER_DEPTH) else None),
     )
     ttnn.deallocate(cache_A.storage)
+    if mode == "scalar":
+        # SCALAR-only run: PASS A (host actual_start, no metadata) IS the whole test. Its per-layer KV-PCC
+        # was just asserted above; skip the metadata PASS B and the bit-exact A-vs-B verify.
+        transformer.release_sub_device_managers()
+        logger.success("[padded-trace] SCALAR-only run complete (no metadata pass, no A-vs-B verify)")
+        return
 
     # ---- PASS B: metadata trace captured ONCE, replayed per split ----
     cache_B = _make_cache()  # persistent (captured) cache
@@ -632,25 +641,38 @@ def run_chunked_transformer_padded_trace(
             metadata=trace_metadata,
         )
 
-    controller = SubDeviceTraceController(mesh_device)
-    transformer.set_trace_controller(controller)
-    _fwd_meta()  # warmup (compile metadata program variants)
-    ttnn.synchronize_device(mesh_device)
-    logger.info(f"[padded-trace] capturing {num_layers}-layer metadata forward...")
-    controller.begin_capture()
-    _fwd_meta()
-    controller.end_capture()
-    ttnn.synchronize_device(mesh_device)
-    logger.info(f"[padded-trace] {controller.num_segments} segments, {controller.trace_bytes()/1024/1024:.2f} MB")
+    # PASS B execution mode (pytest param `mode`). "traced" captures a metadata trace ONCE and replays it
+    # per split (the traced-metadata path). "eager" runs the SAME metadata forward EAGERLY per split (no
+    # capture/replay). ("scalar" mode never reaches here — it returns after PASS A above.)
+    _PADDED_TRACE = mode == "traced"
+    if _PADDED_TRACE:
+        controller = SubDeviceTraceController(mesh_device)
+        transformer.set_trace_controller(controller)
+        _fwd_meta()  # warmup (compile metadata program variants)
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"[padded-trace] TRACED metadata: capturing {num_layers}-layer forward...")
+        controller.begin_capture()
+        _fwd_meta()
+        controller.end_capture()
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"[padded-trace] {controller.num_segments} segments, {controller.trace_bytes()/1024/1024:.2f} MB")
 
-    for c, (ks, e) in enumerate(starts):
-        ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
-        for src, dst in zip(meta_host_tt[c], trace_metadata):
-            ttnn.copy_host_to_device_tensor(src, dst)
-        controller.replay()
-    ttnn.synchronize_device(mesh_device)
-    controller.release()
-    transformer.set_trace_controller(None)
+        for c, (ks, e) in enumerate(starts):
+            ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
+            for src, dst in zip(meta_host_tt[c], trace_metadata):
+                ttnn.copy_host_to_device_tensor(src, dst)
+            controller.replay()
+        ttnn.synchronize_device(mesh_device)
+        controller.release()
+        transformer.set_trace_controller(None)
+    else:
+        logger.info("[padded-trace] EAGER metadata (eager mode): per-split forward, no capture")
+        for c, (ks, e) in enumerate(starts):
+            ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
+            for src, dst in zip(meta_host_tt[c], trace_metadata):
+                ttnn.copy_host_to_device_tensor(src, dst)
+            _fwd_meta()
+        ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(trace_input)
     for t in trace_metadata:
         ttnn.deallocate(t)
@@ -892,6 +914,10 @@ def run_chunked_transformer_kv_cache(
     tracing (varying actual_start / token_ids) is deferred."""
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    # SCALAR-PATH TOGGLE: KIMI_SCALAR_PATH=1 runs the EAGER multi-chunk KV-PCC with the SCALAR (host-value)
+    # op signatures (metadata=None, host actual_start=c*CHUNK) instead of the per-element-tensor metadata
+    # path. Same chunks / cache / golden — lets you compare determinism of scalar vs metadata directly.
+    _SCALAR = os.environ.get("KIMI_SCALAR_PATH", "0") == "1"
     if verify_kv_cache_pcc:
         # KV-cache PCC runs on one of: the traced metadata path (use_trace+use_metadata), the EAGER
         # metadata path (use_metadata, no trace — the determinism BASELINE the traced number must match),
@@ -1067,7 +1093,7 @@ def run_chunked_transformer_kv_cache(
         # execution). Run one full unmeasured walk over all chunks to populate the program cache before
         # the timed loop. Its KV writes are overwritten by the measured pass below (each chunk overwrites
         # its own [c*CHUNK:(c+1)*CHUNK] slots), so it does not affect the KV-PCC result.
-        logger.info("  [eager metadata] warm-up/compile iteration (not measured)...")
+        logger.info(f"  [eager {'SCALAR' if _SCALAR else 'metadata'}] warm-up/compile iteration (not measured)...")
         for c in range(n_chunks):
             ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
             for src, dst in zip(meta_host_tt[c], eager_metadata):
@@ -1076,10 +1102,10 @@ def run_chunked_transformer_kv_cache(
                 trace_input,
                 tt_kvpe_cache,
                 actual_isl=CHUNK,
-                actual_start=None,
+                actual_start=(c * CHUNK if _SCALAR else None),
                 actual_end=None,
                 cache_user_id=0,
-                metadata=eager_metadata,
+                metadata=(None if _SCALAR else eager_metadata),
                 return_intermediates=False,
             )
         ttnn.synchronize_device(mesh_device)
@@ -1098,10 +1124,10 @@ def run_chunked_transformer_kv_cache(
                     trace_input,
                     tt_kvpe_cache,
                     actual_isl=CHUNK,
-                    actual_start=None,
+                    actual_start=(c * CHUNK if _SCALAR else None),
                     actual_end=None,
                     cache_user_id=0,
-                    metadata=eager_metadata,
+                    metadata=(None if _SCALAR else eager_metadata),
                     return_intermediates=False,
                 )
                 ttnn.synchronize_device(mesh_device)
@@ -1725,6 +1751,10 @@ def test_kimi_prefill_transformer_chunked_padded(
 # run via a captured metadata ttnn trace replayed per split, asserting its per-layer KV-cache PCC matches
 # the untraced scalar path bit-exactly. Needs trace_region_size > 0; Kimi uses the DEVICE_FP32 gate + the
 # L1_SMALL semaphore region. The trace controller chops capture at the MoE sub-device load/clear.
+# `mode` (pytest param): "traced" = traced metadata (capture+replay); "eager" = eager metadata (per-split
+# forward, no capture) — both are PASS B, compared bit-exact to the untraced scalar PASS A reference.
+# "scalar" = run ONLY the eager scalar pass (no metadata, no A-vs-B verify), asserting its own KV-PCC.
+@pytest.mark.parametrize("mode", ["traced", "eager", "scalar"], ids=["traced", "eager", "scalar"])
 @pytest.mark.parametrize("splits", [_PADDED_FULL_55K], ids=["full55k"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
@@ -1759,6 +1789,7 @@ def test_kimi_prefill_transformer_chunked_padded_trace(
     splits,
     num_links,
     topology,
+    mode,
 ):
     run_chunked_transformer_padded_trace(
         variant,
@@ -1771,6 +1802,7 @@ def test_kimi_prefill_transformer_chunked_padded_trace(
         num_links,
         topology,
         routing_use_l1_small_for_semaphores=True,
+        mode=mode,
     )
 
 
