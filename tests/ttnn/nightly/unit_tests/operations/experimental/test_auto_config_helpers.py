@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from ttnn._experimental.auto_config import matmul as auto_matmul
+from ttnn._experimental.auto_config import _selector as auto_matmul
 
 
 @pytest.fixture(autouse=True)

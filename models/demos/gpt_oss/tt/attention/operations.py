@@ -24,12 +24,11 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
-    xqkv_fused = ttnn.linear(
+    xqkv_fused = ttnn.experimental.auto_config.linear(
         hidden_states,
         weights.wqkv,
         bias=weights.wqkv_bias,
         dtype=ttnn.bfloat16,
-        auto_config=True,
     )
     return xqkv_fused
 
@@ -124,12 +123,11 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
           - whether the selector already performed the TP reduce-scatter
     """
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
-    out = ttnn.linear(
+    out = ttnn.experimental.auto_config.linear(
         tensor,
         weights.o_proj,
         bias=weights.o_proj_bias,
         dtype=activation_dtype,
-        auto_config=True,
     )
     selection = ttnn.experimental.auto_config.explain_matmul(
         tensor,

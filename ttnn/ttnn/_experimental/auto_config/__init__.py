@@ -3,12 +3,13 @@
 
 """Measured auto-configuration helpers exposed as ``ttnn.experimental.auto_config``."""
 
-from ._install import install_public_wrappers
-from .matmul import WeightPlacement, explain_matmul, place_weight
+from ._selector import WeightPlacement, explain_matmul, place_weight
+from .api import linear, matmul
 
 __all__ = [
     "WeightPlacement",
     "explain_matmul",
-    "install_public_wrappers",
+    "linear",
+    "matmul",
     "place_weight",
 ]

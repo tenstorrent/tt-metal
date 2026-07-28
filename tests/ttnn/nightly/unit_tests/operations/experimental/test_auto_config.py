@@ -5,8 +5,8 @@ import pytest
 import torch
 
 import ttnn
-from ttnn._experimental.auto_config import _install as install_ops
-from ttnn._experimental.auto_config import matmul as auto_matmul
+from ttnn._experimental.auto_config import api as auto_config_api
+from ttnn._experimental.auto_config import _selector as auto_matmul
 
 from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
@@ -25,37 +25,8 @@ def _ok_candidate_entries(result):
     return [entry for entry in result["candidate_timings_us"] if entry["status"] == "ok"]
 
 
-def test_install_passthrough_wrapper_preserves_doc_and_golden_function():
-    def wrapper():
-        return None
-
-    wrapped = install_ops._install_passthrough_wrapper(
-        wrapper,
-        doc="passthrough-doc",
-        golden_function=_ok_candidate_entries,
-    )
-
-    assert wrapped is wrapper
-    assert wrapped.__doc__ == "passthrough-doc"
-    assert wrapped.golden_function is _ok_candidate_entries
-
-
-def test_install_is_noop_when_disabled_via_env(monkeypatch):
-    monkeypatch.setenv("TTNN_AUTO_MATMUL_DISABLE_INSTALL", "1")
-    monkeypatch.setattr(install_ops, "_installed", False)
-    sentinel = object()
-    monkeypatch.setattr(ttnn, "matmul", sentinel, raising=False)
-    monkeypatch.setattr(ttnn, "linear", sentinel, raising=False)
-
-    install_ops.install_public_wrappers()
-
-    # Disabled: the public entrypoints are left as-is (raw C++ ops in production).
-    assert ttnn.matmul is sentinel
-    assert ttnn.linear is sentinel
-
-
-def test_matmul_wrapper_impl_prefers_queue_id_over_cq_id(monkeypatch):
-    import ttnn._experimental.auto_config.matmul as auto_matmul_module
+def test_auto_config_matmul_prefers_queue_id_over_cq_id(monkeypatch):
+    import ttnn._experimental.auto_config._selector as auto_matmul_module
 
     captured_kwargs = {}
 
@@ -65,7 +36,7 @@ def test_matmul_wrapper_impl_prefers_queue_id_over_cq_id(monkeypatch):
 
     monkeypatch.setattr(auto_matmul_module, "dispatch_matmul", fake_dispatch_matmul)
 
-    result = install_ops._matmul_wrapper_impl("lhs", "rhs", queue_id=3, cq_id=7)
+    result = auto_config_api.matmul("lhs", "rhs", queue_id=3, cq_id=7)
 
     assert result == "result"
     assert captured_kwargs["queue_id"] == 3
@@ -93,7 +64,7 @@ def test_linear_auto_config_accepts_host_rhs_and_bias_when_disabled(device):
         layout=ttnn.TILE_LAYOUT,
     )
 
-    output_tensor = ttnn.linear(
+    output_tensor = ttnn.experimental.auto_config.linear(
         input_tensor_a,
         torch_input_tensor_b,
         bias=torch_bias,
@@ -264,12 +235,12 @@ def test_auto_config_model_shapes_correct_and_not_slower_than_default(
         else None
     )
 
-    # (1) Correctness through the public auto-config entrypoint.  auto_config defaults to False
-    # (opt-in), so pass it explicitly here to exercise the tuned path rather than the base op.
+    # (1) Correctness through the public auto-config entrypoint
+    # (ttnn.experimental.auto_config.matmul / .linear), which runs the tuned path.
     if is_linear:
-        out = ttnn.to_torch(ttnn.linear(a, b, bias=tt_bias, dtype=dtype, auto_config=True))
+        out = ttnn.to_torch(ttnn.experimental.auto_config.linear(a, b, bias=tt_bias, dtype=dtype))
     else:
-        out = ttnn.to_torch(ttnn.matmul(a, b, dtype=dtype, auto_config=True))
+        out = ttnn.to_torch(ttnn.experimental.auto_config.matmul(a, b, dtype=dtype))
     assert_numeric_metrics(golden, out, pcc_threshold=pcc, check_allclose=False, check_frobenius=False, check_ulp=False)
 
     # (2) Measured default vs auto-tuned, from one benchmarking session.

@@ -71,8 +71,10 @@ def _ttnn():
 
 
 def _get_cpp_base_operation(is_linear: bool) -> Any:
-    install_module = importlib.import_module("ttnn._experimental.auto_config._install")
-    return install_module._CPP_LINEAR if is_linear else install_module._CPP_MATMUL
+    # The public ttnn.matmul / ttnn.linear are the raw kernel-backed C++ ops (auto-config no
+    # longer rebinds them), so they are the base operation the selector dispatches to.
+    ttnn = _ttnn()
+    return ttnn.linear if is_linear else ttnn.matmul
 
 
 def _load_tt_dit_matmul_helpers() -> Any | None:
