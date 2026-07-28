@@ -40,7 +40,9 @@ FROM ${UV_IMAGE} AS uv-layer
 # Base image
 #############################################################
 
-FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
+ARG BASE_REGISTRY=mirror.gcr.io/
+ARG UBUNTU_VERSION
+FROM ${BASE_REGISTRY}ubuntu:${UBUNTU_VERSION} AS base
 # Re-declare ARG to make it available in the build stage
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION

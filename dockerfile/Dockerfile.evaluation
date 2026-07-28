@@ -28,7 +28,9 @@ FROM ${UV_IMAGE} AS uv-layer
 # Base image with system dependencies
 #############################################################
 
-FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
+ARG BASE_REGISTRY=mirror.gcr.io/
+ARG UBUNTU_VERSION
+FROM ${BASE_REGISTRY}ubuntu:${UBUNTU_VERSION} AS base
 
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]

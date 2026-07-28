@@ -366,6 +366,13 @@ jobs:
           TARGETS=""
           SET=""
 
+          # Set BASE_REGISTRY to use Harbor prefix if available
+          if [ -n "${HARBOR_PREFIX}" ]; then
+            BASE_REGISTRY_PREFIX="BASE_REGISTRY=${HARBOR_PREFIX}mirror.gcr.io/"
+          else
+            BASE_REGISTRY_PREFIX=""
+          fi
+
           # Add tool layer contexts with Harbor prefix for pull-through cache
           add_tool_contexts() {
             local target="$1"
@@ -392,6 +399,7 @@ jobs:
             local tag="$2"
             TARGETS+="${target},"
             add_tool_contexts "$target" "${ALL_TOOLS[@]}"
+            [ -n "$BASE_REGISTRY_PREFIX" ] && SET+="${target}.args.${BASE_REGISTRY_PREFIX}"$'\n'
             SET+="${target}.tags=${tag}"$'\n'
             SET+="${target}.output=${BAKE_OUTPUT}"$'\n'
           }
@@ -501,6 +509,10 @@ jobs:
           MANYLINUX_TAG=$(echo "$PLATFORM_DATA" | jq -r '.manylinux_tag')
 
           SET=""
+          # Set BASE_REGISTRY to use Harbor prefix if available
+          if [ -n "${HARBOR_PREFIX}" ]; then
+            SET+="manylinux.args.BASE_REGISTRY=${HARBOR_PREFIX}mirror.gcr.io/"$'\n'
+          fi
           # Add tool layer contexts with Harbor prefix for pull-through cache
           MANYLINUX_TOOLS=($(.github/scripts/get-target-tools.sh manylinux))
           for tool in "${MANYLINUX_TOOLS[@]}"; do

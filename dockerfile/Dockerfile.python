@@ -41,7 +41,9 @@ FROM ${UV_IMAGE} AS uv-layer
 # ci-test-venv-builder extends this stage to add test dependencies.
 #############################################################
 
-FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
+ARG BASE_REGISTRY=mirror.gcr.io/
+ARG UBUNTU_VERSION
+FROM ${BASE_REGISTRY}ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
 
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION

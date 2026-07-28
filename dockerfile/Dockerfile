@@ -77,7 +77,9 @@ FROM ${UV_IMAGE} AS uv-layer
 # Base Ubuntu image with system dependencies
 #############################################################
 
-FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
+ARG BASE_REGISTRY=mirror.gcr.io/
+ARG UBUNTU_VERSION
+FROM ${BASE_REGISTRY}ubuntu:${UBUNTU_VERSION} AS base
 
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION

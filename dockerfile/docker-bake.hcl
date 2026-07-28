@@ -62,6 +62,13 @@ variable "PYTHON_VERSION" {
   default = "3.10"
 }
 
+variable "BASE_REGISTRY" {
+  # Registry prefix for the base Ubuntu image. Set this when using Harbor
+  # pull-through cache. Default pulls from Google Container Registry mirror.
+  # Example: "harbor.example.com/mirror/" (must end with /)
+  default = "mirror.gcr.io/"
+}
+
 variable "TT_SMI_VERSION" {
   # As of June 2026: this is where you set SMI version of Metal container image.
   # Bake always passes this to the main targets, so it takes precedence over the
@@ -178,6 +185,7 @@ target "ci-build-venv" {
   dockerfile = "dockerfile/Dockerfile.python"
   target     = "ci-build-venv"
   args = {
+    BASE_REGISTRY  = BASE_REGISTRY
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
     UV_IMAGE       = UV_IMAGE
@@ -190,6 +198,7 @@ target "ci-test-venv" {
   dockerfile = "dockerfile/Dockerfile.python"
   target     = "ci-test-venv"
   args = {
+    BASE_REGISTRY  = BASE_REGISTRY
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
     UV_IMAGE       = UV_IMAGE
@@ -216,6 +225,7 @@ target "_main-common" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile"
   args = {
+    BASE_REGISTRY  = BASE_REGISTRY
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
     UV_IMAGE       = UV_IMAGE
@@ -307,6 +317,7 @@ target "_basic-common" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile.basic-dev"
   args = {
+    BASE_REGISTRY  = BASE_REGISTRY
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
     UV_IMAGE       = UV_IMAGE
@@ -365,7 +376,8 @@ target "evaluation" {
   dockerfile = "dockerfile/Dockerfile.evaluation"
   tags       = ["tt-metalium-evaluation:local"]
   args = {
-    UV_IMAGE = UV_IMAGE
+    BASE_REGISTRY = BASE_REGISTRY
+    UV_IMAGE      = UV_IMAGE
   }
   contexts = {
     ccache-layer = "target:ccache"
