@@ -266,7 +266,10 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                             << "::get_semaphore(" << entry.id << "u) + MEM_L1_UNCACHED_BASE);\n";
                 }
                 content << "    }\n";
-                content << "    ::sync_threads();\n";
+                // Rendezvous on the DEDICATED cached-sem-init barrier slot, never slot 0: slot 0/1 are
+                // the DFB producer/consumer role barriers, whose release is keyed on that role's own
+                // participant count, so sharing a slot with a co-resident DFB kernel deadlocks.
+                content << "    ::sync_threads(::KERNEL_BARRIER_CACHED_SEM_INIT);\n";
                 content << "#endif\n";
                 content << "}\n";
             }

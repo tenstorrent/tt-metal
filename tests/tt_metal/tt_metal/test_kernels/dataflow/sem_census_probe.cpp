@@ -18,6 +18,10 @@
 //
 // report[0] = baked SemScope of sem::counter (0=LOCAL_NONATOMIC, 1=DM_LOCAL_CACHED, 2=EXTERNAL)
 // report[1] = counter.value() after this kernel's threads have all finished incrementing
+// report[2] = the RING slot for this semaphore's id, read via the uncached alias. For a cached
+//             semaphore this proves RESIDENCY: the count must live in the pool, so the ring slot must
+//             still hold the untouched initial value. Nothing else in the suite can tell pool from
+//             ring -- every other assertion is count-only and passes under either.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -47,8 +51,15 @@ void kernel_main() {
         report[0] = static_cast<uint32_t>(sem::counter.scope);
         report[1] = counter.value();
 #if defined(ARCH_QUASAR)
+        // Residency check: read this id's RING slot directly (uncached alias, so it is TL1 truth).
+        // A cached semaphore keeps its count in the pool, so the ring slot must be untouched.
+        report[2] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            ::get_semaphore(sem::counter.id) + MEM_L1_UNCACHED_BASE);
         flush_l2_cache_line(report_addr);
         flush_l2_cache_line(report_addr + sizeof(uint32_t));
+        flush_l2_cache_line(report_addr + 2 * sizeof(uint32_t));
+#else
+        report[2] = 0;
 #endif
     }
 }
