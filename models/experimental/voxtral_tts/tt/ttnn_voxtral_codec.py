@@ -111,6 +111,7 @@ CHUNK_MIN = 512
 # production never repeats a length. 128 gives 12 buckets for the model's ~1500-frame ceiling.
 # Set None to disable (best if you genuinely decode one fixed length repeatedly).
 BUCKET = 128
+
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -132,6 +133,11 @@ class TtVoxtralCodecDecoder:
         self.slab = slab
         self.chunk_min = chunk_min  # chunk only when S exceeds this; None = never chunk
         self.bucket = bucket  # round T up to this multiple before decoding; None = off
+        # With PRE-PREPARED weights the op can no longer infer weights_dtype from a host tensor,
+        # so it must be stated explicitly -- and the SAME config must go to prepare_* and to the
+        # conv call, or the prepared layout will not match what the kernel expects.
+        self.conv_cfg = ttnn.Conv1dConfig(weights_dtype=weight_dtype)
+        self.convt_cfg = ttnn.Conv2dConfig(weights_dtype=weight_dtype)
         w = load_codec_state(ckpt_path)  # weight_norm already folded by the reference loader
 
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -144,9 +150,21 @@ class TtVoxtralCodecDecoder:
         self.semantic_host = w["semantic_embedding"].float()  # host gather; see quantizer_decode
 
         # --- convs ---
-        self.conv_in = host(w["decoder_blocks.0.conv.weight"].unsqueeze(2))  # [1024,292,1,3]
-        self.ups = {i: host(w[f"decoder_blocks.{i}.conv.weight"].unsqueeze(2)) for i in DEC_CONV_BLOCKS[1:]}
-        self.conv_out = host(w["output_proj.conv.weight"].unsqueeze(2))  # [240,1024,1,7]
+        # Weights are kept on HOST and prepared per (conv, input length) on first use, then cached.
+        # WHY: ttnn.conv1d transforms and re-uploads its weights INSIDE the op, so without this it
+        # redid that work for all 5 convs on EVERY call. Hoisting it out was worth 2.6x at T=128
+        # (112.8 -> 43.7 ms) and dropped the host share of wall time from 88% to 24%.
+        # The cache is keyed by LENGTH because prepared weights are NOT length-independent: the
+        # prepared layout encodes the sharding/blocking scheme. Same shape at every length but
+        # different VALUES -- a 512-prepared weight used at L=128 computes PCC 0.19 against torch,
+        # so reusing one across lengths silently produces garbage.
+        self.conv_host = {
+            "in": host(w["decoder_blocks.0.conv.weight"].unsqueeze(2)),      # [1024,292,1,3]
+            "out": host(w["output_proj.conv.weight"].unsqueeze(2)),          # [240,1024,1,7]
+            **{f"up{i}": host(w[f"decoder_blocks.{i}.conv.weight"].unsqueeze(2))
+               for i in DEC_CONV_BLOCKS[1:]},                               # [1024,1024,1,4]
+        }
+        self._prep_cache = {}
 
         # --- transformer layers ---
         self.layers = {}
@@ -172,6 +190,46 @@ class TtVoxtralCodecDecoder:
         self._zero_cache = {}
         self._slopes = alibi_slopes(CODEC_N_HEADS)
         self.windows = decoder_window_sizes()
+
+    # ----------------------------------------------------------------------------------
+    # Conv weight preparation (hoisted out of the per-call path)
+    # ----------------------------------------------------------------------------------
+    def _prepared(self, name, in_c, out_c, kernel, stride, L, transpose):
+        """Prepared weight for this conv AT THIS INPUT LENGTH, cached."""
+        key = (name, L)
+        if key not in self._prep_cache:
+            f = self._prep_conv_t if transpose else self._prep_conv
+            self._prep_cache[key] = f(self.conv_host[name], in_c, out_c, kernel, stride, L)
+        return self._prep_cache[key]
+
+    def _prep_conv(self, w_host, in_c, out_c, kernel, stride, L):
+        return ttnn.prepare_conv_weights(
+            weight_tensor=w_host, input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.TILE_LAYOUT, weights_format="OIHW",
+            in_channels=in_c, out_channels=out_c, batch_size=1,
+            input_height=1, input_width=L, kernel_size=(1, kernel),
+            stride=(1, stride), padding=(0, 0), dilation=(1, 1), has_bias=False, groups=1,
+            # input_dtype is the ACTIVATION dtype (always fp32 here), NOT the weight dtype --
+            # passing weight_dtype prepared a layout for bf16 activations while the real
+            # activations are fp32, which silently produced PCC 0.008.
+            device=self.device, input_dtype=DTYPE, compute_config=COMPUTE_CONFIG,
+            conv_config=self.conv_cfg,
+        )
+
+    def _prep_conv_t(self, w_host, in_c, out_c, kernel, stride, L):
+        # transpose weights are IOHW (in, out, kh, kw) -- ConvTranspose1d's [in,out,k] unsqueezed
+        return ttnn.prepare_conv_transpose2d_weights(
+            weight_tensor=w_host, input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.TILE_LAYOUT, weights_format="IOHW",
+            in_channels=in_c, out_channels=out_c, batch_size=1,
+            input_height=1, input_width=L, kernel_size=(1, kernel),
+            stride=(1, stride), padding=(0, 0), dilation=(1, 1), has_bias=False, groups=1,
+            # input_dtype is the ACTIVATION dtype (always fp32 here), NOT the weight dtype --
+            # passing weight_dtype prepared a layout for bf16 activations while the real
+            # activations are fp32, which silently produced PCC 0.008.
+            device=self.device, input_dtype=DTYPE, compute_config=COMPUTE_CONFIG,
+            conv_config=self.convt_cfg,
+        )
 
     # ----------------------------------------------------------------------------------
     # Attention bias: ALiBi + causal + sliding window, one additive [1,H,S,S] term
@@ -208,31 +266,34 @@ class TtVoxtralCodecDecoder:
             raise ValueError(mode)
         return ttnn.concat(parts + [x], dim=2)
 
-    def _conv1d(self, x, weight, in_c, out_c, kernel, stride, pad_mode):
+    def _conv1d(self, x, name, in_c, out_c, kernel, stride, pad_mode):
         """Causal conv1d over channels-last [1,1,L,C]. Padding is applied explicitly, so the op
         itself runs with padding=0."""
         pad_total = kernel - stride
         x = self._pad_causal(x, pad_total, pad_mode)
         L = x.shape[2]
         out = ttnn.conv1d(
-            input_tensor=x, weight_tensor=weight, device=self.device,
+            input_tensor=x, weight_tensor=self._prepared(name, in_c, out_c, kernel, stride, L, False),
+            device=self.device,
             in_channels=in_c, out_channels=out_c, batch_size=1, input_length=L,
             kernel_size=kernel, stride=stride, padding=0, dilation=1, groups=1,
-            compute_config=COMPUTE_CONFIG,
+            compute_config=COMPUTE_CONFIG, conv_config=self.conv_cfg,
         )
         out = out[0] if isinstance(out, (tuple, list)) else out
         return ttnn.reshape(out, [1, 1, -1, out_c])
 
-    def _conv_transpose(self, x, weight, channels, kernel, stride):
+    def _conv_transpose(self, x, name, channels, kernel, stride):
         """Length on the WIDTH axis (kernel (1,k), stride (1,s)) — the XTTS-v2 lesson. Trims
         (k - stride) samples off the RIGHT, matching upstream's trim_ratio=1.0."""
         L = x.shape[2]
         out = ttnn.conv_transpose2d(
-            input_tensor=x, weight_tensor=weight, device=self.device,
+            input_tensor=x,
+            weight_tensor=self._prepared(name, channels, channels, kernel, stride, L, True),
+            device=self.device,
             in_channels=channels, out_channels=channels, batch_size=1,
             input_height=1, input_width=L, kernel_size=(1, kernel), stride=(1, stride),
             padding=(0, 0), output_padding=(0, 0), dilation=(1, 1), groups=1,
-            compute_config=COMPUTE_CONFIG,
+            compute_config=COMPUTE_CONFIG, conv_config=self.convt_cfg,
         )
         out = out[0] if isinstance(out, (tuple, list)) else out
         out = ttnn.reshape(out, [1, 1, -1, channels])
@@ -332,27 +393,49 @@ class TtVoxtralCodecDecoder:
     # ----------------------------------------------------------------------------------
     # Quantizer (decode side)
     # ----------------------------------------------------------------------------------
-    def quantizer_decode(self, codes):
-        """codes torch [1,37,T] (no special-token offset) -> device [1,1,T,292] channels-last.
+    def _quantizer_host(self, codes):
+        """codes torch [1,37,T] -> HOST torch [1,1,T,292] channels-last.
 
-        Semantic is a table lookup; acoustic is pure arithmetic (FSQ has no parameters).
-
-        The semantic gather runs on HOST and is the one host-side step in this block.
-        `ttnn.embedding` requires a BFLOAT16 table, and the semantic codebook entries are large
-        (|x| ~ 10), so a bf16 table would inject ~0.4% relative error into the latents before a
-        deep conv stack that we already know does not cancel accumulated error. An index_select
-        is exact and free, and it only changes what we upload ([1,T,292] floats instead of [1,T]
-        ints). A bf16 device path is available if the accuracy cost is ever measured and accepted."""
+        Semantic is a table lookup, acoustic is pure FSQ arithmetic. Kept on host: ttnn.embedding
+        needs a BFLOAT16 table and the semantic entries are large (|x| ~ 10), so a bf16 table
+        would inject ~0.4% before a deep conv stack that does not cancel error. Split out from the
+        upload so the upload target is explicit."""
         T = codes.shape[2]
         sem = self.semantic_host[codes[:, 0, :].reshape(-1).long()].reshape(1, T, SEMANTIC_DIM)
-        ac = codes[:, 1:, :].to(torch.float32) * 2.0 / (ACOUSTIC_CODEBOOK_SIZE - 1) - 1.0  # [1,36,T]
-        lat = torch.cat([sem, ac.permute(0, 2, 1)], dim=2)  # [1,T,292] channels-last
-        return ttnn.from_torch(
-            lat.reshape(1, 1, T, SEMANTIC_DIM + 36).contiguous(),
-            dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device,
-        )
+        ac = codes[:, 1:, :].to(torch.float32) * 2.0 / (ACOUSTIC_CODEBOOK_SIZE - 1) - 1.0
+        lat = torch.cat([sem, ac.permute(0, 2, 1)], dim=2)
+        return lat.reshape(1, 1, T, SEMANTIC_DIM + 36).contiguous()
+
+    def quantizer_decode(self, codes):
+        """Host quantizer + upload, as one step (the eager path and the tests use this)."""
+        return ttnn.from_torch(self._quantizer_host(codes), dtype=DTYPE,
+                               layout=ttnn.TILE_LAYOUT, device=self.device)
 
     # ----------------------------------------------------------------------------------
+    # The device-only op sequence
+    # ----------------------------------------------------------------------------------
+    def _graph(self, x, stages=None):
+        """latents [1,1,T,292] on device -> [1,1,T',240] on device."""
+        x = self._conv1d(x, "in", SEMANTIC_DIM + 36, CODEC_DIM,
+                         DEC_CONV_KERNELS[0], DEC_CONV_STRIDES[0], "replicate")
+        if stages is not None:
+            stages["after_input_conv"] = self._chw(x)
+        for stage, (tf_i, n_layers) in enumerate(zip(DEC_TF_BLOCKS, DEC_TF_LENGTHS)):
+            L = x.shape[2]
+            seq = ttnn.reshape(x, [1, L, CODEC_DIM])
+            for li in range(n_layers):
+                seq = self._block(seq, self.layers[(tf_i, li)], self.windows[stage])
+            x = ttnn.reshape(seq, [1, 1, L, CODEC_DIM])
+            if stages is not None:
+                stages[f"after_tf{tf_i}"] = self._chw(x)
+            if stage < len(DEC_CONV_BLOCKS) - 1:
+                ci = DEC_CONV_BLOCKS[stage + 1]
+                x = self._conv_transpose(x, f"up{ci}", CODEC_DIM,
+                                         DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1])
+                if stages is not None:
+                    stages[f"after_up{ci}"] = self._chw(x)
+        return self._conv1d(x, "out", CODEC_DIM, PATCH_SIZE, PATCH_PROJ_KERNEL, 1, "reflect")
+
     @torch.no_grad()
     def __call__(self, codes, return_stages=False):
         # return_stages BYPASSES bucketing on purpose: it exists to bisect against the
@@ -375,27 +458,10 @@ class TtVoxtralCodecDecoder:
 
     @torch.no_grad()
     def _decode(self, codes, return_stages=False):
-        stages = {}
-        x = self.quantizer_decode(codes)  # [1,1,T,292]
-        x = self._conv1d(x, self.conv_in, SEMANTIC_DIM + 36, CODEC_DIM,
-                         DEC_CONV_KERNELS[0], DEC_CONV_STRIDES[0], "replicate")
-        if return_stages:
-            stages["after_input_conv"] = self._chw(x)
-        for stage, (tf_i, n_layers) in enumerate(zip(DEC_TF_BLOCKS, DEC_TF_LENGTHS)):
-            L = x.shape[2]
-            seq = ttnn.reshape(x, [1, L, CODEC_DIM])
-            for li in range(n_layers):
-                seq = self._block(seq, self.layers[(tf_i, li)], self.windows[stage])
-            x = ttnn.reshape(seq, [1, 1, L, CODEC_DIM])
-            if return_stages:
-                stages[f"after_tf{tf_i}"] = self._chw(x)
-            if stage < len(DEC_CONV_BLOCKS) - 1:
-                ci = DEC_CONV_BLOCKS[stage + 1]
-                x = self._conv_transpose(x, self.ups[ci], CODEC_DIM,
-                                         DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1])
-                if return_stages:
-                    stages[f"after_up{ci}"] = self._chw(x)
-        x = self._conv1d(x, self.conv_out, CODEC_DIM, PATCH_SIZE, PATCH_PROJ_KERNEL, 1, "reflect")
+        lat_host = self._quantizer_host(codes)
+        stages = {} if return_stages else None
+        xd = ttnn.from_torch(lat_host, dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
+        x = self._graph(xd, stages)
         # unpatch: channels-last [1,1,T',240] flattens (t, c) with c fastest == the reference's
         # permute(0,2,1).reshape(B,1,T'*240)
         out = ttnn.to_torch(x).float().reshape(1, 1, -1)
