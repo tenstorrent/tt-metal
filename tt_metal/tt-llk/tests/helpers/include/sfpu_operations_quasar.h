@@ -91,14 +91,15 @@ inline constexpr bool is_trig_op(SfpuType op)
  * @brief Run the per-operation init step for a Quasar unary SFPU op.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
+ * @tparam is_fp32_dest_acc_en 32-bit Dest; ops whose init depends on the Dest width read it (gelu).
  * @note Pair with @ref call_unary_sfpu_operation_quasar for the calculate step.
  */
-template <SfpuType OPERATION, bool is_fp32_dest_acc_en, bool APPROX = false>
+template <SfpuType OPERATION, bool APPROX = false, bool is_fp32_dest_acc_en = false>
 void init_unary_sfpu_operation_quasar()
 {
     if constexpr (OPERATION == SfpuType::gelu)
     {
-        gelu_init();
+        gelu_init<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
@@ -217,7 +218,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu, (true /* APPROX */, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::relu)
     {

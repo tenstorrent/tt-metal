@@ -63,6 +63,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
     {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
+    {"gelu_accurate", {{"SFPU_OP_CHAIN_0", "gelu_tile_init<false>(); gelu_tile<false>(0);"}}},
     {"sqrt", {{"SFPU_OP_CHAIN_0", "sqrt_tile_init(); sqrt_tile(0);"}}},
     {"sigmoid", {{"SFPU_OP_CHAIN_0", "sigmoid_tile_init(); sigmoid_tile(0);"}}},
     {"silu", {{"SFPU_OP_CHAIN_0", "silu_tile_init(); silu_tile(0);"}}},
@@ -145,6 +146,9 @@ float sfpu_function(const std::string& op_name, float input) {
         static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
         auto x3 = input * input * input;
         return input * 0.5 * (1.0 + tanhf(alpha * (input + 0.044715 * x3)));
+    }
+    if (op_name == "gelu_accurate") {
+        return 0.5f * input * (1.0f + erff(input * static_cast<float>(M_SQRT1_2)));
     }
     if (op_name == "sqrt") {
         return sqrtf(input);
@@ -289,6 +293,9 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
+    if (op_name == "gelu_accurate") {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed);
+    }
     if ((op_name == "eqz") || (op_name == "nez") || (op_name == "ltz") || (op_name == "gtz") || (op_name == "gez") ||
         (op_name == "lez")) {
         // Include exact zeros so the eqz/nez/lez/gez at-zero branches are exercised.
@@ -367,6 +374,9 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
     }
     if ((op_name == "gelu") || (op_name == "relu")) {
         return {0.15f, 0.001f};
+    }
+    if (op_name == "gelu_accurate") {
+        return {0.01f, 0.001f};
     }
     if (op_name == "exponential") {
         // 16-bit Dest runs the approximate (HW LUT) exp; 32-bit Dest runs the fp32-accurate
@@ -1589,6 +1599,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
+        std::make_tuple(1, "gelu_accurate"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
         std::make_tuple(1, "silu"),
@@ -1601,6 +1612,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
+        std::make_tuple(4, "gelu_accurate"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
         std::make_tuple(4, "silu"),
@@ -1718,6 +1730,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
+        std::make_tuple(1, "gelu_accurate"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
         std::make_tuple(1, "silu"),
@@ -1729,6 +1742,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
+        std::make_tuple(4, "gelu_accurate"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
         std::make_tuple(4, "silu"),
