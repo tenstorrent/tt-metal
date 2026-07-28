@@ -107,7 +107,7 @@ best measured candidate (OPT-004). Note: `tt-perf-report` splits `MatmulDeviceOp
 ---
 ## Part C — incorporate into the optimize loop (now)
 
-During the `03-optimized` goal, after `$graph-fusing` and the operation-topology audit, on the
+During the `03-optimized` goal, after the operation-topology audit, on the
 dense attention+MLP block: do B.1-B.2 to get `final_ir`, seed it via B.3 as the first candidate,
 then let the normal optimize search (OPT-003 residual chain, OPT-004 DRAM-sharded sweep,
 precision) iterate on top and keep the measured winner. Re-query the advisor only if you rewrite
