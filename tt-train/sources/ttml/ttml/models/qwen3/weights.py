@@ -33,8 +33,8 @@ import torch
 import ttnn
 
 import ttml
+from ttml.common.utils import resolve_padded_load_shape
 from ttml.sharding import Sharding
-
 
 # =====================================================================
 # Weight permutation utilities (HF -> ttml)
@@ -178,6 +178,51 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
 
     mapping["model.norm.weight"] = f"{root_prefix}/ln_fc/weight"
     return mapping, transforms
+
+
+def expected_fused_load_shape(config, hf_name: str, tie_word_embeddings: bool = False):
+    """GLOBAL LOGICAL (un-tile-padded) shape of an HF tensor AS LOADED into the
+    fused-KV ttml Qwen3 model, or ``None`` if unknown.
+
+    Shared by every HF -> ttml Qwen3 loader (single-device, FSDP, TP, and resume)
+    so they all verify the checkpoint against the same config-derived shape before
+    tile-padding. The HF ``k_proj`` key is the fused-KV mapping key, so it returns
+    the POST-fuse ``kv_proj`` shape (rows = ``2 * num_key_value_heads * head_dim``);
+    ``v_proj`` is consumed by the fuse (never a mapping key) so it has no entry.
+    Shapes are global -- callers reconstruct any per-device/TP scaling of the
+    destination target themselves.
+    """
+    h = config.hidden_size
+    q_dim = config.num_attention_heads * config.head_dim
+    kv_dim = config.num_key_value_heads * config.head_dim
+    inter = config.intermediate_size
+    hd = config.head_dim
+    vocab = config.vocab_size
+    if hf_name.endswith("embed_tokens.weight") or hf_name == "lm_head.weight":
+        return (vocab, h)
+    if hf_name.endswith(".self_attn.q_proj.weight"):
+        return (q_dim, h)
+    if hf_name.endswith(".self_attn.q_proj.bias"):
+        return (q_dim,)
+    if hf_name.endswith(".self_attn.k_proj.weight"):  # fused kv_proj (post-combine)
+        return (2 * kv_dim, h)
+    if hf_name.endswith(".self_attn.k_proj.bias"):
+        return (2 * kv_dim,)
+    if hf_name.endswith(".self_attn.o_proj.weight"):
+        return (h, q_dim)
+    if hf_name.endswith(".self_attn.o_proj.bias"):
+        return (h,)
+    if hf_name.endswith(".self_attn.q_norm.weight") or hf_name.endswith(".self_attn.k_norm.weight"):
+        return (hd,)
+    if hf_name.endswith(".input_layernorm.weight") or hf_name.endswith(".post_attention_layernorm.weight"):
+        return (h,)
+    if hf_name.endswith(".mlp.gate_proj.weight") or hf_name.endswith(".mlp.up_proj.weight"):
+        return (inter, h)
+    if hf_name.endswith(".mlp.down_proj.weight"):
+        return (h, inter)
+    if hf_name == "model.norm.weight":
+        return (h,)
+    return None
 
 
 # =====================================================================
@@ -324,23 +369,28 @@ def load_weights_from_hf(
                 v_w = hf_state_dict[v_hf_name].float()
                 weight = torch.cat([k_w, v_w], dim=0)
 
+        # ttml_shape is already the GLOBAL tile-padded target (scaled up on sharded
+        # dims for the FSDP path above; == local for single-device). Verify the
+        # checkpoint against the config-implied logical shape and pad UP -- never
+        # crop -- via the shared policy helper.
         ttml_shape = ttml_shapes[ttml_name]
+        expected = expected_fused_load_shape(config, hf_name, tie_word_embeddings)
         if weight.dim() == 2:
+            tgt_rows, tgt_cols = resolve_padded_load_shape(
+                weight.shape, (ttml_shape[2], ttml_shape[3]), expected, name=hf_name
+            )
             rows, cols = weight.shape
-            tgt_rows, tgt_cols = ttml_shape[2], ttml_shape[3]
             if rows != tgt_rows or cols != tgt_cols:
                 padded = torch.zeros(tgt_rows, tgt_cols, dtype=weight.dtype)
-                padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = weight[
-                    : min(rows, tgt_rows), : min(cols, tgt_cols)
-                ]
+                padded[:rows, :cols] = weight  # pad-up only (helper guaranteed tgt >= src)
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0)
         elif weight.dim() == 1:
+            (tgt_dim,) = resolve_padded_load_shape(weight.shape, (ttml_shape[-1],), expected, name=hf_name)
             dim = weight.shape[0]
-            tgt_dim = ttml_shape[-1]
             if dim != tgt_dim:
                 padded = torch.zeros(tgt_dim, dtype=weight.dtype)
-                padded[: min(dim, tgt_dim)] = weight[: min(dim, tgt_dim)]
+                padded[:dim] = weight
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 

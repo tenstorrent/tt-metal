@@ -12,7 +12,7 @@ import ttml
 from ttml.common.utils import build_causal_mask
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
-from ttml.models.llama.safetensors_loader import _orient_kv
+
 
 # =============================================================================
 # Fixtures
@@ -276,63 +276,6 @@ class TestLlamaIntegration:
         assert np.all(np.isfinite(logits_np)), "Logits should be finite"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
-
-
-# =============================================================================
-# Fused-KV orientation (safetensors_loader._orient_kv) — host-only, no device
-# =============================================================================
-
-
-class TestLlamaKVOrientation:
-    """The safetensors loader fuses HF k_proj/v_proj into a single kv_linear, first
-    orienting each to [kv_out, hidden] (rows = output features). HF already stores
-    them that way; only a genuinely [hidden, kv_out] tensor needs a transpose.
-
-    Regression guard: for a NON-GQA (multi-head) checkpoint num_key_value_heads ==
-    num_attention_heads, so kv_out == hidden and K is SQUARE. A ``!=``-based
-    "already oriented" test would skip the pass-branch and wrongly transpose the
-    (already correct) square K/V -- silently corrupting them, since a square
-    transpose keeps the shape and evades the downstream shape check. _orient_kv
-    must POSITIVELY match [kv_out, hidden] so the square case is left as-is.
-    """
-
-    @staticmethod
-    def _mk(rows, cols, seed):
-        return np.arange(rows * cols).reshape(rows, cols).astype(np.float32) + seed
-
-    def test_gqa_already_oriented_is_unchanged(self):
-        """GQA (kv_out != hidden), HF layout [kv_out, hidden] -> left as-is."""
-        hidden, kv_out = 4096, 1024
-        k, v = self._mk(kv_out, hidden, 0), self._mk(kv_out, hidden, 1)
-        ko, vo = _orient_kv(k, v, kv_out=kv_out, hidden=hidden)
-        assert ko.shape == (kv_out, hidden) and vo.shape == (kv_out, hidden)
-        assert np.array_equal(ko, k) and np.array_equal(vo, v)
-
-    def test_gqa_transposed_is_reoriented(self):
-        """GQA stored transposed [hidden, kv_out] -> reoriented to [kv_out, hidden]."""
-        hidden, kv_out = 4096, 1024
-        k_correct, v_correct = self._mk(kv_out, hidden, 0), self._mk(kv_out, hidden, 1)
-        ko, vo = _orient_kv(k_correct.T.copy(), v_correct.T.copy(), kv_out=kv_out, hidden=hidden)
-        assert ko.shape == (kv_out, hidden) and vo.shape == (kv_out, hidden)
-        assert np.array_equal(ko, k_correct) and np.array_equal(vo, v_correct)
-
-    def test_mha_square_already_oriented_is_not_transposed(self):
-        """THE REGRESSION: non-GQA/MHA (kv_out == hidden) K is square and already
-        [kv_out, hidden]; it must be left EXACTLY as-is, never transposed."""
-        hidden = kv_out = 4096  # num_key_value_heads == num_attention_heads
-        k, v = self._mk(kv_out, hidden, 0), self._mk(kv_out, hidden, 1)
-        ko, vo = _orient_kv(k, v, kv_out=kv_out, hidden=hidden)
-        assert np.array_equal(ko, k), "square K was transposed -- fused-KV MHA corruption bug"
-        assert np.array_equal(vo, v), "square V was transposed -- fused-KV MHA corruption bug"
-        assert not np.array_equal(ko, k.T)  # data is asymmetric, so a transpose would differ
-
-    def test_unexpected_shape_raises(self, expect_error):
-        """A shape that is neither [kv_out, hidden] nor its transpose must RAISE,
-        not silently fall through mis-oriented."""
-        hidden, kv_out = 4096, 1024
-        bad = np.zeros((512, 999), dtype=np.float32)
-        with expect_error(RuntimeError, "Unexpected k_proj shape"):
-            _orient_kv(bad, bad, kv_out=kv_out, hidden=hidden)
 
 
 if __name__ == "__main__":

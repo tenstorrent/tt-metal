@@ -65,7 +65,9 @@ from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for caller
 from ttml.models.qwen3.weights import (
     unpermute_proj_rows,
     unpermute_norm_weights,
+    expected_fused_load_shape,
 )
+from ttml.common.utils import resolve_padded_load_shape
 from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
@@ -535,29 +537,34 @@ def load_weights_from_hf_distributed(
                     weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out)
 
         ttml_shape = ttml_shapes[ttml_name]
+        expected = expected_fused_load_shape(config, hf_name, tie_word_embeddings)
 
         if weight.dim() == 2:
-            rows, cols = weight.shape
+            # Reconstruct the GLOBAL tile-padded target (ttml_shape is per-device;
+            # the sharded dim is scaled back up by tp_size). Validate the (global)
+            # checkpoint shape against the config-implied logical shape and pad UP
+            # to the global target -- never crop -- via the shared policy helper.
             tgt_rows, tgt_cols = ttml_shape[2], ttml_shape[3]
             if st == "col_w":
                 tgt_rows *= tp_size
             elif st == "row_w":
                 tgt_cols *= tp_size
+            tgt_rows, tgt_cols = resolve_padded_load_shape(weight.shape, (tgt_rows, tgt_cols), expected, name=hf_name)
+            rows, cols = weight.shape
             if rows != tgt_rows or cols != tgt_cols:
                 padded = torch.zeros(tgt_rows, tgt_cols, dtype=weight.dtype)
-                padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = weight[
-                    : min(rows, tgt_rows), : min(cols, tgt_cols)
-                ]
+                padded[:rows, :cols] = weight  # pad-up only (helper guaranteed tgt >= src)
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0)
         elif weight.dim() == 1:
-            dim = weight.shape[0]
             tgt_dim = ttml_shape[-1]
             if st == "col_b":
                 tgt_dim *= tp_size
+            (tgt_dim,) = resolve_padded_load_shape(weight.shape, (tgt_dim,), expected, name=hf_name)
+            dim = weight.shape[0]
             if dim != tgt_dim:
                 padded = torch.zeros(tgt_dim, dtype=weight.dtype)
-                padded[: min(dim, tgt_dim)] = weight[: min(dim, tgt_dim)]
+                padded[:dim] = weight
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
         else:

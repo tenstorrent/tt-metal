@@ -25,8 +25,10 @@ from tqdm import tqdm
 
 import ttml
 import ttnn
+from ttml.common.utils import resolve_padded_load_shape
 from ttml.models.qwen3.weights import (
     build_weight_mapping_single,
+    expected_fused_load_shape,
     repermute_norm_weights,
     repermute_proj_rows,
     unpermute_norm_weights,
@@ -632,6 +634,10 @@ def _load_hf_dict_into_ttml(
                         v_blk = v_w.reshape(col_w_tp, per)
                         weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out)
 
+        # Verify the (fused, global) checkpoint against the config-implied logical
+        # shape and pad UP to the reconstructed global tile-padded target -- never
+        # crop -- via the shared policy helper.
+        expected = expected_fused_load_shape(config, hf_name, tie_word_embeddings)
         if weight.dim() == 2:
             rows, cols = weight.shape
             tp_size = 1
@@ -642,19 +648,25 @@ def _load_hf_dict_into_ttml(
                     tp_size = max(1, cols // ttml_shape[3]) if ttml_shape[3] else 1
             tgt_rows = ttml_shape[2] * (tp_size if shard_type == "col_w" else 1)
             tgt_cols = ttml_shape[3] * (tp_size if shard_type in ("row_w", "col_b") else 1)
+            tgt_rows, tgt_cols = resolve_padded_load_shape(weight.shape, (tgt_rows, tgt_cols), expected, name=hf_name)
             if rows != tgt_rows or cols != tgt_cols:
                 padded = torch.zeros(tgt_rows, tgt_cols, dtype=weight.dtype)
-                padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = weight[
-                    : min(rows, tgt_rows), : min(cols, tgt_cols)
-                ]
+                padded[:rows, :cols] = weight  # pad-up only (helper guaranteed tgt >= src)
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0)
         elif weight.dim() == 1:
             dim = weight.shape[0]
-            tgt_dim = ttml_shape[-1]
+            # Reconstruct the global 1-D target: a col_b bias is sharded on the
+            # last dim, so scale ttml_shape[-1] back up by tp; replicated 1-D
+            # params (norms) are global as-is.
+            bias_tp = 1
+            if distributed and device is not None and shard_type == "col_b" and ttml_shape[-1]:
+                bias_tp = max(1, dim // ttml_shape[-1])
+            tgt_dim = ttml_shape[-1] * (bias_tp if shard_type == "col_b" else 1)
+            (tgt_dim,) = resolve_padded_load_shape(weight.shape, (tgt_dim,), expected, name=hf_name)
             if dim != tgt_dim:
                 padded = torch.zeros(tgt_dim, dtype=weight.dtype)
-                padded[: min(dim, tgt_dim)] = weight[: min(dim, tgt_dim)]
+                padded[:dim] = weight
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 

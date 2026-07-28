@@ -27,6 +27,8 @@ import numpy as np
 import ttnn
 import ttml
 
+from ttml.common.utils import resolve_padded_load_shape
+
 from .. import WeightTyingType
 
 # ---------------------------------------------------------------------------
@@ -126,39 +128,25 @@ def _assign(param, arr_4d: np.ndarray) -> None:
     param.assign(ttml.autograd.Tensor.from_numpy(arr_4d, layout=ttnn.Layout.TILE))
 
 
-def _fit_to_param_shape(arr: np.ndarray, param, hf_name: str) -> np.ndarray:
-    """Transpose/pad/crop ``arr`` to the destination parameter's (tile-padded) shape.
+def _fit_to_param_shape(arr: np.ndarray, param, hf_name: str, expected_shape: Optional[tuple] = None) -> np.ndarray:
+    """Verify ``arr`` matches the model config, then zero-pad it up to the param's shape.
 
-    Mirrors the inline shape handling in :func:`load_from_safetensors` so the
-    fused-KV path and the generic path stay consistent.
+    The shape policy (raise on config divergence / transpose / crop, tile-pad
+    only, warn on unverified tile-pad) lives in
+    :func:`ttml.common.utils.resolve_padded_load_shape`; this wrapper just applies
+    the numpy padding to the returned target shape.
     """
     shape = param.shape()
     if arr.ndim == 2:
-        tgt_rows, tgt_cols = shape[-2], shape[-1]
-        r, c = arr.shape
-        if r == tgt_rows and c == tgt_cols:
-            return arr
-        if c == tgt_rows and r == tgt_cols:
-            return arr.T
-        if r > tgt_rows or c > tgt_cols:
-            print(
-                f"  Warning: cropping {hf_name} from ({r}x{c}) to fit ttml ({tgt_rows}x{tgt_cols}); "
-                f"check that Qwen3Config matches the HF checkpoint."
-            )
-        return _pad_to_target(arr, tgt_rows, tgt_cols)
+        tgt = resolve_padded_load_shape(arr.shape, (shape[-2], shape[-1]), expected_shape, name=hf_name)
+        return _pad_to_target(arr, tgt[0], tgt[1])
     if arr.ndim == 1:
-        tgt_dim = shape[-1]
-        src_dim = arr.shape[0]
-        if src_dim > tgt_dim:
-            print(
-                f"  Warning: cropping {hf_name} from ({src_dim},) to fit ttml ({tgt_dim},); "
-                f"check that Qwen3Config matches the HF checkpoint."
-            )
-            return arr[:tgt_dim]
-        if src_dim < tgt_dim:
-            padded = np.zeros((tgt_dim,), dtype=arr.dtype)
-            padded[:src_dim] = arr
-            return padded
+        (tgt_dim,) = resolve_padded_load_shape(arr.shape, (shape[-1],), expected_shape, name=hf_name)
+        if arr.shape[0] == tgt_dim:
+            return arr
+        padded = np.zeros((tgt_dim,), dtype=arr.dtype)
+        padded[: arr.shape[0]] = arr
+        return padded
     return arr
 
 
@@ -362,6 +350,10 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
     tied = config.weight_tying == WeightTyingType.Enabled
     loaded: set[str] = set()
     unmapped_hf: list[str] = []
+    # Config-implied LOGICAL (un-tile-padded) HF shapes, used to verify each
+    # checkpoint tensor matches the model config before tile-padding it (catches
+    # e.g. a vocab_size that diverges from the config by less than a tile).
+    hf_shapes = _build_hf_shapes(config)
     # HF ships separate k_proj/v_proj; the ttml model has a single fused kv_proj.
     # Stage each layer's K and V arrays keyed by (layer, "weight"|"bias") and fuse
     # them into kv_proj after the main loop (both must be present to fuse).
@@ -405,7 +397,9 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
             arr = _unpermute_norm_weights(arr)
 
         param = parameters[ttml_name]
-        arr = _fit_to_param_shape(arr, param, hf_name)
+        # expected_shape uses the ORIGINAL hf_name (before any tie remap) so the
+        # config lookup is correct even when embed_tokens/lm_head share a param.
+        arr = _fit_to_param_shape(arr, param, hf_name, expected_shape=hf_shapes.get(hf_name))
         _assign(param, _to_bf16_4d(arr))
         loaded.add(ttml_name)
 
@@ -427,7 +421,13 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
             continue
         fused = _fuse_kv(kv["k"], kv["v"], config.num_key_value_heads)
         param = parameters[ttml_name]
-        fused = _fit_to_param_shape(fused, param, f"model.layers.{layer_idx}.self_attn.kv_proj.{kind}")
+        # Fused kv_proj logical shape: K and V stacked -> 2*kv_dim rows (2*kv_dim
+        # for a 1-D bias), hidden cols. Verifies k_proj/v_proj match the config.
+        kv_dim = config.num_key_value_heads * config.head_dim
+        kv_expected = (2 * kv_dim, config.hidden_size) if kind == "weight" else (2 * kv_dim,)
+        fused = _fit_to_param_shape(
+            fused, param, f"model.layers.{layer_idx}.self_attn.kv_proj.{kind}", expected_shape=kv_expected
+        )
         _assign(param, _to_bf16_4d(fused))
         loaded.add(ttml_name)
 

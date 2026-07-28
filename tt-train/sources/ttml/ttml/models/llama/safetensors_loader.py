@@ -96,26 +96,6 @@ def _make_tp_mapper(shard_type):
     return ttml.mesh().axis_mapper("tp", tdim=dim)
 
 
-def _orient_kv(k: np.ndarray, v: np.ndarray, kv_out: int, hidden: int):
-    """Orient K/V to ``[kv_out, hidden]`` (rows = output features).
-
-    HF stores ``k_proj``/``v_proj`` as ``[kv_out, hidden]``. If we detect a transpose
-    weight shaped ``[hidden, kv_out]``, we un-transpose it. Raises on any other shape
-    rather than mis-orienting.
-
-    Returns ``(k, v)`` oriented as ``[kv_out, hidden]``.
-    """
-    if k.shape[0] == kv_out and k.shape[1] == hidden:
-        return k, v  # already [kv_out, hidden]
-    if k.shape[0] == hidden and k.shape[1] == kv_out:
-        return k.T, v.T  # stored transposed [hidden, kv_out]
-    raise RuntimeError(
-        f"Unexpected k_proj shape {tuple(k.shape)}: expected [kv_out, hidden] = "
-        f"[{kv_out}, {hidden}] (or its transpose). Check that the LlamaConfig "
-        f"matches the checkpoint."
-    )
-
-
 def _param_tp_shard_type(param):
     """Shard type of *param* along the 'tp' mesh axis, read from its live layout.
 
@@ -209,13 +189,15 @@ def load_from_safetensors(
         k = k_staged.pop(layer_idx)
         v = v_staged.pop(layer_idx)
 
-        # Orient K/V to [kv_out, hidden] (rows = output features) so the shard axis
+        # Ensure K/V have shape [kv_out, hidden] (rows = output features) so the shard axis
         # (rows / dim 2) matches ColumnParallelLinear. full_rows is the fused
         # kv_linear row count (2*kv_out), so full_rows // 2 == kv_out.
-        try:
-            k, v = _orient_kv(k, v, kv_out=full_rows // 2, hidden=full_cols)
-        except RuntimeError as e:
-            raise RuntimeError(f"layer {layer_idx}: {e}") from e
+        if k.shape[0] != full_rows // 2 or k.shape[1] != full_cols:
+            raise RuntimeError(
+                f"Unexpected k_proj shape {tuple(k.shape)} at layer {layer_idx}: expected "
+                f"[kv_out, hidden] = [{full_rows // 2}, {full_cols}]. Check that the "
+                f"LlamaConfig matches the checkpoint."
+            )
 
         # Fused KV layout under ColumnParallel TP: the kv_linear output rows are
         # sharded CONTIGUOUSLY across tp devices, and per device grouped_heads_creation
