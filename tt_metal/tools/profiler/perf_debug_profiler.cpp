@@ -100,6 +100,99 @@ bool tracy_push_disabled() {
     return off;
 }
 
+// ---- Host<->device clock sync -------------------------------------------------------------------------
+// Restores what the legacy RealtimeProfilerManager used to provide before perf_debug gated it off. Without a
+// real sync, AddDevice() can only guess: it anchors "device time 0" at the host time the FIRST MARKER was
+// CONSUMED, which is later than when the device produced it by the whole drain+decode+ring latency -- so
+// every device zone sits shifted right of the host CPU zones.
+//
+// Done host-side on purpose: the RT manager synced via a device kernel + dispatch handshake (and a reserved
+// tensix core), which is exactly the baggage perf_debug exists to avoid. Instead read the Tensix WALL CLOCK
+// (the very counter kernel markers timestamp with) straight over NoC, bracketed by host clock reads --
+// Cristian's algorithm: the midpoint of the bracket cancels the round-trip to first order.
+struct PerfDebugSync {
+    double frequency = 0.0;   // device cycles per nanosecond (GHz)
+    uint64_t device_at_anchor = 0;
+    int64_t host_anchor = 0;
+    bool valid = false;
+};
+
+PerfDebugSync sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker) {
+    // RISCV_DEBUG_REG_WALL_CLOCK_L/H. Reading L atomically LATCHES H, so read L then H (H's own latency is
+    // irrelevant). Same registers the X280 firmware co-samples in calibrate().
+    constexpr uint64_t kWallClockL = 0xFFB121F0ULL;
+    constexpr uint64_t kWallClockH = 0xFFB121F8ULL;
+    constexpr uint32_t kSamples = 100;
+    struct S {
+        int64_t host_mid;
+        uint64_t dev;
+        int64_t rt;
+    };
+    std::vector<S> samples;
+    samples.reserve(kSamples);
+    const tt_cxy_pair target(chip_id, worker);
+    for (uint32_t i = 0; i < kSamples; i++) {
+        uint32_t lo = 0, hi = 0;
+        const int64_t t0 = tracy::Profiler::GetTime();
+        cluster.read_reg(&lo, target, kWallClockL);  // latches H
+        cluster.read_reg(&hi, target, kWallClockH);
+        const int64_t t1 = tracy::Profiler::GetTime();
+        samples.push_back(S{(t0 + t1) / 2, (static_cast<uint64_t>(hi) << 32) | lo, t1 - t0});
+    }
+    // Drop NoC/PCIe-contended outliers: keep samples whose round-trip is within 1.5x the median.
+    std::vector<int64_t> rts;
+    rts.reserve(samples.size());
+    for (const auto& s : samples) {
+        rts.push_back(s.rt);
+    }
+    std::sort(rts.begin(), rts.end());
+    const int64_t rt_cut = rts[rts.size() / 2] + rts[rts.size() / 2] / 2;
+
+    // Centered least squares (centering avoids catastrophic cancellation at absolute-timestamp magnitudes).
+    double hx = 0, dy = 0;
+    uint32_t n = 0;
+    for (const auto& s : samples) {
+        if (s.rt > rt_cut) {
+            continue;
+        }
+        hx += static_cast<double>(s.host_mid);
+        dy += static_cast<double>(s.dev);
+        n++;
+    }
+    PerfDebugSync out;
+    if (n < 2) {
+        return out;
+    }
+    hx /= n;
+    dy /= n;
+    double num = 0, den = 0;
+    for (const auto& s : samples) {
+        if (s.rt > rt_cut) {
+            continue;
+        }
+        const double ddx = static_cast<double>(s.host_mid) - hx;
+        const double ddy = static_cast<double>(s.dev) - dy;
+        num += ddx * ddy;
+        den += ddx * ddx;
+    }
+    if (std::abs(den) < 1e-10) {
+        return out;
+    }
+    const double slope = num / den;  // device cycles per host tick
+#ifdef TRACY_ENABLE
+    const double ns_per_tick = TracyGetTimerMul();
+#else
+    const double ns_per_tick = 1.0;
+#endif
+    out.frequency = slope / (ns_per_tick > 0.0 ? ns_per_tick : 1.0);  // cycles per ns
+    // Anchor on the sample mean (self-consistent: device time AT that host time), rather than extrapolating
+    // an intercept back to host_time=0 where a tiny slope error becomes a huge offset.
+    out.host_anchor = static_cast<int64_t>(hx);
+    out.device_at_anchor = static_cast<uint64_t>(dy);
+    out.valid = out.frequency > 0.0;
+    return out;
+}
+
 PerfDebugProfiler::DeviceCtx::DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::~DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
@@ -140,11 +233,38 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         }
         // Tracy: anchor + pre-create the per-core contexts (off the drain hot path). Freq = device
         // aiclk in GHz (cycles/ns), matching the standard DeviceProfiler.
+        // Anchor the device timeline with a REAL host<->device clock sync (see sync_device_clock). Falls back
+        // to the old guess -- aiclk + "device 0 == now" -- only if the sync cannot fit a line, in which case
+        // device zones are placed relative to the first marker CONSUMED and so lag the host zones.
         double freq = cluster.get_device_aiclk(ctx.chip_id) / 1000.0;
         if (freq <= 0.0) {
             freq = 1.0;
         }
-        tracy_->AddDevice(ctx.chip_id, tracy::Profiler::GetTime(), 0.0, freq);
+        PerfDebugSync sync;
+        if (!ctx.core_virt.empty()) {
+            const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
+            sync = sync_device_clock(cluster, ctx.chip_id, w);
+        }
+        if (sync.valid) {
+            ctx.synced = true;
+            tracy_->AddDevice(
+                ctx.chip_id, sync.host_anchor, static_cast<double>(sync.device_at_anchor), sync.frequency);
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {} clock sync: frequency={:.6f} GHz (aiclk reports {:.6f}), "
+                "device_time_at_anchor={} cycles",
+                ctx.chip_id,
+                sync.frequency,
+                freq,
+                sync.device_at_anchor);
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {} clock sync FAILED; falling back to first-marker anchoring "
+                "(device zones will lag the host zones by the drain latency)",
+                ctx.chip_id);
+            tracy_->AddDevice(ctx.chip_id, tracy::Profiler::GetTime(), 0.0, freq);
+        }
         // NOTE: per-core Tracy contexts are created LAZILY on each core's first zone (HandleWorkerZone ->
         // GetOrCreateContext). We deliberately do NOT pre-create the full worker grid here: only ~16 of
         // ~110 cores typically run the workload, and pre-creating all of them litters the capture with
@@ -355,7 +475,10 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     ss.iters++;
     ss.pages += np;
     ss.buf.resize(static_cast<size_t>(np) * page_words);
-    sock->read(ss.buf.data(), np);  // auto-acks the sender
+    {
+        ZoneScopedNC("sock-read", 0x27AE60);  // green: pulling pages off the D2H socket (also acks the sender)
+        sock->read(ss.buf.data(), np);
+    }
 
     if (ss.batch.size() < read_chunk_recs_) {
         ss.batch.resize(read_chunk_recs_);  // upper bound on records from one read (words >= records)
@@ -364,6 +487,9 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     PerfDebugRec* bend = ss.batch.data() + ss.batch.size();
     const uint32_t dev_idx = static_cast<uint32_t>(&ctx - devices_.data());
 
+    ZoneScopedNC("decode", 0x8E44AD);  // purple: pages -> records. With the sink decoupled this plus sock-read
+                                       // is the writer's whole job; if it ever fills the thread, the DRAIN is
+                                       // the wall (not Tracy) -- the opposite of the UFLD-v2 case.
     pz::profzone_decode(
         st,
         ss.buf.data(),
@@ -402,6 +528,7 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
 
     const size_t bn = static_cast<size_t>(bcur - ss.batch.data());
     if (bn != 0 && ring_) {
+        ZoneScopedNC("publish", 0xE67E22);  // orange: publish this read's records to the BroadcastRing
         ring_->ring.writer().publish_batch(std::span<const PerfDebugRec>(ss.batch.data(), bn));
     }
     return true;
@@ -454,6 +581,9 @@ void PerfDebugProfiler::writer_thread() {
                 log_warning(tt::LogMetal, "[perf-debug profiler] writer WALL TIMEOUT (120 s no progress)");
                 break;
             }
+            // Every socket came back empty: the writer is STARVED waiting on the device. If this dominates
+            // while the device shows no stalls, the host is comfortably ahead -- the healthy state.
+            ZoneScopedNC("sock-idle", 0x7D6608);  // dark yellow
             std::this_thread::sleep_for(backoff);
         }
     }
@@ -497,6 +627,9 @@ void PerfDebugProfiler::consumer_thread() {
             }
             zone_names_[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID
         });
+        ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch into Tracy -- the slow side (~0.8M
+                                               // rec/s). When this saturates, the RING drops; it can no longer
+                                               // back-pressure the device.
         for (const auto& r : b) {
             const uint32_t dev_idx = r.lane >> 24;
             const uint32_t lane = r.lane & 0x00FFFFFFu;
@@ -528,7 +661,9 @@ void PerfDebugProfiler::consumer_thread() {
             pkt.risc = risc;
             pkt.timer_id = r.zone;
             pkt.name = name;
-            const uint64_t base = ctx.marker_ts_base;
+            // Synced: push the RAW device timestamp -- the context was anchored with a real (host, device)
+            // pair, so Tracy places it exactly. Unsynced: fall back to rebasing on the first marker seen.
+            const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;
             pkt.timestamp = (r.ts >= base) ? (r.ts - base) : 0;
             pkt.is_start = (r.type == kernel_profiler::ZONE_START);
             if (!tracy_push_disabled()) {
@@ -554,7 +689,12 @@ void PerfDebugProfiler::consumer_thread() {
             }
             break;
         }
-        rd.wait(tok);
+        {
+            ZoneScopedNC("ring-wait", 0x7F8C8D);  // gray: consumer starved, waiting on the writer. Mirrors the
+                                                  // harness's mq-pop-wait. Plentiful here = the sink is keeping
+                                                  // up; ~absent = the sink is the bottleneck and drops loom.
+            rd.wait(tok);
+        }
     }
     consumed_.fetch_add(cnt);
     dropped_.fetch_add(rd.dropped());
@@ -675,9 +815,12 @@ void PerfDebugProfiler::push_hart_zones() {
                 hz_max = std::max(hz_max, t);
             }
         }
-        const uint64_t marker_origin = ctx.marker_ts_base;
+        // Synced devices place hart spans on the same absolute Tensix timeline as the markers (no rebase).
+        const uint64_t marker_origin = ctx.synced ? 0 : ctx.marker_ts_base;
         const uint64_t hz_span_start = hz_min;  // kept for the diagnostic below
-        if (marker_origin != 0) {
+        if (ctx.synced) {
+            hz_min = 0;  // absolute Tensix time; the context anchor does the placement
+        } else if (marker_origin != 0) {
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] hart zones start {:.1f} ms BEFORE the first kernel marker (X280 drains "

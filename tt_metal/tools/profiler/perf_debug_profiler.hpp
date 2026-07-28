@@ -140,6 +140,7 @@ private:
         // wanting to record "the first marker ts". Whichever wins differs by microseconds -- irrelevant for an
         // origin, so the benign race is preferable to making the struct unmovable.
         uint64_t marker_ts_base = 0;
+        bool synced = false;  // a real host<->device clock sync succeeded -> push RAW device timestamps
 
         DeviceCtx();
         ~DeviceCtx();
