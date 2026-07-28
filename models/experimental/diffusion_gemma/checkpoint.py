@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import torch
+from loguru import logger
 from safetensors.torch import safe_open
 
 from models.experimental.diffusion_gemma.weight_mapping import (
@@ -104,14 +105,54 @@ def resolve_checkpoint_dir(
     if path.is_absolute():
         raise FileNotFoundError(f"checkpoint directory not found: {path}")
 
-    from huggingface_hub import snapshot_download
-
     kwargs = {}
     if local_files_only is not None:
         kwargs["local_files_only"] = local_files_only
     if allow_patterns is not None:
         kwargs["allow_patterns"] = list(_as_prefix_tuple(allow_patterns))
-    return Path(snapshot_download(str(checkpoint_dir), **kwargs))
+    return Path(_snapshot_download_with_retry(str(checkpoint_dir), **kwargs))
+
+
+def _snapshot_download_with_retry(repo_id: str, *, attempts: int = 5, **kwargs):
+    """``snapshot_download`` with backoff, because one transient 5xx must not cost an hour.
+
+    This is the FIRST thing that runs when a server starts on a host with a cold weight cache, and
+    it raises straight out of ``initialize_vllm_model`` -> ``load_model`` -> ``_init_executor``, where
+    an exception is fatal to the vLLM EngineCore. On 2026-07-28 a single
+    ``HTTP 500`` from ``us.aws.cdn.hf.co`` partway through a ~50 GB fetch therefore killed a CI eval
+    before any DiffusionGemma code had run, and the harness then sat on a QB2 runner for the rest of
+    its 3600 s health-check timeout. The download had already succeeded on a different runner in the
+    same label pool, whose docker volume was warm -- so the failure was pure infrastructure, and pure
+    bad luck about which host the job landed on.
+
+    Retries are on transport/server errors only. A missing repo, a gated repo or bad credentials fail
+    immediately: retrying those just burns the same hour more slowly.
+    """
+    import time
+
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, RepositoryNotFoundError
+
+    fatal = (RepositoryNotFoundError, GatedRepoError, EntryNotFoundError, FileNotFoundError)
+    delay = 5.0
+    for attempt in range(1, attempts + 1):
+        try:
+            return snapshot_download(repo_id, **kwargs)
+        except fatal:
+            raise
+        except Exception as exc:  # noqa: BLE001 - transport errors are not one exception type
+            if attempt == attempts:
+                raise RuntimeError(
+                    f"checkpoint download for {repo_id!r} failed after {attempts} attempts; "
+                    f"last error: {type(exc).__name__}: {exc}"
+                ) from exc
+            logger.warning(
+                f"[DiffusionGemma] checkpoint download attempt {attempt}/{attempts} failed "
+                f"({type(exc).__name__}: {exc}); retrying in {delay:.0f}s. Already-fetched files are "
+                f"kept, so a retry resumes rather than restarts."
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 60.0)
 
 
 def load_text_generation_state_dict(

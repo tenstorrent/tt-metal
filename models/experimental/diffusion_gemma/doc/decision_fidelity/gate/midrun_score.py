@@ -56,6 +56,31 @@ def rate(flags):
     return c, n, 100.0 * p, 100.0 * math.sqrt(p * (1 - p) / n)
 
 
+def answer_stage(choice_filter, text, doc):
+    """WHICH filter stage produced the letter: 1 and 2 are answers, 3 is a guess, None is nothing.
+
+    This distinction is the difference between a score and a fiction. BoxedChoiceFilter's stage 3
+    delegates to an ``[A-D]``-constrained ``multi_choice_regex``: the last "(A-D)" paren ANYWHERE in
+    the response, or a mention of a choice's TEXT. On a response that never stated an answer -- one
+    truncated at the generation cap mid-reasoning, or a degenerate canvas -- stage 3 still returns a
+    letter, and it is right about a quarter of the time.
+
+    Measured on this model at 129 responses: stage 1 74%, stage 2 2%, **stage 3 19.5%**, nothing 4%.
+    The A100 reference: stage 1 91-93%, stage 2 6-8%, stage 3 1.5%, nothing 0%. So counting stage-3
+    letters as answers credited ~7 pp of pure chance to the TT side and none to the reference, and
+    made a 76% real-answer rate print as "extractable 100%".
+    """
+    if not text or not text.strip():
+        return None
+    stripped = choice_filter._strip_think(text)
+    if choice_filter._clean_boxed_letter(stripped):
+        return 1
+    if choice_filter._marker_letter(stripped):
+        return 2
+    got = str(choice_filter.apply([[text]], [doc])[0][0]).strip().upper().strip("()")
+    return 3 if got in ("A", "B", "C", "D") else None
+
+
 def render_docs(task_name: str, checkpoint: str, thinking: bool, seed: int):
     """Every question in served order, with the gold this run's own shuffle produced."""
     random.seed(seed)  # before the task is built: process_docs shuffles the choices from `random`
@@ -180,26 +205,55 @@ def main() -> int:
                 "record": d["record"],
                 "correct": got.strip("()") == gold.strip("()"),
                 "pick": got,
+                "stage": answer_stage(choice_filter, text, d["doc"]),
+                "tokens": len(req["ids"]),
                 "empty": not text.strip(),
                 "guard": req["guard_ended"],
             }
         )
 
-    answered = [r for r in rows if not r["empty"] and r["record"] in ref]
-    if not answered:
-        sys.exit("no answered question overlaps the reference yet")
-    empty = sum(1 for r in rows if r["empty"])
-    extractable = sum(1 for r in answered if r["pick"] not in ("[INVALID]", "", "NONE"))
+    # EVERY served question is in the denominator. An empty or answer-free response is WRONG, which
+    # is what lm_eval scores it -- dropping them is a one-sided correction, since the reference has
+    # no empty responses at all.
+    scored = [r for r in rows if r["record"] in ref]
+    if not scored:
+        sys.exit("no served question overlaps the reference yet")
+    real = [r for r in scored if r["stage"] in (1, 2)]
+    guessed = [r for r in scored if r["stage"] == 3]
+    nothing = [r for r in scored if r["stage"] is None]
     print()
     print(
-        f"scored questions:    {len(answered)} of {len(docs)}   (empty {empty}, guard-truncated "
-        f"{sum(1 for r in rows if r['guard'])})"
+        f"served questions:  {len(scored)} of {len(docs)}   (guard-truncated " f"{sum(1 for r in rows if r['guard'])})"
     )
-    print(f"extractable answers: {extractable}/{len(answered)}  ({100.0*extractable/len(answered):.0f}%)")
+    print(
+        f"  stated an answer (\\boxed or marker): {len(real)}/{len(scored)} = "
+        f"{100.0*len(real)/len(scored):.1f}%   <- the real answer rate"
+    )
+    print(
+        f"  letter only from the filter's GUESS stage: {len(guessed)}   "
+        f"(right by chance in {sum(1 for r in guessed if r['correct'])} of them)"
+    )
+    print(f"  no letter at all: {len(nothing)}  (empty: {sum(1 for r in nothing if r['empty'])})")
+    if len(real) < 0.95 * len(scored):
+        print(f"  !! the A100 reference states an answer on 98.5% of questions. A gap here is a")
+        print(f"     TERMINATION problem, not a reasoning one -- check how many hit the generation cap")
+        capped = [r for r in scored if r["tokens"] >= 5376]
+        print(
+            f"     responses at/near the generation cap: {len(capped)}, of which answer-free "
+            f"{sum(1 for r in capped if r['stage'] in (3, None))}"
+        )
 
-    ct, nt, pt, et = rate([r["correct"] for r in answered])
     print()
-    print(f"  {'TT':<22} {ct:3d}/{nt:<3d} = {pt:6.2f}%  +/- {et:.2f} pp")
+    print("  THREE denominators. The first is the one comparable to the reference.")
+    ct, nt, pt, et = rate([r["correct"] and r["stage"] in (1, 2) for r in scored])
+    print(f"  {'TT (answer-free = wrong)':<30} {ct:3d}/{nt:<3d} = {pt:6.2f}%  +/- {et:.2f} pp")
+    c2, n2, p2, _ = rate([r["correct"] for r in scored])
+    print(f"  {'TT (guessed letters counted)':<30} {c2:3d}/{n2:<3d} = {p2:6.2f}%   <- inflated by chance")
+    if real:
+        c3, n3, p3, _ = rate([r["correct"] for r in real])
+        print(f"  {'TT (only where it answered)':<30} {c3:3d}/{n3:<3d} = {p3:6.2f}%   <- reasoning quality")
+    print()
+    answered = scored
     reps = sorted(k for k in next(iter(ref.values())) if k.startswith("rep"))
     scores = []
     for rep in reps:

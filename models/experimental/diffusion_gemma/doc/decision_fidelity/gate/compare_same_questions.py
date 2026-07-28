@@ -89,10 +89,14 @@ def main() -> int:
     ap.add_argument("--stage", default="full", help="which stage's samples to prefer (default: full)")
     ap.add_argument("--reference", type=Path, default=REFERENCE)
     ap.add_argument(
-        "--include-empty",
+        "--exclude-empty",
         action="store_true",
-        help="count empty answers as wrong instead of excluding them (they are usually a serving "
-        "failure, not a model answer -- see read_engine_health in watch_gpqa.py)",
+        help="EXCLUDE empty answers from the denominator instead of counting them wrong. Off by "
+        "default, and it should stay off for any comparison against the reference: lm_eval scores an "
+        "empty response 0, and the reference has ZERO empty responses, so excluding them is a "
+        "one-sided correction that only ever raises the TT number. Use it only to isolate a serving "
+        "failure (an engine death -- see read_engine_health in watch_gpqa.py) from model quality, and "
+        "say which you are reporting.",
     )
     args = ap.parse_args()
 
@@ -104,9 +108,10 @@ def main() -> int:
 
     path, tt = load_tt(args.target, args.stage)
     print(f"TT samples:  {path}")
-    print(
-        f"reference:   {args.reference}  ({', '.join(f'{r} {ref_blob['meta'][r]['score']*100:.2f}%' for r in reps)} over 198)"
-    )
+    # Built without a nested same-quote f-string on purpose: that needs Python >= 3.12, and this has
+    # to run in the evals venv (3.10), which is where it failed to even parse.
+    rep_summary = ", ".join("%s %.2f%%" % (r, ref_blob["meta"][r]["score"] * 100) for r in reps)
+    print(f"reference:   {args.reference}  ({rep_summary} over 198)")
 
     common = [r for r in tt if r in ref]
     missing = [r for r in tt if r not in ref]
@@ -124,13 +129,15 @@ def main() -> int:
             print(f"       {r}: TT {tt[r]['answer_text']!r} vs ref {ref[r]['answer_text']!r}")
         return 1
 
-    answered = [r for r in common if args.include_empty or not tt[r]["empty"]]
-    empty = len(common) - len([r for r in common if not tt[r]["empty"]])
+    answered = [r for r in common if not (args.exclude_empty and tt[r]["empty"])]
+    empty = sum(1 for r in common if tt[r]["empty"])
     print()
     print(f"questions in this TT run:   {len(common)} of 198")
     if empty:
-        note = "counted as wrong" if args.include_empty else "EXCLUDED"
+        note = "EXCLUDED from the denominator" if args.exclude_empty else "counted as WRONG (lm_eval's rule)"
         print(f"  of which empty answers:   {empty}  ({note})")
+        if args.exclude_empty:
+            print("     !! the reference has 0 empty responses, so excluding these only raises TT")
     print(f"compared on:                {len(answered)} questions")
     if len(answered) < 30:
         print(f"  (n={len(answered)} is small: one question is worth {100.0/max(1,len(answered)):.0f} pp)")
