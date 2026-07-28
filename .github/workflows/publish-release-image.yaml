@@ -69,14 +69,29 @@ jobs:
           # (see docker-run/action.yml's forward_civ2_proxy_env_vars) - this
           # is the same fix applied to the buildx builder.
           #
-          # Rebuilt rather than forwarded verbatim: the runner's own NO_PROXY
-          # includes `harbor.*.tenstorrent.net`, a mid-string wildcard that Go's
-          # NO_PROXY parsing (net/http.ProxyFromEnvironment) does not support
-          # and silently drops - a bare `tenstorrent.net` matches the same
-          # hosts (and every other subdomain) correctly.
+          # Rebuilt rather than forwarded verbatim, for two reasons:
+          # 1. The runner's own NO_PROXY includes `harbor.*.tenstorrent.net`, a
+          #    mid-string wildcard that Go's NO_PROXY parsing
+          #    (net/http.ProxyFromEnvironment) does not support and silently
+          #    drops - a bare `tenstorrent.net` matches the same hosts (and
+          #    every other subdomain) correctly.
+          # 2. `docker buildx create --driver-opt` has its own unrelated,
+          #    unresolved parsing bug: a comma INSIDE a driver-opt's value is
+          #    indistinguishable from the comma that separates multiple
+          #    driver-opts, so a multi-entry NO_PROXY like
+          #    "localhost,127.0.0.1,tenstorrent.net" gets torn apart into
+          #    separate (invalid) driver-opts - confirmed via
+          #    github.com/docker/buildx/discussions/1133, and no quoting or
+          #    escaping works around it. So this is deliberately a SINGLE
+          #    entry, no comma: this job's own bake contexts only need to
+          #    bypass the proxy for harbor.ci.tenstorrent.net (Harbor - see
+          #    HARBOR_PREFIX below); nothing here talks to any other internal
+          #    cluster-only service. If a future caller needs more NO_PROXY
+          #    entries, this will need a different mechanism (e.g. a
+          #    buildkitd config file instead of --driver-opt).
           echo "PROXY_HTTP=${HTTP_PROXY:-${http_proxy:-}}" >> "$GITHUB_ENV"
           echo "PROXY_HTTPS=${HTTPS_PROXY:-${https_proxy:-}}" >> "$GITHUB_ENV"
-          echo "PROXY_NO_PROXY=localhost,127.0.0.1,::1,tenstorrent.net,svc.cluster.local" >> "$GITHUB_ENV"
+          echo "PROXY_NO_PROXY=tenstorrent.net" >> "$GITHUB_ENV"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
