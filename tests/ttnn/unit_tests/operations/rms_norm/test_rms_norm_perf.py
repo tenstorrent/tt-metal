@@ -385,6 +385,38 @@ SHARDED_REFERENCE_NS = {
 }
 
 
+@pytest.mark.parametrize("shape", list(PREFILL_REFERENCE_NS), ids=lambda s: "x".join(map(str, s)))
+def test_prefill_dm_ceiling_reference(device, shape):
+    """The DATA-MOVEMENT ceiling for the prefill column, measured on this silicon.
+
+    Refinement 5's verifier note says the prefill shapes sit at the interleaved-
+    DRAM read floor and that only byte/transaction reductions can move them —
+    and to check the roofline before manufacturing a change. The NPE
+    (`/perf-ceiling-dm`) CLI is a test-build target that is not configured here,
+    so this is the empirical form of the same question, and a stronger one: it is
+    a real op on the real box rather than an interpolated model.
+
+    ``ttnn.clone`` streams the SAME tensor through DRAM with the same
+    interleaved placement and no reduction — read every tile once, write every
+    tile once, no gamma, no cross-tile dependency. Nothing that reads and writes
+    this tensor can beat it. rms_norm moves the same 2 x S bytes plus gamma,
+    which every core reads in full:
+
+        gamma / (2S + gamma) = 110 * Wt / (2 * 256 * Wt + 110 * Wt) = 17.7%
+
+    independent of W. So the shape's DM floor is ``clone x 1.215``, and the
+    residual over that is rms_norm's compute + combine + init, not movement.
+
+    Asserts nothing — it is a measurement surface, read from --profile's CSV
+    next to the test_rms_norm_perf_prefill_pinned row for the same shape.
+    """
+    torch.manual_seed(42)
+    tt_x = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    ttnn.clone(tt_x)
+
+
 def _run_sharded_pinned(device, case, *, check=True, gamma=True):
     """One fresh dispatch of a pinned sharded geometry at the pinned perf config."""
     from eval.sharding import shard_config
