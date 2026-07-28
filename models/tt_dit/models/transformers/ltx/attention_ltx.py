@@ -14,7 +14,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.matmul import get_matmul_config
+from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
@@ -320,6 +320,53 @@ class LTXAttention(Module):
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             M, K, N_out = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
+
+            # Fabric-bound path: known shapes route the addcmul to_out to the optimized strided
+            # all-gather-matmul op. The strided op computes out = ternary_a + scalar * matmul * ternary_b,
+            # matching the addcmul semantics (residual + scalar * matmul * gate, scalar=1.0). On a miss
+            # we fall through to the current all_gather_minimal_matmul_async addcmul path below.
+            fabric_cfg = get_fabric_agmm_config(K, N_out, 1, full_grid)
+            if fabric_cfg is not None:
+                tp_axis = parallel_config.tensor_parallel.mesh_axis
+                dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+                fabric_matmul_config = ttnn.MinimalMatmulConfig(
+                    M_block_size=fabric_cfg.M_block_size,
+                    K_block_size=fabric_cfg.K_block_size,
+                    N_block_size=fabric_cfg.N_block_size,
+                    subblock_h=fabric_cfg.subblock_h,
+                    subblock_w=fabric_cfg.subblock_w,
+                    compute_with_storage_grid_size=fabric_cfg.mm_core_grid,
+                )
+                outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+                    x,
+                    weight,
+                    persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                        x.shape, 3, tp_axis, dtype=x.get_dtype()
+                    ),
+                    dim=3,
+                    multi_device_global_semaphore=self.ccl_manager.get_strided_ag_mm_semaphore(
+                        tp_axis, fabric_cfg.num_workers_per_link
+                    ),
+                    strided_all_gather_core_grid_offset=fabric_cfg.ag_core_grid_offset,
+                    num_links=self.ccl_manager.num_links,
+                    memory_config_ag=dram,
+                    topology=self.ccl_manager.topology,
+                    cluster_axis=tp_axis,
+                    bias=to_out.bias.data if to_out.bias is not None else None,
+                    config=fabric_matmul_config,
+                    memory_config_mm=dram,
+                    compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                    num_workers_per_link=fabric_cfg.num_workers_per_link,
+                    num_buffers_per_channel=fabric_cfg.num_buffers_per_channel,
+                    read_local_slice_from_input=True,
+                    fused_ternary_input_a=addcmul_residual,
+                    fused_ternary_input_b=addcmul_gate,
+                    fused_ternary_scalar=1.0,
+                    chunks=1,
+                )
+                # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
+                return outputs[1]
+
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N_out, core_grid)
 
@@ -605,6 +652,7 @@ class LTXAttention(Module):
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
+        # ttnn.synchronize_device(self.mesh_device)
 
         if addcmul_fused:
             spatial_1BND = self._to_out_fused_addcmul(
