@@ -24,8 +24,7 @@ constexpr uint32_t kOutputBufferIdx = 0U;
 constexpr auto kGateCbIndex = tt::CBIndex::c_0;
 constexpr auto kUpCbIndex = tt::CBIndex::c_1;
 constexpr auto kOutCbIndex = tt::CBIndex::c_2;
-constexpr auto kSigmoidCbIndex = tt::CBIndex::c_3;
-constexpr auto kScratchCbIndex = tt::CBIndex::c_4;
+constexpr auto kSiluCbIndex = tt::CBIndex::c_3;
 
 }  // namespace
 
@@ -98,8 +97,7 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     create_circular_buffer(program, all_cores, kGateCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kUpCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kOutCbIndex, data_format, tile_size_bytes, twice_block);
-    create_circular_buffer(program, all_cores, kSigmoidCbIndex, data_format, tile_size_bytes, twice_block);
-    create_circular_buffer(program, all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block);
+    create_circular_buffer(program, all_cores, kSiluCbIndex, data_format, tile_size_bytes, twice_block);
 
     auto* const packed_buf = packed.buffer();
     auto* const output_buf = output.buffer();

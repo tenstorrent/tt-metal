@@ -8,6 +8,7 @@
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/activations.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
@@ -20,45 +21,30 @@ constexpr uint32_t Wt = get_compile_time_arg_val(2);
 constexpr uint32_t cb_gate = tt::CBIndex::c_0;
 constexpr uint32_t cb_up = tt::CBIndex::c_1;
 constexpr uint32_t cb_out = tt::CBIndex::c_2;
-constexpr uint32_t cb_sigmoid = tt::CBIndex::c_3;
-constexpr uint32_t cb_scratch = tt::CBIndex::c_4;
+constexpr uint32_t cb_silu = tt::CBIndex::c_3;
 
-// sigmoid(gate) -> cb_sigmoid
-inline void compute_sigmoid() {
+// h = silu(gate) * up for one block.
+inline void swiglu_block() {
     tile_regs_acquire();
+    copy_tile_init(cb_gate);
     for (uint32_t i = 0; i < block_size; ++i) {
-        copy_tile_init(cb_gate);
         copy_tile(cb_gate, i, i);
-        sigmoid_tile_init();
-        sigmoid_tile(i);
     }
-    tile_regs_commit();
-    pack_and_push_block(cb_sigmoid, block_size);
-}
-
-// silu(gate) = gate * sigmoid(gate) -> cb_scratch
-inline void compute_silu() {
-    cb_wait_front(cb_sigmoid, block_size);
-    tile_regs_acquire();
-    mul_tiles_init(cb_gate, cb_sigmoid);
+    silu_tile_init();
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles(cb_gate, cb_sigmoid, i, i, i);
+        silu_tile(i);
     }
     tile_regs_commit();
-    cb_pop_front(cb_sigmoid, block_size);
-    pack_and_push_block(cb_scratch, block_size);
-}
+    pack_and_push_block(cb_silu, block_size);
 
-// h = silu(gate) * up -> cb_out
-inline void compute_out() {
-    cb_wait_front(cb_scratch, block_size);
+    cb_wait_front(cb_silu, block_size);
     tile_regs_acquire();
-    mul_tiles_init(cb_scratch, cb_up);
+    mul_tiles_init(cb_silu, cb_up);
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles(cb_scratch, cb_up, i, i, i);
+        mul_tiles(cb_silu, cb_up, i, i, i);
     }
     tile_regs_commit();
-    cb_pop_front(cb_scratch, block_size);
+    cb_pop_front(cb_silu, block_size);
     pack_and_push_block(cb_out, block_size);
 }
 
@@ -71,9 +57,7 @@ void kernel_main() {
             cb_wait_front(cb_gate, block_size);
             cb_wait_front(cb_up, block_size);
 
-            compute_sigmoid();
-            compute_silu();
-            compute_out();
+            swiglu_block();
 
             cb_pop_front(cb_gate, block_size);
             cb_pop_front(cb_up, block_size);
