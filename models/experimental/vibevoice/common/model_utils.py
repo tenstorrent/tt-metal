@@ -43,12 +43,21 @@ def _resolve_base_path(
         return Path(env_path)
 
     if model_location_generator is not None and "TT_GH_CI_INFRA" in os.environ:
-        ci_path = model_location_generator(
-            HF_REPO_ID,
-            model_subdir="",
-            download_if_ci_v2=True,
-        )
-        return Path(ci_path)
+        # Prefer the CI large-file-cache (LFC) mirror, but fall back to a Hugging Face
+        # download when the model is not hosted there. Without this, the LFC wget failure
+        # raises here — before ensure_model_weights() reaches its HF snapshot path — and
+        # every VibeVoice CI test skips. HF is reachable in CI via the proxy + HF_TOKEN.
+        try:
+            ci_path = model_location_generator(
+                HF_REPO_ID,
+                model_subdir="",
+                download_if_ci_v2=True,
+            )
+            return Path(ci_path)
+        except Exception as exc:
+            logger.warning(
+                f"CI weights cache unavailable for {HF_REPO_ID} ({exc}); " "falling back to Hugging Face download."
+            )
 
     return DEFAULT_MODEL_PATH
 
