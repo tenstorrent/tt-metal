@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <string>
 
 #include <tt-logger/tt-logger.hpp>
@@ -36,10 +37,31 @@
 #include "tools/profiler/perf_debug_profiler_packets.hpp"
 #include "impl/profiler/profiler.hpp"  // generateZoneSourceLocationsHashes (zone hash -> name)
 #include "prof_packet.h"
+#include "tt_metal/common/broadcast_ring.hpp"
 
 namespace tt::tt_metal {
 
 namespace pz = tt::tt_metal::profiler;
+
+// pimpl so the BroadcastRing header stays out of perf_debug_profiler.hpp.
+struct RecRingHolder {
+    tt::tt_metal::BroadcastRing<PerfDebugRec> ring;
+    explicit RecRingHolder(size_t cap) : ring(cap) {}
+};
+
+// Ring capacity in RECORDS (rounded up to a power of two by BroadcastRing), TT_METAL_PERF_DEBUG_RING_RECS.
+// Default 4M == test_x280_realprof's --mqcap default (~96 MB at 24 B/Rec). A lagging consumer DROPS rather
+// than back-pressuring, so this sizes the burst it can absorb, not a correctness bound.
+size_t ring_capacity_recs() {
+    static const size_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_RING_RECS");
+        if (s == nullptr || *s == '\0') {
+            return static_cast<size_t>(4u << 20);
+        }
+        return static_cast<size_t>(std::strtoull(s, nullptr, 10));
+    }();
+    return v;
+}
 
 namespace {
 // Read once: profile the X280 drain harts as well as the worker kernels.
@@ -132,11 +154,14 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         devices_.push_back(std::move(ctx));
     }
 
-    // Spawn the continuous drain threads AFTER devices_ is stable (threads capture &devices_[i]).
-    for (auto& ctx : devices_) {
-        for (uint32_t s = 0; s < kNSockets; s++) {
-            ctx.drain[s] = std::thread(&PerfDebugProfiler::drain_loop, this, std::ref(ctx), s);
-        }
+    // Spawn AFTER devices_ is stable (the threads index into it). ONE writer (read+decode+publish) and one
+    // consumer (ring -> Tracy), matching test_x280_realprof: the slow Tracy sink is off the drain path.
+    if (!devices_.empty()) {
+        const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
+        read_chunk_recs_ = cap ? static_cast<size_t>(cap) * 16 : static_cast<size_t>(kHRingWords);
+        ring_ = std::make_unique<RecRingHolder>(ring_capacity_recs());
+        writer_ = std::thread(&PerfDebugProfiler::writer_thread, this);
+        consumers_.emplace_back(&PerfDebugProfiler::consumer_thread, this);
     }
     if (!devices_.empty()) {
         log_info(
@@ -297,66 +322,171 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     return true;
 }
 
-void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
+// ONE read+decode pass over (ctx, sock_idx): pages -> profzone_decode -> PerfDebugRec -> BroadcastRing.
+// Returns true if it moved data. Deliberately does NOT touch Tracy: the sink lives on the consumer thread so
+// a slow Tracy push can never back-pressure the FIFO -> relay -> reader -> worker cores. (Measured: with the
+// push inline, UFLD-v2 held relay0 in HOST-WAIT 15.85 s of a 19 s run and stalled producers 826x; with the
+// push removed, 0 stalls. This is the same structure test_x280_realprof uses.)
+bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     distributed::D2HSocket* sock = ctx.sockets[sock_idx].get();
+    if (sock == nullptr) {
+        return false;
+    }
+    DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
     pz::ProfzoneDecodeState& st = *ctx.decode[sock_idx];
     const uint32_t page_words = kPageSize / sizeof(uint32_t);
     const uint32_t fifo_pages = sock->get_fifo_curr_size() / sock->get_page_size();
-    std::vector<uint32_t> buf;
-    auto backoff = std::chrono::microseconds(50);
-    // Rebase device timestamps to the FIRST one this drain thread sees, so zones land near the Tracy
-    // context origin (host_start) instead of ~device-wall-clock ticks into the timeline (a "multi-hour"
-    // offset that renders zones off-screen). Matches test_x280_realprof / the RT handler's anchoring.
-    uint64_t ts_base = 0;
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
-    uint64_t dbg_iters = 0, dbg_pages = 0, dbg_emit = 0, dbg_stall = 0;
 
-    // Drain-to-empty on stop: after stop_ is set (stop() sends the X280 P_STOP first, so it stops
-    // producing), keep reading until the socket has been empty for a sustained window instead of exiting
-    // on the first stop_ check -- otherwise the last in-flight markers (socket FIFO + host ring, ~the
-    // pipeline depth of zones per lane) are abandoned and the tail of the run is lost from the capture.
-    // A steady-clock deadline backstops the (shouldn't-happen) case where the socket never quiesces.
-    uint32_t quiesce = 0;
-    constexpr uint32_t kQuiesceEmpties = 200;  // ~10 ms sustained-empty at 50 us backoff => pipeline flushed
+    uint32_t np = sock->pages_available();
+    if (np == 0) {
+        return false;
+    }
+    if (np >= fifo_pages) {
+        np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
+    }
+    const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
+    if (cap != 0 && np > cap) {
+        np = cap;
+    }
+    if (ddbg && ss.iters < 40) {
+        log_info(tt::LogMetal, "[drain sock={}] iter={} np={} fifo_pages={}", sock_idx, ss.iters, np, fifo_pages);
+    }
+    ss.iters++;
+    ss.pages += np;
+    ss.buf.resize(static_cast<size_t>(np) * page_words);
+    sock->read(ss.buf.data(), np);  // auto-acks the sender
+
+    if (ss.batch.size() < read_chunk_recs_) {
+        ss.batch.resize(read_chunk_recs_);  // upper bound on records from one read (words >= records)
+    }
+    PerfDebugRec* bcur = ss.batch.data();
+    PerfDebugRec* bend = ss.batch.data() + ss.batch.size();
+    const uint32_t dev_idx = static_cast<uint32_t>(&ctx - devices_.data());
+
+    pz::profzone_decode(
+        st,
+        ss.buf.data(),
+        ss.buf.size(),
+        ctx.nl,
+        [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t prog) {
+            if (type != kernel_profiler::ZONE_START && type != kernel_profiler::ZONE_END) {
+                return;  // only START/END for now (DeviceZoneScopedN)
+            }
+            ss.emit++;
+            if (hash == 0x7FFFu && type == kernel_profiler::ZONE_START) {
+                ss.stall++;  // PROFILER_STALL_ZONE_ID: a producer RISC blocked on a FULL ring. Non-zero means
+                             // the capture PERTURBED the workload (kernels elongated); still lossless.
+            }
+            if (lane / kNRisc >= ctx.core_virt.size() || bcur >= bend) {
+                return;
+            }
+            // Rebase to the first device ts this run sees, so zones land near the Tracy context origin
+            // instead of ~device-wall-clock ticks into the timeline.
+            if (ctx.marker_ts_base == 0) {
+                ctx.marker_ts_base = ts;
+            }
+            // Pack the device index into the high bits of lane: one ring serves every (device, socket), and
+            // the consumer must know which DeviceCtx to resolve coords against. lane = core*NRISC+risc fits
+            // comfortably in 24 bits (110 cores * 5 = 550), so the top 8 are free. Keeps PerfDebugRec
+            // byte-identical to test_x280_realprof's Rec.
+            *bcur++ = PerfDebugRec{ts, (dev_idx << 24) | lane, type, hash, prog};
+        },
+        // X280 drain-hart spans (bcfg.hartzones). Accumulate; they are placed at stop(), which reads the
+        // rdcycle->Tensix calibration. Written only by this (single) writer thread.
+        [&](uint32_t hart, uint32_t meta, uint64_t rdc) {
+            if (hart < ctx.hz_raw.size()) {
+                ctx.hz_raw[hart].push_back(DeviceCtx::HZMark{rdc, meta});
+            }
+        });
+
+    const size_t bn = static_cast<size_t>(bcur - ss.batch.data());
+    if (bn != 0 && ring_) {
+        ring_->ring.writer().publish_batch(std::span<const PerfDebugRec>(ss.batch.data(), bn));
+    }
+    return true;
+}
+
+// The single writer thread: round-robin every (device, socket); each drain_pass publishes its own read as one
+// data-driven batch, then wake readers once per sweep. Idle sweeps back off. Mirrors test_x280_realprof.
+void PerfDebugProfiler::writer_thread() {
+    tracy::SetThreadName("x280-writer");
+    auto watchdog = std::chrono::steady_clock::now();
+    auto backoff = std::chrono::microseconds(50);
+    // Drain-to-empty on stop: stop() sets P_STOP first, so the X280 stops producing; keep reading until every
+    // socket has been empty for a sustained window, else the tail of the run is lost. Deadline backstops it.
+    constexpr uint32_t kQuiesceEmpties = 200;
     std::chrono::steady_clock::time_point drain_deadline{};
     bool deadline_set = false;
-    while (true) {
+    for (;;) {
         const bool stopping = stop_.load(std::memory_order_acquire);
         if (stopping && !deadline_set) {
             drain_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
             deadline_set = true;
         }
-        uint32_t np = sock->pages_available();
-        if (np == 0) {
-            if (stopping && (++quiesce >= kQuiesceEmpties || std::chrono::steady_clock::now() >= drain_deadline)) {
-                break;  // stop signalled AND socket drained (or deadline) => pipeline flushed, exit
+        bool any = false, all_done = true;
+        for (auto& ctx : devices_) {
+            for (uint32_t s = 0; s < kNSockets; s++) {
+                DeviceCtx::SockState& ss = ctx.sock_state[s];
+                if (ss.done) {
+                    continue;
+                }
+                all_done = false;
+                if (drain_pass(ctx, s)) {
+                    any = true;
+                    ss.quiesce = 0;
+                } else if (stopping && (++ss.quiesce >= kQuiesceEmpties ||
+                                        std::chrono::steady_clock::now() >= drain_deadline)) {
+                    ss.done = true;  // stop signalled AND drained (or deadline) => this socket is flushed
+                }
+            }
+        }
+        if (any && ring_) {
+            ring_->ring.writer().wake_readers();
+        }
+        if (all_done) {
+            break;
+        }
+        if (any) {
+            watchdog = std::chrono::steady_clock::now();
+        } else {
+            if (std::chrono::steady_clock::now() - watchdog > std::chrono::seconds(120)) {
+                log_warning(tt::LogMetal, "[perf-debug profiler] writer WALL TIMEOUT (120 s no progress)");
+                break;
             }
             std::this_thread::sleep_for(backoff);
-            continue;
         }
-        quiesce = 0;
-        if (stopping && std::chrono::steady_clock::now() >= drain_deadline) {
-            break;  // safety: socket still non-empty past the deadline (X280 not honoring P_STOP)
+    }
+    for (auto& ctx : devices_) {
+        for (uint32_t s = 0; s < kNSockets; s++) {
+            const DeviceCtx::SockState& ss = ctx.sock_state[s];
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] socket {} drained: {} pages, {} markers ({} reads); producer stall "
+                "zones: {} [0 = X280 kept up, non-zero = capture perturbed the workload]",
+                s,
+                ss.pages,
+                ss.emit,
+                ss.iters,
+                ss.stall);
         }
-        if (np >= fifo_pages) {
-            np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
-        }
-        const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
-        if (cap != 0 && np > cap) {
-            np = cap;  // bound one host turn; the loop takes the rest next iteration
-        }
-        if (ddbg && dbg_iters < 40) {
-            log_info(tt::LogMetal, "[drain sock={}] iter={} np={} fifo_pages={}", sock_idx, dbg_iters, np, fifo_pages);
-        }
-        dbg_iters++;
-        dbg_pages += np;
-        buf.resize(static_cast<size_t>(np) * page_words);
-        sock->read(buf.data(), np);  // auto-acks the sender
+    }
+}
 
-        // First drain with data => the workload's kernels have JIT-compiled, so the zone-source-location
-        // log now holds their srcloc hashes. Load names ONCE (call_once blocks the sibling drain thread
-        // until done, so the subsequent zone_names_ reads are race-free). Stable node storage => the
-        // string_views handed to Tracy stay valid.
+// BroadcastRing reader -> Tracy. This is the slow side (~270 ns/marker measured), and it is now the ONLY
+// thing that suffers when Tracy cannot keep up: it DROPS its own records (reported) instead of stalling the
+// device. Runs until the writer is done and the ring is drained.
+void PerfDebugProfiler::consumer_thread() {
+    tracy::SetThreadName("x280-consume");
+    if (!ring_) {
+        return;
+    }
+    auto rd = ring_->ring.make_reader();
+    std::vector<PerfDebugRec> scratch(read_chunk_recs_ ? read_chunk_recs_ : 65536);
+    uint64_t cnt = 0;
+    auto emit_batch = [&](std::span<PerfDebugRec> b) {
+        // Names are only resolvable once the workload's kernels have JIT-compiled, which has certainly
+        // happened by the time records reach us.
         std::call_once(names_once_, [this]() {
             try {
                 for (auto& [h, md] : generateZoneSourceLocationsHashes()) {
@@ -367,98 +497,67 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
             }
             zone_names_[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID
         });
-
-        pz::profzone_decode(
-            st,
-            buf.data(),
-            buf.size(),
-            ctx.nl,
-            [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t /*prog*/) {
-                if (type != kernel_profiler::ZONE_START && type != kernel_profiler::ZONE_END) {
-                    return;  // only START/END for now (DeviceZoneScopedN)
+        for (const auto& r : b) {
+            const uint32_t dev_idx = r.lane >> 24;
+            const uint32_t lane = r.lane & 0x00FFFFFFu;
+            if (dev_idx >= devices_.size()) {
+                continue;
+            }
+            DeviceCtx& ctx = devices_[dev_idx];
+            const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
+            if (ci >= ctx.core_virt.size()) {
+                continue;
+            }
+            const auto [vx, vy] = ctx.core_virt[ci];
+            uint32_t nx = vx, ny = vy;
+            if (auto it = ctx.virt_to_noc0.find((static_cast<uint64_t>(vx) << 32) | vy);
+                it != ctx.virt_to_noc0.end()) {
+                nx = it->second.first;
+                ny = it->second.second;
+            }
+            std::string_view name;
+            if (auto it = zone_names_.find(static_cast<uint16_t>(r.zone)); it != zone_names_.end()) {
+                name = it->second;
+            }
+            perf_debug::WorkerZonePacket pkt;
+            pkt.chip_id = ctx.chip_id;
+            pkt.core_virtual_x = vx;
+            pkt.core_virtual_y = vy;
+            pkt.core_noc0_x = nx;
+            pkt.core_noc0_y = ny;
+            pkt.risc = risc;
+            pkt.timer_id = r.zone;
+            pkt.name = name;
+            const uint64_t base = ctx.marker_ts_base;
+            pkt.timestamp = (r.ts >= base) ? (r.ts - base) : 0;
+            pkt.is_start = (r.type == kernel_profiler::ZONE_START);
+            if (!tracy_push_disabled()) {
+                tracy_->HandleWorkerZone(pkt);
+            }
+        }
+        cnt += b.size();
+    };
+    for (;;) {
+        auto tok = rd.wait_token();
+        auto got = rd.read_batch(std::span<PerfDebugRec>(scratch));
+        if (!got.empty()) {
+            emit_batch(got);
+            continue;
+        }
+        if (writer_done_.load(std::memory_order_acquire)) {  // writer finished -> drain the tail, then exit
+            for (;;) {
+                auto g = rd.read_batch(std::span<PerfDebugRec>(scratch));
+                if (g.empty()) {
+                    break;
                 }
-                dbg_emit++;
-                if (hash == 0x7FFFu && type == kernel_profiler::ZONE_START) {
-                    dbg_stall++;  // PROFILER_STALL_ZONE_ID: a producer RISC blocked on a FULL ring, i.e. the
-                                  // X280 drain did not keep up. Non-zero => the capture PERTURBS the workload
-                                  // (kernels elongate by the stall); it is still lossless (the ring blocks
-                                  // rather than dropping), but the timings are no longer clean.
-                }
-                const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
-                if (ci >= ctx.core_virt.size()) {
-                    return;
-                }
-                // DIAG (TT_PERF_DEBUG_ZONE_DUMP=1): dump the first decoded markers' per-lane timestamp split
-                // (hi = timer_hi, lo = timer_low) to spot a lane whose timer_hi never got set (-> zones land at
-                // a wildly wrong time and "vanish" when zoomed to the good zones).
-                static const bool zdump = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
-                static std::atomic<int> ndump{0};
-                if (zdump && ndump.fetch_add(1, std::memory_order_relaxed) < 80) {
-                    log_info(
-                        tt::LogMetal,
-                        "[zdump] ci={} risc={} hi={} lo={} ts={} start={} hash=0x{:x}",
-                        ci,
-                        risc,
-                        (uint32_t)(ts >> 32),
-                        (uint32_t)(ts & 0xffffffffu),
-                        ts,
-                        (type == kernel_profiler::ZONE_START),
-                        hash);
-                }
-                const auto [vx, vy] = ctx.core_virt[ci];
-                uint32_t nx = vx, ny = vy;
-                if (auto it = ctx.virt_to_noc0.find((static_cast<uint64_t>(vx) << 32) | vy);
-                    it != ctx.virt_to_noc0.end()) {
-                    nx = it->second.first;
-                    ny = it->second.second;
-                }
-                std::string_view name;
-                if (auto it = zone_names_.find(static_cast<uint16_t>(hash)); it != zone_names_.end()) {
-                    name = it->second;
-                }
-                perf_debug::WorkerZonePacket pkt;
-                pkt.chip_id = ctx.chip_id;
-                pkt.core_virtual_x = vx;
-                pkt.core_virtual_y = vy;
-                pkt.core_noc0_x = nx;
-                pkt.core_noc0_y = ny;
-                pkt.risc = risc;
-                pkt.timer_id = hash;
-                pkt.name = name;
-                if (ts_base == 0) {
-                    ts_base = ts;  // first device ts seen -> the rebase origin (maps to the context host_start)
-                    // Publish for push_hart_zones() so hart spans land on the SAME timeline as the kernels.
-                    if (ctx.marker_ts_base == 0) {
-                        ctx.marker_ts_base = ts;
-                    }
-                }
-                pkt.timestamp = (ts >= ts_base) ? (ts - ts_base) : 0;
-                pkt.is_start = (type == kernel_profiler::ZONE_START);
-                if (!tracy_push_disabled()) {
-                    tracy_->HandleWorkerZone(pkt);
-                }
-            },
-            // X280 drain-hart spans (only produced when bcfg.hartzones was set). Just accumulate here --
-            // they cannot be placed on the timeline until stop(), which reads the rdcycle->Tensix calibration.
-            // Each hart is written by exactly one drain thread, so this is race-free without a lock.
-            [&](uint32_t hart, uint32_t meta, uint64_t rdc) {
-                if (hart < ctx.hz_raw.size()) {
-                    ctx.hz_raw[hart].push_back(DeviceCtx::HZMark{rdc, meta});
-                }
-            });
+                emit_batch(g);
+            }
+            break;
+        }
+        rd.wait(tok);
     }
-    // Always report the per-socket drain totals: this is the only way to tell a healthy capture from a
-    // silently-empty one. pages_read==0 means the X280 relayed nothing (bad boot / wrong grid);
-    // markers_emitted is the device-zone count that actually reached Tracy.
-    log_info(
-        tt::LogMetal,
-        "[perf-debug profiler] socket {} drained: {} pages, {} markers -> Tracy ({} drain iterations); "
-        "producer stall zones: {} [0 = X280 kept up, non-zero = capture perturbed the workload]",
-        sock_idx,
-        dbg_pages,
-        dbg_emit,
-        dbg_iters,
-        dbg_stall);
+    consumed_.fetch_add(cnt);
+    dropped_.fetch_add(rd.dropped());
 }
 
 void PerfDebugProfiler::stop() {
@@ -475,12 +574,26 @@ void PerfDebugProfiler::stop() {
         }
     }
     stop_.store(true, std::memory_order_release);
-    for (auto& ctx : devices_) {
-        for (uint32_t s = 0; s < kNSockets; s++) {
-            if (ctx.drain[s].joinable()) {
-                ctx.drain[s].join();
-            }
+    if (writer_.joinable()) {
+        writer_.join();  // drains every socket to quiescence, then publishes its last batch
+    }
+    writer_done_.store(true, std::memory_order_release);
+    if (ring_) {
+        ring_->ring.writer().wake_readers();  // unblock a consumer parked in wait()
+    }
+    for (auto& c : consumers_) {
+        if (c.joinable()) {
+            c.join();
         }
+    }
+    if (ring_) {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] BroadcastRing: cap {} records; consumer took {} records, dropped {} "
+            "[0 dropped => the Tracy sink kept up]",
+            ring_capacity_recs(),
+            consumed_.load(),
+            dropped_.load());
     }
     push_hart_zones();  // must run BEFORE tracy_.reset() -- it creates/uses Tracy contexts
     tracy_.reset();

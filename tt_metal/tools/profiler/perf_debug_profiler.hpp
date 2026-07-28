@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -35,11 +36,22 @@ class MeshDevice;
 class D2HSocket;
 }  // namespace distributed
 class PerfDebugTracyHandler;
+struct RecRingHolder;  // pimpl for BroadcastRing<PerfDebugRec> (keeps the ring header out of this one)
 
 namespace profiler {
 class X280Driver;
 struct ProfzoneDecodeState;
 }  // namespace profiler
+
+// Decoded device record handed writer -> reader. Layout mirrors test_x280_realprof's Rec exactly (ts first
+// packs it to 24 B instead of 32 padded), so both paths move the same bytes per record.
+struct PerfDebugRec {
+    uint64_t ts;
+    uint32_t lane;
+    uint32_t type;
+    uint32_t zone;
+    uint32_t prog;
+};
 
 // One PerfDebugProfiler per MeshDevice. Constructing it boots the X280 drainer on every eligible local
 // Blackhole device and starts the drain threads; destroying it (or calling stop()) signals P_STOP, joins
@@ -99,7 +111,6 @@ private:
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;
         std::unique_ptr<profiler::ProfzoneDecodeState> decode[kNSockets];
-        std::thread drain[kNSockets];
         bool active = false;
         // --hartzones equivalent (TT_METAL_PERF_DEBUG_HART_ZONES=1): the X280 drain harts inject their own
         // busy/idle spans IN-BAND. {rdcycle, meta} pairs per hart (START,END alternating); each hart is written
@@ -109,6 +120,16 @@ private:
             uint64_t rdc;
             uint32_t meta;
         };
+        // Per-socket state that used to live as locals in the old per-socket drain thread. drain_pass() is
+        // now one pass called repeatedly by the single writer thread, so it has to persist here.
+        struct SockState {
+            std::vector<uint32_t> buf;   // scratch for the page read (+ decoder residual)
+            std::vector<PerfDebugRec> batch;  // pre-sized to the per-read record upper bound
+            uint64_t iters = 0, pages = 0, emit = 0, stall = 0;
+            uint32_t quiesce = 0;
+            bool done = false;
+        };
+        SockState sock_state[kNSockets];
         std::vector<std::vector<HZMark>> hz_raw;  // sized kNRead + kNRelay when enabled
         uint64_t nharts = 0;
         // Marker rebase origin (first worker-kernel device ts seen by ANY socket), published so the hart-zone
@@ -127,10 +148,25 @@ private:
 
     void start(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     bool boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
-    void drain_loop(DeviceCtx& ctx, uint32_t sock_idx);
+    // ONE read+decode pass over (ctx, sock): pages -> decode -> records -> ring. Returns true if it moved data.
+    bool drain_pass(DeviceCtx& ctx, uint32_t sock_idx);
+    void writer_thread();    // round-robins every (device, socket), publishing each read as one batch
+    void consumer_thread();  // BroadcastRing reader -> PerfDebugTracyHandler (the slow sink, now off the drain)
 
     std::vector<DeviceCtx> devices_;
     std::unique_ptr<PerfDebugTracyHandler> tracy_;
+    // ★ Same shape as test_x280_realprof: the drain NEVER blocks on Tracy. One writer publishes decoded
+    // records into a BroadcastRing; a separate consumer pushes them to Tracy. A lagging consumer DROPS its
+    // own records (reported) instead of back-pressuring the FIFO -> relay -> reader -> worker cores.
+    // Measured why this is required: with the push inline, UFLD-v2 put relay0 in HOST-WAIT for 15.85 s of a
+    // 19 s run and stalled producers 826x; with the push removed entirely, stalls went to 0.
+    std::unique_ptr<RecRingHolder> ring_;
+    std::thread writer_;
+    std::vector<std::thread> consumers_;
+    std::atomic<uint64_t> consumed_{0};
+    std::atomic<uint64_t> dropped_{0};
+    std::atomic<bool> writer_done_{false};
+    size_t read_chunk_recs_ = 0;
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::unordered_map<uint16_t, std::string> zone_names_;  // srcloc hash -> zone name (Tracy)
