@@ -19,6 +19,20 @@ from .format_config import FormatConfig
 from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from .logger import logger
 from .metrics import compute_metrics, export_counters, export_metrics, print_metrics
+from .perf_schema import (
+    FLAG_HEADERS,
+    FORMAT_HEADERS,
+    LOOP_FACTOR_COLUMN,
+    MARKER,
+    MEAN,
+    STD,
+    TEXT_SIZE_PREFIX,
+    TILE_CNT_COLUMN,
+    PerfSchemaError,
+    assert_unique_columns,
+    stat_prefix,
+    text_size_column,
+)
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
 from .test_config import BuildMode, ProfilerBuild, TestConfig
@@ -64,24 +78,24 @@ def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
 
-    mask = frame["marker"] == "TILE_LOOP"
+    mask = frame[MARKER] == "TILE_LOOP"
 
     if not mask.any():
         return frame
 
     # Ensure columns exist and default missing values only for masked rows
-    for col in ["loop_factor", "tile_cnt"]:
+    for col in [LOOP_FACTOR_COLUMN, TILE_CNT_COLUMN]:
         if col not in frame.columns:
-            col_idx = frame.columns.get_loc("marker")
+            col_idx = frame.columns.get_loc(MARKER)
             frame.insert(col_idx, col, 1)
         frame[col] = frame[col].fillna(1)
 
     # Compute divisor as Series aligned with masked rows
-    divisor = frame.loc[mask, "loop_factor"] * frame.loc[mask, "tile_cnt"]
+    divisor = frame.loc[mask, LOOP_FACTOR_COLUMN] * frame.loc[mask, TILE_CNT_COLUMN]
 
     # Select only mean/std columns
-    mean_columns = [c for c in frame.columns if c.startswith("mean(")]
-    std_columns = [c for c in frame.columns if c.startswith("std(")]
+    mean_columns = [c for c in frame.columns if c.startswith(stat_prefix(MEAN))]
+    std_columns = [c for c in frame.columns if c.startswith(stat_prefix(STD))]
 
     # Apply division
     for cols in (mean_columns, std_columns):
@@ -89,15 +103,6 @@ def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
             frame.loc[mask, cols] = frame.loc[mask, cols].div(divisor, axis=0)
 
     return frame
-
-
-class PerfSchemaError(AssertionError):
-    """
-    Raised when a single perf report (one CSV) accumulates more than one column
-    schema. Stacking rows with different column sets NaN-fills the gaps, producing
-    a ragged, schema-contaminated artifact that breaks strict-JSON dashboards and
-    the compare feature. We fail loud so the contaminated CSV is never shipped.
-    """
 
 
 class PerfReport:
@@ -122,6 +127,10 @@ class PerfReport:
         self._schema_registry: dict[frozenset, dict] = {}
 
     def append(self, frame: pd.DataFrame, label: str | None = None):
+        # Gate: a report must never carry two columns with the same header. We
+        # check here, at the single funnel every report row passes through
+        # A duplicate raises PerfSchemaError, so the contaminated CSV never ships.
+        assert_unique_columns(frame.columns, context=label or "report")
         self._frames.append(frame)
         self._masks.append(pd.Series(True, index=frame.index))
         self._register_schema(frame, label)
@@ -133,9 +142,9 @@ class PerfReport:
         if sig in self._schema_registry:
             return
         # Identify a frame by its sweep-parameter columns (everything before the
-        # "marker" column) so the error can point the author at the offending test.
-        if "marker" in frame.columns:
-            sweep_cols = list(frame.columns[: frame.columns.get_loc("marker")])
+        # marker column) so the error can point the author at the offending test.
+        if MARKER in frame.columns:
+            sweep_cols = list(frame.columns[: frame.columns.get_loc(MARKER)])
         else:
             sweep_cols = list(frame.columns)
         sample = frame.iloc[0][sweep_cols].to_dict() if sweep_cols else {}
@@ -219,7 +228,7 @@ class PerfReport:
 
     def marker(self, marker: str) -> "PerfReport":
         """Filter: Marker"""
-        return self.filter("marker", marker)
+        return self.filter(MARKER, marker)
 
     def post_process(self):
         frame = pd.concat(self._frames, ignore_index=True)
@@ -327,11 +336,11 @@ def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
     record a parameter that actually changes the kernel, so it should not pass
     silently.
     """
-    if frame.empty or "marker" not in frame.columns:
+    if frame.empty or MARKER not in frame.columns:
         return frame
 
     try:
-        marker_pos = frame.columns.get_loc("marker")
+        marker_pos = frame.columns.get_loc(MARKER)
         key_cols = list(frame.columns[: marker_pos + 1])
         value_cols = [c for c in frame.columns if c not in key_cols]
 
@@ -707,17 +716,13 @@ class PerfConfig(TestConfig):
         # validate="1:1" catches duplicate markers within each run type
         run_results = reduce(
             lambda left, right: pd.merge(
-                left, right, on="marker", how="outer", validate="1:1"
+                left, right, on=MARKER, how="outer", validate="1:1"
             ),
             results,
         )
 
         # Setting header fields that are always there
-        names = (
-            ["formats.input_A", "formats.input_B", "formats.output"]
-            if self.formats_config
-            else []
-        )
+        names = list(FORMAT_HEADERS) if self.formats_config else []
         values = (
             [
                 self.formats_config[0].unpack_A_src,
@@ -728,7 +733,7 @@ class PerfConfig(TestConfig):
             else []
         )
 
-        names += ["unpack_to_dest", "dest_acc"]
+        names += list(FLAG_HEADERS)
         values += [self.unpack_to_dest, self.dest_acc]
 
         for param in self.passed_templates + self.passed_runtimes:
@@ -738,14 +743,14 @@ class PerfConfig(TestConfig):
                     values.append(value)
 
         for run_type, size in code_sizes.items():
-            names.append(f"TEXT_SIZE({run_type.name})")
+            names.append(text_size_column(run_type.name))
             values.append(size)
 
         sweep = pd.DataFrame([values], columns=names)
         combined = sweep.merge(run_results, how="cross")
 
-        text_size_cols = [c for c in combined.columns if c.startswith("TEXT_SIZE(")]
-        other_cols = [c for c in combined.columns if not c.startswith("TEXT_SIZE(")]
+        text_size_cols = [c for c in combined.columns if c.startswith(TEXT_SIZE_PREFIX)]
+        other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
         combined = combined[other_cols + text_size_cols]
 
         perf_report.append(combined, label=self.test_name)
@@ -754,7 +759,7 @@ class PerfConfig(TestConfig):
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:
             counter_run_results = reduce(
                 lambda left, right: pd.merge(
-                    left, right, on="marker", how="outer", validate="1:1"
+                    left, right, on=MARKER, how="outer", validate="1:1"
                 ),
                 counter_results_list,
             )
