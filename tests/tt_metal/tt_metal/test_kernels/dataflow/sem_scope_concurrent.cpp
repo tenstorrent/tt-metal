@@ -36,11 +36,8 @@ void kernel_main() {
     const uint32_t increment_times = get_arg(args::increment_times);
     const uint32_t num_threads = get_arg(args::num_threads);
 
-#ifdef SEM_HAS_DM_CACHED
-    // Seed the cached-only pool from the ring-carried init before any up(). ALL threads call this
-    // (its internal barrier must be balanced); emitted only for cached programs, no-op otherwise.
-    sem::init_dm_cached();
-#endif
+    // NOTE: a DM_LOCAL_CACHED semaphore's cached-only pool slot is seeded by sem::init_dm_cached(),
+    // AUTO-INJECTED at kernel entry (before any thread's first up()) -- no call is needed here.
 
     // Quasar user DM harts are 2..(2+num_threads-1); the lowest (2) is reporter/consumer.
     uint64_t hart = 2;
