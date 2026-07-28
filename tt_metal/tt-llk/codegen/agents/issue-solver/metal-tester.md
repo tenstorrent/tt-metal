@@ -101,6 +101,11 @@ METAL_VERIFY_BUILD_DIR="${METAL_VERIFY_BUILD_DIR:-${CODEGEN_METAL_VERIFY_BUILD_D
 if [ -n "$METAL_VERIFY_HOME" ] && [ -z "$METAL_VERIFY_BUILD_DIR" ]; then
   METAL_VERIFY_BUILD_DIR="$METAL_VERIFY_HOME/build"
 fi
+if [ -n "${CODEGEN_BASE_COMMIT:-}" ] && [ -n "$METAL_VERIFY_HOME" ] &&
+   [ "$(git -C "$METAL_VERIFY_HOME" rev-parse HEAD 2>/dev/null || true)" != "$(sg GIT_COMMIT)" ]; then
+  METAL_VERIFY_HOME=
+  METAL_VERIFY_BUILD_DIR=
+fi
 ```
 
 ## Step A — Build `unit_tests_llk` locally
@@ -199,6 +204,7 @@ set +e
 $HW_TEST_DISPATCH_CMD --kind metal --arch "$ARCHES_CSV" \
   --test "$METAL_FILTER" --dispatch "${METAL_DISPATCH:-fast}" \
   --worktree "$WORKTREE_DIR" \
+  --base "$(sg GIT_COMMIT)" \
   --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
   --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/metal_run.log"
 dispatch_exit=${PIPESTATUS[0]}
