@@ -77,7 +77,8 @@ class LlamaMLP(AbstractModuleBase):
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
-        # Distinct mask per device only when each holds distinct data.
+        # Distinct mask per device only when each holds distinct data. Too coarse under DP+TP:
+        # ttnn offsets the seed by flat device id, so sharing within TP also shares across DP.
         self.dropout_per_device_seed = sequence_parallel or not use_tp
 
         if intermediate_size is None:

@@ -49,7 +49,8 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.dropout_prob = dropout
         self.rope_params = rope_params
         self.sequence_parallel = sequence_parallel
-        # Distinct mask per device only when each holds distinct data.
+        # Distinct mask per device only when each holds distinct data. Too coarse under DP+TP:
+        # ttnn offsets the seed by flat device id, so sharing within TP also shares across DP.
         self.dropout_per_device_seed = sequence_parallel or not use_tp
 
         head_dim = embedding_size // num_heads
