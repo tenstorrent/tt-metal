@@ -8,9 +8,18 @@
 # WHY THIS SHAPE. Both levers change the committed tokens, so the TT-vs-TT bit-identity comparison
 # that has gated them until now cannot answer the question: it compares a candidate against a
 # baseline our own #48291 record calls degenerate, so a lever can only pass by changing nothing.
-# What decides them is ABSOLUTE correctness against the CUDA reference — flexible-extract exact
-# match on the same 198 GPQA-Diamond questions the reference answered at 70.71% and 70.20% over two
-# repetitions. That 0.5 pp spread is the resolution: a difference under ~1-1.5 pp is not a result.
+#
+# WHICH METRIC — this file said the wrong thing before 2026-07-28. run_upfront_gpqa runs
+# `r1_gpqa_diamond`, which emits only `exact_match,none`, a strict \boxed{} extraction. The 07-28
+# baseline scored 6.57% because only **4 of 198** responses contain a boxed answer at all. A metric
+# with four positives cannot separate two arms. (The reference 70.71%/70.20% figures are
+# `gpqa_diamond_cot_zeroshot` with `flexible-extract` — a different task AND filter, so they are not
+# a bar this harness can be scored against either.)
+#
+# What DOES have power is the collapse rate: the baseline fired the degeneracy guard on 146 of 198
+# requests, clustered at blocks 0-3, and left 26 responses empty. Those are per-request binaries at
+# n=198, so SE is ~3 pp and a regression of the magnitude that matters (#51080 moved 56 of 64) is
+# detectable. The scorer reports all four signals and decides on the ones that can.
 #
 # THREE ARMS, one variable each vs the shipped defaults, so any delta is attributable:
 #   base    shipped defaults (SDPA grid already flipped; both levers off)
@@ -90,37 +99,67 @@ done
 echo
 echo "=== scores ==="
 python3 - "$OUT_ROOT" $ARMS <<'PYEOF'
-import json, pathlib, sys
+import json, pathlib, re, sys
 
 root = pathlib.Path(sys.argv[1])
 arms = sys.argv[2:]
-scores = {}
-for arm in arms:
-    files = sorted((root / arm).rglob("results_*.json"))
-    if not files:
-        print(f"  {arm:8s} NO RESULT")
-        continue
-    d = json.loads(files[-1].read_text())
-    for task, m in d.get("results", {}).items():
-        acc = m.get("exact_match,flexible-extract")
-        se = m.get("exact_match_stderr,flexible-extract")
-        n = d.get("n-samples", {}).get(task, {}).get("effective")
-        if acc is None:
-            continue
-        scores[arm] = acc
-        print(f"  {arm:8s} {task:22s} flexible={acc:.4f} stderr={se:.4f} n={n}")
 
-if "base" in scores:
-    print()
-    print("  vs base (the resolution of this gate is ~1-1.5 pp; the CUDA reference's own")
-    print("  run-to-run spread is 0.5 pp over two repetitions):")
-    for arm in arms:
-        if arm == "base" or arm not in scores:
-            continue
-        delta = (scores[arm] - scores["base"]) * 100.0
-        verdict = "within noise" if abs(delta) < 1.5 else ("REGRESSION" if delta < 0 else "improvement")
-        print(f"    {arm:8s} {delta:+.2f} pp   {verdict}")
+# The 2026-07-28 run on the shipped defaults, so a single-arm run still has something to compare to.
+BASELINE = {"guard": 146, "empty": 26, "boxed": 4, "exact": 0.0657, "n": 198, "filter": "none"}
+
+
+def measure(arm):
+    d = root / arm
+    res = sorted(d.rglob("full/*/results_*.json"))
+    smp = sorted(d.rglob("full/*/samples_*.jsonl"))
+    if not res or not smp:
+        return None
+    out = {"guard": 0}
+    blob = json.loads(res[-1].read_text())
+    for task, m in blob.get("results", {}).items():
+        for k, v in m.items():
+            # Take whatever exact_match filter this task emits rather than assuming one it lacks.
+            if k.startswith("exact_match,"):
+                out["exact"], out["filter"] = v, k.split(",", 1)[1]
+        out["n"] = blob.get("n-samples", {}).get(task, {}).get("effective")
+    texts = [(json.loads(l).get("resps") or [[""]])[0][0] for l in open(smp[-1])]
+    out["empty"] = sum(1 for t in texts if not t.strip())
+    out["boxed"] = sum(1 for t in texts if re.search(r"\\boxed", t))
+    log = d / "server.log"
+    if log.exists():
+        out["guard"] = log.read_text(errors="replace").count("ending request at block")
+    return out
+
+
+hdr = "  %-8s %-5s %-20s %-12s %-12s %s"
+print(hdr % ("arm", "n", "exact_match", "guard", "empty", "boxed"))
+got = {}
+for arm in arms:
+    m = measure(arm)
+    if m is None:
+        print("  %-8s NO RESULT" % arm)
+        continue
+    got[arm] = m
+    print(hdr % (arm, m.get("n"), "%.4f (%s)" % (m.get("exact", float("nan")), m.get("filter", "?")),
+                 m["guard"], m["empty"], m["boxed"]))
+
+ref = got.get("base", BASELINE)
+src = "this run" if "base" in got else "the 07-28 baseline"
 print()
-print("  CUDA reference bar: 70.71% / 70.20% flexible-extract (2 reps, thinking, 262k).")
+print("  Deciding signals are guard fires and empty responses (n=198 per-request binaries, SE ~3 pp).")
+print("  exact_match is for the record only: with 4 positives at baseline it cannot separate arms.")
+print("  Compared against %s (guard=%d, empty=%d)." % (src, ref["guard"], ref["empty"]))
+for arm in arms:
+    if arm == "base" or arm not in got:
+        continue
+    m = got[arm]
+    dg, de = m["guard"] - ref["guard"], m["empty"] - ref["empty"]
+    if dg > 12:                     # ~2 SE on the guard count
+        verdict = "REGRESSION - do not flip"
+    elif dg < -12:
+        verdict = "IMPROVEMENT"
+    else:
+        verdict = "no detectable change - flip is safe on this evidence"
+    print("    %-8s guard %+d  empty %+d   %s" % (arm, dg, de, verdict))
 PYEOF
 echo "DG_PERF_FLIP_GATE_END $(date -u +%FT%TZ)"
