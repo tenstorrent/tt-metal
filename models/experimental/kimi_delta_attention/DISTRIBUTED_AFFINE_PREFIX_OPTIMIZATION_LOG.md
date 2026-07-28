@@ -175,4 +175,20 @@ Median exact device time over sessions 2--11 is 1,604.297 us, down from 1,901.89
 
 Diagnosis: multicast removes five composite P2P launches and redundant payload sends per invocation. The two physical source devices execute the broadcast in approximately 68 us; longer 0.18--0.66 ms receiver durations are time queued behind the dependent relay and do not represent multicast bandwidth. The critical arithmetic remains four FP32 matmuls at a 154.525 us median, four adds at 22.253 us, three approximately 120 us steady P2P sends, and dtype/launch boundaries. Next test a BF16 recurrence fast path: retain FP32 public inputs and outputs, but typecast transforms once, compute and relay carry in BF16, and validate recurrent error before making a performance claim.
 
+## Experiment 7: BF16 internal recurrence compute
+
+Verdict: keep; campaign target reached. Public inputs, entry states, and final states remain FP32. The SP4xTP2 fast path typecasts `transform_a` and `transform_b` once into interleaved L1, performs the four recurrence matmuls and adds in BF16 L1, relays the BF16 carry directly, and typecasts only the returned entry/final states to FP32. This removes redundant carry typecasts and avoids recasting communicated BF16 state to FP32 solely for the next matmul.
+
+Validation:
+
+- `./build_metal.sh`: PASS.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_distributed_affine_prefix.py -q -s`: 2 passed, `SAFE_PYTEST_RESULT: PASS`; both TP axes, repeat, and trace passed. The precision cost is measurable and explicitly accepted by the existing production contract: TP-axis 0 worst PCC changes from 0.999996 to 0.999984 and max absolute error from 3.162287e-4 to 7.171780e-4. TP-axis 1 remains PCC 1.000000 and max absolute error 9.099394e-5.
+- `PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_distributed_affine_prefix_perf.py -q -s`: 1 passed, `SAFE_PYTEST_RESULT: PASS`. Raw CSV: `generated/profiler/reports/2026_07_28_15_49_20/ops_perf_results_2026_07_28_15_49_20.csv`.
+
+Median exact device time over sessions 2--11 is 979.819 us, down from 1,604.297 us (38.93%) and from the original 10,524.204 us (10.741x, 90.69%). Fixed-floor efficiency is 71.05%, exceeding the requested 60% target by 11.05 percentage points and beating the 1,160.300 us threshold by 180.481 us. Session maxima are 978.683, 979.893, 980.410, 979.746, 979.972, 978.755, 981.285, 979.319, 980.138, and 978.677 us. Per-device medians are 978.594, 977.416, 978.520, 977.540, 979.483, 978.276, 979.379, and 978.160 us.
+
+The four recurrence matmuls fall from a 154.525 us median to 20.249 us; adds fall from 22.253 us to 5.092 us. Remaining steady payload sends are approximately 119.6--119.9 us and source-side multicast is approximately 68.1 us. Receiver-side 0.18--0.71 ms durations continue to include queued dependency wait and are not additive transfer costs.
+
+Decision 4: stop the target campaign at the first fully validated result above 60% rather than expand scope. Further work could fuse BF16 matmul/add with relay readiness or specialize P2P for persistent recurrence, but neither is required for the stated goal.
+
 ## Backlog

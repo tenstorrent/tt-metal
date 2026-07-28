@@ -946,15 +946,28 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     // Kimi-K3 SP4xTP2 only needs the entry and final states. Relay the state
     // directly instead of materializing the full affine-transform prefix.
     if (sp_size == 4 && tp_size == 2) {
+        const auto transform_a_compute = ttnn::typecast(transform_a, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
+        const auto transform_b_compute = ttnn::typecast(transform_b, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
         auto entry_state = ttnn::clone(initial_state, std::nullopt, out_mem, compute_kernel_config);
         auto entry_state_transport = ttnn::typecast(entry_state, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
-        auto carry = matmul_fp32(transform_a, initial_state);
-        carry = ttnn::add(carry, transform_b, std::nullopt, out_mem);
+        auto matmul_bf16 = [&](const ttnn::Tensor& lhs, const ttnn::Tensor& rhs) {
+            return ttnn::matmul(
+                lhs,
+                rhs,
+                false,
+                false,
+                ttnn::L1_MEMORY_CONFIG,
+                DataType::BFLOAT16,
+                std::nullopt,
+                std::nullopt,
+                compute_kernel_config);
+        };
+        auto carry = matmul_bf16(transform_a_compute, entry_state_transport);
+        carry = ttnn::add(carry, transform_b_compute, std::nullopt, ttnn::L1_MEMORY_CONFIG);
         for (uint32_t destination = 1; destination < sp_size; ++destination) {
-            const auto carry_transport = ttnn::typecast(carry, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
             for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
                 entry_state_transport = ttnn::point_to_point(
-                    carry_transport,
+                    carry,
                     coordinate(destination, tp_rank),
                     coordinate(destination - 1, tp_rank),
                     ttnn::ccl::Topology::Linear,
@@ -962,13 +975,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
                     std::nullopt);
             }
             entry_state = ttnn::typecast(entry_state_transport, DataType::FLOAT32, out_mem);
-            carry = matmul_fp32(transform_a, entry_state);
-            carry = ttnn::add(carry, transform_b, std::nullopt, out_mem);
+            carry = matmul_bf16(transform_a_compute, entry_state_transport);
+            carry = ttnn::add(carry, transform_b_compute, std::nullopt, ttnn::L1_MEMORY_CONFIG);
         }
 
-        const auto final_carry_transport = ttnn::typecast(carry, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
         auto final_state_transport = ttnn::broadcast(
-            final_carry_transport,
+            carry,
             coordinate(sp_size - 1, 0),
             2,
             ttnn::L1_MEMORY_CONFIG,
