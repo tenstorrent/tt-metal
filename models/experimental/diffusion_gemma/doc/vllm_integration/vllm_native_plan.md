@@ -40,7 +40,8 @@ non-zero value until it lands. It is three coupled moves:
    via `paged_fill_cache(chunk_page_table)`. **This mechanism is ALREADY device-proven** in
    `tt/chunked_prefill.py` (`chunk_start_idx` RoPE offset; `paged_fill_cache`;
    `chunked_scaled_dot_product_attention(chunk_start_idx=...)`; **PCC 0.99997 at 2048=8×256** incl
-   sliding-past-window) — it is just env-gated OFF (`DG_CHUNKED_PREFILL`) and not wired to vLLM.
+   sliding-past-window) — it is simply not wired to vLLM. There is no flag: the gate that used
+   to exist (`DG_CHUNKED_PREFILL`) had zero dispatch sites and was deleted 2026-07-28.
    **Viktor's precondition is therefore already met at the kernel level.**
 3. **READ paged** (the load-bearing model change) — `diffusion_attention.py:387-395` materializes the
    frozen prefix as `[1,1,P,H]` via `ttnn.slice` over the contiguous cache then plain SDPA; this must
@@ -77,7 +78,8 @@ Spec-decode ──▶ research spike, likely OUT of native scope (see below)
   flags and convert the three hard-disables (`platform.py:470-472`, `model_runner.py:147-148`,
   `platform.py:659-666`) into capability gates left OFF — no behavior change, unblocks later flips.
   (c) refactor `tt/chunked_prefill.py` into a stateless `prefill_one_chunk()` + re-prove PCC 0.99997
-  offline via `DG_CHUNKED_PREFILL=1`.
+  offline only by calling into `tt/chunked_prefill.py` directly (see its README and
+  `tests/test_device_chunked_prefill.py`); the env gate it used to advertise never dispatched.
 - **Step 1 — land #47488** (block-granular runner/scheduler + n-token block accounting).
 - **Step 2 — KEYSTONE A (ownership):** `create_kv_cache=False`; copy gemma4 `kv_cache.py` +
   `kv_cache_hybrid.py` into `diffusion_gemma/tt/`; return real paged handles; stop `del`-ing

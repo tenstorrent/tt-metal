@@ -65,8 +65,6 @@ from models.experimental.diffusion_gemma.reference.attention_mask import build_c
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     _chunked_norm_forward,
     _denoise_moe_forward,
-    _skip_components,
-    _zeros_like_via_mul,
 )
 from models.experimental.diffusion_gemma.tt.diffusion_attention import (
     TILE_SIZE,
@@ -94,15 +92,6 @@ _KV_WRITE_MODES = (_KV_WRITE_FILL, _KV_WRITE_POSITION)
 
 def _default_kv_write_mode() -> str:
     """Resolve the default write mechanism from ``DG_COMMIT_KV_WRITE`` (default fill)."""
-    if os.environ.get("DG_COMMIT_WRITE_BATCH"):
-        # Removed knob: it selected a 1-block-paged batched write that was racy by
-        # construction (see the note in ``_write_canvas_kv_contiguous``). Warn instead of
-        # ignoring it silently, so a stale runbook export is visible.
-        logger.warning(
-            "[commit] DG_COMMIT_WRITE_BATCH is obsolete and ignored — the 1-block-paged batched "
-            "KV write it selected was removed (racy per-tile RMW). Use DG_COMMIT_KV_WRITE="
-            f"{'|'.join(_KV_WRITE_MODES)}."
-        )
     mode = os.environ.get("DG_COMMIT_KV_WRITE")
     if mode:
         mode = mode.strip().lower()
@@ -667,30 +656,21 @@ def _commit_layer_forward_batched(
     denoise pass.
     """
     layer = tt_model.layers[layer_idx]
-    # DG_SKIP seams for the COMMIT body. The commit is 2.02 s of a served block — 26-38% of it, and
-    # roughly half of a block that early-halts at 2-9 denoise steps — and nothing had ever priced
-    # what it is made of. ``cattn`` also removes the K/V cache write, so the pair (cattn, cmoe,
-    # cshared) answers "is commit the 30-layer forward or the cache write?". Measurement only: a
-    # skipped commit writes garbage KV, so never gate on committed_sha256 from these runs.
-    skip = _skip_components()
     residual = hidden_states
     normed = _chunked_norm_forward(layer.input_layernorm, hidden_states)
-    if "cattn" in skip:
-        attn_output = _zeros_like_via_mul(normed)
-    else:
-        attn_output = _commit_attention_batched(
-            layer.self_attn,
-            normed,
-            rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=start_pos + canvas_len),
-            kv_cache=kv_cache,
-            attn_mask=attn_mask,
-            start_pos=start_pos,
-            canvas_len=canvas_len,
-            is_kv_shared=is_kv_shared,
-            mesh_device=tt_model.mesh_device,
-            page_table=page_table,
-            write_mode=write_mode,
-        )
+    attn_output = _commit_attention_batched(
+        layer.self_attn,
+        normed,
+        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=start_pos + canvas_len),
+        kv_cache=kv_cache,
+        attn_mask=attn_mask,
+        start_pos=start_pos,
+        canvas_len=canvas_len,
+        is_kv_shared=is_kv_shared,
+        mesh_device=tt_model.mesh_device,
+        page_table=page_table,
+        write_mode=write_mode,
+    )
     normed.deallocate(True)
 
     attn_output = _chunked_norm_forward(layer.post_attention_layernorm, attn_output)
@@ -700,24 +680,18 @@ def _commit_layer_forward_batched(
 
     residual = hidden_states
     normed = _chunked_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
-    if "cshared" in skip:
-        mlp_output = _zeros_like_via_mul(normed)
-    else:
-        mlp_output = (
-            shared_mlp_forward(layer.shared_mlp, normed)
-            if os.environ.get("DG_GELU_TANH", "1") == "1"
-            else layer.shared_mlp(normed)
-        )
+    mlp_output = (
+        shared_mlp_forward(layer.shared_mlp, normed)
+        if os.environ.get("DG_GELU_TANH", "1") == "1"
+        else layer.shared_mlp(normed)
+    )
     normed.deallocate(True)
 
     if layer.enable_moe_block:
         mlp_normed = _chunked_norm_forward(layer.post_feedforward_layernorm_1, mlp_output)
         mlp_output.deallocate(True)
         expert_input = _chunked_norm_forward(layer.pre_feedforward_layernorm_2, residual)
-        if "cmoe" in skip:
-            expert_output = _zeros_like_via_mul(expert_input)
-        else:
-            expert_output = _denoise_moe_forward(layer.moe, residual, expert_input)
+        expert_output = _denoise_moe_forward(layer.moe, residual, expert_input)
         expert_input.deallocate(True)
         expert_normed = _chunked_norm_forward(layer.post_feedforward_layernorm_2, expert_output)
         expert_output.deallocate(True)

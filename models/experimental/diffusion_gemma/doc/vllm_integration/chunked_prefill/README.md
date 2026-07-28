@@ -11,7 +11,8 @@
     sliding layers EXCEED the window (chunk 4, start=1024), so this is the case the paged
     causal-only op cannot handle. It **fails with the old code** (which raised `NotImplementedError`
     once total context > window) and **passes** with the bounded rolling K/V window buffer.
-- **Flag:** `DG_CHUNKED_PREFILL` (default **OFF**). Default behavior is the stock single-chunk
+- **Flag:** none. `DG_CHUNKED_PREFILL` existed but had zero dispatch sites and was deleted
+  2026-07-28. The stock single-chunk
   gemma4 prefill; the chunked path is opt-in.
 - **gemma4 untouched:** all changes are DG-local (`git diff main -- models/demos/gemma4/` unchanged).
 

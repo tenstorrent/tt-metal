@@ -44,7 +44,7 @@ in the paged KV cache and are read directly by the SDPA op — never
 materialized), prefill memory is bounded by ``O(chunk_size)`` instead of
 ``O(prompt_len)``.
 
-Scope (prototype, gated by ``DG_CHUNKED_PREFILL``, default OFF)
+Scope (prototype, not wired into the serving path — see the module README)
 --------------------------------------------------------------
 * Single-user (``batch_size == 1``) bounded-memory prefill. Batched chunked
   prefill is the #47557 batched-canvas / #47488 paged-ownership follow-up.
@@ -72,7 +72,6 @@ single-chunk ``O(prompt_len)`` OOM cliff (>64k) prefill in a fixed footprint.
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -90,16 +89,6 @@ from models.demos.gemma4.tt.attention.operations import (
     effective_block_size,
     split_qkv_heads_prefill,
 )
-
-FLAG = "DG_CHUNKED_PREFILL"
-
-
-def chunked_prefill_enabled() -> bool:
-    """True when the ``DG_CHUNKED_PREFILL`` flag opts in to the chunked path.
-
-    Default OFF — callers fall back to the stock single-chunk gemma4 prefill.
-    """
-    return os.environ.get(FLAG, "0") == "1"
 
 
 # ── per-sliding-layer rolling K/V window buffer (threaded across chunks) ──────
@@ -135,14 +124,10 @@ class _ChunkContext:
 _CHUNK_CTX: _ChunkContext | None = None
 
 
-def _default_chunk_size() -> int:
-    """Chunk length in tokens (``DG_CHUNKED_PREFILL_CHUNK``, default 256).
-
-    Must be a multiple of 128 (the ``chunked_scaled_dot_product_attention``
-    ``q_chunk_size``) and of the tile height (32); 256 satisfies both and matches
-    the DiffusionGemma canvas granularity.
-    """
-    return int(os.environ.get("DG_CHUNKED_PREFILL_CHUNK", "256"))
+# Chunk length in tokens. Must be a multiple of 128 (the
+# ``chunked_scaled_dot_product_attention`` ``q_chunk_size``) and of the tile height (32);
+# 256 satisfies both and matches the DiffusionGemma canvas granularity.
+DEFAULT_CHUNK_SIZE = 256
 
 
 def _chunked_sdpa_program_config(head_dim: int) -> "ttnn.SDPAProgramConfig":
@@ -552,7 +537,7 @@ def chunked_prefill(
         kv_cache: list of ``[k_cache, v_cache]`` paged caches per layer.
         page_table_torch: host ``[1, num_blocks]`` full page table for the sequence.
         block_size: paged cache block size (tokens per block).
-        chunk_size: chunk length in tokens (default from :func:`_default_chunk_size`).
+        chunk_size: chunk length in tokens (default :data:`DEFAULT_CHUNK_SIZE`).
         return_last_logits: when True, only the final chunk runs lm_head and its
             logits ``[1, 1, chunk_len, vocab]`` are returned; earlier chunks only
             write KV.
@@ -561,7 +546,7 @@ def chunked_prefill(
         The final chunk's logits (device tensor) when ``return_last_logits``,
         else ``None``. Callers slice the last-token row.
     """
-    chunk_size = chunk_size or _default_chunk_size()
+    chunk_size = chunk_size or DEFAULT_CHUNK_SIZE
     if chunk_size % 128 != 0:
         raise ValueError(f"chunk_size {chunk_size} must be a multiple of 128 (chunked SDPA q_chunk_size)")
     if chunk_size % block_size != 0:

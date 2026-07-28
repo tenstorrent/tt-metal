@@ -1834,10 +1834,7 @@ def ragged_sparse_prefill_forward(
     E = config.num_experts
     H = config.hidden_size
     I = weights.intermediate_size_per_device
-    max_m_blocks = int(os.environ.get("DG_PREFILL_RAGGED_M_BLOCKS", RAGGED_MAX_M_BLOCKS))
-    groups, token_slot_host, route_weight_host, packed_rows = _ragged_metadata_host(
-        routing_weights, E, config.top_k, max_m_blocks=max_m_blocks
-    )
+    groups, token_slot_host, route_weight_host, packed_rows = _ragged_metadata_host(routing_weights, E, config.top_k)
     mapper = ttnn.ReplicateTensorToMesh(mesh) if hasattr(mesh, "shape") else None
 
     def upload(host_tensor, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):

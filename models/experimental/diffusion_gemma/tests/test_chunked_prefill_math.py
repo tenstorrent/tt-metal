@@ -3,7 +3,7 @@
 
 """CPU-only structural tests for tt/chunked_prefill.py (#47466).
 
-These do not need a device: they check the flag default, the per-chunk block
+These do not need a device: they check the per-chunk block
 math (chunk_page_table slicing), and the input validation. The numerical
 RoPE-offset + cross-chunk-attention correctness is the device gate in
 ``test_device_chunked_prefill.py``.
@@ -12,22 +12,6 @@ RoPE-offset + cross-chunk-attention correctness is the device gate in
 import torch
 
 from models.experimental.diffusion_gemma.tt import chunked_prefill as cp
-
-
-def test_flag_default_off(monkeypatch):
-    monkeypatch.delenv(cp.FLAG, raising=False)
-    assert cp.chunked_prefill_enabled() is False
-    monkeypatch.setenv(cp.FLAG, "1")
-    assert cp.chunked_prefill_enabled() is True
-    monkeypatch.setenv(cp.FLAG, "0")
-    assert cp.chunked_prefill_enabled() is False
-
-
-def test_default_chunk_size(monkeypatch):
-    monkeypatch.delenv("DG_CHUNKED_PREFILL_CHUNK", raising=False)
-    assert cp._default_chunk_size() == 256
-    monkeypatch.setenv("DG_CHUNKED_PREFILL_CHUNK", "512")
-    assert cp._default_chunk_size() == 512
 
 
 def test_blocks_in():
