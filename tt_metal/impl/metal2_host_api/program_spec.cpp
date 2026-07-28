@@ -106,6 +106,13 @@ struct CollectedSpecData {
         };
         std::vector<BinderRecord> writers;  // INCREMENT + CONSUME + SET bindings
         std::vector<BinderRecord> readers;  // OBSERVE bindings
+        // Derived in Pass 2, over ALL binders (writers + readers). Used to validate a forced
+        // DM_LOCAL_CACHED semaphore: the cached-only pool is a per-core, DM-cache-domain region, so
+        // every binder must be a data-movement kernel confined to the semaphore's single node --
+        // otherwise the semaphore silently splits (a compute/TRISC binder reads the ring while DM
+        // reads the pool; a binder on another node addresses THAT node's pool).
+        bool all_binders_are_dm = true;
+        NodeRangeSet binder_node_set;
         // Derived in Pass 2 (needs kernel_node_set): sum over writers of
         // num_cores(kernel_node_set) * num_threads = the count of concurrent writer instances.
         uint32_t writer_instance_count = 0;
@@ -231,13 +238,36 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
         case SemaphoreScope::DM_LOCAL_CACHED: {
-            const uint32_t num_nodes = to_node_range_set(sem.target_nodes).num_cores();
+            // A DM_LOCAL_CACHED semaphore lives in the dedicated cached-only pool: a per-core region
+            // in the DM cache domain. Every access must therefore come from a data-movement kernel on
+            // that one node. Violations do not merely lose atomicity -- the semaphore SPLITS into
+            // separate words and the program hangs -- so they are rejected at config time.
+            const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
+            const uint32_t num_nodes = sem_nodes.num_cores();
             TT_FATAL(
                 num_nodes == 1,
                 "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but spans {} nodes; a DM-local cached "
                 "semaphore must live on exactly one node (it must never be reachable via the NoC).",
                 sem.unique_id,
                 num_nodes);
+            // A compute/TRISC binder would address the kernel_config ring (the compute Semaphore class
+            // is scope-agnostic) while DM binders use the pool -> two different words, silent split.
+            TT_FATAL(
+                binders.all_binders_are_dm,
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by a compute kernel; the "
+                "cached-only pool is in the data-movement cache domain, so a compute binder would read a "
+                "different word (the kernel_config ring) and the semaphore would silently split. Bind it "
+                "only from data-movement kernels, or use SemaphoreScope::EXTERNAL.",
+                sem.unique_id);
+            // A binder on another node would address ITS OWN node's pool at the same offset.
+            // merge() then compare counts: if the union grew, some binder sits outside the sem's node.
+            TT_FATAL(
+                sem_nodes.merge(binders.binder_node_set).num_cores() == num_nodes,
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but a binding kernel runs on node(s) outside "
+                "the semaphore's single node; the cached pool is per-core, so a remote binder would "
+                "increment its own node's copy and the semaphore would silently split. Confine the binding "
+                "kernels to the semaphore's node, or use SemaphoreScope::EXTERNAL.",
+                sem.unique_id);
             return SemScope::DM_LOCAL_CACHED;
         }
         case SemaphoreScope::LOCAL_NONATOMIC: return SemScope::LOCAL_NONATOMIC;
@@ -742,6 +772,17 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 sem_info.consuming_instance_count += instances;
             } else if (rec.binding->access_type == SemaphoreAccessType::SET) {
                 sem_info.setting_instance_count += instances;
+            }
+        }
+        // Cached-pool eligibility facts, over EVERY binder (a reader matters too: a compute reader
+        // would read the ring while DM writers use the pool).
+        for (const auto* recs : {&sem_info.writers, &sem_info.readers}) {
+            for (const auto& rec : *recs) {
+                if (!rec.kernel->is_data_movement_kernel()) {
+                    sem_info.all_binders_are_dm = false;
+                }
+                sem_info.binder_node_set =
+                    sem_info.binder_node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
             }
         }
     }
