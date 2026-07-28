@@ -231,6 +231,10 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.build_key = build_env.build_key();
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
+    // Ship our build root so the server can re-root the sfpi toolchain / linker script / hw link
+    // objects to its own tree — lets a client whose tree is at a different path compile remotely
+    // without the server needing the client's filesystem layout.
+    desc.request.client_root = build_env.build_env.get_root_path();
     static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
     // Non-preprocess mode ships the generated source tree for the server to compile. In
     // preprocess-and-ship mode the shipped .ii units are self-contained (headers/defines inlined), so
@@ -2625,19 +2629,52 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
 
         // Throws on any compile failure; only past this point are all ELFs guaranteed on disk.
-        coordinator.finish();
-
-        // Now that the compile succeeded, write the reuse cache. A failure above would have thrown,
-        // so no sidecar is ever written for a missing or stale ELF.
-        for (const auto& kernel : preprocessed_kernels) {
-            finalize_preprocess_reuse_cache(device, kernel);
+        bool remote_ok = true;
+        try {
+            coordinator.finish();
+        } catch (const jit_server::RemoteCompileTransportError& e) {
+            // The compile server became unavailable mid-batch (a response wedged / the connection
+            // went half-open under load). This is infrastructure failure, NOT a real compile error,
+            // so fall back to a LOCAL compile of this program instead of failing it. The kernels are
+            // already prepped (submitted_kernels), so we reuse them directly — re-running prep_kernel
+            // would re-add reserved defines and assert. ensure_kernel_binaries is cache-aware:
+            // kernels the server did finish are read from disk; only the undelivered ones recompile.
+            log_warning(
+                tt::LogBuildKernels,
+                "Remote JIT compile unavailable ({}); falling back to local compile for program {}.",
+                e.what(),
+                this->get_id());
+            remote_ok = false;
         }
 
-        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
-        for (const auto& [kernel, build_options] : submitted_kernels) {
-            kernel->read_binaries(device, binary_root);
-            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+        if (remote_ok) {
+            // Now that the compile succeeded, write the reuse cache. A failure above would have
+            // thrown, so no sidecar is ever written for a missing or stale ELF. Skipped on the
+            // fallback path: the local compile writes its own cache state.
+            for (const auto& kernel : preprocessed_kernels) {
+                finalize_preprocess_reuse_cache(device, kernel);
+            }
+
+            const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
+            for (const auto& [kernel, build_options] : submitted_kernels) {
+                kernel->read_binaries(device, binary_root);
+                kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+                Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+            }
+        } else {
+            for (auto& [kernel, build_options] : submitted_kernels) {
+                launch_build_step(
+                    [&, kernel] {
+                        auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
+                        const std::string binary_root =
+                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+                        kernel->read_binaries(device, binary_root);
+                        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                    },
+                    events);
+            }
+            sync_build_steps(events);
         }
     } else {
         // Local path: parallel build via thread pool.
