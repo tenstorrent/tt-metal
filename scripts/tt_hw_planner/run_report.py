@@ -156,6 +156,7 @@ def _emit_run_report_impl(
 ) -> Path:
     from .final_categorization import build_final_categorization
     from .overlay_manager import load_persistent_skips
+    from .parallelism import read_parallelism_manifest
 
     report_path = demo_dir / "RUN_REPORT.md"
 
@@ -167,6 +168,19 @@ def _emit_run_report_impl(
     lines.append("")
     lines.append(f"_Generated: {time.strftime('%Y-%m-%d %H:%M:%S %Z')}_")
     lines.append("")
+    _topo = read_parallelism_manifest(demo_dir)
+    if _topo:
+        _tp = int(_topo.get("tp", 1) or 1)
+        _dp = int(_topo.get("dp", 1) or 1)
+        _chips = int(_topo.get("chips", _tp * _dp) or (_tp * _dp))
+        if _tp > 1 or _dp > 1:
+            lines.append(
+                f"_Topology: TP={_tp} x DP={_dp} (mesh {_dp}x{_tp}, {_chips} chips) — "
+                f"run emit-e2e / optimize with `--mesh {_dp}x{_tp}`._"
+            )
+        else:
+            lines.append(f"_Topology: single-device ({_chips} chip)._")
+        lines.append("")
     lines.append("## Outcome")
     lines.append("")
     if converged is None:
