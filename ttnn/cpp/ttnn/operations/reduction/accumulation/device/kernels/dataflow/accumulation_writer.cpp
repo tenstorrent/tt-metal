@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 #include "../accumulation_common.hpp"
@@ -30,18 +30,18 @@ void kernel_main() {
     const auto output_addrg = TensorAccessor(output_addrg_args, output_base_addr);
 
     Noc noc;
-    CircularBuffer cb_out_obj(CB_OUT);
+    DataflowBuffer dfb_out_obj(CB_OUT);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
         for (uint32_t j = 0; j < tiles_per_row; ++j) {
             const uint32_t tile_j = flip ? (tiles_per_row - j - 1) : j;
             const uint32_t write_tile_id =
                 get_tile_id(low_rank_offset, high_rank_offset, tile_j, tiles_per_row, input_tile_offset);
-            cb_out_obj.wait_front(ONE_TILE);
+            dfb_out_obj.wait_front(ONE_TILE);
             noc.async_write(
-                cb_out_obj, output_addrg, output_tile_bytes, {.offset_bytes = 0}, {.page_id = write_tile_id});
+                dfb_out_obj, output_addrg, output_tile_bytes, {.offset_bytes = 0}, {.page_id = write_tile_id});
             noc.async_write_barrier();
-            cb_out_obj.pop_front(ONE_TILE);
+            dfb_out_obj.pop_front(ONE_TILE);
         }
         ++high_rank_offset;
         if (high_rank_offset >= input_tile_offset) {
