@@ -52,6 +52,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, 
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
     gather_cache_tp0,
@@ -1530,6 +1531,10 @@ def run_chunked_transformer_no_pcc(
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+)
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_no_pcc(
     variant,
@@ -1683,6 +1688,10 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 )
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+)
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked_no_pcc(
     variant,
