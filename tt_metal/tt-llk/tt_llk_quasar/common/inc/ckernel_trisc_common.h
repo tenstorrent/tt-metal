@@ -474,6 +474,7 @@ inline tdma_descriptor_t construct_tdma_desc(
     {
         // PACR_STRIDE quirk: program BD as 1x1x16 so L1 addressing indexes rows as tiles.
         buf_desc.f.y_dim = 1;
+        buf_desc.f.z_dim = 1;
     }
 
     validate_buffer_desc<MODE>(buf_desc);
