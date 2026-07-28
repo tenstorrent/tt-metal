@@ -51,6 +51,10 @@ struct RegimeAMatmulParams {
     //   bit10 (1024) RING_BALANCED_BG      - bit9 + the fixed background traffic (in1 reads, in0 read,
     //                                       reduction, output) on the link map, + worst-edge and hop
     //                                       budgets anchored on production, + adopt-only-if-better gate
+    //                                       (CORPUS-REFUTED at deployed configs: 0 wins, -13.7% worst)
+    // Back to kernel-behaviour bits (invalid output, unfused/single-output only):
+    //   bit11 (2048) SKIP_IN1_READ         - drop the in1 DRAM read payload; keep CB reserve/push, rotated
+    //                                       shard order, barriers, M-split forwarding, semaphores, compute
     // Bits combine freely (pair-interaction matrix). bit0 dominates bit1 (normalize skip-all+redundant to
     // skip-all). Set from TT_REGIME_A_DIAG_MASK in invoke(); part of the reflection program-cache hash so
     // each mask is a distinct cached program. Diagnostic outputs are intentionally invalid; correctness is
