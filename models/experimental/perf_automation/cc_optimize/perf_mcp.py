@@ -711,7 +711,7 @@ def _ledger_record(prof: dict) -> None:
         if phase == led.PHASE_BEFORE and not _is_credible_profile(prof):
             return
         led.record(led.KIND_EAGER, phase, ms, depth=depth, mode="eager", source="profile_model", model=_mname)
-        _tr = _baseline_trace_ms_from(prof) if "_baseline_trace_ms_from" in globals() else None
+        _tr = led.trace_ms_from_profile(prof)
         if _tr:
             led.record(
                 led.KIND_TRACE_PASS, phase, _tr, depth=depth, mode="tracy-trace", source="profile_model", model=_mname

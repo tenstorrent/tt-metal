@@ -89,4 +89,4 @@ def test_a_refreshed_snapshot_cannot_change_the_reported_floor(tmp_path, monkeyp
     later = json.loads((tmp_path / "tp.json").read_text())
     txt = "\n".join(sm._roofline_lines(later, 615.69, None, "m", "main"))
     assert "modeled floor       : 537.23 ms" in txt
-    assert "341.47 ms" in txt and "this build's floor" in txt
+    assert "341.47" not in txt, txt

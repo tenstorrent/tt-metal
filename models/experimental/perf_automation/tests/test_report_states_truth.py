@@ -85,3 +85,66 @@ def test_the_rendered_floor_line_carries_the_basis_not_an_opaque_label():
     assert "bytes/BW" in line, line
     assert "covers" in line and "%" in line, line
     assert line.strip().endswith(")"), line
+
+
+def _sm_and_led():
+    import importlib.util
+    import sys as _s
+    from pathlib import Path as _P
+
+    root = _P(__file__).resolve().parents[1]
+    out = []
+    for name, rel in (("sm_trace_ut", "cc_optimize/summary.py"), ("led_trace_ut", "cc_optimize/measurements.py")):
+        spec = importlib.util.spec_from_file_location(name, root / rel)
+        mod = importlib.util.module_from_spec(spec)
+        _s.modules[name] = mod
+        spec.loader.exec_module(mod)
+        out.append(mod)
+    return out
+
+
+def test_the_trace_pass_baseline_comes_from_the_ledger_not_the_profile_file(tmp_path, monkeypatch):
+    """THE DEFECT: this line read per_token_ms out of the per-profile JSON, which EVERY profile
+    overwrites -- so an optimized reading carried the word BASELINE and the number changed run to run
+    (11.93 -> 9.34 on llama3_1_8b_p150). The durable row could never be written either: the writer's
+    call was guarded on a name that was never defined.
+    """
+    sm, led = _sm_and_led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    led.record(led.KIND_TRACE_PASS, led.PHASE_BEFORE, 11.93, depth="16", mode="tracy-trace")
+    led.record(led.KIND_TRACE_PASS, led.PHASE_AFTER, 9.34, depth="16", mode="tracy-trace")
+    line = sm._ledger_line(led.KIND_TRACE_PASS, "tracy trace pass", "", "")
+    assert line and "11.93" in line and "9.34" in line, line
+
+
+def test_an_optimized_profile_cannot_relabel_itself_as_the_trace_baseline(tmp_path, monkeypatch):
+    """With a before-row already held, a later profile is an AFTER -- it cannot overwrite the anchor."""
+    sm, led = _sm_and_led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    led.record(led.KIND_TRACE_PASS, led.PHASE_BEFORE, 11.93, depth="16", mode="tracy-trace")
+    for later in (9.34, 8.10, 7.02):
+        led.record(led.KIND_TRACE_PASS, led.PHASE_AFTER, later, depth="16", mode="tracy-trace")
+    first = led.first(led.KIND_TRACE_PASS, led.PHASE_BEFORE)
+    assert first["value_ms"] == 11.93
+    assert led.last(led.KIND_TRACE_PASS, led.PHASE_AFTER)["value_ms"] == 7.02
+
+
+def test_one_extractor_reads_the_trace_ms_from_a_profile():
+    sm, led = _sm_and_led()
+    assert led.trace_ms_from_profile({"per_token_ms": 9.3393}) == 9.3393
+    assert led.trace_ms_from_profile({"trace_per_token_ms": 4.0}) == 4.0
+    assert led.trace_ms_from_profile({"trace_ms": 2.5}) == 2.5
+    assert led.trace_ms_from_profile({"per_token_ms": None, "trace_ms": 2.5}) == 2.5
+    for bad in ({}, None, {"per_token_ms": 0}, {"per_token_ms": -1}, {"per_token_ms": float("nan")}, "x"):
+        assert led.trace_ms_from_profile(bad) is None, bad
+    assert sm._baseline_trace_ms({"per_token_ms": 9.3393}) == 9.3393
+
+
+def test_the_writers_guard_is_gone(tmp_path):
+    """It was `if "_baseline_trace_ms_from" in globals()` against a name never defined, so the branch
+    was permanently dead and no trace_pass row was ever recorded."""
+    from pathlib import Path as _P
+
+    src = (_P(__file__).resolve().parents[1] / "cc_optimize" / "perf_mcp.py").read_text()
+    assert "_baseline_trace_ms_from" not in src
+    assert "led.trace_ms_from_profile(prof)" in src

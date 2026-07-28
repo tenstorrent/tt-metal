@@ -399,22 +399,11 @@ def _depth_label(profile: dict | None = None) -> str:
 
 
 def _baseline_trace_ms(baseline_profile: dict | None):
-    """The trace-pass latency recorded alongside the baseline profile, or None.
-
-    Reported separately from the eager per-op number because they measure different things over the
-    same window -- collapsing them into one figure is how a 'regression' appears out of nowhere.
-    """
-    if not isinstance(baseline_profile, dict):
+    """Delegates to the ledger, which owns how a trace-pass reading is extracted."""
+    try:
+        return _ledger().trace_ms_from_profile(baseline_profile)
+    except Exception:  # noqa: BLE001
         return None
-    for k in ("per_token_ms", "trace_per_token_ms", "trace_ms"):
-        v = baseline_profile.get(k)
-        try:
-            f = float(v)
-        except (TypeError, ValueError):
-            continue
-        if f > 0:
-            return f
-    return None
 
 
 def _floor_basis(profile: dict | None) -> str:
@@ -521,13 +510,6 @@ def _roofline_lines(
             if have_floor
             else "  modeled floor       : n/a"
         )
-        if have_floor and isinstance(_current, (int, float)) and _current > 0 and abs(_current - floor) / floor > 0.05:
-            out.append(
-                f"  this build's floor  : {_current:.2f} ms   (recomputed from the CURRENT op mix; "
-                f"{'below' if _current < floor else 'above'} the pinned anchor because the ops now move "
-                "different bytes — new headroom, NOT a new target; the anchor above stays fixed so "
-                "at-floor% cannot retreat ahead of the measurement)"
-            )
         # The floor is NOT a goal: its compute term assumes the FULL grid even for an op that ran on
         # a few cores, and L1/sharded ops fall back to DRAM bandwidth for want of a calibrated L1
         # peak. No real kernel reaches it, so a bare "% of floor" invites chasing an unreachable
@@ -542,17 +524,36 @@ def _roofline_lines(
         if have_floor and fm:
             status = _floor_status(floor, fm)
             if status == "ABOVE_BAND":
-                # Measured beat a floor that is unreachable BY CONSTRUCTION, so the two numbers
-                # describe different states -- usually a measurement taken at one profiling depth
-                # against a floor summed at another. Name both sides rather than blaming one: this
-                # line used to assert the FLOOR was stale, and on llama3_1_8b_p150 it was the
-                # MEASUREMENT that was stale (2-layer window vs a 16-layer floor).
-                out.append(
-                    f"  status              : ABOVE_BAND — measured {fm:.2f} ms beats the modeled floor "
-                    f"{floor:.2f} ms, impossible for a single workload: one side is stale/suspect "
-                    "(floor and measurement come from different profiles/depths — re-profile both; "
-                    "never bank this as a win)"
-                )
+                # Measured beat the floor. Two very different things produce that, and calling both
+                # "impossible" puts a false claim in a confirmation document:
+                #
+                #   the work SHRANK -- the reported floor is pinned to the BASELINE, and optimization
+                #       removes bytes (bf8_b -> bf4_b halves a weight read), so the current build's own
+                #       bound is lower and beating the baseline's bound is exactly the goal. On
+                #       llama3_1_8b_p150 the run reached 534.44 ms against a 537.23 ms baseline floor
+                #       while its own floor stood at 331.86 ms: a real win the report called impossible
+                #       and told the reader never to bank.
+                #
+                #   the numbers DISAGREE -- measured beats even the current build's floor, which no
+                #       kernel can do, so one side is stale (a 2-layer measurement against a 16-layer
+                #       floor produced this).
+                #
+                # The current floor is the only thing that separates them. It is read here and NOT
+                # printed: the report states the baseline, one floor line.
+                _beats_own = isinstance(_current, (int, float)) and _current > 0 and fm < _current
+                if _beats_own:
+                    out.append(
+                        f"  status              : ABOVE_BAND — measured {fm:.2f} ms beats even this build's own "
+                        f"floor {_current:.2f} ms, which no kernel can do: one side is stale/suspect (floor and "
+                        "measurement come from different profiles/depths — re-profile both; never bank this as "
+                        "a win)"
+                    )
+                else:
+                    out.append(
+                        f"  status              : PAST BASELINE FLOOR — measured {fm:.2f} ms is faster than the "
+                        f"{floor:.2f} ms baseline bound because the optimized build does LESS work (fewer "
+                        "bytes moved), so its own bound is lower; the baseline stays fixed as the reference"
+                    )
             else:
                 _hint = "reached the achievable band — done" if status == "IN_BAND" else "keep optimizing"
                 out.append(
@@ -677,9 +678,9 @@ def render_summary(
     else:
         _eager = _ledger_line(_ledger().KIND_EAGER, "eager per-op device time", model, task)
         lines.append(_eager or "eager per-op device time: not measured (no ledger reading for this run)")
-    _bl_trace = _baseline_trace_ms(baseline_profile)
-    if _bl_trace:
-        lines.append(f"tracy trace pass, BASELINE, same window ({_depth_label(baseline_profile)}):  {_bl_trace:.2f} ms")
+    _tp = _ledger_line(_ledger().KIND_TRACE_PASS, "tracy trace pass", model, task)
+    if _tp:
+        lines.append(_tp)
     _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"
     _fp = _ledger_line(_ledger().KIND_FULLPIPE, "trace+1CQ %s" % _trace_scope, model, task)
     if _fp:

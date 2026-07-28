@@ -84,6 +84,28 @@ def is_win(attempt) -> bool:
     return math.isfinite(ms) and ms > 0
 
 
+def trace_ms_from_profile(profile) -> float | None:
+    """The trace-pass latency carried by a device profile, or None. THE ONE extractor.
+
+    Reported separately from the eager per-op number because they measure different things over the
+    same window; collapsing them is how a 'regression' appears out of nowhere. Lives here so the
+    writer and the renderer read the same key from the same shape: the renderer had its own copy and
+    the writer's call was guarded on a name that was never defined, so the durable row was never
+    written and the report fell back to reading the per-profile file -- which every profile
+    overwrites, making a CURRENT number carry the word BASELINE.
+    """
+    if not isinstance(profile, dict):
+        return None
+    for key in ("per_token_ms", "trace_per_token_ms", "trace_ms"):
+        try:
+            v = float(profile.get(key))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            return v
+    return None
+
+
 def ledger_path(model: str = "", task: str = "") -> Path:
     """Keyed by (model, task), like every other per-run artifact. An unkeyed file is how another
     run's number became this run's baseline."""

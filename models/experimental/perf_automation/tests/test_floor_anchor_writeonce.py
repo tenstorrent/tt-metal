@@ -132,14 +132,17 @@ def test_rendering_reads_the_anchor_and_writes_NOTHING(tmp_path, monkeypatch):
     assert p.read_text() == before, "the renderer appended to the ledger"
 
 
-def test_report_shows_pinned_anchor_and_flags_the_drifted_build_floor(tmp_path, monkeypatch):
-    """The renderer must report the ANCHOR, and must not silently discard the recomputed floor."""
+def test_report_shows_only_the_pinned_baseline_floor(tmp_path, monkeypatch):
+    """RUN_REPORT.md has a FIXED structure and reports the baseline. One floor line, the pinned one:
+    a second "this build's floor" line was noise in a document that goes out for confirmation, and
+    printing two floors invites exactly the confusion the pin exists to remove."""
     _ledger_env(tmp_path, monkeypatch)
     _pin(537.2288)
     txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": 331.8585, "perf_layers": 16}, 615.69, None, "m", "main"))
     assert "modeled floor       : 537.23 ms" in txt
-    assert "331.86 ms" in txt and "this build's floor" in txt
-    assert "NOT a new target" in txt
+    assert "331.86" not in txt, txt
+    assert "this build's floor" not in txt, txt
+    assert len([l for l in txt.splitlines() if "floor" in l and "at-floor" not in l]) == 1, txt
 
 
 def test_at_floor_pct_is_computed_against_the_anchor(tmp_path, monkeypatch):
@@ -150,16 +153,59 @@ def test_at_floor_pct_is_computed_against_the_anchor(tmp_path, monkeypatch):
 
 
 def test_with_no_anchor_yet_the_current_floor_is_reported(tmp_path, monkeypatch):
-    """First render of a fresh model: nothing is pinned, so the current floor is the honest answer --
-    and no drift line, because there is nothing to differ from."""
+    """First render of a fresh model: nothing is pinned yet, so the floor just computed IS the
+    baseline -- and pinning it is what makes every later render report this same number."""
     _ledger_env(tmp_path, monkeypatch)
     txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": 331.8585, "perf_layers": 16}, 615.69, None, "m", "main"))
     assert "modeled floor       : 331.86 ms" in txt
     assert "this build's floor" not in txt
 
 
-def test_no_drift_line_when_floors_agree(tmp_path, monkeypatch):
+def test_a_later_build_floor_never_appears_in_the_report(tmp_path, monkeypatch):
+    """Whatever the current build recomputes, the report shows the pinned baseline only."""
     _ledger_env(tmp_path, monkeypatch)
     _pin(537.2288)
-    txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": 540.0, "perf_layers": 16}, 615.69, None, "m", "main"))
-    assert "this build's floor" not in txt
+    for current in (540.0, 331.86, 120.0, 900.0):
+        txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": current, "perf_layers": 16}, 615.69, None, "m", "main"))
+        assert "modeled floor       : 537.23 ms" in txt, current
+        assert "this build's floor" not in txt, current
+
+
+def test_beating_the_pinned_baseline_floor_is_reported_as_a_real_win(tmp_path, monkeypatch):
+    """The floor is pinned to the BASELINE, so an optimized build that moves fewer bytes can legally
+    beat it -- that is the goal. The report called it "impossible ... never bank this as a win" while
+    llama3_1_8b_p150 sat at 534.44 ms against a 537.23 ms baseline floor with its own floor at 331.86.
+    """
+    _ledger_env(tmp_path, monkeypatch)
+    _pin(537.2288)
+    txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": 331.8585, "perf_layers": 16}, 534.44, None, "m", "main"))
+    assert "PAST BASELINE FLOOR" in txt, txt
+    assert "impossible" not in txt and "never bank" not in txt, txt
+    assert "does LESS work" in txt
+
+
+def test_beating_the_builds_own_floor_is_still_called_suspect(tmp_path, monkeypatch):
+    """No kernel beats the bound of the build it is running, so this really is a stale pairing --
+    a 2-layer measurement against a 16-layer floor produced exactly this."""
+    _ledger_env(tmp_path, monkeypatch)
+    _pin(537.2288)
+    txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": 331.8585, "perf_layers": 16}, 100.0, None, "m", "main"))
+    assert "stale/suspect" in txt and "never bank this as a win" in txt, txt
+    assert "ABOVE_BAND" in txt and "PAST BASELINE FLOOR" not in txt
+
+
+def test_with_no_current_floor_the_conservative_reading_is_kept(tmp_path, monkeypatch):
+    """Nothing to compare against, so do not claim the win is real."""
+    _ledger_env(tmp_path, monkeypatch)
+    _pin(537.2288)
+    txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": None, "perf_layers": 16}, 300.0, None, "m", "main"))
+    assert "PAST BASELINE FLOOR" in txt or "stale/suspect" in txt, txt
+
+
+def test_the_report_still_carries_exactly_one_floor_line_in_every_case(tmp_path, monkeypatch):
+    _ledger_env(tmp_path, monkeypatch)
+    _pin(537.2288)
+    for fm in (900.0, 700.0, 615.69, 534.44, 100.0):
+        txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": 331.8585, "perf_layers": 16}, fm, None, "m", "main"))
+        floors = [l for l in txt.splitlines() if l.strip().startswith("modeled floor")]
+        assert len(floors) == 1 and "537.23" in floors[0], (fm, txt)
