@@ -42,7 +42,13 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
 
     if (tensor_shape.total_num_faces() == NUM_FACES)
     {
-        unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
+        // Dst_Face_Idx_Inc=0: every face is written to SrcA rows 0-15, and Set Dvalid flips the write
+        // bank per face, so the two SrcA banks form a double-buffer that streams the faces to the math
+        // thread (which pools them with ADDR_MOD_0 + CLR_SRCA_VLD, rotating the read bank per face).
+        // Src_Face_Idx_Inc=1 walks the L1 source faces. (A co-resident address-walk layout --
+        // Dst_Face_Idx_Inc=1 to rows 0/16/32/48 -- was tried and fails: GMPOOL consumes SrcA by bank
+        // rotation, not by an srca offset.)
+        unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0 /*Dst face Idx inc*/, 1 /*Src face Idx inc*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
         unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
     }
     else
