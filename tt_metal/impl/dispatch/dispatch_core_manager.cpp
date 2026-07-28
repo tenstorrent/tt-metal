@@ -197,7 +197,16 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
 }
 
 CoreType dispatch_core_manager::get_dispatch_core_type() const {
-    return get_core_type_from_config(this->dispatch_core_config_);
+    // Quasar needs resolve (DISPATCH vs WORKER). WH/BH keep config-only (BH Galaxy regression).
+    if (env_.get_cluster().arch() != tt::ARCH::QUASAR) {
+        return get_core_type_from_config(this->dispatch_core_config_);
+    }
+    const auto& cluster = env_.get_cluster();
+    if (cluster.all_chip_ids().empty()) {
+        return get_core_type_from_config(this->dispatch_core_config_);
+    }
+    const ChipId device_id = *cluster.all_chip_ids().begin();
+    return resolve_dispatch_core_type(env_, device_id, this->dispatch_core_config_);
 }
 
 DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config() { return this->dispatch_core_config_; }
