@@ -31,11 +31,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
-    const int num_faces_c_dim_A     = params.num_faces_c_dim_A;
-    const Operand& buffer_B         = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR          = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT             = params.TILE_CNT;
+    const std::uint32_t INPUT_NUM_BLOCKS     = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t INPUT_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
+    const int num_faces_r_dim_A              = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A              = params.num_faces_c_dim_A;
+    const Operand& buffer_B                  = params.buffer_B;
 #endif
     tdma_descriptor_t td_val_A, td_val_B;
     const std::uint32_t buf_desc_id_a        = 0;
@@ -44,13 +46,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if constexpr (unpack_to_dest)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
-        }
-        else if constexpr (unpack_to_dest)
-        {
+            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+            }
+            else
+            {
+                // CFG persists across run types, so isolates must not inherit
+                // the L1_TO_L1 unpack-to-dest handshake.
+                set_up_zero_dest_dvalid_handshake_for_unpack();
+            }
             _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
         }
 
@@ -62,9 +69,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
         _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
 
-        if (is_fp32_dest_acc_en)
+        if constexpr (is_fp32_dest_acc_en)
         {
-            if (unpack_to_dest)
+            if constexpr (unpack_to_dest)
             {
                 _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
             }
@@ -113,9 +120,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < num_tiles_per_unpack; ++i)
+                for (std::uint32_t block = 0; block < INPUT_NUM_BLOCKS; block++)
                 {
-                    _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_A, unpack_to_dest>(i);
+                    for (std::uint32_t tile = 0; tile < INPUT_TILES_IN_BLOCK; tile++)
+                    {
+                        const std::uint32_t input_tile_idx = (block * INPUT_TILES_IN_BLOCK) + tile;
+                        _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_A, unpack_to_dest>(input_tile_idx);
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                    }
                 }
             }
         }
@@ -160,7 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         {
             ZONE_SCOPED("INIT")
-            // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
+            // Only end-to-end and math-isolate runs use the FPU→PACK dest-dvalid handshake.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -245,7 +260,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -254,7 +269,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            if (unpack_to_dest)
+            if constexpr (unpack_to_dest)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
             }

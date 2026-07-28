@@ -9,6 +9,15 @@
 #include "tensor_shape.h"
 
 /**
+ * @brief Disables the DEST DVALID handshake for UNPACK.
+ */
+inline void set_up_zero_dest_dvalid_handshake_for_unpack()
+{
+    auto cfg                                         = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+    cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+}
+
+/**
  * @brief Disables the DEST DVALID handshake for PACK.
  */
 inline void set_up_zero_dest_dvalid_handshake_for_pack()

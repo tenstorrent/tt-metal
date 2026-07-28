@@ -31,9 +31,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_A         = params.buffer_A;
 #endif
-    const std::uint32_t SELECTED_UNPACKER    = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
-    const std::uint32_t buf_desc_id          = 0;
-    const std::uint32_t num_tiles_per_unpack = TILE_CNT;
+    constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
+    const std::uint32_t buf_desc_id           = 0;
+    const std::uint32_t num_tiles_per_unpack  = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
@@ -47,18 +47,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // CFG persists across run types, so isolates must not inherit
                 // the L1_TO_L1 unpack-to-dest handshake.
-                std::uint32_t volatile* cfg                      = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-                cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+                set_up_zero_dest_dvalid_handshake_for_unpack();
             }
 
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                if (pack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
+                }
+                else if (pack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                }
+                else
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+                }
             }
             else
             {
@@ -153,13 +159,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             DataFormat math_format     = static_cast<DataFormat>(formats.math);
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+                if (pack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+                }
+                else if (pack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+                }
+                else
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+                }
             }
             else
             {
@@ -236,7 +249,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {

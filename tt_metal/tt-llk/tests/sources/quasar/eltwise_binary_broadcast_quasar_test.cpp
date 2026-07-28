@@ -126,13 +126,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         DataFormat math_format     = static_cast<DataFormat>(formats.math);
         DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
+        if constexpr (is_fp32_dest_acc_en)
         {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+            if (pack_src_format == DataFormat::Int32)
+            {
+                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+            }
+            else
+            {
+                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+            }
         }
         else
         {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
         }
 
         _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE);

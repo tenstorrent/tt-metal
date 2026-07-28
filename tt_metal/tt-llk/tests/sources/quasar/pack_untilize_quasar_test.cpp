@@ -30,7 +30,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
-    const std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
+    constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id          = 0;
     const std::uint32_t num_tiles_per_unpack = TILE_CNT;
@@ -49,18 +49,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                auto cfg                                         = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-                cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+                set_up_zero_dest_dvalid_handshake_for_unpack();
             }
 
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                if (pack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
+                }
+                else if (pack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                }
+                else
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+                }
             }
             else
             {
@@ -187,13 +193,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             DataFormat math_format     = static_cast<DataFormat>(formats.math);
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+                if (pack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+                }
+                else if (pack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+                }
+                else
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+                }
             }
             else
             {
@@ -281,7 +294,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (unpack_to_dest)
             {

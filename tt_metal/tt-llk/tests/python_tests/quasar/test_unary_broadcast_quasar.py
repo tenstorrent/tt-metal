@@ -46,9 +46,6 @@ from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 32]]
-# Nested list of [H, W] pairs: a flat [H, W] is expanded by parametrize into
-# input_dimensions=H (int) and breaks generate_stimuli / rows, cols = dims.
-PERF_ONLY_INPUT_DIMENSIONS = [[512, 32]]
 TILE_DIMENSIONS = [32, 32]
 
 
@@ -62,10 +59,6 @@ def unary_broadcast_implied_math_formats(formats, *, is_perf=False):
     if formats.input_format.is_mx_format():
         return [ImpliedMathFormat.Yes]
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
-def unary_broadcast_input_dimensions(*, is_perf=False):
-    return PERF_ONLY_INPUT_DIMENSIONS if is_perf else INPUT_DIMENSIONS
 
 
 UNARY_BROADCAST_FORMATS = input_output_formats(
@@ -104,7 +97,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
     ],
     implied_math_format=lambda formats: unary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
-    input_dimensions=runtime(lambda: unary_broadcast_input_dimensions(is_perf=False)),
+    input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
