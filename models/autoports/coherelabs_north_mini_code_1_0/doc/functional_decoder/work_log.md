@@ -148,4 +148,4 @@ It returned `clean-pass` with no required work. Non-blocking notes were:
   although the cached reference and pinned wall reruns resolve the exact target.
 
 These do not contradict current correctness, profiler, or watcher evidence.
-The stage-local commit remains.
+Stage checkpoint commit: `4e45a256771` (`Add North Mini functional decoder`).
