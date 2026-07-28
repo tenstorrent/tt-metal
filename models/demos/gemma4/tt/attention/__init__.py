@@ -253,14 +253,35 @@ class Gemma4Attention:
             self._last_kv = kept_kv
             return tt_out
 
-    def _release_sliding_prefill_tail(self):
+    def _release_sliding_prefill_tail(self, *, clear_persistent: bool = False):
         """Drop the cross-chunk sliding tail for the next prefill's first chunk.
 
         Traced multi-chunk binds persistent K/V ring buffers into the captured
-        graph — never deallocate those. Only free eager (non-persistent) tails.
+        graph. Soft release (default) keeps those buffers so runtime replay can
+        ``ttnn.copy`` into the same addresses. Hard clear (``clear_persistent``)
+        is only for sp0 compile↔capture: both passes must take the first-alloc
+        path — leaving persistent set makes capture hit ``ttnn.copy`` without
+        that program in cache (TT_FATAL !is_capturing_trace, WH-T3K nightly).
         """
         tail = getattr(self, "_sliding_prefill_tail", None)
         persistent = getattr(self.config, "sliding_prefill_tail_persistent", None)
+        if clear_persistent:
+            seen: set[int] = set()
+            for group in (tail, persistent):
+                if group is None:
+                    continue
+                for t in group:
+                    tid = id(t)
+                    if tid in seen:
+                        continue
+                    seen.add(tid)
+                    try:
+                        t.deallocate(True)
+                    except Exception:
+                        pass
+            self._sliding_prefill_tail = None
+            self.config.sliding_prefill_tail_persistent = None
+            return
         if tail is not None:
             is_persistent = (
                 persistent is not None and len(tail) == 2 and len(persistent) == 2 and tail[0] is persistent[0]

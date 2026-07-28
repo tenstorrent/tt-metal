@@ -277,16 +277,18 @@ _DEFAULT_LONG_CONTEXT_POLICY = {
 def normalize_gemma4_model_key(model_name_or_path) -> str:
     """Map HF id / path / base name → policy key (31B, 12B, 26B-A4B, E4B, E2B)."""
     name = str(model_name_or_path or "").lower().replace("_", "-")
-    base = name.rsplit("/", 1)[-1]
-    if "31b" in base:
+    # vLLM often passes the resolved HF snapshot dir
+    # (.../models--google--gemma-4-31b-it/snapshots/<hash>); the last path
+    # component is then the hash, so search the full string.
+    if "31b" in name:
         return "31B"
-    if "12b" in base:
+    if "12b" in name:
         return "12B"
-    if "26b" in base or "a4b" in base:
+    if "26b" in name or "a4b" in name:
         return "26B-A4B"
-    if "e4b" in base:
+    if "e4b" in name:
         return "E4B"
-    if "e2b" in base:
+    if "e2b" in name:
         return "E2B"
     return "unknown"
 
