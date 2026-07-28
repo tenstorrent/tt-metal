@@ -15,8 +15,13 @@ if str(_PA) not in sys.path:
     sys.path.insert(0, str(_PA))
 _CC = _PA / "cc_optimize"
 
-_PROF = {"buckets": [{"id": "datamove", "device_ms": 70.0}, {"id": "matmul", "device_ms": 50.0},
-                     {"id": "reduction", "device_ms": 14.0}]}
+_PROF = {
+    "buckets": [
+        {"id": "datamove", "device_ms": 70.0},
+        {"id": "matmul", "device_ms": 50.0},
+        {"id": "reduction", "device_ms": 14.0},
+    ]
+}
 
 
 def _summary():
@@ -28,17 +33,32 @@ def _summary():
 
 def _tp(floor_ms):
     theo = 1000.0 / floor_ms
-    return {"scope": "model", "is_llm_decode": False, "theoretical_tok_s": theo,
-            "band": [0.6 * theo, 0.8 * theo], "active_bytes": 0, "peak_bw_gbps": 0.0,
-            "tp_degree": 1, "modeled_floor_ms": floor_ms}
+    return {
+        "scope": "model",
+        "is_llm_decode": False,
+        "theoretical_tok_s": theo,
+        "band": [0.6 * theo, 0.8 * theo],
+        "active_bytes": 0,
+        "peak_bw_gbps": 0.0,
+        "tp_degree": 1,
+        "modeled_floor_ms": floor_ms,
+    }
 
 
 def _render(sm, tmp_path, *, baseline_profile=None, throughput=None, final_ms=100.0, attempts=None):
     kl = tmp_path / "kl.json"
     kl.write_text(json.dumps(attempts or []))
-    return sm.render_summary(str(kl), final_ms, model="s", task="main", metric="device_ms",
-                             baseline_profile=baseline_profile, throughput=throughput,
-                             final_override_ms=final_ms, finalized=True)
+    return sm.render_summary(
+        str(kl),
+        final_ms,
+        model="s",
+        task="main",
+        metric="device_ms",
+        baseline_profile=baseline_profile,
+        throughput=throughput,
+        final_override_ms=final_ms,
+        finalized=True,
+    )
 
 
 def test_stages_from_profile_direct():
@@ -63,8 +83,15 @@ def test_roofline_renders_when_throughput_none(tmp_path, monkeypatch):
 
 def test_prefers_agent_stages_when_present(tmp_path):
     sm = _summary()
-    attempts = [{"op_signature": "MatmulDeviceOperation", "kernel_kind": "dtype", "measured_ms": 10.0,
-                 "beat_baseline": True, "stages": [{"name": "matmul", "ms": 9.0, "dominant": True}]}]
+    attempts = [
+        {
+            "op_signature": "MatmulDeviceOperation",
+            "kernel_kind": "dtype",
+            "measured_ms": 10.0,
+            "beat_baseline": True,
+            "stages": [{"name": "matmul", "ms": 9.0, "dominant": True}],
+        }
+    ]
     text = _render(sm, tmp_path, baseline_profile=_PROF, attempts=attempts)
     assert "Block-level timing (per-stage trace) — latest lever on Matmul" in text
 
@@ -95,3 +122,42 @@ def test_stress_many_profiles(tmp_path):
         text = _render(sm, tmp_path, baseline_profile=prof, throughput=_tp(50.0 + i), final_ms=100.0 + i, attempts=[])
         assert "Roofline & utilization" in text, f"iter {i}: roofline missing"
         assert "Block-level timing (per-stage trace)" in text, f"iter {i}: block-level missing"
+
+
+def test_block_level_timing_is_rendered_exactly_once():
+    """A rebase conflict in summary.py was resolved by keeping BOTH sides, leaving two renders of the
+    same section: the report printed the whole Block-level timing table twice, byte-identical. The
+    second block already handled the case the first did (plus the no-attempt fallback), so the first
+    was pure duplication."""
+    import importlib.util
+    import json
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("summary_dup_ut", root / "cc_optimize" / "summary.py")
+    sm = importlib.util.module_from_spec(spec)
+    sys.modules["summary_dup_ut"] = sm
+    spec.loader.exec_module(sm)
+
+    kl = Path(tempfile.mktemp(suffix=".json"))
+    kl.write_text(
+        json.dumps(
+            [
+                {
+                    "op_signature": "MatmulDeviceOperation 128 x 4096 x 14336",
+                    "kernel_kind": "dtype",
+                    "measured_ms": 648.0,
+                    "beat_baseline": True,
+                    "stages": [
+                        {"name": "prefill ff1/ff3", "ms": 141.85, "dominant": True},
+                        {"name": "decode ff1/ff3", "ms": 92.47},
+                    ],
+                }
+            ]
+        )
+    )
+    out = sm.render_summary(kl, model="m", task="main", finalized=True)
+    assert out.count("Block-level timing (per-stage trace)") == 1, out.count("Block-level timing (per-stage trace)")
+    assert out.count("prefill ff1/ff3") == 1

@@ -617,14 +617,6 @@ def render_summary(
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
     _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
-    if _st:
-        lines.append(
-            f"Block-level timing (per-stage trace) — latest lever on {_op_label(_st.get('op_signature', '?'))}:"
-        )
-        lines.extend(_stage_table_lines(_st["stages"]))
-        lines.append("")
-
-    _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
     _stages = _st["stages"] if _st else _stages_from_profile(baseline_profile)
     if _stages:
         _lbl = (
