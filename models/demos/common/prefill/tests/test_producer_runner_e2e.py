@@ -240,7 +240,7 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int, **extra):
         _cleanup_ipc()
 
 
-def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str) -> None:
+def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str, model: str) -> None:
     """Host-only pre-step: build a reference-KV trace dir from a prompt (no device). Raises with the
     generator's output on failure so a bad reference is not silently mistaken for a device PCC failure."""
     os.makedirs(_REPORT_DIR, exist_ok=True)
@@ -251,6 +251,8 @@ def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str) -> None:
                 sys.executable,
                 "-m",
                 _GEN_TRACE_MODULE,
+                "--model",
+                model,
                 "--prompt-file",
                 prompt_file,
                 "--isl",
@@ -281,6 +283,11 @@ def test_producer_runner_pcc(scenario, tmp_path):
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
     trace_env = {}
     if "prompt_file" in sc:
+        # The reference forward is memory-bounded only for a model whose reference uses chunked-SDPA;
+        # deepseek_v3_d_p's reference OOMs past one chunk, so default this scenario to Kimi. Pin it into
+        # trace_env so the runner + producer select the SAME adapter that generated the golden.
+        model = os.environ.get("PREFILL_MODEL", "kimi_k2_7")
+        trace_env["PREFILL_MODEL"] = model
         # A pre-built reference (PREFILL_REUSE_TRACE_DIR) lets an A/B across device builds compare the
         # device KV against one byte-identical golden — the host reference is device-independent, so
         # regenerating it per build would only add float-order noise to the comparison.
@@ -292,7 +299,7 @@ def test_producer_runner_pcc(scenario, tmp_path):
             # Generate the host reference at exactly the pushed depth (isl == chunks * CHUNK_SIZE). The
             # reference forward is chunked-SDPA so RAM stays bounded at any depth; runtime is still O(seq^2),
             # which the per-test timeout accounts for.
-            _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"])
+            _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"], model)
         trace_env["PREFILL_TRACE_DIR"] = trace_dir
     with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_log:
         env = _transport_env(

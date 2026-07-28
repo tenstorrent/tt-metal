@@ -246,7 +246,10 @@ class PrefillModelAdapter(ABC):
 # model is one line here (plus the adapter class in that model's package). Keeping
 # these as strings means importing this common module never imports a model's
 # device/runtime stack — only the selected model is imported, at get_adapter time.
-DEFAULT_MODEL = "deepseek_v3_d_p"
+# Kimi's reference forward is chunked-SDPA (host RAM bounded); the deepseek_v3_d_p reference
+# materializes the full score matrix and OOMs past one chunk, so it can't back the prompt-KV
+# reference generator. Kimi is the default so the unset-PREFILL_MODEL path is memory-safe.
+DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
