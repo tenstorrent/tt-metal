@@ -16,7 +16,6 @@ does the full round-trip: interleaved -> shard -> unshard, and asserts the resul
 equals the original (values are preserved by pure layout conversions).
 
 NOTE: single-core grid so the passed shape is the exact per-core shard shape.
-TODO: match model's exact grid on device (_compute_norm_core_grid / _dram_shard_core_grid).
 """
 
 import pytest

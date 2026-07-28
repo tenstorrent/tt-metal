@@ -17,8 +17,6 @@ Here we shard a tensor along the last dim across the mesh and all-gather it back
 the gathered tensor should span the full (num_devices * shard) width. We assert
 shape/dtype (the emulator default mesh (1,1) is skipped — this op only runs
 multi-device).
-
-# TODO: verify on device.
 """
 
 import pytest

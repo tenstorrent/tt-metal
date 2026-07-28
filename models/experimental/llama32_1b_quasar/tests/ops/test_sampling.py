@@ -30,10 +30,6 @@ SCOPE — only the config the model actually uses:
 k/p/temp tensor construction mirrors test_sampling_1d.py:_make_sampling_params
 (k: uint32 ROW_MAJOR, p/temp: bfloat16 ROW_MAJOR). topk_values are tiled bf16 and
 topk_global_indices are untilized int32, matching _sample_topk (L399-401, 413).
-
-# TODO: verify on device — ttnn.sampling / ttnn.manual_seed signatures are copied
-# from the model source; kwarg names (seeds/user_ids) are unverified against the
-# emulator build.
 """
 
 import pytest

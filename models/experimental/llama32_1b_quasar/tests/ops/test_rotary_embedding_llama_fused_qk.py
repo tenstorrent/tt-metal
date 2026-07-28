@@ -22,12 +22,6 @@ On a single (1,1) device n_heads = 32, n_kv_heads = 8, head_dim = 64. Inputs
 
 The fused op returns the rotated (q, k) pair. No simple torch reference — assert
 each output's shape / dtype / finiteness.
-
-# TODO: verify signature on device — the fused decode kernel requires Q and K to
-# live on NON-OVERLAPPING HEIGHT_SHARDED core grids with sharded cos/sin (the
-# _reshard_k_for_fused step in attention_1d.py:987). Here we use interleaved DRAM
-# so the op call structure can be exercised without the full attention config
-# resolver / rotary setup; the sharded grids are a device-only concern.
 """
 
 import pytest

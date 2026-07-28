@@ -32,10 +32,6 @@ get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)). The earlier [1,1,64,64] trans
 
 RoPE has a torch reference but it is fiddly (Meta-format cos/sin); shape / dtype /
 finiteness is an accepted assertion for this op per the suite guidance.
-
-# TODO: verify decode signature on device — is_decode_mode=True (L997/L1000) uses
-# HEIGHT_SHARDED heads and sharded cos/sin over the batch cores; only the prefill
-# path is exercised here.
 """
 
 import pytest

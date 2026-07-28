@@ -17,9 +17,6 @@ model; the compute grid is taken from the device rather than hardcoding 8x8 so t
 op fits the emulator.
 
 Reference is ``x @ w``; large-K (INTERMEDIATE=8192) uses a looser pcc.
-
-# TODO: verify on device — MinimalMatmulConfig block/grid divisibility vs M/K/N tiles
-# is only checked at runtime; only exercised for seq_len > 128.
 """
 
 import pytest

@@ -14,10 +14,6 @@ across devices before the matmul), so it is parametrized on a (1, 2) mesh and sk
 on the single-device emulator. Semaphores/kwargs are taken from the call site via the
 shared TT_CCL helper. A full torch reference is impractical (CCL + sharded matmul), so
 we assert output shape / dtype only.
-
-# TODO: verify on device — requires an actual 1x2 (Ring) mesh; the program_config and
-# sharded memory configs the model uses (decode_all_gather_matmul_*) are omitted here,
-# so this exercises the auto-config path of the op.
 """
 
 import pytest

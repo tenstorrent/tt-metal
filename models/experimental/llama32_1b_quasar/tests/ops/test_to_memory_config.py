@@ -27,7 +27,6 @@ import ttnn
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 
 # Single-core width-shard grid; passed shape is the exact per-core shard shape.
-# TODO: match model's exact grid on device (_dram_shard_core_grid).
 _GRID = ttnn.CoreGrid(y=1, x=1)
 
 

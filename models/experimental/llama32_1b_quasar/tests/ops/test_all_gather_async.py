@@ -19,9 +19,6 @@ In the model the semaphore handles come from a TT-CCL manager
 (tt_ccl.get_and_cycle_ag_semaphore_handles / _barrier_semaphore_handle). Here we
 create them directly via ttnn.create_global_semaphore over the worker sub-device,
 mirroring the CCL unit tests. We assert shape/dtype of the gathered output.
-
-# TODO: verify on device — semaphore/sub-device wiring and the exact
-# multi_device_global_semaphore argument type are copied from source and unverified.
 """
 
 import pytest

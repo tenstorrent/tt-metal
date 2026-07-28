@@ -15,7 +15,6 @@ configs are (re)built with ``create_sharded_memory_config`` from the real shard
 shapes / strategies used at the call sites.
 
 NOTE: single-core grid so the passed shape is the exact per-core shard shape.
-TODO: match model's exact grid on device (batch_grid / _dram_shard_core_grid).
 """
 
 import pytest

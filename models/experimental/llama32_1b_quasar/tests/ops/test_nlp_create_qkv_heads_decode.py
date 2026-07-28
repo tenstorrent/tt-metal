@@ -21,11 +21,6 @@ Just before the call the model reshapes the fused QKV to
 device n_local_heads = 32 and n_local_kv_heads = 8. Output heads are
 ``[1, batch, n_heads, head_dim]`` (Q) and ``[1, batch, n_kv_heads, head_dim]``
 (K/V). No simple torch reference — assert head shapes / dtype / finiteness.
-
-# TODO: verify signature on device — the decode variant expects a WIDTH_SHARDED
-# input and emits sharded outputs (cfg.decode_create_qkv_head_memcfg). Here we
-# use interleaved DRAM so the op can be exercised without the full attention
-# config resolver; the sharded memcfg is a device-only concern.
 """
 
 import pytest

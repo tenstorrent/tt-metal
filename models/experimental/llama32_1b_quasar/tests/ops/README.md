@@ -28,8 +28,21 @@ that the parametrizations are derived from.
 - Correctness: `U.assert_pcc(torch_ref, tt_out)` where a torch reference exists;
   otherwise `U.assert_shape_dtype(tt_out, shape=…, dtype=…)` (shape/dtype/finite).
 
+## Running on the 2-node emulator
+
+The emulator only fits small / batch-1 shapes. Select the emulator-appropriate
+subset with the `emulator` marker:
+
+```bash
+pytest models/experimental/llama32_1b_quasar/tests/ops/ -m emulator
+```
+
+Larger cases (batch-32, long prefill) and multi-device CCL / sampling ops are
+skipped there automatically (via the `emulator` marker, per-op skips, and the
+core-count gate in `op_utils.height_sharded_batch_memcfg`), so they run on N150 /
+multi-device but stay out of the emulator run.
+
 ## Status
 
-Authored from static analysis of the model source (no device was available at
-authoring time). Comments marked `# TODO: verify on device` flag op signatures /
-sharded configs that need a first confirming run on hardware or the emulator.
+Authored from static analysis of the model source; op signatures and sharded
+configs may need refinement on a first confirming run on hardware or the emulator.

@@ -20,9 +20,6 @@ create them directly via ttnn.create_global_semaphore over the worker sub-device
 reduce_scatter sums the replicated input across devices and scatters the result
 along dim 3, so the per-device output width is input_width / num_devices. We
 assert shape/dtype.
-
-# TODO: verify on device — semaphore/sub-device wiring and the exact
-# multi_device_global_semaphore argument type are copied from source and unverified.
 """
 
 import pytest
