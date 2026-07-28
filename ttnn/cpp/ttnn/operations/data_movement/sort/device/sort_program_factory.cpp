@@ -1215,8 +1215,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
 // single-node coordinator and the worker grid), each binding its own dataflow buffers. Under
 // that shape the per-core-range dataflow-buffer config payload is sized by the largest
 // per-kernel-group buffer count but indexed by the program-global buffer id, so a buffer whose
-// id exceeds that count is serialized out of bounds. See METAL2_PORT_REPORT.md, Handoff points.
-
+// id exceeds that count is serialized out of bounds.
+// Fix tracked in issue #51409.
 ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors) {
     const tt::DataFormat input_tensor_cb_data_format =

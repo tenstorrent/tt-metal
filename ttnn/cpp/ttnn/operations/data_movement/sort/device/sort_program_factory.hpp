@@ -58,7 +58,8 @@ struct SortProgramFactoryCrossCoreDataExchange {
 //
 // NOT PORTED to Metal 2.0: this factory stays on the legacy ProgramDescriptor concept. Porting it
 // needs two WorkUnitSpecs over disjoint node sets, a shape whose dataflow-buffer config payload the
-// dispatch layer currently serializes out of bounds. See METAL2_PORT_REPORT.md, Handoff points.
+// dispatch layer currently serializes out of bounds.
+// Fix tracked in issue #51409.
 // The framework dispatches per factory, so this coexists with the two ported factories above.
 struct SortProgramFactorySingleRowMultiCore {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
