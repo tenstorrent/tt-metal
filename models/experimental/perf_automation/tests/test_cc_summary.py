@@ -37,7 +37,11 @@ def test_table_marks_win_try_and_none(tmp_path):
         ],
     )
     out = summary.render_summary(log, baseline_ms=22.94, model="bge", task="main")
-    assert "MatmulDeviceOperation" in out and "LayerNorm" in out
+    # The label keeps the SHAPE that tells two matmuls apart -- seven identical
+    # "MatmulDeviceOperation" rows made the ladder matrix unreadable -- and drops the redundant
+    # "DeviceOperation" suffix to make room for it.
+    assert "Matmul 1024" in out and "LayerNorm" in out
+    assert "MatmulDeviceOperation" not in out
     assert "✓win" in out and "·try" in out and "—" in out
 
 

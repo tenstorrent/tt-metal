@@ -192,8 +192,20 @@ def _disp_level(label: str) -> str:
 
 
 def _op_label(sig: str, width: int = 34) -> str:
-    name = (sig or "?").strip().split(" ")[0] or "?"
-    return name[:width]
+    """Display label for an op, KEEPING THE SHAPE that distinguishes it.
+
+    This took `split(" ")[0]`, discarding the shape the signature carries -- so five different
+    matmuls (32x4096x14336 ff1/ff3, 32x14336x4096 ff2, 32x4096x6144 QKV, 32x4096x4096 wo,
+    128x4096x14336 prefill) rendered as seven identical `MatmulDeviceOperation` rows in the ladder
+    matrix and the reader could not tell which one a ✓ belonged to. The redundant "DeviceOperation"
+    suffix is dropped to make room, since every op in the table carries it.
+    """
+    s = (sig or "?").strip()
+    if not s:
+        return "?"
+    head, _, rest = s.partition(" ")
+    name = head.replace("DeviceOperation", "").replace("Operation", "") or head
+    return ("%s %s" % (name, rest.replace(" ", ""))).strip()[:width]
 
 
 def _read_json(path) -> object:
@@ -589,10 +601,18 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
     buckets = prof.get("buckets") if isinstance(prof, dict) else None
     if not buckets:
         return []
-    # Says BASELINE, because that is what it reads. It was labelled "latest profile" while sourcing
-    # baseline_profile["buckets"], so the table summed to the starting 2464 ms directly above a
-    # "measured: 714.94 ms" roofline -- two different points in the run, presented as one.
-    out = ["Op breakdown — device time by op class (BASELINE profile · what to target, ranked):"]
+    # STATE WHICH MEASUREMENT THIS IS, do not name it. The variable is called baseline_profile, but
+    # perf_mcp REWRITES that file on every profile, so the word BASELINE was a claim about provenance
+    # the number did not have: on llama3_1_8b_p150 these rows summed to 615.69 ms of device time -- the
+    # PREVIOUS reading -- while the roofline above reported 534.44 ms and the true baseline was
+    # 2464.18 ms. Three points in the run, one of them labelled the other. Printing the total the rows
+    # sum to lets the reader tie the table to a measurement instead of trusting a label.
+    _tot = sum((b.get("device_ms") or 0.0) for b in buckets if isinstance(b, dict))
+    _depth = _depth_label(prof) if isinstance(prof, dict) else ""
+    _hdr_note = "totalling %.2f ms" % _tot if _tot > 0 else "total unknown"
+    if _depth:
+        _hdr_note += " over %s" % _depth
+    out = ["Op breakdown — device time by op class (profile %s · what to target, ranked):" % _hdr_note]
     hdr = f"{'op class':<15} {'device_ms':>10} {'%':>6} {'count':>7} {'bound':>6}  dominant op (shape)"
     out.append(hdr)
     out.append("-" * min(len(hdr) + 30, 118))
@@ -602,7 +622,10 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
         top = (b.get("top_ops") or [{}])[0] if b.get("top_ops") else {}
         dom = str(top.get("op_code", "") or top.get("shape", "")).strip()
         ms = b.get("device_ms") or 0.0
-        pct = b.get("pct") or 0.0
+        # Recomputed against the total of the rows SHOWN, so the column sums to 100%. The stored pct
+        # used a denominator that excluded host_overhead, so host_overhead's own share was overstated
+        # (3.5% of 615.69 rather than 3.4% of 637.24) and the column did not add up.
+        pct = (ms / _tot * 100.0) if _tot > 0 else (b.get("pct") or 0.0)
         cnt = b.get("count") or 0
         bound = (b.get("tags") or {}).get("bound") or "—"
         out.append(f"{str(b.get('id', '?')):<15} {ms:>10.2f} {pct:>5.1f}% {cnt:>7} {bound:>6}  {dom[:52]}")
