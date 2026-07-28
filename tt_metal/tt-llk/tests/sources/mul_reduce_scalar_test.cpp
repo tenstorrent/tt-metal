@@ -29,6 +29,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 
+// The reduction collapses everything into DEST[0], so every DEST access in this
+// kernel targets index 0. Name it once instead of repeating the bare literal.
+static constexpr std::uint32_t DST_INDEX = 0;
+
 // The tile geometry is parametrized by the Python test: the full 32x32 tile
 // (2x2 faces, num_faces=4) plus the 16x32 (1x2, num_faces=2) and 16x16 (1x1,
 // num_faces=1) "tiny tiles". Only num_faces_{r,c}_dim vary; face_r_dim /
@@ -135,20 +139,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
 
     // Step 4 - stage tile 0 into SrcA, fill SrcB with the scaler, clear DEST[0].
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0 /* idst */);
+    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(DST_INDEX);
     _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, 0 /* dst_index */, VectorMode::RC_custom, REDUCE_SCALER);
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0);
+        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
+    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
     _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, 0 /* dst_index */, VectorMode::RC_custom, 0.0f /* clear DEST[0] */);
+        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, 0.0f /* clear DEST[0] */);
 
     // Step 6 - column-reduce every tile, accumulating into DEST[0].
     // (narrow_tile / num_faces are derived internally from the TensorShape.)
-    _llk_math_mul_reduce_column_<MATH_FIDELITY>(0 /* dst_index */, tensor_shape);
+    _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
     for (std::uint32_t i = 1; i < tile_cnt; ++i)
     {
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY>(0 /* dst_index */, tensor_shape);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
     }
 
     // Step 7 - collapse DEST[0] to a single scalar.
@@ -164,7 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_lib_pack_wrappers.h"
+#include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -182,23 +186,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
-    const bool narrow_tile        = tensor_shape.num_faces_c_dim == 1;
 
+    // Blackhole-only test: call the pack LLKs directly (the _wrapper_ helpers exist
+    // only to paper over the WH/BH signature split for dual-arch tests).
     // compute_kernel_hw_startup
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
+        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face);
 
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
-        formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+    // No-src init: packer strides are owned by the hw-configure above, so skip re-programming them here.
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        formats.pack_src, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 
     // mul_reduce_scalar_tile step 5: mask so only the reduced scalar [0] is packed.
     _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_SCALAR>();
 
-    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
+    _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // Single output tile: the scalar lives in DEST[0].
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // mul_reduce_scalar_uninit
