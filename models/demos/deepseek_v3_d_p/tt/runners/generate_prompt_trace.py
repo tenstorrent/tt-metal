@@ -57,14 +57,31 @@ def _load_config(model_path: Path, isl: int):
 
 def _load_prompt_text(prompt: str | None, prompt_file: str | None) -> str:
     if prompt is not None:
-        return prompt
-    if prompt_file is not None:
+        text = prompt
+    elif prompt_file is not None:
         data = json.loads(Path(prompt_file).read_text())
         if isinstance(data, dict):
             data = data.get("prompts", data)
-        item = data[0] if isinstance(data, list) else data
-        return item["prompt"] if isinstance(item, dict) else item
-    raise SystemExit("provide --prompt or --prompt-file")
+        if isinstance(data, list):
+            if not data:
+                raise SystemExit(f"no prompts in {prompt_file}")
+            # The reference forward validates one prompt; a multi-prompt file would silently drop the rest.
+            if len(data) > 1:
+                logger.warning(f"[gen-trace] {prompt_file} holds {len(data)} prompts; using index 0 only")
+            item = data[0]
+        else:
+            item = data
+        if isinstance(item, dict):
+            if "prompt" not in item:
+                raise SystemExit(f'prompt entry missing "prompt" key: {item!r}')
+            text = item["prompt"]
+        else:
+            text = item
+    else:
+        raise SystemExit("provide --prompt or --prompt-file")
+    if not isinstance(text, str) or not text.strip():
+        raise SystemExit("prompt is empty; provide non-empty prompt text")
+    return text
 
 
 def _meta_pe_to_hf(pe: torch.Tensor) -> torch.Tensor:
@@ -97,6 +114,11 @@ def write_trace_dir(out_dir: Path, token_ids: torch.Tensor, ref_kvpe_list, kv_lo
 
 def generate(model: str, prompt_text: str, isl: int, num_layers: int, out_dir: Path) -> Path:
     variant = get_adapter(model)
+    # Sparse/DSA models also keep an index-key cache (config 1); the producer's validation reads its
+    # golden from the trace dir, but this generator writes only the KVPE cache — so reject them loudly
+    # rather than emitting an incomplete golden that crashes downstream on missing index shards.
+    if hasattr(variant.model_config, "INDEX_HEAD_DIM"):
+        raise SystemExit(f"{model} is a sparse/DSA model; prompt-trace generation supports dense-KVPE MLA only")
     model_path = _resolve_model_path(variant)
     config = _load_config(model_path, isl)
     tokenizer = AutoTokenizer.from_pretrained(
@@ -105,6 +127,9 @@ def generate(model: str, prompt_text: str, isl: int, num_layers: int, out_dir: P
     tokenizer.padding_side = "right"
 
     token_ids, attention_mask, _ = tokenize_prompt_to_isl(tokenizer, max_isl=isl, prompt_text=prompt_text)
+    # A prompt that tokenizes to all padding produces a meaningless all-pad golden that still "passes" PCC.
+    if int(attention_mask.sum()) == 0:
+        raise SystemExit("prompt tokenized to zero real tokens (all padding)")
     logger.info(f"[gen-trace] model={model} isl={isl} num_layers={num_layers} tokens={token_ids.shape}")
 
     result = load_and_compute_layer_by_layer(

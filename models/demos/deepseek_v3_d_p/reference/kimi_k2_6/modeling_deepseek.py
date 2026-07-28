@@ -750,20 +750,25 @@ class DeepseekV3Attention(nn.Module):
         # The full score matrix is [num_heads, q_len, kv_seq_len] — the sole O(seq^2) host-memory term,
         # which OOMs long prefill prompts. When the returned weights are not needed (the prefill KV
         # reference), compute attention in head+query-sequence tiles so peak memory is bounded by
-        # HEAD_CHUNK * SEQ_CHUNK * kv_seq_len rather than num_heads * q_len * kv_seq_len. Gated on
-        # q_len > SEQ_CHUNK so shorter prompts keep the exact original path. Numerically equal up to
-        # float accumulation order; the KVPE cache is already written above, so it is unaffected either way.
-        SEQ_CHUNK = 4096
-        HEAD_CHUNK = 16
-        if not output_attentions and q_len > SEQ_CHUNK:
-            assert attention_mask is not None
+        # HEAD_TILE * Q_SEQ_TILE * kv_seq_len rather than num_heads * q_len * kv_seq_len. These are private
+        # host-RAM tiling sizes (a speed/memory trade), unrelated to the prefill CHUNK_SIZE. Gated on
+        # q_len > Q_SEQ_TILE so shorter prompts keep the exact original path. Numerically equal up to float
+        # accumulation order (dropout is a no-op on this eval reference, so eliding it is safe); the KVPE
+        # cache is already written above, so it is unaffected either way.
+        Q_SEQ_TILE = 4096
+        HEAD_TILE = 16
+        if not output_attentions and q_len > Q_SEQ_TILE:
+            assert attention_mask is not None and attention_mask.shape[-2:] == (
+                q_len,
+                kv_seq_len,
+            ), f"attention_mask {tuple(attention_mask.shape)} incompatible with (q_len={q_len}, kv={kv_seq_len})"
             attn_output = query_states.new_empty(bsz, self.num_heads, q_len, self.v_head_dim)
-            for h in range(0, self.num_heads, HEAD_CHUNK):
-                he = min(h + HEAD_CHUNK, self.num_heads)
+            for h in range(0, self.num_heads, HEAD_TILE):
+                he = min(h + HEAD_TILE, self.num_heads)
                 k_h = key_states[:, h:he]
                 v_h = value_states[:, h:he]
-                for s in range(0, q_len, SEQ_CHUNK):
-                    e = min(s + SEQ_CHUNK, q_len)
+                for s in range(0, q_len, Q_SEQ_TILE):
+                    e = min(s + Q_SEQ_TILE, q_len)
                     scores = torch.matmul(query_states[:, h:he, s:e], k_h.transpose(2, 3)) * self.softmax_scale
                     scores = scores + attention_mask[:, :, s:e, :]
                     scores = nn.functional.softmax(scores, dim=-1, dtype=torch.float32).to(query_states.dtype)
