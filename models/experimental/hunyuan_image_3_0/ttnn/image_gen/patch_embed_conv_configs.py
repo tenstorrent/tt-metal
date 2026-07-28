@@ -72,9 +72,12 @@ PATCH_EMBED_CONV_CONFIGS: dict[str, dict[str, Any]] = {
         "reallocate_halo_output": True,
     },
     # grid=8 id=block_abh64_adb1_da0_wdb1 best_us=296.2
+    # abh pinned to 32: 64 (2 tiles) does not divide the production grid=64 output
+    # (128 tiles over 10 cores -> 13 tiles/core, odd), so conv2d_utils silently
+    # selects 32 and logs a warning. 32 is what production already ran.
     "in_conv": {
         "shard_layout": "block",
-        "act_block_h_override": 64,
+        "act_block_h_override": 32,
         "enable_act_double_buffer": True,
         "deallocate_activation": False,
         "enable_weights_double_buffer": True,
@@ -99,18 +102,20 @@ PATCH_EMBED_CONV_CONFIGS: dict[str, dict[str, Any]] = {
         "reallocate_halo_output": False,
     },
     # grid=8 id=block_abh64_adb1_da0_wdb1 best_us=309.0 (sweep 2026-07-16)
+    # abh pinned to 32 — see in_conv.
     "final_in_conv": {
         "shard_layout": "block",
-        "act_block_h_override": 64,
+        "act_block_h_override": 32,
         "enable_act_double_buffer": True,
         "deallocate_activation": False,
         "enable_weights_double_buffer": True,
         "reallocate_halo_output": False,
     },
     # grid=8 id=block_abh64_adb1_da1_wdb1 best_us=143.6 (sweep 2026-07-16)
+    # abh pinned to 32 — see in_conv.
     "final_out_conv": {
         "shard_layout": "block",
-        "act_block_h_override": 64,
+        "act_block_h_override": 32,
         "enable_act_double_buffer": True,
         "deallocate_activation": True,
         "enable_weights_double_buffer": True,
