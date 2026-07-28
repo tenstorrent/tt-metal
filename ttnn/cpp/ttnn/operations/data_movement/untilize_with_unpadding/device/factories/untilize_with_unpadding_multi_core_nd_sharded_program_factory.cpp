@@ -29,10 +29,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
 
     // const auto& a = input;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    const auto& tile = input.tensor_spec().tile();
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -94,6 +95,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
             .buffer_index = src0_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -114,6 +116,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
             .buffer_index = output_cb_index,
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 

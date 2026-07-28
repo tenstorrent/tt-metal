@@ -31,6 +31,18 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
 
+// Face count of the QK-scores / softmax column-vector tiles in the SDPA flash loop: 4 for a full 32x32
+// tile, 2 for a 16x32 tiny tile (single face-row). Set via a program-factory define derived from the Q
+// operand tile height (see sdpa_program_factory / kv_sdpa_fused_program_factory). Defaults to 4.
+#ifndef QK_NUM_FACES
+#define QK_NUM_FACES 4
+#endif
+// Column-vector (first-column) SFPU traversal mode for the online-softmax corrections (max eltwise-max,
+// exp of max-diff, reciprocal of the row sum). VectorMode::C spans both face-rows (rows 0-31) of a full
+// 32x32 tile; VectorMode::None spans the single face-row (rows 0-15) of a 16x32 tiny tile. Using C on a
+// genuine 16x32 tile walks the non-existent second face-row and corrupts the correction (PCC ~0.5-0.9).
+static constexpr VectorMode QK_COL_VECTOR_MODE = (QK_NUM_FACES == 2) ? VectorMode::None : VectorMode::C;
+
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, cbid)));
@@ -155,11 +167,13 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
              * Note that this special invocation of copy_tile is necessary to produce
              * tiles in DST with transposed faces, as `reduce_block_max_row` expects.
              */
+            reconfig_data_format_srca(prev_cb);
             sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
             for (uint32_t i = 0; i < dst_tiles; i++) {
                 const uint32_t cur_max_dst_idx = i;
                 copy_tile(prev_cb, (row_start_idx + i), cur_max_dst_idx);
             }
+            reconfig_data_format_srca(in0_cb);
         }
 
         /**
@@ -174,6 +188,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
         tile_regs_commit();
         tile_regs_wait();
+        pack_reconfig_data_format(out_cb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
             pack_tile<true>(cur_max_dst_idx, out_cb, (row_start_idx + i));
@@ -198,7 +213,7 @@ template <
     uint32_t in0_cb,
     uint32_t scale_cb,
     uint32_t rows,
-    VectorMode vector_mode = VectorMode::C>
+    VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_scale(scale_cb);
@@ -215,11 +230,14 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     cb_in0.wait_front(num_tiles);
     cb_out.reserve_back(rows);
 
+    pack_reconfig_data_format(out_cb);
+
     binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
+        reconfig_data_format_srca(in0_cb);
         tile_regs_acquire();
         reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
         for (uint32_t j = 0; j < cols; j++) {
@@ -227,6 +245,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         }
         reduce_uninit();
         if (do_eltwise_max) {
+            reconfig_data_format_srca(prev_cb);
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, vector_mode);
@@ -242,9 +261,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 }
 
 #ifdef TRISC_MATH
-template <bool legacy_compat = true>
+template <bool legacy_compat = true, VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, (legacy_compat), idst, VectorMode::C);
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, (legacy_compat), idst, vector_mode);
 }
 #endif
 
@@ -294,6 +313,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
+    reconfig_data_format(in0_cb, in1_cb);
 
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
@@ -334,6 +354,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
+                pack_reconfig_data_format(in0_cb);
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_cb);
                 }
@@ -342,6 +363,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             }
 
             if constexpr (do_reduce) {
+                pack_reconfig_data_format(reduce_cb);
                 // While we have results in DST, take advantage of L1 accumulation
                 // to reduce row x cols tiles to rows x 1 tiles.
                 if (u > 0) {
@@ -393,6 +415,8 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
 
     constexpr uint32_t num_tiles = rows * cols;
 
+    reconfig_data_format(in0_cb, in1_cb);
+    pack_reconfig_data_format(out_cb);
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
@@ -477,6 +501,8 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
 #endif
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
+    reconfig_data_format(in0_cb, in1_cb);
+    pack_reconfig_data_format(in0_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -497,6 +523,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
         }
     }
     cb_in1.pop_front(rows);
+    reconfig_data_format_srcb(in0_cb);
 }
 
 template <uint32_t in1_scalar_cb, uint32_t num_tiles>
@@ -550,6 +577,8 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
+    reconfig_data_format(in0_cb, in1_cb);
+    pack_reconfig_data_format(in0_cb);
     add_tiles_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -582,6 +611,8 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     // Postcondition: in1_cb has num_tiles produced
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
+    reconfig_data_format(in0_cb, in1_cb);
+    pack_reconfig_data_format(in0_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -626,7 +657,9 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+// vector_mode selects the column face-row traversal: VectorMode::C spans Face0+Face2 (both face-rows of a
+// full 32x32 tile); VectorMode::None spans Face0 only (the single face-row of a 16x32 tiny tile).
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void exp_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -634,7 +667,7 @@ void exp_tile_first_column(uint32_t idst) {
         calculate_exponential_first_column,
         (SDPA_EXP_APPROX_MODE, scale_bf16),
         idst,
-        VectorMode::C);
+        vector_mode);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
@@ -673,14 +706,14 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 }
 
 #ifdef TRISC_MATH
-template <VectorMode vector_mode = VectorMode::C>
+template <VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fused_max_sub_exp_add_tile, idst, vector_mode, scale_bf16);
 }
 #endif
 
-template <uint32_t scale_fp32, VectorMode vector_mode = VectorMode::C>
+template <uint32_t scale_fp32, VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void correction_block(
     uint32_t cb_worker_max,
     uint32_t cb_worker_sum,
@@ -799,6 +832,8 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(out_cb);
     CircularBuffer cb_in(in_cb);
     CircularBuffer cb_out(out_cb);
     copy_tile_to_dst_init_short(in_cb);
@@ -1071,6 +1106,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
     reconfig_data_format(in1_cb, out_cb);
+    pack_reconfig_data_format(out_cb);
     cb_in1.wait_front(N);
     cb_out.wait_front(M);
 
@@ -1130,6 +1166,8 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     uint32_t start = num_cols - num_padded;
 
+    reconfig_data_format_srca(neginf_cb);
+    pack_reconfig_data_format(out_cb);
     copy_tile_to_dst_init_short(neginf_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1160,6 +1198,8 @@ void apply_partial_mask_lightweight(
     uint32_t num_cols,
     uint32_t num_rows,
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
+    reconfig_data_format_srca(mask_cb);
+    pack_reconfig_data_format(out_cb);
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1196,6 +1236,8 @@ void apply_causal_mask_lightweight(
     uint32_t num_cols,
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
+    reconfig_data_format_srca(mask_cb);
+    pack_reconfig_data_format(out_cb);
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1798,10 +1840,14 @@ void sdpa_inner_loop(
              *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
              * else:
              *  cur_max = max(qk, dim=-1)
+             *
+             * Use the reduce_c overload with cols as a runtime arg which uses standard
+             * reduce_tile + binary_max_tile. The overload with cols as a template arg
+             * is bf16-only but cb_qk_im could be fp32.
              */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
 
             /**
              * sub_exp fuses a few operations.

@@ -118,6 +118,7 @@ jobs:
           sparse-checkout: |
             .github/actions/download-artifact-with-retry
             .github/actions/setup-ttsim
+            .github/scripts/utils/host-load-sidecar.sh
           sparse-checkout-cone-mode: false
           ref: ${{ inputs.ref || github.sha }}
 
@@ -142,7 +143,30 @@ jobs:
           sku: ${{ matrix.test-group.sku }}
           root: ${{ env.TT_METAL_HOME }}
 
+      # ttsim examples run on the simulator (no hardware power telemetry); wrap the run in the
+      # host-load sidecar to capture host CPU/memory/disk/network usage.
+      # The command is written to a file first (a quoted heredoc preserves its
+      # embedded quoting) and run under the sidecar; the report is written to /work/mem_report.json
+      # (uploaded below) and the sidecar propagates the run's exit code so failures still fail the job.
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          cat > /tmp/ttsim_cmd.sh <<'TTSIM_CMD_EOF'
           ${{ matrix.test-group.cmd }}
+          TTSIM_CMD_EOF
+          .github/scripts/utils/host-load-sidecar.sh \
+            --interval 1 \
+            --label "${{ matrix.test-group.name }}" \
+            --output /work/mem_report.json \
+            -- bash --noprofile --norc -eo pipefail /tmp/ttsim_cmd.sh
+      - name: Upload mem report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mem-report-${{ matrix.test-group.name }}
+          # /work/ is mounted from ${{ github.workspace }}; the host-load sidecar writes its
+          # CPU/memory/disk/network report to --output /work/mem_report.json, so upload-artifact
+          # reads it from there.
+          path: ${{ github.workspace }}/mem_report.json
+          if-no-files-found: warn
+          retention-days: 30

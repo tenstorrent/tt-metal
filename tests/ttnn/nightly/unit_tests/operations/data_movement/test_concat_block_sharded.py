@@ -28,6 +28,8 @@ import pytest
 import torch
 import ttnn
 
+from tests.ttnn.utils_for_testing import select_tile
+
 
 def random_tensor(shape, dtype=torch.bfloat16):
     return torch.randn(shape, dtype=dtype)
@@ -48,7 +50,8 @@ def make_block_sharded_config(shard_shape, grid, orientation=ttnn.ShardOrientati
 
 def to_block_sharded(torch_tensor, device, layout, shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR):
     mem = make_block_sharded_config(shard_shape, grid, orientation)
-    tt = ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    tt = ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile)
     return ttnn.to_memory_config(tt, mem)
 
 
@@ -539,8 +542,9 @@ class TestInterleavedToBlockSharded:
         expected = torch.concat([ta, tb], dim=3)
 
         input_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-        a = ttnn.from_torch(ta, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem)
-        b = ttnn.from_torch(tb, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem)
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        a = ttnn.from_torch(ta, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem, tile=tile)
+        b = ttnn.from_torch(tb, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem, tile=tile)
         out_mem = make_block_sharded_config(out_shard, grid)
 
         out = ttnn.concat([a, b], dim=3, memory_config=out_mem)
@@ -558,8 +562,9 @@ class TestInterleavedToBlockSharded:
         expected = torch.concat([ta, tb], dim=2)
 
         input_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-        a = ttnn.from_torch(ta, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem)
-        b = ttnn.from_torch(tb, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem)
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        a = ttnn.from_torch(ta, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem, tile=tile)
+        b = ttnn.from_torch(tb, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem, tile=tile)
         out_mem = make_block_sharded_config(out_shard, grid)
 
         out = ttnn.concat([a, b], dim=2, memory_config=out_mem)
@@ -599,11 +604,22 @@ class TestInterleavedToBlockSharded:
         tb = torch.randn(1, 1, 1, 16)
         expected = torch.concat([ta, tb], dim=3)
 
+        tile = select_tile(ttnn.float32)
         a = ttnn.from_torch(
-            ta, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+            ta,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            tile=tile,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         b = ttnn.from_torch(
-            tb, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+            tb,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            tile=tile,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         shard_spec = ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)

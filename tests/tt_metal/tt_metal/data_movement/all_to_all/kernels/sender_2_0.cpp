@@ -65,4 +65,8 @@ void kernel_main() {
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_subordinates);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_master);
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
+    DeviceTimestampedData("Master Grid Size X", get_arg(args::mst_grid_size_x));
+    DeviceTimestampedData("Master Grid Size Y", get_arg(args::mst_grid_size_y));
+    DeviceTimestampedData("Subordinate Grid Size X", get_arg(args::sub_grid_size_x));
+    DeviceTimestampedData("Subordinate Grid Size Y", get_arg(args::sub_grid_size_y));
 }

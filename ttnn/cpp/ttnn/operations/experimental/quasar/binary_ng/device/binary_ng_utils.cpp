@@ -123,7 +123,7 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
             return fmt::format(
                 compute,
                 root,
-                is_where_op ? "eltwise_where_sfpu_scalar"
+                is_where_op ? "eltwise_where_sfpu_scalar.cpp"
                             : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
         case KernelName::ComputeRowBcastNg:
             return fmt::format(

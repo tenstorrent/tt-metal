@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, select_tile
 
 _bf16_max = torch.finfo(torch.bfloat16).max
 
@@ -49,12 +49,14 @@ def test_unary_max_int32(input_shapes, low, high, scalar, ttnn_dtype, device):
     golden_function = ttnn.get_golden_function(ttnn.maximum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device).to(torch.int32)
 
+    tile = select_tile(ttnn_dtype)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.maximum(tt_in, scalar)
@@ -87,12 +89,14 @@ def test_unary_max_fill_val_fp32(input_shapes, input_val, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.maximum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
+    tile = select_tile(ttnn.float32)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.maximum(tt_in, scalar)
@@ -135,12 +139,14 @@ def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device):
     scalar_tensor = torch.tensor(scalar, dtype=torch.float32).to(torch.bfloat16).expand(input_shapes)
     golden = golden_function(torch_input, scalar_tensor, device=device)
 
+    tile = select_tile(ttnn.bfloat16)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.maximum(tt_in, scalar)
@@ -168,12 +174,14 @@ def test_unary_max_bf16(input_shapes, low, high, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.maximum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
+    tile = select_tile(ttnn.bfloat16)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.maximum(tt_in, scalar)
@@ -203,12 +211,14 @@ def test_unary_max_fp32(input_shapes, low, high, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.maximum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
+    tile = select_tile(ttnn.float32)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.maximum(tt_in, scalar)
@@ -233,19 +243,23 @@ def test_unary_max_fp32_opt(input_shapes, device):
 
     cq_id = 0
 
+    tile = select_tile(ttnn.float32)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
+    tile = select_tile(ttnn.float32)
     tt_out = ttnn.from_torch(
         output_tensor,
         dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     ttnn.maximum(tt_in, scalar, output_tensor=tt_out, queue_id=cq_id)

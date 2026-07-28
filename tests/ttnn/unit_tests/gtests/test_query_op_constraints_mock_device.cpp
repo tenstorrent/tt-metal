@@ -6,6 +6,9 @@
 
 #include <gtest/gtest.h>
 
+#include <any>
+#include <optional>
+
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
@@ -26,6 +29,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -356,6 +360,157 @@ TEST_F(QueryOpConstraintsMockDevice, Matmul) {
 }
 
 // ============================================================================
+// Capture the ttnn-auto-selected program config through the uniform query API
+// ============================================================================
+
+TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
+    const auto spec_a = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+    const auto spec_b = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 128, 64}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    auto initial_state = experimental::extract_mock_allocator_state(*mock_device_);
+    ASSERT_TRUE(initial_state.is_empty(BufferType::L1));
+
+    // Same op-agnostic entry point every op uses. No explicit program config: ttnn auto-selects one
+    // internally, and the query's built-in capture records it into captured_config.
+    auto out = ttnn::graph::query_op_constraints_with_initial_state(
+        ttnn::matmul,
+        mock_device_.get(),
+        initial_state,
+        spec_a,
+        spec_b,
+        false,  // transpose_a
+        false,  // transpose_b
+        ttnn::L1_MEMORY_CONFIG,
+        DataType::BFLOAT16,
+        std::nullopt,   // program_config
+        std::nullopt,   // activation
+        std::nullopt,   // compute_kernel_config
+        std::nullopt,   // core_grid
+        std::nullopt,   // output_tile
+        std::nullopt,   // optional_output_tensor
+        std::nullopt,   // global_cb
+        std::nullopt);  // sub_device_id
+
+    EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << out.response.error_message.value_or("none");
+
+    // Captured, and unpacks (above the API) to the concrete matmul config type.
+    ASSERT_TRUE(out.captured_config.has_value());
+    const auto& captured = std::any_cast<const ttnn::operations::matmul::MatmulProgramConfig&>(*out.captured_config);
+
+    // Cross-check: feeding the captured config back in as an explicit program config reproduces the
+    // op's own kernel footprint — i.e. we captured the config the op actually ran, not an
+    // approximation. This round-trip is the contract every op extractor must satisfy.
+    auto verify = ttnn::graph::query_op_constraints_with_initial_state(
+        ttnn::matmul,
+        mock_device_.get(),
+        initial_state,
+        spec_a,
+        spec_b,
+        false,
+        false,
+        ttnn::L1_MEMORY_CONFIG,
+        DataType::BFLOAT16,
+        std::make_optional(captured),  // explicit config = the captured one
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
+
+    EXPECT_EQ(verify.response.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << verify.response.error_message.value_or("none");
+    EXPECT_EQ(verify.response.resource_usage.cb_peak_size_per_core, out.response.resource_usage.cb_peak_size_per_core);
+    EXPECT_EQ(
+        verify.response.resource_usage.l1_buffers_peak_per_core, out.response.resource_usage.l1_buffers_peak_per_core);
+}
+
+// Requesting a width-sharded output drives ttnn to auto-select a 1D (multi-cast) matmul program
+// config — a different variant than the interleaved case — and the query still captures it and
+// round-trips it to the same footprint.
+TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
+    // M=512 (16 tiles), K=256 (8 tiles), N=1024 (32 tiles).
+    const auto spec_a = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 512, 256}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+    const auto spec_b = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 256, 1024}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    // Width-shard the [512, 1024] output across an 8-core row: each core holds the full height
+    // (512) and 1024/8 = 128 columns.
+    const auto width_sharded = MemoryConfig{
+        TensorMemoryLayout::WIDTH_SHARDED,
+        BufferType::L1,
+        ShardSpec{
+            CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 0}}}},
+            {512, 128},
+            ShardOrientation::ROW_MAJOR}};
+
+    auto initial_state = experimental::extract_mock_allocator_state(*mock_device_);
+    ASSERT_TRUE(initial_state.is_empty(BufferType::L1));
+
+    auto out = ttnn::graph::query_op_constraints_with_initial_state(
+        ttnn::matmul,
+        mock_device_.get(),
+        initial_state,
+        spec_a,
+        spec_b,
+        false,          // transpose_a
+        false,          // transpose_b
+        width_sharded,  // width-sharded output memory config
+        DataType::BFLOAT16,
+        std::nullopt,   // program_config — let ttnn auto-select
+        std::nullopt,   // activation
+        std::nullopt,   // compute_kernel_config
+        std::nullopt,   // core_grid
+        std::nullopt,   // output_tile
+        std::nullopt,   // optional_output_tensor
+        std::nullopt,   // global_cb
+        std::nullopt);  // sub_device_id
+
+    EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << out.response.error_message.value_or("none");
+
+    ASSERT_TRUE(out.captured_config.has_value());
+    const auto& captured = std::any_cast<const ttnn::operations::matmul::MatmulProgramConfig&>(*out.captured_config);
+    // A width-sharded output yields the 1D multi-cast config, not the interleaved 2D one.
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(captured));
+
+    auto verify = ttnn::graph::query_op_constraints_with_initial_state(
+        ttnn::matmul,
+        mock_device_.get(),
+        initial_state,
+        spec_a,
+        spec_b,
+        false,
+        false,
+        width_sharded,
+        DataType::BFLOAT16,
+        std::make_optional(captured),  // explicit config = the captured one
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
+
+    EXPECT_EQ(verify.response.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << verify.response.error_message.value_or("none");
+    EXPECT_EQ(verify.response.resource_usage.cb_peak_size_per_core, out.response.resource_usage.cb_peak_size_per_core);
+    EXPECT_EQ(
+        verify.response.resource_usage.l1_buffers_peak_per_core, out.response.resource_usage.l1_buffers_peak_per_core);
+}
+
+// ============================================================================
 // query_op_constraints_with_initial_state — pure state-in / state-out variant
 // ============================================================================
 
@@ -384,6 +539,10 @@ TEST_F(QueryOpConstraintsMockDevice, WithInitialStateReturnsResponseAndNewState)
 
     // new_state reflects the op output allocated on top of the (empty) initial state.
     EXPECT_GT(out.new_state.total_allocated_size(BufferType::L1), 0u);
+
+    // An op with no registered program-config extractor captures nothing; the always-on capture is
+    // transparent to such ops.
+    EXPECT_FALSE(out.captured_config.has_value());
 }
 
 TEST_F(QueryOpConstraintsMockDevice, WithInitialStateThreadsStateAcrossOps) {

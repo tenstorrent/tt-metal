@@ -7,7 +7,7 @@ import pytest
 import torch
 import random
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_ulp, select_tile
 
 pytestmark = pytest.mark.use_module_device
 
@@ -81,11 +81,20 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
     else:
         torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16) * 100 - 50
 
+    tile = select_tile(ttnn.bfloat16)
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
@@ -150,8 +159,13 @@ def test_ND_scalar_bcast(device, shapes, ttnn_fn):
     golden_fn = ttnn.get_golden_function(ttnn_fn)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
 
+    tile = select_tile(ttnn.bfloat16)
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     input_tensor_b = torch_input_tensor_b
 

@@ -30,7 +30,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
     const Tensor& v = use_mla ? tensors.k : tensors.v.value();
-
+    const auto input_tile = q.tensor_spec().tile();
+    const auto input_tile_width = input_tile.get_width();
+    const auto input_tile_hw = input_tile.get_tile_hw();
     // Basic tensor properties
     for (const auto* input_tensor : {&q, &k, &v}) {
         TT_FATAL(input_tensor->storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
@@ -42,6 +44,11 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             "Data type of input tensor must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
             input_tensor->dtype());
         TT_FATAL(!input_tensor->is_sharded(), "Operands to SDPA need to be DRAM/L1 interleaved");
+        TT_FATAL(
+            input_tensor->tensor_spec().tile() == input_tile,
+            "Inputs to SDPA must have the same tile size, expected {}, got {}",
+            input_tile,
+            input_tensor->tensor_spec().tile());
     }
 
     auto validate_padding = [&](const Tensor& tensor) {
@@ -105,15 +112,15 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             auto k_chunk_size = attrs.program_config->k_chunk_size;
 
             TT_FATAL(
-                q_chunk_size % tt::constants::TILE_WIDTH == 0,
+                q_chunk_size % input_tile_width == 0,
                 "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
                 q_chunk_size,
-                tt::constants::TILE_WIDTH);
+                input_tile_width);
             TT_FATAL(
-                k_chunk_size % tt::constants::TILE_WIDTH == 0,
+                k_chunk_size % input_tile_width == 0,
                 "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
-                tt::constants::TILE_WIDTH);
+                input_tile_width);
         }
     };
 
@@ -268,15 +275,15 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             auto k_chunk_size = attrs.program_config->k_chunk_size;
 
             TT_FATAL(
-                q_chunk_size % tt::constants::TILE_WIDTH == 0,
+                q_chunk_size % input_tile_width == 0,
                 "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
                 q_chunk_size,
-                tt::constants::TILE_WIDTH);
+                input_tile_width);
             TT_FATAL(
-                k_chunk_size % tt::constants::TILE_WIDTH == 0,
+                k_chunk_size % input_tile_width == 0,
                 "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
-                tt::constants::TILE_WIDTH);
+                input_tile_width);
 
             if (legacy_chunked) {
                 // Validate that chunk_start_idx is a multiple of q_chunk_size
@@ -393,7 +400,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         // The writer loads cu_window_seqlens into a single CB tile and the generator indexes the whole
         // array from it, so the element count is bounded by one uint32 tile (TILE_HW entries). Supporting
         // more would require a multi-tile load in writer_interleaved.cpp / windowed_mask_gen.hpp.
-        constexpr uint32_t max_cu_window_seqlens = tt::constants::TILE_HW;  // 1024 uint32 per tile
+        const uint32_t max_cu_window_seqlens = input_tile_hw;  // 1024 uint32 per tile
         TT_FATAL(
             cu_eles >= 2 && cu_eles <= max_cu_window_seqlens,
             "cu_window_seqlens must have between 2 and {} elements, got {}.",
@@ -428,7 +435,10 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
     }
-    return TensorSpec(shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
+    return TensorSpec(
+        shape,
+        TensorLayout(
+            tensors.q.dtype(), PageConfig(Layout::TILE, tensors.q.tensor_spec().tile()), attrs.output_mem_config));
 }
 
 SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(

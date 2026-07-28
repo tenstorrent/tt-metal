@@ -140,8 +140,6 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
 
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    reader_run.runtime_arg_values.reserve(num_cores_total);
-    writer_run.runtime_arg_values.reserve(num_cores_total);
 
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -161,19 +159,27 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         }
 
         const NodeCoord node = core;
-        reader_run.runtime_arg_values.push_back(
-            {node,
-             {{"num_sticks_per_core_read", num_sticks_per_core_read},
-              {"num_read_per_barrier", num_read_per_barrier},
-              {"start_id", curr_sticks_read},
-              {"curr_c", curr_c},
-              {"curr_h", curr_h},
-              {"curr_n", curr_n}}});
-        writer_run.runtime_arg_values.push_back(
-            {node,
-             {{"num_sticks_per_core_read", num_sticks_per_core_read},
-              {"num_read_per_barrier", num_read_per_barrier},
-              {"start_id", curr_sticks_write}}});
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            node,
+            {
+                {"num_sticks_per_core_read", num_sticks_per_core_read},
+                {"num_read_per_barrier", num_read_per_barrier},
+                {"start_id", curr_sticks_read},
+                {"curr_c", curr_c},
+                {"curr_h", curr_h},
+                {"curr_n", curr_n},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_sticks_per_core_read", num_sticks_per_core_read},
+                {"num_read_per_barrier", num_read_per_barrier},
+                {"start_id", curr_sticks_write},
+            });
 
         curr_sticks_write += num_sticks_per_core;
 

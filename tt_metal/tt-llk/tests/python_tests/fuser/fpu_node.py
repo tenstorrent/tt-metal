@@ -92,6 +92,7 @@ class FpuNode:
     ):
         if self.unpacker is None or config.skip_unpack_init:
             return ""
+        config.sentinel.ensure_unpack_buf_desc_ids(self)
         return self.unpacker.init(operation, config, self, block)
 
     def unpack_run(

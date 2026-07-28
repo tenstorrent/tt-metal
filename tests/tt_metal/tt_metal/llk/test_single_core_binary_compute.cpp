@@ -365,11 +365,11 @@ bool single_core_binary(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .math_fidelity = test_config.math_fidelity,
+            .fpu_math_fidelity = test_config.math_fidelity,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .math_fidelity = test_config.math_fidelity,
+            .fpu_math_fidelity = test_config.math_fidelity,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -428,25 +428,25 @@ bool single_core_binary(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", input0_dram_buffer->address()},
-                   {"src0_bank_id", 0u},
-                   {"src1_addr", input1_dram_buffer->address()},
-                   {"src1_bank_id", 0u},
-                   {"num_tiles", num_tiles_u},
-                   {"src2_addr", input2_dram_buffer->address()},
-                   {"src2_bank_id", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", input0_dram_buffer->address()},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", input1_dram_buffer->address()},
+                 {"src1_bank_id", 0u},
+                 {"num_tiles", num_tiles_u},
+                 {"src2_addr", input2_dram_buffer->address()},
+                 {"src2_bank_id", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node, {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values =
-                {{node, {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);

@@ -166,12 +166,13 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = L1_PRODUCER,
-            .runtime_arg_values = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_CONSUMER,
-            .runtime_arg_values =
-                {{.node = node, .args = {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}),
         },
     };
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
@@ -276,12 +277,13 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = L1_BATCHED_PRODUCER,
-            .runtime_arg_values = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_CONSUMER,
-            .runtime_arg_values =
-                {{.node = node, .args = {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}),
         },
     };
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};

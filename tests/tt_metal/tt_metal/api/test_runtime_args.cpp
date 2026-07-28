@@ -1111,13 +1111,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
     experimental::ProgramRunArgs part1;
     part1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = K1,
-        .runtime_arg_values = {{node, {{"address", address_1}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
         .common_runtime_arg_values = {{"value", value_1}},
     }};
     experimental::ProgramRunArgs part2;
     part2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = K2,
-        .runtime_arg_values = {{node, {{"address", address_2}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
         .common_runtime_arg_values = {{"value", value_2}},
     }};
 
@@ -1174,7 +1174,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
     experimental::ProgramRunArgs params1;
     params1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = {{node, {{"address", address_1}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
         .common_runtime_arg_values = {{"value", value_1}},
     }};
     experimental::SetProgramRunArgs(prog, params1);
@@ -1184,7 +1184,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
     experimental::ProgramRunArgs params2;
     params2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = {{node, {{"address", address_2}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
         .common_runtime_arg_values = {{"value", value_2}},
     }};
     experimental::UpdateProgramRunArgs(prog, params2);

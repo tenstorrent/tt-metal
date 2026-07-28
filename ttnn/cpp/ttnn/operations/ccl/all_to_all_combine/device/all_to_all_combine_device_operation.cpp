@@ -116,20 +116,14 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
 
 ttsl::hash::hash_t AllToAllCombineDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Workaround for PR #44408: the cross_device_semaphore and init_semaphore
-    // L1 addresses are baked into the cached program at first miss and never
-    // refreshed on cache hit (the descriptor framework only re-patches Buffer*
-    // slots).  Hash the input tensor buffer addresses so any allocation churn
-    // -- e.g. the failing test reallocating input tensors per iter -- forces
-    // a fresh build with current semaphore addresses.  Stable across trace
-    // replays that reuse the same buffers, so trace tests still cache-hit.
+    // Key on operation attributes + tensor specs only. Input/output buffer base addresses are
+    // refreshed on every cache hit via BufferBinding (Buffer* runtime-arg slots), and the two
+    // GlobalSemaphores live on WorkloadDescriptor::semaphores -- kept alive for the lifetime of
+    // the cached MeshWorkload, so their baked L1 addresses stay valid across hits. Hashing buffer
+    // addresses here (former PR #44408/#45332 workaround) only forced a full workload rebuild on
+    // every reallocation, defeating the program cache on non-trace dispatch.
     return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<AllToAllCombineDeviceOperation>,
-        attrs,
-        tensor_args,
-        tensor_args.input_tensor.buffer()->address(),
-        tensor_args.mapping_tensor.buffer()->address(),
-        tensor_args.metadata_tensor.buffer()->address());
+        ttsl::hash::type_hash<AllToAllCombineDeviceOperation>, attrs, tensor_args);
 }
 
 AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperation::compute_output_specs(

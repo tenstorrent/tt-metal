@@ -621,7 +621,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     // self-loops the borrowed ACT_SHARDED (input address source) and READER_INDICES.
     m2::DataMovementHardwareConfig act_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        act_hw = m2::DataMovementGen2Config{};
+        // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR/ACT DFB via per-window "stick"
+        // sub-tile NOC reads; that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
+        // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
+        act_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
     }
@@ -805,15 +808,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         uint32_t core_y = core_index / full_core_grid.x;
         CoreCoord core(core_x, core_y);
 
-        act_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"this_core_x", core_x},
-                    {"this_core_y", core_y},
-                    {"num_cores_x", full_core_grid.x},
-                },
-        });
+        m2::KernelRunArgs::RuntimeArgValues& act_rtas = act_run_args.runtime_arg_values;
+        m2::AddRuntimeArgsForNode(
+            act_rtas,
+            core,
+            {
+                {"this_core_x", core_x},
+                {"this_core_y", core_y},
+                {"num_cores_x", full_core_grid.x},
+            });
         // X/Y mcast lookup tables as per-node varargs.
         m2::AdvancedKernelRunArgs::Varargs varargs;
         varargs.reserve(act_mcast_noc_x.size() + act_mcast_noc_y.size());
@@ -822,14 +825,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         act_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
 
         if (core_index < total_num_active_cores) {
-            weights_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args =
-                    {
-                        {"init_weight_start_tile_id", core_index * weight_block_w_ntiles},
-                        {"is_active", (uint32_t)(core_index < output_num_cores)},
-                    },
-            });
+            m2::KernelRunArgs::RuntimeArgValues& weights_rtas = weights_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                weights_rtas,
+                core,
+                {
+                    {"init_weight_start_tile_id", core_index * weight_block_w_ntiles},
+                    {"is_active", (uint32_t)(core_index < output_num_cores)},
+                });
         }
     }
 

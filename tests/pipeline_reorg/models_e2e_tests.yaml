@@ -337,13 +337,14 @@
 
 - name: Qwen3.6-27B e2e tests
   cmd: |
-    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 45
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
@@ -699,3 +700,14 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+
+# ── Panoptic DeepLab ───────────────────────────────────────────────
+- name: panoptic-deeplab e2e tests
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
+  model: panoptic-deeplab
+  skus:
+    bh_p150b_civ2:
+      timeout: 18
+      tier: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield

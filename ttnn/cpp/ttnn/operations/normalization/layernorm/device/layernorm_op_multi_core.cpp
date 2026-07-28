@@ -135,8 +135,9 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const auto& input_tile = a.tensor_spec().tile();
+    const uint32_t tile_height = input_tile.get_height();
+    const uint32_t tile_width = input_tile.get_width();
 
     // Data span in tiles, rounded up to tile boundaries
     uint32_t Wt = Wp / tile_width;
@@ -157,14 +158,14 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
                                              : tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
 
-    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t in_single_tile_size = input_tile.get_tile_size(in_data_format);
+    uint32_t single_tile_size = input_tile.get_tile_size(cb_data_format);
+    uint32_t out_single_tile_size = input_tile.get_tile_size(out_data_format);
+    uint32_t bfloat16_tile_size = input_tile.get_tile_size(tt::DataFormat::Float16_b);
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
-    uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
-    uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
+    uint32_t scaler_tile_size = input_tile.get_tile_size(scaler_cb_data_format);
+    uint32_t gamma_single_tile_size = input_tile.get_tile_size(gamma_cb_data_format);
+    uint32_t beta_single_tile_size = input_tile.get_tile_size(beta_cb_data_format);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
@@ -663,7 +664,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     //                      Build CBDescriptors
     ////////////////////////////////////////////////////////////////////////////
     // Helper lambda to create a CBDescriptor
-    auto make_cb_descriptor = [&all_cores](
+    auto make_cb_descriptor = [&all_cores, &input_tile](
                                   uint32_t total_size,
                                   uint8_t buffer_index,
                                   tt::DataFormat data_format,
@@ -672,8 +673,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         CBDescriptor cb_desc;
         cb_desc.total_size = total_size;
         cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(
-            CBFormatDescriptor{.buffer_index = buffer_index, .data_format = data_format, .page_size = page_size});
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = buffer_index, .data_format = data_format, .page_size = page_size, .tile = input_tile});
         cb_desc.buffer = buffer;
         return cb_desc;
     };
@@ -709,7 +710,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             cb18_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
                 .data_format = cb_data_format,
-                .page_size = single_tile_size});
+                .page_size = single_tile_size,
+                .tile = input_tile});
         }
         program_descriptor.cbs.push_back(std::move(cb18_desc));
     }
@@ -734,7 +736,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             cb19_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
                 .data_format = cb_data_format,
-                .page_size = single_tile_size});
+                .page_size = single_tile_size,
+                .tile = input_tile});
         }
         program_descriptor.cbs.push_back(std::move(cb19_desc));
     }
@@ -810,7 +813,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
                 cb23_desc.format_descriptors.push_back(CBFormatDescriptor{
                     .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
                     .data_format = cb_data_format,
-                    .page_size = single_tile_size});
+                    .page_size = single_tile_size,
+                    .tile = input_tile});
             }
             program_descriptor.cbs.push_back(std::move(cb23_desc));
         }
@@ -827,7 +831,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         recip_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_25,
             .data_format = reciprocal_cb_data_format,
-            .page_size = reciprocal_CB_size_bytes});
+            .page_size = reciprocal_CB_size_bytes,
+            .tile = input_tile});
         recip_cb_desc.buffer = recip_tensor.value().buffer();
         program_descriptor.cbs.push_back(std::move(recip_cb_desc));
     }

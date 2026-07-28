@@ -6,6 +6,8 @@ import torch
 import ttnn
 import pytest
 
+from tests.ttnn.utils_for_testing import select_tile
+
 pytestmark = pytest.mark.use_module_device
 
 
@@ -70,7 +72,8 @@ def test_typecast_sharded_fp32_bf16(
     torch_input = torch.rand(shape, dtype=torch_dtype) * (high - low) + low
 
     # Convert to ttnn and move to sharded memory
-    tt_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(input_dtype, output_dtype)
+    tt_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_input_sharded = ttnn.to_memory_config(tt_input, shard_config)
 
     # Perform typecast
@@ -126,8 +129,14 @@ def test_typecast_interleaved(shape, input_dtype, output_dtype, memory_config, d
     torch_input = torch.rand(shape, dtype=torch_dtype) * (high - low) + low
 
     # Convert to ttnn with specified memory config
+    tile = select_tile(input_dtype, output_dtype)
     tt_input = ttnn.from_torch(
-        torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        torch_input,
+        dtype=input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=memory_config,
     )
 
     # Perform typecast
@@ -197,7 +206,10 @@ def test_typecast_sharded_bfloat16_to_bfloat8b(shape, shard_shape, core_grid, sh
     torch_input = torch.rand(shape, dtype=torch.bfloat16) * (high - low) + low
 
     # Create bfloat16 input on device (interleaved)
-    tt_input_interleaved = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_input_interleaved = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device
+    )
 
     # Golden: typecast on interleaved tensor (same device quantization path)
     tt_golden = ttnn.typecast(tt_input_interleaved, ttnn.bfloat8_b)
@@ -263,7 +275,10 @@ def test_typecast_sharded_bfloat8b_to_bfloat16(shape, shard_shape, core_grid, sh
     torch_input = torch.rand(shape, dtype=torch.bfloat16) * (high - low) + low
 
     # Create bfloat8_b input on device (interleaved)
-    tt_input_interleaved = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat8_b, ttnn.bfloat16)
+    tt_input_interleaved = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, tile=tile, device=device
+    )
 
     # Golden: typecast on interleaved tensor (same device path)
     tt_golden = ttnn.typecast(tt_input_interleaved, ttnn.bfloat16)
@@ -301,10 +316,14 @@ def test_bfloat8b_from_torch_vs_typecast_differ(device):
     torch_input = torch.rand(shape, dtype=torch.bfloat16) * 200.0 - 100.0  # Range [-100, 100]
 
     # Method 1: from_torch directly to bfloat8_b (host-side quantization)
-    tt_from_torch = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tile_bfp8 = select_tile(ttnn.bfloat8_b)
+    tt_from_torch = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, tile=tile_bfp8, device=device
+    )
 
     # Method 2: from_torch to bfloat16, then typecast to bfloat8_b (device-side quantization)
-    tt_bfloat16 = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_bfloat16 = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_typecast = ttnn.typecast(tt_bfloat16, ttnn.bfloat8_b)
 
     # Convert both to torch for comparison
@@ -350,7 +369,8 @@ def test_typecast_sharded_output_stays_sharded(shape, shard_shape, core_grid, sh
     )
 
     torch_input = torch.rand(shape, dtype=torch.float32)
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32, ttnn.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_input_sharded = ttnn.to_memory_config(tt_input, shard_config)
 
     assert tt_input_sharded.is_sharded(), "Input should be sharded"

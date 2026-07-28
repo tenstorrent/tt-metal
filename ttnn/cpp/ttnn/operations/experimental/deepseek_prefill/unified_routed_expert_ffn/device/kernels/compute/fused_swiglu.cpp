@@ -437,7 +437,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // each output tile costs 2 dst slots. With fp32_dest_acc_en=false the MATH thread
 // has 8 dst tiles (DST_CAPACITY in the program factory), so we stream the block in
 // chunks of <=4 output tiles (<=8 dst). The activated CB is drained count-based by
-// the reader (cb_wait_front(cb_activated, d_in0_block_num_tiles)), so the push
+// the reader (cb_activated_obj.wait_front(d_in0_block_num_tiles)), so the push
 // granularity here is free and need not match out_subblock_num_tiles.
 template <uint32_t out_block_num_tiles>
 FORCE_INLINE void swiglu_oai_activation_phase(
@@ -451,8 +451,12 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     constexpr uint32_t kDstCapacity = kFp32DestAccEn ? 4u : 8u;
     constexpr uint32_t kActChunk = kDstCapacity / 2;
 
-    cb_wait_front(gate_partials_cb_id, out_block_num_tiles);
-    cb_wait_front(up_partials_cb_id, out_block_num_tiles);
+    CircularBuffer gate_partials_cb(gate_partials_cb_id);
+    CircularBuffer up_partials_cb(up_partials_cb_id);
+    CircularBuffer activated_cb(activated_cb_id);
+
+    gate_partials_cb.wait_front(out_block_num_tiles);
+    up_partials_cb.wait_front(out_block_num_tiles);
 
     PACK((pack_reconfig_data_format(activated_cb_id)));
     // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
@@ -478,15 +482,15 @@ FORCE_INLINE void swiglu_oai_activation_phase(
         }
         tile_regs_commit();
         tile_regs_wait();
-        cb_reserve_back(activated_cb_id, c);
+        activated_cb.reserve_back(c);
         for (uint32_t j = 0; j < c; ++j) {
             pack_tile(j, activated_cb_id);
         }
-        cb_push_back(activated_cb_id, c);
+        activated_cb.push_back(c);
         tile_regs_release();
     }
-    cb_pop_front(gate_partials_cb_id, out_block_num_tiles);
-    cb_pop_front(up_partials_cb_id, out_block_num_tiles);
+    gate_partials_cb.pop_front(out_block_num_tiles);
+    up_partials_cb.pop_front(out_block_num_tiles);
 }
 #endif
 

@@ -56,10 +56,9 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
  * These mirror the unary/ternary SFPU_UNARY_INIT* macros and delegate to
  * `ckernel::llk_math_eltwise_binary_sfpu_init<SfpuType::OP>` (defined in
  * `llk_math_eltwise_binary_sfpu_init.h`). On Quasar that wrapper is itself
- * a thin shim around `_llk_math_eltwise_sfpu_init_()`, matching what the
- * hand-written `llk_math_eltwise_binary_sfpu_binop_init` wrappers do
- * (the `SfpuType` template parameter is unused on Quasar but kept for API
- * parity with BH/WH).
+ * a thin shim around `_llk_math_eltwise_sfpu_init_()` that then invokes the
+ * init callback (the `SfpuType` template parameter is unused on Quasar but
+ * kept for API parity with BH/WH).
  *
  * SfpuType lives inside `::ckernel::` on Quasar (in llk_defs.h), so the
  * fully-qualified path is `::ckernel::SfpuType::OP`.

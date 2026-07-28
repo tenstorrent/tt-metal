@@ -29,14 +29,20 @@ void push_s2i_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    Buffer* bound_buffer,
+    std::optional<tt::tt_metal::Tile> tile = std::nullopt) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
+    std::optional<TileDescriptor> tile_descriptor = std::nullopt;
+    if (tile) {
+        tile_descriptor = tt::tt_metal::TileDescriptor(tile.value());
+    }
     cb.format_descriptors.push_back(CBFormatDescriptor{
         .buffer_index = static_cast<uint8_t>(cb_index),
         .data_format = data_format,
         .page_size = page_size,
+        .tile = tile_descriptor,
     });
     cb.buffer = bound_buffer;
     desc.cbs.push_back(std::move(cb));
@@ -78,15 +84,27 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
 
     CoreCoord end_core = cores[num_cores - 1];
+    std::optional<tt::tt_metal::Tile> input_tile = std::nullopt;
+    std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
     if (output.layout() == Layout::TILE) {
-        input_unit_size = tt::tile_size(input_cb_data_format);
-        output_unit_size = tt::tile_size(output_cb_data_format);
-        num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
-        num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
+        input_tile = input.tensor_spec().tile();
+        output_tile = output.tensor_spec().tile();
+        input_unit_size = input_tile.value().get_tile_size(input_cb_data_format);
+        output_unit_size = output_tile.value().get_tile_size(output_cb_data_format);
+        const uint32_t tile_height = input_tile.value().get_height();
+        const uint32_t tile_width = input_tile.value().get_width();
+        TT_FATAL(
+            shard_spec.shape[0] % tile_height == 0 && shard_spec.shape[1] % tile_width == 0,
+            "Shard shape {} must be tile {}x{} sized!",
+            shard_spec.shape,
+            tile_height,
+            tile_width);
+        num_units_per_shard_height = shard_spec.shape[0] / tile_height;
+        num_units_per_shard_width = shard_spec.shape[1] / tile_width;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = input.padded_shape()[-1] / tile_width;
         num_units_offset = num_units_per_row;
-        num_units_height = (input.physical_volume() / input.padded_shape()[-1]) / TILE_HEIGHT;
+        num_units_height = (input.physical_volume() / input.padded_shape()[-1]) / tile_height;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
@@ -144,7 +162,8 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
         num_input_units * input_page_size,
         input_page_size,
         used_cores,
-        /*bound_buffer=*/src_buffer);
+        /*bound_buffer=*/src_buffer,
+        input_tile);
 
     if (convert_df) {
         out_cb_index = CBIndex::c_16;
@@ -156,7 +175,8 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
             num_input_units * output_page_size,
             output_page_size,
             used_cores,
-            /*bound_buffer=*/nullptr);
+            /*bound_buffer=*/nullptr,
+            output_tile);
     }
 
     // Reader kernel (sharded input streamed in via globally-allocated CB).

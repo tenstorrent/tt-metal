@@ -29,10 +29,31 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
     TT_FATAL(qs[0] == 1, "kv_sdpa: batch must be 1 (got {})", qs[0]);
     const uint32_t NQH = qs[1], NKH = ks[1];
     TT_FATAL(NKH >= 1 && NQH % NKH == 0, "kv_sdpa: NQH ({}) must be a multiple of NKH ({})", NQH, NKH);
-    TT_FATAL(qs[2] == TILE_HEIGHT, "kv_sdpa: query length must be exactly one tile ({}); got {}", TILE_HEIGHT, qs[2]);
+
+    // Tiny-tile support: the query tile-row may be shorter than 32 (tiny tile), but the tile width
+    // must stay 32 and blocked (face-packed) dtypes cannot use tiny heights. All tile math below is
+    // derived from the tensors' actual tiles rather than the global 32x32 constants.
+    const auto q_tile = ta.q.tensor_spec().tile();
+    const auto k_tile = ta.k.tensor_spec().tile();
+    const auto v_tile = ta.v.tensor_spec().tile();
+    const uint32_t q_tile_h = q_tile.get_height();
+    const uint32_t k_tile_h = k_tile.get_height();
+    const uint32_t v_tile_h = v_tile.get_height();
+    for (const auto& [name, tile] : {std::pair{"q", q_tile}, std::pair{"k", k_tile}, std::pair{"v", v_tile}}) {
+        TT_FATAL(
+            tile.get_width() == TILE_WIDTH,
+            "kv_sdpa: {} tile width must be {}, got {}",
+            name,
+            TILE_WIDTH,
+            tile.get_width());
+    }
+
+    TT_FATAL(qs[2] == q_tile_h, "kv_sdpa: query length must be exactly one tile ({}); got {}", q_tile_h, qs[2]);
     TT_FATAL(qs[3] == ks[3] && qs[3] == vs[3], "kv_sdpa: head_dim must match across q/k/v");
     TT_FATAL(qs[3] % TILE_WIDTH == 0, "kv_sdpa: head_dim ({}) must be tile-aligned", qs[3]);
-    TT_FATAL(ks[2] % TILE_HEIGHT == 0 && ks[2] == vs[2], "kv_sdpa: kv length must be tile-aligned and match k/v");
+    TT_FATAL(
+        ks[2] % k_tile_h == 0 && vs[2] % v_tile_h == 0 && ks[2] == vs[2],
+        "kv_sdpa: kv length must be tile-aligned and match k/v");
     if (ta.past_k.has_value()) {
         TT_FATAL(ta.past_v.has_value(), "kv_sdpa: past_k and past_v must be provided together");
         const auto& pks = ta.past_k->padded_shape();
@@ -43,8 +64,11 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
         TT_FATAL(pks.rank() == 4 && pvs.rank() == 4, "kv_sdpa: past_k/past_v must be rank-4");
         TT_FATAL(pks[1] == NKH && pvs[1] == NKH, "kv_sdpa: past_k/past_v NKH must match k/v");
         TT_FATAL(pks[3] == qs[3] && pvs[3] == qs[3], "kv_sdpa: past_k/past_v head_dim must match");
+        const uint32_t pk_tile_h = ta.past_k->tensor_spec().tile().get_height();
+        const uint32_t pv_tile_h = ta.past_v->tensor_spec().tile().get_height();
         TT_FATAL(
-            pks[2] % TILE_HEIGHT == 0 && pks[2] == pvs[2], "kv_sdpa: prefix length must be tile-aligned and match");
+            pks[2] % pk_tile_h == 0 && pvs[2] % pv_tile_h == 0 && pks[2] == pvs[2],
+            "kv_sdpa: prefix length must be tile-aligned and match");
         TT_FATAL(ta.past_k->dtype() == ta.k.dtype(), "kv_sdpa: past_k/k dtype must match (shared reader CB)");
     }
     if (ta.mask.has_value()) {
@@ -55,7 +79,8 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
         TT_FATAL(ms.rank() == 4, "kv_sdpa: attn_mask must be rank-4 [1, 1, Sq, KV]");
         // Mask is broadcast across Q heads (dim 1) and shares the single Sq tile-row; its KV (last)
         // dim must cover the full folded [prefix ; suffix] KV so column-tile g aligns with KV-tile g.
-        TT_FATAL(ms[2] == TILE_HEIGHT, "kv_sdpa: attn_mask Sq must be one tile ({}); got {}", TILE_HEIGHT, ms[2]);
+        const uint32_t mask_tile_h = ta.mask->tensor_spec().tile().get_height();
+        TT_FATAL(ms[2] == mask_tile_h, "kv_sdpa: attn_mask Sq must be one tile ({}); got {}", mask_tile_h, ms[2]);
         TT_FATAL(ms[3] == kv_total, "kv_sdpa: attn_mask KV ({}) must equal prefix+suffix KV ({})", ms[3], kv_total);
         TT_FATAL(ms[3] % TILE_WIDTH == 0, "kv_sdpa: attn_mask KV ({}) must be tile-aligned", ms[3]);
     }

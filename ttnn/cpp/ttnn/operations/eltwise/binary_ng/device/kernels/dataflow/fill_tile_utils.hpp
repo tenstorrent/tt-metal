@@ -6,13 +6,16 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-// Fills one full tile of bfloat16 with a scalar value
-// Scalar is assumed to be a 16-bit value double packed into a u32
+// Fills one full tile of bfloat16 with a scalar value.
+// Scalar is assumed to be a 16-bit value double packed into a u32.
+// tile_height is the number of rows in the tile (<= 32); tile width is fixed at 32.
+template <uint32_t tile_height = 32>
 FORCE_INLINE void fill_with_val_bfloat16(uint32_t l1_write_ptr, uint32_t packed_scalar) {
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
-    // 1024 is the number of elements in a full tile, but since the scalar is packed into a u32,
-    // each iteration writes 2 elements, hence the division by 2
-    for (uint32_t i = 0; i < 512; ++i) {
+    // A tile has tile_height * 32 elements. Since the scalar is packed into a u32,
+    // each iteration writes 2 elements, hence the division by 2.
+    constexpr uint32_t num_words = tile_height * 32 / 2;
+    for (uint32_t i = 0; i < num_words; ++i) {
         ptr[i] = packed_scalar;
     }
 }
@@ -26,7 +29,9 @@ FORCE_INLINE void fill_with_val(uint32_t l1_write_ptr, ScalarT scalar) {
 }
 
 // Reads the very first element of the CB and fills the entire tile with that value.
-// Tile is assumed to have 16-bit elements
+// Tile is assumed to have 16-bit elements.
+// tile_height is the number of rows in the tile (<= 32); tile width is fixed at 32.
+template <uint32_t tile_height = 32>
 FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t l1_write_ptr) {
     auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_ptr);
     const uint16_t first_elem = read_ptr[0];
@@ -36,20 +41,23 @@ FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t l1_write_ptr) {
     // tile is contiguous in memory.
     auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
     // TODO: should I fill one face like this and then use noc to fill the rest?
-    for (uint32_t i = 0; i < 512; ++i) {
+    constexpr uint32_t num_words = tile_height * 32 / 2;
+    for (uint32_t i = 0; i < num_words; ++i) {
         write_ptr[i] = packed_first_elem;
     }
 }
 
 // Reads the very first element of the CB and fills the entire tile with that value.
 // Tile is assumed to have 32-bit elements (float32 or int32).
-template <typename T>
+// tile_height is the number of rows in the tile (<= 32); tile width is fixed at 32.
+template <typename T, uint32_t tile_height = 32>
 FORCE_INLINE void fill_tile_with_first_element(uint32_t l1_write_ptr) {
     auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_write_ptr);
     const T first_elem = read_ptr[0];
 
     auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_write_ptr);
-    for (uint32_t i = 0; i < 1024; ++i) {
+    constexpr uint32_t num_elems = tile_height * 32;
+    for (uint32_t i = 0; i < num_elems; ++i) {
         write_ptr[i] = first_elem;
     }
 }
@@ -343,73 +351,94 @@ FORCE_INLINE void fill_tile_with_first_row_bfp8(uint32_t l1_write_ptr) {
 
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 16-bit elements.
+// tile_height is the number of rows in the tile (<= 32); tile width is fixed at 32.
+// A standard 32x32 tile has 4 16x16 faces (2 face-rows x 2 face-cols); a tiny tile
+// (height <= 16) has a single face-row of 2 (height x 16) faces.
+template <uint32_t tile_height = 32>
 FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t l1_write_ptr) {
-    // Here we have to account for the fact that a tile consists of 4 16x16 faces.
-    // So we have to fill faces 0 and 2 with the first row of face 0, and faces 1 and 3
-    // with the first row of face 1.
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
-    uint32_t row_offset = 8;  // start at second row since first row is source
-    uint32_t num_rows = 15;
+    constexpr uint32_t face_height = tile_height < 16 ? tile_height : 16;
+    constexpr uint32_t words_per_face_row = 8;  // 16 bf16 elements / 2 per u32
+    constexpr uint32_t words_per_face = face_height * words_per_face_row;
+    constexpr uint32_t num_faces = (tile_height / face_height) * 2;  // 2 face columns
 
-    // iterate over face pairs (0,1) and (2,3)
-    for (uint32_t k = 0, face_offset = 0; k < 2; ++k, face_offset += 256) {
-        for (uint32_t row = 0; row < num_rows; ++row) {
-            uint32_t dst_offset = face_offset + row_offset;
-            for (uint32_t col = 0; col < 8; ++col) {
-                ptr[dst_offset + col] = ptr[col];              // left face
-                ptr[dst_offset + col + 128] = ptr[col + 128];  // right face
+    // Cache row 0 of the left face (face 0) and right face (face 1) before overwriting.
+    uint32_t left[words_per_face_row];
+    uint32_t right[words_per_face_row];
+    for (uint32_t c = 0; c < words_per_face_row; ++c) {
+        left[c] = ptr[c];
+        right[c] = ptr[words_per_face + c];
+    }
+
+    // Fill every row of every face: left-column faces get the left row, right-column faces the right row.
+    for (uint32_t f = 0; f < num_faces; ++f) {
+        const uint32_t* src = (f & 1) ? right : left;
+        const uint32_t base = f * words_per_face;
+        for (uint32_t row = 0; row < face_height; ++row) {
+            const uint32_t dst_offset = base + row * words_per_face_row;
+            for (uint32_t c = 0; c < words_per_face_row; ++c) {
+                ptr[dst_offset + c] = src[c];
             }
-            row_offset += 8;
         }
-        row_offset = 0;
-        num_rows = 16;
     }
 }
 
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 32-bit elements (float32/int32).
+// tile_height is the number of rows in the tile (<= 32); tile width is fixed at 32.
+template <uint32_t tile_height = 32>
 FORCE_INLINE void fill_tile_with_first_row(uint32_t l1_write_ptr) {
-    // Tile with 4 faces (16x16) and 32-bit elements
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
+    constexpr uint32_t face_height = tile_height < 16 ? tile_height : 16;
+    constexpr uint32_t words_per_face_row = 16;  // 16 elements, 1 per u32
+    constexpr uint32_t words_per_face = face_height * words_per_face_row;
+    constexpr uint32_t num_faces = (tile_height / face_height) * 2;  // 2 face columns
 
-    uint32_t row_offset = 16;  // Start at the second row (offset by 16 elements)
-    uint32_t num_rows = 15;    // 15 rows to fill per face
+    // Cache row 0 of the left face (face 0) and right face (face 1) before overwriting.
+    uint32_t left[words_per_face_row];
+    uint32_t right[words_per_face_row];
+    for (uint32_t c = 0; c < words_per_face_row; ++c) {
+        left[c] = ptr[c];
+        right[c] = ptr[words_per_face + c];
+    }
 
-    // Iterate over face pairs (0,1) and (2,3)
-    for (uint32_t k = 0, face_offset = 0; k < 2; ++k, face_offset += 512) {  // Offset 512 = 256 elements x 2 faces
-        for (uint32_t row = 0; row < num_rows; ++row) {
-            uint32_t dst_offset = face_offset + row_offset;
-            for (uint32_t col = 0; col < 16; ++col) {
-                ptr[dst_offset + col] = ptr[col];              // left face
-                ptr[dst_offset + col + 256] = ptr[col + 256];  // right face
+    // Fill every row of every face: left-column faces get the left row, right-column faces the right row.
+    for (uint32_t f = 0; f < num_faces; ++f) {
+        const uint32_t* src = (f & 1) ? right : left;
+        const uint32_t base = f * words_per_face;
+        for (uint32_t row = 0; row < face_height; ++row) {
+            const uint32_t dst_offset = base + row * words_per_face_row;
+            for (uint32_t c = 0; c < words_per_face_row; ++c) {
+                ptr[dst_offset + c] = src[c];
             }
-            row_offset += 16;  // Move to the next row (16 elements per row)
         }
-        row_offset = 0;  // Reset for the next face pair
-        num_rows = 16;   // Process all rows for the next face pair
     }
 }
 
 // Reads the very first column of the CB and fills the entire tile with the same column.
 // Tile is assumed to have 16-bit elements.
+// tile_height is the number of rows in the tile (<= 32); tile width is fixed at 32.
+// A standard 32x32 tile has 4 16x16 faces (2 face-rows x 2 face-cols); a tiny tile
+// (height <= 16) has a single face-row of 2 (height x 16) faces.
+template <uint32_t tile_height = 32>
 FORCE_INLINE void fill_tile_with_first_column_bfloat16(uint32_t l1_write_ptr) {
-    // Here we have to account for the fact that a tile consists of 4 16x16 faces.
-    // So we have to fill faces 0 and 1 with the first column of face 0, and faces 2 and 3
-    // with the first column of face 2.
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_ptr);
 
-    constexpr uint32_t num_rows = 16;
+    constexpr uint32_t face_width = 16;  // elements per row within a face
+    constexpr uint32_t face_height = tile_height < 16 ? tile_height : 16;
+    constexpr uint32_t num_face_rows = tile_height / face_height;  // 1 (tiny) or 2 (32x32)
+    constexpr uint32_t face_size = face_height * face_width;       // elements per face
+    constexpr uint32_t face_pair_stride = 2 * face_size;           // left + right face
 
-    // iterate over face pairs (0,1) and (2,3)
-    for (uint32_t k = 0, face_offset = 0; k < 2; ++k, face_offset += 512) {
-        for (uint32_t row = 0, row_offset = 0; row < num_rows; ++row, row_offset += 16) {
+    // Iterate over face-rows: (0,1) and, for 32x32, (2,3)
+    for (uint32_t k = 0, face_offset = 0; k < num_face_rows; ++k, face_offset += face_pair_stride) {
+        for (uint32_t row = 0, row_offset = 0; row < face_height; ++row, row_offset += face_width) {
             uint32_t dst_offset = face_offset + row_offset;
-            auto src_val = ptr[dst_offset];
+            auto src_val = ptr[dst_offset];  // column 0 of the left face for this row
 
-            ptr[dst_offset + 256] = src_val;  // first column of right face
-            for (uint32_t col = 1; col < 16; ++col) {
-                ptr[dst_offset + col] = src_val;        // left face
-                ptr[dst_offset + col + 256] = src_val;  // right face
+            for (uint32_t col = 0; col < face_width; ++col) {
+                ptr[dst_offset + col] = src_val;              // left face
+                ptr[dst_offset + col + face_size] = src_val;  // right face
             }
         }
     }
@@ -417,25 +446,27 @@ FORCE_INLINE void fill_tile_with_first_column_bfloat16(uint32_t l1_write_ptr) {
 
 // Reads the very first column of the CB and fills the entire tile with the same column.
 // Tile is assumed to have 32-bit elements (float32/int32).
+// tile_height is the number of rows in the tile (<= 32); tile width is fixed at 32.
+template <uint32_t tile_height = 32>
 FORCE_INLINE void fill_tile_with_first_column(uint32_t l1_write_ptr) {
-    // Tile with 4 faces (16x16) and 32-bit elements
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
 
-    constexpr uint32_t num_rows = 16;             // Number of rows per face
-    constexpr uint32_t face_row_stride = 16;      // Elements per row
-    constexpr uint32_t face_size = 256;           // Total elements per face (16x16)
-    constexpr uint32_t face_offset_stride = 512;  // Total elements per pair of faces (2x16x16)
+    constexpr uint32_t face_width = 16;  // elements per row within a face
+    constexpr uint32_t face_height = tile_height < 16 ? tile_height : 16;
+    constexpr uint32_t num_face_rows = tile_height / face_height;  // 1 (tiny) or 2 (32x32)
+    constexpr uint32_t face_size = face_height * face_width;       // elements per face
+    constexpr uint32_t face_pair_stride = 2 * face_size;           // left + right face
 
-    // Iterate over face pairs (0,1) and (2,3)
-    for (uint32_t k = 0, face_offset = 0; k < 2; ++k, face_offset += face_offset_stride) {
-        for (uint32_t row = 0, row_offset = 0; row < num_rows; ++row, row_offset += face_row_stride) {
+    // Iterate over face-rows: (0,1) and, for 32x32, (2,3)
+    for (uint32_t k = 0, face_offset = 0; k < num_face_rows; ++k, face_offset += face_pair_stride) {
+        for (uint32_t row = 0, row_offset = 0; row < face_height; ++row, row_offset += face_width) {
             uint32_t left_dst_offset = face_offset + row_offset;      // Left face (0 or 2)
             uint32_t right_dst_offset = left_dst_offset + face_size;  // Right face (1 or 3)
 
             // Read the first column value for the current row from the left face
             auto src_val = ptr[left_dst_offset];
 
-            for (uint32_t col = 0; col < face_row_stride; ++col) {
+            for (uint32_t col = 0; col < face_width; ++col) {
                 ptr[left_dst_offset + col] = src_val;   // left face
                 ptr[right_dst_offset + col] = src_val;  // right face
             }

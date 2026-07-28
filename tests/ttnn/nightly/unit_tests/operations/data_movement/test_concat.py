@@ -25,7 +25,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, select_tile
 
 torch.manual_seed(0)
 
@@ -68,7 +68,10 @@ def test_tiled_interleaved_concat_int(device, dtype, shapes, dim):
     torch_tensors = [_rand_torch(dtype, s) for s in shapes]
     torch_out = torch.cat(torch_tensors, dim=dim)
 
-    ttnn_tensors = [ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype) for t in torch_tensors]
+    tile = select_tile(dtype)
+    ttnn_tensors = [
+        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, tile=tile) for t in torch_tensors
+    ]
     out = ttnn.concat(ttnn_tensors, dim=dim)
     assert_equal(torch_out, ttnn.to_torch(out))
 
@@ -145,12 +148,13 @@ def test_sharded_tiled_concat_int(device, dtype, shapes, shard_shape, core_grid,
     """
     torch_tensors = []
     ttnn_tensors = []
+    tile = select_tile(dtype)
     for shape, shd in shapes:
         t = _rand_torch(dtype, shape)
         mem_cfg = ttnn.create_sharded_memory_config(
             shd, core_grid=core_grid, strategy=strategy, use_height_and_width_as_shard_shape=True
         )
-        tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+        tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, tile=tile)
         tt = ttnn.to_memory_config(tt, mem_cfg)
         torch_tensors.append(t)
         ttnn_tensors.append(tt)

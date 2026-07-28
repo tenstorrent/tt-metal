@@ -70,7 +70,10 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    const auto aligned_input_page_size = input.buffer()->aligned_page_size();
+    const auto& output_tile = output.tensor_spec().tile();
+    // Prefer tile-derived page size so tiny tiles are not sized as 32x32 via buffer defaults alone.
+    const auto input_page_size = tile.get_tile_size(input_cb_data_format);
+    const auto aligned_input_page_size = tt::align(input_page_size, input.buffer()->alignment());
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * aligned_input_page_size,
         .core_ranges = all_cores,
@@ -78,6 +81,7 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
             .buffer_index = static_cast<uint8_t>(input_pages_cb_index),
             .data_format = input_cb_data_format,
             .page_size = aligned_input_page_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -86,7 +90,8 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
     if (convert_df) {
         // Configuring the CB that stores output pages if we need to convert data formats through the compute kernel
         output_page_cb_index = tt::CBIndex::c_16;
-        const auto aligned_output_page_size = output.buffer()->aligned_page_size();
+        const auto output_page_size = output_tile.get_tile_size(output_cb_data_format);
+        const auto aligned_output_page_size = tt::align(output_page_size, output.buffer()->alignment());
         // Since we are double buffering, the output page_size must be
         // aligned so the noc_write reads from an aligned address in the CB
 
@@ -97,6 +102,7 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(output_page_cb_index),
                 .data_format = output_cb_data_format,
                 .page_size = aligned_output_page_size,
+                .tile = TileDescriptor(output_tile),
             }}},
         });
     }

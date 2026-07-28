@@ -292,21 +292,21 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{test_config.node,
-                  {{"src_addr", input_dram_byte_address},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles_per_thread},
-                   {"dram_page_stride", per_tile_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                test_config.node,
+                {{"src_addr", input_dram_byte_address},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles_per_thread},
+                 {"dram_page_stride", per_tile_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{test_config.node,
-                  {{"dst_addr", output_dram_byte_address},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles_per_thread},
-                   {"dram_page_stride", per_tile_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                test_config.node,
+                {{"dst_addr", output_dram_byte_address},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles_per_thread},
+                 {"dram_page_stride", per_tile_stride}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -461,22 +461,22 @@ bool reader_datacopy_writer(
                                   (test_config.l1_input_data_format == tt::DataFormat::Int32) ||
                                   (test_config.l1_input_data_format == tt::DataFormat::UInt32);
     experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeUnpackToDestModes unpack_modes{};
+    experimental::ComputeUnpackModes unpack_modes{};
     if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
-        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     if (is_quasar) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
             .unpack_to_dest_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_modes,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .unpack_to_dest_mode = unpack_modes,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -523,21 +523,21 @@ bool reader_datacopy_writer(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{test_config.node,
-                  {{"src_addr", ctx.input_dram_byte_address},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles_per_thread},
-                   {"dram_page_stride", ctx.per_tile_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                test_config.node,
+                {{"src_addr", ctx.input_dram_byte_address},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles_per_thread},
+                 {"dram_page_stride", ctx.per_tile_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{test_config.node,
-                  {{"dst_addr", ctx.output_dram_byte_address},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles_per_thread},
-                   {"dram_page_stride", ctx.per_tile_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                test_config.node,
+                {{"dst_addr", ctx.output_dram_byte_address},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles_per_thread},
+                 {"dram_page_stride", ctx.per_tile_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

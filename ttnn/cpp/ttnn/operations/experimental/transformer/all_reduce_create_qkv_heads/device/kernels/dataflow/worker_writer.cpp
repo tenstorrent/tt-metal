@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -45,14 +46,14 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t reduction_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t reduction_semaphore_send_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t reduction_semaphore_send_addr = get_semaphore(reduction_semaphore_send_id);
     const uint32_t num_mcast_ranges = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
     // Set up for mcasting to reduction workers
-    volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduction_semaphore_send_addr);
-    noc_semaphore_set(reduction_semaphore_send_addr_ptr, VALID);
+    Semaphore<> reduction_semaphore_send(reduction_semaphore_send_id);
+    reduction_semaphore_send.set(VALID);
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;

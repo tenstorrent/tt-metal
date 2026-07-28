@@ -59,7 +59,7 @@ inline void set_matmul_mode() {
     // guarded: no-op in bf16; only the fp32-dest fallback reconfigs.
     pack_reconfig_data_format(cb_out_strip, qk_cb);
     pack_reconfig_l1_acc(0);  // cb_qk packs overwrite
-    mm_block_init_short(
+    matmul_block_init(
         q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     // relu(q.kT) in the packer when apply_relu; else linear, so the raw dot flows to the gate-mul.
     if constexpr (apply_relu) {
@@ -328,7 +328,7 @@ inline void set_matmul_to_acc_mode() {
     reconfig_data_format(cb_q, k_cb, cb_w, q_cb);  // srcA(q)->k, srcB(w)->q [guarded]
     pack_reconfig_data_format(cb_q, acc_cb);       // pack->acc
     pack_reconfig_l1_acc(0);
-    mm_block_init_short(q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass, head_dim_tiles);
+    matmul_block_init(q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass, head_dim_tiles);
     pack_relu_config(ReluConfig::none());
 }
 
@@ -439,8 +439,9 @@ void kernel_main() {
         return;
     }
 
-    mm_block_init(
-        cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_qk);
+    matmul_block_init(
+        cb_q, cb_k, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     CircularBuffer(cb_mask).wait_front(num_mask_tiles);  // never popped
     if constexpr (block_pool) {
         CircularBuffer(cb_scaler).wait_front(1);  // 1.0 reduce-MAX scaler, reused, never popped

@@ -1,0 +1,123 @@
+# pi0.5 tiny-tile (16×32) integration plan
+
+Branch: `pi05_tiny_tile_integration` (from `pi05_16_chip_rebase_main`)
+Source: `origin/smanoj/pi0_tiny_tile` @ `6d86b8a1812`
+
+## Topology
+
+`models/experimental/pi0_5`, `matmul_decode` and `kv_sdpa` exist on **neither** main base —
+both branches add them independently, so there is no shared git ancestor for them.
+
+```
+main@a206c6afcfd (Jul 14) ── 3 commits ──► HEAD   pi0_5 (181 files), fused matmul_decode, kv_sdpa
+   └── …main… ──► main@f1f4ff75579 ── 215 ──► smanoj/pi0_tiny_tile
+                                              tiny-tile ttnn infra (238 files / 27k lines)
+                                              + pi0_5 lean subset (50 files) + tiny-tile denoise
+```
+
+Tiny-tile model delta is only **11 files / +770** (`git diff 061501a4bed..tip -- models/experimental/pi0_5`),
+all in the denoise path. `tt_bh_glx/pipeline_16_decode.py:22-27` imports `denoise_block` /
+`denoise_pipeline` directly, so it lands exactly where the production 16-chip pipeline runs.
+
+## Design rule
+
+```
+32×32 : prefix KV, matmul weights (inputB), adaRMS mod-Dense weights
+16×32 : suffix activations, q/k/v, RoPE tables, norm weights/biases, mod triples, x_t
+```
+
+`matmul_decode` rides the tiny tile on **inputA only**. Mixed-tile `kv_sdpa` absorbs the
+32-prefix / 16-suffix mismatch (own CB pair per phase, shared online-softmax state), so the
+prefill→denoise handoff needs no retile.
+
+Switch: `tt/tile_config.py:11 TILE_HEIGHT = 16`. No env var; set to `32` to revert.
+
+The win: `perf_suffix_len(ah=10, 16) = 16` instead of 32. A 16×32 tile has 2 faces not 4, so
+denoise matmul M-work roughly halves. Pushback: SDPA forces `subblock_w == 1` on partial-face
+tiles (LLK `partial_face` unpack/math mismatch for `ct_dim > 1`); a retile lands in the hot path
+(`_to_tile16_bf8` on the SDPA output); the unfused MLP adds a `sharded_to_interleaved`.
+**Net effect must be measured, not assumed.**
+
+## Decisions
+
+- **Sequencing: correctness first, then re-fuse.** Their tiny-tile block unfuses
+  `matmul_decode`/`gate_up`/`concat_heads` and drops LoFi + the residual/gate epilogues because it
+  targets a leaner `matmul_decode`. Stage 1 lands it as-is for a PCC-verified reference; Stage 7
+  re-fuses onto our ops with per-step A/B.
+- **Keep both `matmul_decode` copies.** `ttnn.matmul_decode` (ours, fused) keeps the production
+  16-chip pipeline running; `ttnn.experimental.matmul_decode` (theirs, tiny-tile inputA) serves the
+  tiny-tile denoise path. Unify only once the numbers pick a direction.
+
+## Stages
+
+| # | Stage | Verify |
+|---|---|---|
+| 1 | Merge + resolve 18 conflicts | no markers; `git diff --check`; all pi0_5 modules import |
+| 2 | Fix the 5 verification-blocking defects | targeted |
+| 3 | One full rebuild (~30 min, no ccache; touches `tt_metal/impl/data_format`) | build green |
+| 4 | ttnn-level tiny-tile unit tests | `test_tiny_tile.py`, `test_tilize_retile`, `test_sdpa_tiny_tile`, `test_matmul_decode.py` |
+| 5 | Control: `TILE_HEIGHT=32` | merge did not regress the 32×32 path |
+| 6 | Target: `TILE_HEIGHT=16` | `test_l1_single_layer_pcc` ≥ 0.99; walltime; `compare_profiles.py` 32-vs-16 |
+| 7 | Production 16-chip path | `test_perf_tt_bh_glx_16_e2e_trace_2cq.py` + PCC suite |
+| 8 | Re-fuse onto our fused ops | A/B each step against Stage 6 |
+
+## Conflict resolution notes
+
+All 18 resolved as follows.
+
+- **`kv_sdpa` (6 files)** — took **theirs** wholesale. Theirs is strictly ahead: it already carries
+  the improved `Sk_chunk_t` picker (largest divisor of `Kt` with `Sk_chunk_t*DHt <= 128`, lifted into
+  a `pick_chunk` lambda applied separately to `suffix_Kt` and `prefix_Kt` for the two-source path),
+  plus tiny-tile `QK_NUM_FACES`, bf8, and the newer-main `sources.cmake` convention. Our HEAD had the
+  *older* `{4,3,2,5,6,7,8}` list.
+- **`nlp_concat_heads` / `nlp_create_qkv_heads` factories** — combined: their tile-aware
+  `input_tile_height` divisor **plus** our `head_split` / `mqa_split` block multipliers.
+- **`ttnn_gemma.py`** — took **ours**. All 8 hunks were our unclamped-grid tuning and direct
+  `ttnn.experimental.*` / `ttnn.kv_sdpa` calls vs their `_ttnn_compat` wrappers; the tiny-tile branch
+  added no tile awareness to this file.
+- **`modeling/{gemma,bs,common,suffix}.py`** — took **theirs**; we had never diverged from their
+  baseline in these, so their tiny-tile delta applies cleanly. Deduped their doubled `tile_config`
+  import in `common.py`.
+- **`modeling/pcfg.py`** — took **ours**. The tiny-tile branch never touched this file; the
+  `min(grid_y, ...)` clamp is the original and we removed it deliberately. Taking "theirs" would have
+  silently reverted our own tuning change.
+- **`tt_pipeline/__init__.py`**, **`_d2d_pipeline.py`** — took **ours**. Their lazy `__getattr__`
+  shim and missing `prologue_fn` were both artifacts of `stage_denoise.py` being absent on their
+  branch; the 16-chip socket path needs `prologue_fn` for the in-trace KV recv.
+- **`denoise_block.py`** — took theirs as the base (per the correctness-first decision), then
+  re-applied our orthogonal changes: unclamped tuned-pcfg grid; `DECODE_ALL = False` module default
+  (every caller sets it); restored the real `_decode_all_active()` probe over their unconditional
+  `return True`; removed the four hot-path `print()`s; kept `_KV_SDPA_HIFI2` defined but unwired
+  pending the Stage-6 fidelity A/B.
+- **`denoise_pipeline.py`** — took **ours** as the base (ours is the superset: `refresh_prefix_kv`,
+  `_layer_lo`, and the `build_eager`/`step`/`capture(prologue_fn)`/`reseed_noise` single-root capture
+  the 16-chip pipeline depends on), then ported their two changes in: `perf_suffix_len(ah,
+  tile_height=TILE_HEIGHT)` and the `from_torch_pi05` uploads. **Deliberately kept prefix KV on the
+  default 32×32 tile** — their mechanical sweep had converted `_bind_prefix_kv` to `from_torch_pi05`,
+  which their own reference test then works around by hand-injecting 32×32 tensors.
+- **`_ttnn_compat.py`** — extended `decode_all_supported()` to also accept
+  `ttnn.experimental.matmul_decode`, since that is the op the tiny-tile block actually dispatches
+  (the old probe checked `ttnn.matmul_decode` + `gate_up_matmul_decode`, which the tiny-tile path no
+  longer calls).
+
+## Defects to fix (block verification)
+
+1. `tt/ttnn_gemma.py:932` — `assert q_rope.shape[-2] == 32` hard-fails at `Sq=16`, breaking the DRAM
+   leg of the reference test. Make tile-aware.
+2. `tt/tt_pipeline/denoise_block.py:110` — `_decode_all_active()` has an unconditional `return True`
+   above the real logic, dead-coding the `decode_all_supported()` probe.
+3. `denoise_block.py:329-343` — four `print()`s inside the traced hot path.
+4. `tests/ttnn/utils_for_testing.py::select_tile` — returns `Tile((16,32))` for every TILE case
+   regardless of dtype; `None` for row-major; leftover `print()`s. Diverges from its own design doc.
+5. `tests/test_tiny_tile_ttnn_bugs.py:148` — passes `dtype=` to a `_to_dev` with no such param.
+
+## Noted, NOT fixed here (pre-existing / out of scope)
+
+- Dead code: `_to_tile32_bf8`, `_build_fused_gate_ws`, `_ttnn_compat.concat_heads_matmul_decode`.
+- `compute_padded_shape()` always pads to 32×32; worked around by a duplicated
+  `compute_padded_shape_for_tile()` in both `pad.cpp` and `reshape.cpp`.
+- `fill_implicit_tile_padding` assumes 32×32 when deciding whether implicit pad exists.
+- Contradictory comments: `test_denoise_single_layer_l1_vs_dram.py:158-161` (prefix KV tile),
+  `test_tiny_tile_ttnn_bugs.py:97-98` (claims addcmul avoided; `_gated_residual` uses it),
+  `test_tiny_tile_ttnn_bugs.py:10` vs `tile_config.py:13` (blocked dtypes at tiny tile).
+- Duplicated import at `modeling/common.py:19-20`.

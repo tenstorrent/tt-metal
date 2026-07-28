@@ -16,6 +16,8 @@ from typing import Tuple
 import torch
 import ttnn
 
+from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, TILE_WIDTH, from_torch_pi05
+
 TT_METAL_COMMIT = "58672b47cfd304195798bcf34d44f5dbcbcf5189"
 
 __all__ = [
@@ -25,6 +27,45 @@ __all__ = [
     "precompute_freqs_cis_meta",
     "create_sinusoidal_pos_embedding",
 ]
+
+
+def rectangular_core_grid(num_cores: int, device) -> ttnn.CoreGrid:
+    """A rectangular ``x x y`` core grid of exactly ``num_cores`` cores on ``device``.
+
+    Finds the widest ``x`` that divides ``num_cores`` and fits ``grid.x``, giving a
+    ``(x, num_cores // x)`` rectangle. Raises if no such rectangle fits the device grid.
+    """
+    grid = device.compute_with_storage_grid_size()
+    x = grid.x
+    while x > 0 and num_cores % x != 0:
+        x -= 1
+    y = num_cores // x if x > 0 else 0
+    if x == 0 or y > grid.y:
+        raise ValueError(f"cannot form a rectangular grid of {num_cores} cores within a {grid.x}x{grid.y} device grid")
+    return ttnn.CoreGrid(y=y, x=x)
+
+
+def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
+    """``CoreRangeSet`` for :func:`rectangular_core_grid`."""
+    core_grid = rectangular_core_grid(num_cores, device)
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))})
+
+
+def width_sharded_l1_config(height: int, width: int, device, num_cores: int | None = None) -> ttnn.MemoryConfig:
+    """Width-sharded L1 config: one tile-width (32 cols) per core over ``width // TILE_SIZE`` cores."""
+
+    assert width % TILE_WIDTH == 0, f"width {width} must be tile-aligned"
+    if num_cores is None:
+        num_cores = width // TILE_WIDTH
+    device_grid_size = device.compute_with_storage_grid_size()
+    device_cores = device_grid_size.x * device_grid_size.y
+    while num_cores > device_cores:
+        num_cores //= 2
+    shard_width = width // num_cores
+    grid = rectangular_core_range_set(num_cores, device)
+    height_padded = ((height + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
+    shard_spec = ttnn.ShardSpec(grid, [height_padded, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
 def get_sdpa_math_fidelity() -> "ttnn.MathFidelity":
@@ -46,7 +87,7 @@ def get_sdpa_compute_kernel_config() -> "ttnn.WormholeComputeKernelConfig":
     )
 
 
-def sdpa_prefill_chunk_sizes(seq_len_q: int, seq_len_kv: int, *, tile: int = 32) -> Tuple[int, int]:
+def sdpa_prefill_chunk_sizes(seq_len_q: int, seq_len_kv: int, *, tile: int = TILE_HEIGHT) -> Tuple[int, int]:
     """q_chunk / k_chunk sizes for ttnn SDPA, mirroring the tt_transformers baseline."""
     longest = max(seq_len_q, seq_len_kv)
     if longest >= 2048:
@@ -74,8 +115,8 @@ def precompute_freqs_cis_meta(
     sin = torch.cat([torch.sin(outer), torch.sin(outer)], dim=-1)
     cos = cos.reshape(1, 1, max_seq_len, head_dim).contiguous()
     sin = sin.reshape(1, 1, max_seq_len, head_dim).contiguous()
-    cos_tt = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    sin_tt = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    cos_tt = from_torch_pi05(cos, dtype=ttnn.bfloat16, device=device)
+    sin_tt = from_torch_pi05(sin, dtype=ttnn.bfloat16, device=device)
     return cos_tt, sin_tt
 
 
@@ -96,4 +137,4 @@ def create_sinusoidal_pos_embedding(
     time = time.reshape(-1, 1).to(torch.float32)
     sin_input = time * scaling.reshape(1, half)
     emb = torch.cat([torch.sin(sin_input), torch.cos(sin_input)], dim=-1)
-    return ttnn.from_torch(emb.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return from_torch_pi05(emb.contiguous(), dtype=ttnn.bfloat16, device=device)

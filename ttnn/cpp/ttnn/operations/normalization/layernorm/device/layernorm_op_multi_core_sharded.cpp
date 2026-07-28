@@ -69,6 +69,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     float eps = operation_attributes.eps;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
+    auto input_tile = a.tensor_spec().tile();
     // Extract program config
     CoreCoord compute_with_storage_grid_size;
     uint32_t subblock_wt = 0;
@@ -92,7 +93,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         },
         operation_attributes.program_config);
 
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const uint32_t tile_width = input_tile.get_width();
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / tile_width;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
@@ -119,13 +120,13 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
          reciprocal_cb_data_format] = get_cb_data_formats(output, gamma, beta, stats, fp32_dest_acc_en);
 
     // tile sizes
-    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
-    uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
-    uint32_t stats_single_tile_size = tt::tile_size(stats_cb_data_format);
-    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t in_single_tile_size = input_tile.get_tile_size(in_data_format);
+    uint32_t single_tile_size = input_tile.get_tile_size(cb_data_format);
+    uint32_t out_single_tile_size = input_tile.get_tile_size(out_data_format);
+    uint32_t gamma_single_tile_size = input_tile.get_tile_size(gamma_cb_data_format);
+    uint32_t beta_single_tile_size = input_tile.get_tile_size(beta_cb_data_format);
+    uint32_t stats_single_tile_size = input_tile.get_tile_size(stats_cb_data_format);
+    uint32_t bfloat16_tile_size = input_tile.get_tile_size(tt::DataFormat::Float16_b);
 
     // tensor shape
     const auto& shape = a.padded_shape();
@@ -512,6 +513,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.welford_fp32_alias =
         use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
 
+    cb_config.tile = input_tile;
     add_cb_descriptors(program_descriptor, core_ranges, all_worker_and_storage_cores, cb_config);
 
     return program_descriptor;

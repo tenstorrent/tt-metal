@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, select_tile
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
 
@@ -27,6 +27,7 @@ def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in
     # Sample tensor size and shard config
     input_tensor_shape = (1, 1, 512, 512)
     input_memory_config = ttnn.L1_MEMORY_CONFIG if input_in_l1 else ttnn.DRAM_MEMORY_CONFIG
+    tile = select_tile(first_dtype, second_dtype)
 
     # L1 grid and calculations
     l1_core_grid_x = 4
@@ -45,11 +46,14 @@ def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in
 
     # Create input tensors and send to device
     input_tensor_torch = torch.randn(input_tensor_shape)
-    input_tensor = ttnn.from_torch(input_tensor_torch, first_dtype, layout=ttnn.TILE_LAYOUT)
-    input_tensor_device = ttnn.allocate_tensor_on_device(
-        input_tensor.shape, input_tensor.dtype, input_tensor.layout, device, input_memory_config
+    input_tensor_device = ttnn.from_torch(
+        input_tensor_torch,
+        first_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=input_memory_config,
     )
-    ttnn.copy_host_to_device_tensor(input_tensor, input_tensor_device)
 
     # Do interleaved to sharded op on device several times to load the program from cache
     for iter in range(0, 5):
@@ -95,8 +99,9 @@ def test_interleaved_to_dram_height_sharded(
     )
 
     # Test
+    tile = select_tile(dtype, layout=layout)
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout, tile=tile)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
@@ -134,8 +139,9 @@ def test_interleaved_to_dram_width_sharded(
     )
 
     # Test
+    tile = select_tile(dtype, layout=layout)
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout, tile=tile)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
@@ -176,8 +182,9 @@ def test_interleaved_to_dram_sharded_convert_dtype(
     output_mem_config = ttnn.MemoryConfig(shard_type, ttnn.BufferType.DRAM, output_shard_spec)
 
     # Test
+    tile = select_tile(in_dtype, out_dtype, layout=layout)
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=layout)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=layout, tile=tile)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, out_dtype)
 
@@ -217,9 +224,15 @@ def test_interleaved_to_dram_sharded_via_to_memory_layout(
     output_mem_config = ttnn.MemoryConfig(shard_type, ttnn.BufferType.DRAM, output_shard_spec)
 
     # Test
+    tile = select_tile(dtype, layout=layout)
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=dtype, layout=layout, device=device, memory_config=input_mem_config
+        torch_input_tensor,
+        dtype=dtype,
+        layout=layout,
+        tile=tile,
+        device=device,
+        memory_config=input_mem_config,
     )
     ttnn_output_tensor = ttnn.to_memory_config(ttnn_input_tensor, output_mem_config)
 
@@ -263,8 +276,9 @@ def test_interleaved_to_sharded_nd_with_equivalent_2d(
     nd_shard_spec = ttnn.NdShardSpec(nd_shard_shape, shard_grid, orientation=shard_orientation)
     output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
 
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, tile=tile)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
@@ -288,13 +302,14 @@ def test_interleaved_to_sharded_nd_with_equivalent_2d(
         ],
     ],
 )
-def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_shape, shard_grid):
+def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_shape, shard_grid, expect_error):
     nd_shard_spec = ttnn.NdShardSpec(nd_shard_shape, shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
 
+    tile = select_tile(ttnn.bfloat16)
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "does not support ND sharding"):
         ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)

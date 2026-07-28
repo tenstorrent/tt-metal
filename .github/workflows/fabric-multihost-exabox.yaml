@@ -1,5 +1,4 @@
-# This workflow can be run between 3 and 7 AM UTC
-name: "Fabric Test on a BH Quad"
+name: "(SC4) Health check & Fabric Test"
 
 on:
   schedule:
@@ -47,7 +46,7 @@ jobs:
           pip3 install PyYAML
           {
             echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sp1-mgd"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sc4-mgd"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 

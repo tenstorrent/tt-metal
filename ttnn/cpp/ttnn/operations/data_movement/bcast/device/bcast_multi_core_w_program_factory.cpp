@@ -32,10 +32,12 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreWProgramFactory::create_descriptor
     const uint32_t bW = bshape[-1];
     const uint32_t NC = N * C;
 
-    const uint32_t Wt = W / TILE_WIDTH;
-    const uint32_t Ht = H / TILE_HEIGHT;
+    const auto& tile = a.tensor_spec().tile();
 
-    const uint32_t num_btensor_tiles = NC * bH * bW / TILE_HW;
+    const uint32_t Wt = W / tile.get_width();
+    const uint32_t Ht = H / tile.get_height();
+
+    const uint32_t num_btensor_tiles = NC * bH * bW / tile.get_tile_hw();
 
     const uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
@@ -45,9 +47,9 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreWProgramFactory::create_descriptor
     const tt::DataFormat src1_cb_data_format = datatype_to_dataformat_converter(b.dtype());
     const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    const uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    const uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
-    const uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    const uint32_t src0_single_tile_size = tile.get_tile_size(src0_cb_data_format);
+    const uint32_t src1_single_tile_size = tile.get_tile_size(src1_cb_data_format);
+    const uint32_t dst_single_tile_size = tile.get_tile_size(dst_cb_data_format);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -86,6 +88,7 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreWProgramFactory::create_descriptor
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = src0_cb_data_format,
             .page_size = src0_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -96,6 +99,7 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreWProgramFactory::create_descriptor
             .buffer_index = static_cast<uint8_t>(src1_cb_index),
             .data_format = src1_cb_data_format,
             .page_size = src1_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -106,6 +110,7 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreWProgramFactory::create_descriptor
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = dst_cb_data_format,
             .page_size = dst_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 

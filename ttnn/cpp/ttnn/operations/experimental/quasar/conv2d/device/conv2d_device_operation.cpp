@@ -147,6 +147,7 @@ ttsl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     hashable_operation_attributes_t hashable_args = {
         .sliding_window_config = args.sliding_window_config,
         .output_channels = args.output_channels,
+        .groups = args.groups,
         .untilize_out = args.untilize_out,
         .has_bias = args.has_bias,
         .activation = args.activation,

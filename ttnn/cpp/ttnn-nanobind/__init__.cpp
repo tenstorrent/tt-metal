@@ -62,6 +62,7 @@
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
 #include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
+#include "ttnn/operations/kv_sdpa/kv_sdpa_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
 #include "ttnn/operations/matmul_decode/matmul_decode_nanobind.hpp"
@@ -189,6 +190,9 @@ void py_module(nb::module_& mod) {
 
     auto m_kv_cache = mod.def_submodule("kv_cache", "KV cache operations");
     kv_cache::bind_kv_cache(m_kv_cache);
+
+    auto m_kv_sdpa = mod.def_submodule("kv_sdpa", "kv-parallel sdpa operations");
+    kv_sdpa::bind_kv_sdpa_operation(m_kv_sdpa);
 
     auto m_copy = mod.def_submodule("copy", "copy operations");
     copy::py_module(m_copy);

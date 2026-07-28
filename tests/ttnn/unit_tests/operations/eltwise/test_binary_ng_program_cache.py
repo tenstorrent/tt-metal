@@ -28,7 +28,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, select_tile
 
 
 @pytest.fixture
@@ -50,8 +50,9 @@ def run_binary_ng_op(device, op, shape_a, shape_b, dtype=ttnn.bfloat16, memory_c
     torch_ops = {ttnn.add: torch.add, ttnn.mul: torch.mul, ttnn.sub: torch.sub}
     torch_result = torch_ops[op](torch_a, torch_b)
 
-    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tile = select_tile(dtype)
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, tile=tile, device=device, memory_config=memory_config)
+    tt_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, tile=tile, device=device, memory_config=memory_config)
     with device.cache_entries_counter.measure():
         tt_result = op(tt_a, tt_b, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
@@ -68,7 +69,8 @@ def run_scalar_ng_op(device, op, shape, scalar, dtype=ttnn.bfloat16, memory_conf
     torch_ops = {ttnn.add: lambda a, s: a + s, ttnn.mul: lambda a, s: a * s, ttnn.sub: lambda a, s: a - s}
     torch_result = torch_ops[op](torch_a, scalar)
 
-    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tile = select_tile(dtype)
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, tile=tile, device=device, memory_config=memory_config)
     with device.cache_entries_counter.measure():
         tt_result = op(tt_a, scalar, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
@@ -183,8 +185,9 @@ def test_ng_cache_miss_different_output_dtypes(device, isolate_program_cache):
     torch_b1 = torch.rand(shape, dtype=torch.bfloat16)
     torch_ref1 = torch.add(torch_a1, torch_b1)
 
-    tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+    tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.add(tt_a1, tt_b1, dtype=ttnn.bfloat16)
     assert_with_pcc(torch_ref1, ttnn.to_torch(tt_out1), 0.9999)
@@ -194,8 +197,9 @@ def test_ng_cache_miss_different_output_dtypes(device, isolate_program_cache):
     torch_b2 = torch.rand(shape, dtype=torch.bfloat16)
     torch_ref2 = torch.add(torch_a2, torch_b2)
 
-    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.float32)
+    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+    tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.add(tt_a2, tt_b2, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
@@ -231,8 +235,9 @@ def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     torch_ref1 = torch.add(torch_a1, torch_b1)
 
     grid_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
-    tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+    tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.add(tt_a1, tt_b1, sub_core_grids=grid_a)
     assert_with_pcc(torch_ref1, ttnn.to_torch(tt_out1), 0.9999)
@@ -242,8 +247,8 @@ def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     torch_ref2 = torch.add(torch_a2, torch_b2)
 
     grid_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
-    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+    tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.add(tt_a2, tt_b2, sub_core_grids=grid_b)
     assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
@@ -262,8 +267,9 @@ def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cac
     torch_b1 = torch.rand(shape, dtype=torch.bfloat16)
     torch_ref1 = torch.add(torch_a1, torch_b1)
 
-    tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.float32)
+    tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+    tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.add(tt_a1, tt_b1, dtype=ttnn.float32)
     assert_with_pcc(torch_ref1, ttnn.to_torch(tt_out1), 0.9999)
@@ -273,8 +279,9 @@ def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cac
     torch_b2 = torch.rand(shape, dtype=torch.float32)
     torch_ref2 = torch.add(torch_a2, torch_b2)
 
-    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+    tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.add(tt_a2, tt_b2, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
@@ -316,8 +323,9 @@ def test_ng_cache_reuse_different_logical_shapes_correctness(device, isolate_pro
         with device.cache_entries_counter.measure():
             torch_ref = torch.add(torch_a, torch_b)
 
-        tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
-        tt_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+        tile = select_tile(ttnn.float32)
+        tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+        tt_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
         with device.cache_entries_counter.measure():
             tt_out = ttnn.add(tt_a, tt_b)
         assert_with_pcc(torch_ref, ttnn.to_torch(tt_out), 0.9999)

@@ -32,6 +32,34 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/circular_buffer.h"
 
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+
+// The input is positive and normal because the amax is clamped before this
+// helper runs. Preserve an exact power of two; otherwise increment its biased
+// exponent and clear the mantissa.
+template <int ITERATIONS = 8>
+inline void calculate_ceil_power_of_two() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vInt exponent = sfpi::exexp(value, sfpi::ExponentMode::Biased);
+        sfpi::vFloat mantissa = sfpi::setexp(value, 127);
+        sfpi::vFloat result = sfpi::setexp(sfpi::vFloat(1.0f), exponent);
+        v_if(mantissa != 1.0f) { result = sfpi::setexp(sfpi::vFloat(1.0f), exponent + 1); }
+        v_endif;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+
+inline void ceil_power_of_two_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ceil_power_of_two, (8 /* ITERATIONS */), idst, VectorMode::RC);
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(0);
     CircularBuffer cb_in(cb_in_id);
@@ -56,6 +84,7 @@ void kernel_main() {
     // Tile width from the tensor's tile spec.
     constexpr uint32_t block_w = 128;  // BlockW
     constexpr uint32_t tile_w = get_compile_time_arg_val(11);
+    constexpr bool round_scale_to_power_of_two = get_compile_time_arg_val(12) != 0;
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
     constexpr uint32_t tiles_per_block = block_ht * block_wt;
@@ -129,6 +158,11 @@ void kernel_main() {
                 clamp_tile(IDST0, clamp_min_bits, clamp_max_bits);  // slot 0 = clamp(amax)
                 binop_with_scalar_tile_init();
                 mul_unary_tile(IDST0, inv_448_bits);  // slot 0 = scale = clamp(amax)/448
+                if constexpr (round_scale_to_power_of_two) {
+                    // UE8M0-style scale: 2^ceil(log2(scale)), formed directly from the
+                    // float32 exponent and mantissa so power-of-two boundaries are exact.
+                    MATH((ceil_power_of_two_tile(IDST0)));
+                }
                 copy_dest_values_init();
                 copy_dest_values<DataFormat::Float32>(IDST0, IDST1);  // slot 1 = scale
                 recip_tile_init();

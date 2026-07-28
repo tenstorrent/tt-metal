@@ -810,7 +810,10 @@ ttnn::Shape compute_broadcasted_output_ternary(
 }
 
 tt::tt_metal::ShardSpec adjust_to_shape(
-    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    const tt::tt_metal::ShardSpec& shard_spec,
+    const ttnn::Shape& from_shape,
+    const ttnn::Shape& to_shape,
+    const tt::tt_metal::Tile& tile) {
     auto ret = shard_spec;
 
     // Calculate volume of all dimensions EXCEPT the last (width)
@@ -818,25 +821,26 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     uint32_t from_volume_except_width = 1;
     uint32_t to_volume_except_width = 1;
 
-    const int rank = std::max(from_shape.rank(), to_shape.rank());
+    const auto from_rank = static_cast<int>(from_shape.rank());
+    const auto to_rank = static_cast<int>(to_shape.rank());
 
-    // Accumulate all dimensions except the last
-    for (int i = 0; i < rank - 1; ++i) {
-        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
-        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
-        from_volume_except_width *= from_dim;
-        to_volume_except_width *= to_dim;
+    for (int i = 0; i < from_rank - 1; ++i) {
+        from_volume_except_width *= from_shape[i];
+    }
+
+    for (int i = 0; i < to_rank - 1; ++i) {
+        to_volume_except_width *= to_shape[i];
     }
 
     // Get width dimensions
     uint32_t from_width = from_shape[-1];
     uint32_t to_width = to_shape[-1];
 
-    // Adjust shard shape based on full volume ratios
+    // Adjust shard shape based on full volume ratios; clamp to the actual tile geometry.
     TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
     TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
-    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, tile.get_height());
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, tile.get_width());
     return ret;
 }
 
@@ -845,8 +849,11 @@ tt::tt_metal::MemoryConfig compute_mem_config_actual(
     const auto& padded_a_shape = input_tensor.padded_shape();
     const auto& padded_out_shape =
         input_tensor.tensor_spec().tensor_layout().compute_padded_shape(output_logical_shape);
-    auto adjusted_shard_spec =
-        adjust_to_shape(*input_tensor.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+    auto adjusted_shard_spec = adjust_to_shape(
+        *input_tensor.memory_config().shard_spec(),
+        padded_a_shape,
+        padded_out_shape,
+        input_tensor.tensor_spec().tile());
     return tt::tt_metal::MemoryConfig(
         input_tensor.memory_config().memory_layout(), input_tensor.memory_config().buffer_type(), adjusted_shard_spec);
 }

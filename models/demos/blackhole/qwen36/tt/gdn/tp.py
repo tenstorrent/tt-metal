@@ -274,11 +274,13 @@ class TPGatedDeltaNet:
         ttnn.deallocate(qkv)
 
         kd = self.key_dim_tp
+        rf = Nv // Nk
+        # Head-split in ROW_MAJOR, so that the reshapes are free
+        conv = ttnn.to_layout(conv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
         k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp)), (1, T, Nv, Dv))
         ttnn.deallocate(conv)
-        rf = Nv // Nk
         q = ttnn.repeat_interleave(q, rf, dim=2)
         k = ttnn.repeat_interleave(k, rf, dim=2)
 

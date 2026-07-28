@@ -212,6 +212,20 @@ def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
     return torch.from_numpy(np.ascontiguousarray(decoded))
 
 
+def _decode_bf16_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
+    """Decode a ``[32, head_dim]`` bf16 TILE chunk (raw device bytes) to float32, device-less. Same face/
+    tile de-swizzle as ``_decode_bfp8_chunk`` but bf16 has no exponent block: each 2048-byte tile is 1024
+    bf16 values (uint16 -> float32 via a 16-bit left shift, which is exact). NOTE: not validated against a
+    ttnn unpack the way the bf8 path is."""
+    TILE = 32
+    n_tiles = head_dim // TILE
+    u16 = np.frombuffer(raw, dtype="<u2").reshape(n_tiles, 4, 16, 16)  # (tile, face, row, col)
+    f32 = (u16.astype(np.uint32) << 16).view(np.float32)
+    by_face = f32.reshape(n_tiles, 2, 2, 16, 16).transpose(0, 1, 3, 2, 4).reshape(n_tiles, TILE, TILE)
+    decoded = by_face.transpose(1, 0, 2).reshape(TILE, n_tiles * TILE)
+    return torch.from_numpy(np.ascontiguousarray(decoded))
+
+
 def _resolve_unique_id(fabric_node_ids, device_map: dict) -> int:
     """ASIC unique_id for any replica fabric node present in the device map (replicas hold identical KV,
     and add_device_group sorts the ids so index 0 is not a fixed chip). Raises if none are mapped."""
@@ -394,8 +408,102 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
 
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """Read slot `slot_id`'s KV over [0, real_len) via the published table and PCC-check it against the
+    golden trace. Dispatches on the model: MLA (single merged kvpe config) vs M3 (multi-config triple
+    cache). Returns the min PCC across layers."""
+    if ADAPTER.name == "minimax_m3":
+        return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
+    return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
+
+
+def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode):
+    """Read one config's KV chunks over [0, read_len) for (layer, slot) via the address table and return
+    the decoded ``[read_len, head_dim]`` tensor in natural token order."""
+    from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+
+    rows = []
+    for pos in range(0, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+        loc = table.lookup(layer, pos, slot_id, config_id)
+        unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+        raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+        rows.append(decode(raw, head_dim))
+    return torch.cat(rows, dim=0)[:read_len]
+
+
+def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """M3 multi-config read-back: reconstruct per-head K/V + index_k from the 9-config table and PCC vs the
+    separate_k_v golden. Config layout matches the builder: k_h0..N-1 = 0..N-1, v_h0..N-1 = N..2N-1,
+    index_k = 2N."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.minimax_m3.tt.runners.prefill_kv_validation import _hf_to_meta_rotary_perm
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    mc = ADAPTER.model_config
+    n_kv, head_dim, rotary_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM, mc.ROTARY_DIM
+    perm = _hf_to_meta_rotary_perm(head_dim, rotary_dim)  # golden HF -> device Meta rotary swizzle
+    # index_k dtype from its config's chunk size (bf8 vs bf16) -> the right decoder.
+    ik_cfg = 2 * n_kv
+    ik_bf16 = table.config(ik_cfg).chunk_size_bytes == (head_dim // 32) * 2048
+    ik_decode = _decode_bf16_chunk if ik_bf16 else _decode_bfp8_chunk
+
+    read_len = ((real_len + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) * (
+        NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    )
+    kv_dir = Path(trace_dir) / "kv_cache"
+    mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
+    for layer in range(NUM_LAYERS):
+        dev_k = torch.stack(
+            [
+                _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                for h in range(n_kv)
+            ],
+            dim=0,
+        )[
+            :, :real_len
+        ]  # [n_kv, real_len, head_dim]
+        dev_v = torch.stack(
+            [
+                _read_kv_slice(table, device_map, n_kv + h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                for h in range(n_kv)
+            ],
+            dim=0,
+        )[:, :real_len]
+
+        with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as h:
+            keys = set(h.keys())
+            g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]  # HF -> Meta
+            g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
+            has_ik = f"index_k_cache_layer_{layer}" in keys
+            g_ik = (
+                h.get_tensor(f"index_k_cache_layer_{layer}").float()[0, 0, :real_len, :][..., perm] if has_ik else None
+            )
+
+        pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
+        pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
+        mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
+        line = f"  layer {layer:>2}: K={pcc_k:.5f} V={pcc_v:.5f}"
+        if has_ik:
+            dev_ik = _read_kv_slice(table, device_map, ik_cfg, layer, slot_id, read_len, head_dim, ik_decode)[:real_len]
+            pcc_ik = float(comp_pcc(g_ik, dev_ik, 0.0)[1])
+            mins["index_k"] = min(mins["index_k"], pcc_ik)
+            line += f" index_k={pcc_ik:.5f}"
+        logger.info(line)
+
+    min_pcc = min(mins.values())
+    logger.info(
+        f"[producer] slot {slot_id} M3 KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
+        f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} (min {min_pcc:.6f})"
+    )
+    return min_pcc
+
+
+def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the table and PCC-check it against the golden
-    trace. Returns the min PCC across layers."""
+    trace (DeepSeek/Kimi MLA merged-kvpe single-config table). Returns the min PCC across layers."""
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc

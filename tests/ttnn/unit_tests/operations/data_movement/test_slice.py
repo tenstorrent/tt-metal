@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, select_tile
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
 
@@ -205,8 +205,9 @@ def slice_test(
     else:
         torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
+    tile = select_tile(dtype, layout=input_layout)
     tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
+        torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config, tile=tile
     )
 
     with device.cache_entries_counter.measure():
@@ -499,7 +500,8 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, devic
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
+    tile = select_tile(dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype, tile=tile)
     ttnn_output = ttnn_input[slices[0], slices[1], slices[2], slices[3]]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -523,7 +525,8 @@ def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype,
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
+    tile = select_tile(dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype, tile=tile)
     ttnn_output = ttnn_input[slices[0], slices[1], slices[2], slices[3]]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -534,7 +537,8 @@ def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype,
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase1(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, tile=tile)
 
     torch_output = torch_input[..., ::2, ::2]  # torch_output shape: [1, 3, 320, 320]
     ttnn_output = ttnn_input[..., ::2, ::2]
@@ -546,7 +550,8 @@ def test_slice_usecase1(layout, device):
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase2(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, tile=tile)
 
     torch_output = torch_input[..., ::2, 1::2]  # torch_output shape: [1, 3, 320, 320]
     ttnn_output = ttnn_input[..., ::2, 1::2]
@@ -558,7 +563,8 @@ def test_slice_usecase2(layout, device):
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase3(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, tile=tile)
 
     torch_output = torch_input[..., 1::2, ::2]  # torch_output shape: [1, 3, 320, 320]
     ttnn_output = ttnn_input[..., 1::2, ::2]
@@ -570,7 +576,8 @@ def test_slice_usecase3(layout, device):
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase4(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, tile=tile)
 
     torch_output = torch_input[..., 1::2, 1::2]  # torch_output shape: [1, 3, 320, 320]
     ttnn_output = ttnn_input[..., 1::2, 1::2]
@@ -594,7 +601,8 @@ def test_slice_ellipses(device):
 @pytest.mark.parametrize("ends", [-2, -4, -6, -32])
 def test_slice_negative_ends(layout, dim, ends, device):
     torch_input = torch.randn(32, 32, 32, 32)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
 
     if dim == 3:
         if layout == ttnn.ROW_MAJOR_LAYOUT and ends == -32:
@@ -631,14 +639,15 @@ def test_slice_negative_ends(layout, dim, ends, device):
     (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
 )
 def test_slice_bert(input_shape, input_start, input_ends, layout, device):
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     if layout == ttnn.TILE_LAYOUT:
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
     else:
         if (input_ends[-1] - input_start[-1]) % 2 != 0:
             pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
 
     if len(input_shape) == 4:
         torch_output = torch_input[
@@ -681,14 +690,15 @@ def test_slice_bert(input_shape, input_start, input_ends, layout, device):
     (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 )
 def test_ttnn_slice_bert(input_shape, input_start, input_ends, layout, memory_config, device):
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     if layout == ttnn.TILE_LAYOUT:
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
     else:
         if (input_ends[-1] - input_start[-1]) % 2 != 0:
             pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
 
     if len(input_shape) == 4:
         torch_output = torch_input[
@@ -724,10 +734,16 @@ def test_slice_output_tensor_rm(device):
 
 def test_slice_output_tensor_tile(device):
     torch_input = torch.ones(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile)
     torch_zeros = torch.zeros(1, 3, 320, 320)
     ttnn_output = ttnn.from_torch(
-        torch_zeros, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+        torch_zeros,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        tile=tile,
     )
     torch_output = torch_input[..., ::2, ::2]  # torch_output shape: [1, 3, 320, 320]
 
@@ -758,14 +774,15 @@ def test_slice_output_tensor_tile(device):
     (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 )
 def test_ttnn_slice_optimized_shapes(input_shape, input_start, input_ends, layout, memory_config, device):
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     if layout == ttnn.TILE_LAYOUT:
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
     else:
         if (input_ends[-1] - input_start[-1]) % 2:
             pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
 
     torch_output = torch_input[
         input_start[0] : input_ends[0],
@@ -801,14 +818,15 @@ def test_ttnn_slice_optimized_shapes(input_shape, input_start, input_ends, layou
     (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 )
 def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_config, device):
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     if layout == ttnn.TILE_LAYOUT:
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
     else:
         if (input_ends[-1] - input_start[-1]) % 2:
             pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
 
     torch_output = torch_input[
         input_start[0] : input_ends[0],
@@ -839,16 +857,17 @@ def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_conf
     (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
 )
 def test_slice_5d(input_shape, input_start, input_ends, input_stride, layout, device):
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     if layout == ttnn.TILE_LAYOUT:
         if input_stride != (1, 1, 1, 1, 1):
             pytest.skip("Cannot untilize 5D tensor")
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
     else:
         if (input_ends[-1] - input_start[-1]) % 2:
             pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
 
     torch_output = torch_input[
         input_start[0] : input_ends[0] : input_stride[0],
@@ -882,7 +901,8 @@ def test_slice_7d_strided(device):
 
 def test_slice_7d(device):
     torch_input = torch.randn(1, 1, 1, 1, 1, 1, 256)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile)
 
     torch_output = torch_input[..., 0:1, 0:1, 0:1, 0:1, 0:1, 0:200]
     ttnn_output = ttnn_input[..., 0:1, 0:1, 0:1, 0:1, 0:1, 0:200]
@@ -923,7 +943,8 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     # Apply slicing to the input_tensor
     torch_output_tensor = torch_input[indices]
 
-    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, tile=tile)
     ttnn_output = ttnn_tensor[indices]
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
@@ -963,7 +984,8 @@ def test_slice_former_pytorch2_failures(input_shape, dim, start, end, step, layo
     # Apply slicing to the input_tensor
     torch_output_tensor = torch_input[indices]
 
-    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, tile=tile)
     ttnn_output = ttnn_tensor[indices]
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
@@ -992,8 +1014,9 @@ def test_slice_former_pytorch2_failures(input_shape, dim, start, end, step, layo
 )
 def test_slice_index(device, input_shape, layout, input_memory_config, indices):
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     ttnn_input = ttnn.from_torch(
-        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout
+        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout, tile=tile
     )
 
     torch_output = torch_input[
@@ -1037,7 +1060,8 @@ def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, m
 
     for _ in range(3):
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout, tile=tile)
         if len(input_shape) == 4:
             torch_output = torch_input[
                 input_start[0] : input_ends[0] : input_steps[0],
@@ -1135,12 +1159,14 @@ def test_slice_tensor_args_mesh_device(mesh_device, input_shape, dim, start, end
         torch_end_tensor, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
     )
 
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     ttnn_tensor = ttnn.from_torch(
         torch_input,
         layout=layout,
         dtype=ttnn.bfloat16,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        tile=tile,
     )
 
     num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
@@ -1177,7 +1203,8 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
     ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
     ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
 
-    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device, tile=tile)
 
     # Calculate num_devices from the slice pattern
     num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
@@ -1226,7 +1253,8 @@ def test_slice_subcores(input_shape, dim, start, end, step, layout, args_as_tens
     ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
     ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
 
-    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device, tile=tile)
 
     if args_as_tensor:
         # Calculate num_devices from the slice pattern
@@ -1282,8 +1310,14 @@ def test_slice_sharded_auto_shard_spec_recomputation(
 
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
 
+    tile = select_tile(ttnn.bfloat16)
     tt_input = ttnn.from_torch(
-        torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tensor_memory_layout = (
@@ -1340,8 +1374,9 @@ def test_slice_within_tile_vs_across_tiles(input_shape, begins, ends, layout, us
 
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
 
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     tt_input = ttnn.from_torch(
-        torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, tile=tile
     )
 
     if use_sharding:
@@ -1391,8 +1426,14 @@ def test_slice_sharding_independence(input_shape, begins, ends, use_sharding, de
 
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
 
+    tile = select_tile(ttnn.bfloat16)
     tt_input = ttnn.from_torch(
-        torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     output_mem_config = ttnn.DRAM_MEMORY_CONFIG
@@ -1445,8 +1486,14 @@ def test_issue_38841_regression(device):
     shape = [1, 1, 256, 32]
     torch_input = torch.rand(shape, dtype=torch.bfloat16)
 
+    tile = select_tile(ttnn.bfloat16)
     tt_input = ttnn.from_torch(
-        torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     shard_h = 64
@@ -1483,12 +1530,14 @@ def test_issue_42753_regression(device, input_shape, begins, ends, step):
 
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
+    tile = select_tile(ttnn.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_output = ttnn.slice(tt_input, begins, ends, step)
@@ -1512,12 +1561,14 @@ def test_issue_47602_program_cache_collision_on_shape_change(device):
     torch.manual_seed(47602)
 
     def _to_tt(t, layout, device):
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         return ttnn.from_torch(
             t,
             dtype=ttnn.bfloat16,
             layout=layout,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=tile,
         )
 
     # ── ROW_MAJOR path ──────────────────────────────────────────────────────
@@ -1598,8 +1649,14 @@ def test_slice_rm_nd_misaligned_last_dim(device, shape, slice_start, slice_end):
     dram_interleaved = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
     torch_input = torch.randn(shape, dtype=torch.float32)
 
+    tile = select_tile(ttnn.float32)
     tt_input = ttnn.from_torch(
-        torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram_interleaved
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=dram_interleaved,
+        tile=tile,
     )
     tt_output = ttnn.slice(tt_input, slice_start, slice_end, [1] * len(shape), memory_config=dram_interleaved)
 
@@ -1624,12 +1681,14 @@ def test_slice_rm_wide_row_chunking(device, last_dim):
     torch_input = torch.rand([6, 3, last_dim], dtype=torch.float32)
     torch_output = torch_input[0:6, 2:3, 0:last_dim]
 
+    tile = select_tile(ttnn.float32)
     ttnn_input = ttnn.from_torch(
         torch_input,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.float32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

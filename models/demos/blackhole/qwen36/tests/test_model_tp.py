@@ -174,3 +174,51 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     logger.info(f"traced chunk-outer prefill (T={T}) logits PCC = {pcc}")
     assert float(pcc) >= 0.99, f"traced chunk-outer prefill PCC below 0.99 at T={T}: {pcc}"
     logger.info(f"PASSED: TP traced chunk-outer prefill matches bespoke single-pass (B=1, T={T})")
+
+
+@parametrize_mesh_tp()
+def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
+    """After capture_prefill_trace_chunked parks the trace, a request-time masked-bucket prefill
+    must reuse warmed programs only -- a post-park compile clobbers the trace (#48536).
+
+    paged_fill_cache is keyed per fill width, so sweep EVERY width (1..32, across mask buckets
+    128..2048) with program-cache misses disallowed and assert the cache does not grow. A sample
+    would miss a regression that skips one width in _warmup_paged_fill_widths; here it fails
+    op-named instead of hanging in serving. 8 layers suffices: warmed programs are layer-independent
+    and layers 0..7 include the full-attention layers (3, 7) that own the fill path.
+    """
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=2048, n_layers=8)
+    args = model.args
+
+    block_size = 64
+    num_blocks = math.ceil((2048 // block_size + 8) / 32) * 32  # 32-aligned for the flexible SDPA
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
+
+    # Warmup + park the per-chunk prefill trace.
+    model.capture_prefill_trace_chunked(mesh_device, page_table, chunk_size=2048)
+
+    # Request-time masked-bucket prefills must reuse warmed programs only.
+    before = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        # One length per fill width 1..32: (width-1)*64 + 33 lands mid-block, so ceil(len/64) ==
+        # width and the length stays masked below its auto-selected mask bucket.
+        block_size = 64
+        for width in range(1, 2048 // block_size + 1):
+            actual_len = (width - 1) * block_size + 33
+            model.prefill_masked_bucket(
+                torch.zeros(1, actual_len, dtype=torch.int32), page_table, actual_len=actual_len
+            )
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    after = mesh_device.num_program_cache_entries()
+
+    logger.info(f"prefill-warmup no-recompile: program cache before={before} after={after} delta={after - before}")
+    assert after == before, (
+        f"{after - before} program(s) compiled after the trace was parked -> warmup missed a "
+        f"fill-width-dependent program (add it to _warmup_paged_fill_widths); at request time this "
+        f"clobbers the parked trace (hang)."
+    )
+    logger.info("PASSED: masked-bucket warmup pre-compiles every fill width (no post-capture recompile)")

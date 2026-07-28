@@ -287,30 +287,30 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"Mt", Mt},
-                    {"Kt", Kt},
-                    {"Nt", Nt},
-                    {"MtKt", MtKt},
-                    {"KtNt", KtNt},
-                    {"batch", B},
-                    {"bcast_B", uint32_t(bcast_batch)},
-                    {"output_tile_start_id", num_tiles_written},
-                    {"num_output_tiles", num_output_tiles_per_core},
-                    {"MtNt", MtNt},
-                },
-        });
-        writer_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_pages", num_output_tiles_per_core},
-                    {"start_id", num_tiles_written},
-                },
-        });
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"Mt", Mt},
+                {"Kt", Kt},
+                {"Nt", Nt},
+                {"MtKt", MtKt},
+                {"KtNt", KtNt},
+                {"batch", B},
+                {"bcast_B", uint32_t(bcast_batch)},
+                {"output_tile_start_id", num_tiles_written},
+                {"num_output_tiles", num_output_tiles_per_core},
+                {"MtNt", MtNt},
+            });
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", num_output_tiles_per_core},
+                {"start_id", num_tiles_written},
+            });
         num_tiles_written += num_output_tiles_per_core;
     }
 

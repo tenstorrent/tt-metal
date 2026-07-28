@@ -75,7 +75,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
+    // W front-pad offset: input_tensor_start is [N, C, H, W];
+    uint32_t W_padding_front_bytes = input_tensor_start[3] * input_tensor.element_size();
 
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
@@ -164,13 +165,11 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
         .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
+    // Both kernels take no named runtime args (data flows via CBs/compile-time args), so
+    // runtime_arg_values stays empty; the kernels still run on their nodes per the work unit's
+    // target_nodes.
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    for (const auto& core : ordered_cores_with_data) {
-        const NodeCoord node = core;
-        reader_run.runtime_arg_values.push_back({node, {}});
-        writer_run.runtime_arg_values.push_back({node, {}});
-    }
 
     WorkUnitSpec wu{
         .name = "pad_rm_sharded_width_only",

@@ -19,6 +19,7 @@ from .common import create_sinusoidal_pos_embedding
 from .gemma import _linear_weight_to_tt
 
 from models.experimental.pi0_5.common.configs import SuffixConfig
+from models.experimental.pi0_5.tt.tile_config import from_torch_pi05
 
 TT_METAL_COMMIT = "58672b47cfd304195798bcf34d44f5dbcbcf5189"
 
@@ -31,7 +32,7 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 def _bias_to_tt(b: Optional["ttnn.Tensor"]) -> Optional[ttnn.Tensor]:
     if b is None:
         return None
-    return ttnn.from_torch(b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    return from_torch_pi05(b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16)
 
 
 class TTNNPi05SuffixEmbedding(StatelessTTNNModule):

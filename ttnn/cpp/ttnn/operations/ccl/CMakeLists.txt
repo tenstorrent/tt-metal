@@ -15,13 +15,15 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    broadcast/device/kernels/*
-    common/kernels/*
-    kernel_common/*
-    kernels/*
-    all_to_all_combine/device/kernels/*
-    all_to_all_dispatch/device/kernels/*
-    reduce_to_root/device/kernels/*
+    broadcast/device/kernels/*.cpp
+    common/kernels/*.cpp
+    common/kernels/*.hpp
+    kernel_common/*.hpp
+    kernels/*.cpp
+    kernels/*.hpp
+    all_to_all_combine/device/kernels/*.cpp
+    all_to_all_dispatch/device/kernels/*.cpp
+    reduce_to_root/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_ccl

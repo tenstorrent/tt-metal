@@ -18,9 +18,21 @@
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
+
+// Number of faces of the QK-scores tile fed to reduce_block_max_row: 4 for a full 32x32 tile,
+// 2 for a 16x32 tiny tile (one face-row). Set by the program factory from the operand tile height.
+#ifndef QK_NUM_FACES
+#define QK_NUM_FACES 4
+#endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
+
+// Column (first-column) SFPU vector mode for the flash correction / normalization ops. A full 32x32 tile
+// has two face-rows (Face0+Face2 -> VectorMode::C); a 16x32 tiny tile has a single face-row (Face0 only ->
+// VectorMode::None). Using VectorMode::C on a tiny tile would spill into the non-existent Face2, corrupting
+// the cross-chunk max/sum/output correction.
+static constexpr VectorMode QK_COL_VECTOR_MODE = (QK_NUM_FACES == 2) ? VectorMode::None : VectorMode::C;
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
@@ -436,10 +448,11 @@ void reduce_c_row_group(
         CircularBuffer(in0_cb).wait_front(cumulative_input_tiles);
     }
 
-    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger);
+    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger, QK_NUM_FACES);
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
+        reduce_block_max_row_runtime(
+            in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half, QK_NUM_FACES);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
 
@@ -583,7 +596,7 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     {
         tile_regs_wait();
         for (uint32_t dst_index = 0; dst_index < tiles_per_row; dst_index++) {
-            PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_index)));
+            PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16, QK_COL_VECTOR_MODE>(dst_index)));
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -617,7 +630,14 @@ void salad_correct_fused(
     uint32_t write_q_subblock) {
     constexpr uint32_t tiles_per_row = sbh_t;
     constexpr uint32_t tiles_per_column = sbw_t;
-    constexpr uint32_t col_batch = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
+    // Reserve room in the last output batch for the fused sum correction (sbh_t extra tiles) so the
+    // sum can always be folded into the same DEST acquire. When an output batch exactly fills DEST
+    // (e.g. 16x32 tiny tiles: sbh_t=2, sbw_t=4, dst_size=8 -> 8 output tiles == DEST) the sum would
+    // otherwise fall to the separate (can_fuse_last=false) path, which mispacks for tiny tiles.
+    // Full 32x32 tiles (sbh_t=1) already leave room, so this only shrinks the batch for tiny tiles.
+    constexpr uint32_t col_batch_raw = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
+    constexpr uint32_t col_batch =
+        (col_batch_raw > 1 && (col_batch_raw * sbh_t + sbh_t) > dst_size) ? (col_batch_raw - 1) : col_batch_raw;
     constexpr uint32_t last_out_cols = (sbw_t % col_batch == 0) ? col_batch : (sbw_t % col_batch);
     constexpr bool can_fuse_last = (last_out_cols * sbh_t + sbh_t <= dst_size);
 

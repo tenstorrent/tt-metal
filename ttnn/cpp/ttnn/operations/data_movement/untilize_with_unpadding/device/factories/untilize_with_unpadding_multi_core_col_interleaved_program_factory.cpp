@@ -28,10 +28,15 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
 
     ProgramDescriptor desc;
 
+    const auto& tile = a.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+    const uint32_t tile_hw = tile.get_tile_hw();
+
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
@@ -42,9 +47,9 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
-    uint32_t num_blocks = input_shape[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_blocks = input_shape[-1] / tile_width;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / tile_width;
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / tile_height;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(available_grid, num_blocks);
@@ -70,6 +75,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
             .buffer_index = src0_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
     constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
@@ -80,6 +86,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
             .buffer_index = output_cb_index,
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -88,7 +95,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // reader
-    uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
+    uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / tile_hw;
 
     auto log_shape = output.logical_shape();
     uint32_t third_dim = 1;
@@ -112,7 +119,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
     // writer
     uint32_t total_num_rows = output.logical_shape()[-2];
 
-    std::vector<uint32_t> writer_ct_args = {total_num_rows, ncores, third_dim, TILE_WIDTH, unpadded_row_size_bytes};
+    std::vector<uint32_t> writer_ct_args = {total_num_rows, ncores, third_dim, tile_width, unpadded_row_size_bytes};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
@@ -160,11 +167,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
         } else {
             number_blocks_per_core = nblocks_per_core;
         }
-        uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * el_size;
+        uint32_t size_per_row_per_block = nblocks_per_core * tile_width * el_size;
 
         //  writer runtime args
         writer_desc.emplace_runtime_args(
-            core, {dst_buffer, i, size_per_row_per_block, number_blocks_per_core, TILE_WIDTH * el_size});
+            core, {dst_buffer, i, size_per_row_per_block, number_blocks_per_core, tile_width * el_size});
 
         // reader runtime args
         reader_desc.emplace_runtime_args(core, {src0_buffer, i, num_tiles_per_row, number_blocks_per_core});

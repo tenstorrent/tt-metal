@@ -42,7 +42,11 @@ from helpers.test_variant_parameters import (
 _INT32_UNARY_OPS = [
     MathOperation.AddInt32,
     MathOperation.SubInt32,
+    MathOperation.AbsInt32,
     MathOperation.ReluMin,
+    MathOperation.BitwiseNot,
+    MathOperation.LogicalNot,
+    MathOperation.Fill,
 ]
 
 

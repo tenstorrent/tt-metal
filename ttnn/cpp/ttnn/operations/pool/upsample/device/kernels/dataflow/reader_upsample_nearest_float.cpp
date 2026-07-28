@@ -6,6 +6,7 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
@@ -29,7 +30,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<9>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_buffer_addr);
 
-    experimental::CB out_cb(cb_id_out);
+    DataflowBuffer out_dfb(cb_id_out);
     Noc noc;
 
     // Process sticks assigned to this core
@@ -62,16 +63,16 @@ void kernel_main() {
                                       clamped_src_x * num_pages_per_width + in_stick_offset;
 
         // Reserve space in output CB
-        out_cb.reserve_back(1);
+        out_dfb.reserve_back(1);
 
         // Read source stick from DRAM
-        noc.async_read(input_tensor_accessor, out_cb, aligned_stick_nbytes, {.page_id = src_stick_id}, {});
+        noc.async_read(input_tensor_accessor, out_dfb, aligned_stick_nbytes, {.page_id = src_stick_id}, {});
 
         // Wait for read to complete
         noc.async_read_barrier();
 
         // Push to CB
-        out_cb.push_back(1);
+        out_dfb.push_back(1);
 
         page_id++;
     }

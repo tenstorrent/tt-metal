@@ -93,12 +93,12 @@ static void run_single_dfb_multicore_2_0(
     params.kernel_run_args = {
         {.kernel = PRODUCER,
          .runtime_arg_values =
-             {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}},
-              {.node = core_b, .args = {{"chunk_offset", num_entries}, {"entries_per_core", num_entries}}}}},
+             {{"chunk_offset", {{core_a, 0u}, {core_b, num_entries}}},
+              {"entries_per_core", {{core_a, num_entries}, {core_b, num_entries}}}}},
         {.kernel = CONSUMER,
          .runtime_arg_values =
-             {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}},
-              {.node = core_b, .args = {{"chunk_offset", num_entries}, {"entries_per_core", num_entries}}}}},
+             {{"chunk_offset", {{core_a, 0u}, {core_b, num_entries}}},
+              {"entries_per_core", {{core_a, num_entries}, {core_b, num_entries}}}}},
     };
     params.tensor_args = {
         {IN_TENSOR, std::cref(in_tensor)},
@@ -346,8 +346,8 @@ static void run_sequential_4_dfbs_2_0(
     // framework actually launches them on each node. Without this, the kernels
     // are wired up but never start, and outputs stay at the initial value (0).
     params.kernel_run_args = {
-        {.kernel = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}},
-        {.kernel = CONSUMER, .runtime_arg_values = {{.node = node, .args = {}}}},
+        {.kernel = PRODUCER, .runtime_arg_values = {}},
+        {.kernel = CONSUMER, .runtime_arg_values = {}},
     };
     for (uint32_t i = 0; i < 4; ++i) {
         params.tensor_args.insert({m2::TensorParamName{SRC_NAMES[i]}, std::cref(in_tensors[i])});
@@ -531,12 +531,12 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     m2::ProgramRunArgs params;
     // Producer has no runtime args but still needs a KernelRunArgs entry to be
     // launched. Without it, the kernel is wired up but never runs.
-    params.kernel_run_args.push_back({.kernel = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}});
+    params.kernel_run_args.push_back({.kernel = PRODUCER, .runtime_arg_values = {}});
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         params.kernel_run_args.push_back(
             {.kernel = m2::KernelSpecName{CONSUMER_NAMES[i]},
-             .runtime_arg_values = {
-                 {.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}});
+             .runtime_arg_values =
+                 m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})});
     }
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         params.tensor_args.insert({m2::TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});

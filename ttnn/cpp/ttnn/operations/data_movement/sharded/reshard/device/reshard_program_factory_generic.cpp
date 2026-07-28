@@ -24,14 +24,20 @@ void push_reshard_generic_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    Buffer* bound_buffer,
+    std::optional<Tile> tile = std::nullopt) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
+    std::optional<TileDescriptor> tile_descriptor = std::nullopt;
+    if (tile) {
+        tile_descriptor = tt::tt_metal::TileDescriptor(tile.value());
+    }
     cb.format_descriptors.push_back(CBFormatDescriptor{
         .buffer_index = static_cast<uint8_t>(cb_index),
         .data_format = data_format,
         .page_size = page_size,
+        .tile = tile_descriptor,
     });
     cb.buffer = bound_buffer;
     desc.cbs.push_back(std::move(cb));
@@ -671,10 +677,17 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
     auto output_shard_shape = output.shard_spec().value().shape;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
+    std::optional<Tile> tile = std::nullopt;
     if (input.layout() == Layout::TILE) {
-        page_size = tt::tile_size(data_format);
+        tile = input.tensor_spec().tile();
+        page_size = tile.value().get_tile_size(data_format);
         unit_size = page_size;
-        total_size = static_cast<uint32_t>(output.shard_spec().value().numel() / TILE_HW) * unit_size;
+        const uint32_t tile_hw = tile.value().get_tile_hw();
+        TT_FATAL(
+            output.shard_spec().value().numel() % tile_hw == 0,
+            "Output shard numel must be divisible by tile hw {}",
+            tile_hw);
+        total_size = static_cast<uint32_t>(output.shard_spec().value().numel() / tile_hw) * unit_size;
     } else {
         // For ROW_MAJOR, use base page size from GCD calculation
         uint32_t input_page_size = input_buffer->page_size();
@@ -696,7 +709,8 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         total_size,
         output_buffer->page_size(),
         all_cores,
-        /*bound_buffer=*/output_buffer);
+        /*bound_buffer=*/output_buffer,
+        tile);
 
     const std::string kernel_source = input_buffer->page_size() != output_buffer->page_size()
                                           ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"

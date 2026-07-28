@@ -17,6 +17,8 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input;
     const auto& cos = tensor_args.cos;
     const auto& sin = tensor_args.sin;
+    const auto input_tile = input_tensor.tensor_spec().tile();
+    const auto input_tile_width = input_tile.get_width();
 
     auto* ref_device = input_tensor.device();
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
@@ -34,12 +36,13 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL((sin.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
 
     TT_FATAL(
-        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        input_tensor.padded_shape()[-1] == input_tile_width ||
+            input_tensor.padded_shape()[-1] % (input_tile_width * 2) == 0,
         "Input X dim ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint must "
         "align with a tile boundary).",
         input_tensor.padded_shape()[-1],
-        TILE_WIDTH,
-        TILE_WIDTH * 2);
+        input_tile_width,
+        input_tile_width * 2);
     uint32_t seq_len = input_tensor.padded_shape()[-2];
     uint32_t X = input_tensor.padded_shape()[-1];
     // The single-tile (Wt == 1) path rotates via matmul_tiles against an in-L1
@@ -99,9 +102,11 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
 TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
+    const auto input_tile = input_tensor.tensor_spec().tile();
+    const auto input_tile_height = input_tile.get_height();
     auto shape = input_tensor.padded_shape();
     if (!args.token_idx.has_value()) {
-        shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
+        shape[-2] = tt::round_up(args.seq_len, input_tile_height);
     }
 
     if (args.output_mem_config.is_sharded()) {
@@ -109,7 +114,7 @@ TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
         if (input_tensor.is_sharded()) {
             shard_spec = input_tensor.shard_spec().value();
         } else {
-            uint32_t num_blocks = input_tensor.physical_volume() / input_tensor.padded_shape()[-1] / TILE_HEIGHT;
+            uint32_t num_blocks = input_tensor.physical_volume() / input_tensor.padded_shape()[-1] / input_tile_height;
             auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
             uint32_t num_grid_cores = core_grid.x * core_grid.y;
             uint32_t num_cores = 0;
@@ -121,7 +126,7 @@ TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
             }
             uint32_t Ht = tt::div_up(num_blocks, num_cores);
             shard_spec.grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, core_grid, true);
-            shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.padded_shape()[-1]};
+            shard_spec.shape = {Ht * input_tile_height, input_tensor.padded_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
         auto mem_config = tt::tt_metal::MemoryConfig(
@@ -129,13 +134,13 @@ TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
         return TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout(), input_tile), mem_config));
     }
 
     return TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout(), input_tile), args.output_mem_config));
 }
 
 Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(

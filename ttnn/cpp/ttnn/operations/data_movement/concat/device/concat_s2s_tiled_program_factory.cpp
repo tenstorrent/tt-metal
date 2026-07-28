@@ -5,11 +5,13 @@
 #include "concat_s2s_tiled_program_factory.hpp"
 
 #include <algorithm>
+#include <optional>
 
 #include "tt-metalium/buffer.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -45,25 +47,32 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
         groups);
 
     // The current implementation relies on not having break up tile faces so if we would
-    // need to split tiles because dim[-1] / groups < 16, we cannot proceed
+    // need to split tiles because dim[-1] / groups < face_width, we cannot proceed
+    const auto& tile = input_tensors[0].tensor_spec().tile();
+    const uint32_t face_width = tile.get_face_shape()[1];
     TT_FATAL(
-        input_tensors[0].padded_shape()[-1] / groups >= TILE_HEIGHT / 2,
-        "Group size must be at least 16 for input0 (was {})",
+        input_tensors[0].padded_shape()[-1] / groups >= face_width,
+        "Group size must be at least {} for input0 (was {})",
+        face_width,
         input_tensors[0].padded_shape()[-1] / groups);
     TT_FATAL(
-        input_tensors[1].padded_shape()[-1] / groups >= TILE_HEIGHT / 2,
-        "Group size must be at least 16 for input1 (was {})",
+        input_tensors[1].padded_shape()[-1] / groups >= face_width,
+        "Group size must be at least {} for input1 (was {})",
+        face_width,
         input_tensors[1].padded_shape()[-1] / groups);
 
     ProgramDescriptor desc;
     const CoreRangeSet all_cores = input_tensors[0].shard_spec().value().grid;  // assume all inputs have same grid
 
-    const auto get_num_tiles_per_shard = [](const ShardSpec& shard_spec) -> std::pair<uint32_t, uint32_t> {
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+    const auto get_num_tiles_per_shard = [tile_height,
+                                          tile_width](const ShardSpec& shard_spec) -> std::pair<uint32_t, uint32_t> {
         const std::array<uint32_t, 2> shard_shape = shard_spec.shape;
-        TT_FATAL(shard_shape[0] % TILE_HEIGHT == 0, "Shard height must be aligned to tile height");
-        TT_FATAL(shard_shape[1] % TILE_WIDTH == 0, "Shard width must be aligned to tile width");
-        const uint32_t num_tiles_along_height = shard_shape[0] / TILE_HEIGHT;
-        const uint32_t num_tiles_along_width = shard_shape[1] / TILE_WIDTH;
+        TT_FATAL(shard_shape[0] % tile_height == 0, "Shard height must be aligned to tile height");
+        TT_FATAL(shard_shape[1] % tile_width == 0, "Shard width must be aligned to tile width");
+        const uint32_t num_tiles_along_height = shard_shape[0] / tile_height;
+        const uint32_t num_tiles_along_width = shard_shape[1] / tile_width;
         TT_FATAL(num_tiles_along_height != 0 && num_tiles_along_width != 0, "Expected tensor to have at least 1 tiles");
         return {num_tiles_along_height, num_tiles_along_width};
     };
@@ -85,8 +94,9 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
 
     TT_FATAL(input_tensors.at(0).dtype() == input_tensors.at(1).dtype(), "Input tensor data types must match");
     const tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensors.at(0).dtype());
-    const uint32_t tile_size = tt::tile_size(data_format);
+    const uint32_t tile_size = tile.get_tile_size(data_format);
     const uint32_t num_input_tensors = input_tensors.size();
+    const TileDescriptor tile_descriptor(tile);
 
     for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
         const Tensor& input_tensor = input_tensors.at(idx);
@@ -97,7 +107,8 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(idx),
                 .data_format = datatype_to_dataformat_converter(input_tensor.dtype()),
-                .page_size = tt::tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
+                .page_size = tile.get_tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
+                .tile = tile_descriptor,
             }}},
             .buffer = input_tensor.buffer(),
         });
@@ -111,7 +122,8 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_output_id),
             .data_format = datatype_to_dataformat_converter(output.dtype()),
-            .page_size = tt::tile_size(datatype_to_dataformat_converter(output.dtype())),
+            .page_size = tile.get_tile_size(datatype_to_dataformat_converter(output.dtype())),
+            .tile = tile_descriptor,
         }}},
         .buffer = output.buffer(),
     });
@@ -121,7 +133,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
     const bool is_bf8 = input_tensors[0].dtype() == DataType::BFLOAT8_B;
     if (is_bf8) {
         cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
-        cb_tile_size = tt::tile_size(cb_data_format);
+        cb_tile_size = tile.get_tile_size(cb_data_format);
     }
 
     const uint32_t in0_total_tiles_width = num_tiles_for_each_input_shard[0].second;
@@ -133,6 +145,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(cb_input0_transpose_id),
             .data_format = cb_data_format,
             .page_size = cb_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -145,6 +158,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(cb_input1_transpose_id),
             .data_format = cb_data_format,
             .page_size = cb_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -157,6 +171,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(cb_concat_id),
             .data_format = cb_data_format,
             .page_size = cb_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -168,17 +183,18 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(cb_output_transpose_id),
             .data_format = data_format,
             .page_size = tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
     // TODO: Skip the tile transpose in compute kernel if the following condition is true:
-    // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
-    // >> && input_tensors[1].padded_shape()[-1] / groups % TILE_WIDTH == 0)
+    // >> (input_tensors[0].padded_shape()[-1] / groups % tile_width == 0
+    // >> && input_tensors[1].padded_shape()[-1] / groups % tile_width == 0)
     constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
     const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / input_tensors[0].element_size();
 
     // Calculate stride sizes to determine if we can use single-packet NOC reads
-    // For BF8, the kernel uses bf16_tile_size (2048 bytes) for stride calculation
+    // For BF8, the kernel uses bf16 tile size for stride calculation
     const uint32_t stride_tile_size = is_bf8 ? cb_tile_size : tile_size;
     const uint32_t input0_stride = stride_tile_size * num_tiles_for_each_input_shard[0].second / groups;
     const uint32_t input1_stride = stride_tile_size * num_tiles_for_each_input_shard[1].second / groups;

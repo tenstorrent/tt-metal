@@ -15,8 +15,8 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    example/device/kernels/*
-    example_multiple_return/device/kernels/*
+    example/device/kernels/*.cpp
+    example_multiple_return/device/kernels/*.cpp
 )
 
 target_sources(

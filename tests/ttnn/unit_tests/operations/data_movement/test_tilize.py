@@ -367,7 +367,7 @@ def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
     "device_params",
     [
         {
-            "trace_region_size": 1671168,
+            "trace_region_size": 8 * 1024 * 1024,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
@@ -922,3 +922,168 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_layout",
+    [
+        ([1, 1, 128, 256], None),  # Interleaved input/output.
+        ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+)
+@pytest.mark.parametrize(
+    "tile_shape",
+    [
+        (16, 32),
+        (8, 32),
+        (4, 32),
+        (2, 32),
+        # (1, 32), Disabled due to LLK bug
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_shape, dtype):
+    """Tilize a ROW_MAJOR input (interleaved or sharded) directly into a tiny (non-32x32) tile shape."""
+    torch.manual_seed(42)
+    tile_h, tile_w = tile_shape
+    H, W = tensor_shape[-2], tensor_shape[-1]
+    shard_h, shard_w = 32, 32
+    assert H % tile_h == 0 and W % tile_w == 0, "tensor dims must be divisible by tile dims"
+
+    if shard_layout is None:
+        mem_cfg = None
+    elif shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        assert W == shard_w, "height-sharded shard width must match tensor width"
+        assert H % shard_h == 0, "tensor height must be divisible by shard height"
+        num_cores = H // shard_h
+        grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        shard_shape = [shard_h, shard_w]
+    elif shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        assert H == shard_h, "width-sharded shard height must match tensor height"
+        assert W % shard_w == 0, "tensor width must be divisible by shard width"
+        num_cores = W // shard_w
+        grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        shard_shape = [shard_h, shard_w]
+    else:
+        assert shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        assert H % shard_h == 0 and W % shard_w == 0, "tensor dims must be divisible by shard dims"
+        n_y = H // shard_h
+        n_x = W // shard_w
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
+        shard_shape = [shard_h, shard_w]
+
+    if shard_layout is not None:
+        shard_spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        mem_cfg = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(tile_shape)), memory_config=mem_cfg)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    if shard_layout is not None:
+        assert tt_output.memory_config().memory_layout == shard_layout
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_layout",
+    [
+        # Interleaved input/output.
+        ([1, 1, 128, 256], None),
+        ([1, 1, 64, 256], None),
+        ([1, 1, 64, 128], None),
+        ([1, 1, 1, 1024], None),
+        # Multi-slice (leading dims > 1) with a -2 dim that is NOT a multiple of 32. Each slice is
+        # padded to a whole number of tiles independently, so growing the tile height (e.g. 16->32)
+        # must pad every slice's boundary tile — not just append zeros once at the end of the
+        # flattened tensor. These cases exercise that per-slice padding/truncation.
+        ([1, 4, 48, 128], None),
+        ([1, 8, 16, 64], None),
+        ([2, 3, 80, 96], None),
+        # Sharded input/output (invokes the sharded retile factory).
+        ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("input_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32)])
+@pytest.mark.parametrize("output_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype):
+    """Retile an already-tiled input into a different tile shape (invokes the retile factory)."""
+    torch.manual_seed(42)
+    torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+    if input_tile_shape[0] == output_tile_shape[0]:
+        pytest.skip("Input and output tile shapes are the same")
+    if dtype == ttnn.bfloat8_b and (input_tile_shape[0] < 16 or output_tile_shape[0] < 16):
+        pytest.skip("bfloat8_b tilize/untilize LLK does not support partial-face tiles (height < 16)")
+    # bfloat8_b tilize/untilize LLK does not support partial-face tiles (tile height < 16): the
+    # untilize/tilize half of the retile produces garbage (PCC ~0) whenever either the input or
+    # output tile has a partial face. This matches the convention in test_tiny_tile.py ("blocked
+    # dtypes (bfloat8_b/bfloat4_b) are not supported at a tiny tile"). Full-face tiles (16x32,
+    # 32x32) are supported on both the sharded and interleaved retile paths.
+    # if dtype == ttnn.bfloat8_b and (input_tile_shape[0] < 16 or output_tile_shape[0] < 16):
+    #     pytest.skip("bfloat8_b tilize/untilize LLK does not support partial-face tiles (height < 16)")
+
+    # Build a (possibly sharded) already-tiled input using the source tile shape.
+    mem_cfg = None
+    if shard_layout is not None:
+        # Use a 32x32 shard so the shard height is divisible by every tile height under test,
+        # keeping both the input and output tilings tile-aligned within each shard.
+        H, W = tensor_shape[-2], tensor_shape[-1]
+        shard_h, shard_w = 32, 32
+        if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            num_cores = H // shard_h
+            grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        elif shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            num_cores = W // shard_w
+            grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        else:
+            assert shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            n_y, n_x = H // shard_h, W // shard_w
+            grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
+        shard_spec = ttnn.ShardSpec(grid, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_cfg = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        tile=ttnn.Tile(list(input_tile_shape)),
+        memory_config=mem_cfg,
+    )
+    assert tt_input.layout == ttnn.TILE_LAYOUT
+
+    # Re-tilize into a different tile shape; input and output tile shapes differ.
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(output_tile_shape)), memory_config=mem_cfg)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    if shard_layout is not None:
+        assert tt_output.memory_config().memory_layout == shard_layout
+    if dtype == ttnn.bfloat8_b:
+        assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
+    else:
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+    # When the output tile is taller than the input tile, the logical height may not be a whole
+    # multiple of the output tile height, so the retile pads the output up to whole output tiles.
+    # The real region is checked above (to_torch strips padding); here we additionally verify the
+    # padding rows are exactly zero by inspecting the full physical (padded) output.
+    padded_output = ttnn.from_device(tt_output).to_torch_with_padded_shape()
+    logical_h = tensor_shape[-2]
+    padded_h = padded_output.shape[-2]
+    if output_tile_shape[0] > input_tile_shape[0] and padded_h > logical_h:
+        pad_region = padded_output[..., logical_h:, :]
+        assert torch.all(pad_region == 0), (
+            f"retile height padding must be zero: input_tile={input_tile_shape}, "
+            f"output_tile={output_tile_shape}, logical_h={logical_h}, padded_h={padded_h}"
+        )

@@ -4,11 +4,14 @@
 
 #include "typecast_program_factory.hpp"
 
+#include <optional>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -27,9 +30,19 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     tt::tt_metal::ProgramDescriptor desc;
 
     const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
     const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+
+    std::optional<tt::tt_metal::Tile> tile = std::nullopt;
+    uint32_t single_tile_size_input;
+    uint32_t single_tile_size_output;
+    if (is_row_major) {
+        single_tile_size_input = tt::tile_size(cb_data_format_input);
+        single_tile_size_output = tt::tile_size(cb_data_format_output);
+    } else {
+        tile = input.tensor_spec().tile();
+        single_tile_size_input = tile->get_tile_size(cb_data_format_input);
+        single_tile_size_output = tile->get_tile_size(cb_data_format_output);
+    }
 
     const auto* device = input.device();
 
@@ -40,7 +53,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     Buffer* dst_buffer = output.buffer();
 
     // Set CB page size correctly based on layout
-    // - For TILE layout: page = one 32x32 tile
+    // - For TILE layout: page = one tile (may be tiny, e.g. 16x32)
     // - For ROW_MAJOR layout: page = one full row including padding
     const uint32_t input_page_size = is_row_major ? src_buffer->page_size() : single_tile_size_input;
     const uint32_t output_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
@@ -49,6 +62,9 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_items_per_core_group_1, num_items_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages, is_row_major);
     (void)num_cores;
+
+    const std::optional<TileDescriptor> tile_descriptor =
+        tile.has_value() ? std::optional<TileDescriptor>(TileDescriptor(tile.value())) : std::nullopt;
 
     constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t num_input_pages = 2;
@@ -59,6 +75,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
             .buffer_index = src0_cb_index,
             .data_format = cb_data_format_input,
             .page_size = input_page_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -71,6 +88,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
             .buffer_index = output_cb_index,
             .data_format = cb_data_format_output,
             .page_size = output_page_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -204,12 +222,13 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
 
     tt::tt_metal::ProgramDescriptor desc;
 
+    const auto& tile = input.tensor_spec().tile();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tile.get_tile_size(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+    uint32_t single_tile_size_output = tile.get_tile_size(cb_data_format_output);
 
-    uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
+    uint32_t ntiles = input.physical_volume() / tile.get_tile_hw();
     uint32_t ncores = sub_core_grids->num_cores();
 
     TT_FATAL(ncores != 0, "number of cores cannot be 0");
@@ -229,6 +248,8 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores[0]));
     }
 
+    const TileDescriptor tile_descriptor(tile);
+
     constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t num_input_tiles = 2;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -238,6 +259,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
             .buffer_index = src0_cb_index,
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -250,6 +272,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
             .buffer_index = output_cb_index,
             .data_format = cb_data_format_output,
             .page_size = single_tile_size_output,
+            .tile = tile_descriptor,
         }}},
     });
 

@@ -11,6 +11,8 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
 #include <ttnn/tensor/types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "pad.hpp"
 
@@ -281,10 +283,11 @@ ttnn::Tensor pad_impl(
     }
 
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        const auto& tile = input_tensor.tensor_spec().tile();
         const int target_height = output_padded_shape[padding_size - 2];
         const int target_width = output_padded_shape[padding_size - 1];
         TT_FATAL(
-            target_height % ttnn::TILE_SIZE == 0 && target_width % ttnn::TILE_SIZE == 0,
+            target_height % tile.get_height() == 0 && target_width % tile.get_width() == 0,
             "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
             "tensor in tile layout");
     }
@@ -293,12 +296,35 @@ ttnn::Tensor pad_impl(
         input_tensor_4D, output_padded_shape, pad_front_array, value, use_multicore, memory_config_arg, sub_core_grids);
 }
 
+// Pad logical shape to the given tile geometry. The shared compute_padded_shape() helper
+// currently ignores its tile args and always pads to 32x32; use this for tiny-tile tensors.
+static ttnn::Shape compute_padded_shape_for_tile(ttnn::Shape logical_shape, uint32_t tile_height, uint32_t tile_width) {
+    if (logical_shape.rank() == 1) {
+        logical_shape = ttnn::Shape({1, logical_shape[0]});
+    }
+    ttsl::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
+    std::copy(logical_shape.cbegin(), logical_shape.cend(), output_shape_vec.begin());
+    if (output_shape_vec.size() >= 1) {
+        output_shape_vec[output_shape_vec.size() - 1] =
+            tt::round_up(output_shape_vec[output_shape_vec.size() - 1], tile_width);
+    }
+    if (output_shape_vec.size() >= 2) {
+        output_shape_vec[output_shape_vec.size() - 2] =
+            tt::round_up(output_shape_vec[output_shape_vec.size() - 2], tile_height);
+    }
+    return ttnn::Shape(std::move(output_shape_vec));
+}
+
 std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
-    const ttnn::Shape& input_logical_shape, const ttsl::SmallVector<PadSpecDim>& pad_spec) {
+    const ttnn::Shape& input_logical_shape,
+    const ttsl::SmallVector<PadSpecDim>& pad_spec,
+    uint32_t tile_height = tt::constants::TILE_HEIGHT,
+    uint32_t tile_width = tt::constants::TILE_WIDTH) {
     if (std::all_of(pad_spec.begin(), pad_spec.end(), [](auto& p) {
             return p.before_elements == 0 && p.after_elements == 0;
         })) {
-        return std::make_tuple(compute_padded_shape(input_logical_shape), compute_padded_shape(input_logical_shape));
+        auto padded = compute_padded_shape_for_tile(input_logical_shape, tile_height, tile_width);
+        return std::make_tuple(padded, padded);
     }
 
     const auto rank = input_logical_shape.rank();
@@ -312,7 +338,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
         [](auto& a, auto& b) { return a + b.after_elements; });
 
     const ttnn::Shape logical_shape(requested_logical_shape_vec);
-    return std::make_tuple(logical_shape, compute_padded_shape(logical_shape));
+    return std::make_tuple(logical_shape, compute_padded_shape_for_tile(logical_shape, tile_height, tile_width));
 }
 
 ttnn::Tensor invoke_rm(
@@ -359,8 +385,9 @@ ttnn::Tensor invoke_tile(
 
     const auto& input_logical_shape = input_tensor.logical_shape();
     const auto& input_padded_shape = input_tensor.padded_shape();
+    const auto& tile = input_tensor.tensor_spec().tile();
     const auto [requested_logical_shape, requested_padded_shape] =
-        compute_requested_shape(input_logical_shape, padding_vec);
+        compute_requested_shape(input_logical_shape, padding_vec, tile.get_height(), tile.get_width());
     const auto requested_rank = requested_logical_shape.rank();
 
     // Consistent with behavior expected by callers
@@ -379,7 +406,13 @@ ttnn::Tensor invoke_tile(
         return requested_padded_shape[i] == input_padded_shape[i];
     };
 
-    ttnn::Tensor output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
+    // fill_implicit_tile_padding currently assumes 32x32 when deciding whether implicit pad
+    // exists. Skip it when the input is already aligned to this tensor's tile geometry so
+    // tiny-tile pads (e.g. 16x32) are not incorrectly expanded to a 32-row multiple.
+    const bool already_tile_aligned =
+        (input_logical_shape[-2] % tile.get_height() == 0) && (input_logical_shape[-1] % tile.get_width() == 0);
+    ttnn::Tensor output_tensor =
+        already_tile_aligned ? input_tensor : ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
     if (requested_rank == 1 || (!pad_upper_dims && pad_current_tile_dim(-1) && pad_current_tile_dim(-2))) {
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
 

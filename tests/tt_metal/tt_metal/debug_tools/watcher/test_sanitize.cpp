@@ -122,6 +122,12 @@ void RunTestOnCore(
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
     }
+    // The Quasar NOC shifts the data so transfers don't need to be aligned; a misaligned transfer is
+    // legal there and there is nothing to flag. These tests stay valid on WH/BH where alignment is
+    // enforced.
+    if ((feature == SanitizeNOCAlignmentL1Write || feature == SanitizeNOCAlignmentL1Read) && is_quasar) {
+        GTEST_SKIP() << "Quasar NOC has no L1 alignment restriction; misaligned transfers are legal";
+    }
     // Both exercise Quasar's uncached L1 alias, which only exists on Quasar DM cores.
     if ((feature == SanitizeNOCMailboxWriteUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
         (!is_quasar || is_eth_core)) {
@@ -323,8 +329,8 @@ void RunTestOnCore(
             output_buf_noc_xy.y = 18;
             break;
         case SanitizeNOCAlignmentL1Write:
-            output_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
-                                   // requirements (32 byte aligned).
+            output_buffer_addr++;  // Misaligned L1 write: on WH/BH the NoC requires
+                                   // NOC_L1_WRITE_ALIGNMENT_BYTES alignment.
             buffer_size--;
             break;
         case SanitizeNOCAlignmentL1Read:
@@ -443,30 +449,31 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
+        const experimental::NodeCoord node{core};
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_COPY_KERNEL_NAME,
-            .runtime_arg_values =
-                {{experimental::NodeCoord{core},
-                  {{"local_buffer_addr", buffer_addr},
-                   {"buffer_src_addr", input_buffer_addr},
-                   {"src_noc_x", input_buf_noc_xy.x},
-                   {"src_noc_y", input_buf_noc_xy.y},
-                   {"buffer_dst_addr", output_buffer_addr},
-                   {"dst_noc_x", output_buf_noc_xy.x},
-                   {"dst_noc_y", output_buf_noc_xy.y},
-                   {"buffer_size", buffer_size},
-                   {"use_inline_dw_write", use_inline_dw_write},
-                   {"bad_linked_transaction", bad_linked_transaction},
-                   {"l1_overflow_addr", l1_overflow_addr},
-                   {"eth_src_overflow_addr", eth_src_overflow_addr_words},
-                   {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
-                   {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
-                   {"mcast_dst_end_x", mcast_dst_end_x},
-                   {"mcast_dst_end_y", mcast_dst_end_y},
-                   {"use_write_with_state", use_write_with_state},
-                   {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
-                   {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"local_buffer_addr", buffer_addr},
+                 {"buffer_src_addr", input_buffer_addr},
+                 {"src_noc_x", input_buf_noc_xy.x},
+                 {"src_noc_y", input_buf_noc_xy.y},
+                 {"buffer_dst_addr", output_buffer_addr},
+                 {"dst_noc_x", output_buf_noc_xy.x},
+                 {"dst_noc_y", output_buf_noc_xy.y},
+                 {"buffer_size", buffer_size},
+                 {"use_inline_dw_write", use_inline_dw_write},
+                 {"bad_linked_transaction", bad_linked_transaction},
+                 {"l1_overflow_addr", l1_overflow_addr},
+                 {"eth_src_overflow_addr", eth_src_overflow_addr_words},
+                 {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
+                 {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
+                 {"mcast_dst_end_x", mcast_dst_end_x},
+                 {"mcast_dst_end_y", mcast_dst_end_y},
+                 {"use_write_with_state", use_write_with_state},
+                 {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
+                 {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}),
         }};
         experimental::SetProgramRunArgs(program, params);
     }
@@ -838,6 +845,23 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCAlignmentL1ReadNCrisc) {
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCAlignmentL1Read, true);
         },
         this->devices_[0]);
+}
+
+// Quasar relaxes NoC transfer alignment to 1B (misaligned transfers are legal, so the watcher can't
+// flag them) while allocation alignment stays at the physical floor. Guards against regressing either.
+TEST_F(MeshWatcherFixture, TensixTestWatcherQuasarAlignmentContract) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Relaxed NoC alignment is Quasar-only";
+    }
+    // NoC transfer alignment relaxed to 1B.
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::DRAM), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::DRAM), 1u);
+    // Allocation alignment stays at the physical floor.
+    EXPECT_EQ(hal.get_alignment(HalMemType::L1), 16u);
+    EXPECT_EQ(hal.get_alignment(HalMemType::DRAM), 64u);
 }
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCZeroL1Write) {

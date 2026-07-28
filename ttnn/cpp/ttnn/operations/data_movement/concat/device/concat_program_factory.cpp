@@ -5,12 +5,14 @@
 #include "ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include <algorithm>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -31,6 +33,7 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
     constexpr bool rm_orientation = false;
 
+    std::optional<Tile> tile = std::nullopt;
     uint32_t num_output_pages;
     uint32_t single_page_size;
     const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), output.buffer()->alignment());
@@ -38,8 +41,9 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
     } else {
-        num_output_pages = output.physical_volume() / TILE_HW;
-        single_page_size = tt::tile_size(cb_data_format);
+        tile = output.tensor_spec().tile();
+        num_output_pages = output.physical_volume() / tile->get_tile_hw();
+        single_page_size = tile->get_tile_size(cb_data_format);
     }
 
     CoreRangeSet all_cores;
@@ -130,6 +134,7 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format,
             .page_size = single_page_size,
+            .tile = tile.has_value() ? std::optional<TileDescriptor>(TileDescriptor(tile.value())) : std::nullopt,
         }}},
     });
 
@@ -146,9 +151,9 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     // RM is special cased in the loop (dim_units = 1 for last dim else it's the dim size)
     if (!rm_layout) {
         if (dim == num_dims - 2) {
-            scale_factor = TILE_HEIGHT;
+            scale_factor = tile->get_height();
         } else if (dim == num_dims - 1) {
-            scale_factor = TILE_WIDTH;
+            scale_factor = tile->get_width();
         }
     }
 
@@ -161,9 +166,9 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
         }
     } else {
         if (dim < num_dims - 2) {
-            num_accum_pages /= TILE_HW;
+            num_accum_pages /= tile->get_tile_hw();
         } else if (dim == num_dims - 2) {
-            num_accum_pages /= TILE_WIDTH;
+            num_accum_pages /= tile->get_width();
         }
     }
 
