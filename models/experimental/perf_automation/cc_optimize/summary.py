@@ -453,6 +453,14 @@ def _is_win(attempt) -> bool:
         return False
 
 
+def _win_set(attempts, baseline_ms=None) -> set:
+    """Delegates to the ledger, which owns which attempts actually reduced the measured time."""
+    try:
+        return _ledger().winning_indices(attempts, baseline_ms)
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _floor_anchor(current_ms, depth, model: str = "", task: str = ""):
     """The pinned modeled floor for this (model, task, depth), or None if nothing is pinned yet.
 
@@ -655,14 +663,21 @@ def render_summary(
     if not isinstance(attempts, list):
         attempts = []
 
+    # THE baseline and THE win-set, computed once, before anything renders. A win must have reduced
+    # the model's measured time, which is a property of the SEQUENCE, not of one row -- so it is
+    # decided here and every section below reads this set instead of re-judging rows.
+    _base_row = _ledger_pair(_ledger().KIND_EAGER, model, task)[0]
+    hdr_base = float(_base_row["value_ms"]) if _base_row else None
+    _wins = _win_set(attempts, hdr_base)
+
     by_op: dict[str, dict] = {}
-    for a in attempts:
+    for _i, a in enumerate(attempts):
         if not isinstance(a, dict):
             continue
         sig = a.get("op_signature", "?")
         lvl = classify_level(a.get("kernel_kind", ""), a.get("note", ""), sig)
         ms = a.get("measured_ms")
-        won = _is_win(a)
+        won = _i in _wins
         op = by_op.setdefault(sig, {c: None for c in _ALL_COLS})
         cur = op.get(lvl)
         # 'win' beats 'try'; track best (lowest) measured ms per cell
@@ -676,14 +691,12 @@ def render_summary(
         elif cur and ms is not None and cur[1] is not None and ms < cur[1] and cur[0] != "win":
             op[lvl] = (cur[0], ms)
 
-    win_ms = [a.get("measured_ms") for a in attempts if _is_win(a)]
+    win_ms = [attempts[i].get("measured_ms") for i in _wins]
     final_ms = final_override_ms if final_override_ms is not None else (min(win_ms) if win_ms else baseline_ms)
     # ANCHOR for the headline, most trustworthy first. Falling straight back to `baseline_ms` is
     # wrong: run.py passes the CURRENT committed ms in that slot, so refusing a stale original made a
     # 3.45x run print "714.94 -> 714.94 (+0.0%)". This run's own baseline_profile.json is written once
     # at the start and is the only value guaranteed to predate every lever.
-    _base_row = _ledger_pair(_ledger().KIND_EAGER, model, task)[0]
-    hdr_base = float(_base_row["value_ms"]) if _base_row else None
     # The baseline is a measured fact, never a derived one. This used to substitute the SLOWEST
     # measurement ever recorded whenever the real baseline was not better than the final -- i.e.
     # precisely when the run achieved NOTHING -- so 100 -> 105 with a 180 ms failed experiment
@@ -763,7 +776,7 @@ def render_summary(
         ah = f"{'op':<34} {'lever':>12} {'ms':>9} {'gain vs base':>13}  {'result':<10} why tried / why it won or failed"
         lines.append(ah)
         lines.append("-" * min(len(ah), 120))
-        for a in attempts:
+        for _i, a in enumerate(attempts):
             if not isinstance(a, dict):
                 continue
             sig = _op_label(a.get("op_signature", "?"))
@@ -774,7 +787,7 @@ def render_summary(
                 gain_s = f"{hdr_base - ms:+.2f} ms"
             else:
                 gain_s = "—"
-            res = "✓ win" if _is_win(a) else ("· wedged" if a.get("wedged") else "· no gain")
+            res = "✓ win" if _i in _wins else ("· wedged" if a.get("wedged") else "· no gain")
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
             lines.append(f"{sig:<34} {lever:>12} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
 
@@ -791,7 +804,7 @@ def render_summary(
                 continue
             sig = _op_label(a.get("op_signature", "?"))
             lever = _disp_level(a.get("kernel_kind") or "?")
-            res = "win" if _is_win(a) else ("wedged" if a.get("wedged") else "no gain")
+            res = "win" if (i - 1) in _wins else ("wedged" if a.get("wedged") else "no gain")
             ms = a.get("measured_ms")
             gain = f"  {hdr_base - ms:+.2f} ms" if (hdr_base and isinstance(ms, (int, float))) else ""
             lines.append("")
@@ -800,7 +813,7 @@ def render_summary(
                 lines.append("    " + dl)
 
     # --- Limitations / suggested manual next steps (#5c) ---
-    _won_ops = {a.get("op_signature") for a in attempts if _is_win(a)}
+    _won_ops = {attempts[i].get("op_signature") for i in _wins}
     _no_gain = sorted({o for o in by_op} - {o for o in _won_ops if o})
     lines.append("")
     lines.append("Limitations / suggested manual next steps:")
@@ -809,7 +822,7 @@ def render_summary(
         lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
         lines.append("  -> inspect the per-op device report and consider a hand-written kernel or a structural change.")
     _measured = [a for a in attempts if isinstance(a, dict) and a.get("measured_ms") is not None]
-    _any_win = any(_is_win(a) for a in attempts)
+    _any_win = bool(_wins)
     if not _measured and attempts:
         _unmeasured = len(attempts)
         lines.append(

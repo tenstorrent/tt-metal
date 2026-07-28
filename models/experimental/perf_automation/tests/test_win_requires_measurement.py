@@ -178,3 +178,115 @@ def test_is_win_is_the_only_definition(tmp_path):
     assert not sm._is_win({"beat_baseline": False, "measured_ms": 648.17})
     assert not sm._is_win({})
     assert not sm._is_win(None)
+
+
+# --- a win must have REDUCED the time, not merely been committed and timed --------------------------
+
+
+def _led():
+    import importlib.util
+    from pathlib import Path as _P
+
+    spec = importlib.util.spec_from_file_location(
+        "led_wins_ut", _P(__file__).resolve().parents[1] / "cc_optimize" / "measurements.py"
+    )
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _a(ms, flag=True):
+    return {"op_signature": "Matmul", "kernel_kind": "grid", "measured_ms": ms, "beat_baseline": flag}
+
+
+def test_only_new_bests_count_as_wins():
+    """THE DEFECT: every committed+timed attempt got a tick, so a run whose end-to-end time moved 4
+    times showed 16 wins. A win must be strictly faster than the baseline AND than every win before
+    it -- the staircase the run actually walked down."""
+    led = _led()
+    att = [_a(654.43), _a(700.0), _a(615.69), _a(620.0), _a(567.94), _a(534.44), _a(540.0)]
+    assert led.winning_indices(att, 2464.18) == {0, 2, 4, 5}
+
+
+def test_an_attempt_that_did_not_improve_is_not_a_win_however_it_was_flagged():
+    led = _led()
+    att = [_a(600.0), _a(600.0), _a(601.0)]
+    assert led.winning_indices(att, 2464.18) == {0}
+
+
+def test_nothing_beating_the_baseline_yields_no_wins():
+    led = _led()
+    assert led.winning_indices([_a(3000.0), _a(2600.0)], 2464.18) == set()
+
+
+def test_unmeasured_commits_cannot_enter_the_staircase():
+    led = _led()
+    att = [_a(None), _a(0), _a(600.0), _a(None)]
+    assert led.winning_indices(att, 2464.18) == {2}
+
+
+def test_unflagged_measurements_do_not_lower_the_bar():
+    """A faster reading that was NOT kept must not raise the bar for later real wins -- otherwise a
+    reverted experiment silently disqualifies the win that follows it."""
+    led = _led()
+    att = [_a(400.0, flag=False), _a(600.0)]
+    assert led.winning_indices(att, 2464.18) == {1}
+
+
+def test_order_is_respected():
+    led = _led()
+    assert led.winning_indices([_a(500.0), _a(600.0)], 2464.18) == {0}
+    assert led.winning_indices([_a(600.0), _a(500.0)], 2464.18) == {0, 1}
+
+
+def test_without_a_baseline_the_first_timed_commit_starts_the_staircase():
+    led = _led()
+    assert led.winning_indices([_a(600.0), _a(700.0), _a(550.0)], None) == {0, 2}
+
+
+def test_junk_rows_and_junk_baselines_never_raise():
+    led = _led()
+    for bad_base in (None, 0, -1, "x", float("nan"), float("inf")):
+        assert isinstance(led.winning_indices([_a(600.0)], bad_base), set), bad_base
+    assert led.winning_indices([None, "x", 5, _a(600.0)], 2464.18) == {3}
+    assert led.winning_indices(None, 100.0) == set()
+
+
+def test_every_report_section_reads_the_same_win_set(tmp_path):
+    """The matrix, the per-attempt table, the code-changes list and the limitations section must agree:
+    one of them judging rows for itself is how a ✓ appeared in one section and 'no gain' in another."""
+    sm = _summary()
+    kl = tmp_path / "kl.json"
+    kl.write_text(
+        json.dumps(
+            [
+                {
+                    "op_signature": "Matmul A",
+                    "kernel_kind": "grid",
+                    "measured_ms": 600.0,
+                    "beat_baseline": True,
+                    "note": "real improvement",
+                    "diff": "--- a\n+++ b\n+x",
+                },
+                {
+                    "op_signature": "Matmul A",
+                    "kernel_kind": "dtype",
+                    "measured_ms": 650.0,
+                    "beat_baseline": True,
+                    "note": "committed but slower",
+                    "diff": "--- a\n+++ b\n+y",
+                },
+            ]
+        )
+    )
+    out = sm.render_summary(kl, model="m", task="main", finalized=True)
+    body = out.splitlines()
+    matrix = [l for l in body if l.startswith("Matmul A") and ("✓win" in l or "·try" in l)]
+    attempts_rows = [l for l in body if l.startswith("Matmul A") and ("✓ win" in l or "· no gain" in l)]
+    diff_heads = [l for l in body if l.startswith("[#")]
+    # the matrix marks the winning lever and only that lever
+    assert len(matrix) == 1 and "✓win" in matrix[0] and "·try" in matrix[0], matrix
+    # the per-attempt table: the faster attempt won, the slower committed one did not
+    assert [("✓ win" in r) for r in attempts_rows] == [True, False], attempts_rows
+    # the code-changes list agrees, row for row
+    assert [h.endswith("· win") for h in diff_heads] == [True, False], diff_heads

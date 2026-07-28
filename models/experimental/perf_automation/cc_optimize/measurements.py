@@ -84,6 +84,38 @@ def is_win(attempt) -> bool:
     return math.isfinite(ms) and ms > 0
 
 
+def winning_indices(attempts, baseline_ms=None) -> set:
+    """Indices of the attempts that ACTUALLY made the model faster. THE ONE win rule for a sequence.
+
+    `is_win` answers "was this timed and kept", which is necessary but not sufficient: an attempt can
+    be committed, timed, and still not have reduced anything. Reporting those as wins is how a run
+    with 3 real improvements showed 75 ticks -- every one of them inviting the reader to believe a
+    lever worked.
+
+    A win here must be a NEW BEST: strictly faster than the baseline and than every win before it. So
+    the ✓ marks read as the staircase the run actually walked down, and their count is the number of
+    times the end-to-end time moved.
+
+    Order matters, so this takes the attempt list rather than one row; callers must not re-derive it.
+    """
+    best = None
+    try:
+        b = float(baseline_ms)
+        if math.isfinite(b) and b > 0:
+            best = b
+    except (TypeError, ValueError):
+        pass
+    out = set()
+    for i, a in enumerate(attempts or []):
+        if not is_win(a):
+            continue
+        ms = float(a.get("measured_ms"))
+        if best is None or ms < best:
+            out.add(i)
+            best = ms
+    return out
+
+
 def trace_ms_from_profile(profile) -> float | None:
     """The trace-pass latency carried by a device profile, or None. THE ONE extractor.
 
