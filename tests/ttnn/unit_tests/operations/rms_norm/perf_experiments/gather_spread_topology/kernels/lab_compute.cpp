@@ -77,6 +77,9 @@ constexpr uint32_t cb_group_partials = 6;
 constexpr uint32_t cb_rms_mean = 7;
 constexpr uint32_t cb_partial_out = 8;
 constexpr uint32_t cb_group_partials2 = 9;
+// row_rotate reuses slot 9 as the OWNER-output CB (two_stage's stage-2 gather CB
+// is unused there), so the fold's push granularity gets its own buffer.
+constexpr uint32_t cb_owner_out = 9;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t cb_x_squared = 24;
@@ -87,118 +90,6 @@ constexpr uint32_t cb_scaled = 28;
 }  // namespace
 
 namespace ckl = compute_kernel_lib;
-
-// ===========================================================================
-// Perf 1 — phase 4's SFPU scoped to the lanes phase 5 actually reads.
-// ===========================================================================
-//
-// MEASURED MOTIVE. Phase 4 (`AddUnary(eps)` then `Rsqrt` over the REDUCE_ROW
-// statistic) was the op's single largest real compute item: 906 ns per tile,
-// 29.0 us per core on the BLOCK_SHARDED (1,1,8192,1024) profile = 38 % of that
-// kernel — measured with the cross-core combine ABLATED AWAY, so it is work, not
-// waiting. The tournament bench (perf_experiments/rsqrt_lane_and_window)
-// established by ablation that the 906 ns is ~100 % per-tile SFPU LANE work and
-// ~0 % per-window overhead: blocking the chain is a measured NULL (1.00x), and
-// the fitted cost is 23 ns per 32-lane accurate-rsqrt vector against an 81 ns
-// copy+pack floor.
-//
-// THE WASTE. `cb_rms_sum` holds a REDUCE_ROW result, so only COLUMN 0 is
-// meaningful (op_design.md §4.1: "1 tile per tile-row, col-0 valid"). Its sole
-// consumer is phase 5's `BinaryFpu<..., cb_rms_recip, Mul, BroadcastDim::Col>`,
-// i.e. `mul_tiles_bcast<BroadcastType::COL>`, which reproduces column 0 across
-// the row and never reads columns 1..31. The stock chain nevertheless computed
-// all 32 vector ops per tile per pass, twice (two separate elements = two
-// separate SFPU passes). 8 vector ops in ONE pass produce the identical
-// column 0: 912.7 -> 258.3 ns/tile, 3.53x, measured at every ht in {1,2,4,8,16}
-// (2.95x-3.60x), at every CB format pair and at BOTH DEST modes.
-//
-// SAFETY PRECONDITION, verified on device rather than argued: the bench fed
-// `mul_tiles_bcast<COL>` a tile whose columns 1..31 held poison (7.5e3 / 3e-4)
-// and asserted the product over the WHOLE output tile — max rel-err 0.0078,
-// pure bf16 rounding. The broadcast reads column 0 only, so leaving columns
-// 1..31 of `cb_rms_recip` unwritten provably cannot change the op's output. If a
-// future refinement ever gives `cb_rms_recip` a second consumer that reads other
-// lanes, this element must revert to a full-tile scope.
-//
-// RAW-LLK JUSTIFICATION (required so a later helper-usage pass does not "fix"
-// this back and undo the win). Two mechanisms are not reachable through the
-// stock helpers today:
-//   (a) SFPU WORK SCOPE — `rsqrt_tile` hardcodes `VectorMode::RC` and
-//       `ITERATIONS = 8`, and `add_unary_tile` likewise; neither the compute-API
-//       wrapper nor the `Rsqrt`/`AddUnary` chain elements expose a vector-mode,
-//       iteration-count or DEST-address-stride knob.
-//   (b) PASS FUSION — `AddUnary` and `Rsqrt` are separate chain elements, hence
-//       separate SFPU passes with separate DEST-address setup + STALLWAIT and
-//       separate full walks. There is no "unary op with a pre-added scalar"
-//       element to compose.
-// The BODY is the stock accurate rsqrt kernel verbatim:
-// `_calculate_sqrt_body_<APPROX, RECIPROCAL=true, FAST_APPROX=false>` plus the
-// `!fp32_dest_acc_en` round-to-nearest store — exactly what
-// `calculate_rsqrt<APPROX, 8, DST_ACCUM_MODE, false, false>` runs. Same
-// function, same precision, fewer lanes. The precision contract
-// (`fp32_dest_acc_en` / `math_fidelity` / `math_approx_mode` / dtypes) is
-// untouched; folding `+eps` into the body's argument in fact removes one bf16
-// DEST round trip, so the fused result is marginally MORE accurate (measured
-// col-0 PCC 0.9999968 vs the stock chain's 0.9999967).
-// Everything else stays on the helper surface: this is a `ckl::UnaryOp` CRTP
-// element, so `eltwise_chain` still owns the CB lifecycle, the dtype reconfig
-// and the dst-sync window — only the SFPU body is ours.
-//
-// PREDICATE. Compile-time and architectural only: `_calculate_sqrt_body_` and
-// the SFPU `Converter` exist on Wormhole B0 and Blackhole but not on Quasar, so
-// Quasar keeps the stock two-element chain, byte-identical. There is no
-// shape/dtype/layout guard because the enabling condition is a structural
-// invariant of the op, not a property of the input.
-#if defined(ARCH_QUASAR)
-#define RMS_NORM_COL0_RSQRT 0
-#else
-#define RMS_NORM_COL0_RSQRT 1
-#endif
-
-#if RMS_NORM_COL0_RSQRT
-#ifdef TRISC_MATH
-#include "ckernel_sfpu_sqrt.h"            // _calculate_sqrt_body_
-#include "sfpu/ckernel_sfpu_converter.h"  // Converter::as_float
-#endif
-
-namespace {
-#ifdef TRISC_MATH
-// The SFPU walks a face as [rg0-even, rg0-odd, rg1-even, rg1-odd, ...]; column 0
-// lives only in the EVEN-parity vectors, so visit offsets 0,2,4,6 and skip the
-// odd ones. Net dst_reg advance is +8 == the stock ITERATIONS=8, so
-// `VectorMode::C`'s face-0 -> face-2 stepping composes unchanged and column 0 is
-// covered for all 32 rows in 4 vector ops per face instead of 8.
-template <int NVEC, int STRIDE>
-sfpi_inline void rms_norm_rsqrt_add_col0_body(uint32_t eps_bits) {
-    const sfpi::vFloat eps = ckernel::sfpu::Converter::as_float(eps_bits);
-    for (int d = 0; d < NVEC; d++) {
-        sfpi::vFloat t = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false /*FAST_APPROX*/>(
-            sfpi::dst_reg[0] + eps);
-        if constexpr (!DST_ACCUM_MODE) {
-            t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
-        }
-        sfpi::dst_reg[0] = t;
-        sfpi::dst_reg += STRIDE;
-    }
-}
-#endif
-
-/// `rsqrt(x + eps)` in ONE SFPU pass, scoped to the vector ops holding COLUMN 0.
-/// For a REDUCE_ROW statistic consumed through `BroadcastDim::Col` only.
-template <ckl::Dst Slot = ckl::Dst::D0>
-struct RsqrtAddUnaryColZero : ckl::UnaryOp<RsqrtAddUnaryColZero<Slot>, Slot> {
-    uint32_t eps_bits;
-    constexpr explicit RsqrtAddUnaryColZero(uint32_t e) noexcept : eps_bits(e) {}
-    static ALWI void init() { rsqrt_tile_init(); }  // programs the shared sqrt vConst*Prgm constants
-    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
-        const uint32_t idst = ckl::to_u32(Slot) + slot_offset;
-        const uint32_t eps = eps_bits;
-        MATH((_llk_math_eltwise_unary_sfpu_params_(
-            [eps]() { rms_norm_rsqrt_add_col0_body<4, 2>(eps); }, idst, ckernel::VectorMode::C)));
-    }
-};
-}  // namespace
-#endif  // RMS_NORM_COL0_RSQRT
 
 void kernel_main() {
     // ---- regime flags (§5.2) ----
@@ -238,6 +129,16 @@ void kernel_main() {
     // the accumulator never has to survive a tile_regs_acquire; and no
     // partial-W mask, which lives on the reduce helper's scaler hook).
     constexpr bool FUSE_SQ = get_compile_time_arg_val(18) != 0;
+    // ---- LAB: SCHEME 2 (per-tile-row root rotation) ----
+    // This core owns the fold for the row-block's tile-rows h with h % CW ==
+    // my_slot, so the combine's fp32 tile-reduces are spread over min(ht, CW)
+    // cores instead of all landing on the root. The owner's fold is the FINAL one
+    // (reduce_mean, n_reduced = W) — there is no second REDUCE_ROW anywhere in
+    // this topology, so the Accumulate::at / at_last double-count trap that a
+    // staged tree has to dodge cannot arise by construction.
+    constexpr bool ROW_ROTATE = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(20);
+    static_assert(!ROW_ROTATE || CW2 == 1, "row_rotate has no leader tree");
     static_assert(!FUSE_SQ || NW == 1, "fused square-accumulate requires NW == 1");
     static_assert(!FUSE_SQ || !HAS_PARTIAL_W, "fused square-accumulate cannot apply the partial-W mask");
 
@@ -251,6 +152,7 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(2);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(3);
     const uint32_t is_leader = get_arg_val<uint32_t>(4);
+    const uint32_t my_slot = get_arg_val<uint32_t>(5);
 
     // Filler core (inside a group's multicast rectangle, owns no data).
     if (num_tile_rows == 0) {
@@ -560,7 +462,40 @@ void kernel_main() {
         // The root then finalizes over just the CW2 row-sums.
         if constexpr (W_SPLIT) {
             MaybeDeviceZoneScope("cmp_combine");
-            if constexpr (TWO_STAGE) {
+            if constexpr (ROW_ROTATE) {
+                // SCHEME 2. `ho` = the tile-rows THIS core owns in this row-block
+                // (h = my_slot, my_slot + CW, ...). The gather block is laid out
+                // h-major (tile k*CW + contributor), so of(ho, CW, 1) reads it
+                // contiguously — the identical shape the flat root uses, just
+                // ho rows deep instead of ht, on min(ht, CW) cores at once.
+                if (my_slot < ht) {
+                    const uint32_t ho = (ht - my_slot + CW - 1) / CW;
+                    // Output goes to cb_group_partials2 (reused as the OWNER-output
+                    // CB), never to cb_partial_out: pass A pushes `ht` pages there
+                    // and this pushes `ho`, and a CB whose push granularity is
+                    // mixed lands its pointer mid-buffer so the next full push
+                    // straddles fifo_limit. Measured as a device hang on the focus
+                    // geometry (4 row-blocks) while passing at 1.
+                    ckl::reduce_mean<
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_group_partials,
+                        cb_ones,
+                        cb_owner_out,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        ckl::ReduceInputBlockShape::of(ho, CW, 1),
+                        N_REDUCED,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::NoAccumulation{},
+                        ckl::ReducePartialScaler::none());
+                    // The reader publishes a fixed GATHER_PAGES block so the gather
+                    // slots stay at a constant L1 offset; drop the unused tail.
+                    if (ho * CW < GATHER_PAGES) {
+                        cb_pop_front(cb_group_partials, GATHER_PAGES - ho * CW);
+                    }
+                }
+            } else if constexpr (TWO_STAGE) {
                 if (is_leader) {
                     // One accumulate call, never reloaded -> pack the row sum
                     // straight back into cb_partial_out for this core's own
@@ -631,23 +566,12 @@ void kernel_main() {
         // broadcast), not by phase 3 — every core then finalizes identically.
         {
             MaybeDeviceZoneScope("cmp_rsqrt");
-#if RMS_NORM_COL0_RSQRT
-            // Perf 1 fast path: one SFPU pass over the 8 vectors that hold
-            // column 0 (see the justification above the element). 3.53x measured.
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(ht),
-                ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
-                RsqrtAddUnaryColZero<ckl::Dst::D0>{eps_bits},
-                ckl::PackTile<cb_rms_recip, ckl::OutputLifecycle::Streaming>{});
-#else
-            // Fallback (Quasar): byte-identical to the pre-Perf-1 spelling.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(ht),
                 ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
                 ckl::AddUnary<ckl::Dst::D0>{eps_bits},
                 ckl::Rsqrt<>{},
                 ckl::PackTile<cb_rms_recip, ckl::OutputLifecycle::Streaming>{});
-#endif
         }
         if constexpr (W_SPLIT) {
             // Same fixed-block contract as the gather: the reader publishes

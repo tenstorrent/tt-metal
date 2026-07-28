@@ -78,6 +78,8 @@ constexpr uint32_t cb_ones = 5;
 constexpr uint32_t cb_group_partials = 6;
 constexpr uint32_t cb_rms_mean = 7;
 constexpr uint32_t cb_group_partials2 = 9;
+constexpr uint32_t cb_packsel = 10;  // gather_payload_shrink: column-PACK scalers
+constexpr uint32_t cb_colsel = 11;   // gather_payload_shrink: column-SELECT scalers
 constexpr uint32_t cb_rms_sum = 26;
 }  // namespace
 
@@ -132,7 +134,17 @@ void kernel_main() {
     // must broadcast as two rectangles rather than one bounding box that would
     // target non-worker endpoints. Family B is inactive (`active == 0`) whenever
     // the group fits in one run, and then compiles away entirely.
-    constexpr auto mc_a = dkl::McastArgs</*CT=*/27, /*RT=*/11>();
+    // ---- gather_payload_shrink experiment knobs (CT 27, 28) ----------------
+    constexpr uint32_t VARIANT = get_compile_time_arg_val(27);
+    constexpr uint32_t SHRINK_UNUSED = get_compile_time_arg_val(28);
+    (void)SHRINK_UNUSED;
+    constexpr bool COLPACK = (VARIANT == 1) || (VARIANT == 3);
+    constexpr bool HALFFOLD = (VARIANT == 4);
+    // Gather-window tiles per slot: 1 under COLPACK (one column-packed tile
+    // carries every tile-row's row-sum), HT_BLOCK otherwise.
+    constexpr uint32_t GATHER_HT = COLPACK ? 1u : HT_BLOCK;
+
+    constexpr auto mc_a = dkl::McastArgs</*CT=*/29, /*RT=*/12>();
     constexpr auto mc_b = dkl::McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
     constexpr auto in_args = TensorAccessorArgs<mc_b.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -150,6 +162,11 @@ void kernel_main() {
     const uint32_t wt_real = get_arg_val<uint32_t>(8);
     const uint32_t mcast_family = get_arg_val<uint32_t>(9);
     const uint32_t is_leader = get_arg_val<uint32_t>(10);
+    // gather_payload_shrink: the column-pack's two scaler BANKS are filled by the
+    // WRITER (BRISC), not here — see gps_writer.cpp. Measured motive: filling them
+    // on the reader put 2*HT_BLOCK*1024 RISC-V word stores in front of the shard
+    // publish and cost +20.5 us on the focus shape (colpack 96.0 us vs baseline
+    // 75.5 us) — the whole idea read as a REGRESSION purely from its own prologue.
 
     // Filler core: inside the multicast rectangle so the broadcast lands
     // somewhere legal, but it owns no data and takes no part in the combine.
@@ -175,6 +192,20 @@ void kernel_main() {
             // Float32 unit scaler for the root's combine reduce over the CW
             // gathered partials (its input CB is Float32, so its scaler must be).
             dkl::calculate_and_prepare_reduce_scaler<cb_ones, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        }
+    }
+
+    // HALFFOLD writes only faces 0 and 2 of each gather slot, so faces 1 and 3
+    // of the DESTINATION window stay whatever L1 held. The root's fold sums all
+    // 32 columns, so they must read as zero — pre-zero the window once.
+    if constexpr (W_SPLIT && HALFFOLD) {
+        if (is_leader) {
+            const uint32_t words = (get_tile_size(cb_group_partials) * GATHER_HT * CW1) >> 2;
+            volatile tt_l1_ptr uint32_t* p =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_group_partials));
+            for (uint32_t i = 0; i < words; ++i) {
+                p[i] = 0;
+            }
         }
     }
 
@@ -351,18 +382,18 @@ void kernel_main() {
             {
                 MaybeDeviceZoneScope("rdr_gather_wait");
                 if (is_leader) {
-                    cb_reserve_back(cb_group_partials, HT_BLOCK * CW1);
+                    cb_reserve_back(cb_group_partials, GATHER_HT * CW1);
                     gather_sem.wait(CW1);
                     gather_sem.set(0);
-                    cb_push_back(cb_group_partials, HT_BLOCK * CW1);
+                    cb_push_back(cb_group_partials, GATHER_HT * CW1);
                 }
                 // stage 2 — the root folds the CW2 row-sums the leaders shipped.
                 if constexpr (TWO_STAGE) {
                     if (is_root) {
-                        cb_reserve_back(cb_group_partials2, HT_BLOCK * CW2);
+                        cb_reserve_back(cb_group_partials2, GATHER_HT * CW2);
                         gather2_sem.wait(CW2);
                         gather2_sem.set(0);
-                        cb_push_back(cb_group_partials2, HT_BLOCK * CW2);
+                        cb_push_back(cb_group_partials2, GATHER_HT * CW2);
                     }
                 }
             }

@@ -87,7 +87,10 @@ void kernel_main() {
 
     // 27..36 are the two multicast-family CT blocks (reader-side; the writer
     // shares the layout so a knob cannot drift between them).
-    constexpr auto out_args = TensorAccessorArgs<37>();
+    // FORK (gamma_broadcast_rowsplit): the shared dataflow CT block grew by the
+    // experiment's gamma-broadcast tail (2 flag words + 2 x 5-word mcast blocks),
+    // so the accessor base moves 37 -> 49. Nothing else in this file changes.
+    constexpr auto out_args = TensorAccessorArgs<49>();
 
     static_assert(WT_LAST == WT_CHUNK, "writer assumes uniform chunk widths");
 

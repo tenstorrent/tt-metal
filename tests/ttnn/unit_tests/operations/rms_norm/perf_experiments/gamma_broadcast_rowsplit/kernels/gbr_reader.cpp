@@ -1,6 +1,31 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
+// ============================================================================
+// FORK of rms_norm_reader.cpp for the `gamma_broadcast_rowsplit` perf experiment.
+// ============================================================================
+// Exactly one thing differs from the op: HOW the resident gamma strip is
+// delivered. Three spellings, selected at compile time so the unused ones cost
+// nothing:
+//
+//   GAMMA_MODE=dram    (GAMMA_MCAST=0, GAMMA_ABLATE=0) — the op's current
+//       approach and the honest BASELINE: every core reads its own copy of the
+//       same Wt gamma pages through a TensorAccessor.
+//   GAMMA_MODE=ablate  (GAMMA_ABLATE=1) — the reads are deleted, the
+//       reserve/push kept. Output is WRONG by design; the number is the UPPER
+//       BOUND on any gamma-traffic optimization (it removes the bytes and adds
+//       no synchronization).
+//   GAMMA_MODE=mcast   (GAMMA_MCAST=1) — the CANDIDATE: one injector core per
+//       virtually-contiguous column run reads gamma from DRAM once and
+//       multicasts the whole strip over its run's rectangle, so the grid's
+//       gamma DRAM traffic drops from num_cores x Wt pages to one Wt-page read
+//       per run. Rides kernel_lib/mcast_pipe.hpp exactly as the 1/rms broadcast
+//       does — the rectangle, the corner ordering and the readiness handshake
+//       are the helper's, never hand-rolled here. src == dst on the send()
+//       (the injector's own copy is already in place), so the broadcast is
+//       EXCLUDE-source.
+// ============================================================================
+//
 // rms_norm reader (NCRISC / NoC0) — op_design.md §4.1 and §4.2.
 //
 // Per core: a disjoint range of tile-rows AND (under the cross-core W-split) a
@@ -134,8 +159,20 @@ void kernel_main() {
     // the group fits in one run, and then compiles away entirely.
     constexpr auto mc_a = dkl::McastArgs</*CT=*/27, /*RT=*/11>();
     constexpr auto mc_b = dkl::McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
-    constexpr auto in_args = TensorAccessorArgs<mc_b.next_compile_time_args_offset()>();
+
+    // ---- EXPERIMENT: the gamma broadcast family (one per virtual column run) ----
+    // Flags word: bit0 = broadcast the resident gamma strip, bit1 = deliver it
+    // LATE (after the first pass-A read) instead of in the prologue.
+    constexpr uint32_t GAMMA_FLAGS = get_compile_time_arg_val(mc_b.next_compile_time_args_offset() + 0);
+    constexpr bool GAMMA_MCAST = (GAMMA_FLAGS & 0x1u) != 0;
+    constexpr bool GAMMA_LATE = (GAMMA_FLAGS & 0x2u) != 0;
+    constexpr bool GAMMA_ABLATE = get_compile_time_arg_val(mc_b.next_compile_time_args_offset() + 1) != 0;
+    constexpr auto gmc_a =
+        dkl::McastArgs<mc_b.next_compile_time_args_offset() + 2, mc_b.next_runtime_args_offset() + 2>();
+    constexpr auto gmc_b = dkl::McastArgs<gmc_a.next_compile_time_args_offset(), gmc_a.next_runtime_args_offset()>();
+    constexpr auto in_args = TensorAccessorArgs<gmc_b.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    static_assert(gmc_b.next_compile_time_args_offset() == 49, "shared dataflow CT block must be 49 words");
 
     static_assert(WT_LAST == WT_CHUNK, "reader assumes uniform chunk widths");
     static_assert(X_READ_CHUNKS >= 1 && NW % X_READ_CHUNKS == 0, "read batch must tile NW");
@@ -150,6 +187,10 @@ void kernel_main() {
     const uint32_t wt_real = get_arg_val<uint32_t>(8);
     const uint32_t mcast_family = get_arg_val<uint32_t>(9);
     const uint32_t is_leader = get_arg_val<uint32_t>(10);
+    // EXPERIMENT: gamma-broadcast role. inject == "I read gamma from DRAM and
+    // broadcast it to my run"; family == which run's rectangle I belong to.
+    [[maybe_unused]] const uint32_t gamma_inject = get_arg_val<uint32_t>(mc_b.next_runtime_args_offset() + 0);
+    [[maybe_unused]] const uint32_t gamma_family = get_arg_val<uint32_t>(mc_b.next_runtime_args_offset() + 1);
 
     // Filler core: inside the multicast rectangle so the broadcast lands
     // somewhere legal, but it owns no data and takes no part in the combine.
@@ -194,8 +235,12 @@ void kernel_main() {
         const uint32_t p = wt_start + t;
         return (p < WT_STRIDE) ? p : (WT_STRIDE - 1);
     };
-    if constexpr (HAS_GAMMA && GAMMA_RESIDENT) {
-        MaybeDeviceZoneScope("rdr_gamma_resident");
+    // EXPERIMENT: the resident-gamma delivery, hoisted into a callable so its
+    // SCHEDULE is a knob. GAMMA_LATE=0 keeps the op's prologue position (before
+    // the first input read); GAMMA_LATE=1 runs it after the first row-block's
+    // pass-A read, so the transfer overlaps that read instead of idling the grid
+    // in front of it. Compute needs gamma only for pass B, so the slack is real.
+    auto deliver_gamma_resident = [&]() {
         if constexpr (IS_RM_GAMMA) {
             for (uint32_t wc = 0; wc < NW; ++wc) {
                 const uint32_t rb = (is_last_w_core && wc + 1 == NW) ? G_LAST_ROW_BYTES : G_CHUNK_ROW_BYTES;
@@ -205,14 +250,64 @@ void kernel_main() {
         } else {
             const uint32_t gt = get_tile_size(cb_gamma);
             cb_reserve_back(cb_gamma, WT);
-            uint32_t addr = get_write_ptr(cb_gamma);
-            for (uint32_t t = 0; t < WT; ++t) {
-                noc_async_read_page(gamma_page(t), gamma_acc, addr);
-                addr += gt;
+            const uint32_t base = get_write_ptr(cb_gamma);
+            if constexpr (GAMMA_MCAST) {
+                // EXPERIMENT — the reuse-shared broadcast. cb_gamma is declared at
+                // identical size on every core in the rectangle, so its write
+                // pointer is the SAME L1 address everywhere: the injector can send
+                // src == dst and every receiver's landing address is right by
+                // construction (mcast_pipe's "dst_l1 identical across receivers").
+                Noc gnoc;
+                if (gamma_inject) {
+                    uint32_t addr = base;
+                    for (uint32_t t = 0; t < WT; ++t) {
+                        noc_async_read_page(gamma_page(t), gamma_acc, addr);
+                        addr += gt;
+                    }
+                    noc_async_read_barrier();
+                    // `gamma_inject` is a per-family BITMASK, so ONE core can serve
+                    // every run (GAMMA_ONE_INJECTOR) or each run can have its own.
+                    // src == dst -> the pipe picks EXCLUDE-source, which is right
+                    // both ways: my own copy is already in place when I am inside
+                    // the rect, and I am not a receiver when I am outside it.
+                    if constexpr (gmc_a.active) {
+                        if (gamma_inject & 0x1u) {
+                            auto pipe = gmc_a.sender(gnoc);
+                            pipe.send(base, base, WT * gt);
+                        }
+                    }
+                    if constexpr (gmc_b.active) {
+                        if (gamma_inject & 0x2u) {
+                            auto pipe = gmc_b.sender(gnoc);
+                            pipe.send(base, base, WT * gt);
+                        }
+                    }
+                } else {
+                    if (gamma_family == 0) {
+                        auto pipe = gmc_a.receiver(gnoc);
+                        pipe.receive();
+                    } else {
+                        auto pipe = gmc_b.receiver(gnoc);
+                        pipe.receive();
+                    }
+                }
+            } else if constexpr (!GAMMA_ABLATE) {
+                uint32_t addr = base;
+                for (uint32_t t = 0; t < WT; ++t) {
+                    noc_async_read_page(gamma_page(t), gamma_acc, addr);
+                    addr += gt;
+                }
+                noc_async_read_barrier();
             }
-            noc_async_read_barrier();
+            // GAMMA_ABLATE: no read at all — the CB flow control below is the only
+            // thing kept, so the delta against `dram` is exactly the gamma bytes.
             cb_push_back(cb_gamma, WT);
         }
+    };
+
+    if constexpr (HAS_GAMMA && GAMMA_RESIDENT && !GAMMA_LATE) {
+        MaybeDeviceZoneScope("rdr_gamma_resident");
+        deliver_gamma_resident();
     }
 
     // ---- per-chunk readers -------------------------------------------------
@@ -279,11 +374,16 @@ void kernel_main() {
             const uint32_t gt = get_tile_size(cb_gamma);
             cb_reserve_back(cb_gamma, WT_CHUNK);
             uint32_t addr = get_write_ptr(cb_gamma);
-            for (uint32_t t = 0; t < WT_CHUNK; ++t) {
-                noc_async_read_page(gamma_page(wc * WT_CHUNK + t), gamma_acc, addr);
-                addr += gt;
+            // EXPERIMENT: the same payload ablation on the STREAMING spelling, so
+            // the geometries where the op streams gamma (NH_core == 1) get their
+            // own upper bound. Sync scaffolding kept, bytes removed.
+            if constexpr (!GAMMA_ABLATE) {
+                for (uint32_t t = 0; t < WT_CHUNK; ++t) {
+                    noc_async_read_page(gamma_page(wc * WT_CHUNK + t), gamma_acc, addr);
+                    addr += gt;
+                }
+                noc_async_read_barrier();
             }
-            noc_async_read_barrier();
             cb_push_back(cb_gamma, WT_CHUNK);
         }
     };
@@ -339,6 +439,17 @@ void kernel_main() {
         if constexpr (!SHARDED_IN) {
             MaybeDeviceZoneScope("rdr_read_a");
             read_input_pass(row0, ht, valid_rows);
+        }
+
+        // EXPERIMENT (GAMMA_LATE): deliver the resident gamma strip HERE instead of
+        // in the prologue, so the whole grid's first pass-A read is already in
+        // flight/landed while the injector fetches gamma and broadcasts it. The
+        // reserve still precedes the receiver's ack, so the handshake is unchanged.
+        if constexpr (HAS_GAMMA && GAMMA_RESIDENT && GAMMA_LATE) {
+            if (hb == 0) {
+                MaybeDeviceZoneScope("rdr_gamma_late");
+                deliver_gamma_resident();
+            }
         }
 
         // ---- combine: gather (root) -> finalize (compute) -> broadcast -----
@@ -419,7 +530,9 @@ void kernel_main() {
     // ReceiverPipe's readiness ack is a NON-POSTED remote atomic; drain it
     // before the kernel exits so the core's NoC transaction counters balance
     // (an outstanding atomic at exit stalls dispatch completion).
-    if constexpr (W_SPLIT) {
+    // The gamma broadcast's receivers ack through the SAME non-posted remote
+    // atomic, so it needs the same drain.
+    if constexpr (W_SPLIT || GAMMA_MCAST) {
         noc_async_atomic_barrier();
     }
 }

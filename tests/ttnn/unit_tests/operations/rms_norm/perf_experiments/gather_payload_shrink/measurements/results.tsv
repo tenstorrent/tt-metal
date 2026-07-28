@@ -1,0 +1,86 @@
+# gather_payload_shrink — RAW measured DEVICE KERNEL DURATION [ns]
+# box blackhole_p150b, 11x10 grid, AICLK 1349.99 MHz
+# precision contract PINNED and IDENTICAL for every row:
+#   dtype bf16 / TILE, gamma bf16 TILE, math_fidelity HiFi2,
+#   fp32_dest_acc_en False, math_approx_mode False
+# combine topology PINNED FLAT (cw2 == 1) for every row.
+# One fresh-cache dispatch per (variant, case). No trial loop.
+#
+# variant           case              HT_BLOCK  cores   ns
+baseline            focus             8         64      75490
+baseline            focus             8         64      75472
+baseline            focus             8         64      75430
+baseline            focus_hb4         4         64      79856
+baseline            focus_hb4         4         64      79835
+baseline            focus_hb2         2         64      90216
+baseline            focus_hb2         2         64      90276
+baseline            focus_hb1         1         64      108725
+baseline            focus_hb1         1         64      108442
+baseline            w32x1024          1         8       5189
+baseline            w32x1024          1         8       5210
+baseline            w32x7168          1         28      7420
+baseline            w32x7168          1         28      7446
+baseline            block8192x2304    1         64      126696
+baseline            block8192x2304    1         64      126493
+colpack             focus             8         64      57551
+colpack             focus             8         64      57573
+colpack             focus_hb4         4         64      65475
+colpack             focus_hb2         2         64      82631
+colpack             focus_hb1         1         64      113156
+colpack             w32x1024          1         8       5422
+colpack             w32x7168          1         28      7551
+colpack             block8192x2304    1         64      131100
+colpack_bf16        focus             8         64      57181
+colpack_bf16        focus_hb4         4         64      64800
+colpack_bf16        focus_hb2         2         64      81347
+colpack_bf16        focus_hb1         1         64      111096
+colpack_bf16        w32x1024          1         8       5012
+colpack_bf16        w32x7168          1         28      6836
+colpack_bf16        block8192x2304    1         64      128877
+bf16                focus             8         64      67720
+bf16                focus             8         64      67844
+bf16                focus_hb4         4         64      72307
+bf16                focus_hb4         4         64      72398
+bf16                focus_hb2         2         64      83707
+bf16                focus_hb2         2         64      83754
+bf16                focus_hb1         1         64      106592
+bf16                focus_hb1         1         64      106781
+bf16                w32x1024          1         8       4865
+bf16                w32x1024          1         8       4904
+bf16                w32x7168          1         28      6395
+bf16                w32x7168          1         28      6476
+bf16                block8192x2304    1         64      124233
+bf16                block8192x2304    1         64      124450
+#
+# ABLATION rows below: output WRONG by design, transport/floor ceilings only.
+# GPS_SHRINK=k -> the writer puts tile_bytes/k of each gather tile on the wire.
+ABL_shrink2         focus             8         64      69430
+ABL_shrink8         focus             8         64      66618
+ABL_shrink32        focus             8         64      66384
+ABL_shrink2         focus_hb4         4         64      73904
+ABL_shrink8         focus_hb4         4         64      72359
+ABL_shrink32        focus_hb4         4         64      72204
+ABL_shrink2         focus_hb2         2         64      85256
+ABL_shrink8         focus_hb2         2         64      85108
+ABL_shrink32        focus_hb2         2         64      84970
+ABL_shrink2         focus_hb1         1         64      107821
+ABL_shrink8         focus_hb1         1         64      107041
+ABL_shrink32        focus_hb1         1         64      106799
+ABL_shrink2         w32x1024          1         8       5033
+ABL_shrink8         w32x1024          1         8       4960
+ABL_shrink32        w32x1024          1         8       4975
+ABL_shrink2         w32x7168          1         28      6728
+ABL_shrink8         w32x7168          1         28      6139
+ABL_shrink32        w32x7168          1         28      6147
+ABL_shrink2         block8192x2304    1         64      125570
+ABL_shrink8         block8192x2304    1         64      125079
+ABL_shrink32        block8192x2304    1         64      124696
+# GPS_ABLATE=combine -> gather + root fold + multicast removed entirely
+# (placement / core count / per-core slice byte-for-byte identical). THE FLOOR.
+FLOOR_nocombine     focus             8         64      56070
+FLOOR_nocombine     focus_hb4         4         64      58760
+FLOOR_nocombine     focus_hb2         2         64      64172
+FLOOR_nocombine     focus_hb1         1         64      72330
+FLOOR_nocombine     w32x1024          1         8       3381
+FLOOR_nocombine     w32x7168          1         28      3774
+FLOOR_nocombine     block8192x2304    1         64      90596

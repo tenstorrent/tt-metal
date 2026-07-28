@@ -49,8 +49,12 @@
 
 namespace {
 constexpr uint32_t cb_group_partials = 6;
+constexpr uint32_t cb_rms_mean = 7;
 constexpr uint32_t cb_partial_out = 8;
 constexpr uint32_t cb_group_partials2 = 9;
+// row_rotate reuses slot 9 as the OWNER-output CB (two_stage's stage-2 gather CB
+// is unused there), so the fold's push granularity gets its own buffer.
+constexpr uint32_t cb_owner_out = 9;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 }  // namespace
@@ -82,12 +86,17 @@ void kernel_main() {
     constexpr uint32_t CW1 = get_compile_time_arg_val(24);
     constexpr uint32_t CW2 = get_compile_time_arg_val(25);
     constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(26);
+    // ---- LAB: SCHEME 2 (per-tile-row root rotation) — see lab_reader.cpp ----
+    constexpr bool ROW_ROTATE = get_compile_time_arg_val(27) != 0;
+    constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(28);
     constexpr bool TWO_STAGE = CW2 > 1;
     static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
+    static_assert(!ROW_ROTATE || CW2 == 1, "row_rotate has no leader tree");
+    (void)GATHER_PAGES;
 
-    // 27..36 are the two multicast-family CT blocks (reader-side; the writer
+    // 29..38 are the two multicast-family CT blocks (reader-side; the writer
     // shares the layout so a knob cannot drift between them).
-    constexpr auto out_args = TensorAccessorArgs<37>();
+    constexpr auto out_args = TensorAccessorArgs<39>();
 
     static_assert(WT_LAST == WT_CHUNK, "writer assumes uniform chunk widths");
 
@@ -122,6 +131,22 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t gather2_base = get_write_ptr(cb_group_partials2);
     [[maybe_unused]] const uint32_t gather_sem_addr = get_semaphore<ProgrammableCoreType::TENSIX>(SEM_GATHER);
     [[maybe_unused]] const uint32_t gather2_sem_addr = get_semaphore<ProgrammableCoreType::TENSIX>(SEM_GATHER2);
+
+    // SCHEME 2: the destination of tile-row h is group slot (h % CW), so this
+    // core needs every slot's virtual coords (RT 12.., 2 words per slot) and the
+    // grid-uniform base of cb_rms_mean (the root's collect buffer).
+    [[maybe_unused]] const uint32_t rms_mean_base = get_write_ptr(cb_rms_mean);
+    uint32_t owner_vx[ROW_ROTATE ? CW : 1];
+    uint32_t owner_vy[ROW_ROTATE ? CW : 1];
+    if constexpr (ROW_ROTATE) {
+        for (uint32_t j = 0; j < CW; ++j) {
+            owner_vx[j] = get_arg_val<uint32_t>(12 + 2 * j);
+            owner_vy[j] = get_arg_val<uint32_t>(12 + 2 * j + 1);
+        }
+    } else {
+        owner_vx[0] = 0;
+        owner_vy[0] = 0;
+    }
 
     // One gather hop: ship `ht` settled cb_partial_out tiles into `slot` of the
     // destination core's gather CB (laid out h-major, tile h*fan_in + slot, so
@@ -167,10 +192,56 @@ void kernel_main() {
         // the row sum compute folded out of the stage-1 gather.
         if constexpr (W_SPLIT) {
             MaybeDeviceZoneScope("wtr_gather_hop");
-            gather_hop(ht, leader_x, leader_y, gather_base, CW1, s1_slot, gather_sem_addr);
-            if constexpr (TWO_STAGE) {
-                if (is_leader) {
-                    gather_hop(ht, root_x, root_y, gather2_base, CW2, s2_slot, gather2_sem_addr);
+            if constexpr (ROW_ROTATE) {
+                // ---- leg 1: SPREAD. Tile-row h lands on the core that OWNS it
+                // (group slot h % CW), so no single core's inbound NoC absorbs
+                // the whole group's ht x CW payload — each takes CW tiles.
+                // ONE barrier covers all ht writes; then one atomic per distinct
+                // destination (data-before-signal, per destination).
+                cb_wait_front(cb_partial_out, ht);
+                uint32_t src = get_read_ptr(cb_partial_out);
+                for (uint32_t h = 0; h < ht; ++h) {
+                    const uint32_t j = h % CW;
+                    const uint32_t k = h / CW;
+                    const uint64_t dst =
+                        get_noc_addr(owner_vx[j], owner_vy[j], gather_base + (k * CW + s1_slot) * partial_tile_bytes);
+                    noc_async_write(src, dst, partial_tile_bytes);
+                    src += partial_tile_bytes;
+                }
+                noc_async_write_barrier();
+                const uint32_t owners = (ht < CW) ? ht : CW;
+                for (uint32_t j = 0; j < owners; ++j) {
+                    noc_semaphore_inc(get_noc_addr(owner_vx[j], owner_vy[j], gather_sem_addr), 1);
+                }
+                cb_pop_front(cb_partial_out, ht);
+
+                // ---- leg 2: the owner's FINALIZED mean(x^2) tiles go straight
+                // into slot h of the root's cb_rms_mean, so the broadcast leg is
+                // byte-for-byte the flat topology's. ht tiles reach the root here,
+                // not ht * CW.
+                if (s1_slot < ht) {
+                    const uint32_t ho = (ht - s1_slot + CW - 1) / CW;
+                    // cb_owner_out, NOT cb_partial_out: mixing an `ht`-page push
+                    // (pass A) with an `ho`-page push on one CB straddles
+                    // fifo_limit on the next row-block (measured hang).
+                    cb_wait_front(cb_owner_out, ho);
+                    uint32_t osrc = get_read_ptr(cb_owner_out);
+                    for (uint32_t k = 0; k < ho; ++k) {
+                        const uint32_t h = k * CW + s1_slot;
+                        const uint64_t dst = get_noc_addr(root_x, root_y, rms_mean_base + h * partial_tile_bytes);
+                        noc_async_write(osrc, dst, partial_tile_bytes);
+                        osrc += partial_tile_bytes;
+                    }
+                    noc_async_write_barrier();
+                    noc_semaphore_inc(get_noc_addr(root_x, root_y, gather2_sem_addr), 1);
+                    cb_pop_front(cb_owner_out, ho);
+                }
+            } else {
+                gather_hop(ht, leader_x, leader_y, gather_base, CW1, s1_slot, gather_sem_addr);
+                if constexpr (TWO_STAGE) {
+                    if (is_leader) {
+                        gather_hop(ht, root_x, root_y, gather2_base, CW2, s2_slot, gather2_sem_addr);
+                    }
                 }
             }
         }

@@ -121,8 +121,18 @@ void kernel_main() {
     constexpr uint32_t CW1 = get_compile_time_arg_val(24);
     constexpr uint32_t CW2 = get_compile_time_arg_val(25);
     constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(26);
+    // ---- LAB: SCHEME 2 (per-tile-row root rotation) ----
+    // Core `slot` of the group owns the FOLD for the row-block's tile-rows h with
+    // h % CW == slot, so every core receives CW tiles instead of ONE core
+    // receiving CW * HT_BLOCK. There is no leader tree and no second REDUCE_ROW:
+    // the owner's fold IS the final one (reduce_mean with n_reduced = W), and the
+    // owners unicast their finalized tiles into the root's cb_rms_mean, which the
+    // root then multicasts back byte-for-byte as the flat topology does.
+    constexpr bool ROW_ROTATE = get_compile_time_arg_val(27) != 0;
+    constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(28);
     constexpr bool TWO_STAGE = CW2 > 1;
     static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
+    static_assert(!ROW_ROTATE || CW2 == 1, "row_rotate has no leader tree");
     (void)SHARDED_OUT;
 
     // ONE multicast family per virtually-contiguous column run of the group. A
@@ -132,7 +142,7 @@ void kernel_main() {
     // must broadcast as two rectangles rather than one bounding box that would
     // target non-worker endpoints. Family B is inactive (`active == 0`) whenever
     // the group fits in one run, and then compiles away entirely.
-    constexpr auto mc_a = dkl::McastArgs</*CT=*/27, /*RT=*/11>();
+    constexpr auto mc_a = dkl::McastArgs</*CT=*/29, /*RT=*/11>();
     constexpr auto mc_b = dkl::McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
     constexpr auto in_args = TensorAccessorArgs<mc_b.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -145,6 +155,7 @@ void kernel_main() {
     const uint32_t start_tile_row = get_arg_val<uint32_t>(2);
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(3);
     const uint32_t wt_start = get_arg_val<uint32_t>(4);
+    const uint32_t my_slot = get_arg_val<uint32_t>(5);
     const uint32_t is_root = get_arg_val<uint32_t>(6);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(7);
     const uint32_t wt_real = get_arg_val<uint32_t>(8);
@@ -317,6 +328,10 @@ void kernel_main() {
     [[maybe_unused]] Noc noc;
     [[maybe_unused]] Semaphore<> gather_sem(SEM_GATHER);
     [[maybe_unused]] Semaphore<> gather2_sem(SEM_GATHER2);
+    // SCHEME 2: cb_rms_mean is filled by the OWNERS' remote writes, not by this
+    // core's compute, so it carries no CB credits — the semaphore is the whole
+    // handshake and the landing base is the (grid-uniform) CB base address.
+    [[maybe_unused]] const uint32_t rms_mean_base = get_write_ptr(cb_rms_mean);
 
     // ---- 3. row-block loop -------------------------------------------------
     const uint32_t num_row_blocks = (num_tile_rows + HT_BLOCK - 1) / HT_BLOCK;
@@ -350,19 +365,38 @@ void kernel_main() {
             // flat topology the root is the only leader and CW1 == CW.
             {
                 MaybeDeviceZoneScope("rdr_gather_wait");
-                if (is_leader) {
-                    cb_reserve_back(cb_group_partials, HT_BLOCK * CW1);
-                    gather_sem.wait(CW1);
-                    gather_sem.set(0);
-                    cb_push_back(cb_group_partials, HT_BLOCK * CW1);
-                }
-                // stage 2 — the root folds the CW2 row-sums the leaders shipped.
-                if constexpr (TWO_STAGE) {
+                if constexpr (ROW_ROTATE) {
+                    // SCHEME 2. Every core with an owned tile-row waits for the CW
+                    // contributions to ITS tile-rows — an ht-fold reduction in peak
+                    // inbound bytes vs. one core waiting for CW * ht tiles.
+                    if (my_slot < ht) {
+                        cb_reserve_back(cb_group_partials, GATHER_PAGES);
+                        gather_sem.wait(CW);
+                        gather_sem.set(0);
+                        cb_push_back(cb_group_partials, GATHER_PAGES);
+                    }
+                    // The root then collects the owners' FINALIZED tiles (ht tiles
+                    // total, one per tile-row) before broadcasting the block.
                     if (is_root) {
-                        cb_reserve_back(cb_group_partials2, HT_BLOCK * CW2);
-                        gather2_sem.wait(CW2);
+                        const uint32_t owners = (ht < CW) ? ht : CW;
+                        gather2_sem.wait(owners);
                         gather2_sem.set(0);
-                        cb_push_back(cb_group_partials2, HT_BLOCK * CW2);
+                    }
+                } else {
+                    if (is_leader) {
+                        cb_reserve_back(cb_group_partials, HT_BLOCK * CW1);
+                        gather_sem.wait(CW1);
+                        gather_sem.set(0);
+                        cb_push_back(cb_group_partials, HT_BLOCK * CW1);
+                    }
+                    // stage 2 — the root folds the CW2 row-sums the leaders shipped.
+                    if constexpr (TWO_STAGE) {
+                        if (is_root) {
+                            cb_reserve_back(cb_group_partials2, HT_BLOCK * CW2);
+                            gather2_sem.wait(CW2);
+                            gather2_sem.set(0);
+                            cb_push_back(cb_group_partials2, HT_BLOCK * CW2);
+                        }
                     }
                 }
             }
@@ -371,8 +405,13 @@ void kernel_main() {
                 cb_reserve_back(cb_rms_sum, HT_BLOCK);
                 const uint32_t dst = get_write_ptr(cb_rms_sum);
                 if (is_root) {
-                    cb_wait_front(cb_rms_mean, ht);
-                    const uint32_t src = get_read_ptr(cb_rms_mean);
+                    uint32_t src;
+                    if constexpr (ROW_ROTATE) {
+                        src = rms_mean_base;  // the owners wrote it; gather2_sem said so
+                    } else {
+                        cb_wait_front(cb_rms_mean, ht);
+                        src = get_read_ptr(cb_rms_mean);
+                    }
                     const uint32_t bytes = ht * fp32_tile_bytes;
                     // The root is inside exactly one family's rectangle, so that
                     // send() loops the data back into its OWN cb_rms_sum; the other
@@ -385,7 +424,9 @@ void kernel_main() {
                         auto pipe = mc_b.sender(noc);
                         pipe.send(src, dst, bytes);
                     }
-                    cb_pop_front(cb_rms_mean, ht);
+                    if constexpr (!ROW_ROTATE) {
+                        cb_pop_front(cb_rms_mean, ht);
+                    }
                 } else if (mcast_family == 0) {
                     auto pipe = mc_a.receiver(noc);
                     pipe.receive();

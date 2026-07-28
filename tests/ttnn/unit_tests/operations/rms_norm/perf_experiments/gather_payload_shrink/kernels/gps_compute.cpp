@@ -65,6 +65,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+// gather_payload_shrink: the column-pack / column-select mechanism is raw
+// compute-API (reduce_tile with a NON-canonical scaler + an explicit packer-mask
+// clear). No kernel_lib reduce helper can express either — see the block comment
+// at the fold below.
+#include "api/compute/reduce.h"
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/reconfig_data_format.h"
 
 namespace {
 constexpr uint32_t cb_input_tiles = 0;
@@ -77,6 +85,9 @@ constexpr uint32_t cb_group_partials = 6;
 constexpr uint32_t cb_rms_mean = 7;
 constexpr uint32_t cb_partial_out = 8;
 constexpr uint32_t cb_group_partials2 = 9;
+constexpr uint32_t cb_packsel = 10;  // gather_payload_shrink: column-PACK scalers
+constexpr uint32_t cb_colsel = 11;   // gather_payload_shrink: column-SELECT scalers
+constexpr uint32_t cb_rootsum = 12;  // gather_payload_shrink: root's elementwise sum of the packed tiles
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t cb_x_squared = 24;
@@ -87,118 +98,6 @@ constexpr uint32_t cb_scaled = 28;
 }  // namespace
 
 namespace ckl = compute_kernel_lib;
-
-// ===========================================================================
-// Perf 1 — phase 4's SFPU scoped to the lanes phase 5 actually reads.
-// ===========================================================================
-//
-// MEASURED MOTIVE. Phase 4 (`AddUnary(eps)` then `Rsqrt` over the REDUCE_ROW
-// statistic) was the op's single largest real compute item: 906 ns per tile,
-// 29.0 us per core on the BLOCK_SHARDED (1,1,8192,1024) profile = 38 % of that
-// kernel — measured with the cross-core combine ABLATED AWAY, so it is work, not
-// waiting. The tournament bench (perf_experiments/rsqrt_lane_and_window)
-// established by ablation that the 906 ns is ~100 % per-tile SFPU LANE work and
-// ~0 % per-window overhead: blocking the chain is a measured NULL (1.00x), and
-// the fitted cost is 23 ns per 32-lane accurate-rsqrt vector against an 81 ns
-// copy+pack floor.
-//
-// THE WASTE. `cb_rms_sum` holds a REDUCE_ROW result, so only COLUMN 0 is
-// meaningful (op_design.md §4.1: "1 tile per tile-row, col-0 valid"). Its sole
-// consumer is phase 5's `BinaryFpu<..., cb_rms_recip, Mul, BroadcastDim::Col>`,
-// i.e. `mul_tiles_bcast<BroadcastType::COL>`, which reproduces column 0 across
-// the row and never reads columns 1..31. The stock chain nevertheless computed
-// all 32 vector ops per tile per pass, twice (two separate elements = two
-// separate SFPU passes). 8 vector ops in ONE pass produce the identical
-// column 0: 912.7 -> 258.3 ns/tile, 3.53x, measured at every ht in {1,2,4,8,16}
-// (2.95x-3.60x), at every CB format pair and at BOTH DEST modes.
-//
-// SAFETY PRECONDITION, verified on device rather than argued: the bench fed
-// `mul_tiles_bcast<COL>` a tile whose columns 1..31 held poison (7.5e3 / 3e-4)
-// and asserted the product over the WHOLE output tile — max rel-err 0.0078,
-// pure bf16 rounding. The broadcast reads column 0 only, so leaving columns
-// 1..31 of `cb_rms_recip` unwritten provably cannot change the op's output. If a
-// future refinement ever gives `cb_rms_recip` a second consumer that reads other
-// lanes, this element must revert to a full-tile scope.
-//
-// RAW-LLK JUSTIFICATION (required so a later helper-usage pass does not "fix"
-// this back and undo the win). Two mechanisms are not reachable through the
-// stock helpers today:
-//   (a) SFPU WORK SCOPE — `rsqrt_tile` hardcodes `VectorMode::RC` and
-//       `ITERATIONS = 8`, and `add_unary_tile` likewise; neither the compute-API
-//       wrapper nor the `Rsqrt`/`AddUnary` chain elements expose a vector-mode,
-//       iteration-count or DEST-address-stride knob.
-//   (b) PASS FUSION — `AddUnary` and `Rsqrt` are separate chain elements, hence
-//       separate SFPU passes with separate DEST-address setup + STALLWAIT and
-//       separate full walks. There is no "unary op with a pre-added scalar"
-//       element to compose.
-// The BODY is the stock accurate rsqrt kernel verbatim:
-// `_calculate_sqrt_body_<APPROX, RECIPROCAL=true, FAST_APPROX=false>` plus the
-// `!fp32_dest_acc_en` round-to-nearest store — exactly what
-// `calculate_rsqrt<APPROX, 8, DST_ACCUM_MODE, false, false>` runs. Same
-// function, same precision, fewer lanes. The precision contract
-// (`fp32_dest_acc_en` / `math_fidelity` / `math_approx_mode` / dtypes) is
-// untouched; folding `+eps` into the body's argument in fact removes one bf16
-// DEST round trip, so the fused result is marginally MORE accurate (measured
-// col-0 PCC 0.9999968 vs the stock chain's 0.9999967).
-// Everything else stays on the helper surface: this is a `ckl::UnaryOp` CRTP
-// element, so `eltwise_chain` still owns the CB lifecycle, the dtype reconfig
-// and the dst-sync window — only the SFPU body is ours.
-//
-// PREDICATE. Compile-time and architectural only: `_calculate_sqrt_body_` and
-// the SFPU `Converter` exist on Wormhole B0 and Blackhole but not on Quasar, so
-// Quasar keeps the stock two-element chain, byte-identical. There is no
-// shape/dtype/layout guard because the enabling condition is a structural
-// invariant of the op, not a property of the input.
-#if defined(ARCH_QUASAR)
-#define RMS_NORM_COL0_RSQRT 0
-#else
-#define RMS_NORM_COL0_RSQRT 1
-#endif
-
-#if RMS_NORM_COL0_RSQRT
-#ifdef TRISC_MATH
-#include "ckernel_sfpu_sqrt.h"            // _calculate_sqrt_body_
-#include "sfpu/ckernel_sfpu_converter.h"  // Converter::as_float
-#endif
-
-namespace {
-#ifdef TRISC_MATH
-// The SFPU walks a face as [rg0-even, rg0-odd, rg1-even, rg1-odd, ...]; column 0
-// lives only in the EVEN-parity vectors, so visit offsets 0,2,4,6 and skip the
-// odd ones. Net dst_reg advance is +8 == the stock ITERATIONS=8, so
-// `VectorMode::C`'s face-0 -> face-2 stepping composes unchanged and column 0 is
-// covered for all 32 rows in 4 vector ops per face instead of 8.
-template <int NVEC, int STRIDE>
-sfpi_inline void rms_norm_rsqrt_add_col0_body(uint32_t eps_bits) {
-    const sfpi::vFloat eps = ckernel::sfpu::Converter::as_float(eps_bits);
-    for (int d = 0; d < NVEC; d++) {
-        sfpi::vFloat t = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false /*FAST_APPROX*/>(
-            sfpi::dst_reg[0] + eps);
-        if constexpr (!DST_ACCUM_MODE) {
-            t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
-        }
-        sfpi::dst_reg[0] = t;
-        sfpi::dst_reg += STRIDE;
-    }
-}
-#endif
-
-/// `rsqrt(x + eps)` in ONE SFPU pass, scoped to the vector ops holding COLUMN 0.
-/// For a REDUCE_ROW statistic consumed through `BroadcastDim::Col` only.
-template <ckl::Dst Slot = ckl::Dst::D0>
-struct RsqrtAddUnaryColZero : ckl::UnaryOp<RsqrtAddUnaryColZero<Slot>, Slot> {
-    uint32_t eps_bits;
-    constexpr explicit RsqrtAddUnaryColZero(uint32_t e) noexcept : eps_bits(e) {}
-    static ALWI void init() { rsqrt_tile_init(); }  // programs the shared sqrt vConst*Prgm constants
-    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
-        const uint32_t idst = ckl::to_u32(Slot) + slot_offset;
-        const uint32_t eps = eps_bits;
-        MATH((_llk_math_eltwise_unary_sfpu_params_(
-            [eps]() { rms_norm_rsqrt_add_col0_body<4, 2>(eps); }, idst, ckernel::VectorMode::C)));
-    }
-};
-}  // namespace
-#endif  // RMS_NORM_COL0_RSQRT
 
 void kernel_main() {
     // ---- regime flags (§5.2) ----
@@ -238,6 +137,14 @@ void kernel_main() {
     // the accumulator never has to survive a tile_regs_acquire; and no
     // partial-W mask, which lives on the reduce helper's scaler hook).
     constexpr bool FUSE_SQ = get_compile_time_arg_val(18) != 0;
+    // ---- gather_payload_shrink (CT 19) ----------------------------------
+    // COLPACK collapses the gather payload from `ht` full tiles to ONE tile
+    // whose COLUMN h holds tile-row h's row-sum. Everything else — placement,
+    // core count, per-core slice, precision contract — is untouched.
+    constexpr uint32_t VARIANT = get_compile_time_arg_val(19);
+    constexpr bool COLPACK = W_SPLIT && ((VARIANT == 1) || (VARIANT == 3));
+    static_assert(!COLPACK || NW == 1, "colpack requires NW == 1 (the fold reads one settled tile/row)");
+    static_assert(!COLPACK || HT_BLOCK <= 16, "colpack packs into face-rows 0..15");
     static_assert(!FUSE_SQ || NW == 1, "fused square-accumulate requires NW == 1");
     static_assert(!FUSE_SQ || !HAS_PARTIAL_W, "fused square-accumulate cannot apply the partial-W mask");
 
@@ -285,7 +192,9 @@ void kernel_main() {
     // cb_partial_out (one producer, one consumer, exactly as the NW == 1
     // pairwise path already did); otherwise it stays compute-internal and the
     // fold below reads it back out of cb_partials.
-    constexpr uint32_t cb_accum = W_SPLIT ? cb_partial_out : cb_partials;
+    // COLPACK inserts the fold+pack pass between the square and the ship, so the
+    // raw accumulator has to land in a compute-internal CB first.
+    constexpr uint32_t cb_accum = (W_SPLIT && !COLPACK) ? cb_partial_out : cb_partials;
 
     // Tiles per DEST-sync window (Refinement 5). `EltwiseShape`'s block_size
     // defaults to 1, and at 1 the chain runs a WHOLE
@@ -467,13 +376,13 @@ void kernel_main() {
                             ckernel::ReduceDim::REDUCE_ROW,
                             cb_x_squared,
                             cb_scaler,
-                            cb_partial_out,
+                            cb_accum,
                             ckl::ReduceInputPolicy::BulkWaitBulkPop,
                             ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                             ckl::ReduceAlgorithm::AccumulateViaAdd>(
                             rshape,
                             ckl::ReduceInputMemoryLayout::contiguous(),
-                            ckl::Accumulate::at(cb_partial_out, wc),
+                            ckl::Accumulate::at(cb_accum, wc),
                             ckl::NoOp{},
                             partial);
                     } else {
@@ -542,6 +451,58 @@ void kernel_main() {
             ckl::copy<cb_partials, cb_partial_out>(ckl::EltwiseShape::tiles(ht));
         }
 
+        // ===== gather_payload_shrink: FOLD + COLUMN-PACK the gather payload ===
+        //
+        // The baseline ships `ht` RAW 4 KB fp32 tiles per row-block, in which all
+        // 32 columns are still live x^2 partial sums. The only information in
+        // each is its 32 row-sums — 128 B of 4096. This pass folds each tile-row
+        // within-tile AND lands the `ht` results in `ht` DISTINCT COLUMNS of ONE
+        // tile, so the payload becomes 1 tile instead of `ht` (8x on the focus
+        // shape) — for `ht` FPU ops and one pack.
+        //
+        // MECHANISM (raw compute API, verified on device by probe_mechanism.py):
+        // BH's REDUCE_ROW SUM is an MVMUL with the scaler in SrcA (transposed on
+        // unpack) and the data in SrcB, so `dest[i,j] = sum_k data[i,k] *
+        // scaler[j,k]`: the scaler's FACE-ROW index j picks the output COLUMN.
+        // `cb_packsel[h]` is 1.0 across face-row h, so `ht` reduce_tiles
+        // accumulating into ONE dest tile column-pack the row-sums (probe tile 9
+        // measured live columns {0,1,3} at 32.0 each from scalers at face-rows
+        // 0,1,3).
+        //
+        // HELPERS BYPASSED and why:
+        //   ckl::reduce / ckl::reduce_mean — their scaler is ONE tile (no
+        //     per-output scaler index), and they cannot express a non-canonical
+        //     scaler at all. The whole mechanism is a per-output-column scaler.
+        //   the pack — reduce_init programs a PACKER EDGE MASK that writes every
+        //     datum outside column 0 as zero (reduce.h:44-52). That mask would
+        //     erase columns 1..ht-1 of a column-packed tile, so `reduce_uninit()`
+        //     (mask clear) must be issued between tile_regs_commit and the pack.
+        //     Measured: probe tile 8 (mask on) kept only column 0; probe tile 9
+        //     (mask cleared) kept all three. No helper exposes that seam.
+        if constexpr (COLPACK) {
+            MaybeDeviceZoneScope("cmp_colpack");
+            cb_wait_front(cb_partials, ht);
+            cb_wait_front(cb_packsel, HT_BLOCK);
+            cb_reserve_back(cb_partial_out, 1);
+            // REDUCE_ROW SUM maps scaler -> SrcA, data -> SrcB (reduce.h:70-76).
+            reconfig_data_format(cb_packsel, cb_partials);
+            pack_reconfig_data_format(cb_partial_out);
+            reduce_init<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                cb_partials, cb_packsel, cb_partial_out);
+            tile_regs_acquire();
+            for (uint32_t h = 0; h < ht; ++h) {
+                reduce_tile<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                    cb_partials, cb_packsel, /*itile=*/h, /*itile_scaler=*/h, /*idst=*/0);
+            }
+            tile_regs_commit();
+            reduce_uninit();  // MUST precede the pack — see above.
+            tile_regs_wait();
+            pack_tile(0, cb_partial_out);
+            tile_regs_release();
+            cb_push_back(cb_partial_out, 1);
+            cb_pop_front(cb_partials, ht);
+        }
+
         // ========== phase 3b: cross-core combine (W-split only) ============
         // The combine folds the raw slice-accumulators the writers gathered into
         // ONE mean(x^2) per tile-row. That fold is EXACTLY the local chunk
@@ -558,7 +519,66 @@ void kernel_main() {
         // produces, so the second fold cannot double-count the surviving x^2
         // lanes — and republishes it through cb_partial_out for its own writer.
         // The root then finalizes over just the CW2 row-sums.
-        if constexpr (W_SPLIT) {
+        if constexpr (W_SPLIT && COLPACK) {
+            // ===== gather_payload_shrink: the COLUMN-PACKED combine ===========
+            //
+            // The gathered payload is CW1 column-packed tiles, one per core, in
+            // which column h is that core's row-sum for tile-row h. Two steps,
+            // CW1 + ht FPU ops total, vs the baseline root's ht * CW1:
+            //
+            //  (1) ELEMENTWISE sum the CW1 packed tiles. Column h of the sum is
+            //      the sum of column h, so this is exactly the raw accumulate the
+            //      leader stage already uses (`AccumulateViaAdd` +
+            //      `Accumulate::at`, never `at_last` — it must NOT fold within
+            //      the tile, which would collapse the ht columns into one and
+            //      double-count them; that is the Refinement-2 trap, and here it
+            //      would be a silent RESCALE that PCC would score >= 0.9998).
+            //  (2) COLUMN-SELECT: `cb_colsel[h]` is a one-hot 1/W at reduce-axis
+            //      position h, so one reduce_tile pulls column h into column 0
+            //      AND applies the 1/N in the same op (probe tiles 3,4,5). The
+            //      packer edge mask is deliberately LEFT ON here — its zeroing of
+            //      everything outside column 0 is exactly the shape phase 4 wants
+            //      — and cleared once at the end, before phase 5/6 pack full
+            //      tiles again.
+            if (is_root) {
+                MaybeDeviceZoneScope("cmp_combine");
+                // (1) raw elementwise sum of the CW1 packed tiles -> cb_partials[0]
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    cb_group_partials,
+                    cb_ones,
+                    cb_rootsum,
+                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                    ckl::ReduceInputBlockShape::of(1, CW1, 1),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_rootsum, 0),
+                    ckl::NoOp{},
+                    ckl::ReducePartialScaler::none());
+
+                // (2) ht column-selects -> ht mean(x^2) tiles for the multicast.
+                cb_wait_front(cb_rootsum, 1);
+                cb_wait_front(cb_colsel, HT_BLOCK);
+                cb_reserve_back(cb_rms_mean, ht);
+                reconfig_data_format(cb_colsel, cb_rootsum);
+                pack_reconfig_data_format(cb_rms_mean);
+                reduce_init<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(cb_rootsum, cb_colsel, cb_rms_mean);
+                for (uint32_t h = 0; h < ht; ++h) {
+                    tile_regs_acquire();
+                    reduce_tile<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                        cb_rootsum, cb_colsel, /*itile=*/0, /*itile_scaler=*/h, /*idst=*/0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_rms_mean);
+                    tile_regs_release();
+                }
+                reduce_uninit();  // AFTER the packs: phases 5/6 pack full tiles.
+                cb_push_back(cb_rms_mean, ht);
+                cb_pop_front(cb_rootsum, 1);
+            }
+        } else if constexpr (W_SPLIT) {
             MaybeDeviceZoneScope("cmp_combine");
             if constexpr (TWO_STAGE) {
                 if (is_leader) {
@@ -631,23 +651,12 @@ void kernel_main() {
         // broadcast), not by phase 3 — every core then finalizes identically.
         {
             MaybeDeviceZoneScope("cmp_rsqrt");
-#if RMS_NORM_COL0_RSQRT
-            // Perf 1 fast path: one SFPU pass over the 8 vectors that hold
-            // column 0 (see the justification above the element). 3.53x measured.
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(ht),
-                ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
-                RsqrtAddUnaryColZero<ckl::Dst::D0>{eps_bits},
-                ckl::PackTile<cb_rms_recip, ckl::OutputLifecycle::Streaming>{});
-#else
-            // Fallback (Quasar): byte-identical to the pre-Perf-1 spelling.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(ht),
                 ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
                 ckl::AddUnary<ckl::Dst::D0>{eps_bits},
                 ckl::Rsqrt<>{},
                 ckl::PackTile<cb_rms_recip, ckl::OutputLifecycle::Streaming>{});
-#endif
         }
         if constexpr (W_SPLIT) {
             // Same fixed-block contract as the gather: the reader publishes
