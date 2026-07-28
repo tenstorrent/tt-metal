@@ -450,7 +450,7 @@
   skus:
     wh_galaxy:
       timeout: 20
-  owner_id: U08BH66EXAL # Radoica Draskic
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: Galaxy Llama 3.3-70B e2e tests
