@@ -171,6 +171,33 @@ def test_bias_cache_does_not_grow_with_utterance_length(device):
     assert len(gen._bias_cache) <= 6, f"cache grew to {len(gen._bias_cache)} across 3 lengths"
 
 
+@pytest.mark.parametrize("n_frames", [64, 65, 130, 469])
+def test_bucketing_preserves_length_and_accuracy(device, n_frames):
+    """Bucketing pads T up to a grid so the 5 convs stop recompiling per length (each distinct T
+    otherwise costs 5 new conv programs, measured 1-5 s each). The output must still be trimmed to
+    exactly T frames and match the reference."""
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    w = ref.load_codec_state()
+    codes = ref.make_synthetic_codes(n_frames)
+    exp = ref.reference_decode(codes, w)
+    got = TtVoxtralCodecDecoder(device, bucket=128)(codes)
+    assert got.shape == exp.shape == (1, 1, n_frames * 1920), "bucketed output not trimmed back to T"
+    assert pcc(got, exp) > WAVE_PCC
+
+
+def test_bucketing_pads_with_last_frame_not_zeros(device):
+    """The pad repeats the final frame rather than zero-filling: zeros are a hard edge to the
+    causal convs, and the transposed convs overlap, so a pathological tail could in principle
+    reach the kept region. Checks the two agree, i.e. the choice is not load-bearing but is safe."""
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    codes = ref.make_synthetic_codes(70)  # 70 -> bucket 128, so 58 frames of padding
+    bucketed = TtVoxtralCodecDecoder(device, bucket=128)(codes)
+    plain = TtVoxtralCodecDecoder(device, bucket=None)(codes)
+    assert pcc(bucketed, plain) > 0.999, "padding is leaking into the kept region"
+
+
 def test_slab_is_tile_aligned():
     """TILE_LAYOUT pads every dim to 32. A slab of 272 (= 256 chunk + 16 window) silently becomes
     288, wasting a row and a column of tiles — pick the SLAB aligned and derive the chunk from it."""

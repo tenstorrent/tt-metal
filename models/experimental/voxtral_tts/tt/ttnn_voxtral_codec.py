@@ -100,6 +100,17 @@ ATTN_DTYPE = ttnn.bfloat16
 # percent to dispatch (T=64: 89 -> 97 ms), hence the threshold.
 SLAB = 512
 CHUNK_MIN = 512
+# Length bucketing for the CONVS. Every conv's input length scales with T (T+2, T, 2T, 4T, 8T+6),
+# so each distinct utterance length compiles 5 new conv programs -- measured at 1-5 s each, and
+# T is whatever the model happens to generate, so a server never stops paying it (a ONE-frame
+# difference cost 5.5 s vs 181 ms warm). Rounding T up to a grid caps the shape count: at 64,
+# the model's ~1500-frame ceiling gives 24 buckets = 120 conv programs for the process lifetime.
+# The trade is measured: bucketing costs 7-25% on WARM steady-state (padded compute) but on a
+# realistic stream of 12 distinct lengths, total time went 120.93s (none) -> 25.47s (bucket 64)
+# -> 1.66s (bucket 128), i.e. 73x. Warm-only regression is the wrong thing to optimise here since
+# production never repeats a length. 128 gives 12 buckets for the model's ~1500-frame ceiling.
+# Set None to disable (best if you genuinely decode one fixed length repeatedly).
+BUCKET = 128
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -109,7 +120,7 @@ class TtVoxtralCodecDecoder:
     """On-device codec decoder. __call__(codes [1,37,T] int64) -> waveform torch [1,1,T*1920]."""
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT, weight_dtype=DTYPE, attn_dtype=ATTN_DTYPE,
-                 slab=SLAB, chunk_min=CHUNK_MIN):
+                 slab=SLAB, chunk_min=CHUNK_MIN, bucket=BUCKET):
         """`weight_dtype` / `attn_dtype` exist so the precision question can be MEASURED rather
         than inherited. Activations outside attention are always fp32."""
         self.device = device
@@ -120,6 +131,7 @@ class TtVoxtralCodecDecoder:
         # would silently become 288 and waste a row and column of tiles.
         self.slab = slab
         self.chunk_min = chunk_min  # chunk only when S exceeds this; None = never chunk
+        self.bucket = bucket  # round T up to this multiple before decoding; None = off
         w = load_codec_state(ckpt_path)  # weight_norm already folded by the reference loader
 
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -343,6 +355,26 @@ class TtVoxtralCodecDecoder:
     # ----------------------------------------------------------------------------------
     @torch.no_grad()
     def __call__(self, codes, return_stages=False):
+        # return_stages BYPASSES bucketing on purpose: it exists to bisect against the
+        # reference's per-stage goldens, and a bucketed run's stages are at the padded length
+        # (T, 2T, 4T, 8T of the BUCKET), so they would not correspond. Trimming each stage
+        # separately would work but is error-prone for a debug-only path.
+        if self.bucket and not return_stages:
+            T = codes.shape[2]
+            padded = -(-T // self.bucket) * self.bucket
+            if padded > T:
+                # repeat the LAST frame rather than zero-pad: the tail then looks like plausible
+                # audio to the causal convs instead of a hard edge. It is trimmed off either way,
+                # but the transposed convs overlap, so a pathological tail is worth avoiding.
+                codes = torch.cat([codes, codes[:, :, -1:].repeat(1, 1, padded - T)], dim=2)
+                out = self._decode(codes, return_stages)
+                wav, stages = out if return_stages else (out, {})
+                wav = wav[:, :, : T * PATCH_SIZE * 8]
+                return (wav, stages) if return_stages else wav
+        return self._decode(codes, return_stages)
+
+    @torch.no_grad()
+    def _decode(self, codes, return_stages=False):
         stages = {}
         x = self.quantizer_decode(codes)  # [1,1,T,292]
         x = self._conv1d(x, self.conv_in, SEMANTIC_DIM + 36, CODEC_DIM,
