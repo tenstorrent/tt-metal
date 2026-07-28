@@ -619,6 +619,10 @@ void py_module_types(nb::module_& mod) {
 
     export_enum<tt::tt_metal::UnpackToDestMode>(mod, "UnpackToDestMode");
 
+    export_enum<tt::tt_metal::KernelBuildOptLevel>(mod, "KernelBuildOptLevel", R"pbdoc(
+        Optimization level for kernel compilation.
+    )pbdoc");
+
     // nanobind bind_vector docs:
     // the item accessor __getitem__ copies the accessed element by default.
     // Consequently, writes to elements may not propagate in the expected way.
@@ -807,6 +811,7 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
+        .def_rw("opt_level", &tt::tt_metal::KernelDescriptor::opt_level, "Optimization level for kernel compilation")
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel")
         .def_rw(
             "compiler_include_paths",

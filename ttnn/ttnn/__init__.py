@@ -307,6 +307,7 @@ from ttnn.types import (
     cb_descriptor_from_sharded_tensor,
     get_cb_address,
     UnpackToDestMode,
+    KernelBuildOptLevel,
     FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
