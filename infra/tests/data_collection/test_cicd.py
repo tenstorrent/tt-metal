@@ -351,6 +351,56 @@ def test_non_checkout_git_failure_stays_generic():
     assert result == str(InfraErrorV1.GENERIC_FAILURE)
 
 
+@pytest.mark.parametrize(
+    "failure_description,expected_signature",
+    [
+        # MINFRA-1082: these all previously fell into the GENERIC_FAILURE catch-all
+        ("Value cannot be null. (Parameter 'ContainerId')", InfraErrorV1.DOCKER_CONTAINER_ID_NULL_FAILURE),
+        (
+            "Failed to download archive 'https://codeload.github.com/tenstorrent/tt-metal/tar.gz/9b8a6b5' after 3 attempts.",
+            InfraErrorV1.ACTION_DOWNLOAD_FAILURE,
+        ),
+        (
+            "Failed to download action 'https://codeload.github.com/actions/checkout/tar.gz/de0fac2'. "
+            "Error: Response status code does not indicate success: 429 (Too Many Requests).",
+            InfraErrorV1.ACTION_DOWNLOAD_FAILURE,
+        ),
+        (
+            "Failed tests were found and 'fail-on-error' option is set to true",
+            InfraErrorV1.TEST_REPORTER_FAILURE,
+        ),
+        ("No test report files were found", InfraErrorV1.TEST_REPORTER_NO_REPORTS_FAILURE),
+        ("The process '/usr/bin/git' failed with exit code 128", InfraErrorV1.GIT_PROCESS_FAILURE),
+        (
+            "Failed to FinalizeArtifact: Unable to make request: ECONNRESET",
+            InfraErrorV1.ARTIFACT_FINALIZE_FAILURE,
+        ),
+        (
+            "Unable to download artifact(s): Failed to GetSignedArtifactURL: Unable to make request: ECONNRESET",
+            InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE,
+        ),
+        (
+            'Unable to download artifact(s): Failed to ListArtifacts: Received non-retryable error: '
+            'Failed request: (403) Forbidden: Error from intermediary with HTTP status code 403 "Forbidden"',
+            InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE,
+        ),
+        ("Upload progress stalled.", InfraErrorV1.ARTIFACT_UPLOAD_STALLED_FAILURE),
+        ("Request was cancelled.", InfraErrorV1.REQUEST_CANCELLED_FAILURE),
+        (
+            "We received a malformed request from your client. Sorry about that. "
+            "Please try resubmitting your request and contact us if the problem persists.",
+            InfraErrorV1.GITHUB_API_MALFORMED_REQUEST_FAILURE,
+        ),
+        ("Process completed with exit code 1.", InfraErrorV1.GENERIC_EXIT_CODE_FAILURE),
+    ],
+)
+def test_new_infra_error_signatures_classified_uniquely(failure_description, expected_signature):
+    """Each of these gets its own bucket instead of collapsing into GENERIC_FAILURE (MINFRA-1082)."""
+    mock_job = _make_mock_job(step_name="Run something", step_conclusion="success")
+    result = get_job_failure_signature_(mock_job, failure_description, workflow_outputs_dir=None)
+    assert result == str(expected_signature)
+
+
 @pytest.fixture(autouse=True)
 def clear_sku_config_cache():
     from infra.data_collection.github.utils import _generic_runner_labels, _root_sku_for, _sku_config_sku_names
