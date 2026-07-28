@@ -33,8 +33,18 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         detail::compute_aligned_packet_dims(input_tensor.dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
 
-    // eventually add more cores for multi-link
-    const CoreCoord use_cores = {1, 1};
+    const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
+    const auto [num_hops, dst_is_forward, next_fabric_id] =
+        detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
+    const auto forwarding_link_indices = tt::tt_fabric::get_forwarding_link_indices(this_fabric_id, next_fabric_id);
+    TT_FATAL(!forwarding_link_indices.empty(), "No forwarding links available for point-to-point transfer");
+    constexpr uint32_t max_workers = 4;
+    const bool use_multilink = input_tensor.dtype() == DataType::FLOAT32 && input_tensor.layout() == Layout::TILE;
+    const uint32_t num_workers =
+        use_multilink
+            ? std::min<uint32_t>({max_workers, static_cast<uint32_t>(forwarding_link_indices.size()), total_packets})
+            : 1;
+    const CoreCoord use_cores = {num_workers, 1};
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(use_cores, total_packets);
@@ -97,11 +107,6 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
     reader_kernel_desc.compile_time_args = std::move(reader_ct_args);
     reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
-    const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
-
-    const auto [num_hops, dst_is_forward, next_fabric_id] =
-        detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
-
     std::vector<uint32_t> writer_ct_args = {sender_cb_id, packet_header_cb_id, packet_cb_id, l1_alignment};
     tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(writer_ct_args);
 
@@ -121,9 +126,8 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
     tt::tt_metal::KernelHandle send_unary_reader_kernel_id = 0;
     tt::tt_metal::KernelHandle send_unary_writer_kernel_id = 1;
 
-    constexpr auto link_idx = 0;  // for single link implementation
-
     uint32_t page_idx_start = 0, page_idx_end = 0;
+    uint32_t worker_idx = 0;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
@@ -164,6 +168,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
             dst_is_forward,
         };
 
+        const uint32_t link_idx = use_multilink ? forwarding_link_indices.at(worker_idx) : 0;
         if (dst_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 this_fabric_id, next_fabric_id, link_idx, desc, c, writer_runtime_args);
@@ -183,6 +188,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         desc.kernels[send_unary_writer_kernel_id].emplace_runtime_args(c, writer_rt_args_builder);
 
         page_idx_start += increment;
+        ++worker_idx;
     }
 
     return desc;

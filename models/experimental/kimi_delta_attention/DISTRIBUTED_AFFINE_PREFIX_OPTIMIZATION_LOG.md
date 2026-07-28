@@ -94,6 +94,39 @@ Next breakdown, sorted by potential gain to 60% of each stage floor:
 
 Decision 1: target P2P implementation before matmul. Source evidence shows each P2P uses one worker core and one fabric link (`send_program_factory.cpp:36-40,124`; `receive_program_factory.cpp:35-40,123`) and serially sends one 4 KiB FP32 tile per packet (`writer_send.cpp:76-105`). The 3.146 MB Kimi state therefore cannot use the available parallel fabric links. First test a minimal multi-link P2P change patterned after the existing direct-send implementation; do not assume `ttnn::broadcast` is usable because its 2D API has one exact sender coordinate, while Kimi needs one root per TP lane.
 
+## Experiment 2: FP32 tiled multi-link point-to-point
+
+Verdict: keep. The hardware exposes two forwarding links on the tested routes; striping FP32 tiled packets across them reduces every non-local P2P kernel median by 49.8--50.2% and reduces exact affine-prefix device time by 40.86%. The path is deliberately restricted to FP32 TILE transfers; all other P2P types retain the original single-worker, routing-plane-0 implementation. Worker count is capped by available links, four, and total packet count.
+
+Validation:
+
+- `./build_metal.sh`: PASS after formatting.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_distributed_affine_prefix.py -q -s`: 2 passed, `SAFE_PYTEST_RESULT: PASS`; both TP axes, repeat, and trace passed. Worst PCC remains 0.999999 and worst max absolute error remains 1.904368e-4.
+- `PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_distributed_affine_prefix_perf.py -q -s`: 1 passed, `SAFE_PYTEST_RESULT: PASS`. Raw CSV: `generated/profiler/reports/2026_07_28_15_21_13/ops_perf_results_2026_07_28_15_21_13.csv`.
+
+Median exact device time across sessions 2--11 is 2,539.813 us, down from 4,294.868 us (1.691x, 40.86%) and from the original 10,524.204 us (4.144x, 75.87%). Fixed-floor efficiency is now 27.41%; the 1,160.300 us target still requires another 2.189x. Per-device medians are 2,519.107, 2,520.620, 2,518.380, 2,518.195, 2,536.878, 2,539.191, 2,536.850, and 2,535.366 us.
+
+Remaining critical P2P kernels, sorted by median duration (calls overlap across devices, so these are not additive):
+
+| Rank | Transfer | Two-link us | One-link us | Reduction |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | Broadcast TP1 rank 3 to 0 (3 hops) | 1,433.341 | 2,857.362 | 49.84% |
+| 2 | Broadcast TP0 rank 3 to 0 (3 hops) | 1,422.024 | 2,826.874 | 49.70% |
+| 3 | Relay TP1 rank 2 to 3 (1 physical neighbor, routed trace duration) | 1,238.331 | 2,484.601 | 50.16% |
+| 4 | Relay TP0 rank 2 to 3 | 1,224.370 | 2,456.985 | 50.17% |
+| 5 | Broadcast TP1 rank 3 to 1 (2 hops) | 1,208.927 | 2,410.413 | 49.85% |
+| 6 | Broadcast TP0 rank 3 to 1 (2 hops) | 1,205.575 | 2,398.005 | 49.73% |
+| 7 | Broadcast TP1 rank 3 to 2 (1 hop) | 983.775 | 1,962.440 | 49.87% |
+| 8 | Broadcast TP0 rank 3 to 2 (1 hop) | 980.383 | 1,947.407 | 49.66% |
+| 9 | Relay TP1 rank 1 to 2 | 625.835 | 1,248.198 | 49.86% |
+| 10 | Relay TP0 rank 1 to 2 | 612.647 | 1,222.281 | 49.88% |
+| 11 | Relay TP1 rank 0 to 1 | 402.788 | 802.761 | 49.82% |
+| 12 | Relay TP0 rank 0 to 1 | 394.371 | 789.362 | 50.04% |
+
+The generic P2P suite reports 28 passed and one deterministic BF16 row-major failure for `[1,1,8,16]`. A clean committed control produces the identical failure (only the first row arrives), proving it predates this experiment. The localized FP32 TILE path does not execute for that case.
+
+Decision 2: reduce broadcast hop-work next. The current final-state loop sends rank 3 independently to ranks 0, 1, and 2 for each TP lane (twelve total fabric hops). A chained rank 3 -> 2 -> 1 -> 0 broadcast preserves six P2P calls but halves fabric hop-work to six and reuses the already received final-state tensor. Validate the dependency chain before accepting it.
+
 ## Backlog
 
 - Test BF16 affine summaries/state transport. Hypothesis: halving each per-device tensor from 3.146 MB to 1.573 MB reduces both fabric and DRAM traffic and may improve matmul throughput. Required evidence: remove or specialize the current FP32 invariant only in the local fast path, validate serial/all-gather PCC and max absolute error over repeat and trace replay, then profile exact SP4xTP2. Reject if recurrent error is materially worse even when performance improves.
