@@ -55,8 +55,19 @@ struct ProfzoneDecodeState {
 // where type is PP_ZONE_START/END/TOTAL, zone_hash is the low-16 srcloc hash, and full_ts is the 59-bit
 // device timestamp (timer_hi<<32 | timer_low). Sticky packets update `st` and are not emitted. A trailing
 // partial packet is saved into st.resid for the next call. `nl` = number of lanes (num_cores * NRISC).
-template <typename Emit>
-inline void profzone_decode(ProfzoneDecodeState& st, const uint32_t* in, size_t in_n, uint32_t nl, Emit&& emit) {
+// No-op default for the optional X280 hart-zone sink (see the PP_X280_ZONE branch below).
+struct ProfzoneIgnoreX280 {
+    void operator()(uint32_t /*hart*/, uint32_t /*meta*/, uint64_t /*rdcycle*/) const {}
+};
+
+template <typename Emit, typename EmitX280 = ProfzoneIgnoreX280>
+inline void profzone_decode(
+    ProfzoneDecodeState& st,
+    const uint32_t* in,
+    size_t in_n,
+    uint32_t nl,
+    Emit&& emit,
+    EmitX280&& emit_x280 = ProfzoneIgnoreX280{}) {
     // Prepend the carried residual so packets that straddled the previous read are decoded whole.
     std::vector<uint32_t>& buf = st.resid;
     const size_t rn = buf.size();
@@ -123,6 +134,17 @@ inline void profzone_decode(ProfzoneDecodeState& st, const uint32_t* in, size_t 
                 st.cur_hi[st.cur_lane] = pp_timer_hi(w0);
             }
             p += 1;
+        } else if (pp_is_x280(w0)) {
+            // 3-word: an X280 DRAIN-HART zone (--hartzones / ProfzoneBootCfg::hartzones), riding IN-BAND in
+            // the marker stream: w0 = type|hart|kind|is_start, w1/w2 = the hart's 64-bit rdcycle.
+            // This branch is MANDATORY whenever hart zones are enabled, even if the caller ignores them: the
+            // generic tail below assumes a 2-WORD packet, so a 3-word X280 packet would desynchronize the
+            // whole walk and corrupt every marker after it (silently -- the stream would still "decode").
+            if (p + 2 >= sz) {
+                break;  // partial -> carry
+            }
+            emit_x280(pp_x280_hart(w0), pp_low27(w0), (static_cast<uint64_t>(w[p + 2]) << 32) | w[p + 1]);
+            p += 3;
         } else {  // 2-word: STICKY_PROG or a marker
             if (p + 1 >= sz) {
                 break;  // partial marker -> carry

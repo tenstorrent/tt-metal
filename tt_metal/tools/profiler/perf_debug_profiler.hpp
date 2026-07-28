@@ -55,6 +55,7 @@ public:
     // Stop draining: set P_STOP on every device, wait for the drainers to quiesce, join the host threads.
     // Idempotent. The idle FW stays resident (no reset).
     void stop();
+    void push_hart_zones();  // map X280 drain-hart spans to Tracy lanes (see .cpp); called from stop()
 
 private:
     // Fixed drain config -- the silicon-validated defaults (see test_x280_realprof / the knee + Tracy sweeps):
@@ -90,6 +91,16 @@ private:
         std::unique_ptr<profiler::ProfzoneDecodeState> decode[kNSockets];
         std::thread drain[kNSockets];
         bool active = false;
+        // --hartzones equivalent (TT_METAL_PERF_DEBUG_HART_ZONES=1): the X280 drain harts inject their own
+        // busy/idle spans IN-BAND. {rdcycle, meta} pairs per hart (START,END alternating); each hart is written
+        // by exactly one drain thread, so no lock is needed. Mapped to Tracy at stop() using the per-cluster
+        // rdcycle->Tensix calibration that hart0 writes at boot when this mode is on.
+        struct HZMark {
+            uint64_t rdc;
+            uint32_t meta;
+        };
+        std::vector<std::vector<HZMark>> hz_raw;  // sized kNRead + kNRelay when enabled
+        uint64_t nharts = 0;
 
         DeviceCtx();
         ~DeviceCtx();

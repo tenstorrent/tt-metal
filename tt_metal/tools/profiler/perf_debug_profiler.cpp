@@ -4,6 +4,7 @@
 
 #include "tools/profiler/perf_debug_profiler.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <fstream>
@@ -12,6 +13,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tracy/Tracy.hpp>
+#include <common/TracyTTDeviceData.hpp>  // tracy::RiscType X280_RD0/X280_RELAY0 lanes
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -37,6 +39,17 @@
 namespace tt::tt_metal {
 
 namespace pz = tt::tt_metal::profiler;
+
+namespace {
+// Read once: profile the X280 drain harts as well as the worker kernels.
+bool hart_zones_enabled() {
+    static const bool on = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_HART_ZONES");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return on;
+}
+}  // namespace
 
 PerfDebugProfiler::DeviceCtx::DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::~DeviceCtx() = default;
@@ -220,6 +233,15 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     bcfg.dualrelay = true;
     bcfg.adaptive = true;
     bcfg.socket = true;
+    // TT_METAL_PERF_DEBUG_HART_ZONES=1: also profile the X280 DRAIN HARTS themselves (reader/relay busy +
+    // stall spans), injected in-band. Enabling this also makes hart0 write the rdcycle->Tensix calibration
+    // samples at boot, which stop() needs to place the hart spans on the device timeline. Off by default: it
+    // adds ~24 B per drain-hart span to the same D2H stream the markers use.
+    bcfg.hartzones = hart_zones_enabled();
+    if (bcfg.hartzones) {
+        ctx.nharts = kNRead + kNRelay;
+        ctx.hz_raw.assign(ctx.nharts, {});
+    }
 
     uint64_t nharts = 0;
     bool half_broken = false;
@@ -381,6 +403,14 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 pkt.timestamp = (ts >= ts_base) ? (ts - ts_base) : 0;
                 pkt.is_start = (type == kernel_profiler::ZONE_START);
                 tracy_->HandleWorkerZone(pkt);
+            },
+            // X280 drain-hart spans (only produced when bcfg.hartzones was set). Just accumulate here --
+            // they cannot be placed on the timeline until stop(), which reads the rdcycle->Tensix calibration.
+            // Each hart is written by exactly one drain thread, so this is race-free without a lock.
+            [&](uint32_t hart, uint32_t meta, uint64_t rdc) {
+                if (hart < ctx.hz_raw.size()) {
+                    ctx.hz_raw[hart].push_back(DeviceCtx::HZMark{rdc, meta});
+                }
             });
     }
     // Always report the per-socket drain totals: this is the only way to tell a healthy capture from a
@@ -418,8 +448,135 @@ void PerfDebugProfiler::stop() {
             }
         }
     }
+    push_hart_zones();  // must run BEFORE tracy_.reset() -- it creates/uses Tracy contexts
     tracy_.reset();
     devices_.clear();
+}
+
+// Map the collected X280 drain-hart spans onto the device timeline and push them to Tracy as their own
+// per-hart lanes ("rd0/rd1/relay0/relay1" in the GUI, via the widened RiscType). Runs once, at stop(), after
+// the drain threads have joined so hz_raw is stable.
+//
+// The harts timestamp themselves with rdcycle (a fixed 1 GHz counter), NOT the Tensix wall clock the kernel
+// markers use, so the two cannot be compared directly. hart0 therefore co-samples both clocks at boot (that
+// is what bcfg.hartzones also switches on) and the host least-squares fits tensix = a*rdcycle + b here.
+// Timestamps are rebased on the harts' OWN minimum, which cancels the constant offset between the
+// calibration reference core's raw wall clock and the marker timeline (the same per-node origin trick the
+// standalone harness uses; without it the whole lane can land before the origin and clamp to zero).
+void PerfDebugProfiler::push_hart_zones() {
+    if (!tracy_ || !hart_zones_enabled()) {
+        return;
+    }
+    for (auto& ctx : devices_) {
+        if (!ctx.driver || ctx.hz_raw.empty()) {
+            continue;
+        }
+        uint64_t total = 0;
+        for (const auto& v : ctx.hz_raw) {
+            total += v.size();
+        }
+        if (total == 0) {
+            log_warning(tt::LogMetal, "[perf-debug profiler] hart zones enabled but none were captured.");
+            continue;
+        }
+        // ---- rdcycle -> Tensix fit from hart0's boot co-samples {rdcycle_mid, tensix, noc_round_trip} ----
+        const uint32_t nc = pz::kProfzoneCalibN;
+        std::vector<uint64_t> raw(static_cast<size_t>(nc) * 3);
+        try {
+            ctx.driver->read_block(raw.data(), nc * 3 * sizeof(uint64_t), pz::kProfzoneCalibBase);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "[perf-debug profiler] hart-zone calib read failed ({})", e.what());
+            continue;
+        }
+        std::vector<uint64_t> rts(nc);
+        for (uint32_t i = 0; i < nc; i++) {
+            rts[i] = raw[i * 3 + 2];
+        }
+        std::sort(rts.begin(), rts.end());
+        const uint64_t rt_cut = rts[nc / 2] + rts[nc / 2] / 2;  // drop NoC-contended outliers
+        const uint64_t x_base = raw[0], t_base = raw[1];
+        double sx = 0, st = 0, sxx = 0, sxt = 0;
+        uint32_t nfit = 0;
+        for (uint32_t i = 0; i < nc; i++) {
+            if (raw[i * 3 + 2] > rt_cut) {
+                continue;
+            }
+            const double x = static_cast<double>(raw[i * 3 + 0] - x_base);
+            const double t = static_cast<double>(raw[i * 3 + 1] - t_base);
+            sx += x;
+            st += t;
+            sxx += x * x;
+            sxt += x * t;
+            nfit++;
+        }
+        if (nfit < 2 || (sxx * nfit - sx * sx) == 0.0) {
+            log_warning(tt::LogMetal, "[perf-debug profiler] hart-zone calib unusable (nfit={})", nfit);
+            continue;
+        }
+        const double a = (sxt * nfit - sx * st) / (sxx * nfit - sx * sx);
+        const double b = (st - a * sx) / nfit;
+        auto map_ts = [&](uint64_t x) -> uint64_t {
+            return static_cast<uint64_t>(a * static_cast<double>(x - x_base) + b) + t_base;
+        };
+        // Rebase on the harts' own minimum (see the note above).
+        uint64_t hz_min = ~0ull, hz_max = 0;
+        for (const auto& v : ctx.hz_raw) {
+            for (const auto& m : v) {
+                const uint64_t t = map_ts(m.rdc);
+                hz_min = std::min(hz_min, t);
+                hz_max = std::max(hz_max, t);
+            }
+        }
+        const CoreCoord l2t = pz::x280_l2cpu_tile(0);
+        static constexpr uint32_t kHartColor[4] = {0xE67E22u, 0xF1C40Fu, 0x1ABC9Cu, 0x3498DBu};
+        static constexpr uint32_t kBulkColor = 0xE74C3Cu;      // reader switched to BULK
+        static constexpr uint32_t kHostWaitColor = 0x34495Eu;  // relay blocked on a full host FIFO
+        static constexpr uint32_t kSpscWaitColor = 0x8E44ADu;  // reader blocked on a full LIM STAGE
+        for (uint64_t h = 0; h < ctx.hz_raw.size(); h++) {
+            const bool is_reader = (h < kNRead);
+            const std::string hname =
+                is_reader ? ("X280 rd" + std::to_string(h)) : ("X280 relay" + std::to_string(h - kNRead));
+            const uint32_t lane_risc = is_reader
+                                           ? (static_cast<uint32_t>(tracy::RiscType::X280_RD0) + h)
+                                           : (static_cast<uint32_t>(tracy::RiscType::X280_RELAY0) + (h - kNRead));
+            uint32_t nz = 0;
+            for (const auto& m : ctx.hz_raw[h]) {
+                const uint32_t is_start = m.meta & 1u;
+                const uint32_t kind = (m.meta >> 1) & 3u;  // 0=drain 1=bulk 2=hostwait 3=spscwait
+                const char* suffix = (kind == 1) ? " BULK" : (kind == 2) ? " HOST-WAIT" : (kind == 3) ? " SPSC-WAIT" : "";
+                const std::string zn = hname + suffix;
+                const uint64_t ts = map_ts(m.rdc);
+                perf_debug::WorkerZonePacket pkt;
+                pkt.chip_id = ctx.chip_id;
+                pkt.is_x280 = true;
+                pkt.color = (kind == 1)   ? kBulkColor
+                            : (kind == 2) ? kHostWaitColor
+                            : (kind == 3) ? kSpscWaitColor
+                                          : kHartColor[h & 3];
+                pkt.core_noc0_x = static_cast<uint32_t>(l2t.x);
+                pkt.core_noc0_y = static_cast<uint32_t>(l2t.y);
+                pkt.risc = lane_risc;
+                pkt.name = zn;
+                pkt.timestamp = (ts >= hz_min) ? (ts - hz_min) : 0;
+                pkt.is_start = (is_start != 0u);
+                tracy_->HandleWorkerZone(pkt);
+                nz += is_start;
+            }
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] hart {} ({}): {} zones -> Tracy",
+                h,
+                is_reader ? "READ" : "RELAY",
+                nz);
+        }
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] hart zones: {} spans over {:.1f} ms (a={:.5f}, {} calib samples kept)",
+            total,
+            static_cast<double>(hz_max - hz_min) / 1.35e6,
+            a,
+            nfit);
+    }
 }
 
 }  // namespace tt::tt_metal
