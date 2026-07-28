@@ -1335,7 +1335,89 @@ single-node 3.3M lossless (X280-STALL 12590 @ proddelay 300, == bh-11) and **4-n
 4 L2CPU clusters draining** (X280-STALL 10761) — note those multi-node runs predate the FIFO finding and
 still used the 4 MiB default, so their stall counts are inflated by it.
 
+## §26 — Real models end-to-end: the two paths had diverged, and it cost us the device (bh-07, 2026-07-28)
+
+First real-model captures through the **production** path (`PerfDebugProfiler`, `TT_METAL_PERF_DEBUG_PROFILER=1`),
+on bh-07 (p100a, single-chip, 12 host cores). Working: **ResNet-50 b16** (non-trace 1,578,688 markers /
+trace-replay 1,581,952 — bit-identical to bh-06's P300 numbers), **VGG-UNet** (557,184), **UFLD-v2**
+(**99,187,072**), **qwen36** gated-attention prefill (34,656). Blocked by the model/env, not the profiler:
+SentenceBERT (`shard_grid_fit_error`), ViT (harness-SKIPPED, issue #38877).
+
+**★★★ THE HEADLINE: `perf_debug` and `test_x280_realprof` had DIVERGED, and that divergence reached silicon.**
+The harness has had the decoupled shape since yusuf's work — `sockets -> writer -> BroadcastRing -> consumer
+-> Tracy` — while `perf_debug`, the path real models use, pushed to Tracy **INLINE on the drain thread with no
+ring at all**. Because every X280 stage is lossless-BLOCKING, an inline slow sink propagates all the way down:
+
+    Tracy push slow -> drain thread not back at read() -> D2H FIFO full -> relay HOST-WAIT
+      -> reader LIM STAGE backs up -> worker L1 rings full -> PRODUCERS STALL
+
+There was no release valve anywhere in that chain. UFLD-v2 (99M markers) exposed it: **relay0 host-waited
+15,852 ms of a 19 s run (84% of the run; 96% of its own DRAIN time)** while relay1 waited zero.
+
+**Isolation that proved it** (`TT_METAL_PERF_DEBUG_NO_TRACY=1` — drain + decode unchanged, skip only the push):
+
+| | push ON | push OFF |
+|---|---|---|
+| socket 0 producer stalls | 826 | **0** |
+| relay0 HOST-WAIT | 51× / 15,852 ms | **0** |
+| relay0 DRAIN | 16,434 ms | 583 ms |
+| socket 0 reads | 428 | 41,015 |
+
+So read+decode costs only 583 ms for 58.6M markers; the push inflates it **28×**. The sink was the entire wall.
+
+**The fix = make the paths the same.** `drain_loop` (thread-per-socket, inline push) → `drain_pass()` +
+one writer round-robining every (device, socket) + a consumer thread doing the Tracy push.
+`PerfDebugRec` is byte-identical to the harness's `Rec`; the device index is packed into the top 8 bits of
+`lane` (lane ≤ 550 needs 24) so one ring serves multiple devices. **Decode must STAY on the writer** —
+sticky-SRC/timer state is in-order per stream.
+
+**Result on UFLD-v2 — lossless AND non-perturbing, which the inline design could never give:**
+
+| | inline | ring 4M (default) | **ring 128M** |
+|---|---|---|---|
+| producer stalls | 826 | 0 | **0** |
+| relay0 HOST-WAIT | 51×/15,852 ms | 0 | **0** |
+| records dropped | n/a | 83,377,260 (84%) | **0** |
+| capture | — | 92 MB | **481 MB** (489 MB with hart zones) |
+
+**Sizing:** Tracy ingests **~0.8M records/s**; UFLD produces ~5.2M/s. So drops at the 4M default are
+structural, not a bug — size the ring to the BURST (99M recs ≈ 2.4 GB at 24 B/Rec) via
+`TT_METAL_PERF_DEBUG_RING_RECS`, and the consumer drains the remainder at teardown. Note my earlier
+270 ns/marker estimate implied ~3.7M/s per consumer; the real figure is ~4.5× worse because **Tracy's
+ingestion**, not packet-building, is the ceiling.
+
+**★ CORRECTION — the "44% socket load imbalance" was mostly an ARTIFACT of the back-pressure.** With the sink
+decoupled, the readers are nearly balanced (rd0 1829 ms vs rd1 1812 ms) where before rd0 sat at 17,660 ms vs
+rd1's 1,830. The whole X280 hart span collapsed **18,990 ms → 2,588 ms**: the drainers had been *stretched
+across the entire run* waiting on Tracy. Real remaining asymmetry is relay-side only (583 vs 448 ms) and minor.
+Do not chase a load-balancing fix on numbers measured under back-pressure.
+
+**Hart profiling reached the production path too** (`TT_METAL_PERF_DEBUG_HART_ZONES=1`), and required a
+**latent-corruption fix in the SHARED decoder**: `profzone_decode`'s generic tail assumes a 2-WORD packet but
+`PP_X280_ZONE` is 3 WORDS, so enabling hart zones without teaching it would mis-parse the first hart span and
+**desynchronize the entire packet walk** — silently, with a plausible-looking capture. Added an explicit
+`pp_is_x280` branch + optional `emit_x280` callback (default no-op, existing callers unchanged).
+
+**★ Tracy needs GPU zones submitted in CHRONOLOGICAL order per context.** Pushing hart-by-hart (all of hart0,
+then hart1, …) made the shared context's clock jump backwards once per hart and rendered the four lanes as
+blocks marching left-to-right across the timeline, even though their real windows overlap. Fix: merge all
+harts into ONE `stable_sort`-ed stream before pushing (stable, so equal timestamps keep emission order and a
+zone can never close before it opens). Ruled the data in first via three diagnostics now kept permanently:
+per-hart min/max window, START/END balance (`starts==ends`, `left_open=0`, `orphan_ends=0`, max_depth 1–2),
+and a 10-bucket time histogram (flat for every hart).
+
+Final clean UFLD-v2 capture: **0 stalls, 0 drops, 99,187,072 markers, all four hart lanes with every wait
+category at zero** — `tracy_captures/bh07_ufld_v2_x280_lossless_hartzones.tracy` (489 MB).
+
 ## Gotchas (saved time → don't relearn)
+
+- **★ KEEP `perf_debug` AND `test_x280_realprof` STRUCTURALLY IDENTICAL.** They drifted once (the harness got
+  the BroadcastRing, the production path did not) and the result was worker cores stalling on a real model.
+  I even *noted* the divergence in a commit message and moved on — don't. If a fix lands in one, port it.
+- **A slow HOST sink can stall SILICON here.** Every X280 stage is lossless-blocking, so any inline slow
+  consumer back-pressures FIFO → relay → reader → producers. Anything expensive must sit behind the ring.
+- **`TT_METAL_PERF_DEBUG_NO_TRACY=1` is the one-run answer to "is the sink the bottleneck?"** — it keeps the
+  drain and decode identical and skips only the push.
 
 - **A stall FLOOR that doesn't fall as you slow the producer = a BUFFER limit, not a drain-rate limit.**
   Sweeping `--proddelay` to chase a knee is wasted effort in that regime; size the D2H FIFO (`--hring`)
