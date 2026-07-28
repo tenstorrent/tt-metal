@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -77,15 +77,15 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
     constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
-    // Per-core slots in cb_ex_external are hardcoded to a cb_ex_external_slot_pitch_bytes
-    // pitch (see the `l1_write_addr_external += cb_ex_external_slot_pitch_bytes`
+    // Per-core slots in dfb_ex_external are hardcoded to a dfb_ex_external_slot_pitch_bytes
+    // pitch (see the `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes`
     // increments below). Each NOC read writes datum_size_bytes into its slot, so
-    // datum_size_bytes > cb_ex_external_slot_pitch_bytes would overflow into the next
+    // datum_size_bytes > dfb_ex_external_slot_pitch_bytes would overflow into the next
     // core's slot and silently corrupt the reduction. Zero-fill does not fix this; the
     // slot pitch itself would need to grow.
-    static_assert(datum_size_bytes <= cb_ex_external_slot_pitch_bytes,
+    static_assert(datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
                   "cb_ex_external slot pitch is hardcoded; "
-                  "datum_size_bytes must be <= cb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
+                  "datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
 
@@ -195,47 +195,47 @@ void kernel_main() {
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     reduce_sender_sem.set(VALID);
 
-    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex2_partial_id = tt::CBIndex::c_21;
-    constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex2_id = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex_external_id = tt::CBIndex::c_10;
-    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_repack_id = tt::CBIndex::c_26;
-    constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_31;
-    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
-    constexpr uint32_t cb_x_id = tt::CBIndex::c_24;
-    constexpr uint32_t cb_reread_out_id = tt::CBIndex::c_23;
+    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr uint32_t dfb_ex2_partial_id = tt::CBIndex::c_21;
+    constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
+    constexpr uint32_t dfb_ex2_id = tt::CBIndex::c_13;
+    constexpr uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
+    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_repack_id = tt::CBIndex::c_26;
+    constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_31;
+    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
+    constexpr uint32_t dfb_x_id = tt::CBIndex::c_24;
+    constexpr uint32_t dfb_reread_out_id = tt::CBIndex::c_23;
 
-    CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
-    CircularBuffer cb_ex(cb_ex_id);
-    CircularBuffer cb_ex2(cb_ex2_id);
-    CircularBuffer cb_ex_external(cb_ex_external_id);
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_repack(cb_repack_id);
-    CircularBuffer cb_repack_out(cb_repack_out_id);
-    CircularBuffer cb_out0(cb_out0_id);
-    CircularBuffer cb_reread_out(cb_reread_out_id);
+    DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);
+    DataflowBuffer dfb_ex(dfb_ex_id);
+    DataflowBuffer dfb_ex2(dfb_ex2_id);
+    DataflowBuffer dfb_ex_external(dfb_ex_external_id);
+    DataflowBuffer dfb_in0(dfb_in0_id);
+    DataflowBuffer dfb_repack(dfb_repack_id);
+    DataflowBuffer dfb_repack_out(dfb_repack_out_id);
+    DataflowBuffer dfb_out0(dfb_out0_id);
+    DataflowBuffer dfb_reread_out(dfb_reread_out_id);
 
-    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
-    const DataFormat out_data_format = get_dataformat(cb_out0_id);
+    constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
+    const DataFormat out_data_format = get_dataformat(dfb_out0_id);
     const uint32_t num_bytes_read = datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
+    uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
     UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_repack.reserve_back(per_core_N);
-        uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
+        dfb_repack.reserve_back(per_core_N);
+        uint32_t l1_write_addr_repack = dfb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(self_ep, CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
             src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
         }
         noc.async_read_barrier();
-        cb_repack.push_back(per_core_N);
+        dfb_repack.push_back(per_core_N);
     }
 #endif
 
@@ -251,29 +251,29 @@ void kernel_main() {
     constexpr uint32_t out_block_h_last = extra_out_block ? (residual % out_block_h_normal) : out_block_h_normal;
     constexpr uint32_t out_block_hw_last = out_block_h_last * block_w;
     constexpr uint32_t num_reads_of_input = 3;
-    constexpr uint32_t cb_ex_external_data_bytes =
-        num_out_blocks_padded * num_mcast_cores * cb_ex_external_slot_pitch_bytes;
-    constexpr uint32_t cb_ex_external_tiles_required = (cb_ex_external_data_bytes / single_tile_size_bytes) +
-                                                       ((cb_ex_external_data_bytes % single_tile_size_bytes) != 0);
+    constexpr uint32_t dfb_ex_external_data_bytes =
+        num_out_blocks_padded * num_mcast_cores * dfb_ex_external_slot_pitch_bytes;
+    constexpr uint32_t dfb_ex_external_tiles_required = (dfb_ex_external_data_bytes / single_tile_size_bytes) +
+                                                       ((dfb_ex_external_data_bytes % single_tile_size_bytes) != 0);
 
-    // Two independent sources of stale SRAM contents in cb_ex_external that the
+    // Two independent sources of stale SRAM contents in dfb_ex_external that the
     // downstream `reduce_tile` SUM consumer would otherwise sum into the
     // global reduction:
-    //   (A) intra-slot gap: each per-core slot is cb_ex_external_slot_pitch_bytes
+    //   (A) intra-slot gap: each per-core slot is dfb_ex_external_slot_pitch_bytes
     //       wide (see the hardcoded
-    //       `l1_write_addr_external += cb_ex_external_slot_pitch_bytes` increments
+    //       `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes` increments
     //       below) but the NOC read writes only the first datum_size_bytes; bytes
-    //       [datum_size_bytes, cb_ex_external_slot_pitch_bytes) of every used slot
+    //       [datum_size_bytes, dfb_ex_external_slot_pitch_bytes) of every used slot
     //       are never written. Present iff
-    //       datum_size_bytes < cb_ex_external_slot_pitch_bytes (compile-time check).
+    //       datum_size_bytes < dfb_ex_external_slot_pitch_bytes (compile-time check).
     //   (B) trailing tile gap: when the total meaningful data
     //       (cb_ex_external_data_bytes) does not exactly fill the integer
     //       number of reserved tiles (cb_ex_external_tiles_required), the
     //       bytes past the last used slot in the last tile are never written.
     //
-    // Fix: zero-fill cb_ex_external once at kernel startup. The per-iteration
+    // Fix: zero-fill dfb_ex_external once at kernel startup. The per-iteration
     // writes below only touch the per-core slot data positions (first
-    // datum_size_bytes of every cb_ex_external_slot_pitch_bytes-wide slot);
+    // datum_size_bytes of every dfb_ex_external_slot_pitch_bytes-wide slot);
     // the gap bytes are never written by this kernel, and the consumer
     // (compute kernel's reduce_tile) is read-only on this CB. So the gap
     // bytes stay zero across every iteration.
@@ -281,21 +281,21 @@ void kernel_main() {
     // Note: this mcast reader cannot use the "single-tile-overwrite trick" that the
     // non-welford sharded reader (reader_mcast_sender_unary_sharded_gn_v2.cpp) uses.
     // The sharded reader reserves a single tile per iteration and uses a
-    // full-tile SELF read from cb_ex_partial as a free zero-init, which works
-    // because cb_ex_partial there is `reduce<…, REDUCE_SCALAR>`-packed and
+    // full-tile SELF read from dfb_ex_partial as a free zero-init, which works
+    // because dfb_ex_partial there is `reduce<…, REDUCE_SCALAR>`-packed and
     // therefore documented to have exact zeros at every non-result datum.
     // This mcast reader instead reserves cb_ex_external_tiles_required tiles
     // per cur_read_iteration and writes per-core scalars across all of them
-    // at a cb_ex_external_slot_pitch_bytes slot pitch -- when
-    // num_mcast_cores * cb_ex_external_slot_pitch_bytes does not divide
+    // at a dfb_ex_external_slot_pitch_bytes slot pitch -- when
+    // num_mcast_cores * dfb_ex_external_slot_pitch_bytes does not divide
     // single_tile_size_bytes, slot writes straddle tile boundaries and the
     // 2nd-and-later tiles never get a full-tile overwrite to clear their gap
     // bytes.
-    constexpr bool needs_cb_ex_external_zero_fill = (datum_size_bytes < cb_ex_external_slot_pitch_bytes) ||
-                                                    (cb_ex_external_data_bytes <
-                                                     cb_ex_external_tiles_required * single_tile_size_bytes);
-    if constexpr (needs_cb_ex_external_zero_fill) {
-        zero_whole_cb(cb_ex_external_id, noc);
+    constexpr bool needs_dfb_ex_external_zero_fill = (datum_size_bytes < dfb_ex_external_slot_pitch_bytes) ||
+                                                    (dfb_ex_external_data_bytes <
+                                                     dfb_ex_external_tiles_required * single_tile_size_bytes);
+    if constexpr (needs_dfb_ex_external_zero_fill) {
+        zero_whole_cb(dfb_ex_external_id, noc);
     }
 
         index_b_offset = 0;
@@ -311,8 +311,8 @@ void kernel_main() {
                 //Definition: num_read_of_input = 3
                 for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                     uint32_t out_block_start_id_offset = 0;
-                    cb_ex_external.reserve_back(cb_ex_external_tiles_required);
-                    uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
+                    dfb_ex_external.reserve_back(dfb_ex_external_tiles_required);
+                    uint32_t l1_write_addr_external = dfb_ex_external.get_write_ptr();
 
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual, out_block_hw_actual;
@@ -325,11 +325,11 @@ void kernel_main() {
                         }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                        const uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
+                        const uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
                         const auto src_a = TensorAccessor(src0_args, src_addr);
                         uint32_t l1_write_addr;
-                        l1_write_addr = cb_in0.get_write_ptr();
-                        cb_in0.reserve_back(out_block_hw_normal);
+                        l1_write_addr = dfb_in0.get_write_ptr();
+                        dfb_in0.reserve_back(out_block_hw_normal);
                         for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                             for (uint32_t nt = 0; nt < block_w; nt++) {
                                 noc.async_read(
@@ -343,27 +343,27 @@ void kernel_main() {
                                 noc.async_read_barrier();
                             }
                         }
-                        cb_in0.push_back(out_block_hw_normal);
+                        dfb_in0.push_back(out_block_hw_normal);
 #endif
                         if (cur_read_iteration== 0 || cur_read_iteration== 1) {
                             if (cur_read_iteration== 0) {
-                                cb_ex_partial.wait_front(1);
+                                dfb_ex_partial.wait_front(1);
                             } else {
-                                cb_ex2_partial.wait_front(1);
+                                dfb_ex2_partial.wait_front(1);
                             }
 
                             // read self Ex partial - this slot is treated the same as every
                             // other core's slot (datum_size_bytes wide, advancing by
-                            // cb_ex_external_slot_pitch_bytes).
-                            // Gap bytes inside cb_ex_external are kept zero by the
+                            // dfb_ex_external_slot_pitch_bytes).
+                            // Gap bytes inside dfb_ex_external are kept zero by the
                             // kernel-startup zero_whole_cb call above (or are statically absent
-                            // when datum_size_bytes == cb_ex_external_slot_pitch_bytes and the
+                            // when datum_size_bytes == dfb_ex_external_slot_pitch_bytes and the
                             // slots tile exactly).
                             uint32_t l1_read_addr_ex_par =
-                                cur_read_iteration== 0 ? cb_ex_partial.get_read_ptr() : cb_ex2_partial.get_read_ptr();
+                                cur_read_iteration== 0 ? dfb_ex_partial.get_read_ptr() : dfb_ex2_partial.get_read_ptr();
                             UnicastEndpoint remote_ep;
                             noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
-                            l1_write_addr_external += cb_ex_external_slot_pitch_bytes;
+                            l1_write_addr_external += dfb_ex_external_slot_pitch_bytes;
                             noc.async_read_barrier();
 
                             if constexpr (num_mcast_cores > 1) {
@@ -375,14 +375,14 @@ void kernel_main() {
                                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
                                     UnicastEndpoint remote_ep;
                                     noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par}, {});
-                                    l1_write_addr_external += cb_ex_external_slot_pitch_bytes;
+                                    l1_write_addr_external += dfb_ex_external_slot_pitch_bytes;
                                     noc.async_read_barrier();
                                 }
                             }
                             if (cur_read_iteration== 0) {
-                                cb_ex_partial.pop_front(1);
+                                dfb_ex_partial.pop_front(1);
                             } else {
-                                cb_ex2_partial.pop_front(1);
+                                dfb_ex2_partial.pop_front(1);
                             }
 
                             if constexpr (num_mcast_cores > 1) {
@@ -422,10 +422,10 @@ void kernel_main() {
                             uint32_t block_w_curr =
                                 index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
-                            const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out_id);
+                            const uint32_t dst_tile_bytes = get_tile_size(dfb_reread_out_id);
                             uint32_t l1_write_addr;
-                            l1_write_addr = cb_reread_out.get_write_ptr();
-                            cb_reread_out.reserve_back(out_block_hw_normal);
+                            l1_write_addr = dfb_reread_out.get_write_ptr();
+                            dfb_reread_out.reserve_back(out_block_hw_normal);
 
                             for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                                 for (uint32_t nt = 0; nt < block_w_curr; nt++) {
@@ -440,21 +440,21 @@ void kernel_main() {
                                     noc.async_read_barrier();
                                 }
                             }
-                            cb_reread_out.push_back(out_block_hw_normal);
+                            dfb_reread_out.push_back(out_block_hw_normal);
                         }
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
                     if (cur_read_iteration== 0 || cur_read_iteration == 1) {
-                        cb_ex_external.push_back(cb_ex_external_tiles_required);
+                        dfb_ex_external.push_back(dfb_ex_external_tiles_required);
 
                         if constexpr (num_mcast_cores > 1) {
                             uint32_t l1_read_addr_ex;
                             if (cur_read_iteration== 0) {
-                                cb_ex.wait_front(1);
-                                l1_read_addr_ex = cb_ex.get_read_ptr();
+                                dfb_ex.wait_front(1);
+                                l1_read_addr_ex = dfb_ex.get_read_ptr();
                             } else {
-                                cb_ex2.wait_front(1);
-                                l1_read_addr_ex = cb_ex2.get_read_ptr();
+                                dfb_ex2.wait_front(1);
+                                l1_read_addr_ex = dfb_ex2.get_read_ptr();
                             }
 
                             MulticastEndpoint mcast_dst;
@@ -516,9 +516,9 @@ void kernel_main() {
                             }
                             noc.async_write_barrier();
                             if (cur_read_iteration == 0) {
-                                cb_ex.pop_front(1);
+                                dfb_ex.pop_front(1);
                             } else {
-                                cb_ex2.pop_front(1);
+                                dfb_ex2.pop_front(1);
                             }
                         }
                     }
@@ -558,10 +558,10 @@ void kernel_main() {
         }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
-    uint32_t l1_write_addr_repack = cb_out0.get_write_ptr();
+    uint32_t l1_write_addr_repack = dfb_out0.get_write_ptr();
     for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_repack_out.wait_front(per_core_N);
-        uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
+        dfb_repack_out.wait_front(per_core_N);
+        uint32_t in0_l1_read_addr = dfb_repack_out.get_read_ptr();
         uint32_t src_addr_in0 = in0_l1_read_addr;
         UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
@@ -570,7 +570,7 @@ void kernel_main() {
             l1_write_addr_repack += per_core_N_bytes;
         }
         noc.async_read_barrier();
-        cb_repack_out.pop_front(per_core_N);
+        dfb_repack_out.pop_front(per_core_N);
     }
 #endif
 }
