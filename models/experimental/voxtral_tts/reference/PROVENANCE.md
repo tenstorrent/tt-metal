@@ -182,7 +182,7 @@ No `vllm`, `vllm_omni`, `mistral_common`, `transformers`, `einops`, `safetensors
   0.0% WER. Two reasons: the frame rate is 12.5 Hz rather than 21.53 Hz, and the window is
   ~1500 frames (~120 s) rather than 605 codes. Also tekken is far denser — 139 text tokens for
   the paragraph that cost XTTS 391.
-- **Numerical vs upstream: DONE — 27/27 checks pass.** Harness and setup in
+- **Numerical vs upstream: DONE — 30/30 checks pass.** Harness and setup in
   `scripts/upstream_compare/`. This is the gate the XTTS-v2 references cleared against coqui.
 
   Block 1 vs **`mistral_inference`** (Mistral's own reference, reads the same
@@ -198,10 +198,12 @@ No `vllm`, `vllm_omni`, `mistral_common`, `transformers`, `einops`, `safetensors
   | full TransformerBlock, layers 0 / 1 / 13 / 25 | ≥ 0.9999993 |
   | **full 26-layer stack + final norm** | **0.99999988** |
 
-  Blocks 2 and 3 vs **vLLM-Omni's own `nn.Module`s** — 15/15:
+  Block 1's input side + Blocks 2 and 3 vs **vLLM-Omni's own `nn.Module`s** — 18/18:
 
   | check | result |
   |---|---|
+  | b1-in codebook offsets | **exact** |
+  | b1-in `embed_frame` / `embed_frames` (37-codebook sum) | **bit-exact** |
   | b2 semantic logits / masked argmax | 1.0 / **exact code match** |
   | b2 time embedding, `predict_velocity` | 1.0 |
   | **b2 full frame, 37 codes** | **bit-identical integers** |
