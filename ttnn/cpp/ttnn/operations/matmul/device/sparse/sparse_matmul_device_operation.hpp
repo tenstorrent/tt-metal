@@ -57,7 +57,8 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     const std::optional<const CoreCoord>& user_core_coord = std::nullopt,
     const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const std::optional<Tensor>& indices = std::nullopt);
 
 SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const Tensor& input_tensor_a,
@@ -74,6 +75,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const std::optional<const CoreCoord>& user_core_coord = std::nullopt,
     const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const std::optional<Tensor>& indices = std::nullopt);
 
 }  // namespace ttnn::prim

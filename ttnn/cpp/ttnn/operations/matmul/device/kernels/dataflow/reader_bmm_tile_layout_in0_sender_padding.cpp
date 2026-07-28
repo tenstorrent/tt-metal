@@ -98,6 +98,19 @@ void kernel_main() {
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
 
+    // Indexed/gather mode: iterate only the num_active selected experts (every iterated batch is
+    // valid, no scan/skip, no validity mcast). A is either broadcast (bcast_A) or already compact
+    // (advanced sequentially per iteration when !bcast_A), so the in0 sender needs no index buffer.
+#ifdef USE_INDICES
+    constexpr bool use_indices = true;
+    // Read only when indexed (the named arg is dropped from the map when its value is 0 / unused).
+    constexpr uint32_t num_active = get_named_compile_time_arg_val("num_active");
+    constexpr uint32_t batch_loop_lim = num_active;
+#else
+    constexpr bool use_indices = false;
+    constexpr uint32_t batch_loop_lim = batchB_lim;
+#endif
+
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
         fused_op_receiver = MatmulOpReceiver(
@@ -164,7 +177,7 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
-    if constexpr (batchB > 0) {
+    if constexpr (batchB > 0 && !use_indices) {
         cb_sparsity.reserve_back(1);
         l1_write_addr_sparsity = cb_sparsity.get_write_ptr();
     }
@@ -174,13 +187,13 @@ void kernel_main() {
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
     for (uint32_t b = 0; b < in0_B; ++b) {
-        if constexpr (batchB > 0) {
+        if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 
-        for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
-            if constexpr (batchB > 0) {
+        for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+            if constexpr (batchB > 0 && !use_indices) {
                 volatile auto is_batch_valid =
                     ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
 
@@ -432,7 +445,7 @@ void kernel_main() {
     }
 
     // For completeness, we empty the sparsity CB if it was reserved earlier
-    if constexpr (batchB > 0) {
+    if constexpr (batchB > 0 && !use_indices) {
         cb_sparsity.push_back(1);
         cb_sparsity.wait_front(1);
         cb_sparsity.pop_front(1);
