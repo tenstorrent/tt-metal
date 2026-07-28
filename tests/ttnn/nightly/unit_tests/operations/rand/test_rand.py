@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
-import torch
 import math
+
+import pytest
+import torch
+import ttnn
 
 
 def get_types_from_binding_framework():
@@ -51,7 +52,7 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
     if min_val == max_val:
         return False
 
-    # torch ops don't suport integer data types, convert to list
+    # torch ops don't support integer data types, convert to list
     data = data.detach().cpu().flatten().tolist()
 
     # Calculate sample statistics
@@ -217,6 +218,23 @@ def test_rand_different_seed_values(device):
     )
 
     device.disable_and_clear_program_cache()
+
+
+def test_rand_tile_means_have_iid_dispersion(device):
+    """Guard against correlated SFPU lanes inflating random-tensor mean variance."""
+    shape = (256, 256)
+    data = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=1)).float()
+    assert torch.isfinite(data).all()
+    assert abs(data.mean().item() - 0.5) < 0.01
+
+    tile_means = data.unfold(0, 32, 32).unfold(1, 32, 32).reshape(-1, 32 * 32).mean(dim=1)
+    observed_std = tile_means.std(unbiased=False).item()
+    iid_std = 1.0 / math.sqrt(12 * 32 * 32)
+
+    assert observed_std < 3 * iid_std, (
+        f"tile-mean std {observed_std:.6f} exceeds three times the IID expectation {iid_std:.6f}; "
+        "random elements remain correlated within tiles"
+    )
 
 
 @pytest.mark.parametrize(
