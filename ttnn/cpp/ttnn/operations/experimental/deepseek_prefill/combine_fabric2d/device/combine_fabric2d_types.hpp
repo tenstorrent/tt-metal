@@ -42,6 +42,14 @@ struct CombineFabric2dParams {
     //   bit3 (8) NO_FLOW_CONTROL  ignore the credit gate and send no credit packets at all, which
     //                             overwrites the receiver ring in flight but measures the payload-only
     //                             ceiling of the link (23.8 GB/s per direction on 8x4 BH)
+    // Phase 3 receiver-path modes (mutually exclusive; pick at most one). Both make the op land tokens
+    // in a real interleaved DRAM output buffer instead of NOP-acking them in L1.
+    //   bit5 (32) DRAM_DIRECT  Approach #1: producer writes each token straight to the peer chip's DRAM
+    //                          (page base + token), no credits/semaphores, no receiver kernel. Plain
+    //                          unicast write, not the fused write+atomic-inc (that hangs BH on DRAM).
+    //   bit6 (64) DRAM_DRAIN   Approach #2: unchanged fabric path into the L1 ring; the receiver then
+    //                          writes each consumed slot to DRAM over NOC_0 and waits for it to land
+    //                          before returning that slot's credit.
     uint32_t variant = 0;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
 
