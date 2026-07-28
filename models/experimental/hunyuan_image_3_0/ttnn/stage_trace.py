@@ -67,6 +67,19 @@ class Trace2CQIO:
         self._compute_done_event = ttnn.record_event(self.device, COMPUTE_CQ)
 
 
+# The complete set of I2I base_embeds buffer slots on DenoiseStepTracer. Staging
+# picks a slot by name, so this is both the release() sweep list and the safelist
+# _set_base_embed_slot validates against.
+_BASE_EMBED_SLOTS = (
+    "_base_cond_tt",
+    "_base_uncond_tt",
+    "_base_cond_host",
+    "_base_uncond_host",
+    "_pristine__base_cond_tt",
+    "_pristine__base_uncond_tt",
+)
+
+
 class DenoiseStepTracer:
     """Capture one CFG denoise forward on CQ0; ``execute_trace`` per scheduler step."""
 
@@ -216,6 +229,17 @@ class DenoiseStepTracer:
             return emb.detach().to(torch.bfloat16).contiguous()
         return emb
 
+    def _set_base_embed_slot(self, name: str, value) -> None:
+        """Assign one of the fixed base_embeds buffer slots.
+
+        The slot name is always an internal literal, never caller data — the
+        safelist check keeps it that way if this ever grows a new call path.
+        """
+        if name not in _BASE_EMBED_SLOTS:
+            raise ValueError(f"unknown base_embeds slot {name!r}; expected one of {sorted(_BASE_EMBED_SLOTS)}")
+        # Plain class, no __slots__: writing __dict__ is what setattr does anyway.
+        self.__dict__[name] = value
+
     def _stage_one_base_embeds(
         self,
         host: torch.Tensor,
@@ -227,10 +251,10 @@ class DenoiseStepTracer:
         buf = getattr(self, device_attr)
         if buf is None:
             buf = _upload_trace_buffer(self.device, host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            setattr(self, device_attr, buf)
+            self._set_base_embed_slot(device_attr, buf)
             return buf
         host_tt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        setattr(self, host_attr, host_tt)
+        self._set_base_embed_slot(host_attr, host_tt)
         self.io.stage_host_to_device(host_tt, buf)
         return buf
 
@@ -244,7 +268,7 @@ class DenoiseStepTracer:
                 raise KeyError("device scatter requires base_embeds_host")
             nhwc = host.detach().to(torch.bfloat16).contiguous()
             buf = _upload_trace_buffer(self.device, nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            setattr(self, key, buf)
+            self._set_base_embed_slot(key, buf)
             print(
                 "[denoise] trace I2I base_embeds resident — device TimestepEmbedder scatter",
                 flush=True,
@@ -282,7 +306,7 @@ class DenoiseStepTracer:
         buf = getattr(self, device_attr)
         if buf is None:
             # First step: use scattered tensor as the stable buffer (address fixed thereafter).
-            setattr(self, device_attr, scattered)
+            self._set_base_embed_slot(device_attr, scattered)
         else:
             ttnn.copy(scattered, buf)
             if scattered is not buf:
@@ -560,21 +584,14 @@ class DenoiseStepTracer:
             ttnn.deallocate(cos_tt)
             ttnn.deallocate(sin_tt)
             self._cos_sin = None
-        for name in (
-            "_base_cond_tt",
-            "_base_uncond_tt",
-            "_base_cond_host",
-            "_base_uncond_host",
-            "_pristine__base_cond_tt",
-            "_pristine__base_uncond_tt",
-        ):
+        for name in _BASE_EMBED_SLOTS:
             t = getattr(self, name, None)
             if t is not None:
                 try:
                     ttnn.deallocate(t, force=False)
                 except Exception as exc:
                     print(f"[denoise] release deallocate {name}: {exc}", flush=True)
-                setattr(self, name, None)
+                self._set_base_embed_slot(name, None)
 
 
 class VaeDecodeTracer:
