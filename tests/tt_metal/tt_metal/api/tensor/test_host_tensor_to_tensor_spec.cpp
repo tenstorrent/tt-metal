@@ -534,8 +534,8 @@ TEST(HostTensorToTensorSpec, TypedPadInt8AndWrongTFatal) {
 TEST(HostTensorToTensorSpec, FloatPadToInt8DestRejectsOor) {
     const Shape shape{20, 20};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
-    for (size_t i = 0; i < data.size(); ++i) {
-        data[i] = static_cast<float>(static_cast<int8_t>(static_cast<int>(data[i])));
+    for (float& i : data) {
+        i = static_cast<float>(static_cast<int8_t>(static_cast<int>(i)));
     }
     auto src_spec = CMAKE_UNIQUE_NAMESPACE::make_rm_spec(shape, DataType::FLOAT32);
     auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::INT8, Tile({16, 16}));

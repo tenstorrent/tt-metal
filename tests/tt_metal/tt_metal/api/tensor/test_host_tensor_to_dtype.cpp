@@ -358,8 +358,8 @@ TEST(HostTensorToDtype, Float32ToInt8RowMajorValueCheck) {
     const Shape shape{32, 64};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
 
-    for (size_t i = 0; i < data.size(); ++i) {
-        data[i] = static_cast<float>(static_cast<int8_t>(static_cast<int>(data[i])));
+    for (float& i : data) {
+        i = static_cast<float>(static_cast<int8_t>(static_cast<int>(i)));
     }
     auto memory_config = MemoryConfig{
         TensorMemoryLayout::HEIGHT_SHARDED,
@@ -416,8 +416,11 @@ TEST(HostTensorToDtype, Int32ToInt8RowMajorValueCheck) {
     const Shape shape{32, 64};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<int32_t>(shape.volume());
 
-    for (size_t i = 0; i < data.size(); ++i) {
-        data[i] = static_cast<int32_t>(static_cast<int8_t>(data[i]));
+    for (int32_t& i : data) {
+        // Intentional signed wrap into the INT8 range so the INT32->INT8 conversion stays in-range
+        // and covers the -128/127 edges; the signed-char narrowing here is deliberate.
+        // NOLINTNEXTLINE(bugprone-signed-char-misuse,cert-str34-c)
+        i = static_cast<int32_t>(static_cast<int8_t>(i));
     }
     auto memory_config = MemoryConfig{
         TensorMemoryLayout::HEIGHT_SHARDED,
