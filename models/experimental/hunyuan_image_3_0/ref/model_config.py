@@ -33,6 +33,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from models.experimental.hunyuan_image_3_0.ref.safe_paths import safe_join
+
 _PKG_ROOT = Path(__file__).resolve().parents[1]
 BUNDLED_CONFIG_PATH = _PKG_ROOT / "ref" / "tokenizer" / "assets" / "config.json"
 
@@ -54,8 +56,7 @@ def load_config(model_dir: Path | str | None = None) -> dict[str, Any]:
     copy (and cache it for subsequent calls).
     """
     if model_dir is not None:
-        path = Path(model_dir) / "config.json"
-        with open(path) as f:
+        with open(safe_join(model_dir, "config.json")) as f:
             return json.load(f)
 
     global _cached_bundled
