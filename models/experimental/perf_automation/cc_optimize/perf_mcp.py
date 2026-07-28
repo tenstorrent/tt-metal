@@ -3210,6 +3210,54 @@ def termination_check() -> dict:
     }
 
 
+def _tp_mesh_shapes(ttnn_mod) -> list:
+    """Mesh shapes to try for the TP levers, best first, derived from the DEVICES ACTUALLY PRESENT.
+
+    Both TP entry points opened a literal MeshShape(2, 2) -- the shape of the QB2 bench machine the
+    lever was written on (commit f08b2ce8cc: "Verified on the real (2,2) mesh"). That is wrong
+    anywhere else: a 1x8 board, a galaxy 2x4 or a 2-chip p300c would be asked for a topology it does
+    not have, so the lever failed for reasons that had nothing to do with the fracture.
+
+    1xN comes first because a degenerate mesh needs no cluster_axis at all under 1-D fabric; factor
+    pairs follow, most balanced first, for boards whose links cannot form a single ring, so the sweep
+    still sees every chip. Each entry is only a CANDIDATE -- the caller opens the first that succeeds.
+    """
+    override = (os.environ.get("PERF_MCP_TP_MESH") or "").strip()
+    if override:
+        try:
+            r, c = (int(x) for x in override.lower().replace("x", ",").split(",")[:2])
+            return [(r, c)]
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        num = int(ttnn_mod.get_num_devices())
+    except Exception:  # noqa: BLE001
+        num = 0
+    if num < 1:
+        return [(1, 1)]
+    pairs = []
+    for r in range(2, int(num**0.5) + 1):
+        if num % r == 0:
+            pairs.append((r, num // r))
+    pairs.reverse()
+    out = [(1, num)]
+    for s in pairs:
+        if s not in out:
+            out.append(s)
+    return out
+
+
+def _open_tp_mesh(ttnn_mod):
+    """Open the widest mesh the board actually supports; raise the last error if none open."""
+    last = None
+    for rows, cols in _tp_mesh_shapes(ttnn_mod):
+        try:
+            return ttnn_mod.open_mesh_device(ttnn_mod.MeshShape(rows, cols))
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+    raise last if last else RuntimeError("no mesh shape could be opened")
+
+
 @mcp.tool()
 def tp_pick_degree(m: int, k: int, n: int) -> dict:
     """Decide the tensor-parallel degree for a dense matmul (M x K x N) by MEASUREMENT: sweep each
@@ -3233,7 +3281,7 @@ def tp_pick_degree(m: int, k: int, n: int) -> dict:
 
         floor = int(os.environ.get("TT_PERF_TP_FLOOR", "1") or "1")
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
-        mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
+        mesh = _open_tp_mesh(ttnn)
         try:
             num = mesh.shape[0] * mesh.shape[1]
             candidates = [d for d in (floor, num) if d >= floor]
@@ -3267,9 +3315,8 @@ def verify_tp_fracture(m: int, k: int, n: int, tp: int = 4) -> dict:
 
         from cc_optimize.tp_fracture import verify_fracture
 
-        rows = cols = 2
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
-        mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
+        mesh = _open_tp_mesh(ttnn)
         try:
             r = verify_fracture(mesh, m=m, k=k, n=n, tp=tp)
         finally:

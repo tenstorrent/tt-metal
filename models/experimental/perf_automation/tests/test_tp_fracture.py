@@ -3,6 +3,8 @@
 """TP fracture correctness on a real mesh: a column-fractured matmul + all_gather must reproduce the
 dense single-chip matmul (PCC ~ 1). Skips when ttnn / a multi-chip mesh is unavailable, so it is inert
 in the offline venv and runs only on hardware. Proven on a QB2 (2,2) mesh: PCC 0.99997 across shapes."""
+from pathlib import Path
+
 import pytest
 
 
@@ -117,3 +119,104 @@ def test_all_gather_full_falls_back_when_the_shape_is_unreadable(monkeypatch):
 
     tp_fracture.all_gather_full(_Opaque(), object(), dim=-1)
     assert seen == [None]
+
+
+def _perf_mcp(tmp_path, monkeypatch):
+    import importlib.util
+    import sys as _sys
+
+    monkeypatch.setenv("PERF_MCP_MANIFEST", str(tmp_path / "m.json"))
+    (tmp_path / "m.json").write_text('{"config": {}, "perf_test_resolved": {"path": "t.py"}}')
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("pm_tpmesh_ut", root / "cc_optimize" / "perf_mcp.py")
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules["pm_tpmesh_ut"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _FakeTtnn:
+    def __init__(self, num):
+        self._num = num
+
+    def get_num_devices(self):
+        return self._num
+
+
+@pytest.mark.parametrize(
+    "num,expect",
+    [
+        (1, [(1, 1)]),
+        (2, [(1, 2)]),
+        (4, [(1, 4), (2, 2)]),
+        (8, [(1, 8), (2, 4)]),
+        (6, [(1, 6), (2, 3)]),
+        (32, [(1, 32), (4, 8), (2, 16)]),
+    ],
+)
+def test_tp_mesh_shapes_come_from_the_real_device_count(num, expect, tmp_path, monkeypatch):
+    """A literal MeshShape(2, 2) was baked in from the QB2 bench machine, so a 1x8 board, a galaxy
+    2x4 or a 2-chip p300c was asked for a topology it does not have."""
+    monkeypatch.delenv("PERF_MCP_TP_MESH", raising=False)
+    pm = _perf_mcp(tmp_path, monkeypatch)
+    assert pm._tp_mesh_shapes(_FakeTtnn(num)) == expect
+
+
+def test_tp_mesh_shape_can_be_overridden(tmp_path, monkeypatch):
+    pm = _perf_mcp(tmp_path, monkeypatch)
+    monkeypatch.setenv("PERF_MCP_TP_MESH", "2x4")
+    assert pm._tp_mesh_shapes(_FakeTtnn(8)) == [(2, 4)]
+    monkeypatch.setenv("PERF_MCP_TP_MESH", "1,8")
+    assert pm._tp_mesh_shapes(_FakeTtnn(8)) == [(1, 8)]
+    monkeypatch.setenv("PERF_MCP_TP_MESH", "garbage")
+    assert pm._tp_mesh_shapes(_FakeTtnn(4)) == [(1, 4), (2, 2)]
+
+
+def test_an_unreadable_device_count_does_not_crash_the_lever(tmp_path, monkeypatch):
+    monkeypatch.delenv("PERF_MCP_TP_MESH", raising=False)
+    pm = _perf_mcp(tmp_path, monkeypatch)
+
+    class _Broken:
+        def get_num_devices(self):
+            raise RuntimeError("no cluster")
+
+    assert pm._tp_mesh_shapes(_Broken()) == [(1, 1)]
+
+
+def test_open_tp_mesh_falls_through_to_a_shape_the_board_accepts(tmp_path, monkeypatch):
+    """A 1xN ring is preferred, but a board whose links cannot form one must still get a mesh."""
+    monkeypatch.delenv("PERF_MCP_TP_MESH", raising=False)
+    pm = _perf_mcp(tmp_path, monkeypatch)
+    tried = []
+
+    class _Fussy(_FakeTtnn):
+        def MeshShape(self, r, c):
+            return (r, c)
+
+        def open_mesh_device(self, shape):
+            tried.append(shape)
+            if shape == (1, 4):
+                raise RuntimeError("cannot form a 4-chip ring")
+            return "mesh%s" % (shape,)
+
+    assert pm._open_tp_mesh(_Fussy(4)) == "mesh(2, 2)"
+    assert tried == [(1, 4), (2, 2)]
+
+
+def test_open_tp_mesh_raises_the_real_error_when_nothing_opens(tmp_path, monkeypatch):
+    monkeypatch.delenv("PERF_MCP_TP_MESH", raising=False)
+    pm = _perf_mcp(tmp_path, monkeypatch)
+
+    class _Dead(_FakeTtnn):
+        def MeshShape(self, r, c):
+            return (r, c)
+
+        def open_mesh_device(self, shape):
+            raise RuntimeError("board wedged")
+
+    raised = None
+    try:
+        pm._open_tp_mesh(_Dead(4))
+    except RuntimeError as exc:
+        raised = exc
+    assert raised is not None and "board wedged" in str(raised), raised
