@@ -9,25 +9,63 @@
 
 namespace tt::tt_metal::experimental {
 
+namespace {
+
+// The fields a relaxation treats as load-bearing. Selecting the mode -- including the precedence
+// rule that dynamic_tensor_shape subsumes match_padded_shape_only -- is the one piece of logic
+// hash_tensorspec_with_relaxation and tensorspecs_match_with_relaxation must agree on, so it lives
+// here once and both consult it. Their notions of equivalence therefore cannot drift.
+enum class RelaxationMode {
+    Strict,           // full TensorSpec
+    PaddedShapeOnly,  // tensor_layout + padded_shape (logical_shape may differ)
+    DynamicRank,      // tensor_layout + logical_shape rank (per-dim shape values may differ)
+};
+
+RelaxationMode relaxation_mode(const TensorSpecRelaxation& relaxation) {
+    if (relaxation.dynamic_tensor_shape) {
+        return RelaxationMode::DynamicRank;
+    }
+    if (relaxation.match_padded_shape_only) {
+        return RelaxationMode::PaddedShapeOnly;
+    }
+    return RelaxationMode::Strict;
+}
+
+}  // namespace
+
 // Return type spelled std::uint64_t to match the public header (== ttsl::hash::hash_t); the body
 // works in ttsl::hash and its combiners, which is why reflection.hpp is included here, not there.
 std::uint64_t hash_tensorspec_with_relaxation(
     const tt::tt_metal::TensorSpec& spec, const TensorSpecRelaxation& relaxation) {
-    // Mirror ValidateTensorArgs's match lattice (program_run_args.cpp): hash exactly the fields
-    // the match treats as load-bearing, so matches-under-relaxation <=> equal returned hash.
-    // Precedence follows the validator: dynamic_tensor_shape wins over match_padded_shape_only.
-    if (relaxation.dynamic_tensor_shape) {
-        // Match requires tensor_layout to be equal and the logical_shape rank to be equal; the
-        // per-dim logical (and padded) shape values may vary. Hash exactly that pair.
-        return ttsl::hash::hash_objects_with_default_seed(spec.tensor_layout(), spec.logical_shape().rank());
+    // Hash exactly the load-bearing fields for the mode, so two specs that match under the
+    // relaxation hash equally. (logical_shape + tensor_layout are TensorSpec's own reflected
+    // attributes, so the Strict case is equivalent to hashing the whole spec.)
+    switch (relaxation_mode(relaxation)) {
+        case RelaxationMode::DynamicRank:
+            return ttsl::hash::hash_objects_with_default_seed(spec.tensor_layout(), spec.logical_shape().rank());
+        case RelaxationMode::PaddedShapeOnly:
+            return ttsl::hash::hash_objects_with_default_seed(spec.tensor_layout(), spec.padded_shape());
+        case RelaxationMode::Strict: break;
     }
-    if (relaxation.match_padded_shape_only) {
-        // Match requires tensor_layout and padded_shape to be equal; logical_shape may differ.
-        return ttsl::hash::hash_objects_with_default_seed(spec.tensor_layout(), spec.padded_shape());
-    }
-    // Strict: full TensorSpec. (logical_shape + tensor_layout are exactly TensorSpec's own
-    // reflected attributes, so this is equivalent to hashing the whole spec.)
     return ttsl::hash::hash_objects_with_default_seed(spec.logical_shape(), spec.tensor_layout());
+}
+
+bool tensorspecs_match_with_relaxation(
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const TensorSpecRelaxation& relaxation) {
+    // Compare exactly the load-bearing fields for the mode. This must compare fields, never hash
+    // equality: a hash collision would otherwise report a false match -- the very failure the
+    // exact-comparison key machinery exists to prevent.
+    //
+    // NOTE: this holds the same comparison ValidateTensorArgs (program_run_args.cpp) applies inline
+    // today. Until that validation is refactored to delegate here, keep the two in lockstep.
+    switch (relaxation_mode(relaxation)) {
+        case RelaxationMode::DynamicRank:
+            return a.tensor_layout() == b.tensor_layout() && a.logical_shape().rank() == b.logical_shape().rank();
+        case RelaxationMode::PaddedShapeOnly:
+            return a.tensor_layout() == b.tensor_layout() && a.padded_shape() == b.padded_shape();
+        case RelaxationMode::Strict: break;
+    }
+    return a == b;
 }
 
 }  // namespace tt::tt_metal::experimental

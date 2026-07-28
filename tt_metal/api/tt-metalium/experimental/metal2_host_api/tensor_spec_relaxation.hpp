@@ -16,35 +16,36 @@ namespace tt::tt_metal::experimental {
 //  TensorSpecRelaxation
 // ============================================================================
 //
-// Declares the ways in which a runtime tensor's TensorSpec is permitted to
-// deviate from the TensorSpec a TensorParameter declares. Default-constructed
-// (all flags false) means an EXACT TensorSpec match is required.
+// A Program may declare a TensorParameter with a particular TensorSpec.
+// At execution time (runtime), a MeshTensor argument is supplied to the Program.
+// By default, the MeshTensor argument provided at execution time must EXACTLY
+// match the TensorParameter's declared TensorSpec.
 //
-// The same relaxation governs two things, which MUST stay consistent:
-//   1. Run-time validation -- how loosely SetProgramRunArgs / UpdateTensorArgs
-//      match the supplied MeshTensor against the declared spec (see
-//      ValidateTensorArgs in program_run_args.cpp).
-//   2. Program-cache keying -- an op author writing a custom program hash must
-//      key on exactly the spec fields the relaxation treats as load-bearing.
-//      Key on too much and the cache misses when it should hit; key on too
-//      little and it returns a Program built for a differently-shaped tensor.
+// A TensorSpecRelaxation can "relax" this requirement: it declares the way(s) in
+// which the MeshTensor argument's TensorSpec is permitted to deviate from the
+// TensorParameter's declared TensorSpec.
 //
-// hash_tensorspec_with_relaxation() below is the tool for (2): it hashes the
-// same field projection the validator compares, so the hash and the match
-// cannot drift apart.
+// A default-constructed TensorSpecRelaxation requires an exact match.
 //
 // CAUTION: These options are UNSAFE if set. Most kernels will NOT function
-// correctly if the tensor argument's spec deviates from the declared spec. You
-// must ensure your kernel logic outside of the TensorAccessor itself tolerates
-// the deviation you permit.
+// correctly if the tensor argument's spec deviates from the declared spec! You
+// must guarantee that your kernel logic outside of the TensorAccessor itself
+// tolerates any relaxations that you declare.
+//
+// NOTE: The TensorSpecRelaxation structure is under active development and will
+// change. We are starting with a crude "bag of bools" approach, introducing new
+// relaxations as they are needed. This will be replaced with a more structured
+// construct after the set of required relaxations is better understood.
+//
 // ============================================================================
 struct TensorSpecRelaxation {
     // Permit tensor arguments whose logical_shape differs from the declared shape.
-    // The argument's padded_shape must still match exactly.
+    // The MeshTensor argument's padded_shape must still match exactly.
     //
     // Effects:
     //  - Validation checks are relaxed.
     //  - TensorAccessor configuration is completely unchanged.
+    //
     bool match_padded_shape_only = false;
 
     // Permit tensor arguments with dynamic logical shape.
@@ -68,26 +69,25 @@ struct TensorSpecRelaxation {
     bool dynamic_tensor_shape = false;
 };
 
-// Hash a TensorSpec's *load-bearing* fields under a relaxation: the exact
-// projection that ValidateTensorArgs (program_run_args.cpp) compares for that
-// relaxation. This guarantees
+// Do two TensorSpecs "match" under a TensorSpecRelaxation?
 //
-//     matches-under-relaxation  <=>  equal returned hash
+// A relaxation defines an equivalence relation on TensorSpecs:
+// Two TensorSpecs match under relaxation when they agree on every field the relaxation defines
+// as pertinent. A given relaxation implies an equivalence relationship as defined in the
+// TensorSpecRelaxation documentation above.
 //
-// (modulo ordinary 64-bit collision resolution), so an op author's custom
-// compute_program_hash stays consistent with the relaxation it declared on the
-// TensorParameter -- keying the program cache on precisely what the fast-path
-// tensor update is able to tolerate.
+// NOTE: This check is used by SetProgramRunArgs, UpdateProgramRunArgs, and UpdateTensorArgs when
+// validating a supplied MeshTensor argument against its TensorParameter's declared TensorSpec.
 //
-// A default-constructed (strict) relaxation projects the full TensorSpec, so it
-// is exactly as discriminating as TensorSpec equality.
+bool tensorspecs_match_with_relaxation(
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const TensorSpecRelaxation& relaxation);
+
+// Hash a TensorSpec's pertinent fields under a TensorSpecRelaxation.
+// If two TensorSpecs match under a given relaxation, they will return the same hash.
 //
-// Fold the result into the op's running hash the usual way, e.g.
-//     ttsl::hash::hash_combine(seed, hash_tensorspec_with_relaxation(spec, rel));
+// NOTE: Return type is std::uint64_t, not ttsl::hash::hash_t.
+// This is done so this public header need not include <tt_stl/reflection.hpp>.
 //
-// Return type is ttsl::hash::hash_t (== std::uint64_t), spelled std::uint64_t so this public
-// header need not include <tt_stl/reflection.hpp> (banned in public API: it pulls in <reflect>
-// and <nlohmann/json.hpp>). The .cpp uses ttsl::hash and its combiners directly.
 std::uint64_t hash_tensorspec_with_relaxation(
     const tt::tt_metal::TensorSpec& spec, const TensorSpecRelaxation& relaxation);
 
