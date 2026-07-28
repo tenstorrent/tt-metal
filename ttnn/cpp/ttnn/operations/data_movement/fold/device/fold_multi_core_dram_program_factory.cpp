@@ -51,11 +51,13 @@ constexpr const char* READER_TILED =
     "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_tiled.cpp";
 constexpr const char* WRITER_TILED =
     "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_tiled_input.cpp";
-// Metal 2.0 fork of untilize's compute kernel (the legacy factory file-path-instantiated
-// untilize/device/kernels/compute/untilize.cpp; forked so the Metal 2.0 rewrite does not
-// break untilize's own legacy use of that shared kernel — see METAL2_PORT_REPORT.md).
+// Metal 2.0 fork of untilize's compute kernel. The legacy fold DRAM (tiled) factory
+// file-path-instantiated untilize/device/kernels/compute/untilize.cpp, which is shared with the
+// untilize op (still on the legacy API). Per the shared-kernel port strategy, the `_metal2` fork
+// lives *beside the original* in the untilize op's directory (created by this port, reused by
+// future Metal 2.0 consumers) — not copied into fold's tree. See METAL2_PORT_REPORT.md.
 constexpr const char* COMPUTE_UNTILIZE =
-    "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/compute/untilize.cpp";
+    "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
 constexpr const char* READER_RM =
     "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp";
 constexpr const char* WRITER_RM =
