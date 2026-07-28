@@ -85,14 +85,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         program,
         output_tensors.mm,
         tensor_args.persistent_intermediate,
-        // No penult intermediate: this op's intermediate is always caller-provided, and it has no
-        // output of its own to hang a staging buffer off (the penult intermediate is declared and
-        // allocated by ReduceScatterMinimalAsyncDeviceOperation, which is not the op running here).
-        // Every caller passes an input-shaped tiled intermediate, so the builder takes the tiled path
-        // and never reads this. Were a caller to pass a chunk-paged staging intermediate instead, the
-        // builder's "contiguous-interm path requires a penult intermediate staging tensor" TT_FATAL
-        // would reject it rather than silently mis-address.
-        /*penult_intermediate_tensor=*/std::nullopt,
+        /*penult_intermediate_tensor=*/std::nullopt,  // contiguous intermediate path not supported through here.
         mesh_coord,
         forward_coord,
         backward_coord,
@@ -177,7 +170,6 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             output_tensors.mm,
             tensor_args.persistent_intermediate,
             output_tensors.reduce_scatter,
-            // Matches the nullopt passed in create_at: tiled layout, nothing to re-publish.
             /*penult_intermediate=*/std::nullopt);
     }
 }

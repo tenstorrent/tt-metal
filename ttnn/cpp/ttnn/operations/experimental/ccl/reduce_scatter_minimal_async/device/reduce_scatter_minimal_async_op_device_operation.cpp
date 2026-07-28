@@ -33,7 +33,7 @@ bool uses_contiguous_staging(
         ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config));
 }
 
-}  // namespace
+}  // unnamed namespace
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
@@ -87,10 +87,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         const auto& interm = tensor_args.optional_intermediate_tensor.value();
         TT_FATAL(interm.storage_type() == StorageType::DEVICE, "Persistent intermediate tensor must be on device");
-        if (use_contiguous) {
-            // Matched the staging spec; reduce_scatter_use_contiguous_interm already compared shape,
-            // dtype, layout and buffer type against it.
-        } else {
+        if (!use_contiguous) {
             if (stage_spec.has_value()) {
                 // The contiguous layout was available and this buffer is not it, so the caller must
                 // be asking for the tiled path. Report both options if it is neither.
@@ -170,14 +167,10 @@ std::vector<tt::tt_metal::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::
     // buffer (page = one chunk = tile_granularity tiles). This lets the writer send whole chunks with a
     // single contiguous fused-unicast per packet instead of scatter-writes. The same spec is used to
     // allocate caller-provided persistent buffers (reduce_scatter_ring_interm_staging_spec). A
-    // caller-provided input-shaped intermediate opts back into the tiled layout below. See
-    // rs-contiguous-interm-design.
+    // caller-provided input-shaped intermediate opts back into the tiled layout below.
     //
     // This path carries a third output: the smaller penult intermediate the 2nd-last ring
-    // iteration writes into. It is an implementation detail of the layout rather than a result the
-    // caller asked for, but it is declared here (and allocated in create_output_tensors) so the op owns
-    // it the same way it owns the intermediate — the program factory receives a buffer instead of
-    // allocating one behind the framework's back.
+    // iteration writes into.
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
     if (uses_contiguous_staging(operation_attributes, tensor_args)) {
         auto penult_intermediate_spec = ttnn::experimental::ccl::reduce_scatter_ring_penult_intermediate_staging_spec(

@@ -92,13 +92,12 @@ IntermTensors(const IntermAcc&, const OutputAcc&, const PenultIntermAcc&)
 //
 // IntermSource<true> - chunk-paged layout. The intermediate (and a dedicated penult intermediate for
 //   the 2nd-last iteration's contribution) store one whole chunk per page, so a chunk is read back
-//   in a single coalesced transaction and its address derives statelessly from tiles_read. See
-//   rs-contiguous-interm-design.
+//   in a single coalesced transaction and its address derives statelessly from tiles_read.
 template <bool Contiguous>
 struct IntermSource;
 
 template <>
-struct IntermSource<false> {
+struct IntermSource</*Contiguous=*/false> {
     // Per-worker starting offsets into the slice (workers split the slice by row/column).
     const uint32_t start_pages_read_in_row;
     const uint32_t start_row_offset;
@@ -192,7 +191,7 @@ private:
 };
 
 template <>
-struct IntermSource<true> {
+struct IntermSource</*Contiguous=*/true> {
     uint32_t interm_slice_chunk_base = 0;
     uint32_t interm_channel_chunk_base = 0;
     uint32_t penult_interm_channel_chunk_base = 0;
@@ -234,10 +233,7 @@ struct IntermSource<true> {
         const uint32_t chunk_page_base_off = (tiles_read % tile_granularity) * page_size;
 
         // page_bytes is DRAM-aligned (== aligned_page_size) and a chunk never crosses a
-        // tile_granularity boundary, so the whole chunk is one coalesced NoC transaction instead of
-        // one per tile. That lifts the per-transaction size above the ~2 KB NoC->DRAM bandwidth
-        // knee - a ~2x on the bf8 readback, which the tile-granular read left stuck at ~24.7 GB/s.
-        // See rs-perf-model (P1); mirrors the writer's contiguous chunk writes.
+        // tile_granularity boundary, so the whole chunk is one coalesced NoC transaction.
         noc.async_read(
             tensors.interm,
             cb_interm,

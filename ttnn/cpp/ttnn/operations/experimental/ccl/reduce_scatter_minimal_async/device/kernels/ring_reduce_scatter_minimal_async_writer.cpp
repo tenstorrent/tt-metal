@@ -118,6 +118,7 @@ struct IntermTensors {
     const OutputAcc& output;
     const PenultIntermAcc& penult_interm;
 };
+// convenience deduction guide
 template <typename IntermAcc, typename OutputAcc, typename PenultIntermAcc>
 IntermTensors(const IntermAcc&, const OutputAcc&, const PenultIntermAcc&)
     -> IntermTensors<IntermAcc, OutputAcc, PenultIntermAcc>;
@@ -149,7 +150,7 @@ template <bool Contiguous>
 struct IntermSink;
 
 template <>
-struct IntermSink<false> {
+struct IntermSink</*Contiguous=*/false> {
     // Per-worker starting offsets into the slice (workers split the slice by row/column).
     const uint32_t start_pages_read_in_row;
     const uint32_t start_row_offset;
@@ -163,7 +164,7 @@ struct IntermSink<false> {
     uint32_t row_offset = 0;
     uint32_t output_tiles_read = 0;
 
-    static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
+    static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported (scatter write maximum)");
     uint64_t remote_noc_addrs[4] = {0, 0, 0, 0};
     uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
 
@@ -363,7 +364,7 @@ private:
 };
 
 template <>
-struct IntermSink<true> {
+struct IntermSink</*Contiguous=*/true> {
     const uint32_t start_tiles_read;
 
     uint32_t output_batch_base = 0;
@@ -430,7 +431,7 @@ struct IntermSink<true> {
 
     // Both write_to_interm (mid-ring hops) and the penult intermediate target a chunk-paged
     // staging buffer with the same packetization: one page holds the whole chunk, so each fabric
-    // packet is a single contiguous unicast write (no scatter). The packet that reaches
+    // packet is a single contiguous unicast write. The packet that reaches
     // chunks_per_sync fuses the semaphore increment onto itself.
     template <typename Connection, typename Flusher, typename Tensors>
     bool write_chunk_remote(
@@ -445,8 +446,7 @@ struct IntermSink<true> {
         bool fuse_seminc,
         uint64_t sem_noc_addr) {
         // The 2nd-last iteration stages this direction's contribution in the dedicated penult
-        // intermediate instead of scatter-writing it into the remote tiled output tensor. The receiver's
-        // final iteration reads it back as the 3rd term of its local 3-way reduce.
+        // intermediate The receiver's final iteration reads it back as the 3rd term of its local 3-way reduce.
         const uint32_t channel_chunk_base =
             write_to_interm ? interm_channel_chunk_base : penult_interm_channel_chunk_base;
         const uint32_t chunk_page_id = channel_chunk_base + tiles_read / tile_granularity;
@@ -544,14 +544,8 @@ void kernel_main() {
     // instead and leaves this address at 0.
     address_t penult_intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
 #ifdef USE_WORKER_MUX
-    // The V2 mux client args are the last runtime args; FabricMuxV2Sender::build_from_args consumes
-    // exactly what FabricMuxV2Config::append_client_connection_rt_args serialized on the host.
-    // Eager staging (and the MuxFlusher calls that commit it) is only enabled on the chunk-paged
-    // path, where the flush points have been placed; the tiled path keeps the blocking open() and
-    // instantiates MuxFlusher's no-op primary template.
     size_t mux_arg_idx = arg_idx;
-    auto mux_sender =
-        tt::tt_fabric::FabricMuxV2Sender</*EAGER_STAGING=*/contiguous_interm>::build_from_args(mux_arg_idx);
+    auto mux_sender = tt::tt_fabric::FabricMuxV2Sender</*EAGER_STAGING=*/true>::build_from_args(mux_arg_idx);
     arg_idx = mux_arg_idx;
 #endif
 

@@ -117,11 +117,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         program,
         tensor_args.input_tensor,
         tensor_return_value.at(0),
-        // No penult intermediate: compute_output_specs sizes this op's intermediate as an input-shaped tiled
-        // tensor, so the builder always takes the tiled path and never reads it. The contiguous staging
-        // layout — and the penult intermediate that goes with it — belongs to
-        // ReduceScatterMinimalAsyncDeviceOperation, which declares it as one of its own outputs.
-        /*penult_intermediate_tensor=*/std::nullopt,
+        /*penult_intermediate_tensor=*/std::nullopt,  // accessible via the reduce_scatter_minimal_async path
         mesh_coordinate,
         forward_coordinate,
         backward_coordinate,
