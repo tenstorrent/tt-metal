@@ -331,8 +331,8 @@ jobs:
           # thread pool causes libgomp to burn CPU in busy-wait barriers. This env var only affects
           # the wrapped test command (not the rest of the matrix) and helps isolate the real host
           # work from OpenMP spin overhead.
-          OMP_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '2' || '' }}
-          MKL_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '2' || '' }}
+          OMP_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '4' || '' }}
+          MKL_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '4' || '' }}
           OMP_WAIT_POLICY: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && 'passive' || '' }}
         run: |
           # Build the inner command passed to the power sidecar's `bash -c`. Use a shell variable
@@ -439,6 +439,11 @@ jobs:
             fi
             perf report --stdio -i "$f" 2>/dev/null | head -100 > "${f%.data}.report.txt" || true
             echo "Wrote summary: ${f%.data}.report.txt"
+            # EXPERIMENT (thread-scaling comparison): also print a flat, non-hierarchical
+            # per-shared-object breakdown so cumulative CPU % per DSO (e.g. libgomp.so.1) can be
+            # read straight from the job log without downloading and re-processing perf.data.
+            echo "--- DSO breakdown (flat, cumulative %) for $f ---"
+            perf report --stdio --sort dso -g none -i "$f" 2>/dev/null | head -30 || true
           done || true
 
       - name: Generate flame graph (host profiling)
