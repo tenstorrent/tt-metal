@@ -335,7 +335,44 @@ def _is_device_disruption(rc, out: str) -> bool:
     return False
 
 
+_CAPTURE_DRIVER = re.compile(
+    r"\.(run_[a-z0-9_]+|generate|synthesize|infer|forward)\s*\(|\b(run_[a-z0-9_]+|generate)\s*\("
+)
+_CAPTURE_HOSTFREE = re.compile(r"\b\w*(?:_trace_step|decode_step)\s*\(")
+
+
+def _handrolled_capture_violation(src: str) -> str | None:
+    """A generated perf test MAY hand-roll ttnn.begin_trace_capture (the emit-e2e trace test does), but
+    ONLY around a host-free step: a *_trace_step()/decode_step() hook whose inputs were staged BEFORE the
+    capture. If it instead captures the demo's host-writing driver (run_*/generate/…), the trace records a
+    host->device write — legal on a single chip but a TT_FATAL on a MeshDevice ('Writes are not supported
+    during trace capture') that hangs the device. Detect it statically so BOTH the agentic and one-shot
+    generators reject it BEFORE launching on the device. Returns guidance to feed back, else None."""
+    code = "\n".join(re.sub(r"#.*$", "", ln) for ln in src.splitlines())
+    if "begin_trace_capture" not in code:
+        return None
+    for win in re.findall(r"begin_trace_capture\s*\(.*?end_trace_capture\s*\(", code, re.S):
+        if _CAPTURE_DRIVER.search(win) and not _CAPTURE_HOSTFREE.search(win):
+            return (
+                "HANDROLLED_TRACE_CAPTURE: the test wraps the pipeline's host-writing driver (run_*/generate) "
+                "in ttnn.begin_trace_capture. A trace captures ONLY pure on-device compute; a host->device "
+                "write inside the capture TT_FATALs on a multi-chip mesh ('Writes are not supported during "
+                "trace capture') and hangs. Either capture a host-free *_trace_step()/decode_step() hook "
+                "(stage ALL inputs BEFORE begin_trace_capture, as the emit-e2e trace test does), or trace via "
+                "measure_adapter(PipelineStageAdapter(...)); NEVER wrap run_*/generate in begin_trace_capture."
+            )
+    return None
+
+
 def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
+    _test_file = Path(str(node_abs).partition("::")[0])
+    try:
+        _viol = _handrolled_capture_violation(_test_file.read_text(errors="ignore")) if _test_file.is_file() else None
+    except OSError:
+        _viol = None
+    if _viol:
+        return 2, _viol
+
     def _once(ev):
         env = dict(os.environ)
         env.setdefault("TT_PERF_TRACE", "1")
@@ -463,6 +500,7 @@ def _extract_error(out: str) -> str:
             or "TRACE_REPLAY_SKIPPED" in ln
             or "TRACE_NOT_TRACE_CAPABLE" in ln
             or "TRACE_REPLAY_PATH" in ln
+            or "HANDROLLED_TRACE_CAPTURE" in ln
         ):
             picked.append(s)
     tail = "\n".join(picked[-25:]) if picked else ""
