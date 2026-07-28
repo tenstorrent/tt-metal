@@ -83,14 +83,16 @@ INPUT_TAGGERS = {
 # ALWAYS legal (see the prompt's "Optional weight (gamma) axes" contract).
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    # Phase 0 is the maxed-out precision corner only.
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    # Refinement 1: the full precision surface. `fp32_dest_acc_en` is read off
+    # the caller's compute_kernel_config (default True — see
+    # default_compute_kernel_config, which is NOT changed by this refinement).
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }

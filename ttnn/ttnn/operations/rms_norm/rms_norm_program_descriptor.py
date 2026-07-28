@@ -87,6 +87,36 @@ X_RESIDENT_DEPTH = 2
 # row carries data (the single-stick gamma tilize).
 TILIZE_ROWS = TILE_DIM
 
+# dtypes the reduce scaler / partial-W mask dataflow helpers can actually fill.
+# reduce_helpers_dataflow.inl static_asserts on exactly these two.
+_MASKABLE_DTYPES = (ttnn.float32, ttnn.bfloat16)
+
+# Block-float dtypes: 16 datums share one exponent, so there is no per-element
+# size. Two consequences are used below.
+_BLOCK_FLOAT_DTYPES = tuple(
+    dt for dt in (getattr(ttnn, name, None) for name in ("bfloat8_b", "bfloat4_b")) if dt is not None
+)
+
+
+def _row_elem_bytes(tensor):
+    """Bytes per element along a ROW_MAJOR stick.
+
+    ``Tensor.element_size()`` *raises* for a block-float dtype ("datum for
+    bfp2, bfp4, bfp8 is invalid", tt_backend_api_types.hpp) because a
+    block-float datum has no standalone width. That is not a gap to work
+    around: a block-quantized tensor equally cannot BE row-major (no blocks in
+    a stick), so every consumer of this value — the ``cb_input_rm`` /
+    ``cb_gamma_rm`` page sizes and the four ``*_ROW_BYTES`` compile-time args —
+    sits behind an ``is_rm`` / ``is_rm_gamma`` predicate the dtype can never
+    satisfy. Return the unpacked-datum width as a structurally-unused
+    placeholder instead of letting the exception escape a branch that discards
+    the result anyway.
+    """
+    if tensor.dtype in _BLOCK_FLOAT_DTYPES:
+        return 2  # unreachable placeholder — see docstring
+    return tensor.element_size()
+
+
 # ---------------------------------------------------------------------------
 # CB indices (semantic names; the number is just the buffer slot)
 # ---------------------------------------------------------------------------
@@ -148,22 +178,42 @@ class _Blocking:
             self.ht_total = _prod(shape[:-2]) * _ceil_div(int(shape[-2]), TILE_DIM)
 
         self.tile_bytes = ttnn.tile_size(input_tensor.dtype)
-        self.elem_bytes = input_tensor.element_size()
+        self.elem_bytes = _row_elem_bytes(input_tensor)
         self.gamma_tile_bytes = ttnn.tile_size(gamma.dtype) if self.has_gamma else self.tile_bytes
-        self.gamma_elem_bytes = gamma.element_size() if self.has_gamma else self.elem_bytes
+        self.gamma_elem_bytes = _row_elem_bytes(gamma) if self.has_gamma else self.elem_bytes
         self.fp32_tile_bytes = ttnn.tile_size(ttnn.float32)
+        # --- the reduce-datapath format, and the mask that must match it -----
+        #
         # cb_scaler carries the partial-W 0/1 MASK tile, which
         # reduce_accumulate_via_add's fold_partial_last reads through srcB via
-        # llk_unpack_AB<ROW>(input_dfb, scaler_dfb) WITHOUT reconfiguring srcB —
-        # reduce entry already programmed reconfig_data_format(input, input), so
-        # srcB is configured at the INPUT format. The mask CB must therefore
-        # match the input dtype, not a fixed bfloat16 (op_design.md R4's
-        # Float16_b is right for the ReduceTile datapath, wrong for this one):
-        # a Float16_b mask under an fp32 input is reinterpreted as fp32.
-        # prepare_reduce_mask supports Float16_b and Float32 and deduces the
-        # format from the CB, so both cells are covered.
-        self.scaler_dtype = input_tensor.dtype
-        self.scaler_tile_bytes = self.tile_bytes
+        # llk_unpack_AB<ROW>(input_dfb, scaler_dfb) WITHOUT reconfiguring srcB.
+        # Reduce entry already ran reconfig_data_format(input_dfb, input_dfb),
+        # so srcB is configured at the format of the reduce's INPUT CB — which
+        # is `cb_x_squared`, not the input tensor. Phase 0 wrote "the input
+        # dtype" for both because the two were always the same value; the
+        # load-bearing quantity is cb_x_squared's format, and separating them
+        # is what makes a third input dtype expressible. (op_design.md R4's
+        # fixed Float16_b is right for the ReduceTile datapath, wrong for this
+        # one: a Float16_b mask under an fp32 reduce reads as fp32.)
+        #
+        # prepare_reduce_mask / calculate_and_prepare_reduce_scaler static_assert
+        # on {Float16_b, Float32} (reduce_helpers_dataflow.inl), so the reduce
+        # datapath has to be one of those two. bfloat8_b is not: a bf8 tile's
+        # leading bytes are the shared-exponent header, so a Float16_b mask read
+        # through a Bfp8_b-configured srcB decodes as all-zeros — measured, the
+        # whole last reduce-dim tile then contributes 0 (probe_005: all-ones
+        # W=49 summed to 32, not 49). PCC hides it completely, because dropping
+        # elements only rescales each row and PCC is scale-invariant.
+        #
+        # So block-float inputs square into a bfloat16 cb_x_squared: the reduce
+        # then programs srcA/srcB at Float16_b, the mask matches, and partial-W
+        # is correct instead of quietly wrong. It is also the more accurate
+        # accumulator input — x^2 spans twice the exponent range of x, which is
+        # the worst case for 16-datum shared-exponent blocks.
+        self.x_squared_dtype = input_tensor.dtype if input_tensor.dtype in _MASKABLE_DTYPES else ttnn.bfloat16
+        self.x_squared_tile_bytes = ttnn.tile_size(self.x_squared_dtype)
+        self.scaler_dtype = self.x_squared_dtype
+        self.scaler_tile_bytes = self.x_squared_tile_bytes
 
         # --- BLOCK_CB_UNITS: CB pages charged per block tile (§6.3) ----------
         units = 0
@@ -176,7 +226,10 @@ class _Blocking:
         units += GAMMA_DEPTH if self.has_gamma else 0  # cb_gamma (streaming)
         units += 1 if self.is_rm_gamma else 0  # cb_gamma_rm (conservative unit)
         self.block_cb_units = units
-        self.unit_bytes = max(self.tile_bytes, self.gamma_tile_bytes)
+        # Widest block-scaled page, so TILE_BLOCK_BUDGET stays an upper bound on
+        # the real per-block footprint. cb_x_squared is included because it can
+        # be wider than the input tile (block-float input -> bfloat16 square).
+        self.unit_bytes = max(self.tile_bytes, self.gamma_tile_bytes, self.x_squared_tile_bytes)
 
         # --- the block factors -----------------------------------------------
         self.tile_block_budget = max(1, l1_block_budget_bytes // (self.block_cb_units * self.unit_bytes))
@@ -304,7 +357,7 @@ class _Blocking:
                 B if self.is_rm else OUT_DEPTH * B,
             ),
             ("cb_output_rm", CB_OUTPUT_RM, self.tile_bytes, (OUT_DEPTH * B) if self.is_rm else 0),
-            ("cb_x_squared", CB_X_SQUARED, self.tile_bytes, B),
+            ("cb_x_squared", CB_X_SQUARED, self.x_squared_tile_bytes, B),
             ("cb_partials", CB_PARTIALS, self.fp32_tile_bytes, 2 * H),
             ("cb_rms_sum", CB_RMS_SUM, self.fp32_tile_bytes, H),
             ("cb_rms_recip", CB_RMS_RECIP, self.fp32_tile_bytes, H),
@@ -523,9 +576,13 @@ def create_program_descriptor(
 def _cb_format(name, blk, input_tensor, gamma):
     if name in ("cb_gamma", "cb_gamma_rm"):
         return gamma.dtype if gamma is not None else input_tensor.dtype
+    if name == "cb_x_squared":
+        # The reduce's input CB — its format IS the reduce datapath. See
+        # _Blocking.x_squared_dtype.
+        return blk.x_squared_dtype
     if name == "cb_scaler":
-        # Must match the format srcB is configured at inside the reduce; see
-        # _Blocking.scaler_dtype for the full rationale.
+        # Must match the format srcB is configured at inside the reduce, i.e.
+        # cb_x_squared's; see _Blocking.x_squared_dtype for the full rationale.
         return blk.scaler_dtype
     if name in ("cb_partials", "cb_rms_sum", "cb_rms_recip"):
         return ttnn.float32
