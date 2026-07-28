@@ -211,9 +211,12 @@
   # TTTv2 substitution (wh_llmbox_perf / T3K only — the TTTv2 qwen3_32b demo is T3K-only: 64 attn / 8 KV
   # heads need 8-way TP and the 32B weights don't fit < 8 devices). ci-token-matching -> token-accuracy,
   # ci-eval-32 -> eval-32; both under the performance optimization, matching the TTTv1 leg's cases.
+  # One pytest process per case (matching the Qwen2.5-Coder-32B leg below): grouping demo configs in a
+  # single process on the 8-device Wormhole mesh has wedged an ETH core, so each case opens its own mesh.
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE=T3K
-    pytest --timeout 3000 models/common/tests/demos/qwen3_32b/demo.py -k "(token-accuracy or eval-32) and performance"
+    pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "token-accuracy and performance"
+    pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "eval-32 and performance"
   model: qwen3-32b
   model_family: Qwen
   skus:
@@ -281,7 +284,9 @@
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      # Sized for the one-time cold TTTv2 weight-cache build (~13 min for a 32B) on top of the two warm
+      # cases (~18 min); lower back toward 18 once tt_cache/tttv2/Qwen/Qwen2.5-Coder-32B-Instruct is populated.
+      timeout: 40
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -289,7 +294,10 @@
 - name: Qwen2.5-7B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
-    pytest --timeout 420 models/common/tests/demos/qwen25_7b/demo.py -k "token-accuracy and performance"
+    # --timeout 600 (not the TTTv1 leg's 420) so the pytest cap covers the one-time cold TTTv2
+    # weight-cache build: measured cold wall ~6 min vs warm ~1.2 min. Lower back to 420 once
+    # tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct is populated.
+    pytest --timeout 600 models/common/tests/demos/qwen25_7b/demo.py -k "token-accuracy and performance"
   model: qwen2.5-7b
   model_family: Qwen
   skus:
@@ -573,7 +581,10 @@
   model_family: Mistral
   skus:
     wh_n150:
-      timeout: 10
+      # 13 (not 10) because this leg pays the one-time cold TTTv2 weight-cache build (~6 min for a 7B)
+      # on top of the retained TTTv1 ci-eval-32 command; lower back toward 7 once
+      # tt_cache/tttv2/mistralai/Mistral-7B-Instruct-v0.3 is populated.
+      timeout: 13
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
