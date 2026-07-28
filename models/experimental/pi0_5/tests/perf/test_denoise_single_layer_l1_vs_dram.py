@@ -157,8 +157,14 @@ def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, pref
         pk, pv = prefix_kv[gi]
         # Resident prefix-KV is uploaded at the model tile (tiny 16x32 bf8): kv_sdpa is tiny-tile aware
         # and reads the prefix + suffix K/V as a single uniform-tile stream (no retile, mixed tiles).
-        pk_dev = from_torch_pi05(pk, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
-        pv_dev = from_torch_pi05(pv, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Resident prefix KV is uploaded at the FULL 32x32 tile (kv_sdpa two-source path handles a
+        # tile-32 prefix + tile-16 suffix); q/k/v stay at the model tiny (16x32) tile.
+        pk_dev = from_torch_pi05(
+            pk, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
+        )
+        pv_dev = from_torch_pi05(
+            pv, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
+        )
         stage._prefix_kv.append((pk_dev, pv_dev))
         dev += [pk_dev, pv_dev]
     cond_dev = from_torch_pi05(adarms_cond, dtype=ttnn.bfloat16, device=submesh)
@@ -234,8 +240,12 @@ def _build_dram(submesh, expert_config, chunk_weights, config, suffix_len, ah, a
     prefix_kv_for_chunk = []
     for gi in range(_LO, _HI):
         pk, pv = prefix_kv[gi]
-        pk_dev = from_torch_pi05(pk, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
-        pv_dev = from_torch_pi05(pv, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pk_dev = from_torch_pi05(
+            pk, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
+        )
+        pv_dev = from_torch_pi05(
+            pv, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
+        )
         prefix_kv_for_chunk.append((pk_dev, pv_dev))
         dev += [pk_dev, pv_dev]
     attn_mask_dev = from_torch_pi05(mask, dtype=ttnn.bfloat16, device=submesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)

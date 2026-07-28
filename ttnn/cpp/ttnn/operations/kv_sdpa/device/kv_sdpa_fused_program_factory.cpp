@@ -5,6 +5,7 @@
 #include "kv_sdpa_device_operation.hpp"
 
 #include <algorithm>
+#include <numeric>
 
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/work_split.hpp"
@@ -46,16 +47,23 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const uint32_t DHt = qs[3] / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = DHt;
     const uint32_t group = NQH / NKH;
-    // Total KV = optional resident prefix (past_k/past_v) followed by the new/suffix K/V. The reader
-    // reads both ranges, so the caller need not pre-concatenate.
+    // Two-source K/V: an optional resident prefix (past_k/past_v) and the new/suffix K/V (k/v). They
+    // may use DIFFERENT tile heights (e.g. a 32x32 bf8 prefix + a 16x32 bf8 suffix); the reader feeds
+    // each into its own CB pair at its own geometry and the compute runs one flash loop over both,
+    // sharing the online-softmax state. The caller need not pre-concatenate.
     const bool has_past = ta.past_k.has_value();
+    // Prefix tile geometry (own dtype/tile; falls back to the suffix geometry when there is no past).
+    const auto pktile = has_past ? ta.past_k->tensor_spec().tile() : ktile;
+    const auto pvtile = has_past ? ta.past_v->tensor_spec().tile() : vtile;
+    const auto pkdf = has_past ? datatype_to_dataformat_converter(ta.past_k->dtype()) : kdf;
+    const auto pvdf = has_past ? datatype_to_dataformat_converter(ta.past_v->dtype()) : vdf;
+    const uint32_t pk_ts = pktile.get_tile_size(pkdf);
+    const uint32_t pv_ts = pvtile.get_tile_size(pvdf);
     // KV tile counts derive from each tensor's actual tile height (tiny tiles may be < 32 tall).
-    const uint32_t k_tile_h = ktile.get_height();
-    const uint32_t prefix_Kt =
-        has_past ? (ta.past_k->padded_shape()[2] / ta.past_k->tensor_spec().tile().get_height()) : 0;
-    const uint32_t suffix_Kt = ks[2] / k_tile_h;
-    const uint32_t Kt = prefix_Kt + suffix_Kt;
-    const bool use_provided_mask = ta.mask.has_value();
+    const uint32_t suffix_Kt = ks[2] / ktile.get_height();
+    const uint32_t prefix_Kt = has_past ? (ta.past_k->padded_shape()[2] / pktile.get_height()) : 0;
+    // The two-source flash compute has no mask path (pi0 uses non-causal full attention with no mask).
+    TT_FATAL(!ta.mask.has_value(), "kv_sdpa FlashFused two-source path does not support an attention mask");
 
     // KV chunk size (tiles per flash chunk). This op is compute-bound on the per-chunk fixed overhead
     // (matmul re-init + the reduce/exp reconfig_data_format churn in sdpa_inner_loop), so we want the
@@ -67,28 +75,41 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     // Cap chunk tiles so cb_k_in/cb_v_in (each Sk_chunk_t*DHt*2 tiles, double-buffered) stay bounded in
     // L1 regardless of head_dim: keep Sk_chunk_t*DHt <= 128 tiles per (single-buffered) K/V chunk.
     const uint32_t max_chunk_tiles = std::max<uint32_t>(1u, 128u / DHt);
-    uint32_t Sk_chunk_t = 1;
-    for (uint32_t cand = std::min(Kt, max_chunk_tiles); cand >= 1; --cand) {
-        if (Kt % cand == 0) {
-            Sk_chunk_t = cand;
-            break;
+    auto pick_chunk = [&](uint32_t kt) -> uint32_t {
+        uint32_t sc = 1;
+        for (uint32_t cand = std::min(kt, max_chunk_tiles); cand >= 1; --cand) {
+            if (kt % cand == 0) {
+                sc = cand;
+                break;
+            }
         }
-    }
-    const uint32_t k_num_chunks = Kt / Sk_chunk_t;
+        return sc;
+    };
+    const uint32_t suffix_Sk_chunk_t = pick_chunk(suffix_Kt);
+    const uint32_t suffix_num_chunks = suffix_Sk_chunk_t == 0 ? 0 : suffix_Kt / suffix_Sk_chunk_t;
+    const uint32_t prefix_Sk_chunk_t = has_past ? pick_chunk(prefix_Kt) : 1;
+    const uint32_t prefix_num_chunks = has_past ? prefix_Kt / prefix_Sk_chunk_t : 0;
+
     // Subblock widths must fit the DST register budget (get_dest_reg_count halves it for
     // fp32_dest_acc, and again without dst_full_sync). Derive them from dst_size like the production
-    // transformer SDPA rather than assuming the full head_dim fits (Sq_chunk_t == 1 here).
+    // transformer SDPA rather than assuming the full head_dim fits (Sq_chunk_t == 1 here). Per phase.
     const auto ckc = ttnn::init_device_compute_kernel_config(
         device->arch(), attrs.compute_kernel_config, MathFidelity::HiFi2, false, false, false);
     const uint32_t dst_size = ttnn::get_dest_reg_count(ckc);
-    const uint32_t qk_subblock_w = ttnn::prim::detail::determine_largest_subblock_size(1, Sk_chunk_t, dst_size).second;
+    const uint32_t suffix_qk_subblock_w =
+        ttnn::prim::detail::determine_largest_subblock_size(1, suffix_Sk_chunk_t, dst_size).second;
+    const uint32_t prefix_qk_subblock_w =
+        ttnn::prim::detail::determine_largest_subblock_size(1, prefix_Sk_chunk_t, dst_size).second;
     const uint32_t out_subblock_w = ttnn::prim::detail::determine_largest_subblock_size(1, vDHt, dst_size).second;
 
     const uint32_t Sq_chunk_t = 1;
     const uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
-    const uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
-    const uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
+    // cb_qk_im / out CBs are shared by both phases; size them for the larger chunk.
+    const uint32_t max_Sk_chunk_t = std::max(prefix_num_chunks ? prefix_Sk_chunk_t : 0u, suffix_Sk_chunk_t);
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
+    // sub_exp/mul-bcast DST unroll runs over Sk_chunk (differs per phase); the granularity must divide
+    // BOTH phases' chunk sizes. Use their gcd when a prefix exists, else the suffix chunk.
+    const uint32_t gran_base = prefix_num_chunks ? std::gcd(prefix_Sk_chunk_t, suffix_Sk_chunk_t) : suffix_Sk_chunk_t;
 
     const CoreRangeSet cores =
         tt::tt_metal::num_cores_to_corerangeset(NQH, device->compute_with_storage_grid_size(), /*row_wise=*/true);
@@ -103,17 +124,17 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
                 .buffer_index = idx, .data_format = df, .page_size = ts, .tile = TileDescriptor{tile}}}}});
     };
     using C = CBIndex;
-    add_cb(C::c_0, q_chunk_tiles, qdf, q_ts, qtile);      // cb_q_in
-    add_cb(C::c_1, k_chunk_tiles * 2, kdf, k_ts, ktile);  // cb_k_in (double-buffered)
-    add_cb(C::c_2, v_chunk_tiles * 2, vdf, v_ts, vtile);  // cb_v_in
-    if (use_provided_mask) {
-        // cb_mask_in: bf16, Sk_chunk_t tiles/chunk (Sq_chunk_t==1), double-buffered. bf16 so the
-        // compute's add_block_inplace(cb_qk_im, cb_mask_in) adds the mask to the bf16 QK scores.
-        add_cb(C::c_3, Sk_chunk_t * 2, bf16, bf16_ts, qtile);  // cb_mask_in
-    }
-    add_cb(C::c_5, 1, bf16, bf16_ts, qtile);                         // cb_identity_scale_in
-    add_cb(C::c_7, 1, bf16, bf16_ts, qtile);                         // cb_col_identity
-    add_cb(C::c_24, Sq_chunk_t * Sk_chunk_t, bf16, bf16_ts, qtile);  // cb_qk_im
+    add_cb(C::c_0, q_chunk_tiles, qdf, q_ts, qtile);                 // cb_q_in
+    add_cb(C::c_1, suffix_Sk_chunk_t * DHt * 2, kdf, k_ts, ktile);   // cb_k_in (suffix, double-buffered)
+    add_cb(C::c_2, suffix_Sk_chunk_t * vDHt * 2, vdf, v_ts, vtile);  // cb_v_in (suffix)
+    // Prefix K/V CBs (own tile geometry). When there is no past, prefix_num_chunks==0 so the compute
+    // never touches them; declare a minimal placeholder so the CB index is valid.
+    const uint32_t pk_cb_tiles = has_past ? prefix_Sk_chunk_t * DHt * 2 : 1;
+    add_cb(C::c_8, pk_cb_tiles, pkdf, pk_ts, pktile);                    // cb_k_prefix
+    add_cb(C::c_9, pk_cb_tiles, pvdf, pv_ts, pvtile);                    // cb_v_prefix
+    add_cb(C::c_5, 1, bf16, bf16_ts, qtile);                             // cb_identity_scale_in
+    add_cb(C::c_7, 1, bf16, bf16_ts, qtile);                             // cb_col_identity
+    add_cb(C::c_24, Sq_chunk_t * max_Sk_chunk_t, bf16, bf16_ts, qtile);  // cb_qk_im
     add_cb(C::c_25, out_tiles, bf16, bf16_ts, qtile);                // cb_out_im_A
     add_cb(C::c_26, out_tiles, bf16, bf16_ts, qtile);                // cb_out_im_B
     add_cb(C::c_27, Sq_chunk_t, bf16, bf16_ts, qtile);               // cb_max_A
@@ -127,9 +148,16 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     constexpr uint32_t identity_scalar_packed = 0x3F803F80u;
 
     // ---- Reader ----
-    // Suffix-relative geometry: prefix_Kt tiles come from past_k/past_v, the rest (suffix_Kt) from k/v.
     KernelDescriptor::CompileTimeArgs reader_cta = {
-        NQH, DHt, Kt, Sk_chunk_t, k_num_chunks, prefix_Kt, (uint32_t)has_past, (uint32_t)use_provided_mask};
+        NQH,
+        DHt,
+        prefix_Kt,
+        prefix_Sk_chunk_t,
+        prefix_num_chunks,
+        suffix_Kt,
+        suffix_Sk_chunk_t,
+        suffix_num_chunks,
+        (uint32_t)has_past};
     TensorAccessorArgs(*ta.q.buffer()).append_to(reader_cta);
     TensorAccessorArgs(*ta.k.buffer()).append_to(reader_cta);
     TensorAccessorArgs(*ta.v.buffer()).append_to(reader_cta);
@@ -139,10 +167,6 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     Buffer* pv_buf = has_past ? ta.past_v->buffer() : ta.v.buffer();
     TensorAccessorArgs(*pk_buf).append_to(reader_cta);
     TensorAccessorArgs(*pv_buf).append_to(reader_cta);
-    // Mask accessor (always appended so compile-time offsets are valid; aliases q when no mask, never
-    // read in that case because use_provided_mask gates all mask reads).
-    Buffer* mask_buf = use_provided_mask ? ta.mask->buffer() : ta.q.buffer();
-    TensorAccessorArgs(*mask_buf).append_to(reader_cta);
     KernelDescriptor reader{};
     reader.kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/dataflow/reader_fused.cpp";
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -166,21 +190,23 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = {
-        Sk_chunk_t,
         DHt,
-        Kt,
-        k_num_chunks,
         attrs.scale_bits,
-        qk_subblock_w,
+        prefix_num_chunks,
+        prefix_Sk_chunk_t,
+        prefix_qk_subblock_w,
         out_subblock_w,
-        (uint32_t)use_provided_mask};
+        suffix_num_chunks,
+        suffix_Sk_chunk_t,
+        suffix_qk_subblock_w,
+        out_subblock_w};
     // Granularity defines are DST-loop unroll factors (compute_common.hpp): each must be <= dst_size
     // and divide its tile count, or the DST overflows / trailing tiles are dropped. Derive them from
     // dst_size like the production SDPA (Sq_chunk_t == 1 here, so stats/reduce counts are 1).
     compute.defines = {
         {"STATS_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(1, dst_size))},
-        {"SUB_EXP_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(Sk_chunk_t, dst_size))},
-        {"MUL_BCAST_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(Sk_chunk_t, dst_size))},
+        {"SUB_EXP_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(gran_base, dst_size))},
+        {"MUL_BCAST_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(gran_base, dst_size))},
         {"DHT_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(DHt, dst_size))},
         {"REDUCE_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(1, dst_size / 2))},
         {"EXP_APPROX_MODE", "0"},
@@ -198,7 +224,7 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     for (uint32_t h = 0; h < NQH; ++h) {
         const uint32_t kv_head = h / group;
         reader.emplace_runtime_args(
-            core_vec[h], {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf, mask_buf});
+            core_vec[h], {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf});
         writer.emplace_runtime_args(core_vec[h], {out.buffer(), h});
     }
     desc.kernels.push_back(std::move(reader));

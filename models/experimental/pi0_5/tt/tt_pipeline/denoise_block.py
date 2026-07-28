@@ -306,11 +306,12 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         q, k, v = nlp_create_qkv_heads_rope(qkv, cos, sin, self.num_heads, self.num_kv_heads, memory_config=_L1)
         ttnn.deallocate(qkv)
 
-        # Tile-32 SDPA. q/k/v leave create-heads at the model tiny (16-row) tile, but the flash SDPA
-        # kernel requires q/k/v to share a tile size and the resident prefix-KV is uploaded at a full
-        # 32x32 bf8 tile. Retile the small suffix q/k/v up to a 32x32 bf8 tile (see _to_tile32_bf8),
-        # concat the tile-32 suffix K/V onto the tile-32 prefix, run SDPA, then bring the [.,32,.]
-        # result back down to the tiny tile for the o-proj / gated residual.
+        # Mixed-tile SDPA. q/k/v leave create-heads at the model tiny (16-row) tile and stay there;
+        # the resident prefix-KV (past_k/past_v) is uploaded at the full 32x32 bf8 tile. kv_sdpa's
+        # two-source flash loop processes the tile-32 prefix and the tile-16 suffix in one pass,
+        # sharing the online-softmax state (each K tile yields a [Sq_h x 32] score tile regardless of
+        # its own height), so no retile is needed. The result is brought back down to the tiny tile
+        # for the o-proj / gated residual.
         suffix_sq = q.shape[-2]
         # q/k/v stay at the model tiny (16-row) tile -- kv_sdpa is tiny-tile aware (QK_NUM_FACES).
         # This decode-expert SDPA is non-causal full attention over prefix+suffix KV, so the
