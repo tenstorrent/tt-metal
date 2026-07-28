@@ -33,3 +33,4 @@ Date: 2026-07-28 UTC
 - Exact-final-runtime Tracy: `tracy_final/profile_console.log` and
   `tracy_final/ops.csv`; derived human-readable/CSV reports share that folder.
 - Terminal independent stage-review verdict: `clean-pass`.
+- Stage implementation/evidence commit: `27507afd469`.
