@@ -566,9 +566,7 @@ void run_single_core_unpack_tilizeA_B_program(
 // Uses REDUCE_COL + MAX: tilizes row-major src0 data, reduces each tile independently
 // (column-wise max within each tile), producing output tiles with only row 0 populated.
 void run_single_core_unpack_tilizeA_B_reduce_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const TestConfig& test_config,
-    bool use_short_init = false) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
@@ -672,9 +670,6 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     };
     if (test_config.fp32_dest_acc_en) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
-    if (use_short_init) {
-        compute_defines.emplace("USE_SHORT_INIT", "1");
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
@@ -1355,28 +1350,26 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
 // Quasar Unpack TilizeA_B (tilize + reduce col max)
 // Quasar's unpack_tilizeA_B is only compatible with the reduce math kernel.
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeA_B) {
-    for (bool use_short_init : {false, true}) {
-        for (bool dst_full_sync_en : {true, false}) {
-            for (bool fp32_dest_acc_en : {true, false}) {
-                for (tt::DataFormat input_data_format : {tt::DataFormat::Float16_b}) {
-                    std::uint32_t tile_size = tt::tile_size(input_data_format);
-                    tt::DataFormat output_data_format =
-                        fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-                    std::uint32_t output_tile_size = tt::tile_size(output_data_format);
-                    unit_tests::compute::tilize::TestConfig test_config = {
-                        .dst_full_sync_en = dst_full_sync_en,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .input_single_tile_size = tile_size,
-                        .output_single_tile_size = output_tile_size,
-                        .num_tiles_r = 2,
-                        .num_tiles_c = 10,
-                        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
-                        .input_fmt = input_data_format,
-                        .output_fmt = output_data_format,
-                        .golden_function = ::unit_tests::compute::gold_standard_tilize_w_reduce_col_max};
-                    unit_tests::compute::tilize::run_single_core_unpack_tilizeA_B_reduce_program(
-                        this->devices_.at(0), test_config, use_short_init);
-                }
+    for (bool dst_full_sync_en : {true, false}) {
+        for (bool fp32_dest_acc_en : {true, false}) {
+            for (tt::DataFormat input_data_format : {tt::DataFormat::Float16_b}) {
+                std::uint32_t tile_size = tt::tile_size(input_data_format);
+                tt::DataFormat output_data_format =
+                    fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+                std::uint32_t output_tile_size = tt::tile_size(output_data_format);
+                unit_tests::compute::tilize::TestConfig test_config = {
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .input_single_tile_size = tile_size,
+                    .output_single_tile_size = output_tile_size,
+                    .num_tiles_r = 2,
+                    .num_tiles_c = 10,
+                    .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
+                    .input_fmt = input_data_format,
+                    .output_fmt = output_data_format,
+                    .golden_function = ::unit_tests::compute::gold_standard_tilize_w_reduce_col_max};
+                unit_tests::compute::tilize::run_single_core_unpack_tilizeA_B_reduce_program(
+                    this->devices_.at(0), test_config);
             }
         }
     }
