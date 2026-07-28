@@ -103,17 +103,27 @@ def read_server(run_dir: Path):
 
 
 def read_score(run_dir: Path):
-    """Scores appear only at the end; smoke/ counts too when its stage ran the whole set."""
+    """The newest score on disk, and which stage produced it.
+
+    A smoke score is NOT the run's score, and conflating them is worse than showing nothing: the
+    two-sample smoke stage writes a results file within minutes, so treating any results file as
+    the run's outcome reported a 198-question run as finished with a 50% (1-of-2) score while the
+    full stage was 22 questions in. ``terminal`` says whether this is the last stage, so the caller
+    can label it instead of guessing.
+    """
     for stage in ("full", "smoke"):
         files = sorted((run_dir / stage).rglob("results_*.json")) if (run_dir / stage).exists() else []
         if not files:
             continue
         blob = json.loads(files[-1].read_text())
         for task, m in blob.get("results", {}).items():
-            out = {"stage": stage, "task": task}
+            out = {"stage": stage, "task": task, "terminal": stage == "full"}
             for k, v in m.items():
                 if k.startswith("exact_match"):
                     out[k] = v
+            # lm_eval's n-samples "effective" is the TASK's size, not how many were run: a
+            # two-sample smoke stage still reports 198. The count that matters comes from the
+            # samples file below, so keep this only as a fallback.
             out["n"] = blob.get("n-samples", {}).get(task, {}).get("effective")
             smp = sorted((run_dir / stage).rglob("samples_*.jsonl"))
             if smp:
@@ -184,6 +194,7 @@ def render(run_dir: Path) -> str:
         L.append("")
 
     prog = read_progress(run_dir)
+    in_flight = bool(prog and prog.get("total") and prog["done"] < prog["total"])
     if prog and prog.get("total"):
         pct = 100.0 * prog["done"] / prog["total"]
         L.append(f"progress: {prog['done']}/{prog['total']} ({pct:.0f}%)  [{prog['eta']}]  via {prog['log']}")
@@ -200,9 +211,14 @@ def render(run_dir: Path) -> str:
         return "\n".join(L)
 
     age = time.time() - srv["mtime"]
-    # A finished run is quiet for the same reason a hung one is. Results on disk tell them apart.
-    if score:
-        state = "   (run is FINISHED -- results are written)"
+    # A finished run is quiet for the same reason a hung one is, so results on disk tell them apart
+    # -- but only the FULL stage's results mean the run is over. A smoke results file plus a live
+    # full stage is the most common state of a healthy run, and calling that "FINISHED" is worse
+    # than saying nothing.
+    if score and score.get("terminal") and not in_flight:
+        state = "   (run is FINISHED -- full-stage results are written)"
+    elif in_flight:
+        state = "   (eval in flight)" if age <= 300 else "   <-- STALLED? eval has not finished"
     elif age > 300:
         state = "   <-- STALLED?"
     else:
@@ -254,15 +270,25 @@ def render(run_dir: Path) -> str:
 
     if score:
         keys = [k for k in score if k.startswith("exact_match") and not k.endswith("_stderr")]
-        L.append(f"SCORE ({score['stage']} stage, n={score.get('n')}):")
+        q, empty = score.get("questions"), score.get("empty")
+        # n = questions actually scored, from the samples file. lm_eval's own n-samples reports the
+        # task size (198) even for a two-sample smoke stage.
+        n = q if q is not None else score.get("n")
+        label = "SCORE" if score.get("terminal") else "SMOKE-STAGE SCORE (not the run's score)"
+        L.append(f"{label} ({score['stage']} stage, n={n}):")
         for k in sorted(keys):
             L.append(f"  {k:34s} {fmt_pct(score[k])}")
-        q, empty = score.get("questions"), score.get("empty")
         L.append(
             f"  answers: {score.get('boxed')} boxed, {empty} empty of {q} questions,"
             f" median {score.get('chars_median')} chars"
         )
-        L.append("  bar: A100 CUDA reference 70.71% / 70.20% flexible-extract (thinking, 2 reps)")
+        # At small n the score carries no information about the bar -- 1 of 2 is "50%" with a 50 pp
+        # standard error -- so do not print the bar next to it and invite the comparison.
+        if n is not None and n < 30:
+            L.append(f"  (n={n} is too small to compare against the reference; +/-1 question moves")
+            L.append(f"   this by {100.0 / n:.0f} pp. Waiting on the full stage.)")
+        else:
+            L.append("  bar: A100 CUDA reference 70.71% / 70.20% flexible-extract (thinking, 2 reps)")
         # A score computed over mostly-empty answers says nothing about quality, so refuse to let it
         # stand next to the bar unqualified: report what the model scored where it actually answered.
         if q and empty and empty > 0.05 * q:
