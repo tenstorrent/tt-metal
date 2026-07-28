@@ -99,11 +99,17 @@ inline void calculate_sfpu_binary(
             v_elseif(in0 == in1) { result = 1.0f; }
             v_endif;
 
-            if constexpr (ROUND_NEAREST && !is_fp32_dest_acc_en) {
+            if constexpr (!is_fp32_dest_acc_en) {
                 // Software RNE conversion to match FPU bf16 rounding (Quasar SFPSTORE
                 // truncates by default).
                 result = float32_to_bf16_rne(result);
             }
+        }
+
+        if constexpr (
+            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
+            ROUND_NEAREST) {
+            result = float32_to_bf16_rne(result);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;

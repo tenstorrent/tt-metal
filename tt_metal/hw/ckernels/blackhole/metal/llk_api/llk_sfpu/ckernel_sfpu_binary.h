@@ -120,7 +120,9 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
             v_endif;
         }
 
-        if constexpr (ROUND_NEAREST && !is_fp32_dest_acc_en) {
+        if constexpr (
+            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
+            ROUND_NEAREST) {
             result = float32_to_bf16_rne(result);
         }
 
