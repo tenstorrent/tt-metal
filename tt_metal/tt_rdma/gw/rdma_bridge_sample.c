@@ -10,17 +10,21 @@
  * + 32B tt_rdma_hdr), then re-posts the receive task so it runs continuously.
  *
  * So: ConnectX HW terminates full-spec RoCEv2 (PSN/ICRC/ACK, all in silicon); this bridge does only the lean
- * TT-RDMA re-origination; the BH drainer pool lands it (unchanged, validated 200G lossless). B1 uses a raw
- * AF_PACKET socket on the uplink (p0) for egress — simple + proven from tt_rdma_bf3_send; B3 swaps this for
- * the DOCA Eth-Tx datapath (doca_ttblast) / DPA for line rate.
+ * TT-RDMA re-origination; the BH drainer pool lands it (unchanged, validated 200G lossless). Two egress
+ * backends: B1 raw AF_PACKET on the uplink (simple, ~13G ceiling) and B3 DOCA Eth-TX HW-TX (the doca_ttblast
+ * datapath, batched per B3.1a) -- selected by TTBRIDGE_EGRESS (default doca).
  *
  * Config via env (keeps the stock argp untouched):
- *   TTBRIDGE_IFACE   egress netdev toward the BH   (default p0)
+ *   TTBRIDGE_EGRESS  egress backend: doca | raw    (default doca = B3 HW-TX; raw = B1 AF_PACKET)
+ *   TTBRIDGE_TXDEV   DOCA Eth-TX IB device (doca)  (default mlx5_0 = uplink p0)
+ *   TTBRIDGE_IFACE   egress netdev (raw)           (default p0)
  *   TTBRIDGE_DMAC    BH RXQ2 dest MAC              (default 02:00:00:00:00:02)
  *   TTBRIDGE_RKEY    TT-RDMA rkey (-> MR slot)     (default 0x00CAFE42)
  *   TTBRIDGE_PLEN    bytes to forward per WRITE    (default 256)
  *   TTBRIDGE_MAX     stop after N forwards         (default 1)
- * Build/run: deploy_rdma_bridge.sh (vendors this + builds against the stock DOCA rdma sample sources).
+ *   TTBRIDGE_TXBATCH frames per HW-TX task_batch   (default 64; 1 = unbatched, for A/B)
+ *   TTBRIDGE_BURST   re-emit each payload N times  (default 1; validation knob for a dense pool stream)
+ * Build/run: deploy_rdma_bridge.sh (vendors this + builds against the stock DOCA rdma + eth sample sources).
  */
 
 #include <arpa/inet.h>
@@ -81,23 +85,30 @@ static unsigned char g_frame[4200];
 /* ---- B3 DOCA Eth-TX egress state ----
  * A DOCA Eth-TX (REGULAR, CPU data path) on the uplink device, driven by its OWN progress engine (the bridge
  * main loop progresses both PEs). A pool of persistent doca_bufs over a TX mmap holds pre-built frames; each
- * forward pops a free slot, patches the dynamic TT-RDMA header + copies the RoCE payload, and submits one
- * doca_eth_txq_task_send. The send completion recycles the slot. Frame size is fixed (14 + 32 + g_plen), so
- * the buf data-length never changes. Single-threaded (submit + completion + backpressure all on the main
- * loop thread) -> no locking. Modeled on the proven doca_ttblast (tt-rdma-gateway-sender.md). */
-#define TT_TX_POOL 512      /* TX buf pool depth = max frames in flight */
-#define TT_TX_MAX_BURST 256 /* doca_eth_txq max burst */
+ * forward pops a free slot, patches the dynamic TT-RDMA header + copies the RoCE payload, and STAGES the buf
+ * into a task_batch being filled. When the batch reaches g_tx.batch frames it is submitted as one
+ * doca_task_batch (B3.1a batching: one submit amortized over up to 64 frames); a partial batch is flushed
+ * when the RoCE receive side goes idle (main loop) or at drain. The batch completion recycles every slot.
+ * Frame size is fixed (14 + 32 + g_plen), so buf data-length never changes. Single-threaded (submit +
+ * completion + backpressure all on the main loop thread) -> no locking. Modeled on doca_ttblast. */
+#define TT_TX_BATCH 64                                          /* frames per task_batch (== MAX_TASKS_NUMBER_64) */
+#define TT_TX_INFLIGHT_BATCHES 4                                /* pipeline depth: batches in flight */
+#define TT_TX_MAX_BURST (TT_TX_BATCH * TT_TX_INFLIGHT_BATCHES)  /* doca_eth_txq max burst = 256 */
+#define TT_TX_POOL (TT_TX_BATCH * (TT_TX_INFLIGHT_BATCHES + 1)) /* in-flight (4*64) + 1 filling batch = 320 */
 struct tt_doca_tx {
     struct eth_core_resources core;        /* dev + mmap + buf_inv + pe (allocate_eth_core_resources) */
     struct eth_flow_common_resources flow; /* DOCA Flow port on the uplink (required for HW TX) */
     struct doca_eth_txq* txq;
     struct doca_buf* bufs[TT_TX_POOL];
-    uint32_t free_stack[TT_TX_POOL]; /* indices of free slots */
-    uint32_t free_top;               /* number of free slots on the stack */
-    uint32_t inflight;               /* submitted-but-not-completed sends */
-    uint32_t frame_size;             /* 14 (L2) + 32 (TT hdr) + g_plen */
-    uint8_t smac[6];                 /* uplink device MAC */
-    int started;                     /* ctx started (for cleanup gating) */
+    uint32_t free_stack[TT_TX_POOL];  /* indices of free slots */
+    uint32_t free_top;                /* number of free slots on the stack */
+    uint32_t pend_slots[TT_TX_BATCH]; /* slots staged into the batch currently being filled */
+    uint32_t pend_count;              /* frames staged in the current (unsubmitted) batch */
+    uint32_t inflight_batches;        /* submitted-but-not-completed task_batches */
+    uint32_t frame_size;              /* 14 (L2) + 32 (TT hdr) + g_plen */
+    uint32_t batch;                   /* runtime frames-per-batch (TTBRIDGE_TXBATCH, 1..TT_TX_BATCH) */
+    uint8_t smac[6];                  /* uplink device MAC */
+    int started;                      /* ctx started (for cleanup gating) */
 };
 static struct tt_doca_tx g_tx;
 #define TT_TX_SLEEP_NANOS (10 * 1000)
@@ -218,22 +229,37 @@ static doca_error_t tt_tx_check_device(struct doca_devinfo* devinfo) {
     return doca_eth_txq_cap_is_type_supported(devinfo, DOCA_ETH_TXQ_TYPE_REGULAR, DOCA_ETH_TXQ_DATA_PATH_TYPE_CPU);
 }
 
-/* Send completion: recycle the slot; both success + error callbacks land here. */
-static void tt_tx_send_cb(
-    struct doca_eth_txq_task_send* task_send, union doca_data task_user_data, union doca_data ctx_user_data) {
+/* Batch send completion: recycle every slot in the batch. Success + error both land here. */
+static void tt_tx_batch_cb(
+    struct doca_task_batch* task_batch,
+    uint16_t tasks_num,
+    union doca_data ctx_user_data,
+    union doca_data task_batch_user_data,
+    union doca_data* task_user_data_array,
+    struct doca_buf** pkt_array,
+    doca_error_t* status_array) {
     struct tt_doca_tx* tx = (struct tt_doca_tx*)ctx_user_data.ptr;
-    uint32_t slot = (uint32_t)task_user_data.u64;
-
-    tx->free_stack[tx->free_top++] = slot;
-    tx->inflight--;
-    doca_task_free(doca_eth_txq_task_send_as_doca_task(task_send));
+    (void)task_batch_user_data;
+    (void)pkt_array;
+    (void)status_array;
+    for (uint16_t i = 0; i < tasks_num; i++) {
+        tx->free_stack[tx->free_top++] = (uint32_t)task_user_data_array[i].u64;
+    }
+    tx->inflight_batches--;
+    doca_task_batch_free(task_batch);
 }
 
-static void tt_tx_err_cb(
-    struct doca_eth_txq_task_send* task_send, union doca_data task_user_data, union doca_data ctx_user_data) {
-    doca_error_t st = doca_task_get_status(doca_eth_txq_task_send_as_doca_task(task_send));
-    DOCA_LOG_ERR("HW-TX send task failed: %s", doca_error_get_name(st));
-    tt_tx_send_cb(task_send, task_user_data, ctx_user_data); /* still recycle the slot */
+static void tt_tx_batch_err_cb(
+    struct doca_task_batch* task_batch,
+    uint16_t tasks_num,
+    union doca_data ctx_user_data,
+    union doca_data task_batch_user_data,
+    union doca_data* task_user_data_array,
+    struct doca_buf** pkt_array,
+    doca_error_t* status_array) {
+    DOCA_LOG_ERR("HW-TX batch send failed (%u tasks)", tasks_num);
+    tt_tx_batch_cb(
+        task_batch, tasks_num, ctx_user_data, task_batch_user_data, task_user_data_array, pkt_array, status_array);
 }
 
 /* Bring up the DOCA Eth-TX on `txdev`: core resources (dev+mmap+buf_inv+pe), REGULAR txq, DOCA Flow port,
@@ -241,7 +267,15 @@ static void tt_tx_err_cb(
 static int egress_doca_init(const char* txdev) {
     doca_error_t st;
     union doca_data ud;
+    const char* txbatch_s = getenv("TTBRIDGE_TXBATCH");
 
+    g_tx.batch = txbatch_s ? (uint32_t)strtoul(txbatch_s, NULL, 0) : TT_TX_BATCH;
+    if (g_tx.batch < 1u) {
+        g_tx.batch = 1u;
+    }
+    if (g_tx.batch > TT_TX_BATCH) {
+        g_tx.batch = TT_TX_BATCH;
+    }
     g_tx.frame_size = 14u + 32u + g_plen;
     struct eth_core_config cfg = {
         .mmap_size = g_tx.frame_size * TT_TX_POOL,
@@ -271,9 +305,10 @@ static int egress_doca_init(const char* txdev) {
         DOCA_LOG_ERR("HW-TX: set_type: %s", doca_error_get_name(st));
         return -1;
     }
-    st = doca_eth_txq_task_send_set_conf(g_tx.txq, tt_tx_send_cb, tt_tx_err_cb, TT_TX_POOL);
+    st = doca_eth_txq_task_batch_send_set_conf(
+        g_tx.txq, DOCA_TASK_BATCH_MAX_TASKS_NUMBER_64, TT_TX_INFLIGHT_BATCHES, tt_tx_batch_cb, tt_tx_batch_err_cb);
     if (st != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("HW-TX: task_send_set_conf: %s", doca_error_get_name(st));
+        DOCA_LOG_ERR("HW-TX: task_batch_send_set_conf: %s", doca_error_get_name(st));
         return -1;
     }
     g_tx.core.core_objs.ctx = doca_eth_txq_as_doca_ctx(g_tx.txq);
@@ -329,9 +364,11 @@ static int egress_doca_init(const char* txdev) {
     }
     g_tx.free_top = TT_TX_POOL;
     DOCA_LOG_INFO(
-        "TT-RDMA egress ready (DOCA HW-TX): dev=%s pool=%u frame=%uB rkey=0x%08x plen=%u max=%lu burst=%lu",
+        "TT-RDMA egress ready (DOCA HW-TX): dev=%s pool=%u batch=%u frame=%uB rkey=0x%08x plen=%u max=%lu "
+        "burst=%lu",
         txdev,
         TT_TX_POOL,
+        g_tx.batch,
         g_tx.frame_size,
         g_rkey,
         g_plen,
@@ -340,10 +377,52 @@ static int egress_doca_init(const char* txdev) {
     return 0;
 }
 
-static void egress_doca_send(const unsigned char* payload, unsigned plen, uint32_t roff, uint32_t imm) {
+/* Submit the batch currently being filled (if any) as one doca_task_batch. Backpressures on the TX PE if the
+ * pipeline is full. Recycles the staged slots if allocate/submit fails. */
+static void egress_doca_flush(void) {
     doca_error_t st;
-    struct doca_eth_txq_task_send* task;
-    union doca_data ud;
+    struct doca_buf** pkt_array;
+    union doca_data* tud_array;
+    struct doca_task_batch* batch;
+    union doca_data bud;
+
+    if (g_tx.pend_count == 0) {
+        return;
+    }
+    /* Backpressure: wait for a pipeline slot to free (a prior batch to complete). */
+    while (g_tx.inflight_batches >= TT_TX_INFLIGHT_BATCHES) {
+        (void)doca_pe_progress(g_tx.core.core_objs.pe);
+    }
+
+    bud.u64 = 0;
+    st =
+        doca_eth_txq_task_batch_send_allocate(g_tx.txq, (uint16_t)g_tx.pend_count, bud, &pkt_array, &tud_array, &batch);
+    if (st != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("HW-TX: batch_allocate(%u): %s", g_tx.pend_count, doca_error_get_name(st));
+        while (g_tx.pend_count) {
+            g_tx.free_stack[g_tx.free_top++] = g_tx.pend_slots[--g_tx.pend_count];
+        }
+        return;
+    }
+    for (uint32_t i = 0; i < g_tx.pend_count; i++) {
+        pkt_array[i] = g_tx.bufs[g_tx.pend_slots[i]];
+        tud_array[i].u64 = g_tx.pend_slots[i];
+    }
+    st = doca_task_batch_submit(batch);
+    if (st != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("HW-TX: batch_submit(%u): %s", g_tx.pend_count, doca_error_get_name(st));
+        doca_task_batch_free(batch);
+        while (g_tx.pend_count) {
+            g_tx.free_stack[g_tx.free_top++] = g_tx.pend_slots[--g_tx.pend_count];
+        }
+        return;
+    }
+    g_tx.inflight_batches++;
+    g_tx.pend_count = 0;
+}
+
+/* Stage one TT-RDMA frame into the batch being filled; auto-submit when it reaches g_tx.batch frames. */
+static void egress_doca_send(const unsigned char* payload, unsigned plen, uint32_t roff, uint32_t imm) {
     uint32_t slot;
     uint8_t* base;
 
@@ -351,8 +430,8 @@ static void egress_doca_send(const unsigned char* payload, unsigned plen, uint32
         plen = g_plen; /* pool frame size is fixed at 14+32+g_plen */
     }
 
-    /* Backpressure: if every slot is in flight, progress the TX PE until one frees. This stalls the RoCE
-     * receive callback -> the RoCE flow naturally back-pressures. */
+    /* Backpressure: if no free slot, progress the TX PE (completes batches -> frees slots). This stalls the
+     * RoCE receive callback -> the RoCE flow naturally back-pressures. */
     while (g_tx.free_top == 0) {
         (void)doca_pe_progress(g_tx.core.core_objs.pe);
     }
@@ -362,21 +441,10 @@ static void egress_doca_send(const unsigned char* payload, unsigned plen, uint32
     tt_build_hdr(base + 14, plen, roff, imm); /* L2 + static hdr already built at init */
     memcpy(base + 14 + 32, payload, plen);
 
-    ud.u64 = slot;
-    st = doca_eth_txq_task_send_allocate_init(g_tx.txq, g_tx.bufs[slot], ud, &task);
-    if (st != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("HW-TX: allocate_init: %s", doca_error_get_name(st));
-        g_tx.free_stack[g_tx.free_top++] = slot;
-        return;
+    g_tx.pend_slots[g_tx.pend_count++] = slot;
+    if (g_tx.pend_count >= g_tx.batch) {
+        egress_doca_flush();
     }
-    st = doca_task_submit(doca_eth_txq_task_send_as_doca_task(task));
-    if (st != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("HW-TX: task_submit: %s", doca_error_get_name(st));
-        doca_task_free(doca_eth_txq_task_send_as_doca_task(task));
-        g_tx.free_stack[g_tx.free_top++] = slot;
-        return;
-    }
-    g_tx.inflight++;
 }
 
 /* ============================ egress dispatch ============================ */
@@ -449,13 +517,22 @@ static void egress_progress(void) {
     }
 }
 
+/* Flush the partially-filled batch. No-op for the raw path. Called from the main loop when the RoCE receive
+ * side goes idle (so back-to-back WRITE_IMMs coalesce into a batch, but a lone frame doesn't linger) + at drain. */
+static void egress_flush(void) {
+    if (g_egress_doca) {
+        egress_doca_flush();
+    }
+}
+
 /* Drain any in-flight HW-TX sends before shutdown. */
 static void egress_drain(void) {
     struct timespec ts = {.tv_sec = 0, .tv_nsec = TT_TX_SLEEP_NANOS};
     if (!g_egress_doca) {
         return;
     }
-    while (g_tx.inflight != 0) {
+    egress_doca_flush(); /* push any partial batch first */
+    while (g_tx.inflight_batches != 0) {
         if (doca_pe_progress(g_tx.core.core_objs.pe) == 0) {
             nanosleep(&ts, &ts);
         }
@@ -762,6 +839,9 @@ doca_error_t rdma_write_immediate_responder(struct rdma_config* cfg) {
     }
     while (resources.run_pe_progress) {
         int busy = doca_pe_progress(resources.pe);
+        if (busy == 0) {
+            egress_flush(); /* RoCE receive idle -> submit the staged batch (coalesces back-to-back WRITEs) */
+        }
         egress_progress(); /* drain HW-TX send completions (recycle bufs) */
         if (busy == 0) {
             nanosleep(&ts, &ts);

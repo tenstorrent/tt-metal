@@ -84,10 +84,13 @@ one thread). Select with `TTBRIDGE_EGRESS=doca` (now the DEFAULT; `=raw` for the
 sudo env TTBRIDGE_EGRESS=doca TTBRIDGE_TXDEV=mlx5_0 TTBRIDGE_PLEN=4080 TTBRIDGE_MAX=1 TTBRIDGE_BURST=<n> \
   /tmp/doca_ttbridge -d mlx5_2 -g 1 -cm -lp 51000
 ```
-Correctness identical to B1 (byte-exact land, exactly-once, drop=0). **Perf: ~53 Gbps / 1.6 Mpps peak jumbo
-= ~4× the raw ~13 G.** Single-core-bound by per-frame memcpy + single-task submit. **B3.1 to reach line
-rate:** task batching (64/batch) + zero-copy scatter-gather (payload buf into the RDMA mmap, no memcpy).
-**Next:** B2 (MR federation via RISC1 doorbell 3.1e); B3.1 (batch + zero-copy line-rate egress).
+Correctness identical to B1 (byte-exact land, exactly-once, drop=0). `TTBRIDGE_TXBATCH=N` (default 64; 1 =
+unbatched) sets frames per HW-TX `doca_task_batch`. **Perf (jumbo 4080B): batch=64 ~56 Gbps / 1.7 Mpps vs
+unbatched ~47 G vs raw ~13 G.** **B3.1a (batching) done** — modest ~20% win; the wall is the **per-frame
+memcpy** (4080B × 1.7 Mpps ≈ 6.5 GB/s, one Arm core saturated). **B3.1b (zero-copy scatter-gather** —
+payload buf pointing into the RDMA responder mmap registered on the TX dev + an RX landing ring, no memcpy)
+**is the real line-rate lever** (should ~2×). **Next:** B2 (MR federation via RISC1 doorbell 3.1e); B3.1b
+(zero-copy line-rate egress).
 
 ## 4. Regression / perf gates (run every phase change)
 ```
