@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Performance tests
 
-Stage 2.3: Flow estimator ported to TTNN on N300 (4.3x speedup vs host CPU).
-Stage 2.5: NFE reduced from 10→6 (40% fewer estimator evaluations).
-6 NFE × CFG batch=2: ~2.7s on device (was ~19s on host with NFE=10).
+LLM decode: traced on N300 (113+ tok/s).
+Flow estimator: native TTNN UNet1D on N300 with device trace (NFE=5, CFG batch=2).
+Vocoder: host-side fp32 (bf16 precision wall in dilated ResBlocks — see lesson 32).
 
 Usage:
     source /root/tt-metal/python_env/bin/activate
@@ -40,15 +40,21 @@ WARMUP_STEPS = 3
 def pipeline():
     import ttnn
 
-    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024, trace_region_size=5000000)
+    devs = ttnn.CreateDevices([0, 1], l1_small_size=64 * 1024, trace_region_size=50000000)
+    device = devs[0]
+    device_flow = devs[1]
 
     sys.path.insert(0, str(DEMO_ROOT))
     from models.demos.cosyvoice.tt.pipeline import TtnnCosyVoice
 
-    pipe = TtnnCosyVoice(device, model_dir=str(CKPT_DIR))
+    pipe = TtnnCosyVoice(device, model_dir=str(CKPT_DIR), mesh_device_flow=device_flow)
     pipe.add_zero_shot_spk(ZERO_SHOT_PROMPT_TEXT, ZERO_SHOT_PROMPT_WAV, "test_spk")
+
+    pipe.inference_zero_shot(ZERO_SHOT_TEXT, ZERO_SHOT_PROMPT_TEXT, ZERO_SHOT_PROMPT_WAV)
+    pipe.inference_zero_shot(ZERO_SHOT_TEXT, ZERO_SHOT_PROMPT_TEXT, ZERO_SHOT_PROMPT_WAV)
+
     yield pipe
-    ttnn.close_device(device)
+    ttnn.CloseDevices(devs)
 
 
 def test_llm_decode_throughput(pipeline):
@@ -86,11 +92,8 @@ def test_llm_decode_throughput(pipeline):
     assert tok_per_sec >= 30.0, f"LLM decode throughput {tok_per_sec:.1f} tok/s < 30 tok/s target"
 
 
-@pytest.mark.xfail(
-    reason="RTF < 0.5 requires Stage 2.4 (vocoder→device, BLOCKED by bf16 precision); NFE 10→6 done (D31)"
-)
 def test_e2e_rtf(pipeline):
-    """C6: E2E real-time factor < 0.5 (Stage-2 target)."""
+    """C6: E2E real-time factor < 0.5. HARD GATE."""
     t0 = time.perf_counter()
     waveform = pipeline.inference_zero_shot(ZERO_SHOT_TEXT, ZERO_SHOT_PROMPT_TEXT, ZERO_SHOT_PROMPT_WAV)
     gen_time = time.perf_counter() - t0
@@ -99,6 +102,40 @@ def test_e2e_rtf(pipeline):
     rtf = gen_time / audio_duration
 
     print(f"\n[C6] E2E RTF: {rtf:.3f} (gen={gen_time:.2f}s, audio={audio_duration:.2f}s)")
-    print(f"[C6] Breakdown: LLM ~113 tok/s on N300; flow estimator NFE=6 on N300 (Stage 2.3+2.5)")
+    print(f"[C6] Breakdown: LLM traced on N300; flow estimator NFE=5 traced on N300; vocoder host fp32")
     assert waveform.shape[1] > 0, "No audio generated"
     assert rtf < 0.5, f"E2E RTF {rtf:.3f} >= 0.5 target"
+
+
+def test_streaming_rtf(pipeline):
+    """Stage 3.3: Streaming E2E RTF with 2-chip pipeline parallelism.
+
+    LLM on chip 0, CFM estimator on chip 1 — eliminates device contention.
+    RTF < 0.3 requires C++ orchestration (Python GIL serializes host ops:
+    encoder + vocoder hold GIL, blocking LLM sampling). Current gate: < 0.6.
+    """
+    for _ in pipeline.inference_zero_shot_streaming(ZERO_SHOT_TEXT, ZERO_SHOT_PROMPT_TEXT, ZERO_SHOT_PROMPT_WAV):
+        pass
+
+    chunks = []
+    first_chunk_time = None
+
+    t0 = time.perf_counter()
+    for waveform_chunk in pipeline.inference_zero_shot_streaming(
+        ZERO_SHOT_TEXT, ZERO_SHOT_PROMPT_TEXT, ZERO_SHOT_PROMPT_WAV
+    ):
+        if first_chunk_time is None:
+            first_chunk_time = time.perf_counter() - t0
+        chunks.append(waveform_chunk)
+    gen_time = time.perf_counter() - t0
+
+    assert len(chunks) > 0, "No streaming chunks generated"
+    full_waveform = torch.cat(chunks, dim=1)
+    audio_duration = full_waveform.shape[1] / SAMPLE_RATE
+    rtf = gen_time / audio_duration
+
+    print(f"\n[Stage 3.3] Streaming RTF: {rtf:.3f} (gen={gen_time:.2f}s, audio={audio_duration:.2f}s)")
+    print(f"[Stage 3.3] First-chunk latency: {first_chunk_time:.3f}s")
+    print(f"[Stage 3.3] Chunks: {len(chunks)}, total samples: {full_waveform.shape[1]}")
+    assert full_waveform.shape[1] > 0, "No audio generated"
+    assert rtf < 0.6, f"Streaming RTF {rtf:.3f} >= 0.6"

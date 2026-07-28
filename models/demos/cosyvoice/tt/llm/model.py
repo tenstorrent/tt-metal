@@ -424,6 +424,70 @@ class CosyVoiceLLM:
 
         return out_tokens
 
+    def generate_streaming(
+        self,
+        text_token_ids: torch.Tensor,
+        prompt_speech_token_ids: Optional[torch.Tensor] = None,
+        min_len: int = 10,
+        max_len: int = 500,
+        top_p: float = 0.8,
+        top_k: int = 25,
+        win_size: int = 10,
+        tau_r: float = 0.1,
+        seed: int = SEED,
+    ):
+        """Streaming autoregressive generation — yields tokens one at a time."""
+        torch.manual_seed(seed)
+
+        prefix = self.assemble_prefix(text_token_ids, prompt_speech_token_ids)
+        log_probs = self.prefill(prefix)
+
+        out_tokens: List[int] = []
+        ignore_eos = True
+
+        token_id = sampling_ids(
+            log_probs,
+            out_tokens,
+            self.speech_token_size,
+            ignore_eos=ignore_eos,
+            top_p=top_p,
+            top_k=top_k,
+            win_size=win_size,
+            tau_r=tau_r,
+        )
+
+        if token_id in self.stop_token_ids:
+            return
+
+        out_tokens.append(token_id)
+        yield token_id
+        current_pos = prefix.shape[1]
+
+        if self._trace_id is None:
+            self._init_trace(current_pos)
+
+        for step in range(1, max_len):
+            ignore_eos = step < min_len
+            log_probs = self.decode_step(token_id, current_pos)
+            current_pos += 1
+
+            token_id = sampling_ids(
+                log_probs,
+                out_tokens,
+                self.speech_token_size,
+                ignore_eos=ignore_eos,
+                top_p=top_p,
+                top_k=top_k,
+                win_size=win_size,
+                tau_r=tau_r,
+            )
+
+            if token_id in self.stop_token_ids:
+                break
+
+            out_tokens.append(token_id)
+            yield token_id
+
     @torch.inference_mode()
     def teacher_forced_step(
         self,

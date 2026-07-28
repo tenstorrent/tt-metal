@@ -52,6 +52,8 @@ class FlowEncoderModel(torch.nn.Module):
         self.encoder_proj.weight = torch.nn.Parameter(ep_w)
         self.encoder_proj.bias = torch.nn.Parameter(ep_b)
 
+    PRE_LOOKAHEAD_LEN = 3
+
     @torch.no_grad()
     def forward(
         self,
@@ -62,8 +64,10 @@ class FlowEncoderModel(torch.nn.Module):
         prompt_feat: torch.Tensor,
         prompt_feat_len: torch.Tensor,
         embedding: torch.Tensor,
+        streaming: bool = False,
+        finalize: bool = True,
     ) -> torch.Tensor:
-        """Full flow encoder forward (non-streaming, finalize=True).
+        """Flow encoder forward.
 
         Args:
             token: [1, T_gen] generated speech tokens
@@ -73,24 +77,29 @@ class FlowEncoderModel(torch.nn.Module):
             prompt_feat: [1, T_prompt_mel, 80] prompt mel
             prompt_feat_len: [1] length
             embedding: [1, 192] speaker embedding
+            streaming: use chunked-causal attention in encoder
+            finalize: if False, split last PRE_LOOKAHEAD_LEN tokens as context
 
         Returns:
             mu: [1, 80, T_mel] — encoder output (transposed for estimator)
+            spks: [1, 80] — speaker embedding
+            conds: [1, 80, T_mel] — prompt condition
         """
-        # xvec projection
         embedding = F.normalize(embedding, dim=1)
         spks = self.spk_embed_affine_layer(embedding)
 
-        # concat text and prompt_text
         token, token_len = torch.concat([prompt_token, token], dim=1), prompt_token_len + token_len
         mask = (~self._make_pad_mask(token_len, token.shape[1])).unsqueeze(-1).to(spks.dtype)
         token = self.input_embedding(torch.clamp(token, min=0)) * mask
 
-        # text encode (finalize=True → no context splitting)
-        h, h_lengths = self._encoder_forward(token, token_len)
+        context = None
+        if streaming and not finalize:
+            context = token[:, -self.PRE_LOOKAHEAD_LEN :]
+            token = token[:, : -self.PRE_LOOKAHEAD_LEN]
+
+        h = self.encoder(token, streaming=streaming, context=context)
         h = self.encoder_proj(h)
 
-        # get conditions
         mel_len1, mel_len2 = prompt_feat.shape[1], h.shape[1] - prompt_feat.shape[1]
         conds = torch.zeros([1, mel_len1 + mel_len2, 80], device=token.device).to(h.dtype)
         conds[:, :mel_len1] = prompt_feat
@@ -98,13 +107,6 @@ class FlowEncoderModel(torch.nn.Module):
 
         mu = h.transpose(1, 2).contiguous()
         return mu, spks, conds
-
-    def _encoder_forward(self, token_emb: torch.Tensor, token_len: torch.Tensor):
-        """Wrapper to call the encoder (which doesn't take token_len in our impl)."""
-        h = self.encoder(token_emb)
-        # Upsample: token_len * 2
-        h_lengths = token_len * 2
-        return h, h_lengths
 
     @staticmethod
     def _make_pad_mask(lengths: torch.Tensor, max_len: int) -> torch.Tensor:

@@ -82,6 +82,7 @@ class HiFTVocoder:
 
         _fold_weight_norm(self.model)
         self.model.eval()
+        self.model = torch.compile(self.model, mode="reduce-overhead", dynamic=True)
 
     @classmethod
     def from_checkpoint(cls, hift_pt_path: str | Path) -> "HiFTVocoder":

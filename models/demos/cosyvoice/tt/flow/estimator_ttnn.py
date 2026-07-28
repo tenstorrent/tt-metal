@@ -293,13 +293,10 @@ class BasicTransformerBlockTtnn:
         k = ttnn.permute(k, (0, 2, 1, 3))
         v = ttnn.permute(v, (0, 2, 1, 3))
 
-        k_t = ttnn.transpose(k, -2, -1)
-        attn_weights = ttnn.matmul(q, k_t)
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=attn_mask, scale=1.0
+        )
 
-        attn_weights = ttnn.add(attn_weights, attn_mask)
-        attn_weights = ttnn.softmax(attn_weights, dim=-1)
-
-        attn_output = ttnn.matmul(attn_weights, v)
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
         attn_output = ttnn.reshape(attn_output, (batch_size, T, self.inner_dim))
 
@@ -350,6 +347,10 @@ class UNetEstimatorTtnn:
         self.emb_freqs = torch.exp(torch.arange(half_dim).float() * -emb_scale)
         self.time_linear1 = LinearTtnn(sd["time_mlp.linear_1.weight"], sd["time_mlp.linear_1.bias"], self.device)
         self.time_linear2 = LinearTtnn(sd["time_mlp.linear_2.weight"], sd["time_mlp.linear_2.bias"], self.device)
+        self._time_w1 = sd["time_mlp.linear_1.weight"].float()
+        self._time_b1 = sd["time_mlp.linear_1.bias"].float()
+        self._time_w2 = sd["time_mlp.linear_2.weight"].float()
+        self._time_b2 = sd["time_mlp.linear_2.bias"].float()
 
     def _build_down_blocks(self, sd: Dict[str, torch.Tensor]):
         self.down_resnet = CausalResnetBlock1DTtnn("down_blocks.0.0", sd, self.device)
@@ -386,9 +387,22 @@ class UNetEstimatorTtnn:
         emb = 1000.0 * t.unsqueeze(1) * self.emb_freqs.unsqueeze(0).to(t.device)
         return torch.cat([emb.sin(), emb.cos()], dim=-1)
 
-    def _build_attn_mask(self, mask: torch.Tensor, T: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    ESTIMATOR_STATIC_CHUNK_SIZE = 50
+
+    def _build_attn_mask(
+        self, mask: torch.Tensor, T: int, device: ttnn.MeshDevice, streaming: bool = False
+    ) -> ttnn.Tensor:
         mask_2d = mask.squeeze(1).unsqueeze(1).expand(-1, T, -1)
-        bias = (1.0 - mask_2d.float()) * -1.0e10
+        if streaming:
+            pos_idx = torch.arange(T, device=mask.device)
+            block_value = (
+                torch.div(pos_idx, self.ESTIMATOR_STATIC_CHUNK_SIZE, rounding_mode="trunc") + 1
+            ) * self.ESTIMATOR_STATIC_CHUNK_SIZE
+            chunk_mask = pos_idx.unsqueeze(0) < block_value.unsqueeze(1)
+            mask_2d = mask_2d.bool() & chunk_mask.unsqueeze(0)
+            bias = torch.where(mask_2d, torch.tensor(0.0), torch.tensor(-1.0e10))
+        else:
+            bias = (1.0 - mask_2d.float()) * -1.0e10
         bias = bias.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
         return _to_tile(bias, device)
 
@@ -462,7 +476,7 @@ class UNetEstimatorTtnn:
 
         x_tt = _to_tile(x_cat, self.device)
         mask_tt = _to_tile(mask_btc, self.device)
-        attn_mask_tt = self._build_attn_mask(mask, T, self.device)
+        attn_mask_tt = self._build_attn_mask(mask, T, self.device, streaming=streaming)
 
         x_tt = self._device_forward(x_tt, mask_tt, attn_mask_tt, t_emb_tt, B, T)
 
@@ -470,17 +484,24 @@ class UNetEstimatorTtnn:
         out = out[:, :T_orig, :].permute(0, 2, 1).contiguous()
         return out
 
-    def init_trace(self, B: int, T_orig: int, mask: torch.Tensor) -> bool:
+    def init_trace(self, B: int, T_orig: int, mask: torch.Tensor, streaming: bool = False) -> bool:
         """Capture a device trace for repeated NFE steps with fixed shapes.
 
         Args:
             B: batch size (2 for CFG)
             T_orig: original mel length (before padding)
             mask: [B, 1, T_orig] mask tensor
+            streaming: if True, use chunked-causal attention mask
 
         Returns:
             True if trace was captured successfully, False if trace region too small.
         """
+        if hasattr(self, "_trace_id") and self._trace_id is not None and getattr(self, "_trace_T_orig", None) == T_orig:
+            return True
+
+        if hasattr(self, "_trace_id") and self._trace_id is not None:
+            self.release_trace()
+
         T_pad = ((T_orig + 31) // 32) * 32
         if T_pad != T_orig:
             mask = torch.nn.functional.pad(mask, (0, T_pad - T_orig))
@@ -492,7 +513,7 @@ class UNetEstimatorTtnn:
 
         mask_btc = mask.permute(0, 2, 1).contiguous()
         self._trace_mask_tt = _to_tile(mask_btc, self.device)
-        self._trace_attn_mask_tt = self._build_attn_mask(mask, T, self.device)
+        self._trace_attn_mask_tt = self._build_attn_mask(mask, T, self.device, streaming=streaming)
 
         self._trace_x_buf = ttnn.zeros(
             (B, T, self.in_channels), dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=self.device
@@ -542,18 +563,16 @@ class UNetEstimatorTtnn:
         T_orig = self._trace_T_orig
 
         t_emb = self._sinusoidal_pos_emb(t)
-        t_emb_tt = _to_tile(t_emb, self.device)
-        t_emb_tt = self.time_linear1(t_emb_tt)
-        t_emb_tt = ttnn.silu(t_emb_tt)
-        t_emb_tt = self.time_linear2(t_emb_tt)
+        t_emb = torch.nn.functional.linear(t_emb, self._time_w1, self._time_b1)
+        t_emb = torch.nn.functional.silu(t_emb)
+        t_emb = torch.nn.functional.linear(t_emb, self._time_w2, self._time_b2)
 
         if x_cat.shape[1] < T:
             pad_len = T - x_cat.shape[1]
             x_cat = torch.nn.functional.pad(x_cat, (0, 0, 0, pad_len))
 
         x_host = ttnn.from_torch(x_cat, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT)
-        t_emb_host = ttnn.to_torch(t_emb_tt)
-        t_emb_host_tt = ttnn.from_torch(t_emb_host, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT)
+        t_emb_host_tt = ttnn.from_torch(t_emb, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT)
 
         ttnn.copy_host_to_device_tensor(x_host, self._trace_x_buf)
         ttnn.copy_host_to_device_tensor(t_emb_host_tt, self._trace_t_emb_buf)

@@ -25,6 +25,21 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
+STATIC_CHUNK_SIZE = 25
+UP_LAYER_STRIDE = 2
+
+
+def subsequent_chunk_mask(size: int, chunk_size: int, device: torch.device = torch.device("cpu")) -> torch.Tensor:
+    pos_idx = torch.arange(size, device=device)
+    block_value = (torch.div(pos_idx, chunk_size, rounding_mode="trunc") + 1) * chunk_size
+    return pos_idx.unsqueeze(0) < block_value.unsqueeze(1)
+
+
+def _make_additive_chunk_mask(T: int, chunk_size: int, device: torch.device = torch.device("cpu")) -> torch.Tensor:
+    bool_mask = subsequent_chunk_mask(T, chunk_size, device)
+    additive = torch.where(bool_mask, torch.tensor(0.0), torch.tensor(float("-inf")))
+    return additive.unsqueeze(0).unsqueeze(0)
+
 
 def _make_espnet_pos_emb(seq_len: int, d_model: int) -> torch.Tensor:
     """Generate ESPnet sinusoidal relative position encoding.
@@ -222,10 +237,15 @@ class UpsampleConformerEncoder(torch.nn.Module):
         pos_emb = _make_espnet_pos_emb(T, self.d_model)
         return x, pos_emb
 
-    def _pre_lookahead(self, x: torch.Tensor) -> torch.Tensor:
+    def _pre_lookahead(self, x: torch.Tensor, context: Optional[torch.Tensor] = None) -> torch.Tensor:
         residual = x
         h = x.transpose(1, 2)
-        h = F.pad(h, (0, 3), mode="constant", value=0.0)
+        if context is not None and context.shape[1] > 0:
+            ctx = context.transpose(1, 2)
+            h = torch.cat([h, ctx], dim=2)
+            h = F.pad(h, (0, 3 - context.shape[1]), mode="constant", value=0.0)
+        else:
+            h = F.pad(h, (0, 3), mode="constant", value=0.0)
         h = F.conv1d(h, self.pre_la_conv1_w, self.pre_la_conv1_b)
         h = F.leaky_relu(h)
         h = F.pad(h, (2, 0), mode="constant", value=0.0)
@@ -241,20 +261,41 @@ class UpsampleConformerEncoder(torch.nn.Module):
         return h.transpose(1, 2)
 
     @torch.no_grad()
-    def forward(self, token_emb: torch.Tensor) -> torch.Tensor:
-        """Full encoder forward (non-streaming).
+    def forward(
+        self,
+        token_emb: torch.Tensor,
+        streaming: bool = False,
+        context: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Encoder forward.
 
         Args:
             token_emb: [1, T_tokens, 512] — output of input_embedding * mask
+            streaming: if True, use chunked-causal attention (static_chunk_size=25)
+            context: [1, pre_lookahead_len, 512] — embedded context tokens for
+                     streaming with finalize=False (last pre_lookahead_len tokens)
 
         Returns:
             [1, T_mel, 512] — encoder output (before encoder_proj)
         """
         x, pos_emb = self._embed(token_emb, self.embed_linear_w, self.embed_linear_b, self.embed_ln_w, self.embed_ln_b)
-        x = self._pre_lookahead(x)
+
+        ctx_embedded = None
+        if context is not None and context.shape[1] > 0:
+            ctx_embedded, _ = self._embed(
+                context, self.embed_linear_w, self.embed_linear_b, self.embed_ln_w, self.embed_ln_b
+            )
+
+        x = self._pre_lookahead(x, ctx_embedded)
+
+        T = x.shape[1]
+        if streaming:
+            attn_mask = _make_additive_chunk_mask(T, STATIC_CHUNK_SIZE, x.device)
+        else:
+            attn_mask = None
 
         for block in self.blocks:
-            x = block(x, pos_emb, None)
+            x = block(x, pos_emb, attn_mask)
 
         x = self._upsample(x)
 
@@ -262,8 +303,14 @@ class UpsampleConformerEncoder(torch.nn.Module):
             x, self.up_embed_linear_w, self.up_embed_linear_b, self.up_embed_ln_w, self.up_embed_ln_b
         )
 
+        T_up = x.shape[1]
+        if streaming:
+            up_attn_mask = _make_additive_chunk_mask(T_up, STATIC_CHUNK_SIZE * UP_LAYER_STRIDE, x.device)
+        else:
+            up_attn_mask = None
+
         for block in self.up_blocks:
-            x = block(x, pos_emb, None)
+            x = block(x, pos_emb, up_attn_mask)
 
         x = F.layer_norm(x, (self.d_model,), self.after_norm_w, self.after_norm_b)
         return x

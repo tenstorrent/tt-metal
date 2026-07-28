@@ -23,7 +23,9 @@ from models.demos.cosyvoice.tt.model_config import FLOW
 
 
 class CausalConditionalCFM:
-    """Euler ODE solver with CFG for flow matching (non-streaming)."""
+    """Euler ODE solver with CFG for flow matching."""
+
+    STREAMING_T_MAX = 256
 
     def __init__(self, estimator: Union[UNetEstimator, "UNetEstimatorTtnn"], n_timesteps: int | None = None):
         self.estimator = estimator
@@ -56,6 +58,7 @@ class CausalConditionalCFM:
         mask: torch.Tensor,
         spks: torch.Tensor,
         cond: torch.Tensor,
+        streaming: bool = False,
     ) -> torch.Tensor:
         """Euler ODE solver with classifier-free guidance.
 
@@ -66,6 +69,7 @@ class CausalConditionalCFM:
             mask: [1, 1, T]
             spks: [1, 80] speaker embedding
             cond: [1, 80, T] prompt mel condition
+            streaming: if True, use chunked-causal attn mask and skip trace
 
         Returns:
             [1, 80, T] final mel
@@ -73,6 +77,9 @@ class CausalConditionalCFM:
         t = t_span[0].unsqueeze(0)
         dt = t_span[1] - t_span[0]
         T_orig = x.size(2)
+
+        if streaming and self._use_trace and T_orig <= self.STREAMING_T_MAX:
+            return self._solve_euler_streaming_traced(x, t_span, mu, mask, spks, cond, T_orig)
 
         x_in = torch.zeros([2, 80, T_orig], device=x.device, dtype=spks.dtype)
         mask_in = torch.zeros([2, 1, T_orig], device=x.device, dtype=spks.dtype)
@@ -84,6 +91,16 @@ class CausalConditionalCFM:
         trace_initialized = False
         trace_active = False
 
+        if (
+            not streaming
+            and self._use_trace
+            and hasattr(self.estimator, "_trace_id")
+            and self.estimator._trace_id is not None
+        ):
+            if getattr(self.estimator, "_trace_T_orig", None) == T_orig:
+                trace_active = True
+                trace_initialized = True
+
         for step in range(1, len(t_span)):
             x_in[:] = x
             mask_in[:] = mask
@@ -93,13 +110,12 @@ class CausalConditionalCFM:
             cond_in[0] = cond
 
             if trace_active:
-                T_pad = ((T_orig + 31) // 32) * 32
-                x_cat = self._assemble_input(x_in, mu_in, spks_in, cond_in, T_pad)
+                x_cat = self._assemble_input(x_in, mu_in, spks_in, cond_in, T_orig)
                 dphi_dt = self.estimator.forward_traced(x_cat, t_in)
             else:
-                dphi_dt = self.estimator.forward(x_in, mask_in, mu_in, t_in, spks_in, cond_in, streaming=False)
+                dphi_dt = self.estimator.forward(x_in, mask_in, mu_in, t_in, spks_in, cond_in, streaming=streaming)
 
-                if self._use_trace and not trace_initialized:
+                if not streaming and self._use_trace and not trace_initialized:
                     trace_initialized = True
                     trace_active = self.estimator.init_trace(2, T_orig, mask_in)
 
@@ -110,10 +126,63 @@ class CausalConditionalCFM:
             t = t + dt
             dt = t_span[step + 1] - t if step < len(t_span) - 1 else dt
 
-        if trace_active:
-            self.estimator.release_trace()
-
         return x
+
+    def _solve_euler_streaming_traced(
+        self,
+        x: torch.Tensor,
+        t_span: torch.Tensor,
+        mu: torch.Tensor,
+        mask: torch.Tensor,
+        spks: torch.Tensor,
+        cond: torch.Tensor,
+        T_orig: int,
+    ) -> torch.Tensor:
+        """Streaming Euler solver with fixed-T trace (pad to STREAMING_T_MAX)."""
+        T_max = self.STREAMING_T_MAX
+
+        if getattr(self.estimator, "_trace_T_orig", None) != T_max:
+            stream_mask = torch.ones([2, 1, T_max], dtype=spks.dtype)
+            self.estimator.init_trace(2, T_max, stream_mask, streaming=True)
+
+        t = t_span[0].unsqueeze(0)
+        dt = t_span[1] - t_span[0]
+
+        x_pad = torch.zeros([1, 80, T_max], device=x.device, dtype=spks.dtype)
+        mu_pad = torch.zeros([1, 80, T_max], device=x.device, dtype=spks.dtype)
+        mask_pad = torch.zeros([1, 1, T_max], device=x.device, dtype=spks.dtype)
+        cond_pad = torch.zeros([1, 80, T_max], device=x.device, dtype=spks.dtype)
+
+        x_pad[:, :, :T_orig] = x
+        mu_pad[:, :, :T_orig] = mu
+        mask_pad[:, :, :T_orig] = mask
+        cond_pad[:, :, :T_orig] = cond
+
+        x_in = torch.zeros([2, 80, T_max], device=x.device, dtype=spks.dtype)
+        mu_in = torch.zeros([2, 80, T_max], device=x.device, dtype=spks.dtype)
+        spks_in = torch.zeros([2, 80], device=x.device, dtype=spks.dtype)
+        cond_in = torch.zeros([2, 80, T_max], device=x.device, dtype=spks.dtype)
+        t_in = torch.zeros([2], device=x.device, dtype=spks.dtype)
+
+        mu_in[0] = mu_pad
+        spks_in[0] = spks
+        cond_in[0] = cond_pad
+
+        for step in range(1, len(t_span)):
+            x_in[:] = x_pad
+            t_in[:] = t.unsqueeze(0)
+
+            x_cat = self._assemble_input(x_in, mu_in, spks_in, cond_in, T_max)
+            dphi_dt = self.estimator.forward_traced(x_cat, t_in)
+
+            dphi_dt_cond, dphi_dt_uncond = torch.split(dphi_dt, [1, 1], dim=0)
+            dphi_dt = (1.0 + self.inference_cfg_rate) * dphi_dt_cond - self.inference_cfg_rate * dphi_dt_uncond
+
+            x_pad = x_pad + dt * dphi_dt
+            t = t + dt
+            dt = t_span[step + 1] - t if step < len(t_span) - 1 else dt
+
+        return x_pad[:, :, :T_orig]
 
     @torch.no_grad()
     def inference(
@@ -122,6 +191,7 @@ class CausalConditionalCFM:
         mask: torch.Tensor,
         spks: torch.Tensor,
         cond: torch.Tensor,
+        streaming: bool = False,
     ) -> torch.Tensor:
         """Full CFM inference: noise → mel via Euler solver.
 
@@ -130,6 +200,7 @@ class CausalConditionalCFM:
             mask: [1, 1, T]
             spks: [1, 80]
             cond: [1, 80, T]
+            streaming: if True, use chunked-causal attn in estimator (no trace)
 
         Returns:
             [1, 80, T] generated mel
@@ -138,4 +209,4 @@ class CausalConditionalCFM:
         t_span = torch.linspace(0, 1, self.n_timesteps + 1, device=mu.device, dtype=mu.dtype)
         if FLOW.decoder.t_scheduler == "cosine":
             t_span = 1 - torch.cos(t_span * 0.5 * torch.pi)
-        return self.solve_euler(x, t_span, mu, mask, spks, cond)
+        return self.solve_euler(x, t_span, mu, mask, spks, cond, streaming=streaming)
