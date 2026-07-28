@@ -72,10 +72,20 @@ private:
     // windows per socket, so kNSockets * nwin <= 16 (12 MiB -> nwin=7 -> 14). Raising further needs
     // SOCKET_WIN_BASE moved too.
     static constexpr uint32_t kHRingWords = 3145728;
-    // Per-read page cap, matching test_x280_realprof's --maxpages default. Without it one read can pull the
-    // WHOLE FIFO (196607 pages at 12 MiB) into a single decode pass before the sender is acked, which stalls
-    // the relay behind one long host turn; capping keeps read/ack cadence tight.
-    static constexpr uint32_t kMaxPagesPerRead = 1024;
+    // Per-read page cap. 0 = UNCAPPED (take whatever the FIFO holds, bounded only by fifo_pages-1).
+    // Overridable at runtime with TT_METAL_PERF_DEBUG_MAX_PAGES.
+    //
+    // This was 1024 (64 KB/read), ported from test_x280_realprof's --maxpages default on the theory that
+    // bounding one host turn keeps the read/ack cadence tight. That reasoning is WRONG for high-volume real
+    // models: the fixed per-read cost (socket read + decode + inline Tracy push) dominates, so a small cap
+    // just multiplies it, the FIFO stays full, and the RELAY sits in HOST-WAIT -- which back-pressures the
+    // reader and finally stalls the worker cores. Measured on UFLD-v2 (~99M markers), busier socket:
+    //     cap 1024 (64 KB)  -> 24,669 producer stall zones, 9,855 reads
+    //     cap 16384 (1 MB)  ->  9,223 producer stall zones,   617 reads
+    //     cap 0 (uncapped)  ->    783 producer stall zones,    54 reads
+    // Monotonic, so uncapped is the default. Note the ack is issued by read() itself, so a bigger read acks
+    // MORE data sooner rather than later -- the original concern was backwards.
+    static constexpr uint32_t kMaxPagesPerRead = 0;
     static constexpr uint32_t kPageSize = 64;
     static constexpr uint32_t kNRisc = 5;
 

@@ -51,6 +51,21 @@ bool hart_zones_enabled() {
 }
 }  // namespace
 
+// Per-read page cap, overridable at runtime for tuning: TT_METAL_PERF_DEBUG_MAX_PAGES (0 = uncapped, take
+// whatever the FIFO holds). The compiled default came from the synthetic benchmark; on high-volume real models
+// (UFLD-v2: ~99M markers) the busier socket pins at the cap on every read, which is a suspect for the relay
+// sitting in HOST-WAIT.
+uint32_t max_pages_per_read(uint32_t compiled_default) {
+    static const uint32_t v = [compiled_default] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_MAX_PAGES");
+        if (s == nullptr || *s == '\0') {
+            return compiled_default;
+        }
+        return static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+    }();
+    return v;
+}
+
 PerfDebugProfiler::DeviceCtx::DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::~DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
@@ -314,8 +329,9 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
         if (np >= fifo_pages) {
             np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
         }
-        if (np > kMaxPagesPerRead) {
-            np = kMaxPagesPerRead;  // bound one host turn; the loop takes the rest next iteration
+        const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
+        if (cap != 0 && np > cap) {
+            np = cap;  // bound one host turn; the loop takes the rest next iteration
         }
         if (ddbg && dbg_iters < 40) {
             log_info(tt::LogMetal, "[drain sock={}] iter={} np={} fifo_pages={}", sock_idx, dbg_iters, np, fifo_pages);
