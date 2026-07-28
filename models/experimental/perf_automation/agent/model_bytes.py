@@ -119,7 +119,21 @@ _UNIT_BY_TAG = {
     "video-classification": "inference",
     "visual-document-retrieval": "inference",
     "audio-classification": "inference",
+    # A source-separation / speech-enhancement model runs one forward pass over an audio segment --
+    # a perfectly well-defined unit. It was missing, so an audio-to-audio model got no ceiling at all.
+    "audio-to-audio": "inference",
+    # TAPAS-style table QA is an encoder forward pass over the flattened table + question.
+    "table-question-answering": "inference",
 }
+
+# Tags with NO defined unit of work, listed deliberately so the set cannot grow by accident:
+#   reinforcement-learning   a policy rollout has no fixed weight-read-per-unit; the episode length is
+#                            the workload and it is not a model property.
+#   tabular-classification   these are gradient-boosted trees / sklearn estimators far more often than
+#   tabular-regression       neural nets, so there is no weight stream to bound at all.
+# Anything here yields no unit, no conditions and no ceiling -- the same safe direction as everywhere
+# else in this module: publish nothing rather than a number that reads like a target.
+NO_UNIT_TAGS = ("reinforcement-learning", "tabular-classification", "tabular-regression")
 
 _UNIT_LABEL = {"token": "tok/s/u", "step": "steps/s", "inference": "inferences/s"}
 
@@ -277,6 +291,104 @@ def weight_bytes(
         "shards": len(files),
         "unit": unit,
     }
+
+
+# DEFAULT MEASUREMENT CONDITIONS, keyed on the unit of work rather than on a model family.
+#
+# The distinction that decides these: a condition the model's own config STATES is read, never
+# defaulted; a condition it does NOT state needs a tool default, because otherwise whoever writes the
+# perf test picks one and nobody records it.
+#
+#   token      ISL and OSL are runtime choices, absent from every config.json -- which is exactly how
+#              a generated test ended up on a six-token prompt. 128 in / 128 out is the standard
+#              short-context benchmark point, so that is the fallback.
+#   step       50 denoise steps -- diffusers' own documented default for
+#              `StableDiffusionPipeline.__call__(num_inference_steps: int = 50)`, so the number has a
+#              citable source rather than being a round figure someone liked. The RATE is per step, so
+#              the count only bounds how long the measurement runs.
+#   inference  one forward pass at batch 1. Input size is a model property -- an image processor's
+#              `image_size` (ViT: 224) and a feature extractor's `chunk_length` (Whisper: 30 s) are
+#              read from the config, never defaulted. Only the TEXT case has no such property:
+#              `max_position_embeddings` is a cap, not a workload, and HF pipelines pad to the batch,
+#              so there is no HF number to inherit. 384 is MLPerf's BERT inference sequence length --
+#              a published reference, chosen over a figure picked for internal consistency.
+_DEFAULT_CONDITIONS = {
+    "token": {"isl": 128, "osl": 128, "batch": 1},
+    "step": {"steps": 50, "batch": 1},
+    "inference": {"batch": 1, "seq_len": 384},
+}
+
+
+def default_conditions(unit: str, cfg: dict = None) -> dict:
+    """The conditions a perf measurement should default to for this unit of work.
+
+    Anything the config states wins over the fallback: `sample_size` fixes a diffusion model's
+    resolution, `max_position_embeddings` caps a text model's sequence length. Returns {} for a unit
+    with no defined unit of work -- the same safe direction as the ceiling, where no unit means no
+    published number rather than an invented one.
+    """
+    unit = str(unit or "").strip().lower()
+    base = dict(_DEFAULT_CONDITIONS.get(unit) or {})
+    if not base:
+        return {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    # RESOLUTION. A UNet's `sample_size` is the LATENT size, not pixels: diffusers documents
+    # height as `unet.config.sample_size * vae_scale_factor`, so SD-1.5's sample_size=64 is a
+    # 512px image. Reporting 64px would understate the workload by 8x per side. Only convert when
+    # the scale factor is actually known -- otherwise say latent, because a guessed multiplier is
+    # how a plausible-looking wrong number gets into a report.
+    latent = cfg.get("sample_size")
+    pixels = (cfg.get("vision_config") or {}).get("image_size") or cfg.get("image_size")
+    scale = cfg.get("vae_scale_factor") or (cfg.get("vae_config") or {}).get("scale_factor")
+    if unit in ("step", "inference"):
+        if isinstance(pixels, (int, float)) and pixels > 0:
+            base["resolution"] = int(pixels)
+        elif isinstance(latent, (int, float)) and latent > 0:
+            if isinstance(scale, (int, float)) and scale > 0:
+                base["resolution"] = int(latent * scale)
+            else:
+                base["latent"] = int(latent)
+    if "resolution" in base or "latent" in base:
+        # seq_len is the TEXT fallback for a single forward pass; a model that states an image size is
+        # not a text model, and reporting both would describe a workload that does not exist.
+        base.pop("seq_len", None)
+    # AUDIO. The workload for an audio model is a DURATION -- reporting "seq_len 128" for a speech
+    # enhancer describes nothing. Read it from the feature extractor's own config (Whisper carries
+    # chunk_length=30); when absent, publish no duration rather than invent one, since a segment
+    # length is a preprocessing choice and not something to guess.
+    secs = cfg.get("chunk_length_s") or cfg.get("chunk_length") or cfg.get("max_length_s")
+    if isinstance(secs, (int, float)) and secs > 0 and unit == "inference":
+        base["seconds"] = float(secs)
+        base.pop("seq_len", None)
+    cap = cfg.get("max_position_embeddings")
+    if isinstance(cap, (int, float)) and cap > 0:
+        for k in ("isl", "osl", "seq_len"):
+            if k in base and base[k] > cap:
+                base[k] = int(cap)
+    return base
+
+
+def conditions_label(conds: dict) -> str:
+    """How the conditions read in a report: "ISL 128 / OSL 128, batch 1"."""
+    c = conds if isinstance(conds, dict) else {}
+    parts = []
+    if "isl" in c:
+        parts.append("ISL %d" % c["isl"])
+    if "osl" in c:
+        parts.append("OSL %d" % c["osl"])
+    if "steps" in c:
+        parts.append("%d steps" % c["steps"])
+    if "seq_len" in c and "isl" not in c:
+        parts.append("seq_len %d" % c["seq_len"])
+    if "resolution" in c:
+        parts.append("%dpx" % c["resolution"])
+    if "latent" in c:
+        parts.append("latent %d" % c["latent"])
+    if "seconds" in c:
+        parts.append("%gs audio" % c["seconds"])
+    if "batch" in c:
+        parts.append("batch %d" % c["batch"])
+    return ", ".join(parts)
 
 
 def parse_overrides(spec: str):

@@ -29,6 +29,17 @@ import ttnn
 
 PERF_MAX_NEW_TOKENS = int(os.environ.get("TT_PERF_MAX_NEW_TOKENS", "4"))
 PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
+# ISL / OSL -- THE MEASUREMENT CONDITIONS, and they default to a REALISTIC operating point rather
+# than to whatever example prompt reads naturally. Left unspecified, a generated perf test used the
+# shortest prompt that proves the pipeline runs -- on llama3_1_8b_p150 that was "The capital of
+# France is", six tokens, and nothing recorded that the throughput number was a six-token one.
+# Decode is weight-bandwidth bound so ISL barely moves tok/s/u (measured: 0.5% from ISL 6 to 128),
+# but TTFT, prefill cost and any long-context claim all depend on it, so the default must be a
+# figure someone would actually quote. 128 in / 128 out is the industry-standard short-context
+# benchmark point. Both are env-overridable; the markers below record what actually ran, so a
+# reader never has to guess the conditions.
+PERF_ISL_TOKENS = int(os.environ.get("TT_PERF_ISL_TOKENS", "128"))
+PERF_OSL_TOKENS = int(os.environ.get("TT_PERF_OSL_TOKENS", "128"))
 # DEPTH. A POSITIVE TT_PERF_LAYERS caps the profiled window so a deep model's marker stream (x mesh
 # chips) does not overflow the profiler; the tool sends that number for tracy runs. The variable being
 # ABSENT means ALL LAYERS -- the tool expresses "whole model" by REMOVING the cap, never by sending a
@@ -102,7 +113,11 @@ def test_<task>_perf(device_params, device):
         def _build_for_perf(dev):
             from <model>.tt.pipeline import build_pipeline   # lift the real import
             return build_pipeline(dev)                        # + the same build args the demo uses
-        _prompt_ids = ...
+        # ISL: build the prompt to EXACTLY PERF_ISL_TOKENS tokens rather than writing an example
+        # sentence, so the measurement condition is the tool's choice and not the generator's.
+        _prompt_ids = prompt_ids_for_isl(<tokenizer>, PERF_ISL_TOKENS)
+        print("PERF_ISL_TOKENS=%d" % _prompt_ids.shape[-1], flush=True)
+        print("PERF_OSL_TOKENS=%d" % PERF_OSL_TOKENS, flush=True)
         # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets
         # traced. Falls back to the single decode contract for pipelines that expose only decode_step.
         measure_adapter(PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1), device)
@@ -1108,6 +1123,11 @@ def generate_perf_test(
         "single-device pipelines). When TT_PERF_TRACE is set and the source's open function accepts "
         "trace_region_size / num_command_queues, pass them through that open; otherwise open exactly as the "
         "source does (the trace block stays guarded and simply falls back).\n"
+        "- ISL / OSL ARE NOT YOURS TO CHOOSE. Build the prompt to EXACTLY PERF_ISL_TOKENS tokens with "
+        "agent.perf_test_gen.prompt_ids_for_isl(tokenizer, PERF_ISL_TOKENS) -- do NOT write an example "
+        "sentence and do NOT pick a length. Left to a model, this became a six-token prompt whose length "
+        "nothing recorded, so the reported throughput silently described a six-token context. Echo "
+        "PERF_ISL_TOKENS= and PERF_OSL_TOKENS= so the conditions are in the log.\n"
         "- BOUNDED + profiler-safe so tracy's 12000-marker buffer never overflows: cap the work (decode "
         "loop via env TT_PERF_MAX_NEW_TOKENS default 4, or a SINGLE forward if there's no loop), AND drain "
         "the profiler every TT_PERF_FLUSH_EVERY ops (default 32) + a final ttnn.ReadDeviceProfiler. DRAIN "

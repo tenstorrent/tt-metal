@@ -218,12 +218,17 @@ def score(target: PerfTarget, forward_ms: float) -> dict:
     bw_util = measured / theo
     lo, _hi = target.band
     if measured > theo:
+        # Ordered BEFORE the no-band check on purpose, and it is NOT a stop signal -- exit_policy
+        # terminates on IN_BAND only. Beating the number the target carries is a SANITY flag that the
+        # floor form needs too: it is how the report separates "past the pinned BASELINE floor", which
+        # an optimized build legitimately does, from "beats this build's OWN floor", which no kernel
+        # does and which means a stale pairing (a 2-layer measurement against a 16-layer floor). Moving
+        # the no-band check above this silently deleted that distinction.
         status = "ABOVE_BAND"
     elif not lo:
-        # NO BAND to be in. A zero band means the target carries no bandwidth-derived achievable
-        # range (target_from_floor_ms), and `measured >= 0` would otherwise read IN_BAND for every
-        # measurement ever taken -- declaring an arbitrary run "done" against a range that was never
-        # computed from the hardware.
+        # NO BAND to be in. A zero band means the target carries no bandwidth-derived achievable range
+        # (target_from_floor_ms), and `measured >= 0` would otherwise read IN_BAND for every measurement
+        # ever taken -- declaring an arbitrary run "done" against a range never computed from hardware.
         status = "NO_BAND"
     elif measured >= lo:
         status = "IN_BAND"

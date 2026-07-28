@@ -245,3 +245,128 @@ def test_an_empty_config_yields_no_unit():
     mb = _mb()
     for cfg in ({}, None, {"architectures": []}, {"architectures": None}):
         assert mb.unit_from_config(cfg) == ""
+
+
+# --- default measurement CONDITIONS, keyed on the unit of work ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "unit,cfg,expect",
+    [
+        ("token", {}, "ISL 128, OSL 128, batch 1"),
+        ("step", {}, "50 steps, batch 1"),
+        ("step", {"sample_size": 128, "vae_scale_factor": 8}, "50 steps, 1024px, batch 1"),
+        ("step", {"sample_size": 64}, "50 steps, latent 64, batch 1"),
+        ("inference", {}, "seq_len 384, batch 1"),
+        ("inference", {"image_size": 224}, "224px, batch 1"),
+        ("", {}, ""),
+        ("nonsense", {}, ""),
+    ],
+)
+def test_default_conditions_are_keyed_on_the_unit_not_the_model_family(unit, cfg, expect):
+    """ISL/OSL only mean something for an autoregressive unit. A diffusion model's condition is steps
+    and resolution; a classifier's is one forward at batch 1. One default for all three would describe
+    a workload that does not exist for two of them."""
+    mb = _mb()
+    assert mb.conditions_label(mb.default_conditions(unit, cfg)) == expect
+
+
+def test_isl_osl_default_to_the_standard_short_context_point():
+    """THE GAP THIS CLOSES: ISL and OSL appear in no config.json, so whoever writes the perf test picks
+    them -- and an LLM asked to fill in a prompt picked six tokens, which nothing then recorded."""
+    c = _mb().default_conditions("token")
+    assert c["isl"] == 128 and c["osl"] == 128 and c["batch"] == 1
+
+
+def test_a_config_stated_limit_wins_over_the_default():
+    """A condition the model states is read, never defaulted: asking for 128 tokens of context from a
+    model whose max_position_embeddings is 64 would simply fail."""
+    mb = _mb()
+    assert mb.default_conditions("token", {"max_position_embeddings": 64})["isl"] == 64
+    assert mb.default_conditions("inference", {"max_position_embeddings": 32})["seq_len"] == 32
+
+
+def test_resolution_and_seq_len_are_mutually_exclusive():
+    """seq_len is the TEXT fallback; a model stating an image size is not a text model."""
+    c = _mb().default_conditions("inference", {"image_size": 384})
+    assert c["resolution"] == 384 and "seq_len" not in c
+
+
+def test_a_unit_less_model_gets_no_conditions_and_no_ceiling():
+    """Same safe direction as the ceiling: no unit of work -> publish nothing rather than invent it."""
+    mb = _mb()
+    for tag in ("reinforcement-learning", "tabular-regression", "not-a-tag", ""):
+        assert mb.unit_for_tag(tag) == ""
+        assert mb.default_conditions(mb.unit_for_tag(tag)) == {}
+
+
+def test_the_step_count_is_the_diffusers_documented_default():
+    """50, not a round number someone liked: diffusers documents
+    `StableDiffusionPipeline.__call__(num_inference_steps: int = 50)`, so the default is citable."""
+    assert _mb().default_conditions("step")["steps"] == 50
+
+
+def test_a_unets_sample_size_is_latent_not_pixels():
+    """THE TRAP: diffusers documents height as `unet.config.sample_size * vae_scale_factor`, so
+    SD-1.5's sample_size=64 is a 512px image. Reporting 64px understates the workload 8x per side."""
+    mb = _mb()
+    assert mb.default_conditions("step", {"sample_size": 64, "vae_scale_factor": 8})["resolution"] == 512
+    assert mb.default_conditions("step", {"sample_size": 128, "vae_scale_factor": 8})["resolution"] == 1024
+
+
+def test_an_unknown_scale_factor_reports_latent_rather_than_guessing_pixels():
+    """8 is the SD-family VAE factor, not a law. A guessed multiplier is how a plausible-looking wrong
+    number reaches a report, so say what is known instead."""
+    c = _mb().default_conditions("step", {"sample_size": 64})
+    assert c.get("latent") == 64 and "resolution" not in c
+
+
+def test_an_image_processor_size_is_already_pixels():
+    """`image_size` on a vision config is pixels, so it must NOT be scaled."""
+    assert _mb().default_conditions("inference", {"image_size": 224})["resolution"] == 224
+
+
+def test_every_hf_tag_with_a_definable_unit_of_work_has_one():
+    """Coverage is checkable, not a matter of opinion: HF publishes the tag list. Two were genuinely
+    missing -- audio-to-audio (a speech enhancer IS one forward pass over a segment) and
+    table-question-answering (TAPAS is an encoder pass) -- so those models got no ceiling at all."""
+    mb = _mb()
+    import sys as _s
+    from pathlib import Path as _P
+
+    _s.path.insert(0, str(_P(__file__).resolve().parents[3] / "../scripts/tt_hw_planner/tests"))
+    from test_pipeline_category_coverage import HF_TAGS  # the pinned HF /api/tasks snapshot
+
+    unitless = sorted(t for t in HF_TAGS if not mb.unit_for_tag(t))
+    assert unitless == sorted(mb.NO_UNIT_TAGS), (
+        "a tag lost or gained a unit without the deliberate list being updated: %s" % unitless
+    )
+
+
+def test_the_unitless_set_is_deliberate_and_small():
+    """Three tags have no fixed weight-read-per-unit: an RL rollout's length is not a model property,
+    and tabular models are usually trees rather than nets. Pinned so the set cannot grow silently."""
+    mb = _mb()
+    assert len(mb.NO_UNIT_TAGS) == 3
+    for tag in mb.NO_UNIT_TAGS:
+        assert mb.unit_for_tag(tag) == "" and mb.default_conditions(mb.unit_for_tag(tag)) == {}
+
+
+def test_an_audio_workload_is_a_duration_not_a_token_count():
+    """ "seq_len 128" describes nothing for a speech enhancer. Whisper carries chunk_length=30."""
+    mb = _mb()
+    c = mb.default_conditions("inference", {"chunk_length": 30})
+    assert c["seconds"] == 30 and "seq_len" not in c
+    assert mb.conditions_label(c) == "30s audio, batch 1"
+
+
+def test_no_audio_duration_is_invented_when_the_config_is_silent():
+    """A segment length is a preprocessing choice; guessing one puts a fabricated condition in a report."""
+    assert "seconds" not in _mb().default_conditions("inference", {})
+
+
+def test_the_text_encoder_sequence_length_is_the_mlperf_reference():
+    """The one condition with no HF number to inherit: max_position_embeddings is a CAP and HF
+    pipelines pad to the batch. 384 is MLPerf's BERT inference sequence length, so the default cites a
+    published reference instead of a figure chosen for internal consistency."""
+    assert _mb().default_conditions("inference")["seq_len"] == 384
