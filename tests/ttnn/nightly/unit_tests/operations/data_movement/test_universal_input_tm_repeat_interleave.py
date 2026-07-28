@@ -191,8 +191,19 @@ def test_sharded_fallback(device, strategy, dim, sharded_output):
     assert_equal(torch_result, ttnn.to_torch(out))
 
 
-# Program-cache: same shape reuses, different shape rebuilds; results stay correct
-def test_program_cache_reuse(device):
+@pytest.fixture
+def isolate_program_cache(device):
+    """Ensure each test starts with an empty program cache and cleans up after."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
+# Program-cache: same shape reuses (no new entry), different shape rebuilds (new entry); results
+# stay correct throughout. Asserts actual cache size, not just numerical correctness, so a
+# regression in cache-hit/rebuild behavior fails this test even if results still happen to match.
+def test_program_cache_reuse(device, isolate_program_cache):
     def run(shape, repeats, dim):
         torch_input = torch.rand(*shape, dtype=torch.bfloat16)
         torch_result = torch.repeat_interleave(torch_input, repeats, dim=dim)
@@ -200,7 +211,25 @@ def test_program_cache_reuse(device):
         out = ttnn.repeat_interleave(x, repeats, dim=dim)
         assert_equal(torch_result, ttnn.to_torch(out))
 
+    assert device.num_program_cache_entries() == 0, "Program cache should be empty before the test"
+
     run((1, 1, 32, 32), 2, 2)
-    run((1, 1, 32, 32), 2, 2)  # same shape -> cache reuse
-    run((1, 1, 64, 32), 2, 2)  # different shape -> rebuild
-    run((1, 1, 32, 32), 3, 1)  # different repeats/dim
+    after_first = device.num_program_cache_entries()
+    assert after_first > 0, "Expected at least one program cache entry after the first call"
+
+    run((1, 1, 32, 32), 2, 2)  # same shape/repeats/dim -> cache reuse, no new entry
+    assert device.num_program_cache_entries() == after_first, (
+        f"Expected cache reuse (still {after_first} entries), " f"got {device.num_program_cache_entries()}"
+    )
+
+    run((1, 1, 64, 32), 2, 2)  # different shape -> rebuild, new entry
+    after_reshape = device.num_program_cache_entries()
+    assert (
+        after_reshape > after_first
+    ), f"Expected a new cache entry after a shape change (>{after_first}), got {after_reshape}"
+
+    run((1, 1, 32, 32), 3, 1)  # different repeats/dim -> rebuild, new entry
+    assert device.num_program_cache_entries() > after_reshape, (
+        f"Expected a new cache entry after a repeats/dim change (>{after_reshape}), "
+        f"got {device.num_program_cache_entries()}"
+    )
