@@ -658,7 +658,11 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, num_tokens, path
         if not w["valid"]:
             bad.append(w)
             continue
-        cycles = w["t_last_credit"] - w["t_first_send"]
+        # End-to-end window closes when the credit for the last token returns. Approach #1 (DRAM_DIRECT)
+        # has no credits at all, so t_last_credit is 0; there is no end-to-end signal, and the send
+        # window IS the measured (DRAM-bounded) rate, so fall back to t_last_send for that mode.
+        end_ts = w["t_last_credit"] if w["t_last_credit"] else w["t_last_send"]
+        cycles = end_ts - w["t_first_send"]
         us = cycles / clock_mhz if clock_mhz else 0.0
         payload = w["tokens_sent"] * w["chunk_size_bytes"]
         gbps = (payload / (us * 1e-6)) / 1e9 if us > 0 else 0.0
