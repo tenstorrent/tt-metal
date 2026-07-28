@@ -93,7 +93,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 7
+      timeout: 3
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -314,13 +314,13 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=3120
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=2940
     '
   test_type: prefill_transformer_determinism
   test_group: module
   skus:
     bh_sc1:
-      timeout: 52
+      timeout: 49
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
