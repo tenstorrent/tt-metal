@@ -318,10 +318,12 @@ class REDUCE_BLOCK_CT_DIM(TemplateParameter):
     fail to compile. (This test does not currently emit ``BLOCK_CT_DIM``.)
     """
 
-    block_ct_dim: int
+    reduce_block_ct_dim: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t REDUCE_BLOCK_CT_DIM = {self.block_ct_dim};"
+        return (
+            f"constexpr std::uint32_t REDUCE_BLOCK_CT_DIM = {self.reduce_block_ct_dim};"
+        )
 
 
 @dataclass
