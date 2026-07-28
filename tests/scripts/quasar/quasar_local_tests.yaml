@@ -52,3 +52,4 @@ tests/tt_metal/tools/profiler/test_device_profiler.py:
     config: 2x3_DISPATCH
     env:
       TT_METAL_DEVICE_PROFILER: 1
+      ARCH_NAME: quasar
