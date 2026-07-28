@@ -8,6 +8,7 @@
 #include "groupnorm_input_mask.hpp"
 
 #include <mutex>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
