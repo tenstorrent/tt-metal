@@ -302,8 +302,10 @@ protected:
         sem.scope = scope;
 
         std::vector<experimental::KernelSpec> kernel_specs;
-        std::vector<experimental::WorkUnitSpec> work_units;
         experimental::ProgramRunArgs params;
+        // WorkUnitSpecs must have DISJOINT target nodes, so kernels sharing a node go into ONE work
+        // unit (a work unit holds a Group of kernels). Grouped here by node, preserving order.
+        std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
         for (size_t i = 0; i < kernels.size(); i++) {
             const auto& k = kernels[i];
             const experimental::KernelSpecName name{"census_k" + std::to_string(i)};
@@ -319,8 +321,17 @@ protected:
                 .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter"}},
                 .hw_config = experimental::DataMovementGen2Config{},
             });
-            work_units.push_back(
-                experimental::WorkUnitSpec{.name = "wu" + std::to_string(i), .kernels = {name}, .target_nodes = k.node});
+            bool placed = false;
+            for (auto& [node, names] : by_node) {
+                if (node == k.node) {
+                    names.push_back(name);
+                    placed = true;
+                    break;
+                }
+            }
+            if (!placed) {
+                by_node.push_back({k.node, {name}});
+            }
             params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = name,
                 .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
@@ -329,6 +340,11 @@ protected:
                      {"increment_times", k.increments},
                      {"is_reporter", k.reporter ? 1u : 0u}}),
             });
+        }
+        std::vector<experimental::WorkUnitSpec> work_units;
+        for (size_t w = 0; w < by_node.size(); w++) {
+            work_units.push_back(experimental::WorkUnitSpec{
+                .name = "wu" + std::to_string(w), .kernels = by_node[w].second, .target_nodes = by_node[w].first});
         }
 
         experimental::ProgramSpec spec{
