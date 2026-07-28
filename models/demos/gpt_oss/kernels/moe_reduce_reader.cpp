@@ -33,6 +33,9 @@ constexpr uint32_t ct_idx_scores = TensorAccessorArgs<ct_idx_act>::next_compile_
 void kernel_main() {
     const uint32_t act_addr = get_arg_val<uint32_t>(0);
     const uint32_t scores_addr = get_arg_val<uint32_t>(1);
+    // Per-core output-tile slice [start_tile, start_tile + n_tiles).
+    const uint32_t start_tile = get_arg_val<uint32_t>(2);
+    const uint32_t n_tiles = get_arg_val<uint32_t>(3);
 
     constexpr auto act_args = TensorAccessorArgs<ct_idx_act>();
     constexpr auto scores_args = TensorAccessorArgs<ct_idx_scores>();
@@ -54,8 +57,11 @@ void kernel_main() {
     noc.async_read_barrier();
     cb_scores.push_back(num_experts);
 
-    // Stream activation: for each output tile i, push the E expert tiles act[e,i].
-    for (uint32_t i = 0; i < num_output_tiles; ++i) {
+    // Stream activation for THIS core's output-tile slice. For each output tile i,
+    // push the E expert tiles act[e,i]. Activation tile(e,i) is at DRAM page
+    // e*num_output_tiles + i (expert-major, num_output_tiles = full Ht).
+    for (uint32_t t = 0; t < n_tiles; ++t) {
+        const uint32_t i = start_tile + t;
         for (uint32_t e = 0; e < num_experts; ++e) {
             const uint32_t page = e * num_output_tiles + i;
             cb_act.reserve_back(1);

@@ -25,6 +25,15 @@ def col0_score_tiles(w):
     return st
 
 
+def _best_ncores(ht, max_cores=64):
+    """Largest divisor of ht that is <= max_cores (uniform per-core tile count)."""
+    best = 1
+    for d in range(1, min(ht, max_cores) + 1):
+        if ht % d == 0:
+            best = d
+    return best
+
+
 def pcc(a, b):
     a = a.flatten().double()
     b = b.flatten().double()
@@ -62,7 +71,20 @@ def main():
             ttnn.Shape([1, 1, T, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG
         )
 
-        core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+        # Parallelize the Ht output tiles across a core grid. Pick a core count that
+        # divides Ht evenly so the per-core tile count (a compile-time arg) is uniform.
+        import os
+
+        NCORES = int(os.environ.get("NCORES", "0")) or _best_ncores(Ht, max_cores=64)
+        per_core = Ht // NCORES
+        gx = min(8, NCORES)
+        gy = (NCORES + gx - 1) // gx
+        core_list = [(x, y) for y in range(gy) for x in range(gx)][:NCORES]
+        # Build the CoreRangeSet from EXACTLY the assigned cores (not a bounding
+        # rectangle) so no unassigned core in the rectangle gets the kernel+CBs with
+        # no runtime args (that deadlocks on multi-row grids).
+        core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y) in core_list])
+        print(f"# Ht={Ht} NCORES={NCORES} per_core={per_core} grid={gx}x{gy}")
         tile_bytes = 2 * 1024  # bf16 tile
 
         def cb(idx, npages):
@@ -78,13 +100,15 @@ def main():
         reader_ct += ttnn.TensorAccessorArgs(sc_t).get_compile_time_args()
         writer_ct = [cb_out]
         writer_ct += ttnn.TensorAccessorArgs(out_t).get_compile_time_args()
-        # compute: num_output_tiles, reduction_dim_size(E), input_granularity, cb0, cb1, cbout
-        compute_ct = [Ht, E, 1, cb_act, cb_sc, cb_out]
+        # compute: num_output_tiles(per_core), reduction_dim_size(E), input_granularity, cb0, cb1, cbout
+        compute_ct = [per_core, E, 1, cb_act, cb_sc, cb_out]
 
         rr = ttnn.RuntimeArgs()
         wr = ttnn.RuntimeArgs()
-        rr[0][0] = [act_t.buffer_address(), sc_t.buffer_address()]
-        wr[0][0] = [out_t.buffer_address(), Ht, 0]
+        for c, (x, y) in enumerate(core_list):
+            st = c * per_core
+            rr[x][y] = [act_t.buffer_address(), sc_t.buffer_address(), st, per_core]
+            wr[x][y] = [out_t.buffer_address(), per_core, st]
 
         reader = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/moe_reduce_reader.cpp",
@@ -112,7 +136,17 @@ def main():
         )
 
         prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
-        out = ttnn.generic_op([act_t, sc_t, out_t], prog)
+        import time
+
+        out = ttnn.generic_op([act_t, sc_t, out_t], prog)  # compile + first run
+        ttnn.synchronize_device(dev)
+        iters = 20
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            out = ttnn.generic_op([act_t, sc_t, out_t], prog)
+        ttnn.synchronize_device(dev)
+        ms = (time.perf_counter() - t0) / iters * 1e3
+        print(f"RESULT timing: {ms:.4f} ms/call ({NCORES} cores)")
         got = ttnn.to_torch(out).float().reshape(T, H)  # = sum_e w[e]*down[e]
         # add bias term on host: bias * sum_e w[e]
         wsum = w.float().sum(dim=1, keepdim=True)  # [T,1]
