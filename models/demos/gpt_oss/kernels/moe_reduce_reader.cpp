@@ -60,14 +60,20 @@ void kernel_main() {
     // Stream activation for THIS core's output-tile slice. For each output tile i,
     // push the E expert tiles act[e,i]. Activation tile(e,i) is at DRAM page
     // e*num_output_tiles + i (expert-major, num_output_tiles = full Ht).
+    //
+    // PERF: issue all E async reads for one output tile into a contiguous E-slot CB
+    // window, then a SINGLE barrier, then push all E at once. This overlaps the E
+    // DRAM latencies instead of serializing a barrier per tile (the compute kernel
+    // consumes a full E-batch per output tile anyway via wait_front(input_granularity)
+    // -> here input_granularity==E so it waits once).
     for (uint32_t t = 0; t < n_tiles; ++t) {
         const uint32_t i = start_tile + t;
+        cb_act.reserve_back(num_experts);
         for (uint32_t e = 0; e < num_experts; ++e) {
             const uint32_t page = e * num_output_tiles + i;
-            cb_act.reserve_back(1);
-            noc.async_read(act, cb_act, act_page, {.page_id = page}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            cb_act.push_back(1);
+            noc.async_read(act, cb_act, act_page, {.page_id = page}, {.offset_bytes = e * act_page});
         }
+        noc.async_read_barrier();
+        cb_act.push_back(num_experts);
     }
 }

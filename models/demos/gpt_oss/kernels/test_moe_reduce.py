@@ -92,16 +92,18 @@ def main():
             return ttnn.CBDescriptor(total_size=npages * tile_bytes, core_ranges=core, format_descriptors=[fmt])
 
         cb_act, cb_sc, cb_out = 0, 1, 16
-        # act CB double-buffered; scores CB holds all E resident; out double-buffered.
-        cbs = [cb(cb_act, 2), cb(cb_sc, E), cb(cb_out, 2)]
+        # act CB holds 2*E (double-buffered E-batch); scores CB all E resident; out double-buffered.
+        cbs = [cb(cb_act, 2 * E), cb(cb_sc, E), cb(cb_out, 2)]
 
         reader_ct = [cb_act, cb_sc, E, Ht]
         reader_ct += ttnn.TensorAccessorArgs(act_t).get_compile_time_args()
         reader_ct += ttnn.TensorAccessorArgs(sc_t).get_compile_time_args()
         writer_ct = [cb_out]
         writer_ct += ttnn.TensorAccessorArgs(out_t).get_compile_time_args()
-        # compute: num_output_tiles(per_core), reduction_dim_size(E), input_granularity, cb0, cb1, cbout
-        compute_ct = [per_core, E, 1, cb_act, cb_sc, cb_out]
+        # compute: num_output_tiles(per_core), reduction_dim_size(E), input_granularity=E, cb0, cb1, cbout
+        # input_granularity=E => compute waits once per output tile for the whole E-batch,
+        # matching the reader's batched E-read + single barrier.
+        compute_ct = [per_core, E, E, cb_act, cb_sc, cb_out]
 
         rr = ttnn.RuntimeArgs()
         wr = ttnn.RuntimeArgs()
