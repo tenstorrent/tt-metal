@@ -181,7 +181,6 @@ def test_beating_the_pinned_baseline_floor_is_reported_as_a_real_win(tmp_path, m
     txt = "\n".join(sm._roofline_lines({"modeled_floor_ms": 331.8585, "perf_layers": 16}, 534.44, None, "m", "main"))
     assert "PAST BASELINE FLOOR" in txt, txt
     assert "impossible" not in txt and "never bank" not in txt, txt
-    assert "does LESS work" in txt
 
 
 def test_beating_the_builds_own_floor_is_still_called_suspect(tmp_path, monkeypatch):

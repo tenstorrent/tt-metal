@@ -45,7 +45,7 @@ def test_it_does_not_claim_a_decode_model_is_not_a_decode_model():
     out = m._roofline_lines({"modeled_floor_ms": 341.47, "active_bytes": 0, "peak_bw_gbps": 512.0}, 615.69)
     txt = "\n".join(out)
     assert "not an LLM decode pipeline" not in txt, txt
-    assert "active_bytes not computed" in txt, txt
+    assert "no weight-bytes input" in txt, txt
 
 
 def test_it_still_says_not_decode_when_that_is_actually_why():

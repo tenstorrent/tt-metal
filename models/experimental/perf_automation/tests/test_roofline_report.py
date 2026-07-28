@@ -41,7 +41,7 @@ def test_module_floor_form_when_not_llm():
     # unconditionally, which was false for Llama-3.1-8B; with no active_bytes it now says the
     # numerator is missing instead of inventing a property of the model.
     assert "tok/s/u" in out and "tok/s/u   (1000 /" not in out
-    assert "active_bytes not computed" in out
+    assert "no weight-bytes input" in out
 
 
 def test_floor_form_shows_the_achievable_band_not_just_the_floor():

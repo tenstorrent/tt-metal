@@ -245,3 +245,73 @@ def test_a_junk_override_is_ignored_rather_than_trusted(tmp_path, monkeypatch):
     for junk in ("", "  ", "abc", "0", "-8", "8e9x"):
         monkeypatch.setenv("TT_PERF_WEIGHT_BYTES", junk)
         assert run._perf_target_inputs(tmp_path, None, {})["weight_bytes"] == int(16 * _GB), junk
+
+
+# --- the reported unit must match the ceiling's unit ------------------------------------------------
+
+
+def _sm():
+    spec = importlib.util.spec_from_file_location("sm_phys_ut", _ROOT / "cc_optimize" / "summary.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["sm_phys_ut"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _snap():
+    pt = _pt()
+    tgt = pt.compute_target({"weight_bytes": int(8 * _GB)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
+    return {
+        "is_llm_decode": True,
+        "theoretical_tok_s": tgt.theoretical_tok_s,
+        "band": [tgt.band[0], tgt.band[1]],
+        "active_bytes": tgt.active_bytes,
+        "peak_bw_gbps": _BH_DRAM_GBPS,
+        "tp_degree": 1,
+        "perf_layers": "all",
+    }
+
+
+def test_the_per_token_reading_is_used_not_the_per_profile_sum(tmp_path, monkeypatch):
+    """THE DEFECT: the ceiling is per TOKEN, and the renderer was handed the headline per-profile
+    device_ms. 1000/534 ms reads 1.9 tok/s/u against a 64 tok/s/u ceiling -- 3% utilisation for a
+    model actually running at 84%."""
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    out = "\n".join(sm._roofline_lines(_snap(), 534.44, {"per_token_ms": 18.68}, "m", "main"))
+    assert "53.5 tok/s/u" in out, out
+    assert "1.9 tok/s/u" not in out
+    assert "428 GB/s" in out
+    assert "84%" in out
+
+
+def test_published_figures_render_exactly(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    out = "\n".join(sm._roofline_lines(_snap(), 534.44, {"per_token_ms": 19.4}, "m", "main"))
+    assert "theoretical ceiling : 64.0 tok/s/u" in out
+    assert "achievable (60-80%) : 38.4 - 51.2 tok/s/u" in out
+    assert "51.5 tok/s/u" in out and "412 GB/s" in out
+
+
+def test_with_no_per_token_reading_the_line_says_so(tmp_path, monkeypatch):
+    """Better to report nothing than a number of the wrong kind."""
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    out = "\n".join(sm._roofline_lines(_snap(), None, {}, "m", "main"))
+    assert "n/a" in out
+    assert "1.9" not in out and "tok/s/u   (1000" not in out
+
+
+def test_the_report_never_hands_a_per_profile_sum_to_a_per_token_ceiling(tmp_path, monkeypatch):
+    """THE GUARD: for a per-token ceiling the per-profile device_ms is not a fallback, it is a wrong
+    answer -- it rendered 1.9 tok/s/u and 3% utilisation for a model running at 84%."""
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    kl = tmp_path / "kl.json"
+    kl.write_text(
+        json.dumps([{"op_signature": "Matmul", "kernel_kind": "grid", "measured_ms": 534.44, "beat_baseline": True}])
+    )
+    out = sm.render_summary(kl, model="m", task="main", finalized=True, throughput=_snap(), baseline_profile={})
+    assert "3%" not in out and "1.9 tok/s/u" not in out, out
+    assert "measured            : n/a" in out, out

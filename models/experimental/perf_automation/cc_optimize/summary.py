@@ -484,6 +484,7 @@ def _roofline_lines(
     profile: dict | None = None,
     model: str = "",
     task: str = "",
+    per_token_ms: float | None = None,
 ) -> list:
     """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
     at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
@@ -500,6 +501,19 @@ def _roofline_lines(
         active_bytes = throughput.get("active_bytes") or 0
         tp = max(1, int(throughput.get("tp_degree") or 1))
         per_dev_bytes = (active_bytes / tp) if active_bytes else 0
+        # THE UNIT MUST MATCH THE CEILING. This ceiling is per TOKEN (peak_BW / bytes-per-token), and
+        # `fm` here is the headline number -- a per-profile device_ms sum over the profiling window.
+        # Dividing 1000 by that reported 1.9 tok/s/u against a 64 tok/s/u ceiling: a 3% utilisation
+        # readout for a model running at 84%. The per-token reading is the profile's own, and when
+        # there is none the line says so rather than printing a number of the wrong kind.
+        _pt_ms = per_token_ms
+        if not (isinstance(_pt_ms, (int, float)) and _pt_ms > 0):
+            try:
+                _pt_ms = _ledger().trace_ms_from_profile(profile)
+            except Exception:  # noqa: BLE001
+                _pt_ms = None
+        if isinstance(_pt_ms, (int, float)) and _pt_ms > 0:
+            fm = float(_pt_ms)
         measured = (1000.0 / fm) if fm else None
         util = (measured / theo) if measured else None
         bw_gbps = ((per_dev_bytes / (fm / 1000.0)) / 1e9) if (per_dev_bytes and fm) else None
@@ -563,17 +577,11 @@ def _roofline_lines(
                 _beats_own = isinstance(_current, (int, float)) and _current > 0 and fm < _current
                 if _beats_own:
                     out.append(
-                        f"  status              : ABOVE_BAND — measured {fm:.2f} ms beats even this build's own "
-                        f"floor {_current:.2f} ms, which no kernel can do: one side is stale/suspect (floor and "
-                        "measurement come from different profiles/depths — re-profile both; never bank this as "
-                        "a win)"
+                        f"  status              : ABOVE_BAND — stale/suspect: beats this build's own floor "
+                        f"{_current:.2f} ms (re-profile; never bank this as a win)"
                     )
                 else:
-                    out.append(
-                        f"  status              : PAST BASELINE FLOOR — measured {fm:.2f} ms is faster than the "
-                        f"{floor:.2f} ms baseline bound because the optimized build does LESS work (fewer "
-                        "bytes moved), so its own bound is lower; the baseline stays fixed as the reference"
-                    )
+                    out.append("  status              : PAST BASELINE FLOOR — keep optimizing")
             else:
                 _hint = "reached the achievable band — done" if status == "IN_BAND" else "keep optimizing"
                 out.append(
@@ -588,12 +596,9 @@ def _roofline_lines(
         # input by inventing a property of the model.
         _ab = throughput.get("active_bytes") if isinstance(throughput, dict) else None
         if not _ab:
-            out.append(
-                "  (tok/s/u — unavailable: active_bytes not computed for this pipeline, so the "
-                "per-token weight-bytes target has no numerator)"
-            )
+            out.append("  (tok/s/u — n/a: no weight-bytes input for this pipeline)")
         else:
-            out.append("  (tok/s/u — N/A: not an LLM decode pipeline)")
+            out.append("  (tok/s/u — n/a: not an LLM decode pipeline)")
     out.append("")
     return out
 
@@ -725,7 +730,34 @@ def render_summary(
 
     if not isinstance(throughput, dict):
         throughput = _throughput_from_profile(baseline_profile)
-    lines.extend(_roofline_lines(throughput, final_ms, baseline_profile, model, task))
+    # The decode ceiling is per TOKEN, so hand the renderer the per-token reading EXPLICITLY rather
+    # than letting it divide the headline per-profile device_ms: 1000/534 ms reads 1.9 tok/s/u against
+    # a 64 tok/s/u ceiling, i.e. 3% utilisation for a model running at 84%.
+    _tok_ms = None
+    try:
+        _tok_ms = _ledger().trace_ms_from_profile(baseline_profile)
+        if _tok_ms is None:
+            _row = _ledger_pair(_ledger().KIND_TRACE_PASS, model, task)[1]
+            _tok_ms = float(_row["value_ms"]) if _row else None
+    except Exception:  # noqa: BLE001
+        _tok_ms = None
+    # For a per-token ceiling the per-profile sum is not a fallback, it is a WRONG ANSWER, so it is
+    # never offered: with no per-token reading the line reads n/a instead of "3% utilisation".
+    _is_decode = bool(throughput.get("is_llm_decode")) if isinstance(throughput, dict) else False
+    # An EXPLICIT final_override_ms is the caller stating the measured value, and in a decode run that
+    # is already the per-token figure (_reliable_forward_ms), so it is honoured. What is withheld is
+    # the DERIVED final_ms -- a per-profile sum -- which is not a fallback for a per-token ceiling.
+    _fm_for_roofline = final_override_ms if final_override_ms is not None else (None if _is_decode else final_ms)
+    lines.extend(
+        _roofline_lines(
+            throughput,
+            _fm_for_roofline,
+            baseline_profile,
+            model,
+            task,
+            per_token_ms=_tok_ms,
+        )
+    )
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
     _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
@@ -734,7 +766,7 @@ def render_summary(
         _lbl = (
             f"latest lever on {_op_label(_st.get('op_signature', '?'))}"
             if _st
-            else "op-class breakdown (BASELINE profile)"
+            else "op-class breakdown (same profile as the table above)"
         )
         lines.append(f"Block-level timing (per-stage trace) — {_lbl}:")
         lines.extend(_stage_table_lines(_stages))

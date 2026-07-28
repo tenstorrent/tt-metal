@@ -22,7 +22,18 @@ import json
 import tempfile
 from pathlib import Path
 
-from models.experimental.perf_automation.cc_optimize import summary as S
+# Loaded BY PATH, like every sibling test. The package-path import resolved through the interpreter's
+# site-packages, which points at a different tt-metal checkout, so this file was silently asserting
+# against another tree's summary.py -- it passed on wording that no longer exists in this one.
+import importlib.util as _ilu
+import sys as _sys
+
+_SPEC = _ilu.spec_from_file_location(
+    "cc_summary_headline_ut", Path(__file__).resolve().parents[1] / "cc_optimize" / "summary.py"
+)
+S = _ilu.module_from_spec(_SPEC)
+_sys.modules["cc_summary_headline_ut"] = S
+_SPEC.loader.exec_module(S)
 
 _KL = None
 
@@ -92,6 +103,10 @@ def test_sections_say_which_profile_they_came_from():
             "buckets": [{"id": "matmul", "device_ms": 1010.23, "count": 5600}],
         },
     )
-    assert "BASELINE profile" in txt
-    assert "tracy trace pass, BASELINE" in txt
-    assert "latest profile" not in txt
+    # The table now STATES the total it sums to rather than naming a provenance it cannot verify: the
+    # variable is called baseline_profile, but perf_mcp rewrites that file on every profile, so the
+    # word BASELINE was a claim about which point in the run the rows describe. The trace line moved
+    # to the ledger for the same reason -- it was reading per_token_ms out of that mutable file.
+    assert "totalling 1010.23 ms" in txt, txt
+    assert "BASELINE profile" not in txt and "latest profile" not in txt
+    assert "tracy trace pass, BASELINE" not in txt
