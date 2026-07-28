@@ -2,21 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Merge-gate sanity check for the real-time (RT) profiler on Wormhole and
-// Blackhole single-chip configurations. Enqueues a handful of compute
-// programs back-to-back on all tensix cores, attaches an RT profiler
-// callback, and asserts that each program produces a record with a
-// plausible start/end timestamp. The goal is to catch coarse regressions
-// in the RT profiler pipeline (mailbox layout, D2H socket init, sync
-// handshake, kernel source propagation, timestamp extraction) before they
-// reach CI's longer-running profiler test suite.
+// Merge-gate sanity coverage for the real-time (RT) profiler, in three layers:
 //
-// Lives in the dispatch "basic" test library so it runs as part of
-// `tt-metalium-validation-basic`, which the merge-gate `metalium-basic-tests`
-// job executes on both N150 (WH) and P150b (BH). On configs where RT
-// profiler cannot be enabled (ETH dispatch, non-MMIO chip, kernels
-// nullified, IOMMU-off on BH, etc.) the test skips gracefully via
-// IsProgramRealtimeProfilerActive().
+//   RealtimeProfilerClockModel / RealtimeProfilerRttFloor -- the host-side clock logic, exercised directly with
+//       synthetic handshakes. No device, so these also run wherever the profiler itself cannot.
+//   RealtimeProfilerSanity -- the record service and its consumer threads, driven through hand-fed rings. A MeshDevice
+//       contributes exactly one ring, so multi-ring and mid-callback behaviour is unreachable from a device test.
+//   RealtimeProfilerDeviceSanity -- the whole pipeline on a unit mesh: mailbox layout, D2H socket init, sync
+//       handshake, kernel source propagation, timestamp extraction.
+//
+// Lives in the dispatch "basic" test library so it runs as part of `tt-metalium-validation-basic`, which the merge-gate
+// `metalium-basic-tests` job executes on both N150 (WH) and P150b (BH). The device layer skips gracefully via
+// IsProgramRealtimeProfilerActive() where the profiler cannot be enabled (ETH dispatch, non-MMIO chip, kernels
+// nullified, IOMMU-off on BH).
 
 #include <algorithm>
 #include <atomic>
@@ -24,19 +22,16 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <cstdlib>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <numeric>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -52,12 +47,17 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
-#include <tt-metalium/host_buffer.hpp>
+
+#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/pcie/tlb_handle.hpp>
+#include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
+#include "impl/realtime_profiler/realtime_profiler_clock_model.hpp"
+#include "impl/realtime_profiler/realtime_profiler_receiver.hpp"
 #include "impl/realtime_profiler/realtime_profiler_service.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -79,10 +79,14 @@ constexpr uint32_t kNumPrograms = 5;
 // mis-decoded timestamp.
 constexpr double kMaxDurationNs = 1'000'000'000.0;
 
-// clock_sync.sync_error_ns is half the sync-handshake RTT — the minimax bound on the offset anchor, and what each
-// record self-reports as its sync accuracy. Healthy is ~1-2µs; the servo rejects re-anchors whose half-RTT exceeds
-// ~25µs, so the accepted distribution stays well under that. SyncAccuracy asserts the p50/p90/p99 across a session
-// rather than a single loose per-record ceiling (which said nothing about the actual distribution).
+// clock_sync.sync_error_ns is half the sync-handshake RTT: the minimax bound on where the anchor landed, and what each
+// record self-reports as its accuracy. Asserted as a distribution rather than a per-record ceiling because the two
+// failure modes look different -- a degraded handshake lifts the median, while a re-anchor policy that stops rejecting
+// bad round trips only fattens the tail.
+//
+// Sized for the slower of the two architectures. Blackhole reaches the profiler core through a TLB window and reports
+// ~0.6us; Wormhole goes through write_core_immediate and a poll for a round trip of ~4-5us, so it reports ~2us p50 and
+// ~12us p99. Tightening these to what Blackhole does would fail every Wormhole run.
 constexpr uint64_t kSyncErrorP50Ns = 6'000;
 constexpr uint64_t kSyncErrorP90Ns = 10'000;
 constexpr uint64_t kSyncErrorP99Ns = 15'000;
@@ -146,11 +150,277 @@ void enqueue_sanity_program(
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
 }
 
-// The two tests below drive RealtimeProfilerService directly instead of opening a mesh, because neither property can be
-// observed through a device. A MeshDevice contributes exactly one record ring, so no device test can show a consumer
-// servicing several of them; and blocking inside a callback to catch unregister mid-flight needs a ring the test drives
-// by hand. Everything else about the service and its ring is covered by the device tests below and by
-// tests/tt_metal/tt_metal/misc/test_broadcast_ring.cpp.
+// Accumulates everything delivered to one registered callback. Unregistering in the destructor is what makes the
+// accumulated records safe to read: the API guarantees no callback is in flight once it returns.
+class RecordCollector {
+public:
+    RecordCollector() {
+        handle_ = RegisterProgramRealtimeProfilerCallback([this](const ProgramRealtimeRecordBatch& batch) {
+            std::lock_guard lock(mutex_);
+            dropped_ += batch.dropped;
+            records_.insert(records_.end(), batch.records.begin(), batch.records.end());
+        });
+        registered_ = true;
+    }
+    ~RecordCollector() { stop(); }
+    RecordCollector(const RecordCollector&) = delete;
+    RecordCollector& operator=(const RecordCollector&) = delete;
+
+    void stop() {
+        if (std::exchange(registered_, false)) {
+            UnregisterProgramRealtimeProfilerCallback(handle_);
+        }
+    }
+
+    std::vector<ProgramRealtimeRecord> records() const {
+        std::lock_guard lock(mutex_);
+        return records_;
+    }
+    uint64_t dropped() const {
+        std::lock_guard lock(mutex_);
+        return dropped_;
+    }
+    // The subset of 1..count that produced a record, which is what most device tests actually assert on.
+    std::set<uint32_t> runtime_ids_in_range(uint32_t count) const {
+        std::set<uint32_t> ids;
+        for (const auto& record : records()) {
+            if (record.runtime_id >= 1 && record.runtime_id <= count) {
+                ids.insert(record.runtime_id);
+            }
+        }
+        return ids;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<ProgramRealtimeRecord> records_;
+    uint64_t dropped_ = 0;
+    ProgramRealtimeProfilerCallbackHandle handle_{};
+    bool registered_ = false;
+};
+
+// Opens a unit mesh with the RT profiler active, or skips. Activation is decided during the init-sync handshake inside
+// mesh open, so the check is stable by the time create_unit_mesh returns.
+class RealtimeProfilerDeviceSanity : public ::testing::Test {
+protected:
+    void SetUp() override {
+        mesh_device_ = distributed::MeshDevice::create_unit_mesh(
+            /*device_id=*/0,
+            DEFAULT_L1_SMALL_SIZE,
+            trace_region_size(),
+            /*num_command_queues=*/1,
+            DispatchCoreConfig{DispatchCoreType::WORKER});
+        ASSERT_NE(mesh_device_, nullptr);
+        if (!IsProgramRealtimeProfilerActive()) {
+            close_mesh();
+            GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+        }
+    }
+
+    void TearDown() override { close_mesh(); }
+
+    // Only TraceReplayResolvesKernelSources needs a trace region; everything else pays nothing for it.
+    virtual size_t trace_region_size() const { return DEFAULT_TRACE_REGION_SIZE; }
+
+    bool close_mesh() {
+        if (mesh_device_ == nullptr) {
+            return true;
+        }
+        const bool closed = mesh_device_->close();
+        mesh_device_.reset();
+        return closed;
+    }
+
+    CoreRange all_cores() const {
+        const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
+        return CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1});
+    }
+
+    // Runtime IDs start at 1 so every program emits a record; runtime_id == 0 is reserved for infrastructure traffic
+    // and filtered host-side.
+    void enqueue_programs(uint32_t count) {
+        for (uint32_t i = 1; i <= count; ++i) {
+            enqueue_sanity_program(mesh_device_, i, all_cores());
+        }
+    }
+
+    // Waits out the receiver thread's last drain. 500ms mirrors the programming example at
+    // test_realtime_profiler_csv.cpp and has proven sufficient for small workloads on WH/BH single-chip.
+    void quiesce_and_settle() {
+        mesh_device_->quiesce_devices();
+        std::this_thread::sleep_for(500ms);
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+};
+
+class RealtimeProfilerDeviceSanityWithTrace : public RealtimeProfilerDeviceSanity {
+protected:
+    size_t trace_region_size() const override { return 8 * 1024 * 1024; }
+};
+
+// Synthetic steady_clock instants. Real ones are ~1e15 ns since boot, close enough to the 2^53 limit of exact integer
+// arithmetic in a double that the model's own rounding would show up in the assertions below.
+constexpr std::chrono::steady_clock::time_point host_instant(int64_t ns) {
+    return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
+}
+
+// Handshakes lying exactly on device_ticks = frequency * host_ns + ticks_at_start, spaced like the bring-up fit.
+std::vector<ClockSyncSample> make_fit_samples(
+    std::chrono::steady_clock::time_point start, double frequency, uint64_t ticks_at_start, size_t count) {
+    std::vector<ClockSyncSample> samples;
+    samples.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const auto host_time = start + std::chrono::milliseconds(5 * static_cast<int64_t>(i));
+        const double elapsed_ns = static_cast<double>((host_time - start).count());
+        samples.push_back(ClockSyncSample{
+            .host_time = host_time,
+            .rtt = std::chrono::nanoseconds(1200),
+            .device_ticks = ticks_at_start + static_cast<uint64_t>(frequency * elapsed_ns)});
+    }
+    return samples;
+}
+
+TEST(RealtimeProfilerClockModel, FitRecoversTheDeviceClockFrequency) {
+    ClockModel model;
+    model.seed_frequency(1.0);
+    const auto start = host_instant(1'000'000'000);
+    const auto samples = make_fit_samples(start, /*frequency=*/1.35, /*ticks_at_start=*/1'000'000, /*count=*/100);
+
+    const ClockFitQuality quality = model.fit(samples, start);
+
+    EXPECT_TRUE(quality.ok);
+    EXPECT_EQ(quality.num_samples, 100u);
+    EXPECT_NEAR(model.frequency(), 1.35, 1e-9);
+    EXPECT_TRUE(model.is_anchored());
+    // Samples sit on the line up to the truncation of device_ticks to whole cycles, i.e. under one cycle of residual.
+    EXPECT_LT(quality.residual_rms_ns, 1.0);
+}
+
+TEST(RealtimeProfilerClockModel, TooFewSamplesKeepTheSeededFrequency) {
+    ClockModel model;
+    model.seed_frequency(1.35);
+    const auto start = host_instant(1'000'000'000);
+
+    const ClockFitQuality quality = model.fit(make_fit_samples(start, /*frequency=*/0.5, 0, /*count=*/1), start);
+
+    EXPECT_FALSE(quality.ok);
+    EXPECT_EQ(model.frequency(), 1.35);
+    EXPECT_FALSE(model.is_anchored()) << "a mapping with no handshake behind it must not look anchored";
+}
+
+TEST(RealtimeProfilerClockModel, NonPositiveFittedSlopeKeepsTheSeededFrequency) {
+    // Consumers divide by the frequency, so a device whose tick count appears to run backwards must not reach them.
+    ClockModel model;
+    model.seed_frequency(1.35);
+    const auto start = host_instant(1'000'000'000);
+    std::vector<ClockSyncSample> samples;
+    for (size_t i = 0; i < 8; ++i) {
+        samples.push_back(ClockSyncSample{
+            .host_time = start + std::chrono::milliseconds(5 * static_cast<int64_t>(i)),
+            .rtt = std::chrono::nanoseconds(1200),
+            .device_ticks = 100'000 - i * 1'000});
+    }
+
+    model.fit(samples, start);
+
+    EXPECT_EQ(model.frequency(), 1.35);
+}
+
+TEST(RealtimeProfilerClockModel, AnchorSitsAtTheRoundTripMidpoint) {
+    ClockModel model;
+    model.seed_frequency(1.0);  // one tick per nanosecond, so the mapping arithmetic below is exact
+    const auto now = host_instant(1'000'000'000);
+    constexpr auto kRtt = std::chrono::nanoseconds(1000);
+    const ClockSyncSample sample{.host_time = now, .rtt = kRtt, .device_ticks = 500'000};
+
+    model.reanchor(now, sample);
+
+    const auto mapping = model.mapping(now);
+    const int64_t mapped_host_ns = static_cast<int64_t>(
+        (static_cast<double>(sample.device_ticks) - static_cast<double>(mapping.device_cycle_offset)) /
+        model.frequency());
+    EXPECT_EQ(mapped_host_ns, (now + kRtt / 2).time_since_epoch().count())
+        << "the device timestamp must map back to the midpoint of the round trip that carried it";
+    EXPECT_EQ(mapping.sync_error_ns, static_cast<uint64_t>((kRtt / 2).count()));
+}
+
+TEST(RealtimeProfilerClockModel, FirstHandshakeIsAcceptedHoweverSlow) {
+    ClockModel model;
+    model.seed_frequency(1.0);
+    EXPECT_TRUE(model.accept_reanchor(std::chrono::seconds(1), host_instant(0)));
+}
+
+TEST(RealtimeProfilerClockModel, SlowHandshakeIsRejectedWhileTheAnchorIsFresh) {
+    ClockModel model;
+    model.seed_frequency(1.0);
+    const auto anchored_at = host_instant(1'000'000'000);
+    model.reanchor(anchored_at, ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)});
+
+    const auto soon_after = anchored_at + std::chrono::milliseconds(10);
+    EXPECT_TRUE(model.accept_reanchor(std::chrono::microseconds(2), soon_after));
+    EXPECT_FALSE(model.accept_reanchor(std::chrono::milliseconds(1), soon_after))
+        << "a round trip this slow places the anchor worse than the drift it would correct";
+}
+
+TEST(RealtimeProfilerClockModel, StaleAnchorAcceptsEvenASlowHandshake) {
+    ClockModel model;
+    model.seed_frequency(1.0);
+    const auto anchored_at = host_instant(1'000'000'000);
+    model.reanchor(anchored_at, ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)});
+
+    EXPECT_FALSE(model.accept_reanchor(std::chrono::milliseconds(1), anchored_at + std::chrono::seconds(1)));
+    EXPECT_TRUE(model.accept_reanchor(std::chrono::milliseconds(1), anchored_at + std::chrono::seconds(5)))
+        << "once the anchor has gone stale, a loose anchor beats unbounded drift";
+}
+
+TEST(RealtimeProfilerRttFloor, HasNoTargetBeforeTheFirstObservation) {
+    const RttFloor floor;
+    EXPECT_EQ(floor.value(), std::chrono::nanoseconds::zero());
+    EXPECT_FALSE(floor.is_near(std::chrono::nanoseconds(1)));
+}
+
+TEST(RealtimeProfilerRttFloor, DropsToANewMinimumImmediately) {
+    RttFloor floor;
+    floor.observe(std::chrono::nanoseconds(2000));
+    EXPECT_EQ(floor.value(), std::chrono::nanoseconds(2000));
+    floor.observe(std::chrono::nanoseconds(1200));
+    EXPECT_EQ(floor.value(), std::chrono::nanoseconds(1200));
+}
+
+TEST(RealtimeProfilerRttFloor, TreatsASmallExcessOverTheFloorAsNearIt) {
+    RttFloor floor;
+    floor.observe(std::chrono::nanoseconds(1000));
+    EXPECT_TRUE(floor.is_near(std::chrono::nanoseconds(1040)));
+    EXPECT_FALSE(floor.is_near(std::chrono::nanoseconds(1500)));
+}
+
+TEST(RealtimeProfilerRttFloor, RisesWhenTheStepIsBelowOneNanosecond) {
+    // At a realistic floor the per-observation rise is a fraction of a nanosecond. Truncating it away would freeze the
+    // floor at the all-time minimum, and a burst would never exit early again.
+    RttFloor floor;
+    floor.observe(std::chrono::nanoseconds(1200));
+    for (int i = 0; i < 10; ++i) {
+        floor.observe(std::chrono::nanoseconds(5000));
+    }
+    EXPECT_GT(floor.value(), std::chrono::nanoseconds(1200));
+}
+
+TEST(RealtimeProfilerRttFloor, SustainedSlowHandshakesDoNotDragTheFloorToTheirMean) {
+    // A floor that rose in proportion to each sample's excess would converge on the distribution's mean and then admit
+    // everything, which is the one thing the burst's early exit must not do.
+    RttFloor floor;
+    floor.observe(std::chrono::nanoseconds(1200));
+    for (int i = 0; i < 500; ++i) {
+        floor.observe(std::chrono::nanoseconds(4000));
+    }
+    EXPECT_LT(floor.value(), std::chrono::nanoseconds(1600));
+    EXPECT_FALSE(floor.is_near(std::chrono::nanoseconds(4000)));
+}
+
+// The service tests drive RealtimeProfilerService directly rather than opening a mesh: a MeshDevice contributes
+// exactly one record ring, so multi-ring delivery, drop accounting and mid-callback control changes are all
+// unreachable from a device test. The ring itself is covered by tests/tt_metal/tt_metal/misc/test_broadcast_ring.cpp.
 experimental::ProgramRealtimeRecord make_service_record(uint32_t runtime_id, uint32_t chip_id) {
     return experimental::ProgramRealtimeRecord{
         .runtime_id = runtime_id,
@@ -251,56 +521,227 @@ TEST(RealtimeProfilerSanity, UnregisterWaitsForInFlightCallback) {
     service.detach_ring(ring);
 }
 
-TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
-    constexpr int kDeviceId = 0;
+// A reader starts at the ring's current head, so a consumer registering late sees the stream from that point on rather
+// than replaying whatever backlog happens to still be resident.
+TEST(RealtimeProfilerSanity, LateConsumerReceivesOnlyFutureRecords) {
+    RealtimeProfilerService service;
+    RealtimeProfilerRecordRing ring(8);
+    service.attach_ring(ring, 4);
 
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        kDeviceId,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        /*num_command_queues=*/1,
-        DispatchCoreConfig{DispatchCoreType::WORKER});
-    ASSERT_NE(mesh_device, nullptr);
+    ring.writer().publish(make_service_record(1, 7));
+    service.wake_consumers();
 
-    // Activation flips on during the init-sync handshake inside mesh open,
-    // so this check is stable by the time create_unit_mesh returns. When it
-    // returns false the RT profiler was disabled for this dispatch config
-    // (ETH dispatch, non-MMIO chip, kernels nullified, no valid RT core) —
-    // treat that as a graceful skip rather than a failure.
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<uint32_t> received;
+    const auto handle = service.register_consumer([&](const ProgramRealtimeRecordBatch& batch) {
+        {
+            std::lock_guard lock(mutex);
+            for (const auto& record : batch.records) {
+                received.push_back(record.runtime_id);
+            }
+        }
+        cv.notify_all();
+    });
+
+    ring.writer().publish(make_service_record(2, 7));
+    service.wake_consumers();
+
+    {
+        std::unique_lock lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return !received.empty(); }));
+        EXPECT_EQ(received, (std::vector<uint32_t>{2}));
     }
 
-    std::vector<ProgramRealtimeRecord> records;
-    uint64_t dropped = 0;
+    service.detach_ring(ring);
+    service.unregister_consumer(handle);
+}
 
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records, &dropped](const ProgramRealtimeRecordBatch& batch) {
-            dropped += batch.dropped;
-            records.insert(records.end(), batch.records.begin(), batch.records.end());
+// Consumers are isolated from each other: one that throws every time must not cost a sibling any records. The
+// device-level ThrowingCallbackIsIsolated covers the same contract end-to-end, but only this one pins it to the
+// service without a mesh in the way.
+TEST(RealtimeProfilerSanity, ThrowingConsumerDoesNotAffectSibling) {
+    RealtimeProfilerService service;
+    RealtimeProfilerRecordRing ring(8);
+    service.attach_ring(ring, 4);
+
+    const auto throwing = service.register_consumer(
+        [](const ProgramRealtimeRecordBatch&) { throw std::runtime_error("intentional record failure"); });
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t good_count = 0;
+    const auto good = service.register_consumer([&](const ProgramRealtimeRecordBatch& batch) {
+        {
+            std::lock_guard lock(mutex);
+            good_count += batch.records.size();
+        }
+        cv.notify_all();
+    });
+
+    ring.writer().publish(make_service_record(1, 1));
+    service.wake_consumers();
+
+    {
+        std::unique_lock lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return good_count == 1; }));
+    }
+
+    service.detach_ring(ring);
+    service.unregister_consumer(throwing);
+    service.unregister_consumer(good);
+}
+
+// batch.dropped counts what this consumer lost since its previous batch, not since the session began. A consumer stuck
+// in a callback overruns the ring it is not reading, and the loss has to surface on its next batch from that ring.
+TEST(RealtimeProfilerSanity, DropsAreReportedSinceThePreviousCallback) {
+    RealtimeProfilerService service;
+    RealtimeProfilerRecordRing overflowing_ring(4);
+    RealtimeProfilerRecordRing blocked_ring(4);
+    service.attach_ring(overflowing_ring, 4);
+    service.attach_ring(blocked_ring, 4);
+
+    struct BatchResult {
+        uint32_t chip_id;
+        uint64_t dropped;
+    };
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool blocked_callback_started = false;
+    bool release_blocked_callback = false;
+    std::vector<BatchResult> results;
+    const auto handle = service.register_consumer([&](const ProgramRealtimeRecordBatch& batch) {
+        std::unique_lock lock(mutex);
+        const uint32_t chip_id = batch.records.front().chip_id;
+        if (chip_id == 2 && !blocked_callback_started) {
+            blocked_callback_started = true;
+            cv.notify_all();
+            cv.wait(lock, [&] { return release_blocked_callback; });
+        }
+        results.push_back({chip_id, batch.dropped});
+        cv.notify_all();
+    });
+
+    blocked_ring.writer().publish(make_service_record(1, 2));
+    service.wake_consumers();
+    {
+        std::unique_lock lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return blocked_callback_started; }));
+    }
+
+    for (uint32_t id = 10; id < 22; ++id) {
+        overflowing_ring.writer().publish(make_service_record(id, 1));
+    }
+    service.wake_consumers();
+    {
+        std::lock_guard lock(mutex);
+        release_blocked_callback = true;
+    }
+    cv.notify_all();
+
+    {
+        std::unique_lock lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, 5s, [&] {
+            return std::any_of(results.begin(), results.end(), [](const BatchResult& result) {
+                return result.chip_id == 1 && result.dropped > 0;
+            });
+        }));
+    }
+
+    service.detach_ring(overflowing_ring);
+    service.detach_ring(blocked_ring);
+    service.unregister_consumer(handle);
+}
+
+// detach_ring is what MeshDevice close goes through, so everything already published has to be delivered before it
+// returns; otherwise closing a device silently truncates its tail of records.
+TEST(RealtimeProfilerSanity, DetachDrainsPublishedRecordsBeforeReturning) {
+    RealtimeProfilerService service;
+    RealtimeProfilerRecordRing ring(16);
+    service.attach_ring(ring, 8);
+
+    std::atomic<size_t> delivered = 0;
+    const auto handle = service.register_consumer(
+        [&](const ProgramRealtimeRecordBatch& batch) { delivered.fetch_add(batch.records.size()); });
+    for (uint32_t id = 1; id <= 8; ++id) {
+        ring.writer().publish(make_service_record(id, 1));
+    }
+    service.wake_consumers();
+
+    service.detach_ring(ring);
+    EXPECT_EQ(delivered.load(), 8u);
+    service.unregister_consumer(handle);
+}
+
+// A consumer thread parks on the wake generation when there is nothing to read; destruction has to wake it or the
+// destructor blocks forever joining it.
+TEST(RealtimeProfilerSanity, DestructorWakesIdleConsumerThread) {
+    RealtimeProfilerService service;
+    service.register_consumer([](const ProgramRealtimeRecordBatch&) {});
+}
+
+TEST(RealtimeProfilerSanity, ManyRingsAndConsumersDeliverWithoutLoss) {
+    constexpr size_t kRingCount = 8;
+    constexpr size_t kConsumerCount = 4;
+    constexpr size_t kRecordsPerRing = 64;
+
+    RealtimeProfilerService service;
+    std::vector<std::unique_ptr<RealtimeProfilerRecordRing>> rings;
+    rings.reserve(kRingCount);
+    for (size_t i = 0; i < kRingCount; ++i) {
+        rings.push_back(std::make_unique<RealtimeProfilerRecordRing>(128));
+        service.attach_ring(*rings.back(), 32);
+    }
+
+    std::vector<std::atomic<size_t>> received(kConsumerCount);
+    std::vector<ProgramRealtimeProfilerCallbackHandle> handles;
+    handles.reserve(kConsumerCount);
+    for (size_t consumer = 0; consumer < kConsumerCount; ++consumer) {
+        handles.push_back(
+            service.register_consumer([&count = received[consumer]](const ProgramRealtimeRecordBatch& batch) {
+                count.fetch_add(batch.records.size(), std::memory_order_relaxed);
+            }));
+    }
+
+    for (size_t ring = 0; ring < kRingCount; ++ring) {
+        for (size_t record = 0; record < kRecordsPerRing; ++record) {
+            rings[ring]->writer().publish(make_service_record(
+                static_cast<uint32_t>(ring * kRecordsPerRing + record), static_cast<uint32_t>(ring)));
+        }
+    }
+    service.wake_consumers();
+
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    const auto all_delivered = [&] {
+        return std::all_of(received.begin(), received.end(), [](const std::atomic<size_t>& count) {
+            return count.load(std::memory_order_relaxed) == kRingCount * kRecordsPerRing;
         });
-
-    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
-    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
-    for (uint32_t i = 0; i < kNumPrograms; ++i) {
-        // Runtime IDs start at 1 so every program emits a record (runtime_id == 0
-        // is reserved for infrastructure traffic and filtered host-side).
-        enqueue_sanity_program(mesh_device, /*runtime_id=*/i + 1, all_cores);
+    };
+    while (std::chrono::steady_clock::now() < deadline && !all_delivered()) {
+        std::this_thread::sleep_for(1ms);
+    }
+    for (const auto& count : received) {
+        EXPECT_EQ(count.load(std::memory_order_relaxed), kRingCount * kRecordsPerRing);
     }
 
-    mesh_device->quiesce_devices();
-    // Give the RT profiler receiver thread a moment to drain the last
-    // socket pages before we unregister. 500ms mirrors the programming
-    // example at test_realtime_profiler_csv.cpp and has proven sufficient
-    // for small workloads on WH/BH single-chip.
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    for (auto& ring : rings) {
+        service.detach_ring(*ring);
+    }
+    for (auto handle : handles) {
+        service.unregister_consumer(handle);
+    }
+}
 
-    UnregisterProgramRealtimeProfilerCallback(handle);
+TEST_F(RealtimeProfilerDeviceSanity, FiveProgramsBackToBack) {
+    RecordCollector collector;
+    enqueue_programs(kNumPrograms);
+    quiesce_and_settle();
+    collector.stop();
 
+    const std::vector<ProgramRealtimeRecord> records = collector.records();
     ASSERT_GE(records.size(), kNumPrograms)
         << "Expected at least " << kNumPrograms << " RT profiler records (one per program), got " << records.size();
-    EXPECT_EQ(dropped, 0u);
+    EXPECT_EQ(collector.dropped(), 0u);
 
     for (const auto& rec : records) {
         EXPECT_GT(rec.end_timestamp, rec.start_timestamp)
@@ -346,42 +787,22 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
 // re-anchor intervals so the records sample that value over the session, then assert its distribution stays tight.
 // A degraded handshake (slow/contended PCIe) lifts the median; a servo that stops rejecting bad re-anchors fattens the
 // tail — p50/p90/p99 catch each, unlike a single per-record ceiling.
-TEST(RealtimeProfilerSanity, SyncAccuracy) {
-    constexpr int kDeviceId = 0;
-
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
-    ASSERT_NE(mesh_device, nullptr);
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
-    }
-
-    std::mutex records_mu;
-    std::vector<uint64_t> sync_errors_ns;
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
-            std::lock_guard<std::mutex> lk(records_mu);
-            for (const auto& rec : batch.records) {
-                sync_errors_ns.push_back(rec.clock_sync.sync_error_ns);
-            }
-        });
-
-    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
-    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
+    RecordCollector collector;
     // A fixed runtime_id keeps the kernel source (and its JIT compile) shared across iterations; the 50ms spacing
-    // straddles kServoInterval so successive records fall in different re-anchor epochs.
+    // straddles the resync interval so successive records fall in different re-anchor epochs.
     constexpr uint32_t kIterations = 40;
     for (uint32_t i = 0; i < kIterations; ++i) {
-        enqueue_sanity_program(mesh_device, /*runtime_id=*/1, all_cores);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        enqueue_sanity_program(mesh_device_, /*runtime_id=*/1, all_cores());
+        std::this_thread::sleep_for(50ms);
     }
+    quiesce_and_settle();
+    collector.stop();
 
-    mesh_device->quiesce_devices();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    UnregisterProgramRealtimeProfilerCallback(handle);
-
-    std::lock_guard<std::mutex> lk(records_mu);
+    std::vector<uint64_t> sync_errors_ns;
+    for (const auto& record : collector.records()) {
+        sync_errors_ns.push_back(record.clock_sync.sync_error_ns);
+    }
     ASSERT_GE(sync_errors_ns.size(), kIterations / 2)
         << "too few records (" << sync_errors_ns.size() << ") to characterize the sync-error distribution";
     std::sort(sync_errors_ns.begin(), sync_errors_ns.end());
@@ -399,187 +820,77 @@ TEST(RealtimeProfilerSanity, SyncAccuracy) {
     EXPECT_LT(p50, kSyncErrorP50Ns) << "median sync error too high; the handshake is systematically degraded";
     EXPECT_LT(p90, kSyncErrorP90Ns) << "p90 sync error too high";
     EXPECT_LT(p99, kSyncErrorP99Ns) << "tail sync error too high; a bad re-anchor is not being rejected";
-
-    EXPECT_TRUE(mesh_device->close());
 }
 
-TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
-    constexpr int kDeviceId = 0;
+TEST_F(RealtimeProfilerDeviceSanity, CloseDrainsRegisteredCallback) {
+    RecordCollector collector;
+    enqueue_programs(kNumPrograms);
 
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
-    ASSERT_NE(mesh_device, nullptr);
+    mesh_device_->quiesce_devices();
+    EXPECT_TRUE(close_mesh());
+    collector.stop();
 
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
-    }
-
-    std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
-            records.insert(records.end(), batch.records.begin(), batch.records.end());
-        });
-
-    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
-    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
-    for (uint32_t i = 0; i < kNumPrograms; ++i) {
-        enqueue_sanity_program(mesh_device, i + 1, all_cores);
-    }
-
-    mesh_device->quiesce_devices();
-    EXPECT_TRUE(mesh_device->close());
-
-    UnregisterProgramRealtimeProfilerCallback(handle);
-
-    std::set<uint32_t> observed_runtime_ids;
-    for (const auto& rec : records) {
-        if (rec.runtime_id >= 1 && rec.runtime_id <= kNumPrograms) {
-            observed_runtime_ids.insert(rec.runtime_id);
-        }
-    }
-    EXPECT_EQ(observed_runtime_ids.size(), kNumPrograms)
+    EXPECT_EQ(collector.runtime_ids_in_range(kNumPrograms).size(), kNumPrograms)
         << "Mesh close should drain records for callbacks still registered at shutdown";
 }
 
-TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
-    constexpr int kDeviceId = 0;
-
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
-    ASSERT_NE(mesh_device, nullptr);
-
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
-    }
-
-    uint64_t throwing_invocations = 0;
-    std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle throwing_handle =
+TEST_F(RealtimeProfilerDeviceSanity, ThrowingCallbackIsIsolated) {
+    std::atomic<uint64_t> throwing_invocations = 0;
+    const auto throwing_handle =
         RegisterProgramRealtimeProfilerCallback([&throwing_invocations](const ProgramRealtimeRecordBatch&) {
-            ++throwing_invocations;
+            throwing_invocations.fetch_add(1);
             throw std::runtime_error("intentional callback failure");
         });
-    ProgramRealtimeProfilerCallbackHandle good_handle =
-        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
-            records.insert(records.end(), batch.records.begin(), batch.records.end());
-        });
+    RecordCollector collector;
 
-    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
-    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
-    for (uint32_t i = 0; i < kNumPrograms; ++i) {
-        enqueue_sanity_program(mesh_device, i + 1, all_cores);
-    }
-
-    mesh_device->quiesce_devices();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
+    enqueue_programs(kNumPrograms);
+    quiesce_and_settle();
     UnregisterProgramRealtimeProfilerCallback(throwing_handle);
-    UnregisterProgramRealtimeProfilerCallback(good_handle);
+    collector.stop();
 
-    std::set<uint32_t> observed_runtime_ids;
-    for (const auto& rec : records) {
-        if (rec.runtime_id >= 1 && rec.runtime_id <= kNumPrograms) {
-            observed_runtime_ids.insert(rec.runtime_id);
-        }
-    }
-    EXPECT_GT(throwing_invocations, 0u) << "throwing callback should have been invoked";
-    EXPECT_EQ(observed_runtime_ids.size(), kNumPrograms)
+    EXPECT_GT(throwing_invocations.load(), 0u) << "throwing callback should have been invoked";
+    EXPECT_EQ(collector.runtime_ids_in_range(kNumPrograms).size(), kNumPrograms)
         << "sibling callback must receive every record despite the other callback throwing";
 }
 
-TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
-    constexpr int kDeviceId = 0;
+// Finish, unlike close, leaves the device open, so the final program's record only arrives if the finish-time flush
+// is emitted rather than waiting for the next program to push it out.
+TEST_F(RealtimeProfilerDeviceSanity, LastProgramRecordDeliveredOnFinish) {
+    RecordCollector collector;
+    enqueue_programs(kNumPrograms);
 
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
-    ASSERT_NE(mesh_device, nullptr);
+    distributed::Finish(mesh_device_->mesh_command_queue());
+    std::this_thread::sleep_for(500ms);
+    collector.stop();
 
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
-    }
-
-    std::mutex records_mu;
-    std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecordBatch& batch) {
-            std::lock_guard<std::mutex> lk(records_mu);
-            records.insert(records.end(), batch.records.begin(), batch.records.end());
-        });
-
-    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
-    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
-
-    for (uint32_t i = 0; i < kNumPrograms; ++i) {
-        enqueue_sanity_program(mesh_device, i + 1, all_cores);
-    }
-
-    distributed::Finish(mesh_device->mesh_command_queue());
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    UnregisterProgramRealtimeProfilerCallback(handle);
-
-    constexpr uint32_t last_runtime_id = kNumPrograms;
-    bool last_record_seen = false;
-    {
-        std::lock_guard<std::mutex> lk(records_mu);
-        for (const auto& rec : records) {
-            if (rec.runtime_id == last_runtime_id) {
-                last_record_seen = true;
-                break;
-            }
-        }
-    }
-
-    EXPECT_TRUE(last_record_seen) << "The final program's RT profiler record (runtime_id=" << last_runtime_id
-                                  << ") was not delivered; ensure that the finish-time RT-profiler flush is emitted";
-
-    EXPECT_TRUE(mesh_device->close());
+    EXPECT_TRUE(collector.runtime_ids_in_range(kNumPrograms).contains(kNumPrograms))
+        << "the final program's record (runtime_id=" << kNumPrograms << ") was not delivered";
 }
 
-TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
-    constexpr int kDeviceId = 0;
+TEST_F(RealtimeProfilerDeviceSanityWithTrace, TraceReplayResolvesKernelSources) {
     constexpr uint32_t kWarmupRuntimeId = 0x6001;
     constexpr uint32_t kTraceRuntimeId = 0x6002;
-    constexpr size_t kTraceRegionSize = 8 * 1024 * 1024;
 
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        kDeviceId, DEFAULT_L1_SMALL_SIZE, kTraceRegionSize, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
-    ASSERT_NE(mesh_device, nullptr);
-
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
-    }
-
-    std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
-            records.insert(records.end(), batch.records.begin(), batch.records.end());
-        });
-
-    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
-    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
-
+    RecordCollector collector;
+    const CoreRange cores = all_cores();
     const std::string kernel_src = make_sanity_kernel_source(kTraceRuntimeId);
     Program program = CreateProgram();
     CreateKernelFromString(
         program,
         kernel_src,
-        all_cores,
+        cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     CreateKernelFromString(
         program,
         kernel_src,
-        all_cores,
+        cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    CreateKernelFromString(program, kernel_src, all_cores, ComputeConfig{});
+    CreateKernelFromString(program, kernel_src, cores, ComputeConfig{});
     program.set_runtime_id(static_cast<uint64_t>(kWarmupRuntimeId));
 
     distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    auto& mesh_cq = mesh_device->mesh_command_queue(0);
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+    auto& mesh_cq = mesh_device_->mesh_command_queue(0);
 
     // Warm up before capture (capture cannot load binaries) under kWarmupRuntimeId, then switch to
     // kTraceRuntimeId so the trace-baked id is tied only by create_trace_node, the path under test.
@@ -588,19 +899,18 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
         prog.set_runtime_id(static_cast<uint64_t>(kTraceRuntimeId));
     }
 
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), mesh_cq.id());
+    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device_.get(), mesh_cq.id());
     distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
-    mesh_device->end_mesh_trace(mesh_cq.id(), trace_id);
-    mesh_device->replay_mesh_trace(mesh_cq.id(), trace_id, true);
+    mesh_device_->end_mesh_trace(mesh_cq.id(), trace_id);
+    mesh_device_->replay_mesh_trace(mesh_cq.id(), trace_id, true);
 
-    mesh_device->quiesce_devices();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    UnregisterProgramRealtimeProfilerCallback(handle);
-    mesh_device->release_mesh_trace(trace_id);
+    quiesce_and_settle();
+    collector.stop();
+    mesh_device_->release_mesh_trace(trace_id);
 
     const std::string expected_marker = kSourceMarkerPrefix + std::to_string(kTraceRuntimeId);
     uint32_t trace_records = 0;
-    for (const auto& rec : records) {
+    for (const auto& rec : collector.records()) {
         if (rec.runtime_id != kTraceRuntimeId) {
             continue;
         }
@@ -615,8 +925,6 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     }
     EXPECT_GT(trace_records, 0u) << "No records observed for the trace-replayed program (runtime_id=" << kTraceRuntimeId
                                  << ")";
-
-    EXPECT_TRUE(mesh_device->close());
 }
 
 // Independent host/device sync-accuracy check. The Tracy SYNC_CHECK markers are a self-consistency check — their host
@@ -626,28 +934,9 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
 // frequency — lands inside that independently-measured host window. A mis-signed/mis-scaled offset, a wrong clock
 // domain, or a stale anchor would push the record outside the window. This is only possible because the affine mapping
 // now rides on the record itself.
-TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
-    constexpr int kDeviceId = 0;
-
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
-    ASSERT_NE(mesh_device, nullptr);
-
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
-    }
-
-    std::mutex records_mu;
-    std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecordBatch& batch) {
-            std::lock_guard<std::mutex> lk(records_mu);
-            records.insert(records.end(), batch.records.begin(), batch.records.end());
-        });
-
-    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
-    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
+    RecordCollector collector;
+    const CoreRange cores = all_cores();
 
     // One fixed kernel source for every program so the JIT ELF is compiled once (during warm-up) and reused; this
     // keeps each measured dispatch window free of multi-second kernel-compilation time.
@@ -658,18 +947,18 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
         CreateKernelFromString(
             program,
             fixed_src,
-            all_cores,
+            cores,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         CreateKernelFromString(
             program,
             fixed_src,
-            all_cores,
+            cores,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        CreateKernelFromString(program, fixed_src, all_cores, ComputeConfig{});
+        CreateKernelFromString(program, fixed_src, cores, ComputeConfig{});
         program.set_runtime_id(static_cast<uint64_t>(runtime_id));
         distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, /*blocking=*/true);
     };
 
     // Warm up the JIT cache; runtime_id 1 is not placed in the window map.
@@ -693,9 +982,8 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
         windows[runtime_id] = {before, after};
     }
 
-    mesh_device->quiesce_devices();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    UnregisterProgramRealtimeProfilerCallback(handle);
+    quiesce_and_settle();
+    collector.stop();
 
     // Generous bound: it covers host-clock read jitter and the gap between the bracketing reads and the actual
     // dispatch/completion. The check catches a fundamentally wrong mapping (off by ms and up), not µs-level skew.
@@ -705,8 +993,7 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
     double worst_outside_ns = 0.0;
     double min_freq = 0.0;
     double max_freq = 0.0;
-    std::lock_guard<std::mutex> lk(records_mu);
-    for (const auto& rec : records) {
+    for (const auto& rec : collector.records()) {
         auto it = windows.find(rec.runtime_id);
         if (it == windows.end() || rec.frequency <= 0.0) {
             continue;
@@ -736,279 +1023,284 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
               << " record(s); worst excursion outside dispatch window = " << worst_outside_ns
               << "ns (<= 0 means fully inside); record frequency = [" << min_freq << ", " << max_freq << "] GHz"
               << std::endl;
+}
+
+// Devices take turns being resynced, one per tick, rather than all together on a single tick. A rotation that failed
+// to advance would leave every device but the first pinned to its bring-up fit, drifting with nothing to correct it,
+// while the published sync_error_ns still looked healthy -- so the counts are the only thing that shows it.
+TEST(RealtimeProfilerSanity, EveryDeviceIsResyncedInRotation) {
+    auto mesh_device = distributed::MeshDevice::create(
+        distributed::MeshDeviceConfig(std::nullopt),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        /*num_command_queues=*/1,
+        DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    auto* receiver = mesh_device->impl().get_realtime_profiler();
+    ASSERT_NE(receiver, nullptr);
+    // A full rotation takes the resync interval; sleep well past several of them.
+    std::this_thread::sleep_for(1s);
+    const std::vector<uint64_t> resyncs = receiver->num_resyncs_per_device();
+
+    ASSERT_EQ(resyncs.size(), receiver->num_active_devices());
+    ASSERT_FALSE(resyncs.empty());
+    const auto [min_it, max_it] = std::minmax_element(resyncs.begin(), resyncs.end());
+    EXPECT_GT(*min_it, 0u) << "at least one device was never resynced; the rotation is not advancing";
+    // Strict round-robin, so the spread is one visit plus whatever the sample raced with.
+    EXPECT_LE(*max_it - *min_it, 2u) << "resyncs are not evenly distributed across devices";
 
     EXPECT_TRUE(mesh_device->close());
 }
 
-// Independent measurement of the RT profiler's clock-sync accuracy, sharing no code with the production sync. The
-// roles are deliberately inverted: here the *device* times a round trip and brackets a host clock read inside it,
-// where RealtimeProfilerClockSync has the host time a round trip and bracket a device timestamp. A wrong anchor
-// placement, a wrong clock domain, or a mis-signed offset in production therefore cannot reproduce itself here.
+// Independent check of the clock mapping the RT profiler publishes on every record. It shares no code and no
+// mechanism with the production sync: production has the host drive a round trip and bracket a device timestamp
+// inside it, while this reads the device's own clock and brackets that read between two host clock reads.
 //
-// Per iteration the kernel stamps WALL_CLOCK, asks the host for a reply, and stamps again once the reply lands. The
-// host's clock read happened somewhere inside that device-measured interval, so (host read, interval midpoint) samples
-// the same mapping. Bracketing on the device keeps the host's polling cost out of the interval; what is left is the
-// asymmetry between the two legs, which the midpoint splits and the reported bracket bounds. Only the tightest
-// brackets are kept, those being the round trips that queued least on either leg.
-constexpr uint32_t kSyncProbeIterations = 2000;
-constexpr double kSyncProbeKeepFraction = 0.05;
+// Nothing is fitted here. A record already states, through device_cycle_offset and frequency, which host time a
+// device timestamp corresponds to, so there is no line to reconstruct -- only its residual to measure. One read
+// resolves nothing on its own, because the host bracket is wider than the error being looked for; averaging many is
+// what gives the measurement its resolution. The reads are taken back-to-back, so a round spans milliseconds and no
+// clock drifts across it, and the mean residual is good to about one bracket over the square root of the sample
+// count -- tens of nanoseconds, against roughly a microsecond for any single read.
+//
+// The kernel never waits on the host. It stamps WALL_CLOCK into one L1 slot in a bounded loop and exits, so the host
+// can stop reading whenever it likes -- or fail an assertion and leave -- without stranding a spinning kernel, which
+// would make Finish, and the test, hang rather than fail.
+constexpr uint32_t kClockStampIterations = 200'000'000;  // ~5s of stamping; only reached if the stop flag never lands
+constexpr uint32_t kClockCheckRounds = 3;
+// Taken back-to-back, a couple of microseconds apart, so a round's reads span only milliseconds. Enough of them that
+// the mean residual resolves well below a single bracket.
+constexpr uint32_t kClockReadsPerRound = 500;
+constexpr uint32_t kFirstClockCheckRuntimeId = 9101;
+// What this has to establish: that the published mapping is right to within a few microseconds. Deliberately fixed
+// rather than derived from the record's own sync_error_ns -- a bound computed from the claim cannot test the claim.
+// The measured disagreement is ~210ns, so these leave an order of magnitude of headroom, and they are wide enough to
+// absorb the clock drift between a record's mapping snapshot and the reads it is checked against.
+constexpr double kMaxMeanMappingErrorNs = 2'000.0;
+constexpr double kMaxTailMappingErrorNs = 3'000.0;
 
-std::string make_sync_kernel_source() {
+std::string make_clock_stamp_kernel_source() {
     return R"(
 #include <cstdint>
 #include "risc_common.h"
 
 void kernel_main() {
-    const uint32_t ack_addr = get_arg_val<uint32_t>(0);
-    const uint32_t request_addr = get_arg_val<uint32_t>(1);
-    const uint32_t log_addr = get_arg_val<uint32_t>(2);
-    const uint32_t iterations = get_arg_val<uint32_t>(3);
-    // PinnedMemory hands the host the address only; a NOC write also needs the PCIe endpoint's coordinates, which the
-    // JIT build supplies as PCIE_NOC_X/Y. Same encoding cq_realtime_profiler_push.cpp builds.
-    const uint64_t host_addr =
-        uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y))) |
-        ((static_cast<uint64_t>(get_arg_val<uint32_t>(5)) << 32) | static_cast<uint64_t>(get_arg_val<uint32_t>(4)));
+    const uint32_t stamp_addr = get_arg_val<uint32_t>(0);
+    const uint32_t stop_addr = get_arg_val<uint32_t>(1);
+    const uint32_t max_iterations = get_arg_val<uint32_t>(2);
 
-    volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ack_addr);
-    (void)ack;
-    volatile tt_l1_ptr uint32_t* request = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(request_addr);
-    volatile tt_l1_ptr uint32_t* log = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_addr);
+    volatile tt_l1_ptr uint32_t* stamp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stamp_addr);
+    volatile tt_l1_ptr const uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
 
-    for (uint32_t i = 1; i <= iterations; i++) {
-        request[0] = i;
-        const uint64_t sent = get_timestamp();
-        noc_async_write(request_addr, host_addr, sizeof(uint32_t));
-        noc_async_write_barrier();
-        const uint64_t written = get_timestamp();
-        while (NOC_STREAM_READ_REG(0, STREAM_SCRATCH_REG_INDEX) != i) {
+    for (uint32_t i = 0; i < max_iterations; i++) {
+        const uint64_t now = get_timestamp();
+        stamp[1] = static_cast<uint32_t>(now >> 32);
+        stamp[0] = static_cast<uint32_t>(now & 0xFFFFFFFF);
+        if ((i & 0xFF) == 0 && stop[0] != 0) {
+            break;
         }
-        const uint64_t answered = get_timestamp();
-        log[8 * (i - 1) + 4] = static_cast<uint32_t>(written & 0xFFFFFFFF);
-        log[8 * (i - 1) + 5] = static_cast<uint32_t>(written >> 32);
-        log[8 * (i - 1) + 0] = static_cast<uint32_t>(sent & 0xFFFFFFFF);
-        log[8 * (i - 1) + 1] = static_cast<uint32_t>(sent >> 32);
-        log[8 * (i - 1) + 2] = static_cast<uint32_t>(answered & 0xFFFFFFFF);
-        log[8 * (i - 1) + 3] = static_cast<uint32_t>(answered >> 32);
     }
 }
 )";
 }
 
-struct SyncProbe {
-    int64_t host_ns = 0;
-    double device_mid_ticks = 0.0;
-    uint64_t bracket_ticks = 0;
+// One read of the device clock, bracketed by the host's own clock either side of it.
+struct ClockBracket {
+    int64_t host_before_ns = 0;
+    int64_t host_after_ns = 0;
+    uint64_t device_ticks = 0;
+    uint32_t round = 0;
+
+    double host_mid_ns() const {
+        return static_cast<double>(host_before_ns) + static_cast<double>(host_after_ns - host_before_ns) / 2.0;
+    }
+    double half_width_ns() const { return static_cast<double>(host_after_ns - host_before_ns) / 2.0; }
 };
 
-TEST(RealtimeProfilerSanity, SyncAccuracyAgainstIndependentHandshake) {
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
-    if (!IsProgramRealtimeProfilerActive()) {
-        GTEST_SKIP() << "Real-time profiler is not active on this configuration";
-    }
+TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead) {
+    RecordCollector collector;
 
-    std::mutex records_mu;
-    std::vector<ProgramRealtimeRecord> records;
-    const auto handle = RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
-        std::lock_guard lk(records_mu);
-        records.insert(records.end(), batch.records.begin(), batch.records.end());
-    });
-
-    IDevice* device = mesh_device->get_devices().front();
-    const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t ack_addr = l1_base;
-    const uint32_t request_addr = l1_base + 16;
-    const uint32_t log_addr = l1_base + 32;
+    IDevice* device = mesh_device_->get_devices().front();
+    const uint32_t l1_base = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t stamp_addr = l1_base;
+    const uint32_t stop_addr = l1_base + 16;
     const CoreCoord core{0, 0};
     const CoreCoord vcore = device->virtual_core_from_logical_core(core, CoreType::WORKER);
     auto& cluster = MetalContext::instance().get_cluster();
-    // Stream 0 scratch register: plain read/write storage (scratch exists only in streams 0-3 and 8-11, and 8-39 are
-    // the CB range), unused on this core. Polling it costs the kernel a register load with no cache in the way.
-    constexpr uint32_t kStreamScratchRegIndex = 36;
-    const uint32_t stream_scratch_addr =
-        MetalContext::instance().hal().get_noc_overlay_start_addr() + kStreamScratchRegIndex * sizeof(uint32_t);
-    {
-        const std::vector<uint32_t> zeros(8, 0);
-        cluster.write_core(zeros.data(), zeros.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), vcore), ack_addr);
-    }
 
-    const size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
-    std::shared_ptr<uint32_t[]> request_backing(
-        static_cast<uint32_t*>(std::aligned_alloc(page_size, page_size)), [](uint32_t* p) { std::free(p); });
-    ASSERT_NE(request_backing, nullptr);
-    request_backing[0] = 0;
-    HostBuffer request_view(ttsl::Span<uint32_t>(request_backing.get(), 4), MemoryPin(request_backing));
-    distributed::MeshCoordinateRangeSet request_range;
-    request_range.merge(distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)));
-    auto request_pinned = experimental::PinnedMemory::Create(*mesh_device, request_range, request_view, true);
-    if (!request_pinned || !request_pinned->get_noc_addr(device->id()).has_value()) {
-        UnregisterProgramRealtimeProfilerCallback(handle);
-        GTEST_SKIP() << "Host memory cannot be pinned for device writes on this configuration";
-    }
-    const uint64_t request_noc_addr = request_pinned->get_noc_addr(device->id())->addr;
-    volatile uint32_t* request_word = request_backing.get();
-    volatile uint32_t* ready_word_probe = request_backing.get() + 3;
-
-    Program program = CreateProgram();
-    auto kernel = CreateKernelFromString(
-        program,
-        make_sync_kernel_source(),
-        CoreRangeSet(CoreRange(core, core)),
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    CreateKernelFromString(
-        program, "#include <cstdint>\nvoid kernel_main() {}\n", CoreRangeSet(CoreRange(core, core)), ComputeConfig{});
-    SetRuntimeArgs(
-        program,
-        kernel,
-        core,
-        {ack_addr,
-         request_addr,
-         log_addr,
-         kSyncProbeIterations,
-         static_cast<uint32_t>(request_noc_addr & 0xFFFFFFFFull),
-         static_cast<uint32_t>(request_noc_addr >> 32)});
-    program.set_runtime_id(9001);
-
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
-
-    constexpr uint32_t kCalibrationReps = 2000;
-    auto min_write_ns = std::chrono::nanoseconds::max();
-    for (uint32_t r = 0; r < kCalibrationReps; r++) {
-        const uint32_t probe = 0;
-        const auto before = std::chrono::steady_clock::now();
-        cluster.write_core_immediate(&probe, sizeof(probe), tt_cxy_pair(device->id(), vcore), log_addr + 4096);
-        min_write_ns = std::min(min_write_ns, std::chrono::steady_clock::now() - before);
-    }
-    auto min_detect_ns = std::chrono::nanoseconds::max();
-    for (uint32_t r = 0; r < kCalibrationReps; r++) {
-        const auto before = std::chrono::steady_clock::now();
-        const uint32_t observed = ready_word_probe[0];
-        const auto delta = std::chrono::steady_clock::now() - before;
-        if (observed == 0xFFFFFFFF) {
-            continue;
-        }
-        min_detect_ns = std::min(min_detect_ns, delta);
-    }
-
-    std::vector<int64_t> host_ns_by_iteration;
-    host_ns_by_iteration.reserve(kSyncProbeIterations);
-    for (uint32_t i = 1; i <= kSyncProbeIterations; i++) {
-        bool asked = false;
-        for (uint32_t poll = 0; poll < 2000000; poll++) {
-            if (request_word[0] == i) {
-                asked = true;
-                break;
+    // Blackhole exposes a static TLB window onto the core's L1, so the device clock can be read with one load instead
+    // of going through UMD's generic path. Only software overhead comes off -- an MMIO read is a non-posted PCIe
+    // transaction either way -- but it is the widest part of the bracket that can be removed at all. Null elsewhere,
+    // where the generic path is used instead.
+    volatile uint64_t* mapped_stamp = nullptr;
+    try {
+        // is_tlb_mapped asks the question that actually matters -- are these bytes covered by a mapping that will not
+        // move underneath a raw pointer -- rather than inferring it from the architecture.
+        const tt_xy_pair tlb_core(vcore.x, vcore.y);
+        auto* tlb_manager = cluster.get_driver()->get_chip(device->id())->get_tlb_manager();
+        if (tlb_manager != nullptr && tlb_manager->is_tlb_mapped(tlb_core, stamp_addr, sizeof(uint64_t))) {
+            // A lookup, never an allocation: get_tlb_window throws unless UMD already mapped this core at init, and
+            // is_tlb_mapped has just confirmed the mapping covers these bytes. No TLB is consumed by reading here.
+            auto* window = tlb_manager->get_tlb_window(tlb_core);
+            if (window != nullptr) {
+                const uint64_t window_offset =
+                    window->get_base_address() - window->handle_ref().get_config().local_offset;
+                mapped_stamp =
+                    reinterpret_cast<volatile uint64_t*>(window->handle_ref().get_base() + stamp_addr + window_offset);
             }
         }
-        if (!asked) {
-            break;
+    } catch (const std::exception&) {
+        // Left null; the generic read path still works.
+    }
+
+    const auto host_now_ns = [] { return std::chrono::steady_clock::now().time_since_epoch().count(); };
+    const auto read_device_ticks = [&]() -> uint64_t {
+        if (mapped_stamp != nullptr) {
+            return *mapped_stamp;
         }
-        host_ns_by_iteration.push_back(std::chrono::steady_clock::now().time_since_epoch().count());
-        cluster.write_core_immediate(&i, sizeof(i), tt_cxy_pair(device->id(), vcore), stream_scratch_addr);
-    }
-
-    distributed::Finish(mesh_device->mesh_command_queue());
-    std::this_thread::sleep_for(500ms);
-    UnregisterProgramRealtimeProfilerCallback(handle);
-
-    ASSERT_GE(host_ns_by_iteration.size(), 100u)
-        << "kernel stopped asking after " << host_ns_by_iteration.size() << " iterations";
-
-    const std::vector<uint32_t> log = cluster.read_core(
-        device->id(), vcore, log_addr, static_cast<uint32_t>(host_ns_by_iteration.size() * 8 * sizeof(uint32_t)));
-    std::vector<double> device_work_ns;
-    std::vector<double> remainder_ns;
-    std::vector<SyncProbe> probes;
-    probes.reserve(host_ns_by_iteration.size());
-    for (size_t i = 0; i < host_ns_by_iteration.size(); i++) {
-        const uint64_t sent = (static_cast<uint64_t>(log[8 * i + 1]) << 32) | log[8 * i + 0];
-        const uint64_t answered = (static_cast<uint64_t>(log[8 * i + 3]) << 32) | log[8 * i + 2];
-        const uint64_t written = (static_cast<uint64_t>(log[8 * i + 5]) << 32) | log[8 * i + 4];
-        if (written > sent && answered > written) {
-            device_work_ns.push_back(static_cast<double>(written - sent));
-            remainder_ns.push_back(static_cast<double>(answered - written));
-        }
-        if (answered <= sent) {
-            continue;
-        }
-        probes.push_back(SyncProbe{
-            .host_ns = host_ns_by_iteration[i],
-            .device_mid_ticks = static_cast<double>(sent) + static_cast<double>(answered - sent) / 2.0,
-            .bracket_ticks = (answered - sent) / 2});
-    }
-    ASSERT_GE(probes.size(), 100u) << "too few usable probes: " << probes.size();
-
-    std::sort(probes.begin(), probes.end(), [](const SyncProbe& a, const SyncProbe& b) {
-        return a.bracket_ticks < b.bracket_ticks;
-    });
-    probes.resize(std::max<size_t>(16, static_cast<size_t>(probes.size() * kSyncProbeKeepFraction)));
-
-    double mean_host = 0.0;
-    double mean_device = 0.0;
-    for (const auto& p : probes) {
-        mean_host += static_cast<double>(p.host_ns);
-        mean_device += p.device_mid_ticks;
-    }
-    mean_host /= static_cast<double>(probes.size());
-    mean_device /= static_cast<double>(probes.size());
-    double num = 0.0;
-    double den = 0.0;
-    for (const auto& p : probes) {
-        const double dx = static_cast<double>(p.host_ns) - mean_host;
-        num += dx * (p.device_mid_ticks - mean_device);
-        den += dx * dx;
-    }
-    ASSERT_GT(den, 0.0) << "probes span no host time";
-    const double frequency = num / den;
-    const double offset = mean_device - frequency * mean_host;
-
-    std::lock_guard lk(records_mu);
-    ASSERT_FALSE(records.empty()) << "no RT records collected";
-    const double worst_bracket_ns = static_cast<double>(probes.back().bracket_ticks) / frequency;
-    // The two mappings sit a fixed distance apart, since this test splits its round trip at the midpoint while its two
-    // legs are not equal. That constant is bounded by its own bracket; what has to hold is that it does not move,
-    // because both mappings track the same device clock.
-    std::vector<double> disagreements;
-    uint64_t reported_error_ns = 0;
-    for (const auto& rec : records) {
-        if (rec.frequency <= 0.0) {
-            continue;
-        }
-        const double independent_host_ns = (static_cast<double>(rec.start_timestamp) - offset) / frequency;
-        disagreements.push_back(static_cast<double>(rec.host_start_ns()) - independent_host_ns);
-        reported_error_ns = std::max(reported_error_ns, rec.clock_sync.sync_error_ns);
-    }
-    ASSERT_FALSE(disagreements.empty());
-    const auto [min_it, max_it] = std::minmax_element(disagreements.begin(), disagreements.end());
-    const double offset_spread_ns = *max_it - *min_it;
-    const double mean_offset_ns =
-        std::accumulate(disagreements.begin(), disagreements.end(), 0.0) / static_cast<double>(disagreements.size());
-
-    const auto tick_ns = [&](const std::vector<double>& v) {
-        auto sorted = v;
-        std::sort(sorted.begin(), sorted.end());
-        return sorted.empty() ? 0.0 : sorted[sorted.size() / 20] / frequency;
+        uint32_t words[2] = {0, 0};
+        cluster.read_core(words, sizeof(words), tt_cxy_pair(device->id(), vcore), stamp_addr);
+        return (static_cast<uint64_t>(words[1]) << 32) | words[0];
     };
-    const double device_work = tick_ns(device_work_ns);
-    const double remainder = tick_ns(remainder_ns);
-    std::cout << "[ BREAKDOWN ] round trip " << (device_work + remainder) << "ns = device write+barrier " << device_work
-              << "ns + remainder " << remainder << "ns; of that remainder, host write issue " << min_write_ns.count()
-              << "ns + host spin detect " << min_detect_ns.count() << "ns => both flights "
-              << (remainder - static_cast<double>(min_write_ns.count()) - static_cast<double>(min_detect_ns.count()))
-              << "ns" << std::endl;
-    std::cout << "[ SYNC ] device-bracketed handshake: " << probes.size() << " tightest probes, frequency " << frequency
-              << " GHz (record reports " << records.front().frequency << "), own bracket +/-" << worst_bracket_ns
-              << "ns; RT mapping offset by " << mean_offset_ns << "ns, moving " << offset_spread_ns
-              << "ns across the session; RT profiler reports " << reported_error_ns << "ns" << std::endl;
 
-    EXPECT_LE(std::abs(mean_offset_ns), worst_bracket_ns + static_cast<double>(reported_error_ns))
-        << "RT mapping sits further from the independent one than both stated uncertainties allow";
-    EXPECT_LE(offset_spread_ns, static_cast<double>(reported_error_ns) + worst_bracket_ns / 4.0)
-        << "the gap between the two mappings moved during the session; one of them is not tracking the device clock";
+    // Each round brackets one device clock read, then runs one program so a record is published with the mapping that
+    // was live beside that read. Pairing them keeps every comparison local in time.
+    std::vector<ClockBracket> brackets;
+    for (uint32_t round = 0; round < kClockCheckRounds; ++round) {
+        const std::vector<uint32_t> zeros(8, 0);
+        cluster.write_core(zeros.data(), zeros.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), vcore), stamp_addr);
 
-    EXPECT_TRUE(mesh_device->close());
+        Program stamp_program = CreateProgram();
+        auto kernel = CreateKernelFromString(
+            stamp_program,
+            make_clock_stamp_kernel_source(),
+            CoreRangeSet(CoreRange(core, core)),
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(stamp_program, kernel, core, {stamp_addr, stop_addr, kClockStampIterations});
+        distributed::MeshWorkload stamp_workload;
+        stamp_workload.add_program(distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(stamp_program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), stamp_workload, /*blocking=*/false);
+
+        // Wait for the slot to go non-zero rather than assume a launch latency. A timeout fails the assertion; it
+        // cannot hang, because the kernel ends itself either way.
+        const auto launch_deadline = std::chrono::steady_clock::now() + 10s;
+        while (read_device_ticks() == 0 && std::chrono::steady_clock::now() < launch_deadline) {
+            std::this_thread::sleep_for(1ms);
+        }
+        ASSERT_NE(read_device_ticks(), 0u) << "the stamping kernel never started";
+
+        // The window arithmetic is only exercised on the architectures this has actually run on, so prove the pointer
+        // before trusting a clock read through it. The device clock only rises, so a mapped read taken between two
+        // generic reads has to fall between them; anything else means the pointer does not address what it is
+        // believed to, and the generic path carries the rest of the test.
+        if (mapped_stamp != nullptr && round == 0) {
+            const auto generic_read = [&] {
+                uint32_t words[2] = {0, 0};
+                cluster.read_core(words, sizeof(words), tt_cxy_pair(device->id(), vcore), stamp_addr);
+                return (static_cast<uint64_t>(words[1]) << 32) | words[0];
+            };
+            const uint64_t before = generic_read();
+            const uint64_t mapped = *mapped_stamp;
+            const uint64_t after = generic_read();
+            if (mapped < before || mapped > after) {
+                ADD_FAILURE() << "the mapped clock read (" << mapped << ") fell outside two generic reads bracketing "
+                              << "it (" << before << ", " << after << "); falling back to the generic path";
+                mapped_stamp = nullptr;
+            }
+        }
+
+        for (uint32_t i = 0; i < kClockReadsPerRound; ++i) {
+            ClockBracket bracket;
+            bracket.host_before_ns = host_now_ns();
+            bracket.device_ticks = read_device_ticks();
+            bracket.host_after_ns = host_now_ns();
+            bracket.round = round;
+            brackets.push_back(bracket);
+        }
+
+        const uint32_t stop = 1;
+        cluster.write_core_immediate(&stop, sizeof(stop), tt_cxy_pair(device->id(), vcore), stop_addr);
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        enqueue_sanity_program(mesh_device_, kFirstClockCheckRuntimeId + round, all_cores());
+        distributed::Finish(mesh_device_->mesh_command_queue());
+    }
+
+    quiesce_and_settle();
+    collector.stop();
+
+    std::map<uint32_t, ProgramRealtimeRecord> record_by_runtime_id;
+    for (const auto& record : collector.records()) {
+        if (record.frequency > 0.0) {
+            record_by_runtime_id.insert({record.runtime_id, record});
+        }
+    }
+
+    // Residual of the published mapping against each independently bracketed read: where the mapping says the device
+    // timestamp happened, minus where the host observed it happening.
+    std::vector<double> residuals_ns;
+    residuals_ns.reserve(brackets.size());
+    std::vector<double> bracket_widths_ns;
+    uint64_t claimed_error_ns = 0;
+    uint32_t rounds_checked = 0;
+    for (uint32_t round = 0; round < kClockCheckRounds; ++round) {
+        const auto it = record_by_runtime_id.find(kFirstClockCheckRuntimeId + round);
+        if (it == record_by_runtime_id.end()) {
+            continue;
+        }
+        ++rounds_checked;
+        const ProgramRealtimeRecord& record = it->second;
+        for (const auto& bracket : brackets) {
+            if (bracket.round != round) {
+                continue;
+            }
+            const double mapped_host_ns = (static_cast<double>(bracket.device_ticks) -
+                                           static_cast<double>(record.clock_sync.device_cycle_offset)) /
+                                          record.frequency;
+            residuals_ns.push_back(mapped_host_ns - bracket.host_mid_ns());
+            bracket_widths_ns.push_back(bracket.half_width_ns());
+            claimed_error_ns = std::max(claimed_error_ns, record.clock_sync.sync_error_ns);
+        }
+    }
+    ASSERT_GE(rounds_checked, kClockCheckRounds / 2) << "too few rounds produced a record to check against";
+    ASSERT_FALSE(residuals_ns.empty());
+
+    const double mean_residual_ns =
+        std::accumulate(residuals_ns.begin(), residuals_ns.end(), 0.0) / static_cast<double>(residuals_ns.size());
+    std::vector<double> magnitudes;
+    magnitudes.reserve(residuals_ns.size());
+    for (const double residual : residuals_ns) {
+        magnitudes.push_back(std::abs(residual));
+    }
+    std::ranges::sort(magnitudes);
+    // The median, not the widest: a handful of reads queue behind other PCIe traffic and run tens of microseconds
+    // long, which says nothing about how well a typical read locates the device clock.
+    std::ranges::sort(bracket_widths_ns);
+    const double typical_bracket_ns = bracket_widths_ns[bracket_widths_ns.size() / 2];
+    const auto quantile = [&](double q) {
+        return magnitudes[static_cast<size_t>(q * static_cast<double>(magnitudes.size() - 1))];
+    };
+
+    std::cout << "[ SYNC ] independent clock read (" << (mapped_stamp != nullptr ? "mapped load" : "generic read")
+              << "): " << residuals_ns.size() << " reads over " << rounds_checked << " rounds, host bracket +/-"
+              << typical_bracket_ns << "ns; published mapping off by " << mean_residual_ns
+              << "ns on average, |residual| p50=" << quantile(0.50) << "ns p90=" << quantile(0.90)
+              << "ns max=" << magnitudes.back() << "ns; RT profiler claims " << claimed_error_ns << "ns" << std::endl;
+
+    // Averaging drives the bracket's noise down by the square root of the sample count, so the mean resolves the
+    // disagreement to tens of nanoseconds; a regression in it shows up in the line printed above long before it
+    // reaches the bound. The mean is not expected to be zero -- a read's true sampling instant is not the midpoint of
+    // its bracket, since the two legs of a PCIe access are unequal, and that asymmetry is a constant of the
+    // measurement rather than an error in the mapping.
+    EXPECT_LE(std::abs(mean_residual_ns), kMaxMeanMappingErrorNs)
+        << "an independent read of the device clock puts the published mapping further out than a few microseconds";
+    EXPECT_LE(quantile(0.90), kMaxTailMappingErrorNs)
+        << "individual reads disagree with the published mapping by more than a few microseconds";
 }
 
 }  // namespace

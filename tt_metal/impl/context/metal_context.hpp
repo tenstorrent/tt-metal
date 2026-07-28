@@ -41,7 +41,6 @@ class Data;
 class ContextDescriptor;
 class DataCollector;
 class DeviceManager;
-class RealtimeProfilerService;
 class RiscFirmwareInitializer;
 class dispatch_core_manager;
 class DispatchQueryManager;

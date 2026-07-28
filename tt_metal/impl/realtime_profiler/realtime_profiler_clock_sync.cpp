@@ -50,14 +50,6 @@ constexpr uint32_t kRttProbeHealthyPolls = 128;
 // How long a cached calibration stays usable across a MeshDevice close/reopen.
 constexpr auto kCalibrationCacheMaxAge = std::chrono::seconds(60);
 
-// How close to the floor a round trip has to land for the rest of the burst to be not worth firing.
-constexpr double kBurstStopSlack = 1.05;
-
-// How much the floor climbs per resync, so it can recover when the path's real best round trip gets worse. A fraction
-// of the floor, not of the sample's excess over it: rising in proportion to that excess lets the bulk of the
-// distribution drag the floor up to its own mean, which is the one thing the floor must not become.
-constexpr double kRttFloorRise = 1.0 / 4096.0;
-
 // Host ACK buffer, 32-bit words: [device_time_lo, device_time_hi, token]. device_time is at the base so it is 8-byte
 // aligned; NOC PCIe writes require src/dst to share the low 4 bits, so its L1 source is 16-aligned and the token's is
 // 8-mod-16.
@@ -115,26 +107,48 @@ RealtimeProfilerClockSync::SyncL1Addrs RealtimeProfilerClockSync::resolve_l1_add
 }
 
 void RealtimeProfilerClockSync::configure_write_path() {
-    if (MetalContext::instance(context_id_).hal().get_arch() != tt::ARCH::BLACKHOLE) {
-        return;
-    }
     try {
         const CoreCoord rt_virtual = device_->virtual_core_from_logical_core(profiler_core_, CoreType::WORKER);
+        const tt_xy_pair tlb_core(rt_virtual.x, rt_virtual.y);
         auto* tlb_manager =
             MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(device_->id())->get_tlb_manager();
-        if (tlb_manager != nullptr) {
-            sync_tlb_ = tlb_manager->get_tlb_window(tt_xy_pair(rt_virtual.x, rt_virtual.y));
-            // Resolve the token's mapped address once. TlbWindow::write32 is a virtual call that re-validates the
-            // offset and re-derives the address on every store; the window is static, so the address is not.
-            const uint64_t window_offset =
-                sync_tlb_->get_base_address() - sync_tlb_->handle_ref().get_config().local_offset;
-            TT_FATAL(
-                l1_.host_timestamp + sizeof(uint32_t) <= sync_tlb_->get_size(),
-                "Sync token at {} does not fit the profiler core's TLB window",
-                l1_.host_timestamp);
-            sync_doorbell_ = reinterpret_cast<volatile uint32_t*>(
-                sync_tlb_->handle_ref().get_base() + l1_.host_timestamp + window_offset);
+        // Asks whether these bytes are already covered by a static mapping, rather than inferring it from the
+        // architecture. get_tlb_window is a lookup that throws unless UMD mapped this core at init, so nothing is
+        // allocated here and a chip without such a mapping simply keeps the write_core_immediate path below.
+        if (tlb_manager == nullptr || !tlb_manager->is_tlb_mapped(tlb_core, l1_.host_timestamp, sizeof(uint32_t))) {
+            return;
         }
+        sync_tlb_ = tlb_manager->get_tlb_window(tlb_core);
+        // Resolve the token's mapped address once. TlbWindow::write32 is a virtual call that re-validates the
+        // offset and re-derives the address on every store; the window is static, so the address is not.
+        const uint64_t window_offset =
+            sync_tlb_->get_base_address() - sync_tlb_->handle_ref().get_config().local_offset;
+        volatile uint32_t* doorbell = reinterpret_cast<volatile uint32_t*>(
+            sync_tlb_->handle_ref().get_base() + l1_.host_timestamp + window_offset);
+
+        // Prove the pointer before the handshake depends on it. The window is keyed by coordinates whose flavour is
+        // UMD's to define, so a lookup that silently resolves to the wrong core would put the token somewhere else in
+        // the mesh -- a corruption rather than a failure. Writing a sentinel and reading it back the ordinary way
+        // costs one round trip at bring-up and turns that into a fallback.
+        constexpr uint32_t kDoorbellProbe = 0xC0FFEEu;
+        *doorbell = kDoorbellProbe;
+        tt_driver_atomics::sfence();
+        std::vector<uint32_t> readback(1, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device_, profiler_core_, l1_.host_timestamp, sizeof(uint32_t), readback, CoreType::WORKER);
+        std::vector<uint32_t> cleared(1, 0);
+        tt::tt_metal::detail::WriteToDeviceL1(device_, profiler_core_, l1_.host_timestamp, cleared, CoreType::WORKER);
+        if (readback[0] != kDoorbellProbe) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {}: the mapped sync doorbell did not land (read back 0x{:x}); falling "
+                "back to write_core_immediate",
+                device_->id(),
+                readback[0]);
+            sync_tlb_ = nullptr;
+            return;
+        }
+        sync_doorbell_ = doorbell;
     } catch (const std::exception& e) {
         log_debug(
             tt::LogMetal,
@@ -201,9 +215,9 @@ void RealtimeProfilerClockSync::configure_ack_word(distributed::MeshDevice& mesh
 }
 
 void RealtimeProfilerClockSync::write_timestamp(uint32_t value) {
-    // TODO: measure on Wormhole. The non-TLB path resolves the virtual core on every probe, inside the interval the
-    // round trip is timed over; caching the tt_cxy_pair in configure() would take it off that path. Blackhole always
-    // takes the TLB branch, so the change is unmeasurable here.
+    // TODO: measure on a chip that takes it. The non-TLB path resolves the virtual core on every probe, inside the
+    // interval the round trip is timed over; caching the tt_cxy_pair in configure() would take it off that path. Any
+    // chip with a static mapping for the profiler core takes the branch above instead, so it is unmeasurable there.
     if (sync_doorbell_ != nullptr) {
         *sync_doorbell_ = value;
         tt_driver_atomics::sfence();
@@ -317,7 +331,7 @@ bool RealtimeProfilerClockSync::run_fit() {
             // The first probe pays the cold PCIe path.
             if (i > 0) {
                 samples.push_back(*p);
-                update_rtt_floor(p->rtt);
+                rtt_floor_.observe(p->rtt);
             }
         }
     }
@@ -363,15 +377,6 @@ bool RealtimeProfilerClockSync::try_restore_calibration(std::chrono::steady_cloc
     return true;
 }
 
-void RealtimeProfilerClockSync::update_rtt_floor(std::chrono::nanoseconds rtt) {
-    if (rtt_floor_ == std::chrono::nanoseconds::zero() || rtt < rtt_floor_) {
-        rtt_floor_ = rtt;
-        return;
-    }
-    rtt_floor_ +=
-        std::chrono::nanoseconds(static_cast<int64_t>(static_cast<double>(rtt_floor_.count()) * kRttFloorRise));
-}
-
 bool RealtimeProfilerClockSync::resync(std::chrono::steady_clock::time_point now) {
     if (ack_host_ptr_ == nullptr) {
         return true;
@@ -385,15 +390,14 @@ bool RealtimeProfilerClockSync::resync(std::chrono::steady_clock::time_point now
             if (sample.has_value() && (!best.has_value() || sample->rtt < best->rtt)) {
                 best = sample;
             }
-            if (best.has_value() && rtt_floor_ != std::chrono::nanoseconds::zero() &&
-                best->rtt <= rtt_floor_ * kBurstStopSlack) {
+            if (best.has_value() && rtt_floor_.is_near(best->rtt)) {
                 break;
             }
         }
         if (!best.has_value()) {
             return false;
         }
-        update_rtt_floor(best->rtt);
+        rtt_floor_.observe(best->rtt);
         if (model_.accept_reanchor(best->rtt, now)) {
             model_.reanchor(now, *best);
         }

@@ -24,7 +24,34 @@ constexpr auto kMaxAnchorAge = std::chrono::seconds(2);
 // Half the round trip: the anchor could have landed anywhere inside it.
 constexpr std::chrono::nanoseconds placement_error(std::chrono::nanoseconds rtt) { return rtt / 2; }
 
+// How close to the floor a round trip has to land to count as near it. Measured on Blackhole: with the floor at
+// ~1.2us, ~80% of single probes already land inside this, which is what makes stopping a burst early worthwhile.
+constexpr double kRttFloorSlack = 1.05;
+
+// How much the floor climbs per observation, so it can recover when the path's real best round trip gets worse.
+// Multiplicative because its use is: is_near compares against floor * kRttFloorSlack, so recovery time depends on the
+// ratio alone and not on the absolute round trip, which varies ~4x across chips and architectures. A fraction of the
+// floor, never of a sample's excess over it -- rising in proportion to that excess lets the bulk of the distribution
+// drag the floor up to its own mean, which is the one thing the floor must not become. 1/4096 is ~200 observations to
+// climb one kRttFloorSlack; erring low only costs probes, since the burst then simply runs its full depth.
+constexpr double kRttFloorRise = 1.0 / 4096.0;
+
 }  // namespace
+
+void RttFloor::observe(std::chrono::nanoseconds rtt) {
+    const double rtt_ns = static_cast<double>(rtt.count());
+    if (floor_ns_ == 0.0 || rtt_ns < floor_ns_) {
+        floor_ns_ = rtt_ns;
+        return;
+    }
+    floor_ns_ += floor_ns_ * kRttFloorRise;
+}
+
+std::chrono::nanoseconds RttFloor::value() const { return std::chrono::nanoseconds(static_cast<int64_t>(floor_ns_)); }
+
+bool RttFloor::is_near(std::chrono::nanoseconds rtt) const {
+    return floor_ns_ != 0.0 && static_cast<double>(rtt.count()) <= floor_ns_ * kRttFloorSlack;
+}
 
 void ClockModel::seed_frequency(double frequency) {
     TT_FATAL(frequency > 0.0, "Real-time profiler clock model needs a positive seed frequency, got {}", frequency);

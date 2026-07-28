@@ -447,6 +447,15 @@ RealtimeProfilerReceiver::DeviceState::DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::~DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = default;
 
+std::vector<uint64_t> RealtimeProfilerReceiver::num_resyncs_per_device() const {
+    std::vector<uint64_t> counts;
+    counts.reserve(num_resyncs_.size());
+    for (const auto& count : num_resyncs_) {
+        counts.push_back(count.load(std::memory_order_relaxed));
+    }
+    return counts;
+}
+
 uint32_t RealtimeProfilerReceiver::host_fifo_capacity_pages() const { return RealtimeProfilerRuntimeSizes::fifo_pages; }
 
 uint32_t RealtimeProfilerReceiver::read_ring_full_wait_count() {
@@ -514,8 +523,10 @@ void RealtimeProfilerReceiver::publish_pages(
 }
 
 void RealtimeProfilerReceiver::resync_next_device(std::chrono::steady_clock::time_point now) {
-    DeviceState& dev_state = devices_[next_resync_device_];
-    next_resync_device_ = (next_resync_device_ + 1) % devices_.size();
+    const size_t index = next_resync_device_;
+    DeviceState& dev_state = devices_[index];
+    next_resync_device_ = (index + 1) % devices_.size();
+    num_resyncs_[index].fetch_add(1, std::memory_order_relaxed);
     if (!dev_state.clock_sync.resync(now)) {
         if (const auto total = probe_timeout_warns_.record(now, 1)) {
             log_warning(
@@ -557,6 +568,7 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     data_collector_(MetalContext::instance(context_id).data_collector().get()),
     realtime_profiler_service_(&realtime_profiler_service()),
     devices_(std::move(devices)),
+    num_resyncs_(devices_.size()),
     ring_(std::min(kMaxRingCapacity, consumer_batch_records_for(devices_.size()) * kRingHeadroomBatches)) {
     run_init_sync();
     realtime_profiler_service_->attach_ring(ring_, consumer_batch_records_for(devices_.size()));

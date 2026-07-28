@@ -20,6 +20,24 @@ struct ClockSyncSample {
     uint64_t device_ticks = 0;                        // device WALL_CLOCK captured inside that round trip
 };
 
+// The best round trip a handshake path is currently capable of, which is the target a probe burst works towards.
+// Drops to any new minimum at once and rises only slowly, so one lucky fast round trip cannot set a bar later bursts
+// can never clear, and a path that has genuinely slowed is followed within seconds.
+class RttFloor {
+public:
+    void observe(std::chrono::nanoseconds rtt);
+    // Zero until the first observation, which callers take as "no target yet" and probe without one.
+    [[nodiscard]] std::chrono::nanoseconds value() const;
+    // Whether a round trip is close enough to the floor that further probing would not measurably improve on it.
+    [[nodiscard]] bool is_near(std::chrono::nanoseconds rtt) const;
+
+private:
+    // Held as a double because the per-observation rise is a fraction of a nanosecond at realistic round trips
+    // (~0.3ns at a 1.2us floor). In integer nanoseconds it would truncate to zero every time, leaving the floor a
+    // monotone minimum that ratchets down to the all-time best and never lets a burst exit early again.
+    double floor_ns_ = 0.0;
+};
+
 // How well an initial fit matched its samples. Reported so bring-up can log it; the model does not act on it.
 struct ClockFitQuality {
     bool ok = false;  // false when there were too few samples to regress and the seeded frequency was kept

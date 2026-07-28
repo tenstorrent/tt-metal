@@ -211,7 +211,7 @@ void RealtimeProfilerService::run_consumer(
     };
 
     while (!stop_token.stop_requested()) {
-        // we snapshot before checking any work condition so a concurrent publication/control isn't missed
+        // Snapshot before checking any work condition, so a concurrent publication or control change is not missed.
         const uint32_t wake_token = wake_generation_.load(std::memory_order_acquire);
 
         if (registration.control_pending.load(std::memory_order_acquire)) {
@@ -241,7 +241,7 @@ void RealtimeProfilerService::run_consumer(
             rings_to_drain.clear();
         }
 
-        bool made_progress = false;  // for deciding if we should wait
+        bool made_progress = false;
 
         for (auto it = registration.readers.begin(); it != registration.readers.end();) {
             RingReader& ring_reader = *it;

@@ -106,10 +106,6 @@ private:
     };
 
     std::optional<ClockSyncSample> probe();
-    // Tracks the best round trip this path is currently capable of, which is the target a burst probes towards. Drops
-    // to any new minimum at once and rises only slowly, so one lucky fast round trip cannot set a bar later bursts can
-    // never clear.
-    void update_rtt_floor(std::chrono::nanoseconds rtt);
     void write_timestamp(uint32_t value);
     // Times the round trip to the timestamp landing, then waits for the token. Empty when the device stopped
     // responding.
@@ -132,7 +128,7 @@ private:
     SyncL1Addrs l1_;
     uint32_t sync_seq_ = 0;          // host->device request flag, never 0 so the device can tell a request is pending
     uint64_t last_device_time_ = 0;  // last timestamp read out of the ACK buffer; a change is the acknowledgement
-    std::chrono::nanoseconds rtt_floor_{};  // zero until the first handshake completes
+    RttFloor rtt_floor_;
     // Sole owner of the pinned-path ACK buffer: PinnedMemory maps only a raw pointer, so dropping this frees it.
     std::shared_ptr<uint32_t[]> ack_host_backing_;
     std::shared_ptr<experimental::PinnedMemory> ack_pinned_;

@@ -100,7 +100,7 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 
 ## 3. Sync (Timestamp Calibration)
 
-Host and device timestamps are aligned so consumers (Tracy, callbacks) can relate device cycles to host time. The host keeps a per-chip affine mapping `device_cycle = frequency * host_ns + device_cycle_offset`: `frequency` is fit once at init; `device_cycle_offset` is re-anchored continuously by a free-running servo on the receiver thread (~every 50 ms).
+Host and device timestamps are aligned so consumers (Tracy, callbacks) can relate device cycles to host time. The host keeps a per-chip affine mapping `device_cycle = frequency * host_ns + device_cycle_offset`: `frequency` is fit once at init; `device_cycle_offset` is re-anchored continuously from the receiver thread (~every 50 ms per device).
 
 Each handshake is one-shot and rides a host-pinned ACK word; the device never writes a sync record into the timestamp FIFO. The host writes a 32-bit token into `sync_host_timestamp`; the profiler core's NCRISC pusher (`cq_realtime_profiler_push.cpp`, so the drop-critical dispatch_s read path is never stalled by sync work) sees it non-zero on its next loop iteration, captures the device WALL_CLOCK, and NOC-writes it — then the token — straight into the host's pinned ACK buffer (a device->host write that bypasses the record FIFO).
 
@@ -119,7 +119,9 @@ Each handshake is one-shot and rides a host-pinned ACK word; the device never wr
 
 The device writes `D` before the token, so once the host observes the token `D` has already landed. The offset is re-anchored at the round-trip midpoint (minimax placement, error <= RTT/2 without assuming a symmetric latency); the reported `sync_error_ns` is that half-RTT.
 
-**Init** repeats the handshake ~100 times (reading `D` from the ACK buffer each time) and fits `frequency` by linear regression. **Steady state:** the servo issues one handshake per device every 50 ms and re-anchors `device_cycle_offset` to track clock drift. A device whose host ACK word could not be set up (`sync_ack_pcie_xy_enc == 0`) is simply left unsynced — there is no record-FIFO fallback.
+**Init** repeats the handshake ~100 times (reading `D` from the ACK buffer each time) and fits `frequency` by linear regression. **Steady state:** each device is resynced every 50 ms and `device_cycle_offset` re-anchored to track clock drift. A device whose host ACK word could not be set up is simply left unsynced — there is no record-FIFO fallback.
+
+A resync fires a burst of up to 8 handshakes and anchors on the tightest, so one slow round trip cannot set the published `sync_error_ns`; the burst stops early once a handshake lands near the round-trip floor the path is currently managing, which on Blackhole ends it after ~2-3. Devices take their turn one per tick rather than all on the same tick, so the receiver thread's page draining is blocked for one device's burst instead of the whole mesh's.
 
 ---
 
@@ -142,7 +144,7 @@ Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::
 | Profiler-core kernels (BRISC reader + NCRISC pusher/sync) | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp`, `cq_realtime_profiler_push.cpp` |
 | Host init and receiver thread (per MeshDevice) | `tt_metal/impl/realtime_profiler/realtime_profiler_receiver.cpp` |
 | Clock mapping: fit, re-anchor policy, drift, error bar | `realtime_profiler_clock_model.cpp` |
-| Sync handshake transport, servo, calibration cache | `realtime_profiler_clock_sync.cpp` |
+| Sync handshake transport, probe burst, calibration cache | `realtime_profiler_clock_sync.cpp` |
 | Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
 | Public API (register / unregister / is-active) | `tt_metal/impl/realtime_profiler/realtime_profiler.cpp` |
 | Record fan-out (service, Tracy, user callbacks) | `tt_metal/impl/realtime_profiler/realtime_profiler_service.cpp`, `realtime_profiler_tracy_consumer.cpp` |

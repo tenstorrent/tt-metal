@@ -66,6 +66,9 @@ public:
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
     // Records dropped before publication because their end timestamp preceded their start
     uint64_t num_malformed_records() const { return num_malformed_records_.load(std::memory_order_relaxed); }
+    // Clock resyncs performed per device, indexed as get_devices() orders them. Devices are resynced in strict
+    // rotation, so in a healthy run every entry is non-zero and they stay within one of each other.
+    std::vector<uint64_t> num_resyncs_per_device() const;
     // Blocking device L1 read across every chip; not for a latency-sensitive path.
     uint32_t read_ring_full_wait_count();
     size_t num_active_devices() const { return devices_.size(); }
@@ -157,6 +160,8 @@ private:
     // What the receiver thread drains, and where it publishes.
     std::vector<DeviceState> devices_;
     size_t next_resync_device_ = 0;
+    // Indexed like devices_ and sized once at construction; the receiver thread writes, tests read.
+    std::vector<std::atomic<uint64_t>> num_resyncs_;
     RealtimeProfilerRecordRing ring_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};
