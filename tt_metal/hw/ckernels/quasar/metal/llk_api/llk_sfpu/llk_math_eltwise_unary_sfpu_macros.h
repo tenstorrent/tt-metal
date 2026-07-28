@@ -14,11 +14,10 @@
 
 namespace ckernel {
 
-template <DstSync DST_SYNC, bool DST_ACCUM>
+template <DstSync DST_SYNC, bool DST_ACCUM, trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index, VectorMode vector_mode) {
     LLK_ASSERT(
-        (dst_index < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, trisc::DstTileShape::Tile32x32>()),
-        "dst_index exceeds max dest tiles");
+        (dst_index < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, TILE_SHAPE>()), "dst_index exceeds max dest tiles");
     LLK_ASSERT(
         vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
             vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,
@@ -36,6 +35,12 @@ inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index,
 #define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
     (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM>(DST_IDX, VECTOR_MODE),               \
      _llk_math_eltwise_unary_sfpu_params_(                                             \
+         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
+
+// Templated functor in `ckernel::sfpu` operating on a non-default Dest tile shape.
+#define SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, DST_ACCUM, TILE_SHAPE, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM, TILE_SHAPE>(DST_IDX, VECTOR_MODE),                         \
+     _llk_math_eltwise_unary_sfpu_params_<TILE_SHAPE>(                                                       \
          ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
 // Non-templated functor in `ckernel::sfpu`.

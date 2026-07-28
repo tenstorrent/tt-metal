@@ -216,10 +216,19 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             volatile dfb_initializer_per_risc_t* per_risc_base =
                 reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
+            // Sized to the ISR descriptor these ids are copied into (see MAX_TILE_COUNTERS_PER_SIDE).
+            // The two sides are adjacent stack locals, so an unbounded fill of one silently
+            // overwrites the other's ids; the collection loops below must stay in bounds.
             uint8_t num_producer_tcs = 0;
-            uint8_t producer_tcs[16] = {};
+            uint8_t producer_tcs[dfb::MAX_TILE_COUNTERS_PER_SIDE] = {};
             uint8_t num_consumer_tcs = 0;
-            uint8_t consumer_tcs[16] = {};
+            uint8_t consumer_tcs[dfb::MAX_TILE_COUNTERS_PER_SIDE] = {};
+            // Only collect a side's ids when that side actually programs a TxnDFBDescriptor below.
+            // A side with no transaction ids (e.g. a Tensix-only consumer, which never gets one)
+            // would otherwise gather ids that are never read - wasted work that can also exceed the
+            // staging capacity, e.g. 6 producers x 4 ALL Tensix consumers needs 24 ids.
+            const bool collect_producer_tcs = init_ptr->producer_txn_descriptor.num_txn_ids > 0;
+            const bool collect_consumer_tcs = init_ptr->consumer_txn_descriptor.num_txn_ids > 0;
             for (uint8_t i = 0; i < num_riscs; i++) {
                 volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + i;
 
@@ -255,11 +264,19 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                         g_remapper_configurator.write_all_configs();
                     }
 
-                    for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
+                    for (uint8_t i = 0; collect_producer_tcs && i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
+                        ASSERT(num_producer_tcs < dfb::MAX_TILE_COUNTERS_PER_SIDE);
+                        if (num_producer_tcs >= dfb::MAX_TILE_COUNTERS_PER_SIDE) {
+                            break;
+                        }
                         producer_tcs[num_producer_tcs++] = per_risc_ptr->packed_tile_counter[i];
                     }
                 } else {
-                    for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
+                    for (uint8_t i = 0; collect_consumer_tcs && i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
+                        ASSERT(num_consumer_tcs < dfb::MAX_TILE_COUNTERS_PER_SIDE);
+                        if (num_consumer_tcs >= dfb::MAX_TILE_COUNTERS_PER_SIDE) {
+                            break;
+                        }
                         consumer_tcs[num_consumer_tcs++] = per_risc_ptr->packed_tile_counter[i];
                     }
                 }
