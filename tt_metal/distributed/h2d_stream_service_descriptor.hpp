@@ -25,7 +25,10 @@ namespace tt::tt_metal::distributed {
 
 // Serializable descriptor for cross-process H2DStreamService attachment.
 struct H2DStreamServiceDescriptor {
-    static constexpr uint32_t kVersion = 1;
+    // v2: DataType ordinals were renumbered (INT8 inserted at 8, shifting FP8_E4M3 8->9 and INVALID 9->10).
+    // global_dtype is serialized as a raw DataType ordinal, so the bump forces a version mismatch (hard error)
+    // between old/new processes instead of silently decoding ordinal 8/9 as the wrong dtype.
+    static constexpr uint32_t kVersion = 2;
 
     // Source-tensor spec snapshot. Limited to ROW_MAJOR / DRAM-interleaved today.
     tt::tt_metal::Shape global_shape;
