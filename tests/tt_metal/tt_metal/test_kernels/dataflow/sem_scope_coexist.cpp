@@ -30,11 +30,8 @@ void kernel_main() {
     const uint32_t increment_times = get_arg(args::increment_times);
     const uint32_t num_threads = get_arg(args::num_threads);
 
-#ifdef SEM_HAS_DM_CACHED
-    // Seed the cached-only pool from the ring-carried init before any up(). All threads call it
-    // (its barrier must be balanced); emitted only because 'cached' below is DM_LOCAL_CACHED.
-    sem::init_dm_cached();
-#endif
+    // NOTE: the cached-only pool slot for sem::cached is seeded by sem::init_dm_cached(), which the
+    // build AUTO-INJECTS at kernel entry (before any thread's first up()) -- no call is needed here.
 
     Semaphore cached(sem::cached);      // CTAD -> DM_LOCAL_CACHED (pool, cached AMO)
     Semaphore external(sem::external);  // CTAD -> EXTERNAL (ring, NoC atomic)
