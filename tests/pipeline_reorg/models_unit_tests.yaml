@@ -565,7 +565,7 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      timeout: 40
+      timeout: 15
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
