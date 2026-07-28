@@ -107,19 +107,27 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
 
     auto& env_impl = MetalEnvAccessor(env_).impl();
     const auto& cluster = env_impl.get_cluster();
-    TT_FATAL(not cluster.all_chip_ids().empty(), "Cannot reset DispatchQueryManager with no devices");
-    const ChipId device_id = *cluster.all_chip_ids().begin();
-    resolved_dispatch_core_type_ = resolve_dispatch_core_type(env_impl, device_id, dispatch_core_config_);
     const tt::ARCH arch = cluster.arch();
-    // WORKER (Tensix) and DISPATCH (Quasar DE) both co-locate dispatch_s on the same core as
-    // dispatch; ETH 2CQ does not. Quasar topology always includes DISPATCH_S for 1CQ/2CQ.
-    dispatch_s_enabled_ =
-        (num_hw_cqs == 1 or resolved_dispatch_core_type_ == CoreType::WORKER or
-         resolved_dispatch_core_type_ == CoreType::DISPATCH);
-    distributed_dispatcher_ = (num_hw_cqs == 1 and resolved_dispatch_core_type_ == CoreType::ETH);
+
+    if (arch == tt::ARCH::QUASAR) {
+        TT_FATAL(not cluster.all_chip_ids().empty(), "Cannot reset DispatchQueryManager with no devices");
+        const ChipId device_id = *cluster.all_chip_ids().begin();
+        resolved_dispatch_core_type_ = resolve_dispatch_core_type(env_impl, device_id, dispatch_core_config_);
+        // WORKER (Tensix) and DISPATCH (DE) both co-locate dispatch_s; ETH 2CQ does not.
+        dispatch_s_enabled_ =
+            (num_hw_cqs == 1 or resolved_dispatch_core_type_ == CoreType::WORKER or
+             resolved_dispatch_core_type_ == CoreType::DISPATCH);
+        distributed_dispatcher_ = (num_hw_cqs == 1 and resolved_dispatch_core_type_ == CoreType::ETH);
+    } else {
+        // WH/BH: keep config-derived type/flags.
+        resolved_dispatch_core_type_ = get_core_type_from_config(dispatch_core_config_);
+        dispatch_s_enabled_ =
+            (num_hw_cqs == 1 or dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::WORKER);
+        distributed_dispatcher_ =
+            (num_hw_cqs == 1 and dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH);
+    }
+
     go_signal_noc_ = (dispatch_s_enabled_ and arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
-    // Layout is keyed off the *resolved* dispatch core type (Quasar DE → DISPATCH, Tensix fallback → WORKER),
-    // not the config's WORKER/ETH axis. Config alone never yields CoreType::DISPATCH.
     worker_cq_dispatch_layout_ =
         generate_cq_dispatch_layout(arch, CoreType::WORKER, resolved_dispatch_core_type_, num_hw_cqs);
     eth_cq_dispatch_layout_ =

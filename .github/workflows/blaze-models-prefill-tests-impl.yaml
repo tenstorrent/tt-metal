@@ -171,7 +171,10 @@ jobs:
           pip3 install PyYAML
           {
             echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
+            # Derive the allocation from this leg's own SKU (matrix.test-group.sku) rather than
+            # the pipeline-wide sp-config, so individual tests can opt into a different allocation
+            # pool (e.g. bh_sc1_high_power) without changing the pool for the rest of the run.
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "${{ matrix.test-group.sku }}"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
