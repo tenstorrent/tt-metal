@@ -11,6 +11,13 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/validation_helpers.hpp"
+
+// This reader shares one source across four modes, so its runtime-arg schema is the union of every
+// path's names (see the factory). Each path declares the arg names it does NOT own as
+// `extern INVALID_VALUE_PLACEHOLDER` (from validation_helpers.hpp), so a wrong-path read of one is a hard build
+// error instead of a silent read of the placeholder the host passed for that unused name. The extern
+// placeholder reserves nothing and has no readable value.
 
 void kernel_main() {
     uint32_t batch_id_size = get_arg(args::batch_id_size);
@@ -61,6 +68,12 @@ void kernel_main() {
         const uint32_t col_page_offset = get_arg(args::col_page_offset);
         const uint32_t col_byte_offset = get_arg(args::col_byte_offset);
         const uint32_t shard_ppb = batch_size_in_pages;
+
+        // Generic-path args are not valid on the shard-local path; reading one is a build error.
+        extern INVALID_VALUE_PLACEHOLDER outer_count;
+        extern INVALID_VALUE_PLACEHOLDER outer_stride_a;
+        extern INVALID_VALUE_PLACEHOLDER outer_stride_b;
+        extern INVALID_VALUE_PLACEHOLDER num_slices;
 
         // Raw SRAM base addresses for this core's shard (Case 2 bindings): direct-address
         // arithmetic into input_a (both shard-local modes) and input_b (same-sharded mode only).
@@ -142,6 +155,20 @@ void kernel_main() {
 
     } else {
         if constexpr (IS_NATIVE) {
+            // Native reads only the common args; every path-specific name is invalid here, so
+            // reading any of them is a build error.
+            extern INVALID_VALUE_PLACEHOLDER outer_count;
+            extern INVALID_VALUE_PLACEHOLDER outer_stride_a;
+            extern INVALID_VALUE_PLACEHOLDER outer_stride_b;
+            extern INVALID_VALUE_PLACEHOLDER num_slices;
+            extern INVALID_VALUE_PLACEHOLDER batch_offset_a;
+            extern INVALID_VALUE_PLACEHOLDER total_local_batches;
+            extern INVALID_VALUE_PLACEHOLDER b_full_ppb;
+            extern INVALID_VALUE_PLACEHOLDER shard_tile_w;
+            extern INVALID_VALUE_PLACEHOLDER full_tile_w;
+            extern INVALID_VALUE_PLACEHOLDER col_page_offset;
+            extern INVALID_VALUE_PLACEHOLDER col_byte_offset;
+
             bool replace_batch = false;
             uint32_t batch_to_replace_id = 0;
             if (batch_id_size > 0) {
@@ -192,6 +219,15 @@ void kernel_main() {
             const uint32_t outer_stride_a = get_arg(args::outer_stride_a);
             const uint32_t outer_stride_b = get_arg(args::outer_stride_b);
             const uint32_t inner_count = batch_size_in_pages;
+
+            // Shard-local-path args are not valid on the generic path; reading one is a build error.
+            extern INVALID_VALUE_PLACEHOLDER batch_offset_a;
+            extern INVALID_VALUE_PLACEHOLDER total_local_batches;
+            extern INVALID_VALUE_PLACEHOLDER b_full_ppb;
+            extern INVALID_VALUE_PLACEHOLDER shard_tile_w;
+            extern INVALID_VALUE_PLACEHOLDER full_tile_w;
+            extern INVALID_VALUE_PLACEHOLDER col_page_offset;
+            extern INVALID_VALUE_PLACEHOLDER col_byte_offset;
 
             if (num_slices == 0) {
                 return;
