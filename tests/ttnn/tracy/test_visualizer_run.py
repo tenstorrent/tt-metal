@@ -111,6 +111,19 @@ def test_read_db_run_id_missing_file_does_not_create(tmp_path):
     assert not missing.parent.exists()
 
 
+def test_read_db_run_id_accepts_relative_path(monkeypatch, tmp_path):
+    monkeypatch.setenv(TT_METAL_RUN_ID_ENV, "rel-db-path")
+    db_path = _make_memory_db(tmp_path / "generated" / "ttnn" / "reports" / "r1" / "db.sqlite")
+    stamped = stamp_memory_run_id(db_path)
+    assert stamped == "rel-db-path"
+
+    monkeypatch.chdir(tmp_path)
+    relative = Path("generated/ttnn/reports/r1/db.sqlite")
+    assert not relative.is_absolute()
+    assert read_db_run_id(relative) == stamped
+    assert find_memory_report_dir(stamped, root=Path("generated/ttnn/reports")) == relative.parent
+
+
 def test_stamp_memory_and_manifest_share_run_id(monkeypatch, tmp_path):
     monkeypatch.delenv(TT_METAL_RUN_ID_ENV, raising=False)
 
