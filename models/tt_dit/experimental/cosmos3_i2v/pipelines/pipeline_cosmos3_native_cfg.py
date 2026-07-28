@@ -372,21 +372,6 @@ def build_cosmos3_i2v_native_cfg_pipeline(
     # transplant its trunks onto a DualSubmeshProxy. We invoke the underlying
     # builder twice to get two trunks with weights loaded; the second call
     # reuses tt_dit's tensor cache (same parallel_config + submesh shape).
-    # TT_COSMOS3_VAE_FULL_MESH moves the VAE decoder onto the full parent mesh.
-    # The two CFG submeshes must be closed first — the parent can't be driven while
-    # its children are open — so the trunks are unusable after; safe because decode
-    # is the last device work in the run.
-    vae_full_mesh = _os.environ.get("TT_COSMOS3_VAE_FULL_MESH") in ("1", "true", "True")
-    _submesh_closed = {"done": False}
-
-    def _close_cfg_submeshes():
-        if _submesh_closed["done"]:
-            return
-        _submesh_closed["done"] = True
-        for _s in (submesh_a, submesh_b):
-            ttnn.close_mesh_device(_s)
-        print("[cfg-pipeline] closed CFG submeshes; VAE decode runs on the full parent mesh", flush=True)
-
     pipe_a = build_cosmos3_i2v_native_pipeline(
         submesh_a,
         dtype=dtype,
@@ -401,8 +386,6 @@ def build_cosmos3_i2v_native_cfg_pipeline(
         cache_namespace=cache_namespace,
         enable_device_proj_out=enable_device_proj_out,
         enable_device_proj_in=enable_device_proj_in,
-        vae_decoder_device=device if vae_full_mesh else None,
-        pre_decode_hook=_close_cfg_submeshes if vae_full_mesh else None,
     )
     trunk_a = pipe_a.transformer.layers[0]._native_trunk
 

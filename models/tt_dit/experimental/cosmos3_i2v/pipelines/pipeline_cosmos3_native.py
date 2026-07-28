@@ -575,17 +575,8 @@ def build_cosmos3_i2v_native_pipeline(
     cache_namespace: str = "cosmos3-i2v",
     enable_device_proj_out: bool = False,
     enable_device_proj_in: bool = False,
-    vae_decoder_device: ttnn.MeshDevice | None = None,
-    pre_decode_hook=None,
 ):
     """Construct the native-trunk Cosmos3 I2V pipeline.
-
-    vae_decoder_device, when set, builds the VAE *decoder* on this mesh instead
-    of `device`. native-cfg passes the full parent mesh so decode runs on all
-    chips (the encoder stays on `device`, since it runs before the trunk frees
-    the submeshes). pre_decode_hook runs once before the first decode — used to
-    close the CFG submeshes so the parent mesh is free (concurrent parent+submesh
-    device use deadlocks).
 
     Args:
         device: Open ttnn MeshDevice (e.g. 1x8 LoudBox or 4x8 BH Galaxy).
@@ -737,34 +728,15 @@ def build_cosmos3_i2v_native_pipeline(
         def _make_tt_decoder(height: int, width: int, num_frames: int):
             if _vae_decoder_holder["adapter"] is not None:
                 return _vae_decoder_holder["adapter"]
-            dec_parallel_config = vae_parallel_config
-            dec_ccl_manager = vae_ccl_manager
-            if vae_decoder_device is not None:
-                # Free the CFG submeshes first — the parent mesh can only be driven
-                # once its children are closed.
-                if pre_decode_hook is not None:
-                    pre_decode_hook()
-                dec_shape = tuple(vae_decoder_device.shape)
-                dec_tp_axis = _tp_key_vae(range(len(dec_shape)), key=lambda i: dec_shape[i])
-                dec_sp_axis = 1 - dec_tp_axis if len(dec_shape) == 2 else 0
-                dec_parallel_config = VaeHWParallelConfig.from_tuples(
-                    height=(dec_shape[dec_tp_axis], dec_tp_axis),
-                    width=(dec_shape[dec_sp_axis] if len(dec_shape) == 2 else 1, dec_sp_axis),
-                )
-                dec_ccl_manager = _CCLManager(
-                    mesh_device=vae_decoder_device,
-                    num_links=num_links,
-                    topology=ttnn.Topology.Linear,
-                )
             print(
                 f"[native-pipeline] TT VAE decoder: lazy-init H={height} W={width} F={num_frames} "
-                f"mesh={tuple((vae_decoder_device or device).shape)}",
+                f"mesh={tuple(device.shape)}",
                 flush=True,
             )
             adapter = Cosmos3VAEDecoderAdapter(
                 checkpoint_name=hf_repo,
-                parallel_config=dec_parallel_config,
-                ccl_manager=dec_ccl_manager,
+                parallel_config=vae_parallel_config,
+                ccl_manager=vae_ccl_manager,
                 height=height,
                 width=width,
                 num_frames=num_frames,
