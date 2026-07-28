@@ -48,6 +48,8 @@ protected:
         "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_concurrent.cpp";
     const std::string kernel_path_coexist =
         "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_coexist.cpp";
+    const std::string kernel_path_census =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_census_probe.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     bool is_quasar{false};
@@ -269,6 +271,83 @@ protected:
         return {result[0], result[1]};
     }
 
+    // ---- Census / AUTO-classifier probe harness ----
+    // One binding kernel in a census shape. All kernels are single-node so per-node runtime args stay
+    // simple; an "off-node binder" shape is built by adding a second kernel on another node.
+    struct CensusKernel {
+        experimental::NodeCoord node{core};
+        uint32_t num_threads = 1;
+        experimental::SemaphoreAccessType access = experimental::SemaphoreAccessType::INCREMENT;
+        uint32_t increments = 0;  // 0 for an OBSERVE reader (it must not write)
+        bool reporter = false;    // exactly one kernel should report
+    };
+
+    // Build + run a program with the given census shape; returns {baked_scope, counter_value}.
+    // The baked scope is read back from the device, so it is the classifier's ACTUAL decision as
+    // compiled into the kernel -- not an inference from the resulting counts (every correct mechanism
+    // yields the same counts, so a count-only assertion cannot detect a wrong pick).
+    std::pair<uint32_t, uint32_t> run_census(
+        const experimental::Nodes& sem_target,
+        const std::vector<CensusKernel>& kernels,
+        SemaphoreScope scope = SemaphoreScope::AUTO) {
+        std::vector<uint32_t> zero(2, 0);
+        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
+
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord{0, 0};
+        distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
+
+        experimental::SemaphoreSpec sem{
+            .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = sem_target};
+        sem.scope = scope;
+
+        std::vector<experimental::KernelSpec> kernel_specs;
+        std::vector<experimental::WorkUnitSpec> work_units;
+        experimental::ProgramRunArgs params;
+        for (size_t i = 0; i < kernels.size(); i++) {
+            const auto& k = kernels[i];
+            const experimental::KernelSpecName name{"census_k" + std::to_string(i)};
+            kernel_specs.push_back(experimental::KernelSpec{
+                .unique_id = name,
+                .source = kernel_path_census,
+                .num_threads = k.num_threads,
+                .semaphore_bindings = {{
+                    .semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
+                    .accessor_name = "counter",
+                    .access_type = k.access,
+                }},
+                .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter"}},
+                .hw_config = experimental::DataMovementGen2Config{},
+            });
+            work_units.push_back(
+                experimental::WorkUnitSpec{.name = "wu" + std::to_string(i), .kernels = {name}, .target_nodes = k.node});
+            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = name,
+                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                    k.node,
+                    {{"report_addr", report_addr},
+                     {"increment_times", k.increments},
+                     {"is_reporter", k.reporter ? 1u : 0u}}),
+            });
+        }
+
+        experimental::ProgramSpec spec{
+            .name = "sem_census", .kernels = kernel_specs, .semaphores = {sem}, .work_units = work_units};
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        experimental::SetProgramRunArgs(program, params);
+        workload.add_program(device_range, std::move(program));
+        RunProgram(mesh_device_, workload);
+
+        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
+        EXPECT_EQ(result.size(), 2u);
+        if (result.size() < 2) {
+            return {0xFFFFFFFFu, 0u};
+        }
+        return {result[0], result[1]};
+    }
+
+    static uint32_t scope_val(SemScope s) { return static_cast<uint32_t>(s); }
+
     // Where the binding kernel is placed (defaults to the semaphore's node). Set wider to build the
     // "a binder runs outside the semaphore's node" case for the cached-pool guard.
     experimental::Nodes kernel_target_{core};
@@ -442,6 +521,132 @@ TEST_F(SemScopeFixture, TestAutoSingleWriterResolvesLocal) {
     const uint32_t observed = run_scope(SemaphoreScope::AUTO);
     log_info(LogTest, "AUTO single-writer value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations) << "AUTO on a single-writer semaphore did not produce the expected count.";
+}
+
+// ============================================================================
+// AUTO-classifier / census stress suite.
+// ============================================================================
+// Each test builds a distinct census shape and asserts the scope the host ACTUALLY baked into the
+// kernel (read back from the device), so a regression in the classifier or the census arithmetic
+// fails loudly instead of hiding behind counts that look right under any correct mechanism.
+// Second node used for the off-node shapes; those tests skip on a 1-wide grid.
+// ============================================================================
+
+// 1 writer instance on a single-cell semaphore -> nothing can race -> cheapest path.
+TEST_F(SemScopeFixture, TestCensusSingleWriterPicksLocal) {
+    const auto [scope, count] = run_census(core, {{.num_threads = 1, .increments = iterations, .reporter = true}});
+    log_info(LogTest, "census single-writer: scope={} count={}", scope, count);
+    EXPECT_EQ(scope, scope_val(SemScope::LOCAL_NONATOMIC)) << "single writer should take the cheap uncached path";
+    EXPECT_EQ(count, iterations);
+}
+
+// Many writer instances (threads) all on the semaphore's ONE node -> cached-pool AMO: atomic among
+// the node's coherent DM cores, with no NoC round-trip. This is the auto-selected fast path.
+TEST_F(SemScopeFixture, TestCensusMultiThreadPicksCached) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "multi-threaded DM kernels + the cached pool are Quasar-only";
+    }
+    const auto [scope, count] =
+        run_census(core, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
+    const uint32_t expected = num_dms_ * concurrent_iterations;
+    log_info(LogTest, "census multi-thread: scope={} count={} (expected {})", scope, count, expected);
+    EXPECT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED))
+        << "multi-writer confined to one node should auto-select the cached fast path";
+    EXPECT_EQ(count, expected) << "cached AMO lost updates under concurrency, or the pool was not initialised";
+}
+
+// Two separate kernels, both on the semaphore's node -> 2 writer instances, still confined -> cached.
+TEST_F(SemScopeFixture, TestCensusTwoKernelsSameNodePicksCached) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "cached pool is Quasar-only";
+    }
+    const auto [scope, count] = run_census(
+        core,
+        {{.num_threads = 1, .increments = iterations, .reporter = true}, {.num_threads = 1, .increments = iterations}});
+    (void)count;  // cross-kernel count is not barrier-synchronised; the decision is what matters here
+    log_info(LogTest, "census two-kernels-same-node: scope={}", scope);
+    EXPECT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED))
+        << "two single-thread kernels on the semaphore's node are still confined -> cached";
+}
+
+// A semaphore spanning >1 node is >1 physical cell; the pool is per-core, so it must take the NoC
+// atomic instead.
+TEST_F(SemScopeFixture, TestCensusMultiNodeSemPicksExternal) {
+    const auto grid = mesh_device_->compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "needs >= 2 worker nodes for a multi-node semaphore";
+    }
+    const experimental::NodeRange two_nodes{experimental::NodeCoord{0, 0}, experimental::NodeCoord{1, 0}};
+    const auto [scope, count] =
+        run_census(two_nodes, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
+    (void)count;
+    log_info(LogTest, "census multi-node sem: scope={}", scope);
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL)) << "a multi-node semaphore must not take the per-core cached pool";
+}
+
+// A WRITER on another node means the semaphore is reachable from off-node -> cached would split it.
+TEST_F(SemScopeFixture, TestCensusOffNodeWriterPicksExternal) {
+    const auto grid = mesh_device_->compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "needs >= 2 worker nodes to place a binder off the semaphore's node";
+    }
+    const experimental::NodeCoord other{1, 0};
+    const auto [scope, count] = run_census(
+        core,
+        {{.num_threads = 1, .increments = iterations, .reporter = true},
+         {.node = other, .num_threads = 1, .increments = iterations}});
+    (void)count;
+    log_info(LogTest, "census off-node writer: scope={}", scope);
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL)) << "a binder off the semaphore's node must force the NoC atomic";
+}
+
+// An OBSERVE reader must NOT inflate the writer count: 1 writer + 1 reader is still single-writer.
+TEST_F(SemScopeFixture, TestCensusObserverNotCountedAsWriter) {
+    const auto [scope, count] = run_census(
+        core,
+        {{.num_threads = 1, .increments = iterations, .reporter = true},
+         {.num_threads = 1, .access = experimental::SemaphoreAccessType::OBSERVE, .increments = 0}});
+    log_info(LogTest, "census writer+observer: scope={} count={}", scope, count);
+    EXPECT_EQ(scope, scope_val(SemScope::LOCAL_NONATOMIC))
+        << "an OBSERVE reader must not count as a writer (it would needlessly force an atomic path)";
+    EXPECT_EQ(count, iterations);
+}
+
+// ...but an OBSERVE reader DOES count for node confinement: a reader on another node would read that
+// node's pool copy, so the semaphore must not be cached.
+TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
+    const auto grid = mesh_device_->compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "needs >= 2 worker nodes to place a reader off the semaphore's node";
+    }
+    const experimental::NodeCoord other{1, 0};
+    const auto [scope, count] = run_census(
+        core,
+        {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true},
+         {.node = other,
+          .num_threads = 1,
+          .access = experimental::SemaphoreAccessType::OBSERVE,
+          .increments = 0}});
+    (void)count;
+    log_info(LogTest, "census off-node observer: scope={}", scope);
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL))
+        << "a READER off the semaphore's node must also block the cached path (it would read a different copy)";
+}
+
+// Explicit scopes must still win over the classifier.
+TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
+    const auto [ext_scope, ext_count] = run_census(
+        core, {{.num_threads = 1, .increments = iterations, .reporter = true}}, SemaphoreScope::EXTERNAL);
+    EXPECT_EQ(ext_scope, scope_val(SemScope::EXTERNAL)) << "forced EXTERNAL must override the AUTO cheap pick";
+    EXPECT_EQ(ext_count, iterations);
+
+    const auto [loc_scope, loc_count] = run_census(
+        core,
+        {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}},
+        SemaphoreScope::LOCAL_NONATOMIC);
+    EXPECT_EQ(loc_scope, scope_val(SemScope::LOCAL_NONATOMIC))
+        << "forced LOCAL_NONATOMIC must override the AUTO atomic pick (explicit escape hatch)";
+    (void)loc_count;  // deliberately non-atomic here; the count may legitimately be short
 }
 
 // ---- Phase-2 S2a: host-side scope resolution + contradiction FATALs ----
