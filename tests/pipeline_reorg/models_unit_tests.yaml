@@ -1013,7 +1013,7 @@
     # the proven fabric-multihost-exabox leg. --tcp-interface ens5f0np0 is still REQUIRED: the job env sets
     # OMPI_MCA_btl_tcp_if_include=ens5f0np0, so without it tt-run adds the conflicting default
     # btl_tcp_if_exclude docker0,lo (mutually-exclusive MCA vars -> TCP dropped -> MPI_Comm_dup abort).
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --skip-mgd-check --skip-executable-check \
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
       --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
       --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and 14b-720p"
