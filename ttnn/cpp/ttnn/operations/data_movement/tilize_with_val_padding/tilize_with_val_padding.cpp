@@ -9,6 +9,8 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/hal.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
@@ -95,10 +97,25 @@ ttnn::Tensor tilize_with_val_padding(
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
     uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
 
+    // Fold in the block factory's c_1 staging CB so routing sees the true CB budget.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t staging_bytes_per_tile = input_single_tile_size / tt::constants::TILE_HEIGHT;
+    const uint32_t fixed_staging_bytes = 2 * dram_alignment;
+
     bool enough_space_width = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_col,
+        staging_bytes_per_tile,
+        fixed_staging_bytes);
     bool enough_space_height = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        staging_bytes_per_tile,
+        fixed_staging_bytes);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         return ttnn::prim::tilize_with_val_padding(
