@@ -105,7 +105,50 @@ The other end of the range: 99.2 M markers at ~5.2 M/s, 63× ResNet's volume, an
 exposed the back-pressure bug. This is where the drain and sink are actually loaded, so it is the test that
 would reveal a `B`-vs-`C` divergence if one exists.
 
-Needs a burst-sized `TT_METAL_PERF_DEBUG_RING_RECS` to stay at 0 drops (Tracy ingests ~0.8 M rec/s against
-the model's ~5.2 M/s, so the default 4 M ring drops ~84 % structurally).
+`test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant[1-device_params0]`, bh-07, trace + 2 CQ,
+batch 1, **1000 measured iterations**, 3 reps. `TT_METAL_PERF_DEBUG_RING_RECS=134217728` (128 M records
+≈ 3.1 GB) on B and C — Tracy ingests ~0.8 M rec/s against the model's much higher rate, so the default
+4 M ring drops ~84 % structurally.
 
-_(pending — sweep running)_
+| config | ms/iter (median of 3) | FPS | vs OFF | wall |
+|---|---|---|---|---|
+| A — OFF | **1.8360** | 545 | — | 10.1 s |
+| B — X280 drain, sink off | **1.8680** | 535 | **+1.7 %** | 10.6 s |
+| C — X280 full capture | **1.8680** | 535 | **+1.7 %** | 29.7 s |
+| D — tracy wrapper only | **1.8360** | 545 | ±0.0 % | 11.4 s |
+
+Every rep reproduced its config's value exactly. That is not a copy-paste error: the test rounds to 6
+decimal places and averages over 1000 iterations, so run-to-run variance lands below the 1 µs print
+resolution. Health: **99,187,072 markers**, **0 producer stalls** on both sockets, **0 ring drops**
+(consumer took 99,187,072 of a 128 M ring) — in all six profiled runs.
+
+### `B == C`, now with a much sharper demonstration
+
+`C`'s **wall clock is 3× `B`'s** — 29.7 s against 10.6 s — because Tracy is serializing a ~490 MB capture.
+And the measured inference time is **identical to the microsecond**. Twenty seconds of sink work, zero
+cost to the model. Under the old inline design that same work sat directly on the drain thread and
+back-pressured into silicon; here it is entirely behind the BroadcastRing and lands after the timed loop.
+
+### The two windows disagree, and the sustained one is the trustworthy figure
+
+| | window | markers | overhead |
+|---|---|---|---|
+| ResNet-50 | 15 iters ≈ 25 ms | 1.58 M | +79 µs/iter (+4.6 %) |
+| UFLD-v2 | 1000 iters ≈ 1.84 s | 99.2 M | +32 µs/iter (+1.7 %) |
+
+UFLD emits *more* markers per iteration yet costs 2.5× **less** per iteration. Overhead is not scaling
+with volume, which is the opposite of what a per-marker cost would do.
+
+**Leading hypothesis (not yet proven): a fixed per-run cost sitting inside ResNet's timed region.** Its
+timed region is `pipeline.enqueue(host_inputs).pop_all()` — 15 enqueues *plus a full flush and host
+readback of all 15 outputs*. A one-time profiler-induced cost at that flush of only ~0.7 ms would fully
+account for the gap, since ResNet divides it by 15 while UFLD divides it by 1000. The arithmetic fits, but
+a plausible arithmetic fit is not evidence.
+
+**To confirm**: raise `num_measurement_iterations` in `perf_e2e_resnet50.py` (hardcoded to 15) and check
+whether ResNet's per-iteration overhead decays toward ~1.7 %. If it does, quote **+1.7 % as the steady-state
+overhead** and treat +4.6 % as a short-window artifact. If it does not, the difference is real and belongs
+to the models (grid occupancy, 1 CQ vs 2 CQ pipelining) and both numbers stand as measured.
+
+Until that is settled, the defensible claim is: **profiling costs between 1.7 % and 4.6 % of e2e time
+depending on the shape of the workload, and none of it is the drain or the host sink.**
