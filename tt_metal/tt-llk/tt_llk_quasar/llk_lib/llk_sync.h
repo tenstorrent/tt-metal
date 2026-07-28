@@ -110,7 +110,7 @@ inline void _llk_sync_post_(std::uint8_t sem_index)
 template <std::uint32_t DrainRes0, std::uint32_t DrainRes1 = p_stall::NOTHING, std::uint32_t DrainRes2 = p_stall::NOTHING>
 inline void _llk_stall_cfg_on_()
 {
-    TTI_STALLWAIT(p_stall::STALL_CFG, DrainRes2, DrainRes1, DrainRes0);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_CFG, DrainRes2, DrainRes1, DrainRes0);
 }
 
 /**

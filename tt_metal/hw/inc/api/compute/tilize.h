@@ -362,15 +362,16 @@ ALWI void tilize_block(
 
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
-        MATH((llk_math_wait_for_dest_available()));
-        PACK((llk_packer_wait_for_math_done()));
+        // [#48552 DIAG] tile_regs_acquire() equivalent removed: MATH((llk_math_wait_for_dest_available()));
+        // [#48552 DIAG] tile_regs_wait() equivalent removed: PACK((llk_packer_wait_for_math_done()));
 
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
         PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
         // Release dest. NO llk_math_set_dvalid: it belongs to the dest-dvalid scheme and is compile-blocked on
         // the semaphore-sync path; the datacopy MOP + llk_math_dest_section_done handle FPU dvalid as WH does.
-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        // [#48552 DIAG] tile_regs_commit() equivalent removed (this is the fault PC):
+        // MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        // [#48552 DIAG] tile_regs_release() equivalent removed: PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 #else
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));

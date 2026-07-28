@@ -393,7 +393,7 @@ void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile std::uint
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
-    mop_sync(); // wait until previous mops have completed
+    // [#48552 DIAG] mop_sync() removed: mop_sync(); // wait until previous mops have completed
 
     mop_cfg->MOP_CONFIG              = 2;
     mop_cfg->BANK0_LOOP0_LEN         = m_outer_loop_len;
@@ -412,7 +412,7 @@ void ckernel_template::program_bank1_sw_cntl([[maybe_unused]] volatile std::uint
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
-    mop_sync(); // wait until previous mops have completed
+    // [#48552 DIAG] mop_sync() removed: mop_sync(); // wait until previous mops have completed
 
     mop_cfg->MOP_CONFIG              = 2;
     mop_cfg->BANK1_LOOP0_LEN         = m_outer_loop_len;

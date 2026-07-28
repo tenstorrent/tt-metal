@@ -64,12 +64,14 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
         unpack_tile_instrn          = TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
-        unpack_tile_w_dvalid_instrn = TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
+        // [#48552 DIAG] SetDatValid forced 1 -> 0
+        unpack_tile_w_dvalid_instrn = TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B)
     {
         unpack_tile_instrn          = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
-        unpack_tile_w_dvalid_instrn = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
+        // [#48552 DIAG] SetDatValid forced 1 -> 0
+        unpack_tile_w_dvalid_instrn = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
     }
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);

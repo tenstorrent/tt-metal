@@ -35,7 +35,8 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
 
     // For UNP_DEST, don't set dvalid on individual tiles, the section_done signal handles it.
     // Setting dvalid per tile would cause the packer to start (and ZEROACC) before all tiles are in DEST.
-    constexpr std::uint32_t SET_DVALID = (UNP_SEL == p_unpacr::UNP_DEST) ? 0 : 1;
+    // [#48552 DIAG] forced to 0 (was: (UNP_SEL == p_unpacr::UNP_DEST) ? 0 : 1)
+    constexpr std::uint32_t SET_DVALID = 0;
     std::uint32_t unpack_tile_instrn   = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, buf_desc_id, SET_DVALID);
 
     std::uint32_t reset_src_reg_instrn =

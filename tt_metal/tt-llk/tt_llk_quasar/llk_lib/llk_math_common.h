@@ -161,7 +161,7 @@ inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
 inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_format, bool en_int32_dest_format)
 {
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
 
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
     cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
@@ -255,7 +255,7 @@ inline void _llk_math_set_dvalid_()
 {
     static_assert(SET_DEST_DVALID == p_cleardvalid::FPU || SET_DEST_DVALID == p_cleardvalid::SFPU, "Can only set dest dvalid for FPU and SFPU");
 
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::WAIT_SFPU);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::WAIT_SFPU);
     TTI_CLEARDVALID(0, 0, 0, 0, SET_DEST_DVALID, 0);
     if constexpr (DST == DstSync::SyncFull)
     {
@@ -328,7 +328,7 @@ inline void _llk_math_dest_section_done_()
     {
         _update_dest_register_offset_<EN_32BIT_DEST>();
         std::uint32_t base_addr = _get_dest_buffer_base_();
-        TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU);
+        // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU);
         _set_dest_section_base_<TRISC_ID>(base_addr);
     }
 }

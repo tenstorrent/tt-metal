@@ -85,7 +85,7 @@ inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src
 template <DstSync DST>
 inline void _llk_unpack_dest_dvalid_section_done_()
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::UNPACK0);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::UNPACK0);
     TTI_CLEARDVALID(0, 0, 0, 0, p_cleardvalid::UNPACK_TO_DEST, 0);
     if constexpr (DST == DstSync::SyncFull)
     {

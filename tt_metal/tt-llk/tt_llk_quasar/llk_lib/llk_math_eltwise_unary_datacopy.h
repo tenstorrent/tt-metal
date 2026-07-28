@@ -57,8 +57,10 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
                                                                                 : p_cleardvalid::CLR_SRCB_VLD;
 
     // clear srcA and srcB dvalid
-    temp.set_end_op(
-        TT_OP_CLEARDVALID(CLR_SRC_VLD, 0 /*cleardvalid_S*/, 0 /*dest_dvalid_reset*/, 0 /*dest_dvalid_client_bank_reset*/, 0 /*dest_pulse_last*/, 0 /*reset*/));
+    // [#48552 DIAG] removed: temp.set_end_op(
+    //     TT_OP_CLEARDVALID(CLR_SRC_VLD, 0 /*cleardvalid_S*/, 0 /*dest_dvalid_reset*/, 0 /*dest_dvalid_client_bank_reset*/, 0 /*dest_pulse_last*/, 0
+    //     /*reset*/));
+    (void)CLR_SRC_VLD; // [#48552 DIAG] only used by the removed clear-dvalid call; keep to avoid -Wunused
 
     temp.set_last_inner_loop_instr(datacopy_func(ADDR_MOD_1));
 

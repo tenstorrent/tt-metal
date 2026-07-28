@@ -333,7 +333,7 @@ inline void t6_semaphore_post(const std::uint8_t index)
 {
     if constexpr (WaitRes0 != p_stall::NOTHING)
     {
-        TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
+        // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
 
     TT_SEMPOST(0, semaphore::t6_sem(index));
@@ -346,7 +346,7 @@ inline void t6_semaphore_get(const std::uint8_t index)
 {
     if constexpr (WaitRes0 != p_stall::NOTHING)
     {
-        TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
+        // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
 
     TT_SEMGET(0, semaphore::t6_sem(index));

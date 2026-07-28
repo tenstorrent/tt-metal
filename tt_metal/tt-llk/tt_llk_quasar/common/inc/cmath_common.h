@@ -197,7 +197,7 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod)
     // MOVD2A src is relative to dest_section_base + dest_counter.
     // Use fixed offsets (0, 8) — the dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
     TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_8_ROWS, 0);
     TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_8_ROWS, 8);
 }
@@ -207,7 +207,7 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod)
     // MOVD2B src is relative to dest_section_base + dest_counter.
     // Use fixed offsets (0, 8) — the dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
     TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_8_ROWS, 0, 0);
     TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_8_ROWS, 0, 8);
 }

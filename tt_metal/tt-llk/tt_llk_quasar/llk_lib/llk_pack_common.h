@@ -140,7 +140,7 @@ inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format,
 template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_pack_dest_dvalid_section_done_()
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::PACK);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::PACK);
 
     constexpr std::uint32_t ZEROACC_CLR_MODE = (DST == DstSync::SyncHalf) ? p_zeroacc::CLR_HALF : p_zeroacc::CLR_ALL;
     if constexpr (DST == DstSync::SyncFull)
@@ -177,7 +177,7 @@ template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
 {
     // Wait for packer to finish to avoid breaking its current configuration
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
 
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_ZERO);
 
@@ -225,7 +225,7 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
     }
 
     // Stall until all config instructions are done
-    TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
 }
 
 /**
@@ -236,7 +236,7 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
 inline void _llk_pack_reduce_mask_clear_()
 {
     // Wait for packer to finish to avoid breaking its current configuration
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
 
     // Edge mask mode is disabled
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_NONE);
@@ -248,7 +248,7 @@ inline void _llk_pack_reduce_mask_clear_()
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
 
     // Stall until all config instructions are done
-    TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
 }
 
 /**
@@ -307,7 +307,7 @@ inline void _llk_packer_set_math_semaphore_()
 template <std::uint32_t PACK_SEL, DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_pack_dest_semaphore_section_done_()
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK); // wait for pack to finish
+    // [#48552 DIAG] STALLWAIT removed: TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK); // wait for pack to finish
 
     // TODO: (RT) Addrmod here is dangerous, can be overwritten by other pack operations
     //  Need to pick a addrmod, and assert no other math uses it
