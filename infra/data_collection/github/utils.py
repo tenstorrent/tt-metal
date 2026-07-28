@@ -119,6 +119,25 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "could not read Username": str(InfraErrorV1.CHECKOUT_FAILURE),
         "terminal prompts disabled": str(InfraErrorV1.CHECKOUT_FAILURE),
         "Fetched in submodule path": str(InfraErrorV1.CHECKOUT_FAILURE),
+        # Docker daemon rejects a container operation with a null id (distinct from registry/pull failures above)
+        "Value cannot be null. (Parameter 'ContainerId')": str(InfraErrorV1.DOCKER_CONTAINER_ID_NULL_FAILURE),
+        # GitHub Actions runner failing to download a custom action's tarball from codeload.github.com
+        # (e.g. actions/checkout itself), distinct from a `git clone` failure of the repo under test
+        "Failed to download archive": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
+        "Failed to download action": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
+        # phoenix-actions/test-reporting surfacing a real test failure as a .github-path annotation
+        "Failed tests were found and 'fail-on-error'": str(InfraErrorV1.TEST_REPORTER_FAILURE),
+        "No test report files were found": str(InfraErrorV1.TEST_REPORTER_NO_REPORTS_FAILURE),
+        "/usr/bin/git' failed with exit code 128": str(InfraErrorV1.GIT_PROCESS_FAILURE),
+        "Failed to FinalizeArtifact": str(InfraErrorV1.ARTIFACT_FINALIZE_FAILURE),
+        "Failed to GetSignedArtifactURL": str(InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE),
+        "Failed to ListArtifacts": str(InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE),
+        "Upload progress stalled.": str(InfraErrorV1.ARTIFACT_UPLOAD_STALLED_FAILURE),
+        "Request was cancelled.": str(InfraErrorV1.REQUEST_CANCELLED_FAILURE),
+        "We received a malformed request from your client": str(InfraErrorV1.GITHUB_API_MALFORMED_REQUEST_FAILURE),
+        # Most generic step-failure message GitHub emits; keep last so any more specific
+        # snippet above (e.g. the git/artifact ones) matches first
+        "Process completed with exit code": str(InfraErrorV1.GENERIC_EXIT_CODE_FAILURE),
     }
 
     # Check the mapping dictionary for specific failure signature types
