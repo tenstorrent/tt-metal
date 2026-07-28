@@ -20,9 +20,12 @@ static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFI
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
  * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
  * width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent width
- * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format, values = DataFormat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format, values = DataFormat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
+ * width
+ * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format, values = DataFormat enum, ex:
+ * <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format, values = DataFormat enum, ex:
+ * <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
 inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
@@ -80,7 +83,8 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
  * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
  * width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent width
+ * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
+ * width
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
 inline void _llk_math_upk_to_dest_hw_configure_()
@@ -264,11 +268,19 @@ inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_f
         return;
     }
 
-    // For 32-bit dest, force the dest-format override to Float32 so the transpose MOVD2B/MOVB2D read
-    // the DEST via the current Float32 32b path instead of a stale saved dest format (e.g. Int32 left
+    // Quasar selects the 16-bit or 32-bit DEST bank-address bit for MOV
+    // operations from the source ALU format, and only TF32 selects the 32-bit
+    // path. Explicit 32-bit MOV sequences transfer the upper and lower 16-bit
+    // halves separately, so tagging them as TF32 fixes bank switching without
+    // changing the Float32 or Int32 payload.
+    const DataFormat mov_srcA_format = EN_32BIT_DEST ? DataFormat::Tf32 : srcA_format;
+    const DataFormat mov_srcB_format = EN_32BIT_DEST ? DataFormat::Tf32 : srcB_format;
+
+    // For 32-bit dest, also force the dest-format override to Float32 so MOVD2B/MOVB2D read
+    // DEST via the current Float32 32b path instead of a stale saved dest format (e.g. Int32 left
     // by a prior compute), which otherwise selects the wrong hi16 datum mux.
     _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
-        srcA_format, srcB_format, false /* en_int32_dest_format */, EN_32BIT_DEST ? DataFormat::Float32 : DataFormat::Invalid);
+        mov_srcA_format, mov_srcB_format, false /* en_int32_dest_format */, EN_32BIT_DEST ? DataFormat::Float32 : DataFormat::Invalid);
 
     data_format_config_set = DataFormatConfigSet::MOV_OPS_EXPLICIT_FMT;
 }
