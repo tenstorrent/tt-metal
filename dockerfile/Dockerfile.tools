@@ -64,11 +64,13 @@ ARG SYFT_SCANNER_VERSION=1.11.0
 ARG SYFT_SCANNER_DIGEST=sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68
 
 # Same reasoning as SYFT_SCANNER_VERSION/DIGEST above, for the Dockerfile
-# syntax frontend. 1.4.3 is the minimum minor version (plus its latest
-# patch) covering every syntax feature used across dockerfile/* - see the
-# dockerfile-frontend target and dockerfile/Dockerfile's syntax line.
-ARG DOCKERFILE_FRONTEND_VERSION=1.4.3
-ARG DOCKERFILE_FRONTEND_DIGEST=sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
+# syntax frontend. Since we host our own re-published copy (rather than
+# referencing the mutable upstream tag directly), there's no reason to pick
+# an older minimum version for supply-chain safety - pinned to the latest
+# release instead. (COPY/ADD --link, the newest syntax feature actually
+# used anywhere in dockerfile/*, only needs >=1.4 - 1.25 covers it easily.)
+ARG DOCKERFILE_FRONTEND_VERSION=1.25
+ARG DOCKERFILE_FRONTEND_DIGEST=sha256:0adf442eae370b6087e08edc7c50b552d80ddf261576f4ebd6421006b2461f12
 
 # NOTE: SFPI version/hash are NOT defined here as ARGs.
 # The single source of truth for SFPI version information is:
