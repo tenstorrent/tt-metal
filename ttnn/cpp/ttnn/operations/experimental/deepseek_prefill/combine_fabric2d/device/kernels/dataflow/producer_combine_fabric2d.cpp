@@ -35,6 +35,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 
 // Wall clock, read the way the hardware requires: reading the LOW register latches HIGH, so the pair
@@ -99,10 +100,19 @@ void kernel_main() {
     constexpr bool stall_telemetry = get_compile_time_arg_val(15) != 0;
     constexpr uint32_t variant = get_compile_time_arg_val(16);
     constexpr uint32_t pkt_hdr_ring_addr = get_compile_time_arg_val(17);
+    // Phase 3 — direct-to-DRAM (Approach #1). When set, the producer ignores all credit/semaphore
+    // machinery and simply fires every token to an incrementally larger page in the peer chip's DRAM
+    // output buffer, starting at `dram_base_page`. Plain unicast write (NOT the fused write+atomic-inc,
+    // which is documented to hang Blackhole on a DRAM destination — moe_utils.hpp:486). EDM
+    // sender-slot backpressure is the only throttle, so the send window IS the DRAM-bounded rate.
+    constexpr uint32_t dram_base_page = get_compile_time_arg_val(18);
+    constexpr uint32_t dram_bank_base_addr = get_compile_time_arg_val(19);
+    constexpr auto dram_out_args = TensorAccessorArgs<20>();
 
     // Diagnostics only (see CombineFabric2dParams::variant); both break a guarantee to price it.
     constexpr bool RELAXED_READY = (variant & 4u) != 0;
     constexpr bool NO_FLOW_CONTROL = (variant & 8u) != 0;
+    constexpr bool DRAM_DIRECT = (variant & 32u) != 0;  // Approach #1
     // Credit batch threshold: a quarter ring. Small enough that the peer never runs dry (it can be up to
     // a quarter ring ahead of the credits it has been told about, and the ring is num_slots deep), large
     // enough to cut the credit packet count ~4x. Liveness does not depend on it: credits are flushed
@@ -141,7 +151,18 @@ void kernel_main() {
     auto slot_hdr = [](uint32_t slot) -> volatile PACKET_HEADER_TYPE* {
         return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_ring_addr + slot * sizeof(PACKET_HEADER_TYPE));
     };
-    {
+    // Approach #1 addresses the peer chip's DRAM output buffer by page. Interleaved layout is identical
+    // across chips, so an accessor built from THIS chip's buffer base produces addresses valid on the
+    // peer chip (same trick the production combine op relies on).
+    const auto dram_out = TensorAccessor(dram_out_args, dram_bank_base_addr);
+    if constexpr (DRAM_DIRECT) {
+        // Only the route is fixed per slot header (same peer chip every token); the destination page
+        // changes per token and is stamped in the loop by to_noc_unicast_write.
+        for (uint32_t slot = 0; slot < num_slots; slot++) {
+            fabric_set_unicast_route(
+                (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot), peer_chip_id, peer_mesh_id);
+        }
+    } else {
         for (uint32_t slot = 0; slot < num_slots; slot++) {
             volatile PACKET_HEADER_TYPE* h = slot_hdr(slot);
             const uint64_t dst_noc = get_noc_addr(peer_noc_x, peer_noc_y, recv_buf_addr + slot * chunk_size_bytes);
@@ -176,107 +197,132 @@ void kernel_main() {
         // One zone per token, plus this outer one. The profiler L1 buffer holds 250 optional markers
         // per RISC, so at num_tokens=100 a second per-token zone would overflow and silently drop.
         DeviceZoneScopedN("PRODUCER_LOOP");
-        // In the NO_FLOW_CONTROL diagnostic there are no credits to wait on in either direction, so the
-        // window closes at the last send and t_last_credit stays 0 (report the send-window number).
-        while (NO_FLOW_CONTROL
-                   ? sent < num_tokens
-                   : (sent < num_tokens || credits_sent < num_tokens || observed_write_up_to < write_up_to_target)) {
-            loop_iters++;
-            // ---- 1. Credits first, always. Never gated on anything, so a stalled producer cannot
-            // ---- stall its peer. One packet carries the whole pending batch as its inc value.
-            invalidate_l1_cache();
-            const uint32_t returnable = *credits_to_return;
-            // The packet is held back until a batch has accumulated — unless we have no payload to send
-            // anyway (either done sending, or blocked on our own credits), in which case sending it now
-            // is free and is what keeps the ring live. One packet per token cost 36% of the send window.
-            // NO_FLOW_CONTROL also suppresses the credit packets themselves: with nobody gated on
-            // credits, forwarding them would only steal link bandwidth from the payload, and the point
-            // of that diagnostic is the payload-only ceiling.
-            const bool have_credits = !NO_FLOW_CONTROL && returnable > credits_sent;
-            const bool send_credits_now = have_credits && ((returnable - credits_sent) >= credit_batch ||
-                                                           sent >= num_tokens || sent >= observed_write_up_to);
-            if (send_credits_now) {
-                const uint64_t c0 = stall_telemetry ? wall_clock() : 0;
-                const uint32_t batch = returnable - credits_sent;
-                pkt_hdr_credit->to_noc_unicast_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_write_up_to_noc, batch, /*flush=*/false});
-                fabric_set_unicast_route(
-                    (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr_credit, peer_chip_id, peer_mesh_id);
+        if constexpr (DRAM_DIRECT) {
+            // Approach #1: no credits, no receiver, no ring reuse to protect. Each token lands on its own
+            // DRAM page (base_page + sent), so the only backpressure is the EDM refusing an empty write
+            // slot when the eth side cannot drain to DRAM fast enough. t_last_credit stays 0: there is no
+            // end-to-end signal, so the send window (first send -> last send) IS the measured rate.
+            while (sent < num_tokens) {
+                const uint32_t slot = sent % num_slots;
+                volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
+                // Stamp this token's DRAM page into the (route-preset) header. Plain write, no atomic.
+                tt::tt_fabric::linear::to_noc_unicast_write(chunk_size_bytes, hdr, dram_base_page + sent, dram_out);
+                const uint64_t w0 = wall_clock();
+                if (sent == 0) {
+                    t_first_send = w0;
+                }
                 sender.wait_for_empty_write_slot();
-                sender.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr_credit, sizeof(PACKET_HEADER_TYPE));
-                credits_sent += batch;
-                credit_packets++;
-                if constexpr (stall_telemetry) {
-                    credit_cy += wall_clock() - c0;
-                }
+                // Single fixed source chunk (payload content is garbage in this harness); a slot's header is
+                // not reused until the ring wraps, so the header send need not flush-block.
+                sender.send_payload_without_header_non_blocking_from_address(prod_buf_addr, chunk_size_bytes);
+                sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+                sent++;
+                t_last_send = wall_clock();
             }
-
-            // ---- 2. Track the peer's progress. Once it has credited every token we sent, the
-            // ---- transfer is provably complete and the timing window closes.
-            invalidate_l1_cache();
-            const uint32_t cur_write_up_to = *write_up_to;
-            if (cur_write_up_to > observed_write_up_to) {
-                observed_write_up_to = cur_write_up_to;
-                if (observed_write_up_to >= write_up_to_target) {
-                    t_last_credit = wall_clock();
-                }
-            }
-
-            // ---- 3. Then a token, if the peer's ring has room for it.
-            if (sent < num_tokens) {
-                if (NO_FLOW_CONTROL || sent < cur_write_up_to) {
-                    DeviceZoneScopedN("PRODUCER_SEND");
-                    // Credit starvation ended here, if we were in it.
-                    const uint64_t w0 = (stall_telemetry || sent == 0) ? wall_clock() : 0;
-                    if constexpr (stall_telemetry) {
-                        if (starve_start != 0) {
-                            starve_cy += w0 - starve_start;
-                            starve_start = 0;
-                        }
-                    }
-                    if (sent == 0) {
-                        t_first_send = w0;
-                    }
-                    // Header first, THEN wait for the slot — building it while the EDM may still be
-                    // busy is free overlap, and reversing the two costs ~8% of the bandwidth.
-                    const uint32_t slot = sent % num_slots;
-                    volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
-                    // Waiting for an EDM slot is the one stall that means "the eth side cannot drain
-                    // us", so it gets its own bucket; the header build above counts as issue cost.
-                    const uint64_t wh = stall_telemetry ? wall_clock() : 0;
+        } else {
+            // In the NO_FLOW_CONTROL diagnostic there are no credits to wait on in either direction, so the
+            // window closes at the last send and t_last_credit stays 0 (report the send-window number).
+            while (NO_FLOW_CONTROL ? sent < num_tokens
+                                   : (sent < num_tokens || credits_sent < num_tokens ||
+                                      observed_write_up_to < write_up_to_target)) {
+                loop_iters++;
+                // ---- 1. Credits first, always. Never gated on anything, so a stalled producer cannot
+                // ---- stall its peer. One packet carries the whole pending batch as its inc value.
+                invalidate_l1_cache();
+                const uint32_t returnable = *credits_to_return;
+                // The packet is held back until a batch has accumulated — unless we have no payload to send
+                // anyway (either done sending, or blocked on our own credits), in which case sending it now
+                // is free and is what keeps the ring live. One packet per token cost 36% of the send window.
+                // NO_FLOW_CONTROL also suppresses the credit packets themselves: with nobody gated on
+                // credits, forwarding them would only steal link bandwidth from the payload, and the point
+                // of that diagnostic is the payload-only ceiling.
+                const bool have_credits = !NO_FLOW_CONTROL && returnable > credits_sent;
+                const bool send_credits_now = have_credits && ((returnable - credits_sent) >= credit_batch ||
+                                                               sent >= num_tokens || sent >= observed_write_up_to);
+                if (send_credits_now) {
+                    const uint64_t c0 = stall_telemetry ? wall_clock() : 0;
+                    const uint32_t batch = returnable - credits_sent;
+                    pkt_hdr_credit->to_noc_unicast_atomic_inc(
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_write_up_to_noc, batch, /*flush=*/false});
+                    fabric_set_unicast_route(
+                        (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr_credit, peer_chip_id, peer_mesh_id);
                     sender.wait_for_empty_write_slot();
-                    uint64_t w1 = 0;
+                    sender.send_payload_flush_blocking_from_address(
+                        (uint32_t)pkt_hdr_credit, sizeof(PACKET_HEADER_TYPE));
+                    credits_sent += batch;
+                    credit_packets++;
                     if constexpr (stall_telemetry) {
-                        w1 = wall_clock();
-                        wait_slot_cy += w1 - wh;
-                        issue_cy += wh - w0;
+                        credit_cy += wall_clock() - c0;
                     }
-                    sender.send_payload_without_header_non_blocking_from_address(
-                        prod_buf_addr + slot * chunk_size_bytes, chunk_size_bytes);
-                    // No flush: this slot's header is not touched again until the ring wraps, and the
-                    // source payload is never written by us at all. Letting the NoC queue hold the
-                    // writes is what allows token N+1 to be issued while N is still draining.
-                    //
-                    // CAVEAT: the production idiom (moe_utils.hpp) flush-blocks here, which also orders
-                    // our payload write ahead of the EDM slot-credit write that
-                    // post_send_payload_increment_pointers issues on the sync cmd buf. Dropping the
-                    // flush leans on the NoC keeping those in order to the same destination. It has not
-                    // misbehaved over 128 producers x 10k tokens (every token acked, no hang), but this
-                    // harness never checks payload CONTENT, so a torn packet would be invisible here.
-                    // Validate content (Phase 3's DRAM drain) before relying on it in a real op.
-                    sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
-                    sent++;
-                    t_last_send = wall_clock();
-                    if constexpr (stall_telemetry) {
-                        issue_cy += t_last_send - w1;
+                }
+
+                // ---- 2. Track the peer's progress. Once it has credited every token we sent, the
+                // ---- transfer is provably complete and the timing window closes.
+                invalidate_l1_cache();
+                const uint32_t cur_write_up_to = *write_up_to;
+                if (cur_write_up_to > observed_write_up_to) {
+                    observed_write_up_to = cur_write_up_to;
+                    if (observed_write_up_to >= write_up_to_target) {
+                        t_last_credit = wall_clock();
                     }
-                } else if (stall_telemetry && starve_start == 0) {
-                    // Tokens left to send but no credit for them: the credit round-trip is what we are
-                    // waiting on. Timed from the first iteration that observes it.
-                    starve_start = wall_clock();
+                }
+
+                // ---- 3. Then a token, if the peer's ring has room for it.
+                if (sent < num_tokens) {
+                    if (NO_FLOW_CONTROL || sent < cur_write_up_to) {
+                        DeviceZoneScopedN("PRODUCER_SEND");
+                        // Credit starvation ended here, if we were in it.
+                        const uint64_t w0 = (stall_telemetry || sent == 0) ? wall_clock() : 0;
+                        if constexpr (stall_telemetry) {
+                            if (starve_start != 0) {
+                                starve_cy += w0 - starve_start;
+                                starve_start = 0;
+                            }
+                        }
+                        if (sent == 0) {
+                            t_first_send = w0;
+                        }
+                        // Header first, THEN wait for the slot — building it while the EDM may still be
+                        // busy is free overlap, and reversing the two costs ~8% of the bandwidth.
+                        const uint32_t slot = sent % num_slots;
+                        volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
+                        // Waiting for an EDM slot is the one stall that means "the eth side cannot drain
+                        // us", so it gets its own bucket; the header build above counts as issue cost.
+                        const uint64_t wh = stall_telemetry ? wall_clock() : 0;
+                        sender.wait_for_empty_write_slot();
+                        uint64_t w1 = 0;
+                        if constexpr (stall_telemetry) {
+                            w1 = wall_clock();
+                            wait_slot_cy += w1 - wh;
+                            issue_cy += wh - w0;
+                        }
+                        sender.send_payload_without_header_non_blocking_from_address(
+                            prod_buf_addr + slot * chunk_size_bytes, chunk_size_bytes);
+                        // No flush: this slot's header is not touched again until the ring wraps, and the
+                        // source payload is never written by us at all. Letting the NoC queue hold the
+                        // writes is what allows token N+1 to be issued while N is still draining.
+                        //
+                        // CAVEAT: the production idiom (moe_utils.hpp) flush-blocks here, which also orders
+                        // our payload write ahead of the EDM slot-credit write that
+                        // post_send_payload_increment_pointers issues on the sync cmd buf. Dropping the
+                        // flush leans on the NoC keeping those in order to the same destination. It has not
+                        // misbehaved over 128 producers x 10k tokens (every token acked, no hang), but this
+                        // harness never checks payload CONTENT, so a torn packet would be invisible here.
+                        // Validate content (Phase 3's DRAM drain) before relying on it in a real op.
+                        sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+                        sent++;
+                        t_last_send = wall_clock();
+                        if constexpr (stall_telemetry) {
+                            issue_cy += t_last_send - w1;
+                        }
+                    } else if (stall_telemetry && starve_start == 0) {
+                        // Tokens left to send but no credit for them: the credit round-trip is what we are
+                        // waiting on. Timed from the first iteration that observes it.
+                        starve_start = wall_clock();
+                    }
                 }
             }
-        }
+        }  // end !DRAM_DIRECT
     }
 
     telem[TELEM_TOKENS_SENT] = sent;
