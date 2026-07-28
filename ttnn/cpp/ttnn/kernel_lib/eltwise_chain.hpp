@@ -228,6 +228,29 @@ enum class SetupOwner {
     Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
 };
 
+// -----------------------------------------------------------------------------
+// Skip-compute — a performance-debugging BUILD knob, NOT part of the eltwise_chain API.
+//
+// With CKL_ELTWISE_CHAIN_SKIP_COMPUTE=1, every eltwise_chain in the translation unit emits only
+// its CB lifecycle (wait/pop/reserve/push) and tile_regs synchronization. All helper-owned init,
+// reconfiguration, compute, and pack execution is compile-time-elided. CB counts are unchanged, so
+// the dataflow handshake remains intact, but the published output is intentionally garbage.
+//
+// Use this only for local run-versus-skip profiling to separate compute cost from the
+// CB/data-movement floor. Do not use it in production or correctness runs.
+//
+// Opt in either before including this header or through the kernel's compiler defines:
+//
+//   #define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 1
+//   #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+//
+// The knob covers ordinary, L1-accumulation, and DEST-accumulation walks. It does not suppress
+// caller-owned work outside eltwise_chain, including compute_kernel_hw_startup or setup emitted for
+// SetupOwner::Caller.
+#ifndef CKL_ELTWISE_CHAIN_SKIP_COMPUTE
+#define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 0
+#endif
+
 // =============================================================================
 // 1c. Input and output CB synchronization policies
 // =============================================================================

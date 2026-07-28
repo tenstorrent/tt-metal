@@ -2602,6 +2602,8 @@ ALWI void hoist_compute_init_one(SelectedElement<E, TransitionFacts<PrevA, PrevB
 
 namespace detail {
 
+inline constexpr bool eltwise_chain_skip_compute_v = CKL_ELTWISE_CHAIN_SKIP_COMPUTE != 0;
+
 template <
     bool EmitMathInit,
     bool EmitSfpuInit,
@@ -2640,8 +2642,10 @@ ALWI void elem_apply_compute(
     // returns the local CB-front offset (the just-waited window).
     [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_runtime_conditional_sequence_op_v<ElemT>) {
-        elem.template apply<SlotBase, PrevA, PrevB, PrevP, PackHetero>(
-            i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
+        if constexpr (!eltwise_chain_skip_compute_v) {
+            elem.template apply<SlotBase, PrevA, PrevB, PrevP, PackHetero>(
+                i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
+        }
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
         // Per-block-iteration input waits — mutually exclusive by policy (Streaming forces
         // block_size 1, so per_tile and per_block never both fire). The Bulk upfront wait is NOT
@@ -2673,24 +2677,26 @@ ALWI void elem_apply_compute(
                 emit_wait<true>(ElemT::dfb, chunk_sync_count);
             }
         }
-        if constexpr (EmitMathInit) {
+        if constexpr (EmitMathInit && !eltwise_chain_skip_compute_v) {
             emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
             elem.init();  // instance dispatch (see convention note above)
         }
-        constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            if constexpr (per_side) {
-                // Per-side path: chain hands both indices; element picks per operand.
-                elem.exec(
-                    /*i_flat_local=*/j,
-                    /*i_flat_abs=*/(i_flat + j),
-                    ht,
-                    /*wt_local=*/j,
-                    /*wt_abs=*/(wt + j),
-                    SlotBase + j * chain_lane_width);
-            } else {
-                const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-                elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
+        if constexpr (!eltwise_chain_skip_compute_v) {
+            constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                if constexpr (per_side) {
+                    // Per-side path: chain hands both indices; element picks per operand.
+                    elem.exec(
+                        /*i_flat_local=*/j,
+                        /*i_flat_abs=*/(i_flat + j),
+                        ht,
+                        /*wt_local=*/j,
+                        /*wt_abs=*/(wt + j),
+                        SlotBase + j * chain_lane_width);
+                } else {
+                    const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                    elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
+                }
             }
         }
         if constexpr (is_binary_fpu_op_v<ElemT>) {
@@ -2713,7 +2719,7 @@ ALWI void elem_apply_compute(
                 emit_pop<true>(ElemT::dfb, chunk_sync_count);
             }
         }
-    } else if constexpr (is_dest_only_op_v<ElemT>) {
+    } else if constexpr (is_dest_only_op_v<ElemT> && !eltwise_chain_skip_compute_v) {
         if constexpr (EmitSfpuInit) {
             emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
             elem.init();  // instance dispatch (see convention note above)
@@ -2744,18 +2750,22 @@ ALWI void elem_apply_pack(
     const ElemT& elem = selected.value;
     [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
-    emit_per_stage_pack_reconfig(dfb_for_side<Side::Pack, ElemT>(), PrevPack, LastPackCb, PackHetero);
+    if constexpr (!eltwise_chain_skip_compute_v) {
+        emit_per_stage_pack_reconfig(dfb_for_side<Side::Pack, ElemT>(), PrevPack, LastPackCb, PackHetero);
+    }
     if constexpr (ElemT::Reserve == ReservePolicy::PerTile) {
         emit_reserve<true>(ElemT::dfb, 1);
     } else if constexpr (ElemT::Reserve == ReservePolicy::PerChunk) {
         emit_reserve<true>(ElemT::dfb, chunk_sync_count);
     }
-    if constexpr (AnyPackRelu) {
+    if constexpr (AnyPackRelu && !eltwise_chain_skip_compute_v) {
         elem.configure_relu();
     }
-    for (uint32_t j = 0; j < inner_count; ++j) {
-        const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-        elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+    if constexpr (!eltwise_chain_skip_compute_v) {
+        for (uint32_t j = 0; j < inner_count; ++j) {
+            const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+            elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+        }
     }
     if constexpr (ElemT::Push == PushPolicy::PerTile) {
         emit_push<true>(ElemT::dfb, 1);
@@ -2774,9 +2784,11 @@ ALWI void elem_apply_seed_first_l1_pack(
     [[maybe_unused]] uint32_t wt,
     [[maybe_unused]] uint32_t j,
     [[maybe_unused]] uint32_t chain_lane_width) {
-    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
-    const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-    selected.value.exec(i_arg, ht, wt + j, j * chain_lane_width);
+    if constexpr (!eltwise_chain_skip_compute_v) {
+        constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
+        const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+        selected.value.exec(i_arg, ht, wt + j, j * chain_lane_width);
+    }
 }
 
 ALWI void emit_wait_upfront(UnselectedElement, uint32_t, uint32_t) {}
@@ -2984,7 +2996,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
     constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
-    if constexpr (SO == SetupOwner::Chain) {
+    if constexpr (SO == SetupOwner::Chain && !detail::eltwise_chain_skip_compute_v) {
         (detail::elem_pack_init(detail::select_element<
                                 is_pack_tile_op_v<Es>,
                                 detail::TransitionFacts<
@@ -3031,7 +3043,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     constexpr bool dest_accumulation = dest_accumulation_mode != DestAccumulation::Disabled;
     constexpr bool per_row_dest_accumulation = dest_accumulation_mode == DestAccumulation::PerRow;
     constexpr bool whole_shape_dest_accumulation = dest_accumulation_mode == DestAccumulation::WholeShape;
-    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
+    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !detail::eltwise_chain_skip_compute_v) {
         pack_reconfig_l1_acc(detail::ChainTraits<Es...>::any_seed_first_l1_accumulation ? 0 : 1);
     }
     if constexpr (whole_shape_dest_accumulation) {
@@ -3089,8 +3101,10 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                         (detail::elem_apply_seed_first_l1_pack(
                              detail::select_element<is_pack_tile_op_v<Es>>(elts), i_flat, ht, wt_base, j, chain_lane_w),
                          ...);
-                        if (i_flat == 0 && j == 0) {
-                            pack_reconfig_l1_acc(1);
+                        if constexpr (!detail::eltwise_chain_skip_compute_v) {
+                            if (i_flat == 0 && j == 0) {
+                                pack_reconfig_l1_acc(1);
+                            }
                         }
                     }
                 } else {
@@ -3171,11 +3185,11 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              detail::ChainTraits<Es...>::d[Is].pack_dfb),
          ...);
     }
-    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
+    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !detail::eltwise_chain_skip_compute_v) {
         pack_reconfig_l1_acc(0);
     }
 
-    if constexpr (detail::ChainTraits<Es...>::any_pack_relu) {
+    if constexpr (detail::ChainTraits<Es...>::any_pack_relu && !detail::eltwise_chain_skip_compute_v) {
         pack_relu_config(ReluConfig::none());
     }
     (detail::emit_pop_at_end(detail::select_element<detail::pops_at_end<Es>()>(elts), Ht, Wt), ...);
