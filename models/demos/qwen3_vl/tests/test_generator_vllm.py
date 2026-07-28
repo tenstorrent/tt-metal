@@ -2,8 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 
+pytest.importorskip("vllm")
 from models.demos.qwen3_vl.tt import generator_vllm
 
 
