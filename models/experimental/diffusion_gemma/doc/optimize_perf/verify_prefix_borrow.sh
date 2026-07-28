@@ -16,6 +16,15 @@
 # Requires the traced path, so it uses serving_smoke --upfront (the cheap stand-in for the vLLM
 # wrapper's fail-loud startup contract).
 
+# Gumbel source: `device`. `--upfront` needs a MATERIALIZED full-vocabulary Gumbel and `device` is
+# now the only one: the `host` mode this script used was DELETED on 2026-07-28 after being measured
+# NOT to be the TT language-drift cause (it drifts on exactly the same prompts as `device`, repairs
+# 0, and costs 1.40x per request; the real cause was the canvas attending prefill pad keys, fixed in
+# d0936d4da4f).
+# Consequence for this A/B: committed_sha256 values recorded from earlier `host`-mode runs will NOT
+# reproduce here, and absolute latencies are ~1.94x lower than any host-Gumbel figure in
+# doc/optimize_perf/winter_borrow_20260727.md. Compare the two arms WITHIN one invocation only.
+
 set -uo pipefail
 
 TT_METAL_ROOT="${TT_METAL_ROOT:-/home/zni/tt-metal}"
@@ -48,7 +57,7 @@ for borrow in 1 0; do
         "${PY}" -u -m models.experimental.diffusion_gemma.demo.serving_smoke \
         --checkpoint "${DG_CKPT}" --mesh "${MESH}" "${LAYER_ARG[@]}" \
         --max-seq-len "${MAX_SEQ_LEN}" --num-blocks "${NUM_BLOCKS}" \
-        --gumbel-mode host --disable-eos-stop --local-files-only \
+        --gumbel-mode device --disable-eos-stop --local-files-only \
         --upfront --reveal-pmax "${PMAX}" \
         --metrics-json "${OUT_DIR}/${tag}.json" \
         >"${OUT_DIR}/${tag}.log" 2>&1

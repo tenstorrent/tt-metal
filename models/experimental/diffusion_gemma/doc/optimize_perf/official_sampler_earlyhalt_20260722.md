@@ -1,5 +1,12 @@
 # Official DiffusionGemma sampler with traced early halt (2026-07-22)
 
+> **2026-07-28 — the `host` Gumbel mode used/recommended below was DELETED.** It was measured NOT
+> to be the TT language-drift cause: it drifts on exactly the same prompts as `device`, repairs 0,
+> and costs 1.40x per request. The real cause was the canvas attending prefill pad keys, fixed in
+> `d0936d4da4f`. **Every measurement below stands exactly as recorded**; only the recommendation to
+> use, keep, or fall back to `host` is void. `device` is the only materialized Gumbel source and
+> therefore the only mode valid under up-front capture (`argmax`/`chunked` are not materialized).
+
 ## Configuration
 
 The official-semantics serving configuration now combines:

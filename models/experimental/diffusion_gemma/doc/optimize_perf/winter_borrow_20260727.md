@@ -7,6 +7,16 @@ changed. Winter's own headline (a ~0.15 s warm traced denoise step) has **no com
 artifact** in that tree — it is a README assertion plus a code path capable of producing it — so
 nothing here rests on it. Every number below is ours.
 
+> **2026-07-28 — the `host` Gumbel mode used/recommended below was DELETED.** It was measured NOT
+> to be the TT language-drift cause: it drifts on exactly the same prompts as `device`, repairs 0,
+> and costs 1.40x per request. The real cause was the canvas attending prefill pad keys, fixed in
+> `d0936d4da4f`. **Every measurement below stands exactly as recorded**; only the recommendation to
+> use, keep, or fall back to `host` is void. `device` is the only materialized Gumbel source and
+> therefore the only mode valid under up-front capture (`argmax`/`chunked` are not materialized).
+> Practical effect on this document: the §§1–12 `host`-Gumbel sweep is no longer re-runnable as
+> written (`sweep_denoise_arms.sh` now defaults to `device`). The numbers stand; convert them
+> with the 1.94x host→device ratio measured in §13.4.
+
 ---
 
 ## Where we ended up, normalized against winter's operating point

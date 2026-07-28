@@ -51,7 +51,7 @@ def test_vllm_session_selects_upfront_or_eager_from_sole_model_trace_flag(monkey
     model._dg_state_dict = {}
     model._config = SimpleNamespace(canvas_length=256, max_denoise_steps=48)
     model._tokenizer = None
-    model._gumbel_mode = "host"
+    model._gumbel_mode = "device"
     model.canvas_length = 256
 
     model._make_session()

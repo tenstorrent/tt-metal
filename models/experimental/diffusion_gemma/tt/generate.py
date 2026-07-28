@@ -11,9 +11,7 @@ the DiffusionGemma-local commit decode path.
 
 from __future__ import annotations
 
-import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from numbers import Integral
 from typing import Callable, NamedTuple
 
@@ -551,99 +549,6 @@ def make_seeded_host_noise_tokens_fn(
         return noise_tokens_for_step
 
     return noise_tokens_for_block
-
-
-def _host_gumbel_prefetch_enabled() -> bool:
-    """Whether to overlap host Gumbel generation behind the previous device step."""
-    return os.environ.get("DG_HOST_GUMBEL_PREFETCH", "1").lower() not in ("0", "false", "no", "off")
-
-
-def _host_gumbel_tensor(*, batch: int, canvas_len: int, vocab_size: int, seed: int, block_idx: int, step: int):
-    """Pure-CPU per-(block, step) host Gumbel(0,1) draw as a ``[batch, canvas, vocab]`` torch tensor.
-
-    Deterministic in ``(block_idx, step)`` via a private ``torch.Generator`` — it never
-    touches the process-global RNG — so it is safe to compute on a background thread and
-    yields the identical values regardless of when or on which thread it runs. This is the
-    property that lets the prefetch below stay byte-identical to the serial path.
-    """
-    generator = torch.Generator()
-    generator.manual_seed(seed + int(block_idx) * 1_000_003 + int(step))
-    u = torch.rand((batch, canvas_len, vocab_size), dtype=torch.float32, generator=generator)
-    return -torch.log(-torch.log(u + 1.0e-10) + 1.0e-10)
-
-
-def make_seeded_host_gumbel_noise_fn(
-    mesh_device,
-    *,
-    batch: int,
-    canvas_len: int,
-    vocab_size: int,
-    seed: int,
-    num_steps: int | None = None,
-):
-    """Create seeded host-generated Gumbel hooks for ``generate_blocks``.
-
-    This preserves the injected-noise device sampler path while avoiding the
-    full-vocab ``ttnn.rand`` allocation. It is a RUN/debug path, not the released
-    on-device RNG path.
-
-    The full-vocab ``torch.rand`` + two ``torch.log`` passes cost ~300 ms/step of pure
-    host CPU. When ``DG_HOST_GUMBEL_PREFETCH`` is enabled (default), the *next* step's
-    host tensor is computed on a single background worker thread while the current step's
-    device trace runs (``torch.rand``/``torch.log`` release the GIL), so the host RNG is
-    hidden behind device compute instead of idling the device before it. Only the
-    ``from_torch`` upload (which touches the device) runs on the calling thread, so there
-    is never concurrent device access. Because :func:`_host_gumbel_tensor` is a pure
-    function of ``(block_idx, step)``, the prefetched value is bit-identical to the serial
-    result — this changes *when* the noise is generated, never *what*. ``num_steps`` caps
-    the prefetch so the last step of a block does not spawn a wasted out-of-range draw.
-    """
-    _check_random_token_args(batch, canvas_len, vocab_size)
-    seed = _validate_host_rand_seed(seed)
-    prefetch = _host_gumbel_prefetch_enabled()
-    prefetch_cap = int(num_steps) if num_steps is not None else None
-    # One model-lifetime worker shared across blocks. A block that early-halts abandons at
-    # most one in-flight draw; the next block simply queues behind it on the single worker.
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dg-gumbel-prefetch") if prefetch else None
-
-    def _draw(block_idx: int, step: int):
-        return _host_gumbel_tensor(
-            batch=batch, canvas_len=canvas_len, vocab_size=vocab_size, seed=seed, block_idx=block_idx, step=step
-        )
-
-    def gumbel_noise_for_block(block_idx: int):
-        if isinstance(block_idx, bool) or not isinstance(block_idx, Integral):
-            raise ValueError("host Gumbel block index must be an integer")
-        block_idx = int(block_idx)
-        pending: dict = {"step": None, "future": None}
-
-        def gumbel_noise_for_step(step: int):
-            if isinstance(step, bool) or not isinstance(step, Integral):
-                raise ValueError("host Gumbel step index must be an integer")
-            step = int(step)
-
-            gumbel = None
-            future = pending["future"]
-            if future is not None and pending["step"] == step:
-                gumbel = future.result()
-            pending["step"] = None
-            pending["future"] = None
-            if gumbel is None:
-                gumbel = _draw(block_idx, step)
-
-            # Kick off the next step's host draw on the worker; the device is about to run
-            # this step's trace, so the CPU generation overlaps that device time.
-            if executor is not None:
-                nxt = step + 1
-                if prefetch_cap is None or nxt < prefetch_cap:
-                    pending["step"] = nxt
-                    pending["future"] = executor.submit(_draw, block_idx, nxt)
-
-            return host_gumbel_noise_to_device(mesh_device, gumbel)
-
-        return gumbel_noise_for_step
-
-    return gumbel_noise_for_block
 
 
 def make_seeded_chunked_gumbel_noise_fn(
@@ -1452,7 +1357,6 @@ def generate_text_from_checkpoint_state(
     gumbel_seed: int | None = None,
     noise_seed: int | None = None,
     batch: int = 1,
-    use_host_gumbel_noise: bool = False,
     use_chunked_gumbel_noise: bool = False,
     gumbel_vocab_chunk_size: int = 1024,
     adapter_kwargs: dict | None = None,
@@ -1508,19 +1412,8 @@ def generate_text_from_checkpoint_state(
     if num_blocks > 0 and "gumbel_noise_fn" not in generate_kwargs and (seed is not None or gumbel_seed is not None):
         if vocab_size is None:
             raise ValueError("gumbel_noise_fn requires vocab_size or tokenizer/model vocab metadata")
-        if use_host_gumbel_noise and use_chunked_gumbel_noise:
-            raise ValueError("choose at most one generated Gumbel workaround")
         gumbel_seed_value = gumbel_seed if gumbel_seed is not None else seed + 2
-        if use_host_gumbel_noise:
-            gumbel_seed_value = _validate_host_rand_seed(gumbel_seed_value)
-            generate_kwargs["gumbel_noise_fn"] = make_seeded_host_gumbel_noise_fn(
-                tt_model.mesh_device,
-                batch=batch,
-                canvas_len=config.canvas_length,
-                vocab_size=vocab_size,
-                seed=gumbel_seed_value,
-            )
-        elif use_chunked_gumbel_noise:
+        if use_chunked_gumbel_noise:
             generate_kwargs["gumbel_noise_fn"] = make_seeded_chunked_gumbel_noise_fn(
                 seed=TS._validate_ttnn_rand_seed(gumbel_seed_value),
                 vocab_chunk_size=gumbel_vocab_chunk_size,

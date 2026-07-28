@@ -2,7 +2,8 @@
 
 > **CURRENT CONTRACT — 2026-07-22.** Use `plan.md` Part 0 first. There is exactly one supported
 > Metal denoise trace path: model-lifetime up-front capture with reveal masking, a materialized
-> full-vocabulary Gumbel source (`device` by default since 2026-07-24, `host` as the IID reference),
+> full-vocabulary Gumbel source (`device` since 2026-07-24 and, since 2026-07-28, the ONLY mode --
+> the `host` IID reference was deleted; see the `DG_VLLM_GUMBEL_MODE` bullet below),
 > K=48, and one-step/window early halt. Ordinary eager execution is the only fallback. All
 > fixed-budget, grouped/multistep, frozen-prefix, per-request, and argmax trace results below are
 > historical evidence, not executable current-path guidance.
@@ -29,8 +30,14 @@ Current guardrails:
   `ttnn.rand`: the Blackhole SFPU PRNG is a sliding window over one stream, so 64 of the 256 canvas
   positions were receiving a byte-identical copy of another position's noise. The default DEPENDS on
   that kernel fix, whose residual is pinned by `tests/ttnn/.../test_rand_independence.py`; see
-  `doc/decision_fidelity/degenerate_output_fix.md`. `host` remains the IID reference; `chunked` and
-  `argmax` are not materialized full-tensor sources and are rejected under up-front capture.
+  `doc/decision_fidelity/degenerate_output_fix.md`. **`host` was DELETED on 2026-07-28** after
+  being measured NOT to be the language-drift cause -- it drifts on exactly the same prompts as
+  `device`, repairs 0, and costs 1.40x per request, and the real cause was the canvas attending
+  prefill pad keys, fixed in `d0936d4da4f` --
+  so there is no IID reference arm any more. `chunked` and `argmax` are not materialized
+  full-tensor sources and are rejected under up-front capture, which leaves `device` as the only
+  mode up-front capture accepts. The 4-seed numbers above are the record of that history, not a
+  runnable A/B.
 - Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Do not add legacy
   selector flags for them. Every admitted prefill shape must compile before capture; unseen runtime
   shapes fail loudly.

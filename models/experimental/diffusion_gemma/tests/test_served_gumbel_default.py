@@ -16,6 +16,13 @@ This default has moved twice, so it is pinned rather than left to a comment:
   advancing the window per element, the same A/B answers correctly 4/4 on both arms and the
   degeneracy guard never fires, at ~53.6 vs ~36.3 tokens/block/s.
 
+* 2026-07-27 measured ``host`` as no repair at all: it drifts on exactly the same prompts as
+  ``device``, fixes 0 of them, and costs 1.40x per request. The drift was the canvas attending the
+  prefill pad keys (fixed in ``d0936d4da4f``), never the RNG. The ``host`` SERVING mode was
+  therefore DELETED on 2026-07-28, leaving ``device`` as the only materialized source and the only
+  mode valid under up-front capture. The torch-noise INJECTION helpers stay -- see
+  ``test_the_deleted_host_serving_mode_is_not_offered`` below.
+
 So the invariant worth pinning is no longer "the default is host" but "the default is only allowed
 to be a device RNG while the kernel-level independence gate holds". These tests pin the default and
 point at that gate; ``tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py``
@@ -28,7 +35,7 @@ import pytest
 
 GV = pytest.importorskip("models.experimental.diffusion_gemma.tt.generator_vllm")
 
-SUPPORTED_UPFRONT_MODES = {"host", "device"}
+SUPPORTED_UPFRONT_MODES = {"device"}
 
 
 def test_served_default_is_a_materialized_mode():
@@ -40,17 +47,38 @@ def test_served_default_is_a_materialized_mode():
 
 
 def test_served_default_is_device_for_throughput():
-    """`device` is the default because `host` does not meet the throughput bar (~1.48x slower).
+    """`device` is the default; the `host` alternative missed the throughput bar (~1.48x slower).
 
-    If this has been changed back to `host`, the reason should be a NEW correctness finding, and
-    the kernel gate in test_rand_independence.py is where to look first -- a regression there is
-    what would make a device RNG unusable again.
+    If a non-device Gumbel source is ever reintroduced, the reason should be a NEW correctness
+    finding, and the kernel gate in test_rand_independence.py is where to look first -- a
+    regression there is what would make a device RNG unusable again.
     """
     assert GV.DEFAULT_VLLM_GUMBEL_MODE == "device", (
         f"served Gumbel default is {GV.DEFAULT_VLLM_GUMBEL_MODE!r}, not 'device'. That is a "
         "throughput regression (~53.6 -> ~36.3 tokens/block/s) unless a correctness finding "
         "justifies it; see doc/decision_fidelity/degenerate_output_fix.md"
     )
+
+
+def test_the_deleted_host_serving_mode_is_not_offered():
+    """`host` was a SERVING mode and is gone; the torch-noise INJECTION harness is not.
+
+    The distinction matters because both are spelled "host gumbel". Deleted: the per-step
+    full-vocabulary torch draw offered as ``DG_VLLM_GUMBEL_MODE=host``. Kept: replaying a torch
+    run's exact pre-computed noise onto the device so TT decisions are token-for-token comparable
+    to a torch oracle -- ``demo/replay_hf_tt.py`` depends on ``make_host_gumbel_noise_fn``.
+    """
+    serving = pytest.importorskip("models.experimental.diffusion_gemma.tt.serving")
+    generate = pytest.importorskip("models.experimental.diffusion_gemma.tt.generate")
+
+    assert "host" not in serving.GUMBEL_MODES
+    assert SUPPORTED_UPFRONT_MODES == {"device"}
+    assert not hasattr(generate, "make_seeded_host_gumbel_noise_fn")
+    assert not hasattr(generate, "_host_gumbel_prefetch_enabled")
+    assert not hasattr(generate, "_host_gumbel_tensor")
+    # The HF<->TT determinism harness is deliberately kept.
+    assert hasattr(generate, "host_gumbel_noise_to_device")
+    assert hasattr(generate, "make_host_gumbel_noise_fn")
 
 
 def test_the_kernel_gate_this_default_depends_on_exists():

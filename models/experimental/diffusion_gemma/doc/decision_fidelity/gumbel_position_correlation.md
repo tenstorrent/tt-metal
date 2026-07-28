@@ -1,5 +1,12 @@
 # Device Gumbel noise is not IID across canvas positions (#48291)
 
+> **2026-07-28 — the `host` Gumbel mode used/recommended below was DELETED.** It was measured NOT
+> to be the TT language-drift cause: it drifts on exactly the same prompts as `device`, repairs 0,
+> and costs 1.40x per request. The real cause was the canvas attending prefill pad keys, fixed in
+> `d0936d4da4f`. **Every measurement below stands exactly as recorded**; only the recommendation to
+> use, keep, or fall back to `host` is void. `device` is the only materialized Gumbel source and
+> therefore the only mode valid under up-front capture (`argmax`/`chunked` are not materialized).
+
 **Status 2026-07-25: CONFIRMED on device (P150x4, QB2). Root-caused to `ttnn.rand`. No DG-local
 layout or seeding workaround fixes it. `DG_VLLM_GUMBEL_MODE=host` is the only IID option today,
 and the shipped default (`device`) is the WORST of all device arms on the functional metric.**

@@ -7,6 +7,15 @@
 > the permuted-vocab draw puts the 256 canvas positions on the rand width axis, where only 24 of
 > every 32 row streams are distinct. The throughput numbers below still stand; the default does
 > not. See `doc/decision_fidelity/gumbel_position_correlation.md`.
+>
+> **SUPERSEDED AGAIN 2026-07-28 — the `host` mode this doc reverts to was DELETED.** The revert
+> above was undone on 2026-07-25 (the `ttnn.rand` kernel was fixed), and `host` has now been
+> removed outright after being measured NOT to be the language-drift cause: it drifts on exactly
+> the same prompts as `device`, repairs 0, and costs 1.40x per request, and the real cause was the
+> canvas attending prefill pad keys, fixed in `d0936d4da4f`.
+> The Opt-B host-Gumbel-prefetch mechanism and `DG_HOST_GUMBEL_PREFETCH` are gone with it. The
+> throughput and A/B numbers below still stand as the record; the "revert to `host`" fallback
+> plan and the owed host-vs-device re-gate no longer have a second arm to run.
 
 
 Two optimizations to the up-front traced denoise path (`tt/traced_denoise.py`

@@ -1,5 +1,12 @@
 # Degenerate output: cause, fix, and the safety net (#48291)
 
+> **2026-07-28 — the `host` Gumbel mode used/recommended below was DELETED.** It was measured NOT
+> to be the TT language-drift cause: it drifts on exactly the same prompts as `device`, repairs 0,
+> and costs 1.40x per request. The real cause was the canvas attending prefill pad keys, fixed in
+> `d0936d4da4f`. **Every measurement below stands exactly as recorded**; only the recommendation to
+> use, keep, or fall back to `host` is void. `device` is the only materialized Gumbel source and
+> therefore the only mode valid under up-front capture (`argmax`/`chunked` are not materialized).
+
 **Status 2026-07-25: root cause identified and fixed. The served Gumbel default is back to `host`.**
 Matched 4-seed A/B on device, one variable: `host` answered correctly **4/4**, `device` corrupted
 **2/4**. A degenerate-canvas detector is added as defense in depth, calibrated on real blocks.
@@ -237,13 +244,12 @@ measuring the committed tokens.
 ## 8. Reproduce
 
 ```bash
-# the A/B (one variable)
-for arm in host device; do
-  DG_TRACE_REGION_SIZE=12884901888 MESH_DEVICE=P150x4 \
-  python -m models.experimental.diffusion_gemma.demo.serving_smoke \
-    --max-seq-len 4096 --num-blocks 12 --gumbel-mode "$arm" --upfront --reveal-pmax 4096 \
-    --enable-thinking --disable-eos-stop --seed 0 --prompt "<gpqa doc 0>"
-done
+# The A/B reported above was `host` vs `device` (one variable). The `host` arm was DELETED on
+# 2026-07-28 -- see the banner at the top of this file -- so only the `device` arm is runnable:
+DG_TRACE_REGION_SIZE=12884901888 MESH_DEVICE=P150x4 \
+python -m models.experimental.diffusion_gemma.demo.serving_smoke \
+  --max-seq-len 4096 --num-blocks 12 --gumbel-mode device --upfront --reveal-pmax 4096 \
+  --enable-thinking --disable-eos-stop --seed 0 --prompt "<gpqa doc 0>"
 
 # per-block degeneracy statistics on any run
 DG_DEGENERACY_POLICY=warn  ...   # logs DG_DEGENERACY start_pos=... top_frac=... max_run=...

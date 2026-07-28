@@ -8,7 +8,8 @@
 There are exactly two denoise execution modes:
 
 1. **Metal trace (default):** one model-lifetime trace/controller captured during startup with reveal
-   masking, IID host Gumbel, K=48, and one-step/window early halt. This is what an
+   masking, the materialized on-device Gumbel (`device` -- the only mode since `host` was
+   deleted 2026-07-28), K=48, and one-step/window early halt. This is what an
    unset `DG_UPFRONT_CAPTURE` now selects.
 2. **Eager fallback:** `DG_UPFRONT_CAPTURE=0`, set explicitly — unsetting it no longer disables
    capture. Eager is valid for diagnostics, and is the only path that emits per-step trajectory
@@ -21,7 +22,7 @@ export DG_UPFRONT_CAPTURE=1                                                  # d
 export DG_UPFRONT_PREFILL_WARMUP_LENS=<all-admitted-aligned-prompt-lengths>  # required, no default
 export DG_TRACE_REGION_SIZE=<validated-positive-reservation>                 # required, no default
 export DG_DENOISE_REVEAL_PMAX=<positive-tile-aligned-served-cap>             # optional; derived from --max-model-len
-export DG_VLLM_GUMBEL_MODE=device                                            # default; ~1.48x faster than `host`
+export DG_VLLM_GUMBEL_MODE=device                                            # default and ONLY mode (`host` deleted 2026-07-28)
 export DG_DENOISE_SLIDING_WINDOW=1                                           # default ON since 2026-07-27; redundant but explicit
 ```
 
@@ -73,8 +74,10 @@ Three independent measurements, all on device:
 
 The same A/B exonerates the sampler: `DG_VLLM_GUMBEL_MODE=host` (IID) drifts on exactly the same
 prompts as `device` (2/16, repaired 0) while costing 1.40x per request, so do NOT revert that default
-for language reasons. Cost of the pad fix on GPQA prompts is +12% mean latency (39.3 -> 44.1 s),
-because more replies now finish their think channel instead of being truncated mid-thought.
+for language reasons. That measurement is why the `host` mode was DELETED outright on 2026-07-28;
+`device` is now the only Gumbel mode. Cost of the pad fix on GPQA prompts is +12% mean latency
+(39.3 -> 44.1 s), because more replies now finish their think channel instead of being truncated
+mid-thought.
 
 Set `DG_DENOISE_HIDE_PREFILL_PADS=0` for the old maskless behaviour. **Still owed:** a full 198-question
 GPQA run at the reference budget to confirm the 38/198 non-English rate drops and the score holds, and
@@ -100,8 +103,13 @@ and the same 4-seed A/B answers correctly 4/4 on both arms with the degeneracy g
 **This default depends on that kernel fix.** The residual correlation it does not remove
 (cross-position max |r| 0.618 against 0.035 for host IID) is pinned by
 `tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py`; if that gate regresses,
-revisit this default. `host` remains the IID reference. `chunked` and `argmax` are not materialized
-full-tensor sources and are rejected by the up-front controller.
+revisit this default. **`host` was DELETED on 2026-07-28** after being measured NOT to be the
+language-drift cause -- it drifts on exactly the same prompts as `device`, repairs 0, and costs
+1.40x per request, and the real cause was the canvas attending prefill pad keys, fixed in
+`d0936d4da4f` --
+so there is no IID reference arm any more. `chunked` and `argmax` are not materialized
+full-tensor sources and are rejected by the up-front controller, which leaves `device` as the only
+mode valid under up-front capture.
 
 Server command requirements:
 

@@ -11,7 +11,8 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 
 - **The central conflict.** The entropy-budget cutoff may not change a captured operation sequence or shape. Keep it as an on-device tensor mask with tensor-valued indices.
 - **One Metal denoise trace path.** Capture the reveal-masked controller once during model startup,
-  retain it for the model lifetime, use IID host Gumbel with K=48, and replay one-step/window early
+  retain it for the model lifetime, use the materialized on-device Gumbel (`device`, the only
+  materialized mode since `host` was deleted 2026-07-28) with K=48, and replay one-step/window early
   halt. Eager is the only fallback. Fixed-budget, grouped/multistep, frozen-prefix, per-request, and
   argmax traces are legacy evidence, not selectable variants.
 - **Warm the program cache for the new ops** — sort, cumsum, scatter, gather/permute, entropy — at the EXACT fixed canvas shape and argument values used in capture. Verify cumsum/sort over the 256 axis do not internally trigger reads / host-sync / dynamic-shape misses during capture (a likely first failure; bisect with the flushed-marker technique).

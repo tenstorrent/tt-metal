@@ -27,12 +27,17 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 ### Current benchmark guardrails (2026-07-22)
 
 - The traced vLLM profile is now the default: `DG_UPFRONT_CAPTURE` defaults to `1` and
-  `DG_VLLM_GUMBEL_MODE` defaults to `device` (~1.48x faster than `host`; it depends on the
-  Blackhole ttnn.rand kernel fix — see doc/decision_fidelity/degenerate_output_fix.md). Set `DG_UPFRONT_CAPTURE=0` only to fall back to eager,
+  `DG_VLLM_GUMBEL_MODE` is `device`, the ONLY materialized Gumbel source and therefore the only
+  mode valid under up-front capture (it depends on the Blackhole ttnn.rand kernel fix — see
+  doc/decision_fidelity/degenerate_output_fix.md). Set `DG_UPFRONT_CAPTURE=0` only to fall back to eager,
   which is what you need for per-step trajectory records that replayed traces do not produce. Device
-  Gumbel is a distribution change, not bit-exact against host IID Gumbel, and the sub-40 GPQA
-  host-vs-device @3072 re-gate is still outstanding: record the mode with every benchmark and use
-  `DG_VLLM_GUMBEL_MODE=host` for the IID reference.
+  Gumbel is a distribution change, not bit-exact against the torch IID Gumbel the old `host` mode
+  drew. **`host` was DELETED on 2026-07-28** after being measured NOT to be the language-drift
+  cause: it drifts on exactly the same prompts as `device`, repairs 0, and costs 1.40x per request.
+  The real cause was the canvas attending prefill pad keys, fixed in `d0936d4da4f`.
+  There is no IID reference arm any more and the owed sub-40 @3072 re-gate has no second arm to
+  run: judge quality against the A100 CUDA GPQA reference. Still record the mode with every
+  benchmark. `argmax` and `chunked` are not materialized and stay rejected under up-front capture.
 - Still required and fail-loud: every admitted aligned length in `DG_UPFRONT_PREFILL_WARMUP_LENS`
   and positive `DG_TRACE_REGION_SIZE` (the reserved region cannot be read back from the device, and
   a trace-region overflow poisons the device). `DG_DENOISE_REVEAL_PMAX` is now optional — unset
@@ -265,13 +270,13 @@ At the tuned default the step is **~66% NON-MoE**. The L1 pass recovered one mat
 
 - **Sharded terminal — VALIDATED in concept, BLOCKED in-repo.** The replicated full-vocab terminal does 4× redundant argmax/entropy work. A per-chip `[256,65536]` terminal measured an estimated ~7% block win, but the traced on-device cross-shard combine needs an exact 18-bit token index; Blackhole fp32 TILE reduction loses low index bits. The fix is an int32 reduction or custom terminal kernel. See `nonmoe_roofline/README.md` and the sharded-terminal entries in `perf_campaign_worklog.md`.
 - **DRAM-sharded expert weights are no longer a current Python-level recommendation.** That roadmap item predates OPT-004. The tuned expert matmul already reaches ~235 GB/s/chip (~92% of practical DRAM roofline), while a second sharded expert copy would conflict with the 256K budget (only ~2.16 GiB/chip free). Revisit only with a loader-native non-duplicated layout and a batched-matmul contract that can consume it.
-- **Current verdict:** the 18.844 t/s argmax row, 20.7 t/s full-canvas-norm row, and 1.42 output t/s growing-prefix recapture row are historical comparisons. Current trace optimization must use the model-lifetime up-front reveal+host+window1 K=48 path; use eager only as its fallback/control.
+- **Current verdict:** the 18.844 t/s argmax row, 20.7 t/s full-canvas-norm row, and 1.42 output t/s growing-prefix recapture row are historical comparisons. Current trace optimization must use the model-lifetime up-front reveal+device-Gumbel+window1 K=48 path; use eager only as its fallback/control.
 
 ### When the in-repo levers are exhausted: the ceiling
 
 These are genuinely not fixable DiffusionGemma-locally or are hard device/kernel limits. Do not re-investigate them as DG-local Python knobs; use the in-repo evidence named above.
 
-1. **Historical fixed/argmax rows measured ~18.8–20.7 t/s at 48 steps.** They are not the current serving path. At K=48, 100 t/s remains arithmetically impossible; current measurements must use up-front reveal+host+window1.
+1. **Historical fixed/argmax rows measured ~18.8–20.7 t/s at 48 steps.** They are not the current serving path. At K=48, 100 t/s remains arithmetically impossible; current measurements must use up-front reveal+device-Gumbel+window1.
 2. **#48291 decision fidelity (correctness, and it gates the step count).** The bf16 / MoE / TP=4 backbone argmax-agrees with HF only ~50% and diffusion commits the clean argmax with no cushion. Decomposition (2026-07-07): the gap is the backbone hidden, and **attention is the #1 lever** — full-fp32 attention alone lifts logits PCC to ≥0.92. Config precision knobs are DEAD (`sparse_matmul` + flash SDPA ignore `fp32_dest_acc_en`; HiFi4 is worse). The clean fix is a **C++ flash-SDPA kernel change** (fp32 softmax/PV accumulation) + fp32 qkv/o projections — scoped shared/upstream kernel work, NOT a DG-local Python knob. `ttnn.topk` is bf16-only (TT_FATAL on FLOAT32); fp32 experts exceed QB2 DRAM.
 3. **The MoE is already ~roofline-optimal; the remaining MoE gap is a fused kernel (upstream).** At the tuned state the expert matmul reads the weight bank at ~92% of the 256 GB/s roofline (weight-bound at M=1 tile). The ~3.6 ms/layer of dispatch + gather/combine + all-reduce overhead in `tt/sparse_moe.py` (dense gather/combine matmuls because TTNN has no gather-experts primitive) is the residual — removing it needs a **fused gather-experts-combine kernel (upstream ttnn)** or a per-token/down-layout `sparse_matmul` variant (upstream). At S=256, top-8 activates ~all 128 experts, so the weight floor is all-128 (12.58 GB/chip/step) — sparsity never buys weight bytes.
 4. **The commit still rides the ungated shared-gemma4 decode footprint.** Batched commit is the live default (landed, above), but a fully DG-local **sparse causal 256-token commit** (`path_to_100tps.md` lever 7) or reverting the ungated decode-footprint edits (RoPE-per-user, SDPA 1×1 grid k=32) touches shared gemma4 → needs a gate/rebaseline or copy-into-DG (plan.md R0.4 / R-new / line 149).

@@ -5,6 +5,11 @@
 > same-ID multi-block numbers below used prompt-only prefix visibility and are historical
 > same-shape performance provenance. Use `README.md` and `plan.md` Part 0 for current launch and
 > metric semantics.
+>
+> **Update 2026-07-28:** the `host` Gumbel mode listed under "What changed" below was DELETED
+> after being measured NOT to be the language-drift cause: it drifts on exactly the same prompts
+> as `device`, repairs 0, and costs 1.40x per request, and the real cause was the canvas attending
+> prefill pad keys, fixed in `d0936d4da4f`. `device` is the only materialized mode. The changelog below is left exactly as written.
 
 Enables **Metal TRACE capture/replay in the serving decode path** (a perf feature — NOT Tracy/device
 profiling; no profiler was run against a live server, per the `optimize`/`vllm-integration` skills),

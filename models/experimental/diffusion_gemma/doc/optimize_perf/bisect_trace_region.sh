@@ -22,6 +22,12 @@
 #
 # Report: for each size, capture success + free DRAM after model build.
 
+# Gumbel source: `device`. `--upfront` needs a MATERIALIZED full-vocabulary Gumbel and `device` is
+# now the only one: the `host` mode this script used was DELETED on 2026-07-28 after being measured
+# NOT to be the TT language-drift cause (it drifts on exactly the same prompts as `device`, repairs
+# 0, and costs 1.40x per request; the real cause was the canvas attending prefill pad keys, fixed in
+# d0936d4da4f).
+
 set -uo pipefail
 
 TT_METAL_ROOT="${TT_METAL_ROOT:-/home/zni/tt-metal}"
@@ -62,7 +68,7 @@ for size in "${SIZES[@]}"; do
         --max-seq-len "${MAX_SEQ_LEN}" \
         --num-blocks "${NUM_BLOCKS}" \
         --max-denoising-steps "${STEPS}" \
-        --gumbel-mode host \
+        --gumbel-mode device \
         --seed 0 \
         --entropy-stop-threshold -1 \
         --disable-eos-stop \

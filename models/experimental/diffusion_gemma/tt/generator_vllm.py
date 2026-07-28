@@ -122,13 +122,13 @@ def _validate_upfront_capture_configuration(
         raise RuntimeError(
             f"DG_UPFRONT_CAPTURE requires max_denoise_steps={UPFRONT_DENOISE_STEPS}, " f"got {max_denoise_steps}"
         )
-    if gumbel_mode not in ("host", "device"):
+    if gumbel_mode != "device":
         raise RuntimeError(
-            "DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE in {host, device}; "
-            f"got {gumbel_mode!r}. 'device' is the default: the W4-validated on-device "
-            "permuted-vocab RNG (no per-step host RNG or PCIe DMA). 'host' is the IID "
-            "full-vocab torch Gumbel fallback. 'chunked'/'argmax' are not materialized "
-            "full-tensor sources and are unsupported by the up-front controller."
+            "DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE='device'; "
+            f"got {gumbel_mode!r}. 'device' is the only materialized source: the W4-validated "
+            "on-device permuted-vocab RNG (no per-step host RNG or PCIe DMA). "
+            "'chunked'/'argmax' are not materialized full-tensor sources and are unsupported "
+            "by the up-front controller."
         )
 
     # This process cannot read the reserved trace region back from the device (Metal takes
@@ -277,33 +277,40 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # pin DG_DENOISE_REVEAL_PMAX explicitly.
         self._max_model_len = None if max_model_len is None else int(max_model_len)
         # DEFAULT "device" is the on-device permuted-vocab Gumbel: it removes the ~313 ms/step
-        # host RNG and the ~256 MiB/step replicated PCIe DMA, measured here at ~53.6 vs ~36.3
-        # tokens/block/s steady against host (~1.48x).
+        # host RNG and the ~256 MiB/step replicated PCIe DMA that the deleted per-step host-torch
+        # Gumbel mode paid, measured here at ~53.6 vs ~36.3 tokens/block/s steady (~1.48x).
         #
         # HISTORY, because this default has moved twice. It was flipped to "device" on 2026-07-24,
-        # reverted to "host" on 2026-07-25 after it corrupted generated text on 2 of 4 matched
-        # seeds, and restored here once the CAUSE was fixed. The cause was never in this module:
-        # for the production noise shape (1, 1, 256, vocab) the permuted-vocab draw puts the 256
-        # canvas positions on the ttnn.rand width axis, and the Blackhole SFPU PRNG is a sliding
-        # window over one stream -- element (read t, lane i) carried stream[t + i], so 64 of 256
-        # positions held a byte-identical COPY of another position's noise and picked the same
-        # token together. tt_metal/hw/ckernels/blackhole/.../ckernel_sfpu_rand.h now advances the
-        # window per element; duplicate rows are gone and the same 4-seed A/B answers correctly
-        # 4/4 on both arms with the degeneracy guard never firing.
+        # reverted to the host IID mode on 2026-07-25 after "device" corrupted generated text on
+        # 2 of 4 matched seeds, and restored here once the CAUSE was fixed. The cause was never in
+        # this module: for the production noise shape (1, 1, 256, vocab) the permuted-vocab draw
+        # puts the 256 canvas positions on the ttnn.rand width axis, and the Blackhole SFPU PRNG
+        # is a sliding window over one stream -- element (read t, lane i) carried stream[t + i],
+        # so 64 of 256 positions held a byte-identical COPY of another position's noise and picked
+        # the same token together. tt_metal/hw/ckernels/blackhole/.../ckernel_sfpu_rand.h now
+        # advances the window per element; duplicate rows are gone and the same 4-seed A/B answers
+        # correctly 4/4 on both arms with the degeneracy guard never firing.
         #
         # This default therefore DEPENDS on that kernel fix. The residual correlation it does not
-        # remove (cross-position max |r| 0.618 against 0.035 for host IID) is pinned by
+        # remove (cross-position max |r| 0.618 against 0.035 for a host IID control) is pinned by
         # tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py; if that
-        # regresses, revisit this default. DG_VLLM_GUMBEL_MODE=host remains the IID reference.
+        # regresses, revisit this default.
         #
-        # MEMORY ENVELOPE: "device" and "host" both materialize a full-vocabulary (262144)
-        # tensor per step. context_contract.json records that materialization measured as an
-        # OOM in the DRAM left after a 256K-KV allocation, where only the no-materialize
-        # "chunked" descriptor fits. So at very large served contexts this default must be
-        # overridden with DG_VLLM_GUMBEL_MODE=chunked, which in turn requires
-        # DG_UPFRONT_CAPTURE=0 (the up-front controller needs a materialized source and
-        # rejects "chunked"/"argmax"). "chunked" also carries a known QB2 1024-wide RNG
-        # distribution bias; "argmax" is the fast deterministic RUN control.
+        # WHY THERE IS NO LONGER A "host" MODE: the per-step full-vocab torch Gumbel source was
+        # the suspected cause of TT language drift and was measured NOT to be -- it drifts on
+        # exactly the same prompts as "device", repairs 0 of them, and costs 1.40x per request.
+        # The real cause was the canvas attending the prefill pad keys, fixed in d0936d4da4f, so
+        # the mode was deleted. (The torch-noise INJECTION helpers in tt/generate.py stay: they
+        # replay a torch run's exact noise for HF<->TT determinism, they are not a serving mode.)
+        #
+        # MEMORY ENVELOPE: "device" materializes a full-vocabulary (262144) tensor per step.
+        # context_contract.json records that materialization measured as an OOM in the DRAM left
+        # after a 256K-KV allocation, where only the no-materialize "chunked" descriptor fits.
+        # So at very large served contexts this default must be overridden with
+        # DG_VLLM_GUMBEL_MODE=chunked, which in turn requires DG_UPFRONT_CAPTURE=0 (the up-front
+        # controller needs a materialized source and rejects "chunked"/"argmax"). "chunked" also
+        # carries a known QB2 1024-wide RNG distribution bias; "argmax" is the fast deterministic
+        # RUN control.
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
         # One active session per batch row. A single contiguous model cache backs
         # one active sequence today (see module docstring); the dict is keyed by

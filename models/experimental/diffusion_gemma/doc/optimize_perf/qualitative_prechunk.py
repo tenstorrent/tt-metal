@@ -189,7 +189,7 @@ def main(argv=None) -> int:
     parser.add_argument("--canvas-length", type=int, default=256)
     parser.add_argument("--steps", type=int, default=16)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--gumbel-mode", choices=("argmax", "chunked", "host", "device"), default="argmax")
+    parser.add_argument("--gumbel-mode", choices=("argmax", "chunked", "device"), default="argmax")
     parser.add_argument("--compare", nargs=2, metavar=("CONTROL", "CANDIDATE"))
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)

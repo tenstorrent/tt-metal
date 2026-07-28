@@ -3,7 +3,6 @@
 
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 from models.experimental.diffusion_gemma.demo import text_demo
@@ -84,10 +83,10 @@ def test_parse_success_summary_returns_integer_fields():
     }
 
 
-def test_parse_success_summary_rejects_malformed_summary():
-    with pytest.raises(ValueError, match="must start"):
+def test_parse_success_summary_rejects_malformed_summary(expect_error):
+    with expect_error(ValueError, match="must start"):
         text_demo._parse_success_summary("DG_TEXT_DEMO_FAILURE mode=generate")
-    with pytest.raises(ValueError, match="malformed"):
+    with expect_error(ValueError, match="malformed"):
         text_demo._parse_success_summary("DG_TEXT_DEMO_SUCCESS blocks")
 
 
@@ -110,7 +109,7 @@ def test_failure_summary_is_single_greppable_line():
     assert "\n" not in summary
 
 
-def test_main_logs_failure_marker_and_reraises(monkeypatch):
+def test_main_logs_failure_marker_and_reraises(monkeypatch, expect_error):
     logged = {}
 
     def fake_run(args):
@@ -119,18 +118,18 @@ def test_main_logs_failure_marker_and_reraises(monkeypatch):
     monkeypatch.setattr(text_demo, "_run", fake_run)
     monkeypatch.setattr(text_demo.logger, "error", lambda msg: logged.setdefault("error", msg))
 
-    with pytest.raises(RuntimeError, match="kaboom"):
+    with expect_error(RuntimeError, match="kaboom"):
         text_demo.main(["--build-only", "--mesh", "P150x4"])
 
     assert logged["error"] == ("DG_TEXT_DEMO_FAILURE mode=build-only mesh=P150x4 error_type=RuntimeError")
 
 
-def test_text_demo_rejects_conflicting_smoke_modes():
+def test_text_demo_rejects_conflicting_smoke_modes(expect_error):
     parser = text_demo.build_arg_parser()
 
-    with pytest.raises(SystemExit):
+    with expect_error(SystemExit):
         parser.parse_args(["--build-only", "--prefill-only"])
-    with pytest.raises(SystemExit):
+    with expect_error(SystemExit):
         parser.parse_args(["--prefill-only", "--adapter-only"])
 
 
@@ -326,60 +325,6 @@ def test_text_demo_argmax_sampling_threads_no_gumbel_hook(monkeypatch):
     assert kwargs["gumbel_noise_fn"](0)(0) is None
 
 
-def test_text_demo_host_gumbel_sampling_threads_generation_option(monkeypatch):
-    calls = {}
-
-    class _FakeMesh:
-        def get_num_devices(self):
-            return 1
-
-    fake_generation = SimpleNamespace(
-        generation=SimpleNamespace(
-            generated=torch.zeros((1, 32), dtype=torch.long),
-            trajectories=[object()],
-            prompt_len=32,
-            next_pos=64,
-        ),
-        sequences=torch.zeros((1, 64), dtype=torch.long),
-        text=["ok"],
-    )
-
-    def fake_generate(checkpoint_model_inputs, prompt, **kwargs):
-        calls["generate"] = (checkpoint_model_inputs, prompt, kwargs)
-        return fake_generation
-
-    monkeypatch.setattr(text_demo, "load_checkpoint_inputs", lambda *args, **kwargs: "checkpoint-inputs")
-    monkeypatch.setattr(text_demo, "_open_mesh_device", lambda mesh: _FakeMesh())
-    monkeypatch.setattr(text_demo, "_close_mesh_device", lambda mesh: calls.setdefault("closed", mesh))
-    monkeypatch.setattr(text_demo, "_log_mesh_dram", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        text_demo,
-        "build_tt_model_from_checkpoint_inputs",
-        lambda *args, **kwargs: SimpleNamespace(tokenizer="tok", tt_model="model", state_dict={}),
-    )
-    monkeypatch.setattr(text_demo, "generate_text_from_checkpoint_model_inputs", fake_generate)
-
-    assert (
-        text_demo.main(
-            [
-                "--checkpoint",
-                "/tmp/ckpt",
-                "--local-files-only",
-                "--host-gumbel-sampling",
-                "--num-blocks",
-                "1",
-                "--max-new-tokens",
-                "32",
-            ]
-        )
-        == 0
-    )
-
-    _, _, kwargs = calls["generate"]
-    assert kwargs["use_host_gumbel_noise"] is True
-    assert "gumbel_noise_fn" not in kwargs
-
-
 def test_text_demo_chunked_gumbel_sampling_threads_generation_option(monkeypatch):
     calls = {}
 
@@ -437,24 +382,24 @@ def test_text_demo_chunked_gumbel_sampling_threads_generation_option(monkeypatch
     assert "gumbel_noise_fn" not in kwargs
 
 
-def test_text_demo_rejects_conflicting_sampling_modes():
-    with pytest.raises(ValueError, match="choose at most one"):
+def test_text_demo_rejects_conflicting_sampling_modes(expect_error):
+    """argmax vs chunked is the only remaining pair; the host-gumbel flag was deleted."""
+    with expect_error(ValueError, match="choose at most one"):
         text_demo.main(
             [
                 "--checkpoint",
                 "/tmp/ckpt",
                 "--local-files-only",
                 "--argmax-sampling",
-                "--host-gumbel-sampling",
-            ]
-        )
-    with pytest.raises(ValueError, match="choose at most one"):
-        text_demo.main(
-            [
-                "--checkpoint",
-                "/tmp/ckpt",
-                "--local-files-only",
-                "--host-gumbel-sampling",
                 "--chunked-gumbel-sampling",
             ]
         )
+
+
+def test_text_demo_does_not_offer_the_deleted_host_gumbel_flag():
+    """The deleted serving mode must not come back as a CLI choice."""
+    parser = text_demo.build_arg_parser()
+    options = {option for action in parser._actions for option in action.option_strings}
+    assert "--host-gumbel-sampling" not in options
+    assert "--chunked-gumbel-sampling" in options
+    assert "--argmax-sampling" in options

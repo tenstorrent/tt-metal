@@ -60,9 +60,15 @@ fi
 ARMS=("$@")
 
 # --upfront needs a materialized Gumbel source (argmax is None and cannot be refreshed between
-# trace replays). ``host`` with a fixed --seed keeps the run reproducible across arms.
+# trace replays). ``device`` is the only materialized mode: the ``host`` mode this used to pick was
+# DELETED on 2026-07-28 after being measured NOT to be the TT language-drift cause (same drifting
+# prompts as ``device``, repairs 0, costs 1.40x per request; the real cause was the canvas attending
+# prefill pad keys, fixed in d0936d4da4f). ``device`` is seeded, so a fixed --seed still keeps the
+# run reproducible across arms -- but absolute ms/step is ~1.94x lower than the host-Gumbel numbers
+# recorded in doc/optimize_perf/winter_borrow_20260727.md and committed_sha256 values from earlier
+# host-mode sweeps will not reproduce.
 if [ -z "${GUMBEL_MODE}" ]; then
-    if [ "${UPFRONT}" != "0" ]; then GUMBEL_MODE=host; else GUMBEL_MODE=argmax; fi
+    if [ "${UPFRONT}" != "0" ]; then GUMBEL_MODE=device; else GUMBEL_MODE=argmax; fi
 fi
 
 mkdir -p "$OUT_DIR"

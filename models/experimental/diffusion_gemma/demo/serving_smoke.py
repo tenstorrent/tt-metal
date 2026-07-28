@@ -80,7 +80,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gumbel-mode",
         default="argmax",
-        choices=["argmax", "chunked", "host", "device"],
+        choices=["argmax", "chunked", "device"],
         help="sampler memory strategy (argmax/chunked fit full 256K)",
     )
     parser.add_argument("--seed", type=int, default=0)
@@ -115,7 +115,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exercise the model-lifetime up-front traced denoise path (capture 48 traces once at "
         "startup, then replay) instead of the eager per-step loop. Requires DG_TRACE_REGION_SIZE>0 "
-        "and a materialized --gumbel-mode (host/device); forces 48 denoise steps.",
+        "and --gumbel-mode device (the only materialized source); forces 48 denoise steps.",
     )
     parser.add_argument(
         "--reveal-pmax",
@@ -159,10 +159,10 @@ def _resolve_upfront(args):
     Gumbel source ("chunked" is a descriptor and "argmax" is None, neither of which can be
     refreshed between trace replays).
     """
-    if args.gumbel_mode not in ("host", "device"):
+    if args.gumbel_mode != "device":
         raise ValueError(
-            f"--upfront requires --gumbel-mode host|device (materialized), got {args.gumbel_mode!r}. "
-            "'chunked'/'argmax' are not materialized full-tensor sources."
+            "--upfront requires --gumbel-mode device (the only materialized source), got "
+            f"{args.gumbel_mode!r}. 'chunked'/'argmax' are not materialized full-tensor sources."
         )
     if int(os.environ.get("DG_TRACE_REGION_SIZE", "0")) <= 0:
         raise ValueError("--upfront requires DG_TRACE_REGION_SIZE>0 (the mesh is opened with it reserved)")

@@ -225,10 +225,12 @@ echo "  prefill whitelist: ${PREFILL_WARMUP_LENS}"
 
 # This is the complete model-level launch contract. Up-front capture intrinsically
 # uses reveal masking, eager startup capture, and one-step/window early halt.
-# Host mode generates IID full-vocabulary Gumbel noise with torch, then keeps
-# sampling/denoise on device. DiffusionConfig supplies the released temperature,
-# entropy, and halt settings. Do not replace host mode with chunked: QB2's current
-# 1024-wide RNG has a known distribution bias.
+# `device` mode draws the full-vocabulary Gumbel noise on device and keeps
+# sampling/denoise there (per-position marginals are validated; it is NOT IID
+# across canvas positions -- see doc/decision_fidelity/gumbel_position_correlation.md). DiffusionConfig supplies the released temperature,
+# entropy, and halt settings. Do not replace it with chunked: QB2's current
+# 1024-wide RNG has a known distribution bias, and chunked is not a materialized
+# full tensor, so up-front capture rejects it.
 #
 # DG_VLLM_GUMBEL_MODE defaults to `device`: the on-device permuted-vocab RNG, ~53.6 vs
 # ~36.3 tokens/block/s against host (~1.48x), since it removes the per-step host RNG and
@@ -238,13 +240,13 @@ echo "  prefill whitelist: ${PREFILL_WARMUP_LENS}"
 # 2026-07-25 and was reverted to `host`; it is restored now that the cause is fixed. The
 # cause was in ttnn.rand: the Blackhole SFPU PRNG is a sliding window over one stream, so
 # 64 of the 256 canvas positions received a byte-identical copy of another position's
-# noise. See doc/decision_fidelity/degenerate_output_fix.md. Set
-# DG_VLLM_GUMBEL_MODE=host for the IID full-vocabulary reference.
+# noise. See doc/decision_fidelity/degenerate_output_fix.md.
 #
-# Host mode also overlaps each step's Gumbel generation behind the previous step's
-# device trace (DG_HOST_GUMBEL_PREFETCH=1, default on; set 0 for the exact serial
-# baseline). This is byte-identical (per-(block,step) private Gumbel seeds only; the
-# shared-generator renoise-token stream is untouched).
+# `device` is now the ONLY mode. The `host` IID full-vocabulary reference (and its
+# DG_HOST_GUMBEL_PREFETCH overlap) was DELETED on 2026-07-28 after being measured NOT
+# to be the TT language-drift cause: it drifts on exactly the same prompts as `device`,
+# repairs 0, and costs 1.40x per request. The real cause was the canvas attending
+# prefill pad keys, fixed in d0936d4da4f (DG_DENOISE_HIDE_PREFILL_PADS, default on).
 setsid env \
     TT_METAL_HOME="${TT_METAL_ROOT}" \
     TT_METAL_RUNTIME_ROOT="${TT_METAL_ROOT}" \

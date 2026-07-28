@@ -61,7 +61,6 @@ from models.experimental.diffusion_gemma.tt.generate import (
     make_seeded_chunked_gumbel_noise_fn,
     make_seeded_gumbel_noise_fn,
     make_seeded_host_canvas_init_fn,
-    make_seeded_host_gumbel_noise_fn,
     make_seeded_host_noise_tokens_fn,
     prefill_prompt_tokens,
 )
@@ -69,10 +68,16 @@ from models.experimental.diffusion_gemma.tt.generate import (
 # Sampling modes exposed to the serving layer. "chunked" remains the bounded-memory
 # DEFAULT because it fits full-depth 256K, but QB2's current 1024-wide innermost-axis
 # RNG has a known distribution bias; do not use it as an official-quality reference.
-# "host" provides IID full-vocabulary Gumbel semantics where context memory permits.
 # "argmax" is the greedy RUN-first speed/determinism control. "device" uses the
 # permuted-vocabulary workaround but its padded full-vocabulary temporary can OOM.
-GUMBEL_MODES = ("chunked", "argmax", "host", "device")
+# "device" is also the only *materialized* mode, so it is the only one usable under
+# up-front capture (DG_UPFRONT_CAPTURE=1).
+# A "host" mode (IID full-vocabulary torch Gumbel drawn per step) was removed: it
+# repaired 0 of the drifting prompts while costing 1.40x per request, because the
+# language drift was the canvas attending the prefill pad keys (fixed in d0936d4da4f),
+# not the RNG. Injecting a torch run's exact noise for HF<->TT parity is a different
+# thing and still lives in tt/generate.py: make_host_gumbel_noise_fn.
+GUMBEL_MODES = ("chunked", "argmax", "device")
 
 
 def _resolve_degeneracy_stop_ids(explicit, *, stop_token_ids, tokenizer) -> set | None:
@@ -264,15 +269,6 @@ class BlockDiffusionServingSession:
             return make_seeded_chunked_gumbel_noise_fn(
                 seed=TS._validate_ttnn_rand_seed(gumbel_seed),
                 vocab_chunk_size=self.gumbel_vocab_chunk_size,
-            )
-        if self.gumbel_mode == "host":
-            return make_seeded_host_gumbel_noise_fn(
-                mesh_device,
-                batch=1,
-                canvas_len=self.canvas_length,
-                vocab_size=self.vocab_size,
-                seed=gumbel_seed,
-                num_steps=self.config.max_denoise_steps,
             )
         return make_seeded_gumbel_noise_fn(
             mesh_device,

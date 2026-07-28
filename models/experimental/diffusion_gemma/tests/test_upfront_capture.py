@@ -188,22 +188,8 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
     from models.experimental.diffusion_gemma.tt import generator_vllm
 
     _set_valid_upfront_env(monkeypatch)
-    assert (
-        generator_vllm._validate_upfront_capture_configuration(
-            canvas_length=256,
-            max_denoise_steps=UPFRONT_DENOISE_STEPS,
-            gumbel_mode="host",
-        )
-        == 1024
-    )
-
-    with expect_error(RuntimeError, match="max_denoise_steps=48"):
-        generator_vllm._validate_upfront_capture_configuration(
-            canvas_length=256,
-            max_denoise_steps=47,
-            gumbel_mode="host",
-        )
-    # The on-device permuted-vocab source is now an accepted up-front Gumbel mode.
+    # `device` (the on-device permuted-vocab RNG) is the ONLY materialized Gumbel source, so it
+    # is the only mode the up-front controller can accept.
     assert (
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
@@ -212,9 +198,18 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
         )
         == 1024
     )
-    # Non-materialized sources (chunked descriptor / argmax None) remain rejected loudly.
-    for rejected_mode in ("argmax", "chunked"):
-        with expect_error(RuntimeError, match=r"GUMBEL_MODE in \{host, device\}"):
+
+    with expect_error(RuntimeError, match="max_denoise_steps=48"):
+        generator_vllm._validate_upfront_capture_configuration(
+            canvas_length=256,
+            max_denoise_steps=47,
+            gumbel_mode="device",
+        )
+    # Everything else is rejected loudly: "chunked" is a descriptor, "argmax" is None, and "host"
+    # (the per-step full-vocab torch Gumbel serving mode) was deleted 2026-07-28 -- it repaired 0
+    # of the drifting prompts at 1.40x the cost. Passing it must now fail, not silently serve.
+    for rejected_mode in ("argmax", "chunked", "host"):
+        with expect_error(RuntimeError, match=r"GUMBEL_MODE='device'"):
             generator_vllm._validate_upfront_capture_configuration(
                 canvas_length=256,
                 max_denoise_steps=48,
@@ -226,7 +221,7 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
             max_denoise_steps=48,
-            gumbel_mode="host",
+            gumbel_mode="device",
         )
 
     _set_valid_upfront_env(monkeypatch)
@@ -235,7 +230,7 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
             max_denoise_steps=48,
-            gumbel_mode="host",
+            gumbel_mode="device",
         )
 
     monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "1000")
@@ -243,7 +238,7 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
             max_denoise_steps=48,
-            gumbel_mode="host",
+            gumbel_mode="device",
         )
 
 
@@ -367,7 +362,7 @@ def test_vllm_warmup_captures_48_traces_and_detaches_persistent_adapter(monkeypa
     wrapper.canvas_length = 256
     wrapper._tokenizer = SimpleNamespace(bos_token_id=2)
     wrapper._config = DiffusionConfig()
-    wrapper._gumbel_mode = "host"
+    wrapper._gumbel_mode = "device"
     wrapper._upfront = True
     wrapper._persistent_adapter = None
     wrapper._upfront_compile_phase_seen = True
@@ -626,7 +621,7 @@ def upfront_device_bundle():
         {
             "DG_UPFRONT_CAPTURE": "1",
             "DG_DENOISE_REVEAL_PMAX": str(p_max),
-            "DG_VLLM_GUMBEL_MODE": "host",
+            "DG_VLLM_GUMBEL_MODE": "device",
         }
     )
 
@@ -672,7 +667,7 @@ def _make_upfront_wrapper(bundle, prompts):
         dg_state_dict=bundle.state_dict,
         tokenizer=bundle.tokenizer,
         config=DiffusionConfig(),
-        gumbel_mode="host",
+        gumbel_mode="device",
     )
     wrapper.warmup_model_prefill(None, False, True)
     wrapper.warmup_model_prefill(None, True, True)
@@ -712,7 +707,7 @@ def _serve_eager(bundle, tokens: torch.Tensor, *, num_blocks: int = 2):
         bundle.state_dict,
         config=DiffusionConfig(),
         tokenizer=bundle.tokenizer,
-        gumbel_mode="host",
+        gumbel_mode="device",
         seed=0,
         stop_token_ids=[],
     )

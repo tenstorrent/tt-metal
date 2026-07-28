@@ -252,11 +252,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Use clean argmax instead of Gumbel-max sampling to avoid full-vocab Gumbel allocation in fit smokes",
     )
     parser.add_argument(
-        "--host-gumbel-sampling",
-        action="store_true",
-        help="Generate Gumbel noise on host and inject it, avoiding device ttnn.rand allocation",
-    )
-    parser.add_argument(
         "--chunked-gumbel-sampling",
         action="store_true",
         help="Generate device Gumbel noise in vocab chunks and reduce argmax without a full noise tensor",
@@ -280,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args) -> int:
-    sampling_modes = [args.argmax_sampling, args.host_gumbel_sampling, args.chunked_gumbel_sampling]
+    sampling_modes = [args.argmax_sampling, args.chunked_gumbel_sampling]
     if sum(bool(mode) for mode in sampling_modes) > 1:
         raise ValueError("choose at most one sampling workaround")
 
@@ -344,8 +339,6 @@ def _run(args) -> int:
             generate_kwargs.update(eos_token_id=None, stop_token_ids=[], decode_kwargs={"skip_special_tokens": True})
         if args.argmax_sampling:
             generate_kwargs["gumbel_noise_fn"] = lambda block_idx: (lambda step: None)
-        if args.host_gumbel_sampling:
-            generate_kwargs["use_host_gumbel_noise"] = True
         if args.chunked_gumbel_sampling:
             generate_kwargs["use_chunked_gumbel_noise"] = True
             generate_kwargs["gumbel_vocab_chunk_size"] = args.gumbel_vocab_chunk_size
