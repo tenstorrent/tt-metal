@@ -313,7 +313,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     // Run rank < 2 inputs as [1, N] and restore the shape on the way out
     if (input_tensor.logical_shape().rank() < 2) {
-        const auto logical_shape = input_tensor.logical_shape();
+        const auto& logical_shape = input_tensor.logical_shape();
         auto output_tensor = all_reduce_async(
             ttnn::unsqueeze(input_tensor, 0),
             cluster_axis,
