@@ -33,12 +33,42 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
         tokens,
         kNumCores);
     TT_FATAL(args.n_routed_experts > 0, "n_routed_experts must be > 0");
+
+    // Reader geometry contract (see kernels/reader_masked_bincount.cpp): the reader treats a page id as
+    // a row-tile index and untiles rows through the two left 16-wide faces of a 32x32 tile. Inputs
+    // outside that contract would read the wrong pages / face offsets and silently miscount, so reject
+    // them here rather than returning an inflated or garbage histogram.
+    constexpr uint32_t kTileDim = 32;
+    constexpr uint32_t kFaceDim = 16;
+    const auto& tile = input_tensor.tensor_spec().page_config().get_tile();
+    TT_FATAL(
+        tile.get_height() == kTileDim && tile.get_width() == kTileDim,
+        "Only {}x{} tiles are supported (the in-kernel untilize assumes four {}x{} faces), got {}x{}",
+        kTileDim,
+        kTileDim,
+        kFaceDim,
+        kFaceDim,
+        tile.get_height(),
+        tile.get_width());
+    // A page id is used directly as the row-tile index, which only holds for a single tile column.
+    TT_FATAL(
+        input_shape[1] == tile.get_width(),
+        "topk_dim must fit in a single tile column (padded width {}), got padded width {}",
+        tile.get_width(),
+        input_shape[1]);
+
     // The logical width is the real topk (e.g. 8); the padded TILE width is 32. Check against logical.
     const uint32_t logical_topk = input_tensor.logical_shape()[input_tensor.logical_shape().size() - 1];
     TT_FATAL(
         args.num_experts_per_token > 0 && args.num_experts_per_token <= logical_topk,
         "num_experts_per_token must be in (0, {}], got {}",
         logical_topk,
+        args.num_experts_per_token);
+    // Columns >= 16 live in faces 1/3, which the reader's face-offset math does not address.
+    TT_FATAL(
+        args.num_experts_per_token <= kFaceDim,
+        "num_experts_per_token must be <= {} (the reader untiles only the left faces of each tile), got {}",
+        kFaceDim,
         args.num_experts_per_token);
 
     TT_FATAL(expert_mask.dtype() == tt::tt_metal::DataType::INT32, "Expert dispatch table must be INT32!");
