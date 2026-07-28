@@ -1080,3 +1080,21 @@ def test_make_generation_logits_fn_builder_from_checkpoint_state_remaps_once():
         "config": "config",
         "seq_len_start": 32,
     }
+
+
+def test_dg_skip_rejects_an_unknown_component(monkeypatch, expect_error):
+    """A typo must abort, not silently measure the unablated step.
+
+    An ignored token is the worst failure mode for a measurement tool: ``DG_SKIP=moe1`` would run
+    the full MoE and the harness would report the number as an ablation, which looks plausible.
+    """
+    monkeypatch.setenv("DG_SKIP", "moe1")
+    with expect_error(ValueError, match="DG_SKIP has unknown component"):
+        DF._skip_components()
+
+
+def test_dg_skip_accepts_every_documented_component(monkeypatch):
+    monkeypatch.setenv("DG_SKIP", "attn,shared,moe,sc,cattn,cshared,cmoe")
+    assert DF._skip_components() == DF._SKIP_TOKENS
+    monkeypatch.delenv("DG_SKIP")
+    assert DF._skip_components() == frozenset()

@@ -640,10 +640,11 @@ def _denoise_shared_mlp_forward(mlp, hidden_states):
 # component with a shape-preserving ``ttnn.mul(x, 0.0)`` at its seam, so the op graph keeps the same
 # shapes and the rest of the step is untouched.
 #
-# ``DG_SKIP="attn,shared,moe"`` — comma-separated. Default empty (nothing skipped).
-#   attn    the whole denoise attention (QKV, RoPE, SDPA, o_proj, all-reduce)
-#   shared  the shared MLP
-#   moe     the router + expert path
+# ``DG_SKIP="attn,shared,moe"`` — comma-separated, validated (an unknown token raises). Default
+# empty (nothing skipped). See ``_SKIP_TOKENS`` for the authoritative list:
+#   attn / shared / moe   the denoise attention, shared MLP, and router+expert path
+#   sc                    self-conditioning (the [C,V] @ [V,H] soft-embedding + its gated MLP)
+#   cattn / cshared / cmoe  the same three in the COMMIT body (cattn also removes the K/V write)
 #
 # The output of a skipped run is garbage BY CONSTRUCTION — never feed a DG_SKIP run into a
 # committed_sha256 comparison or a quality gate. Note also that zeroing the MoE feeds an all-zero
@@ -652,9 +653,33 @@ def _denoise_shared_mlp_forward(mlp, hidden_states):
 # ---------------------------------------------------------------------------------------------
 
 
+# Every token DG_SKIP honours. Validated on read: an unrecognised token used to be silently ignored,
+# which meant a typo (``DG_SKIP=moe1``) measured the UNABLATED step and reported it as an ablation --
+# the worst possible failure for a measurement tool, because the number looks plausible.
+_SKIP_TOKENS = frozenset(
+    {
+        "attn",  # denoise attention: QKV, RoPE, SDPA, o_proj, all-reduce
+        "shared",  # denoise shared MLP
+        "moe",  # denoise router + expert path
+        "sc",  # self-conditioning soft-embedding + gated MLP
+        "cattn",  # commit attention, INCLUDING the K/V cache write
+        "cshared",  # commit shared MLP
+        "cmoe",  # commit MoE
+    }
+)
+
+
 def _skip_components() -> frozenset:
     raw = os.environ.get("DG_SKIP", "")
-    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+    tokens = frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+    unknown = tokens - _SKIP_TOKENS
+    if unknown:
+        raise ValueError(
+            f"DG_SKIP has unknown component(s) {sorted(unknown)}; valid tokens are "
+            f"{sorted(_SKIP_TOKENS)}. Refusing to run: an ignored token would silently measure the "
+            "unablated step and report it as an ablation."
+        )
+    return tokens
 
 
 def _zeros_like_via_mul(tensor):
