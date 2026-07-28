@@ -6,8 +6,7 @@
 
 Flow:
   A. Build + run the WHOLE verifier prefill (all 61 Kimi layers) by constructing ``TtPrefillTransformer``
-     directly (no ``run_model`` dependency). Weight handling is IDENTICAL to ``test_prefill_transformer``'s
-     ``run_model``: pretrained → the memory-bounded ``load_and_compute_layer_by_layer`` + TTNN weight cache;
+     directly. Weight handling: pretrained → the memory-bounded ``load_and_compute_layer_by_layer`` + TTNN weight cache;
      random → ``create_hf_model`` + ``extract_tt_state_dict``. We pass an ``on_layer_hidden`` callback into
      the forward so that ONLY the 6 target layers ([1,12,24,35,47,58]) tap their output residual stream, ON
      DEVICE, into the drafter (SP-gathered to full seq, kept in DRAM). The other 55 layers aren't captured.
@@ -51,7 +50,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.999
-SEQ_LEN_5K = 5120  # matches test_prefill_transformer's "5k" config; 5120 / sp_factor(8) = 640 tok/chip
+SEQ_LEN_5K = 5120  # 5120 / sp_factor(8) = 640 tok/chip
 EXPECTED_TARGET_LAYERS = (1, 12, 24, 35, 47, 58)
 MAX_RANDOM_LAYERS = 12
 
@@ -158,8 +157,7 @@ def test_dflash_prefill_integration(
         tapped.append(global_idx)
         drafter.tap(ttnn.clone(h), global_idx)  # own a private copy of the live SP-sharded residual slice
 
-    # Build + run the full 61-layer verifier DIRECTLY (weight handling identical to
-    # test_prefill_transformer.run_model). on_layer_hidden taps ONLY the 6 target layers on device.
+    # Build + run the full 61-layer verifier DIRECTLY. on_layer_hidden taps ONLY the 6 target layers on device.
     config = config_only
     config.max_seq_len = isl_total
     isl_per_chip = isl_total // sp_factor

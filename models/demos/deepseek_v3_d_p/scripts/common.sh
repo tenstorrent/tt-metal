@@ -25,11 +25,11 @@ LOOP="${LOOP:-${2:-20}}"
 LOG_DIR="/data/$USER/$LOG_NAME"
 
 # Test selection — single source of truth.
-TEST_FILE="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py"
-KFILTER="ds_prefill and pretrained and e256_device_fp32 and fabric2d-mesh-8x4 and 61_layers and balanced and right_pad and smoke and no_determinism and iter25 and 25600 and longbook"
+TEST_FILE="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py"
+KFILTER="deepseek_v3 and mesh-8x4 and L61 and chunks_eleven and iters25"
 
-# Inner-iteration count, derived from the iterNN token in the filter above.
-INNER_ITERS=$(grep -oE 'iter[0-9]+' <<<"$KFILTER" | grep -oE '[0-9]+' | head -1)
+# Inner-iteration count, derived from the itersNN token in the filter above.
+INNER_ITERS=$(grep -oE 'iters?[0-9]+' <<<"$KFILTER" | grep -oE '[0-9]+' | head -1)
 
 # Model + cache paths handed to pytest.
 ENV_VARS='TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/'
@@ -64,7 +64,7 @@ scan_log_dir() {
       details+=("  $N: FAIL")
       ((fail++))
     else
-      iter=$(grep -c 'Starting iteration:' "$f" 2>/dev/null)
+      iter=$(grep -cE 'iter [0-9]+ done' "$f" 2>/dev/null)
       layer=$(grep -oE 'forward_layer_[0-9]+_(start|end)' "$f" 2>/dev/null | tail -1)
       mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
       now=$(date +%s)

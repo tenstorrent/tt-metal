@@ -222,9 +222,8 @@ def kv_cache_pcc_check(
 
         if kv_pt is not None:
             # ref_kvpe_list[global_layer] = ref_cache.key_cache[global_layer] from HF's DynamicCache
-            # after the HF model's MLA forward. Per tests/test_prefill_transformer.py (canonical KVPE
-            # PCC, lines ~664-671), this tensor is ALREADY in the device's rotary basis — pe is compared
-            # directly with no re-interleave. Applying HF->Meta to it produces noise.
+            # after the HF model's MLA forward. This tensor is ALREADY in the device's rotary basis —
+            # pe is compared directly with no re-interleave. Applying HF->Meta to it produces noise.
             g_post = kv_pt[global_layer][0, 0, :compare_len].to(torch.float32)
         else:
             # The safetensors trace stores `kv_post_transform_layer_<global_layer>` in HF half-split

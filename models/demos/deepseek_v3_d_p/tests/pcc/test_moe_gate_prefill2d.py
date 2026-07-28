@@ -97,7 +97,7 @@ def _try_load_real_gate_weights(n_routed_experts: int, dim: int) -> dict | None:
 def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None:
     """Try to load the gate input from the golden GPU prefill trace; return None on failure.
 
-    Mirrors test_ttnn_moe / test_prefill_transformer: the gate input is the
+    Mirrors test_ttnn_moe: the gate input is the
     post-attention RMSNorm output (``post_attn_norm_layer_{i}``) of the first MoE
     layer in the bit_sculpt golden trace. ``DEEPSEEK_V3_GATE_INPUT_CACHE`` may
     override the trace directory. Returns ``None`` when the trace is unavailable

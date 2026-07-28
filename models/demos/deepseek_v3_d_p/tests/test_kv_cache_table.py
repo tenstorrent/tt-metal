@@ -52,9 +52,9 @@ from tests.ttnn.utils_for_testing import assert_equal
 @pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024, 25 * 1024], ids=["seq5k", "seq10k", "seq25k"])
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.skipif(not is_blackhole(), reason="KvChunkAddressTable is Blackhole-only")
 @pytest.mark.timeout(0)
-def test_kimi_kv_cache_mock(
+def test_kv_cache_mock(
     mesh_device,
     seq_len,
     num_users,

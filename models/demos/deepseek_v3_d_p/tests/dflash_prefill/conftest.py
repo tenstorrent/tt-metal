@@ -197,7 +197,7 @@ def use_pretrained(request) -> bool:
 
     INDIRECT fixture: each test supplies the values via
     ``@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)``
-    so the axis is visible in the test's own params (matching ``test_prefill_transformer.py``), while the
+    so the axis is visible in the test's own params, while the
     drafter resource fixtures (``hf_drafter``/``drafter_cfg``/``drafter_state_dict``/``hf_context_kv``) can
     still depend on it. A test using those fixtures MUST parametrize ``use_pretrained``."""
     return request.param

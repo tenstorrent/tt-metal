@@ -8,7 +8,7 @@ Test for TtPrefillBlock — verifies composition of norm → MLA → residual �
 Validates output shapes and PCC against torch reference.
 
 Reference: when a pretrained checkpoint is available the layer's input/output come from a real
-forward over layers 0..layer_idx (as in test_prefill_transformer); otherwise it falls back to a
+forward over layers 0..layer_idx; otherwise it falls back to a
 randomly-initialized HF reference layer so the test still runs without weights.
 """
 
@@ -178,9 +178,9 @@ def test_glm_prefill_block(
     config.max_seq_len = seq_len
     # GLM-5.2 MoE single-block: skipped. The block feeds a RANDOM input, which drives GLM's
     # near-degenerate top-8 MoE gate to select different experts on device vs the CPU reference at an
-    # isolated layer (block PCC collapses to ~0.1 though the same layer scores ~0.995 in-context in
-    # test_glm_prefill_transformer). Not an op/weight bug — a random-input artifact of the degenerate
-    # gate. GLM-5.2 MoE is covered by test_glm_prefill_transformer; the device gate by test_ttnn_moe.
+    # isolated layer (block PCC collapses to ~0.1). Not an op/weight bug — a random-input artifact of
+    # the degenerate gate. GLM-5.2 MoE is covered in-context by test_glm_prefill_transformer_chunked;
+    # the device gate by test_ttnn_moe.
     if is_moe and getattr(config, "indexer_types", None) is not None:
         pytest.skip("GLM-5.2 single-block MoE unreliable under degenerate gate on random input (see comment)")
     hidden = config.hidden_size

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tokenizer-related tests split from test_prefill_transformer.py.
+Tokenizer-related tests.
 
 Tests tokenize_prompt_to_isl, tokenize_prompt_to_chat_template,
 and first-token generation from saved reference outputs.

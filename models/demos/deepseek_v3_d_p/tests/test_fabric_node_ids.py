@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test for KvChunkAddressTable Python bindings.
-This test verifies that the disaggregation APIs are accessible from Python
-and work correctly.
+Test that per-device fabric node IDs (mesh_id, chip_id) are reachable from Python
+and can be enumerated across a multi-host mesh.
 """
 
 import socket
