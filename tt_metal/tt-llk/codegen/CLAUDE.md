@@ -44,11 +44,15 @@ When a user references a **GitHub issue** (e.g., "solve issue #123", "fix #456",
 - `REQUEST_TYPE` = `issue`
 - `TASK_ID` = `issue-{ISSUE_NUMBER}` (e.g., `issue-123`)
 
-Then fetch **all** issue data — title, body, comments, and labels:
+Then load **all** issue data — title, body, comments, and labels:
 
 ```bash
-gh issue view {number} --json number,title,body,labels,comments
+python codegen/scripts/load_issue.py {number}
 ```
+
+When `CODEGEN_ISSUE_SNAPSHOT` is set, the helper reads that frozen JSON file and
+does not access GitHub. When it is unset, it runs the existing `gh issue view`
+command.
 
 Extract and store verbatim:
 - `ISSUE_NUMBER` — the issue number
@@ -97,7 +101,8 @@ execute_step_begin_setup {kernel} {target_arch} /proj_sw/user_dev/llk_code_gen
 # Echoes LOG_DIR, RUN_ID, START_TIME — carry these to Step 3.
 ```
 
-Set up an isolated worktree so all code changes happen on a dedicated branch based on `origin/main`.
+Set up an isolated worktree so all code changes happen on a dedicated branch
+based on `CODEGEN_BASE_COMMIT` when set, or `origin/main` otherwise.
 
 ```bash
 source codegen/scripts/setup_worktree.sh

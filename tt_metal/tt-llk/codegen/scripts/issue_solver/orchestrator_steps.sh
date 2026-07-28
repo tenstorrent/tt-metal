@@ -1134,12 +1134,12 @@ execute_step_copy_artifacts() {
     local S="$_ORCH_SCRIPTS" wt num lb; wt="$(_wt)"; num="$(sg ISSUE_NUMBER)"; lb="$(sg LOGS_BASE)"
     python "$S/issue_solver_run_utils.py" upsert-runs-jsonl --log-dir "$_L" --runs-jsonl "${lb}/runs.jsonl" || true
     cp codegen/artifacts/issue_${num}_*.md "$_L/" 2>/dev/null || true
-    local f flat
+    local f flat base; base="$(sg GIT_COMMIT)"
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         flat="$(printf '%s' "$f" | tr '/' '_')"
         [ -f "$wt/$f" ] && cp "$wt/$f" "$_L/$flat" 2>/dev/null || true
-        git -C "$wt" show "origin/main:$f" > "$_L/base_$flat" 2>/dev/null || true
+        git -C "$wt" show "${base}:$f" > "$_L/base_$flat" 2>/dev/null || true
         [ -s "$_L/base_$flat" ] || rm -f "$_L/base_$flat"
     done <<EOF
 $(sg CHANGED_FILES)
