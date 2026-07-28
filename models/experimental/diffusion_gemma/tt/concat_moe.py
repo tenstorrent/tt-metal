@@ -49,12 +49,20 @@ cheap matmul — the alternative is a reshape of a very wide tensor, which is a 
 
 ## What it costs, and why it is default-off
 
-The concatenated gate/up are a SECOND copy of those weights: 2 * H * E*I * 2 B = 132 MiB per layer
-per device at bf16, i.e. **~7.7 GiB across 30 layers**. The originals cannot simply be freed —
-prefill and commit still run the ragged top-8 path over them. ``down_cat`` is free: at bf16 in TILE
-layout ``[1,E,I,H] -> [1,1,E*I,H]`` is the same byte order (expert *e* occupies row-blocks
-``[6e, 6e+6)`` either way), so it is a metadata reshape. :func:`verify_down_concat_is_free` checks
-that on device rather than trusting the argument.
+The concatenated gate/up are a SECOND copy of those weights: ``H * E*I * 2 B`` = **132 MiB each**,
+so ``2 * 132 = 264 MiB per layer per device`` at bf16, i.e. **~7.7 GiB across 30 layers** (measured
+7.773 GiB). The originals cannot simply be freed — prefill still runs the ragged top-8 path over
+them. ``down_cat`` is free: at bf16 in TILE layout ``[1,E,I,H] -> [1,1,E*I,H]`` is the same byte
+order (expert *e* occupies row-blocks ``[6e, 6e+6)`` either way), so it is a metadata reshape —
+a **view**, which is why :meth:`ConcatExpertWeights.deallocate` must not force-free it.
+:func:`verify_down_concat_is_free` checks that on device rather than trusting the argument.
+
+**Blast radius.** This is not denoise-only. The batched commit runs the same layer body and calls
+the same ``_denoise_moe_forward`` seam (``tt/commit_batched.py:703``), and batched commit is the
+shipped default — so ``DG_MOE_CONCAT=1`` folds the **commit** MoE too, and commit hidden states are
+what the committed-prefix KV is built from, so the change compounds across blocks. That is
+deliberate (commit is meant to be numerically the same body as denoise), but it means a quality
+gate on this flag is gating two components, not one. Prefill is genuinely untouched.
 
 7.7 GiB does not fit next to a 12 GiB trace reservation, and it does not have to: the 48 resident
 traces measure ~1.44 GiB (doc/vllm_integration/traced_serving.md), so ~10 GiB of that reservation
@@ -91,15 +99,35 @@ def concat_moe_enabled() -> bool:
     return os.environ.get("DG_MOE_CONCAT", "0").strip().lower() not in ("0", "false", "no", "off")
 
 
+def _free_if_distinct(candidate, source) -> None:
+    """Free ``candidate`` only when it does not alias ``source``.
+
+    ``ttnn.reshape`` returns a **view** when the last dim is unchanged and the second-last dims are
+    tile-aligned, and a view carries its own ``MeshTensorHolder`` — so ``is_allocated()`` on the view
+    stays true after the root is freed. Force-freeing the root and then touching the view therefore
+    reads DRAM the allocator has already handed back, silently, with no validation error. Comparing
+    buffer addresses is the only reliable test; when it cannot be taken we leak rather than risk it,
+    the same discipline ``diffusion_attention._is_distinct_buffer`` uses.
+    """
+    if candidate is source:
+        return
+    try:
+        distinct = candidate.buffer_address() != source.buffer_address()
+    except Exception:
+        return
+    if distinct:
+        source.deallocate(True)
+
+
 def _relayout(tensor, fn):
     """Apply ``fn`` to ``tensor``, round-tripping through bf16 when the dtype rejects it."""
     if tensor.dtype in _RELAYOUT_SAFE_DTYPES:
         return fn(tensor)
     wide = ttnn.typecast(tensor, ttnn.bfloat16)
     out = fn(wide)
-    wide.deallocate(True)
+    _free_if_distinct(out, wide)
     requant = ttnn.typecast(out, tensor.dtype)
-    out.deallocate(True)
+    _free_if_distinct(requant, out)
     return requant
 
 
@@ -161,10 +189,19 @@ class ConcatExpertWeights:
         self.down_cat = build_down_concat(weights.down_proj)
 
     def deallocate(self):
+        """Release the concat weights **without** freeing anything they alias.
+
+        ``down_cat`` is a *view* of ``experts.weights.down_proj`` at bf16 (that is exactly why the
+        relayout costs 7.7 GiB and not 11.6). ``deallocate(True)`` bypasses the not-sole-owner guard
+        and reaches the root holder, so force-freeing it would free the live row-parallel down
+        weights that prefill and the sparse path still read — and the failure would surface inside
+        prefill, far from here. ``deallocate(False)`` is correct in both cases: the aliasing bf16
+        view is not the sole owner and is skipped, while a non-aliasing bfp8 copy is freed normally.
+        """
         for name in ("gate_cat", "up_cat", "down_cat"):
             tensor = getattr(self, name, None)
             if tensor is not None:
-                tensor.deallocate(True)
+                tensor.deallocate(False)
                 setattr(self, name, None)
 
 

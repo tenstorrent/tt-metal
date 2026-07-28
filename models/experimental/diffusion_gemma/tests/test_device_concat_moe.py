@@ -128,11 +128,15 @@ def _run_concat(device, w, routing, x):
         hidden, seq = w.gate_proj.shape[2], x.shape[-2]
         return ttnn.to_torch(out).float().reshape(1, 1, seq, hidden)
     finally:
-        for t in (tt_x, tt_routing, experts.weights.gate_proj, experts.weights.up_proj, experts.weights.down_proj):
-            t.deallocate(True)
+        # Order matters: release the concat weights FIRST. ``down_cat`` is a view of
+        # ``weights.down_proj``, so freeing the root first and then touching the view would read
+        # DRAM the allocator has already reclaimed. ``ConcatExpertWeights.deallocate`` uses
+        # ``deallocate(False)`` and so correctly skips the aliasing view.
         cached = getattr(experts, "_dg_concat_weights", None)
         if cached is not None:
             cached.deallocate()
+        for t in (tt_x, tt_routing, experts.weights.gate_proj, experts.weights.up_proj, experts.weights.down_proj):
+            t.deallocate(True)
 
 
 def test_concat_matches_per_expert_oracle(device):
@@ -216,3 +220,29 @@ def test_down_concat_is_a_pure_reshape(device):
         assert info["values_match"], f"down concat is not byte-order preserving: {info}"
     finally:
         source.deallocate(True)
+
+
+def test_deallocate_does_not_free_the_aliased_down_weights(device):
+    """``down_cat`` is a view of ``weights.down_proj``; releasing it must not free the root.
+
+    ``deallocate(True)`` bypasses the not-sole-owner guard and reaches the root holder, so a
+    force-free here would release the live row-parallel down weights that prefill and the sparse
+    path still read — and the crash would surface inside prefill, far from this module.
+    """
+
+    w = _make_weights()
+    experts = _fake_experts(w, device)
+    down = experts.weights.down_proj
+    try:
+        concat = concat_moe.concat_weights_for(experts)
+        assert concat.down_cat.buffer_address() == down.buffer_address(), (
+            "down_cat is no longer a view of down_proj — the 7.7 GiB memory budget in "
+            "concat_moe.py assumes it is; re-derive it before changing this"
+        )
+        concat.deallocate()
+        assert down.is_allocated(), "ConcatExpertWeights.deallocate freed the shared down weights"
+        # And the root must still be readable, not merely flagged allocated.
+        assert torch.isfinite(ttnn.to_torch(down).float()).all()
+    finally:
+        for t in (experts.weights.gate_proj, experts.weights.up_proj, down):
+            t.deallocate(True)

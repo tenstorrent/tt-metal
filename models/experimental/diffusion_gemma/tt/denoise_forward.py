@@ -679,6 +679,31 @@ def _denoise_moe_forward(moe, router_input, expert_input):
     from models.experimental.diffusion_gemma.tt.concat_moe import concat_experts_forward, concat_moe_enabled
 
     if concat_moe_enabled():
+        # Concat is tested FIRST, so every other MoE selector below is unreachable while it is on.
+        # Silently winning that race is how DG_TERMINAL_SHARDED became a no-op and how a corrupting
+        # DG_VLLM_GUMBEL_MODE default survived two weeks: the run looks fine and the label lies.
+        # Fail loud instead, naming both knobs, in the style of the DG_SPARSE_MOE=0 guard below.
+        from models.experimental.diffusion_gemma.tt.sparse_moe import (
+            compact_ragged_denoise_enabled,
+            expert_weight_bfp8_enabled,
+        )
+
+        conflicts = []
+        if expert_weight_bfp8_enabled():
+            # Only sparse_experts_forward calls _bfp8_expert_weights; concat reads experts.weights
+            # directly, so the arm would be labelled bfp8 and run bf16 — with a different footprint.
+            conflicts.append("DG_MOE_EXPERT_BFP8=1 (concat reads the unquantized expert weights)")
+        if not _sparse_moe_enabled():
+            conflicts.append("DG_SPARSE_MOE=0 (asks for the dense reference, would silently get concat)")
+        if compact_ragged_denoise_enabled():
+            conflicts.append("DG_DENOISE_COMPACT_RAGGED=1 (unreachable under concat)")
+        if conflicts:
+            raise RuntimeError(
+                "DG_MOE_CONCAT=1 takes the concat-experts MoE path, which ignores: "
+                + "; ".join(conflicts)
+                + ". Unset DG_MOE_CONCAT to use those, or unset them to use concat — running both "
+                "would report a measurement under the wrong label."
+            )
         dense_routing = _denoise_router_forward(moe.router, router_input)
         out = concat_experts_forward(moe.experts, expert_input, dense_routing)
         dense_routing.deallocate(True)

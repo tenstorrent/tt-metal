@@ -203,10 +203,16 @@ never materializes the `[1,E,S,H]` per-expert output. `apply_geglu` is **ours** 
 uses `fast_and_approximate` GeLU in the shared MLP and erf-GeLU in the self-conditioning gate, both
 of which disagree with this checkpoint, so that part is deliberately not copied.
 
-Cost: `gate_cat` and `up_cat` are a second copy of those weights, 132 MiB per layer per device at
-bf16 = **~7.7 GiB over 30 layers**. The originals cannot be freed — prefill and commit still run the
-ragged top-8 path over them. `down_cat` should be free (same byte order at bf16 TILE);
+Cost: `gate_cat` and `up_cat` are a second copy of those weights, 132 MiB **each** = 264 MiB per
+layer per device at bf16 = **~7.7 GiB over 30 layers** (measured 7.773). The originals cannot be
+freed — prefill still runs the ragged top-8 path over them. `down_cat` is free (same byte order at
+bf16 TILE) — it is a **view**, which is what makes the total 7.7 and not 11.6 GiB;
 `verify_down_concat_is_free` checks that on device instead of assuming it.
+
+**This is not denoise-only.** The batched commit runs the same layer body through the same
+`_denoise_moe_forward` seam (`tt/commit_batched.py:703`) and is the shipped default, so the flag
+folds the commit MoE too — and commit hidden states build the committed-prefix KV, so it compounds
+across blocks. Deliberate, but it means the quality gate on this flag covers two components.
 
 7.7 GiB does not fit beside a 12 GiB trace reservation, which is why §8 came first.
 
