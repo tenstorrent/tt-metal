@@ -14,9 +14,9 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -30,12 +30,6 @@ struct AccumulationDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct AccumulationProgramFactory {
-        enum class AccumulationCB : std::underlying_type_t<tt::CBIndex> {
-            SRC = tt::CBIndex::c_0,
-            DST = tt::CBIndex::c_1,
-            ACC = tt::CBIndex::c_2
-        };
-
         static constexpr std::array<const char*, 3> KERNEL_PATHS{
             "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
             "accumulation_reader.cpp",
@@ -43,7 +37,7 @@ struct AccumulationDeviceOperation {
             "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
             "accumulation_writer.cpp"};
 
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_spec(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

@@ -6,42 +6,41 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 #include "../accumulation_common.hpp"
 
 void kernel_main() {
-    constexpr auto output_addrg_args = TensorAccessorArgs<0>();
-
-    uint32_t output_base_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
-    const uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
-    const uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
-    const uint32_t start_id = get_arg_val<uint32_t>(4);
+    const uint32_t num_rows_per_core = get_arg(args::num_rows_per_core);
+    const uint32_t tiles_per_row = get_arg(args::tiles_per_row);
+    const uint32_t input_tile_offset = get_arg(args::input_tile_offset);
+    const uint32_t start_id = get_arg(args::start_id);
     // This is the offset of all dimensions below the accumulation axis
-    uint32_t low_rank_offset = get_arg_val<uint32_t>(5);
+    uint32_t low_rank_offset = get_arg(args::low_rank_offset);
     // This is the offset of all dimensions above the accumulation axis (HtWt for last two axes)
-    uint32_t high_rank_offset = get_arg_val<uint32_t>(6);
+    uint32_t high_rank_offset = get_arg(args::high_rank_offset);
 
-    const uint32_t flip = get_arg_val<uint32_t>(7);
+    const uint32_t flip = get_arg(args::flip);
 
-    const uint32_t ublock_size_bytes = get_tile_size(CB_OUT);
+    DataflowBuffer dfb_out_obj(dfb::dst);
+
+    const uint32_t ublock_size_bytes = dfb_out_obj.get_tile_size();
     const uint32_t output_tile_bytes = ublock_size_bytes;
 
-    const auto output_addrg = TensorAccessor(output_addrg_args, output_base_addr);
+    const auto output_addrg = TensorAccessor(ta::output);
 
     Noc noc;
-    CircularBuffer cb_out_obj(CB_OUT);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
         for (uint32_t j = 0; j < tiles_per_row; ++j) {
             const uint32_t tile_j = flip ? (tiles_per_row - j - 1) : j;
             const uint32_t write_tile_id =
                 get_tile_id(low_rank_offset, high_rank_offset, tile_j, tiles_per_row, input_tile_offset);
-            cb_out_obj.wait_front(ONE_TILE);
+            dfb_out_obj.wait_front(ONE_TILE);
             noc.async_write(
-                cb_out_obj, output_addrg, output_tile_bytes, {.offset_bytes = 0}, {.page_id = write_tile_id});
+                dfb_out_obj, output_addrg, output_tile_bytes, {.offset_bytes = 0}, {.page_id = write_tile_id});
             noc.async_write_barrier();
-            cb_out_obj.pop_front(ONE_TILE);
+            dfb_out_obj.pop_front(ONE_TILE);
         }
         ++high_rank_offset;
         if (high_rank_offset >= input_tile_offset) {

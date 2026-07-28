@@ -12,7 +12,9 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <bit>
 #include <map>
@@ -20,7 +22,26 @@
 
 namespace ttnn::prim {
 
+using namespace tt::tt_metal::experimental;
+
 using AccumulationProgramFactory = AccumulationDeviceOperation::AccumulationProgramFactory;
+
+namespace {
+
+// Metal 2.0 named resource handles for the accumulation ProgramSpec.
+const DFBSpecName SRC_DFB{"src"};
+const DFBSpecName ACC_DFB{"acc"};
+const DFBSpecName DST_DFB{"dst"};
+
+const TensorParamName INPUT_TENSOR{"input"};
+const TensorParamName OUTPUT_TENSOR{"output"};
+
+const KernelSpecName READER_KERNEL{"reader"};
+const KernelSpecName WRITER_KERNEL{"writer"};
+const KernelSpecName COMPUTE_KERNEL_G1{"compute_g1"};
+const KernelSpecName COMPUTE_KERNEL_G2{"compute_g2"};
+
+}  // namespace
 
 // calculate the offset between consecutive tiles between accumulation axis and last dimension
 uint32_t AccumulationProgramFactory::calc_input_tile_offset(
@@ -39,7 +60,7 @@ uint32_t AccumulationProgramFactory::calc_input_tile_offset(
     return input_tile_offset;
 }
 
-tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_program_spec(
     const AccumulationParams& operation_attributes,
     const AccumulationInputs& tensor_args,
     Tensor& tensor_return_value) {
@@ -49,8 +70,6 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
     const auto& input_shape{input_tensor.padded_shape()};
-
-    ProgramDescriptor desc;
 
     IDevice* device{&input_tensor.mutable_device()};
 
@@ -99,33 +118,48 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    auto push_cb = [&](const tt::DataFormat& data_format,
-                       AccumulationProgramFactory::AccumulationCB accumulation_cb,
-                       uint32_t num_tiles) {
-        const uint32_t cb_id{static_cast<uint32_t>(accumulation_cb)};
-        const uint32_t single_tile_size{tt::tile_size(data_format)};
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = num_tiles * single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_id),
-                .data_format = data_format,
-                .page_size = single_tile_size,
-            }}},
-        });
+    // ----------------------------------------------------------------------------
+    // Dataflow buffers (formerly CB_IN / CB_OUT / CB_ACC). One DFB per legacy CB.
+    // entry_size / num_entries are fixed at spec construction (no per-execution override).
+    // ----------------------------------------------------------------------------
+    DataflowBufferSpec src_dfb_spec{
+        .unique_id = SRC_DFB,
+        .entry_size = tt::tile_size(input_dataformat),
+        .num_entries = in_tiles,
+        .data_format_metadata = input_dataformat,
+    };
+    DataflowBufferSpec acc_dfb_spec{
+        .unique_id = ACC_DFB,
+        .entry_size = tt::tile_size(acc_dataformat),
+        .num_entries = acc_tiles,
+        .data_format_metadata = acc_dataformat,
+    };
+    DataflowBufferSpec dst_dfb_spec{
+        .unique_id = DST_DFB,
+        .entry_size = tt::tile_size(output_dataformat),
+        .num_entries = out_tiles,
+        .data_format_metadata = output_dataformat,
     };
 
-    push_cb(input_dataformat, AccumulationProgramFactory::AccumulationCB::SRC, in_tiles);
-    push_cb(acc_dataformat, AccumulationProgramFactory::AccumulationCB::ACC, acc_tiles);
-    push_cb(output_dataformat, AccumulationProgramFactory::AccumulationCB::DST, out_tiles);
-
-    std::vector<UnpackToDestMode> unpack_to_dst(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dst[static_cast<unsigned>(AccumulationProgramFactory::AccumulationCB::ACC)] =
-        UnpackToDestMode::UnpackToDestFp32;
-
-    if (input_dataformat != DataFormat::Float16_b) {
-        unpack_to_dst[static_cast<unsigned>(AccumulationProgramFactory::AccumulationCB::SRC)] =
-            UnpackToDestMode::UnpackToDestFp32;
+    // ----------------------------------------------------------------------------
+    // Compute unpack_to_dest_mode (per-DFB). Legacy set ACC→Fp32 always, SRC→Fp32
+    // unless input is Float16_b. The helper to_compute_hardware_config does NOT cover
+    // unpack_to_dest_mode, so it is configured here directly (per the recipe's
+    // hardware-config note).
+    //
+    // The Metal 2.0 spec validator (program_spec.cpp:819) rejects UnpackToDestFp32 on a
+    // DFB whose data format is not Float32 — the mode is only meaningful for FP32 data.
+    // The legacy code set UnpackToDestFp32 unconditionally (e.g. on the integer ACC/SRC
+    // buffers for int32 cumsum/cumprod), which the legacy CB path never validated and the
+    // LLK ignored for integer formats. Preserve the *meaningful* legacy behavior by
+    // gating each entry on the DFB's actual format being Float32. (See PORT_REPORT.)
+    // ----------------------------------------------------------------------------
+    ComputeHardwareConfig::UnpackToDestModes unpack_to_dest_modes;
+    if (acc_dataformat == DataFormat::Float32) {
+        unpack_to_dest_modes.insert({ACC_DFB, UnpackToDestMode::UnpackToDestFp32});
+    }
+    if (input_dataformat == DataFormat::Float32) {
+        unpack_to_dest_modes.insert({SRC_DFB, UnpackToDestMode::UnpackToDestFp32});
     }
 
     std::map<std::string, std::string> defines_kernel_args = {};
@@ -162,62 +196,89 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     const auto default_math_fidelity =
         (is_wormhole && output_tensor.dtype() == DataType::FLOAT32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
 
-    std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    // ----------------------------------------------------------------------------
+    // Tensor parameters: input (reader) and output (writer). Both Case 1 — the
+    // legacy buffer-address RTA + TensorAccessorArgs plumbing collapse to a binding.
+    // ----------------------------------------------------------------------------
+    TensorParameter input_param{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT_TENSOR, .spec = output_tensor.tensor_spec()};
 
-    std::vector<uint32_t> writer_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
+    // ----------------------------------------------------------------------------
+    // Reader / writer kernels (single instance across all_cores).
+    // ----------------------------------------------------------------------------
+    const std::vector<std::string> dataflow_rta_names{
+        "num_rows_per_core",
+        "tiles_per_row",
+        "input_tile_offset",
+        "start_id",
+        "low_rank_offset",
+        "high_rank_offset",
+        "flip"};
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[0];
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[2];
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    KernelDescriptor::Defines compute_defines(defines_kernel_args.begin(), defines_kernel_args.end());
-
-    KernelDescriptor compute_desc_1;
-    compute_desc_1.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[1];
-    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc_1.core_ranges = core_group_1;
-    compute_desc_1.compile_time_args = {std::bit_cast<uint32_t>(default_acc_value)};
-    compute_desc_1.defines = compute_defines;
-    compute_desc_1.config = ComputeConfigDescriptor{
-        .math_fidelity = default_math_fidelity,
-        .fp32_dest_acc_en = true,
-        .dst_full_sync_en = false,
-        .unpack_to_dest_mode = unpack_to_dst,
-        .math_approx_mode = false,
+    KernelSpec reader_spec{
+        .unique_id = READER_KERNEL,
+        .source = std::filesystem::path{AccumulationProgramFactory::KERNEL_PATHS[0]},
+        .dfb_bindings = {ProducerOf(SRC_DFB, "src")},
+        .tensor_bindings = {{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"}},
+        .runtime_arg_schema = {.runtime_arg_names = dataflow_rta_names},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementHardwareConfig::RoleHint::READER},
     };
 
-    std::optional<KernelDescriptor> compute_desc_2;
-    if (!core_group_2.ranges().empty()) {
-        KernelDescriptor cd2;
-        cd2.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[1];
-        cd2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        cd2.core_ranges = core_group_2;
-        cd2.compile_time_args = {std::bit_cast<uint32_t>(default_acc_value)};
-        cd2.defines = compute_defines;
-        cd2.config = ComputeConfigDescriptor{
-            .math_fidelity = default_math_fidelity,
-            .fp32_dest_acc_en = true,
-            .dst_full_sync_en = false,
-            .unpack_to_dest_mode = unpack_to_dst,
-            .math_approx_mode = false,
+    KernelSpec writer_spec{
+        .unique_id = WRITER_KERNEL,
+        .source = std::filesystem::path{AccumulationProgramFactory::KERNEL_PATHS[2]},
+        .dfb_bindings = {ConsumerOf(DST_DFB, "dst")},
+        .tensor_bindings = {{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
+        .runtime_arg_schema = {.runtime_arg_names = dataflow_rta_names},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementHardwareConfig::RoleHint::WRITER},
+    };
+
+    // ----------------------------------------------------------------------------
+    // Compute kernel: one KernelSpec per legacy compute KernelDescriptor (per core
+    // group), preserving the work-split multiplicity. ACC is a self-loop binding
+    // (PRODUCER + CONSUMER on the same KernelSpec).
+    // ----------------------------------------------------------------------------
+    KernelSpec::CompilerOptions::Defines compute_defines{defines_kernel_args};
+
+    auto make_compute_spec = [&](const KernelSpecName& unique_id) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = std::filesystem::path{AccumulationProgramFactory::KERNEL_PATHS[1]},
+            .compiler_options = {.defines = compute_defines},
+            .dfb_bindings =
+                {ConsumerOf(SRC_DFB, "src"),
+                 ProducerOf(DST_DFB, "dst"),
+                 ProducerOf(ACC_DFB, "acc"),
+                 ConsumerOf(ACC_DFB, "acc")},
+            .compile_time_args = {{"default_acc_value", std::bit_cast<uint32_t>(default_acc_value)}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tiles_per_row"}},
+            .hw_config =
+                ComputeHardwareConfig{
+                    .math_fidelity = default_math_fidelity,
+                    .fp32_dest_acc_en = true,
+                    .dst_full_sync_en = false,
+                    .math_approx_mode = false,
+                    .unpack_to_dest_mode = unpack_to_dest_modes,
+                },
         };
-        compute_desc_2 = std::move(cd2);
-    }
+    };
+
+    KernelSpec compute_spec_g1 = make_compute_spec(COMPUTE_KERNEL_G1);
+    const bool group_2_present = !core_group_2.ranges().empty();
+    KernelSpec compute_spec_g2 = group_2_present ? make_compute_spec(COMPUTE_KERNEL_G2) : KernelSpec{};
+
+    // ----------------------------------------------------------------------------
+    // Per-node runtime arg values (paired with the schemas above).
+    // ----------------------------------------------------------------------------
+    KernelRunArgs reader_run{.kernel = READER_KERNEL};
+    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
+    KernelRunArgs compute_run_g1{.kernel = COMPUTE_KERNEL_G1};
+    KernelRunArgs compute_run_g2{.kernel = COMPUTE_KERNEL_G2};
+
+    const uint32_t flip = static_cast<uint32_t>(operation_attributes.flip);
 
     for (uint32_t i{0}, tile_offset = 0; i < num_cores; ++i) {
-        CoreCoord core{i / num_cores_y, i % num_cores_y};
+        NodeCoord core{i / num_cores_y, i % num_cores_y};
 
         uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
@@ -228,33 +289,29 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        reader_desc.emplace_runtime_args(
-            core,
-            {input_tensor,
-             num_tiles_per_core,
-             tiles_per_row,
-             input_tile_offset,
-             tile_offset,
-             tile_offset / input_tile_offset,
-             tile_offset % input_tile_offset,
-             static_cast<uint32_t>(operation_attributes.flip)});
+        const uint32_t low_rank_offset = tile_offset / input_tile_offset;
+        const uint32_t high_rank_offset = tile_offset % input_tile_offset;
 
-        writer_desc.emplace_runtime_args(
-            core,
-            {output_tensor,
-             num_tiles_per_core,
-             tiles_per_row,
-             input_tile_offset,
-             tile_offset,
-             tile_offset / input_tile_offset,
-             tile_offset % input_tile_offset,
-             static_cast<uint32_t>(operation_attributes.flip)});
+        const KernelRunArgs::RuntimeArgValues dataflow_args{
+            {"num_rows_per_core", num_tiles_per_core},
+            {"tiles_per_row", tiles_per_row},
+            {"input_tile_offset", input_tile_offset},
+            {"start_id", tile_offset},
+            {"low_rank_offset", low_rank_offset},
+            {"high_rank_offset", high_rank_offset},
+            {"flip", flip}};
+
+        reader_run.runtime_arg_values.push_back({core, dataflow_args});
+        writer_run.runtime_arg_values.push_back({core, dataflow_args});
+
+        const KernelRunArgs::RuntimeArgValues compute_args{
+            {"num_rows", num_tiles_per_core}, {"tiles_per_row", tiles_per_row}};
 
         if (core_group_1.contains(core)) {
-            compute_desc_1.emplace_runtime_args(core, {num_tiles_per_core, tiles_per_row});
+            compute_run_g1.runtime_arg_values.push_back({core, compute_args});
         } else if (core_group_2.contains(core)) {
-            TT_ASSERT(compute_desc_2.has_value());
-            compute_desc_2->emplace_runtime_args(core, {num_tiles_per_core, tiles_per_row});
+            TT_ASSERT(group_2_present);
+            compute_run_g2.runtime_arg_values.push_back({core, compute_args});
         } else {
             TT_THROW("Core not in any predefined core range.");
         }
@@ -262,14 +319,41 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
         tile_offset += num_tiles_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc_1));
-    if (compute_desc_2.has_value()) {
-        desc.kernels.push_back(std::move(*compute_desc_2));
+    // ----------------------------------------------------------------------------
+    // Work units: one per core group, each running reader + writer + the group's
+    // compute kernel. Reader/writer are members of both WUs (single KernelSpec).
+    // ----------------------------------------------------------------------------
+    WorkUnitSpec wu_g1{
+        .name = "accumulation_g1",
+        .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL_G1},
+        .target_nodes = core_group_1,
+    };
+
+    ProgramSpec spec{
+        .name = "accumulation",
+        .kernels = {reader_spec, writer_spec, compute_spec_g1},
+        .dataflow_buffers = {src_dfb_spec, acc_dfb_spec, dst_dfb_spec},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {wu_g1},
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {reader_run, writer_run, compute_run_g1};
+    run_args.tensor_args = {
+        {INPUT_TENSOR, TensorArgument{std::cref(input_tensor)}},
+        {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensor)}}};
+
+    if (group_2_present) {
+        spec.kernels.push_back(compute_spec_g2);
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "accumulation_g2",
+            .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL_G2},
+            .target_nodes = core_group_2,
+        });
+        run_args.kernel_run_args.push_back(compute_run_g2);
     }
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim
