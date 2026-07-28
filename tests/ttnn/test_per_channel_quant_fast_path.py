@@ -65,3 +65,32 @@ def test_multi_zp(zp):
     scale=_per_channel_scale(x,-1)
     q=torch.round(x/scale)+zp;dq=(q-zp)*scale
     assert dq.shape==x.shape
+
+@pytest.mark.parametrize('shape,axis', [((1,128),0), ((128,1),1), ((16,16,16),0), ((16,16,16),2)])
+def test_edge_shapes(shape, axis):
+    torch.manual_seed(17)
+    x = torch.rand(*shape) * 4 - 2
+    scale = _per_channel_scale(x, axis)
+    zp = 0
+    q = torch.round(x / scale) + zp
+    dq = (q - zp) * scale
+    assert dq.shape == x.shape
+    assert not torch.isnan(dq).any()
+
+def test_out_of_range_zp():
+    torch.manual_seed(5)
+    x = torch.rand(64, 128) * 6 - 3
+    scale = _per_channel_scale(x, 0)
+    for zp in [-1000, 0, 1000]:
+        q = torch.round(x / scale) + zp
+        assert q.min() >= -128 and q.max() <= 127
+
+def test_identical_fused_vs_composite():
+    torch.manual_seed(42)
+    x = torch.rand(256, 256) * 4 - 2
+    scale = _per_channel_scale(x, 0)
+    zp_scalar = 0
+    fused = (torch.round(x / scale) + zp_scalar) * scale
+    zp_tensor = torch.zeros(256, dtype=torch.float32)
+    composite = (torch.round(x / scale) + zp_tensor) * scale
+    assert torch.allclose(fused, composite, rtol=1e-5)
