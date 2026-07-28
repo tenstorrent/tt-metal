@@ -552,3 +552,183 @@
   - `probes/probe_028..034.py` — HEIGHT bring-up, the RM-shard granule check, the L1-tight corner, and the
     old-vs-new blocking survey across every sharded geometry the suites emit.
   - Unit suite: **582 passed, 73 skipped** (`--run-all`), and the sharded suites green under `--dev`.
+
+---
+
+## Refinement 5 — Speed up the perf-flagged **prefill** column and the sharded geometries
+
+- **Date**: 2026-07-28
+- **Device**: blackhole_p150b, 11 × 10 = 110-core compute grid, measured AICLK **1349.98 MHz** —
+  the references' `reference_aiclk_mhz`, so `scaled_ns == achievable_ns` and nothing below is scaled.
+
+- **What was done**: a perf-only refinement (no SUPPORTED change) on the four interleaved prefill
+  profiles `(1,1,8192,W)` and the five pinned sharded geometries, all at the config `feature_spec`
+  pins for them (bf16 / TILE / `fp32_dest_acc_en=False` / HiFi2 / bf16 TILE gamma).
+
+  **Measure first, and the measurement redirected the phase.** A new `test_rms_norm_perf_prefill_pinned`
+  re-baselined prefill at the pinned config (the Phase-0/R2/R4 prefill numbers were all taken at the
+  op's *default* HiFi4 / fp32-on corner — the wrong datapath), and a new **sharded** twin of R3's
+  ablation harness (`test_rms_norm_ablate_sharded`) attributed the sharded time. The ablation holds
+  the shard placement, the core count and the per-core slice byte-for-byte and removes only the
+  gather + root fold + multicast:
+
+      geometry            full   no-combine   combine   share   BRISC   NCRISC
+      WIDTH 32x1024      4_913        3_088     1_825     37%      95    1_139
+      WIDTH 32x2304      5_503        3_658     1_845     34%     282    1_476
+      WIDTH 32x5120      5_664        3_288     2_376     42%     220    1_871
+      WIDTH 32x7168      6_079        3_562     2_517     41%     191    2_286
+      BLOCK 8192x1024   74_838       55_522    19_316     26%     293    2_801
+
+  `BLOCK_SHARDED` is **MATH-bound**: with the combine removed it is 55.5 µs of pure TRISC time
+  against **0.3 µs of BRISC and 2.8 µs of NCRISC**. So the verifier's suggested placement/NoC tune
+  could not have moved it — only FPU-op count and DEST-sync overhead can. (The NoC pairing was in
+  any case already correct by construction: reader = NCRISC/NOC_0 (+x,+y), writer = BRISC/NOC_1
+  (−x,−y), and every gather root sits at the *low* corner of its group, so the gather's −x/−y
+  traffic and the multicast's +x/+y traffic are each on the NoC that routes them natively.)
+
+  **Lever (a) — one L1 wall instead of two.** `L1_CB_BUDGET_BYTES = 1_100_000` was a Phase-0 guess
+  at "worker L1 minus firmware headroom". R4 then read the real bank from the live device
+  (1 461 504 B) and made `prog + shard <= bank − headroom` the second wall, but kept the guess as a
+  first wall on program-allocated CBs alone. That first wall is a *proxy* for the quantity the second
+  one measures, and strictly more conservative, so it could only ever cost block size. Retired:
+  one condition, `program CBs + resident shards <= live bank − L1_ALLOC_HEADROOM_BYTES`.
+
+  Blast radius verified by A/B over the whole perf set (`probes/probe_036.py`): **exactly one cell's
+  derivation changes** — `(1,1,8192,7168)` gains a **resident gamma** (needs 1 195 648 B; the guessed
+  wall refused it, the real 1 330 432 B one accepts). gamma is the *same bytes on every core* and is
+  re-read once per row-block when not resident, so that deletes 2 of 3 gamma passes ≈ **100 MB of the
+  shape's 386 MB of DRAM traffic**. Every other cell is byte-identical.
+
+  **Lever (b) — `FUSE_SQ`, the fused square-accumulate.** Phases 2 and 3 were two FPU passes over the
+  same block: square into `cb_x_squared`, then elementwise-accumulate that block back out. The second
+  one's operation is an *add*, so the FPU's accumulate-into-DEST mode collapses them —
+  `mul_tiles(x, x, acc_to_dest)` over a sticky D0 leaves `Σ_w x_w²` in DEST, which is **exactly** the
+  raw elementwise accumulator both the local finalize and the cross-core combine already consume
+  (op_design's "the combine is literally the local chunk accumulate"). `eltwise_chain`'s
+  `DestAccumulation` walk expresses it directly: D0 stays acquired across an outer row's whole `Wt`
+  and is packed once per row. Removes one FPU op per input tile of four, the whole `cb_x_squared` L1
+  round trip, and `W−1` of every `W` packs. Two preconditions, decided on the host and
+  `static_assert`ed in the kernel: `NW == 1` (a DEST accumulator dies at the next `tile_regs_acquire`,
+  and the chain forbids composing DEST with L1 accumulation) and no partial-W mask (that rides the
+  reduce helper's partial-scaler hook, which this path does not go through). `scaler_dtype` follows
+  the reduce's input CB to Float32 — R1's rule, applied, not a new one.
+
+  **Lever (c) — `DEST_BLOCK`.** `EltwiseShape`'s `block_size` defaults to **1**, and at 1 the chain
+  runs a whole `tile_regs_acquire/commit/wait/release` round *plus a pack phase* around **every single
+  tile** (`examples/compute_block_size`: ~1.6 µs per extra pass, 1.65× end to end). Every chain in the
+  compute kernel was doing this. It now asks for `DEST_AUTO_LIMIT` and lets `eltwise_chain` clamp to
+  its own compile-time DEST capacity (`chain_max_block_v`) — so it is "the coarsest block that fits
+  DEST", re-derived per chain and per `fp32_dest_acc_en` / `dst_full_sync_en` setting, not a constant.
+
+- **Measured result** (pinned perf config, DEVICE KERNEL DURATION ns, best of two fresh-cache runs
+  that agreed to 0.02–1.6 %; the `(a)+(c)` column is `RMS_NORM_FUSE_SQ=0`, so both levers are shown
+  pulling separately and together):
+
+      case              R4 base   (a)+(c)   +FUSE_SQ  speedup      ref   vs ref
+      WIDTH 32x1024       5_002     4_975      4_900   1.021x    4_110    1.19x
+      WIDTH 32x2304       5_730     5_735      5_503   1.041x    4_617    1.19x
+      WIDTH 32x5120       5_895     5_776      5_664   1.041x    5_267    1.08x
+      WIDTH 32x7168       6_344     6_217      6_079   1.044x    5_481    1.11x
+      BLOCK 8192x1024    85_245    77_561     74_813   1.139x   25_640    2.92x
+      prefill 8192x1024  97_097    97_632     98_229   ~1.00    96_744    1.02x
+      prefill 8192x2304 222_213   219_159    217_673   1.021x  211_345    1.03x
+      prefill 8192x5120 480_766   471_674    470_143   1.023x  738_307    0.64x
+      prefill 8192x7168 810_299   652_079    659_050   1.229x  1_032_281  0.64x
+      decode x4                                        ~1.00            all inside
+
+  On `BLOCK_SHARDED` the split is `DEST_BLOCK` 1.099× then `FUSE_SQ` a further 1.037×. `8192×1024`,
+  `8192×5120` and the four decode shapes are flat *inside the noise band* — which this phase also
+  measured properly: re-running a **byte-identical** `8192×5120` program gave 480 766 / 497 328 /
+  471 787 / 470 143 / 473 456, a ±3.4 % spread, so the large prefill shapes are noisier than the
+  1–2 % the decode column showed.
+
+- **The prefill column has no data-movement headroom, and that is measured rather than argued.** The
+  verifier note said to check the roofline before manufacturing a change. `/perf-ceiling-dm`'s NPE CLI
+  is a test-build target not configured in this tree, so a stronger empirical form was used instead —
+  a real op on the real box rather than an interpolated model. `test_prefill_dm_ceiling_reference`
+  dispatches **`ttnn.clone`** on the same tensor with the same interleaved placement: every tile read
+  once, written once, no reduction, no gamma. Nothing that reads and writes this tensor can beat it.
+
+      W       clone ns   clone GB/s   rms_norm ns   rms_norm GB/s
+      1024      83_100          404        98_229             415
+      2304     192_568          392       219_966             417
+      5120     408_984          410       470_143             434
+      7168     586_752          400       659_050             433
+
+  rms_norm moves its bytes **4–6 % more efficiently than a plain DRAM copy of the same tensor**, and
+  comes in *under* `clone × 1.215` — its byte-scaled floor, since gamma is
+  `110·Wt / (2·256·Wt + 110·Wt)` = a flat **17.7 %** of traffic independent of `W` — on all four
+  shapes. Two of the four prefill shapes are 1.57× *ahead* of their references; the other two are at
+  theirs within the noise band.
+
+- **Accuracy achieved**: PCC ≥ 0.9995 on every pinned shape (asserted by the three `*_pinned` tests,
+  which carry the loose cases' tighter soft gate). `FUSE_SQ` changes *where* the running sum lives —
+  a sticky DEST register instead of an fp32 L1 accumulator reloaded per pair — so it was pinned with
+  an **absolute** check and an equivalence check, never a PCC: all-ones input recovers
+  `mean(x²) = 1.0` exactly on every fused shape, and fused vs pairwise agree to a median ratio of
+  1.000 on random data.
+
+- **Golden test progress**: unchanged by design (perf refinement, no SUPPORTED change).
+  `test_op_loose` **19 passed / 0 xfail**. Cross-product slices, **0 failed and 0 XPASS-drift
+  throughout**: `1x1x64x128` + `1x1x32x8192` + `1x1x17x50` + `4x8x32x256` = **534 passed**
+  (fused and non-fused, aligned and both-non-aligned, TILE/RM × gamma/no-gamma × every dtype ×
+  interleaved/WIDTH/BLOCK/HEIGHT), and `1x1x256x512` + `2x512x1024` + `1x1x32x4096` = **296 passed**
+  (the sharded placements). Unit suite **605 passed / 78 skipped**; the W-split and HEIGHT suites
+  green under `--dev` (watcher + NoC sanitizer), which R2's changelog flags as non-optional for this
+  scheme since the compute kernel that feeds the gather changed.
+
+- **Issues encountered** — one real bug, in the new lever, caught immediately by the pinned gates:
+
+  **`block_size > 1` with `OutputLifecycle::Streaming` gives PCC 0.0.** `PackTile` is not a CB-reader
+  element, so it does **not** constrain `block_size` (`chain_supports_block` only inspects the input
+  side) — but `Streaming` is `{ReservePolicy::PerTile, PushPolicy::PerTile}`, reserving and pushing
+  **one** tile per block-iteration while the pack loop writes `inner_count` of them. `Chunked` is the
+  matching policy. Fixed on the three blocked pack sites (phases 2, 5, 6, both their resident and
+  streaming spellings); the two chains whose operands are per-tile (phase 4's `CopyTile`, the
+  republishing `copy`) are clamped to `block_size 1` regardless, so they keep `Streaming` and an
+  unblocked shape rather than carrying a knob that can never turn. Catastrophic and immediate, so it
+  cost one cycle — but it is exactly the class of thing that would have been invisible had the block
+  happened to be 1 on the shapes under test (`(1,1,32,1024)`, whose `WT_CHUNK` is 1, was the single
+  case that passed while the other 12 failed).
+
+  Two of my *test* premises were also wrong and worth recording, since both would mislead a reader:
+  `(1,1,32,8192)` is **fused** even though its whole-tensor `Wt` is 256 — the W-split hands each core
+  only 8 W-tiles, so the precondition is on the *per-core* chunk count, not on `W`; and R4's
+  `test_resident_shard_is_not_charged_against_the_cb_budget` A/B has to accept **outright refusal**
+  as well as a shrunk block, because that is the form R4 measured on fp32 `W=4096`.
+
+- **Remaining headroom — findings, not queued tasks.** `BLOCK_SHARDED` is still 2.9× from its
+  25 640 ns reference and is math-bound, so the next lever there is **fusing phases 5 and 6**
+  (`x·(1/rms)` then `·gamma`): `DestReuseBinary` carries no `BroadcastDim` (R3 already established
+  this), but pre-expanding gamma to full tiles *once per core* makes it expressible — `Wt` tiles,
+  cheap at the sharded `Wt = 4…8`, and it can reuse the L1 that `cb_scaled` vacates. It deletes the
+  whole `cb_scaled` round trip (128 packs + 128 unpacks per core) but **no FPU ops**, so on a
+  math-bound kernel I estimate only ~5 %, which is why it lost to spending the remaining budget on
+  the regression net. The combine's residual 19.3 µs (26 %) is **not** topology-bound: a
+  `BLOCK_SHARDED` group is one grid row (`cw_y == 1`), so R3's two-stage tree cannot apply by
+  construction, and `master.md`'s `two_phase_reduce_mcast` — measured 1.69× on a 1×8 line at exactly
+  this payload — is a T3-shaped restructure of which core owns which tile-row. For **prefill**, the
+  one remaining byte reduction is a **grid-wide gamma multicast** (op_design's Lamp L2), worth ~1.2×
+  on the column; not built because it adds a global sync to the highest-volume path,
+  `examples/shared_input_reuse` measures such a broadcast at only 1.71× for an 11× read reduction,
+  and the two shapes it would help are already at their references within the noise band.
+
+- **Tests added**:
+  - `test_rms_norm_fused_reduce.py` (**new**, 14 cases) — the `FUSE_SQ` datapath: it *engages* where
+    expected (else every assertion below would pass on the fallback path), it *refuses* where
+    structurally wrong (`NW > 1`, partial W), all-ones recovers `mean(x²) = 1.0` **absolutely**, and
+    fused agrees with pairwise on random data by median ratio. The file's docstring records why a PCC
+    gate is not acceptable here: R1, R2 and R4 each shipped an accumulation bug that PCC scored
+    ≥ 0.9998 because miscounting elements only rescales rows.
+  - `test_rms_norm_perf.py::test_rms_norm_perf_prefill_pinned` (**new**, 4 cases) — prefill at the
+    pinned perf config, the datapath its `achievable_ns` references were taken at.
+  - `test_rms_norm_perf.py::test_prefill_dm_ceiling_reference` (**new**, 4 cases) — the measured DM
+    ceiling (`ttnn.clone` on the same tensor), so "prefill is saturated" stays a re-runnable
+    measurement instead of a claim in a changelog.
+  - `test_rms_norm_perf.py::test_rms_norm_ablate_sharded` (**new**, 5 cases, opt-in via
+    `RMS_NORM_ABLATE`) — the sharded twin of R3's ablation harness.
+  - `test_rms_norm_height_sharded.py::test_live_bank_budget_buys_gamma_residency` (**new**) — pins
+    lever (a) exactly where it is load-bearing, including that the *block factor* must not move.
+  - `RMS_NORM_FUSE_SQ` env override, so lever (b) stays A/B-measurable without editing the op.
+  - `probes/probe_035.py`, `probes/probe_036.py` — the blocking survey across every perf geometry and
+    the one-cell-changes A/B for the budget retirement.

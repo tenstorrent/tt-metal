@@ -297,14 +297,20 @@ def test_resident_shard_is_not_charged_against_the_cb_budget(device, shape, dtyp
     assert blk.wt_chunk > 1, f"WT_CHUNK collapsed to {blk.wt_chunk} (NW={blk.nw})"
 
     # ...whereas budgeting the same program against the GUESSED constant — the
-    # pre-Refinement-4 model — does collapse it. This is the A/B that makes the
-    # assertion above a result rather than a tautology.
-    guessed = pd._derive_blocking(
-        tt_x, tt_g, 110, p, sharded_in=True, sharded_out=True, l1_total_budget=pd.L1_CB_BUDGET_BYTES
-    )
-    assert guessed.wt_chunk < blk.wt_chunk, (
+    # pre-Refinement-4 model — costs real block size. This is the A/B that makes
+    # the assertion above a result rather than a tautology. R4 measured the two
+    # ways it shows up, and both count: the block collapses (bf16 W=8192,
+    # WT_CHUNK 32 -> 1), or the cell is refused outright with the bank still
+    # partly free (fp32 W=4096, missed by 10 KB) — which is the stronger form.
+    try:
+        guessed_wt_chunk = pd._derive_blocking(
+            tt_x, tt_g, 110, p, sharded_in=True, sharded_out=True, l1_total_budget=pd.L1_CB_BUDGET_BYTES
+        ).wt_chunk
+    except AssertionError:
+        guessed_wt_chunk = 0  # refused outright
+    assert guessed_wt_chunk < blk.wt_chunk, (
         f"the guessed {pd.L1_CB_BUDGET_BYTES} B wall no longer costs block size "
-        f"(WT_CHUNK {guessed.wt_chunk} vs {blk.wt_chunk}) — re-pick the shape"
+        f"(WT_CHUNK {guessed_wt_chunk} vs {blk.wt_chunk}) — re-pick the shape"
     )
     ttnn.deallocate(tt_x)
     ttnn.deallocate(tt_g)

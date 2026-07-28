@@ -130,6 +130,63 @@ pinned perf config), only the one whose blocking actually moves changes:
     (1,1,32,5120)   WIDTH [32,160]  (8,4)           5_878        5_890
     (1,1,32,7168)   WIDTH [32,256]  (7,4)           6_295        6_284
     (1,1,8192,1024) BLOCK [1024,128](8,8)          89_413       85_107   HT_BLOCK 4->8
+
+Refinement 5 took the prefill column and the sharded geometries. Three levers,
+all measured at the pinned perf config, one fresh-cache run per variant (and the
+winning configuration re-run to confirm; run-to-run agreement was 0.02-1.6%):
+
+  (a) ONE L1 wall instead of two. L1_CB_BUDGET_BYTES was a Phase-0 guess that
+      R4 had already superseded with a live-bank read; keeping it as a second
+      wall on program CBs alone could only cost block size. Exactly one cell in
+      the whole perf set changes derivation - (1,1,8192,7168) gets a RESIDENT
+      gamma, i.e. 2 of its 3 gamma read passes deleted. Since every core reads
+      all of gamma, that is ~100 MB of the shape's ~386 MB of DRAM traffic.
+  (b) FUSE_SQ - the fused square-accumulate (RMS_NORM_FUSE_SQ=0 to A/B).
+  (c) DEST_BLOCK - EltwiseShape's block_size was defaulting to 1, so every
+      chain ran a whole tile_regs_acquire/commit/wait/release round PER TILE.
+
+    case              R4 base   (a)+(c)   +FUSE_SQ  speedup     ref   vs ref
+    WIDTH 32x1024       5_002     4_975      4_900   1.021x   4_110    1.19x
+    WIDTH 32x2304       5_730     5_735      5_503   1.041x   4_617    1.19x
+    WIDTH 32x5120       5_895     5_776      5_664   1.041x   5_267    1.08x
+    WIDTH 32x7168       6_344     6_217      6_079   1.044x   5_481    1.11x
+    BLOCK 8192x1024    85_245    77_561     74_813   1.139x  25_640    2.92x
+    prefill 8192x1024  97_097    97_632     98_229   ~1.00   96_744    1.02x
+    prefill 8192x2304 222_213   219_159    217_673   1.021x 211_345    1.03x
+    prefill 8192x5120 480_766   471_674    470_143   1.023x 738_307    0.64x
+    prefill 8192x7168 810_299   652_079    659_050   1.229x  1.03e6    0.64x
+    decode x4                                        ~1.00           all inside
+
+Ablation (RMS_NORM_ABLATE=combine, now with a SHARDED twin) says where the
+sharded time is, and it is not data movement:
+
+    geometry            full   no-combine   combine   share   BRISC   NCRISC
+    WIDTH 32x1024      4_913        3_088     1_825     37%      95    1_139
+    WIDTH 32x2304      5_503        3_658     1_845     34%     282    1_476
+    WIDTH 32x5120      5_664        3_288     2_376     42%     220    1_871
+    WIDTH 32x7168      6_079        3_562     2_517     41%     191    2_286
+    BLOCK 8192x1024   74_838       55_522    19_316     26%     293    2_801
+
+BLOCK_SHARDED is MATH-bound: with the combine removed it is 55.5 us of pure
+TRISC time against 0.3 us of BRISC and 2.8 us of NCRISC. That is why (b) and (c)
+- which remove FPU ops and DEST-sync rounds - are the levers that reach it, and
+why no dataflow lever would have.
+
+The PREFILL column, by contrast, has no data-movement headroom left, and
+test_prefill_dm_ceiling_reference measures that rather than asserting it:
+ttnn.clone streams the same tensor with the same interleaved placement and no
+reduction, so nothing that reads and writes this tensor can beat it.
+
+    W       clone ns   clone GB/s   rms_norm ns   rms_norm GB/s
+    1024      83_100          404        98_229             415
+    2304     192_568          392       219_966             417
+    5120     408_984          410       470_143             434
+    7168     586_752          400       659_050             433
+
+rms_norm moves its bytes 4-6% MORE efficiently than a plain DRAM copy of the
+same tensor, and lands under clone x 1.215 (its byte-scaled floor - gamma is a
+flat 17.7% of traffic independent of W) on all four shapes. The only reducible
+bytes left are gamma's 17.7%, which needs a grid-wide gamma multicast.
 """
 
 import os
