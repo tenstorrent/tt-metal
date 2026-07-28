@@ -53,6 +53,14 @@ jobs:
         with:
           ref: feature/tt-hw-planner
           fetch-depth: 0
+          # GITHUB_TOKEN is a GitHub App token, and App tokens are refused any write under
+          # .github/workflows/. Upstream tt-metal touches workflow files roughly weekly, and the
+          # moment a merge includes one the push dies with "refusing to allow a GitHub App to
+          # create or update workflow ... without `workflows` permission" (2026-07-28: 9 upstream
+          # workflow files changed, branch stalled 44 behind). SYNC_PAT must carry `workflows`
+          # write. Falling back to github.token keeps merges that touch no workflow file working
+          # rather than failing outright when the secret is absent.
+          token: ${{ secrets.SYNC_PAT || github.token }}
 
       - name: Git setup (safe.directory + identity)
         run: |
@@ -95,13 +103,25 @@ jobs:
             exit 1
           fi
           git commit -m "Merge upstream/main ($SHA, latest tt-metal) [auto-sync, tool-only]"
-          git push origin HEAD:feature/tt-hw-planner
+
+          # Capture WHY a push failed instead of letting the issue text assume a conflict. The
+          # 2026-07-28 stall was a push rejection (App token may not write .github/workflows/),
+          # yet the issue said "unexpected merge conflict" with an empty conflict list -- which
+          # sent the next reader hunting through the DST gate instead of reading one git line.
+          set +e
+          git push origin HEAD:feature/tt-hw-planner 2>&1 | tee /tmp/push.log
+          PUSH_RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$PUSH_RC" != "0" ]; then
+            { echo "reason<<EOF"; tail -6 /tmp/push.log; echo "EOF"; } >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "Pushed feature/tt-hw-planner -> latest tt-metal ($SHA)"
 
       - name: File an issue on conflict/failure (comment on the open one instead of duplicating)
         if: failure()
         run: |
-          BODY="Auto-sync to latest tt-metal could not push (unexpected merge conflict). Conflicts: ${{ steps.sync.outputs.conflicts }}. Resolve manually, then verify build+PCC on a TT box. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="Auto-sync to latest tt-metal did not push. Unresolved conflicts: '${{ steps.sync.outputs.conflicts }}' (empty means the merge was CLEAN and the failure was later -- read the push output below, do not assume a conflict). Push output: '${{ steps.sync.outputs.reason }}'. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           python3 - "$BODY" <<'PY'
           # A conflict here needs a human, so it persists across days -- and this workflow runs
           # daily. Filing unconditionally would leave one identical issue per day until someone
