@@ -119,7 +119,7 @@ class _FakeTensor:
         self.deallocate = MagicMock()
 
 
-def _identity_all_gather(_norm, tensor, **_kwargs):
+def _identity_all_gather(_norm, tensor, *, memory_config=None):
     return tensor
 
 

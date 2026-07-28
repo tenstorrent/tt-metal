@@ -5,13 +5,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
+
+import torch
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, TraceMode, WarmupConfig
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
-from models.common.llm_runtime.vllm_adapter import VLLMAdapter, VLLMAdapterConfig
+from models.common.llm_runtime.vllm_adapter import NormalizedPrefillKwargs, VLLMAdapter, VLLMAdapterConfig
 from models.common.models.llama3_8b.executor import Llama3ExecutorConfig, build_llama3_executor
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
@@ -113,7 +116,6 @@ class Llama3Generator:
         tt_data_parallel: int = 1,
         max_model_len: int = 0,
         max_num_seqs: int = 1,
-        **kwargs,
     ) -> int:
         """Return the unpadded per-submesh KV token budget for vLLM sizing."""
 
@@ -164,49 +166,168 @@ class Llama3Generator:
         self.target.configure_paged_kv_cache(resolved)
         return self.target.allocate_kv_cache()
 
-    def compile_prefill(self, *args, **kwargs):
+    def compile_prefill(
+        self,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        enable_trace: bool,  # ↓ Required policy
+        prompt_lens: Sequence[int] | torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+    ) -> None:
         """Normalize a vLLM prefill call and compile its selected target."""
 
-        normalized = self._adapter.normalize_prefill(args, kwargs)
-        execution = self._select_prefill_execution(normalized)
+        normalized, trace_requested = self._adapter.normalize_prefill(
+            tokens,
+            page_table,
+            enable_trace=enable_trace,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+        )
+        execution = self._select_prefill_execution(normalized, trace_requested)
         return self.target.compile_prefill(execution=execution, **normalized)
 
-    def compile_decode(self, *args, **kwargs):
+    def compile_decode(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        enable_trace: bool,  # ↓ Required policy
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+    ) -> None:
         """Normalize a vLLM decode call and compile its selected target."""
 
-        normalized = self._adapter.normalize_decode(args, kwargs)
-        execution = self._select_execution("decode", normalized.pop("enable_trace"))
+        normalized, trace_requested = self._adapter.normalize_decode(
+            tokens,
+            start_pos,
+            page_table,
+            enable_trace=enable_trace,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+            reset_batch=reset_batch,
+        )
+        execution = self._select_execution("decode", trace_requested)
         return self.target.compile_decode(execution=execution, **normalized)
 
-    def prefill_forward(self, *args, **kwargs):
+    def prefill_forward(
+        self,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        enable_trace: bool,  # ↓ Required policy
+        prompt_lens: Sequence[int] | torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        **compatibility_kwargs: Any,  # ↓ Compatibility
+    ) -> Any:
         """Normalize and dispatch one vLLM prefill call."""
 
-        normalized = self._adapter.normalize_prefill(args, kwargs)
-        execution = self._select_prefill_execution(normalized)
+        normalized, trace_requested = self._adapter.normalize_prefill(
+            tokens,
+            page_table,
+            enable_trace=enable_trace,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+            compatibility_kwargs=compatibility_kwargs,
+        )
+        execution = self._select_prefill_execution(normalized, trace_requested)
         return self.target.prefill_forward(execution=execution, **normalized)
 
-    def decode_forward(self, *args, **kwargs):
+    def decode_forward(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        enable_trace: bool,  # ↓ Required policy
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        read_from_device: bool = True,  # ↓ Output policy
+        **compatibility_kwargs: Any,  # ↓ Compatibility
+    ) -> Any:
         """Normalize and dispatch one vLLM decode call."""
 
-        normalized = self._adapter.normalize_decode(args, kwargs)
-        execution = self._select_execution("decode", normalized.pop("enable_trace"))
-        return self.target.decode_forward(execution=execution, **normalized)
+        normalized, trace_requested = self._adapter.normalize_decode(
+            tokens,
+            start_pos,
+            page_table,
+            enable_trace=enable_trace,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+            reset_batch=reset_batch,
+            compatibility_kwargs=compatibility_kwargs,
+        )
+        execution = self._select_execution("decode", trace_requested)
+        return self.target.decode_forward(
+            execution=execution,
+            read_from_device=read_from_device,
+            **normalized,
+        )
 
-    def read_decode_output(self, *args, **kwargs):
+    def read_decode_output(
+        self,
+        tt_out: Any,
+        *,
+        async_read: bool = False,
+    ) -> Any:
         """Delegate vLLM's raw decode-output read."""
 
-        return self.target.read_decode_output(*args, **kwargs)
+        return self.target.read_decode_output(tt_out=tt_out, async_read=async_read)
 
-    def process_decode_output_host(self, *args, **kwargs):
+    def process_decode_output_host(
+        self,
+        tt_out: Any,
+        *,
+        is_tokens: bool = False,
+    ) -> tuple[Any, Any]:
         """Delegate vLLM's asynchronous host-output completion."""
 
-        return self.target.process_decode_output_host(*args, **kwargs)
+        return self.target.process_decode_output_host(tt_out=tt_out, is_tokens=is_tokens)
 
-    def warmup_model_prefill(self, *args, **kwargs):
-        return self.target.warmup_model_prefill(*args, **kwargs)
+    def warmup_model_prefill(
+        self,
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
+    ) -> None:
+        return self.target.warmup_model_prefill(
+            kv_cache=kv_cache,
+            can_sample_on_device=can_sample_on_device,
+            enable_trace=enable_trace,
+        )
 
-    def warmup_model_decode(self, *args, **kwargs):
-        return self.target.warmup_model_decode(*args, **kwargs)
+    def warmup_model_decode(
+        self,
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        max_batch_size: int,  # ↓ Coverage dimensions
+        num_blocks: int,
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
+    ) -> None:
+        return self.target.warmup_model_decode(
+            kv_cache=kv_cache,
+            max_batch_size=max_batch_size,
+            num_blocks=num_blocks,
+            can_sample_on_device=can_sample_on_device,
+            enable_trace=enable_trace,
+        )
 
     def cleanup(self):
         """Release every resource owned by the concrete target."""
@@ -215,11 +336,19 @@ class Llama3Generator:
 
     # Private implementation
 
-    def _select_prefill_execution(self, normalized: dict[str, Any]):
-        enable_trace = normalized.pop("enable_trace")
-        if enable_trace and not self.target.can_trace_prefill(**normalized):
-            enable_trace = False
-        return self._select_execution("prefill", enable_trace)
+    def _select_prefill_execution(
+        self,
+        normalized: NormalizedPrefillKwargs,
+        trace_requested: bool,
+    ):
+        if trace_requested and not self.target.can_trace_prefill(
+            tokens=normalized["tokens"],
+            prompt_lens=normalized["prompt_lens"],
+            start_pos=normalized["start_pos"],
+            empty_slots=normalized["empty_slots"],
+        ):
+            trace_requested = False
+        return self._select_execution("prefill", trace_requested)
 
     def _select_execution(self, operation: str, enable_trace: bool):
         if not enable_trace:

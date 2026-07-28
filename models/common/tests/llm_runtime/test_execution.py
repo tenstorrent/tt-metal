@@ -91,6 +91,75 @@ def test_execution_strategies_use_exact_identity_composition_without_type_framew
     assert not hasattr(TracedExecutor, "cleanup")
 
 
+def test_execution_request_signatures_are_exact_and_aligned():
+    required = inspect.Parameter.empty
+    positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
+    keyword_only = inspect.Parameter.KEYWORD_ONLY
+    prefill_contract = [
+        ("self", positional, required),
+        ("tokens", keyword_only, required),
+        ("page_table", keyword_only, required),
+        ("prompt_lens", keyword_only, None),
+        ("start_pos", keyword_only, None),
+        ("empty_slots", keyword_only, None),
+        ("sampling_params", keyword_only, None),
+    ]
+    decode_contract = [
+        ("self", positional, required),
+        ("tokens", keyword_only, required),
+        ("start_pos", keyword_only, required),
+        ("page_table", keyword_only, required),
+        ("sampling_params", keyword_only, None),
+        ("reset_batch", keyword_only, False),
+    ]
+    decode_forward_contract = [
+        *decode_contract,
+        ("read_from_device", keyword_only, True),
+    ]
+
+    def parameter_contract(method):
+        return [
+            (parameter.name, parameter.kind, parameter.default)
+            for parameter in inspect.signature(method).parameters.values()
+        ]
+
+    for executor_type in (EagerExecutor, TracedExecutor):
+        assert parameter_contract(executor_type.compile_prefill) == prefill_contract
+        assert parameter_contract(executor_type.prefill_forward) == prefill_contract
+        assert parameter_contract(executor_type.compile_decode) == decode_contract
+        assert parameter_contract(executor_type.decode_forward) == decode_forward_contract
+
+    assert parameter_contract(EagerExecutor._prepare_prefill) == prefill_contract
+    assert parameter_contract(EagerExecutor._prepare_decode) == decode_contract
+    for method_name in ("compile_prefill", "prefill_forward", "compile_decode", "decode_forward"):
+        assert inspect.signature(getattr(EagerExecutor, method_name)) == inspect.signature(
+            getattr(TracedExecutor, method_name)
+        )
+
+
+def test_execution_request_methods_reject_kv_cache(expect_error):
+    prefill_fields = {
+        "tokens": torch.zeros(1, 1),
+        "page_table": torch.zeros(1, 1),
+    }
+    decode_fields = {
+        "tokens": torch.zeros(1, 1),
+        "start_pos": torch.zeros(1),
+        "page_table": torch.zeros(1, 1),
+    }
+
+    for executor_type in (EagerExecutor, TracedExecutor):
+        executor = object.__new__(executor_type)
+        for method_name, fields in (
+            ("compile_prefill", prefill_fields),
+            ("prefill_forward", prefill_fields),
+            ("compile_decode", decode_fields),
+            ("decode_forward", decode_fields),
+        ):
+            with expect_error(TypeError, "kv_cache"):
+                getattr(executor, method_name)(**fields, kv_cache=object())
+
+
 def test_traced_constructor_rejects_a_different_program_compiler(monkeypatch, expect_error):
     eager = EagerExecutor(
         prefill=_runtime(PrefillRuntime),
@@ -109,16 +178,60 @@ def test_eager_prefill_prepares_once_and_compiles_all_signatures_from_same_objec
     )
     prepared_seen = []
     prepare_calls = []
+
+    def prepare(
+        *,
+        tokens,
+        page_table,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        sampling_params=None,
+    ):
+        prepare_calls.append(
+            {
+                "tokens": tokens,
+                "page_table": page_table,
+                "prompt_lens": prompt_lens,
+                "start_pos": start_pos,
+                "empty_slots": empty_slots,
+                "sampling_params": sampling_params,
+            }
+        )
+        return (prepared,)
+
     prefill = _runtime(
         PrefillRuntime,
-        prepare=lambda **kwargs: prepare_calls.append(kwargs) or (prepared,),
-        invoke=lambda request: prepared_seen.append(request) or PrefillInvocationResult(torch.zeros(1), ()),
+        prepare=prepare,
+        invoke=lambda prepared: prepared_seen.append(prepared) or PrefillInvocationResult(torch.zeros(1), ()),
     )
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=_compiler(monkeypatch))
+    tokens = torch.zeros(1, 1)
+    page_table = torch.zeros(1, 1)
+    prompt_lens = torch.tensor([1])
+    start_pos = torch.tensor([0])
+    empty_slots = [0]
+    sampling_params = object()
 
-    eager.compile_prefill(tokens=torch.zeros(1, 1))
+    eager.compile_prefill(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=empty_slots,
+        sampling_params=sampling_params,
+    )
 
-    assert len(prepare_calls) == 1
+    assert prepare_calls == [
+        {
+            "tokens": tokens,
+            "page_table": page_table,
+            "prompt_lens": prompt_lens,
+            "start_pos": start_pos,
+            "empty_slots": empty_slots,
+            "sampling_params": sampling_params,
+        }
+    ]
     assert prepared_seen == [prepared, prepared]
 
 
@@ -131,12 +244,25 @@ def test_traced_prefill_compile_does_not_interpret_request_eligibility(monkeypat
         capture=lambda persistent: torch.zeros(1),
         refresh_fields=("tokens",),
     )
+
+    def prepare(
+        *,
+        tokens,
+        page_table,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        sampling_params=None,
+    ):
+        identity_events.append(("prepare", prepared))
+        return (prepared,)
+
     prefill = _runtime(
         PrefillRuntime,
-        prepare=lambda **kwargs: identity_events.append(("prepare", prepared)) or (prepared,),
-        invoke=lambda request: identity_events.append(("invoke", request))
+        prepare=prepare,
+        invoke=lambda prepared: identity_events.append(("invoke", prepared))
         or PrefillInvocationResult(torch.zeros(1), ()),
-        capture_plan=lambda request: identity_events.append(("capture_plan", request)) or operation_plan,
+        capture_plan=lambda prepared: identity_events.append(("capture_plan", prepared)) or operation_plan,
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
@@ -145,7 +271,7 @@ def test_traced_prefill_compile_does_not_interpret_request_eligibility(monkeypat
     trace_compiler.register_capture_plan = registered.append
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
-    traced.compile_prefill(tokens=torch.zeros(1, 1))
+    traced.compile_prefill(tokens=torch.zeros(1, 1), page_table=torch.zeros(1, 1))
 
     assert [event[0] for event in identity_events] == ["prepare", "invoke", "capture_plan"]
     assert all(event[1] is prepared for event in identity_events)
@@ -154,11 +280,23 @@ def test_traced_prefill_compile_does_not_interpret_request_eligibility(monkeypat
 
 def test_traced_prefill_recompile_reuses_existing_trace_association(monkeypatch):
     prepared = _prepared_prefill()
+
+    def prepare(
+        *,
+        tokens,
+        page_table,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        sampling_params=None,
+    ):
+        return (prepared,)
+
     prefill = _runtime(
         PrefillRuntime,
-        prepare=lambda **kwargs: (prepared,),
-        invoke=lambda request: PrefillInvocationResult(torch.zeros(1), ()),
-        capture_plan=lambda request: (_ for _ in ()).throw(AssertionError("capture plan rebuilt")),
+        prepare=prepare,
+        invoke=lambda prepared: PrefillInvocationResult(torch.zeros(1), ()),
+        capture_plan=lambda prepared: (_ for _ in ()).throw(AssertionError("capture plan rebuilt")),
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
@@ -167,17 +305,21 @@ def test_traced_prefill_recompile_reuses_existing_trace_association(monkeypatch)
     trace_compiler.register_capture_plan = lambda plan: (_ for _ in ()).throw(AssertionError("plan registered"))
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
-    traced.compile_prefill(tokens=torch.zeros(1, 1))
+    traced.compile_prefill(tokens=torch.zeros(1, 1), page_table=torch.zeros(1, 1))
 
 
 def test_traced_decode_recompile_reuses_existing_trace_association(monkeypatch):
     prepared = _prepared_decode()
+
+    def prepare(*, tokens, start_pos, page_table, sampling_params=None, reset_batch=False):
+        return prepared
+
     decode = _runtime(
         DecodeRuntime,
-        prepare=lambda **kwargs: prepared,
-        program_signature=lambda request: _Signature("decode", 1),
-        invoke=lambda request, **kwargs: DecodeInvocationResult(torch.zeros(1), (), False),
-        capture_plan=lambda request: (_ for _ in ()).throw(AssertionError("capture plan rebuilt")),
+        prepare=prepare,
+        program_signature=lambda prepared: _Signature("decode", 1),
+        invoke=lambda prepared, *, device_feedback=False: DecodeInvocationResult(torch.zeros(1), (), False),
+        capture_plan=lambda prepared: (_ for _ in ()).throw(AssertionError("capture plan rebuilt")),
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=_runtime(PrefillRuntime), decode=decode, program_compiler=program_compiler)
@@ -192,19 +334,49 @@ def test_traced_decode_recompile_reuses_existing_trace_association(monkeypatch):
 def test_execution_target_selection_is_external_to_traced_prefill(monkeypatch):
     prepared = _prepared_prefill(trace_eligible=True)
     invocations = []
+
+    def prepare(
+        *,
+        tokens,
+        page_table,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        sampling_params=None,
+    ):
+        return (prepared,)
+
     prefill = _runtime(
         PrefillRuntime,
-        prepare=lambda **kwargs: (prepared,),
-        invoke=lambda request: invocations.append(request) or PrefillInvocationResult("eager", ()),
-        assemble=lambda results, **kwargs: results[0][1].value,
+        prepare=prepare,
+        invoke=lambda prepared: invocations.append(prepared) or PrefillInvocationResult("eager", ()),
+        assemble=lambda prepared_results, *, batch_size, sampling_params=None: prepared_results[0][1].value,
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
     trace_compiler = _trace_compiler(program_compiler, mode="decode_only")
-    trace_compiler.replay = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("trace replayed"))
+
+    def replay(
+        program_key,
+        refresh_inputs,
+        *,
+        reset_batch=False,
+        device_feedback_enabled=False,
+        feedback_compatible=False,
+        page_table_changed=False,
+    ):
+        raise AssertionError("trace replayed")
+
+    trace_compiler.replay = replay
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
-    assert traced.eager_executor.prefill_forward(tokens=torch.zeros(1, 1)) == "eager"
+    assert (
+        traced.eager_executor.prefill_forward(
+            tokens=torch.zeros(1, 1),
+            page_table=torch.zeros(1, 1),
+        )
+        == "eager"
+    )
     assert invocations == [prepared]
 
 
@@ -213,25 +385,45 @@ def test_prefill_replay_does_not_interpret_request_eligibility(monkeypatch):
     persistent = object()
     hidden = object()
     identity_events = []
+
+    def prepare(
+        *,
+        tokens,
+        page_table,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        sampling_params=None,
+    ):
+        identity_events.append(("prepare", prepared))
+        return (prepared,)
+
     prefill = _runtime(
         PrefillRuntime,
-        prepare=lambda **kwargs: identity_events.append(("prepare", prepared)) or (prepared,),
-        refresh_trace=lambda request, values: identity_events.append(("refresh", request, values)),
-        finish_trace=lambda request, value, values: identity_events.append(("finish", request, value, values))
+        prepare=prepare,
+        refresh_trace=lambda prepared, persistent: identity_events.append(("refresh", prepared, persistent)),
+        finish_trace=lambda prepared, hidden, persistent: identity_events.append(
+            ("finish", prepared, hidden, persistent)
+        )
         or "traced",
-        assemble=lambda results, **kwargs: results[0][1],
+        assemble=lambda prepared_results, *, batch_size, sampling_params=None: prepared_results[0][1],
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
     trace_compiler = _trace_compiler(program_compiler)
     artifact = SimpleNamespace(persistent_inputs=SimpleNamespace(values=persistent))
     record = SimpleNamespace(artifact=artifact)
-    trace_compiler.replay = lambda program_key, refresh, **kwargs: refresh(artifact, object()) or hidden
+    trace_compiler.replay = (
+        lambda program_key, refresh_inputs, *, reset_batch=False, device_feedback_enabled=False, feedback_compatible=False, page_table_changed=False: refresh_inputs(
+            artifact, object()
+        )
+        or hidden
+    )
     trace_compiler.trace_key_for_program = lambda program_key: "trace-key"
     trace_compiler.get = lambda trace_key: record
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
-    result = traced.prefill_forward(tokens=torch.zeros(1, 1))
+    result = traced.prefill_forward(tokens=torch.zeros(1, 1), page_table=torch.zeros(1, 1))
 
     assert result == "traced"
     assert [event[0] for event in identity_events] == ["prepare", "refresh", "finish"]
@@ -243,24 +435,41 @@ def test_prefill_replay_does_not_interpret_request_eligibility(monkeypatch):
 def test_prefill_missing_trace_artifact_is_an_error_without_eager_reinvocation(monkeypatch, expect_error):
     prepared = _prepared_prefill(trace_eligible=True)
     eager_invocations = []
+
+    def prepare(
+        *,
+        tokens,
+        page_table,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        sampling_params=None,
+    ):
+        return (prepared,)
+
     prefill = _runtime(
         PrefillRuntime,
-        prepare=lambda **kwargs: (prepared,),
-        invoke=lambda request: eager_invocations.append(request) or PrefillInvocationResult("eager", ()),
-        refresh_trace=lambda request, values: None,
-        assemble=lambda results, **kwargs: results[0][1],
+        prepare=prepare,
+        invoke=lambda prepared: eager_invocations.append(prepared) or PrefillInvocationResult("eager", ()),
+        refresh_trace=lambda prepared, persistent: None,
+        assemble=lambda prepared_results, *, batch_size, sampling_params=None: prepared_results[0][1],
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
     trace_compiler = _trace_compiler(program_compiler)
     artifact = SimpleNamespace(persistent_inputs=SimpleNamespace(values=()))
-    trace_compiler.replay = lambda program_key, refresh, **kwargs: refresh(artifact, object()) or "hidden"
+    trace_compiler.replay = (
+        lambda program_key, refresh_inputs, *, reset_batch=False, device_feedback_enabled=False, feedback_compatible=False, page_table_changed=False: refresh_inputs(
+            artifact, object()
+        )
+        or "hidden"
+    )
     trace_compiler.trace_key_for_program = lambda program_key: "missing"
     trace_compiler.get = lambda trace_key: None
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
     with expect_error(RuntimeError, "Required prefill trace"):
-        traced.prefill_forward(tokens=torch.zeros(1, 1))
+        traced.prefill_forward(tokens=torch.zeros(1, 1), page_table=torch.zeros(1, 1))
 
     assert eager_invocations == []
 
@@ -268,52 +477,99 @@ def test_prefill_missing_trace_artifact_is_an_error_without_eager_reinvocation(m
 def test_decode_replay_prepares_once_and_uses_same_object_for_refresh_submission_and_consume(monkeypatch):
     prepared = _prepared_decode()
     events = []
+
+    def prepare(*, tokens, start_pos, page_table, sampling_params=None, reset_batch=False):
+        events.append(("prepare", prepared, sampling_params, reset_batch))
+        return prepared
+
     decode = _runtime(
         DecodeRuntime,
         config=SimpleNamespace(position_feedback_capable=True),
-        prepare=lambda **kwargs: events.append(("prepare", prepared)) or prepared,
-        program_signature=lambda request: events.append(("signature", request)) or _Signature("decode", 1),
-        refresh_trace=lambda artifact, request, decision: events.append(("refresh", request)),
-        note_submitted=lambda request: events.append(("submitted", request)),
-        consume=lambda result, **kwargs: events.append(("consume", result)) or result.value,
+        prepare=prepare,
+        program_signature=lambda prepared: events.append(("signature", prepared)) or _Signature("decode", 1),
+        refresh_trace=lambda artifact, prepared, decision: events.append(("refresh", prepared)),
+        note_submitted=lambda prepared: events.append(("submitted", prepared)),
+        consume=lambda result, *, read_from_device=True: events.append(("consume", result, read_from_device))
+        or result.value,
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=_runtime(PrefillRuntime), decode=decode, program_compiler=program_compiler)
     trace_compiler = _trace_compiler(program_compiler)
-    trace_compiler.replay = lambda program_key, refresh, **kwargs: refresh(object(), object()) or "token"
+    trace_compiler.replay = (
+        lambda program_key, refresh_inputs, *, reset_batch=False, device_feedback_enabled=False, feedback_compatible=False, page_table_changed=False: refresh_inputs(
+            object(), object()
+        )
+        or "token"
+    )
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
+    sampling_params = object()
 
-    result = traced.decode_forward(tokens=torch.zeros(1, 1), start_pos=torch.zeros(1), page_table=torch.zeros(1, 1))
+    result = traced.decode_forward(
+        tokens=torch.zeros(1, 1),
+        start_pos=torch.zeros(1),
+        page_table=torch.zeros(1, 1),
+        sampling_params=sampling_params,
+        reset_batch=True,
+        read_from_device=False,
+    )
 
     assert result == "token"
     assert [event[0] for event in events] == ["prepare", "signature", "refresh", "submitted", "consume"]
     assert all(event[1] is prepared for event in events[:-1])
+    assert events[0][2:] == (sampling_params, True)
     assert isinstance(events[-1][1], DecodeInvocationResult)
     assert events[-1][1].owned is None
+    assert events[-1][2] is False
 
 
 def test_explicit_eager_decode_delegates_once_and_execution_objects_do_not_cleanup(monkeypatch):
     prepared = _prepared_decode()
     calls = []
+
+    def prepare(*, tokens, start_pos, page_table, sampling_params=None, reset_batch=False):
+        calls.append(("prepare", prepared, sampling_params, reset_batch))
+        return prepared
+
     decode = _runtime(
         DecodeRuntime,
-        prepare=lambda **kwargs: calls.append(("prepare", prepared)) or prepared,
-        invoke=lambda request, **kwargs: calls.append(("invoke", request))
+        prepare=prepare,
+        invoke=lambda prepared, *, device_feedback=False: calls.append(("invoke", prepared, device_feedback))
         or DecodeInvocationResult("eager", (), False),
-        consume=lambda result, **kwargs: calls.append(("consume", result.value)) or result.value,
+        consume=lambda result, *, read_from_device=True: calls.append(("consume", result.value, read_from_device))
+        or result.value,
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=_runtime(PrefillRuntime), decode=decode, program_compiler=program_compiler)
     trace_compiler = _trace_compiler(program_compiler)
-    trace_compiler.replay = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("trace replayed"))
+
+    def replay(
+        program_key,
+        refresh_inputs,
+        *,
+        reset_batch=False,
+        device_feedback_enabled=False,
+        feedback_compatible=False,
+        page_table_changed=False,
+    ):
+        raise AssertionError("trace replayed")
+
+    trace_compiler.replay = replay
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
+    sampling_params = object()
 
     assert (
         traced.eager_executor.decode_forward(
             tokens=torch.zeros(1, 1),
             start_pos=torch.zeros(1),
             page_table=torch.zeros(1, 1),
+            sampling_params=sampling_params,
+            reset_batch=True,
+            read_from_device=False,
         )
         == "eager"
     )
-    assert calls == [("prepare", prepared), ("invoke", prepared), ("consume", "eager")]
+    assert calls == [
+        ("prepare", prepared, sampling_params, True),
+        ("invoke", prepared, False),
+        ("consume", "eager", False),
+    ]

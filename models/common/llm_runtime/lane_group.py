@@ -9,9 +9,32 @@ import copy
 import dataclasses
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterator, Sequence, TypedDict
 
 import torch
+
+from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
+
+
+class _LanePrefillKwargs(TypedDict):
+    tokens: torch.Tensor  # ↓ Core request
+    page_table: torch.Tensor
+    prompt_lens: torch.Tensor | None  # ↓ Sequence metadata
+    start_pos: torch.Tensor | None
+    empty_slots: Sequence[int] | None  # ↓ Lane routing
+    kv_cache: Any  # ↓ Borrowed resources
+    sampling_params: Any  # ↓ Sampling
+    execution: EagerExecutor | TracedExecutor | None  # ↓ Internal dispatch
+
+
+class _LaneDecodeKwargs(TypedDict):
+    tokens: torch.Tensor  # ↓ Core request
+    start_pos: torch.Tensor
+    page_table: torch.Tensor
+    kv_cache: Any  # ↓ Borrowed resources
+    sampling_params: Any  # ↓ Sampling
+    reset_batch: bool  # ↓ State transition
+    execution: EagerExecutor | TracedExecutor | None  # ↓ Internal dispatch
 
 
 class LaneGroupExecutor:
@@ -102,82 +125,220 @@ class LaneGroupExecutor:
 
         self._run_guarded(operation)
 
-    def allocate_kv_cache(self, *args: Any, **kwargs: Any) -> list[Any]:
-        return self._run_guarded(lambda: [lane.allocate_kv_cache(*args, **kwargs) for lane in self.lanes])
+    def allocate_kv_cache(
+        self,
+        kv_cache_shape: tuple[int, ...] | None = None,
+        dtype: torch.dtype | None = None,
+        num_layers: int | None = None,
+    ) -> list[Any]:
+        return self._run_guarded(
+            lambda: [
+                lane.allocate_kv_cache(
+                    kv_cache_shape=kv_cache_shape,
+                    dtype=dtype,
+                    num_layers=num_layers,
+                )
+                for lane in self.lanes
+            ]
+        )
 
-    def compile_prefill(self, *args: Any, **kwargs: Any) -> None:
-        bound = _bind_positional(args, kwargs, ("tokens", "page_table"), "compile_prefill")
-        self._run_guarded(lambda: self._prefill_fanout("compile_prefill", bound))
-
-    def compile_decode(self, *args: Any, **kwargs: Any) -> None:
-        bound = _bind_positional(args, kwargs, ("tokens", "start_pos", "page_table"), "compile_decode")
-        self._run_guarded(lambda: self._decode_fanout("compile_decode", bound, return_raw=False))
-
-    def warmup_model_prefill(self, *args: Any, **kwargs: Any) -> None:
-        self._run_guarded(lambda: self._replicate_warmup("warmup_model_prefill", args, kwargs))
-
-    def warmup_model_decode(self, *args: Any, **kwargs: Any) -> None:
+    def compile_prefill(
+        self,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        execution: Sequence[EagerExecutor | TracedExecutor] | None = None,  # ↓ Internal dispatch
+    ) -> None:
         def operation() -> None:
-            lane_kwargs = dict(kwargs)
-            if "max_batch_size" in lane_kwargs:
-                lane_kwargs["max_batch_size"] = self.per_lane_max_batch_size
-            self._replicate_warmup("warmup_model_decode", args, lane_kwargs)
+            lane_requests = self._prefill_lane_requests(
+                tokens,
+                page_table,
+                prompt_lens=prompt_lens,
+                start_pos=start_pos,
+                empty_slots=empty_slots,
+                kv_cache=kv_cache,
+                sampling_params=sampling_params,
+                execution=execution,
+            )
+            for lane_idx, _, lane_kwargs in lane_requests:
+                self.lanes[lane_idx].compile_prefill(**lane_kwargs)
 
         self._run_guarded(operation)
 
-    def prefill_forward(self, *args: Any, **kwargs: Any) -> Any:
+    def compile_decode(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        execution: Sequence[EagerExecutor | TracedExecutor] | None = None,  # ↓ Internal dispatch
+    ) -> None:
+        def operation() -> None:
+            for lane_idx, lane_kwargs in self._decode_lane_requests(
+                tokens,
+                start_pos,
+                page_table,
+                kv_cache=kv_cache,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+                execution=execution,
+            ):
+                self.lanes[lane_idx].compile_decode(**lane_kwargs)
+
+        self._run_guarded(operation)
+
+    def warmup_model_prefill(
+        self,
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
+    ) -> None:
+        def operation() -> None:
+            for lane_idx, lane in enumerate(self.lanes):
+                lane_kv_cache = None if kv_cache is None else self._lane_value(kv_cache, lane_idx, "KV caches")
+                lane.warmup_model_prefill(
+                    kv_cache=lane_kv_cache,
+                    can_sample_on_device=can_sample_on_device,
+                    enable_trace=enable_trace,
+                )
+
+        self._run_guarded(operation)
+
+    def warmup_model_decode(
+        self,
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        max_batch_size: int,  # ↓ Coverage dimensions
+        num_blocks: int,
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
+    ) -> None:
+        def operation() -> None:
+            for lane_idx, lane in enumerate(self.lanes):
+                lane_kv_cache = None if kv_cache is None else self._lane_value(kv_cache, lane_idx, "KV caches")
+                lane.warmup_model_decode(
+                    kv_cache=lane_kv_cache,
+                    max_batch_size=self.per_lane_max_batch_size,
+                    num_blocks=num_blocks,
+                    can_sample_on_device=can_sample_on_device,
+                    enable_trace=enable_trace,
+                )
+
+        self._run_guarded(operation)
+
+    def prefill_forward(
+        self,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        execution: Sequence[EagerExecutor | TracedExecutor] | None = None,  # ↓ Internal dispatch
+    ) -> Any:
         """Fan out prefill rows by slot and restore their source-row order."""
 
-        bound = _bind_positional(args, kwargs, ("tokens", "page_table"), "prefill_forward")
-        return self._run_guarded(lambda: self._prefill_fanout("prefill_forward", bound))
+        def operation() -> Any:
+            lane_results = []
+            for lane_idx, rows, lane_kwargs in self._prefill_lane_requests(
+                tokens,
+                page_table,
+                prompt_lens=prompt_lens,
+                start_pos=start_pos,
+                empty_slots=empty_slots,
+                kv_cache=kv_cache,
+                sampling_params=sampling_params,
+                execution=execution,
+            ):
+                result = self.lanes[lane_idx].prefill_forward(**lane_kwargs)
+                lane_results.append((rows, result))
+            return _aggregate_prefill_outputs(lane_results, int(tokens.shape[0]))
 
-    def can_trace_prefill(self, *args: Any, **kwargs: Any) -> bool:
+        return self._run_guarded(operation)
+
+    def can_trace_prefill(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+    ) -> bool:
         """Return true only when every participating lane can use prefill trace."""
 
-        bound = _bind_positional(args, kwargs, ("tokens", "page_table"), "can_trace_prefill")
-
         def operation() -> bool:
-            tokens = bound.get("tokens")
             if not isinstance(tokens, torch.Tensor) or tokens.ndim < 1:
                 raise TypeError("prefill tokens must be a torch.Tensor with a batch dimension")
             batch_size = int(tokens.shape[0])
-            empty_slots = bound.get("empty_slots")
-            if empty_slots is None:
-                empty_slots = list(range(batch_size))
-            else:
-                empty_slots = list(empty_slots)
-            if len(empty_slots) != batch_size:
-                raise ValueError(f"empty_slots length {len(empty_slots)} must match prefill batch {batch_size}")
+            slots = list(range(batch_size)) if empty_slots is None else list(empty_slots)
+            if len(slots) != batch_size:
+                raise ValueError(f"empty_slots length {len(slots)} must match prefill batch {batch_size}")
 
-            for lane_idx, rows, _ in self._prefill_lane_groups(empty_slots):
-                lane_kwargs = {"tokens": _slice_rows(tokens, rows)}
-                for key in ("prompt_lens", "start_pos"):
-                    if bound.get(key) is not None:
-                        lane_kwargs[key] = _slice_rows(bound[key], rows)
-                if not self.lanes[lane_idx].can_trace_prefill(**lane_kwargs):
+            for lane_idx, rows, _ in self._prefill_lane_groups(slots):
+                if not self.lanes[lane_idx].can_trace_prefill(
+                    tokens=_slice_rows(tokens, rows),
+                    prompt_lens=None if prompt_lens is None else _slice_rows(prompt_lens, rows),
+                    start_pos=None if start_pos is None else _slice_rows(start_pos, rows),
+                ):
                     return False
             return True
 
         return self._run_guarded(operation)
 
-    def decode_forward(self, *args: Any, **kwargs: Any) -> Any:
+    def decode_forward(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        read_from_device: bool = True,  # ↓ Output policy
+        execution: Sequence[EagerExecutor | TracedExecutor] | None = None,  # ↓ Internal dispatch
+    ) -> Any:
         """Split one decode batch into contiguous lane calls and aggregate it."""
 
-        bound = _bind_positional(args, kwargs, ("tokens", "start_pos", "page_table"), "decode_forward")
-        return self._run_guarded(
-            lambda: self._decode_fanout(
-                "decode_forward",
-                bound,
-                return_raw=not bound.get("read_from_device", True),
-            )
-        )
-
-    def read_decode_output(self, lane_outputs: Sequence[Any], async_read: bool = False) -> Any:
         def operation() -> Any:
-            self._validate_lane_values(lane_outputs, "decode outputs")
+            lane_outputs = []
+            for lane_idx, lane_kwargs in self._decode_lane_requests(
+                tokens,
+                start_pos,
+                page_table,
+                kv_cache=kv_cache,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+                execution=execution,
+            ):
+                lane_outputs.append(
+                    self.lanes[lane_idx].decode_forward(
+                        read_from_device=read_from_device,
+                        **lane_kwargs,
+                    )
+                )
+            if not read_from_device:
+                return lane_outputs
+            return _aggregate_contiguous_outputs(lane_outputs)
+
+        return self._run_guarded(operation)
+
+    def read_decode_output(self, tt_out: Any, *, async_read: bool = False) -> Any:
+        def operation() -> Any:
+            self._validate_lane_values(tt_out, "decode outputs")
             results = self._run_concurrently(
                 lambda lane_idx: self.lanes[lane_idx].read_decode_output(
-                    lane_outputs[lane_idx],
+                    tt_out=tt_out[lane_idx],
                     async_read=async_read,
                 )
             )
@@ -201,12 +362,12 @@ class LaneGroupExecutor:
 
         return self._run_guarded(operation)
 
-    def process_decode_output_host(self, lane_outputs: Sequence[Any], is_tokens: bool = False) -> Any:
+    def process_decode_output_host(self, tt_out: Any, *, is_tokens: bool = False) -> Any:
         def operation() -> Any:
-            self._validate_lane_values(lane_outputs, "host decode outputs")
+            self._validate_lane_values(tt_out, "host decode outputs")
             results = self._run_concurrently(
                 lambda lane_idx: self.lanes[lane_idx].process_decode_output_host(
-                    lane_outputs[lane_idx],
+                    tt_out=tt_out[lane_idx],
                     is_tokens=is_tokens,
                 )
             )
@@ -225,13 +386,18 @@ class LaneGroupExecutor:
 
     # Private implementation
 
-    def _prefill_fanout(self, method_name: str, kwargs: dict[str, Any]) -> Any:
-        lane_results = self._prefill_lane_results(method_name, kwargs)
-        return _aggregate_prefill_outputs(lane_results, int(kwargs["tokens"].shape[0]))
-
-    def _prefill_lane_results(self, method_name: str, kwargs: dict[str, Any]) -> list[tuple[list[int], Any]]:
-        tokens = kwargs.get("tokens")
-        page_table = kwargs.get("page_table")
+    def _prefill_lane_requests(
+        self,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        prompt_lens: torch.Tensor | None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None,
+        empty_slots: Sequence[int] | None,  # ↓ Lane routing
+        kv_cache: Any,  # ↓ Borrowed resources
+        sampling_params: Any,  # ↓ Sampling
+        execution: Sequence[EagerExecutor | TracedExecutor] | None,  # ↓ Internal dispatch
+    ) -> Iterator[tuple[int, list[int], _LanePrefillKwargs]]:
         if not isinstance(tokens, torch.Tensor) or tokens.ndim < 1:
             raise TypeError("prefill tokens must be a torch.Tensor with a batch dimension")
         if not isinstance(page_table, torch.Tensor) or page_table.ndim < 1:
@@ -240,38 +406,41 @@ class LaneGroupExecutor:
         if int(page_table.shape[0]) != batch_size:
             raise ValueError("prefill tokens and page_table batch sizes must match")
 
-        empty_slots = kwargs.get("empty_slots")
-        if empty_slots is None:
-            empty_slots = list(range(batch_size))
-        else:
-            empty_slots = list(empty_slots)
-        if len(empty_slots) != batch_size:
-            raise ValueError(f"empty_slots length {len(empty_slots)} must match prefill batch {batch_size}")
+        slots = list(range(batch_size)) if empty_slots is None else list(empty_slots)
+        if len(slots) != batch_size:
+            raise ValueError(f"empty_slots length {len(slots)} must match prefill batch {batch_size}")
 
-        lane_results: list[tuple[list[int], Any]] = []
-        for lane_idx, rows, local_slots in self._prefill_lane_groups(empty_slots):
-            lane_kwargs = dict(kwargs)
-            lane_kwargs["tokens"] = _slice_rows(tokens, rows)
-            lane_kwargs["page_table"] = _slice_rows(page_table, rows)
-            lane_kwargs["empty_slots"] = local_slots
-            for key in ("prompt_lens", "start_pos"):
-                if lane_kwargs.get(key) is not None:
-                    lane_kwargs[key] = _slice_rows(lane_kwargs[key], rows)
-            if lane_kwargs.get("sampling_params") is not None:
-                lane_kwargs["sampling_params"] = _slice_sampling_params(lane_kwargs["sampling_params"], rows)
-            if lane_kwargs.get("kv_cache") is not None:
-                lane_kwargs["kv_cache"] = self._lane_value(lane_kwargs["kv_cache"], lane_idx, "KV caches")
-            if lane_kwargs.get("execution") is not None:
-                lane_kwargs["execution"] = self._lane_value(lane_kwargs["execution"], lane_idx, "executions")
-            result = getattr(self.lanes[lane_idx], method_name)(**lane_kwargs)
-            lane_results.append((rows, result))
+        for lane_idx, rows, local_slots in self._prefill_lane_groups(slots):
+            lane_tokens = _slice_rows(tokens, rows)
+            lane_page_table = _slice_rows(page_table, rows)
+            lane_prompt_lens = None if prompt_lens is None else _slice_rows(prompt_lens, rows)
+            lane_start_pos = None if start_pos is None else _slice_rows(start_pos, rows)
+            lane_sampling_params = None if sampling_params is None else _slice_sampling_params(sampling_params, rows)
+            lane_kv_cache = None if kv_cache is None else self._lane_value(kv_cache, lane_idx, "KV caches")
+            lane_execution = None if execution is None else self._lane_value(execution, lane_idx, "executions")
+            lane_kwargs: _LanePrefillKwargs = {
+                "tokens": lane_tokens,
+                "page_table": lane_page_table,
+                "prompt_lens": lane_prompt_lens,
+                "start_pos": lane_start_pos,
+                "empty_slots": local_slots,
+                "kv_cache": lane_kv_cache,
+                "sampling_params": lane_sampling_params,
+                "execution": lane_execution,
+            }
+            yield lane_idx, rows, lane_kwargs
 
-        return lane_results
-
-    def _decode_fanout(self, method_name: str, kwargs: dict[str, Any], *, return_raw: bool) -> Any:
-        tokens = kwargs.get("tokens")
-        start_pos = kwargs.get("start_pos")
-        page_table = kwargs.get("page_table")
+    def _decode_lane_requests(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        sampling_params: Any,  # ↓ Sampling
+        reset_batch: bool,  # ↓ State transition
+        execution: Sequence[EagerExecutor | TracedExecutor] | None,  # ↓ Internal dispatch
+    ) -> Iterator[tuple[int, _LaneDecodeKwargs]]:
         for name, value in (("tokens", tokens), ("start_pos", start_pos), ("page_table", page_table)):
             if not isinstance(value, torch.Tensor) or value.ndim < 1:
                 raise TypeError(f"decode {name} must be a torch.Tensor with a batch dimension")
@@ -280,34 +449,27 @@ class LaneGroupExecutor:
                     f"DP decode expects fixed global batch {self.max_batch_size}; " f"{name} has batch {value.shape[0]}"
                 )
 
-        lane_outputs = []
         for lane_idx in range(self.tt_data_parallel):
             start = lane_idx * self.per_lane_max_batch_size
             end = start + self.per_lane_max_batch_size
-            lane_kwargs = dict(kwargs)
-            lane_kwargs["tokens"] = tokens[start:end]
-            lane_kwargs["start_pos"] = start_pos[start:end]
-            lane_kwargs["page_table"] = page_table[start:end]
-            if lane_kwargs.get("sampling_params") is not None:
-                lane_kwargs["sampling_params"] = _slice_contiguous_sampling_params(
-                    lane_kwargs["sampling_params"], start, end
-                )
-            if lane_kwargs.get("kv_cache") is not None:
-                lane_kwargs["kv_cache"] = self._lane_value(lane_kwargs["kv_cache"], lane_idx, "KV caches")
-            if lane_kwargs.get("execution") is not None:
-                lane_kwargs["execution"] = self._lane_value(lane_kwargs["execution"], lane_idx, "executions")
-            lane_outputs.append(getattr(self.lanes[lane_idx], method_name)(**lane_kwargs))
-
-        if return_raw:
-            return lane_outputs
-        return _aggregate_contiguous_outputs(lane_outputs)
-
-    def _replicate_warmup(self, method_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-        for lane_idx, lane in enumerate(self.lanes):
-            lane_kwargs = dict(kwargs)
-            if lane_kwargs.get("kv_cache") is not None:
-                lane_kwargs["kv_cache"] = self._lane_value(lane_kwargs["kv_cache"], lane_idx, "KV caches")
-            getattr(lane, method_name)(*args, **lane_kwargs)
+            lane_tokens = tokens[start:end]
+            lane_start_pos = start_pos[start:end]
+            lane_page_table = page_table[start:end]
+            lane_sampling_params = (
+                None if sampling_params is None else _slice_contiguous_sampling_params(sampling_params, start, end)
+            )
+            lane_kv_cache = None if kv_cache is None else self._lane_value(kv_cache, lane_idx, "KV caches")
+            lane_execution = None if execution is None else self._lane_value(execution, lane_idx, "executions")
+            lane_kwargs: _LaneDecodeKwargs = {
+                "tokens": lane_tokens,
+                "start_pos": lane_start_pos,
+                "page_table": lane_page_table,
+                "kv_cache": lane_kv_cache,
+                "sampling_params": lane_sampling_params,
+                "reset_batch": reset_batch,
+                "execution": lane_execution,
+            }
+            yield lane_idx, lane_kwargs
 
     def _prefill_lane_groups(self, empty_slots: list[Any]):
         groups: list[list[tuple[int, int]]] = [[] for _ in self.lanes]
@@ -418,22 +580,6 @@ class LaneGroupExecutor:
 
             self._cleaned_up = all(self._lane_cleanup_complete) and self._pool_cleanup_complete
             return failures
-
-
-def _bind_positional(
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    names: tuple[str, ...],
-    operation: str,
-) -> dict[str, Any]:
-    if len(args) > len(names):
-        raise TypeError(f"{operation} accepts at most {len(names)} positional arguments")
-    bound = dict(kwargs)
-    for name, value in zip(names, args):
-        if name in bound:
-            raise TypeError(f"{operation} got multiple values for argument {name!r}")
-        bound[name] = value
-    return bound
 
 
 def _slice_rows(value: Any, rows: list[int]) -> Any:

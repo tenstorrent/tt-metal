@@ -17,7 +17,7 @@ class FakeTensor:
 class FakeLogProbsCalculator:
     instances = []
 
-    def __init__(self, *args):
+    def __init__(self, *_args):  # External construction hook; intentionally generic.
         self.buffer = FakeTensor(f"log-probs-{len(self.instances)}")
         self.instances.append(self)
 
@@ -59,7 +59,8 @@ def test_sampling_release_is_idempotent_preserves_borrowed_and_allows_reload(mon
     deallocated = []
     allocations = []
 
-    def from_torch(source, **kwargs):
+    # ttnn.from_torch is overloaded; retain backend-specific keyword absorption.
+    def from_torch(source, **_kwargs):
         tensor = FakeTensor(f"{source}-{len(allocations)}")
         allocations.append(tensor)
         return tensor
@@ -119,7 +120,7 @@ def test_partial_load_failure_preserves_primary_and_releases_before_reload(monke
     fail_allocation = True
     fail_cleanup = True
 
-    def from_torch(source, **kwargs):
+    def from_torch(source, **_kwargs):
         if source == "seeds" and fail_allocation:
             raise allocation_error
         tensor = FakeTensor(f"{source}-{len(allocations)}")
@@ -178,7 +179,7 @@ def test_sampling_release_is_best_effort_and_retries_only_failed_buffer(monkeypa
     monkeypatch.setattr(
         sampling_1d.ttnn,
         "from_torch",
-        lambda source, **kwargs: FakeTensor(source),
+        lambda source, **_kwargs: FakeTensor(source),
     )
 
     from models.common import utils as common_utils

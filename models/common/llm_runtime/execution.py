@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
+
+import torch
 
 from models.common.llm_runtime.decode import DecodeRuntime
 from models.common.llm_runtime.decode import InvocationResult as DecodeInvocationResult
@@ -37,45 +40,117 @@ class EagerExecutor:
 
     # Public API
 
-    def compile_prefill(self, **kwargs: Any) -> None:
+    def compile_prefill(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        page_table: torch.Tensor,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        sampling_params: Any = None,  # ↓ Sampling
+    ) -> None:
         """Prepare and compile every eager program needed by one prefill call."""
 
-        kwargs.pop("kv_cache", None)
-        for prepared in self._prepare_prefill(**kwargs):
+        for prepared in self._prepare_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            sampling_params=sampling_params,
+        ):
             self._compile_prefill(prepared)
 
-    def prefill_forward(self, **kwargs: Any):
+    def prefill_forward(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        page_table: torch.Tensor,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        sampling_params: Any = None,  # ↓ Sampling
+    ):
         """Prepare, execute, and assemble one eager prefill call."""
 
-        prepared = self._prepare_prefill(**kwargs)
+        prepared = self._prepare_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            sampling_params=sampling_params,
+        )
         results = tuple((request, self._execute_prefill(request)) for request in prepared)
         return self.prefill.assemble(
             results,
-            batch_size=int(kwargs["tokens"].shape[0]),
-            sampling_params=kwargs.get("sampling_params"),
+            batch_size=int(tokens.shape[0]),
+            sampling_params=sampling_params,
         )
 
-    def compile_decode(self, **kwargs: Any) -> None:
+    def compile_decode(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+    ) -> None:
         """Prepare and compile the eager program needed by one decode call."""
 
-        kwargs.pop("kv_cache", None)
-        self._compile_decode(self._prepare_decode(**kwargs))
+        self._compile_decode(
+            self._prepare_decode(
+                tokens=tokens,
+                start_pos=start_pos,
+                page_table=page_table,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+            )
+        )
 
     def decode_forward(
         self,
         *,
-        read_from_device: bool = True,
-        **kwargs: Any,
+        tokens: torch.Tensor,  # ↓ Core request
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        read_from_device: bool = True,  # ↓ Output policy
     ):
         """Prepare and execute one eager decode call."""
 
-        prepared = self._prepare_decode(**kwargs)
+        prepared = self._prepare_decode(
+            tokens=tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            sampling_params=sampling_params,
+            reset_batch=reset_batch,
+        )
         return self._execute_decode(prepared, read_from_device=read_from_device)
 
     # Private implementation
 
-    def _prepare_prefill(self, **kwargs: Any):
-        return self.prefill.prepare(**kwargs)
+    def _prepare_prefill(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        page_table: torch.Tensor,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        sampling_params: Any = None,  # ↓ Sampling
+    ):
+        return self.prefill.prepare(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            sampling_params=sampling_params,
+        )
 
     def _compile_prefill(self, prepared: Any):
         programs = []
@@ -94,8 +169,22 @@ class EagerExecutor:
         self._require_ready_after_trace_gate(prepared.program_signatures)
         return self.prefill.invoke(prepared)
 
-    def _prepare_decode(self, **kwargs: Any):
-        return self.decode.prepare(**kwargs)
+    def _prepare_decode(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+    ):
+        return self.decode.prepare(
+            tokens=tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            sampling_params=sampling_params,
+            reset_batch=reset_batch,
+        )
 
     def _compile_decode(self, prepared: Any):
         return self.program_compiler.compile(
@@ -143,39 +232,95 @@ class TracedExecutor:
 
     # Public API
 
-    def compile_prefill(self, **kwargs: Any) -> None:
+    def compile_prefill(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        page_table: torch.Tensor,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        sampling_params: Any = None,  # ↓ Sampling
+    ) -> None:
         """Compile eager prefill programs and register their trace plans."""
 
-        kwargs.pop("kv_cache", None)
-        for prepared in self.eager_executor._prepare_prefill(**kwargs):
+        for prepared in self.eager_executor._prepare_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            sampling_params=sampling_params,
+        ):
             self._compile_prefill(prepared)
 
-    def prefill_forward(self, **kwargs: Any):
+    def prefill_forward(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        page_table: torch.Tensor,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        sampling_params: Any = None,  # ↓ Sampling
+    ):
         """Replay traced prefill and assemble the results."""
 
-        prepared = self.eager_executor._prepare_prefill(**kwargs)
+        prepared = self.eager_executor._prepare_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            sampling_params=sampling_params,
+        )
         results = tuple((request, self._execute_prefill(request)) for request in prepared)
         return self.eager_executor.prefill.assemble(
             results,
-            batch_size=int(kwargs["tokens"].shape[0]),
-            sampling_params=kwargs.get("sampling_params"),
+            batch_size=int(tokens.shape[0]),
+            sampling_params=sampling_params,
         )
 
-    def compile_decode(self, **kwargs: Any) -> None:
+    def compile_decode(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+    ) -> None:
         """Compile the eager decode program and register its trace plan."""
 
-        kwargs.pop("kv_cache", None)
-        self._compile_decode(self.eager_executor._prepare_decode(**kwargs))
+        self._compile_decode(
+            self.eager_executor._prepare_decode(
+                tokens=tokens,
+                start_pos=start_pos,
+                page_table=page_table,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+            )
+        )
 
     def decode_forward(
         self,
         *,
-        read_from_device: bool = True,
-        **kwargs: Any,
+        tokens: torch.Tensor,  # ↓ Core request
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        read_from_device: bool = True,  # ↓ Output policy
     ):
         """Replay one traced decode step and consume its output."""
 
-        prepared = self.eager_executor._prepare_decode(**kwargs)
+        prepared = self.eager_executor._prepare_decode(
+            tokens=tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            sampling_params=sampling_params,
+            reset_batch=reset_batch,
+        )
         return self._execute_decode(
             prepared,
             read_from_device=read_from_device,

@@ -24,23 +24,74 @@ class FakeExecutionTarget:
         self.decode_outputs = list(decode_outputs)
         self.calls = []
 
+    def _record(self, method_name, arguments):
+        self.calls.append(
+            (
+                method_name,
+                {name: value for name, value in arguments.items() if name != "self"},
+            )
+        )
+
     @property
     def _engine(self):
         raise AssertionError("execution helpers must not inspect a private wrapped engine")
 
-    def compile_prefill(self, **kwargs):
-        self.calls.append(("compile_prefill", kwargs))
+    def compile_prefill(
+        self,
+        *,
+        tokens,  # ↓ Core request
+        page_table,
+        prompt_lens=None,  # ↓ Sequence metadata
+        start_pos=None,
+        empty_slots=None,  # ↓ Lane routing
+        kv_cache=None,  # ↓ Borrowed resources
+        sampling_params=None,  # ↓ Sampling
+        execution=None,  # ↓ Internal dispatch
+    ):
+        self._record("compile_prefill", locals())
         return self.compile_prefill_output
 
-    def compile_decode(self, **kwargs):
-        self.calls.append(("compile_decode", kwargs))
+    def compile_decode(
+        self,
+        *,
+        tokens,  # ↓ Core request
+        start_pos,
+        page_table,
+        kv_cache=None,  # ↓ Borrowed resources
+        sampling_params=None,  # ↓ Sampling
+        reset_batch=False,  # ↓ State transition
+        execution=None,  # ↓ Internal dispatch
+    ):
+        self._record("compile_decode", locals())
 
-    def prefill_forward(self, *args, **kwargs):
-        self.calls.append(("prefill_forward", kwargs))
+    def prefill_forward(
+        self,
+        tokens,
+        page_table,
+        *,
+        prompt_lens=None,  # ↓ Sequence metadata
+        start_pos=None,
+        empty_slots=None,  # ↓ Lane routing
+        kv_cache=None,  # ↓ Borrowed resources
+        sampling_params=None,  # ↓ Sampling
+        execution=None,  # ↓ Internal dispatch
+    ):
+        self._record("prefill_forward", locals())
         return self.prefill_output
 
-    def decode_forward(self, *args, **kwargs):
-        self.calls.append(("decode_forward", kwargs))
+    def decode_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table,
+        *,
+        kv_cache=None,  # ↓ Borrowed resources
+        sampling_params=None,  # ↓ Sampling
+        reset_batch=False,  # ↓ State transition
+        read_from_device=True,  # ↓ Output policy
+        execution=None,  # ↓ Internal dispatch
+    ):
+        self._record("decode_forward", locals())
         return self.decode_outputs.pop(0)
 
 
@@ -110,17 +161,17 @@ class PublicReadbackTarget(FakeExecutionTarget):
         self.mesh_device = SimpleNamespace(shape=(1, 1))
         self.next_event = 0
 
-    def read_decode_output(self, output, async_read=False):
+    def read_decode_output(self, tt_out, *, async_read=False):
         assert async_read
         event = self.next_event
         self.next_event += 1
         self.calls.append(("read_decode_output", {"event": event}))
-        return output, [event]
+        return tt_out, [event]
 
-    def process_decode_output_host(self, output, is_tokens=False):
+    def process_decode_output_host(self, tt_out, *, is_tokens=False):
         assert is_tokens
         self.calls.append(("process_decode_output_host", {}))
-        return output
+        return tt_out
 
 
 def test_perf_benchmark_uses_public_async_readback_without_trace_introspection(monkeypatch):
@@ -168,7 +219,7 @@ def test_perf_benchmark_does_not_reprocess_blocking_sampled_output(monkeypatch):
 
 
 def test_loop_policy_is_not_exported_from_production_executor():
-    from models.common.llm_runtime import executor as production_executor
+    from models.common.llm_runtime import execution as production_executor
 
     for name in ("TeacherForceResult", "PerfBenchmarkResult", "run_teacher_forcing", "run_perf_benchmark"):
         assert not hasattr(production_executor, name)

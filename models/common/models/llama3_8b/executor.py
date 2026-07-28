@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 
@@ -251,40 +251,65 @@ class Llama3Executor:
     def compile_prefill(
         self,
         *,
-        execution: EagerExecutor | TracedExecutor | None = None,
-        **kwargs: Any,
+        tokens: torch.Tensor,  # ↓ Core request
+        page_table: torch.Tensor,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
     ) -> None:
         """Compile prefill on the supplied eager or traced execution target."""
 
         self._ensure_active()
-        self._validate_bound_cache(kwargs.get("kv_cache"))
-        self._ensure_sampling_for(kwargs.get("sampling_params"))
-        return (execution or self._prefill_execution).compile_prefill(**kwargs)
+        self._validate_bound_cache(kv_cache)
+        self._ensure_sampling_for(sampling_params)
+        return (execution or self._prefill_execution).compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            sampling_params=sampling_params,
+        )
 
     def compile_decode(
         self,
         *,
-        execution: EagerExecutor | TracedExecutor | None = None,
-        **kwargs: Any,
+        tokens: torch.Tensor,  # ↓ Core request
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
     ) -> None:
         """Compile decode on the supplied eager or traced execution target."""
 
         self._ensure_active()
-        self._validate_bound_cache(kwargs.get("kv_cache"))
-        self._ensure_sampling_for(kwargs.get("sampling_params"))
-        return (execution or self._decode_execution).compile_decode(**kwargs)
+        self._validate_bound_cache(kv_cache)
+        self._ensure_sampling_for(sampling_params)
+        return (execution or self._decode_execution).compile_decode(
+            tokens=tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            sampling_params=sampling_params,
+            reset_batch=reset_batch,
+        )
 
     def prefill_forward(
         self,
-        tokens,
-        page_table,
-        kv_cache=None,
-        prompt_lens=None,
-        empty_slots=None,
-        sampling_params=None,
-        start_pos=None,
-        execution: EagerExecutor | TracedExecutor | None = None,
-    ):
+        tokens: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
+    ) -> Any:
         """Validate ownership and execute one prefill call."""
 
         self._ensure_active()
@@ -294,22 +319,23 @@ class Llama3Executor:
             tokens=tokens,
             page_table=page_table,
             prompt_lens=prompt_lens,
+            start_pos=start_pos,
             empty_slots=empty_slots,
             sampling_params=sampling_params,
-            start_pos=start_pos,
         )
 
     def decode_forward(
         self,
-        tokens,
-        start_pos,
-        page_table,
-        kv_cache=None,
-        read_from_device=True,
-        sampling_params=None,
-        reset_batch=False,
-        execution: EagerExecutor | TracedExecutor | None = None,
-    ):
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        read_from_device: bool = True,  # ↓ Output policy
+        execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
+    ) -> Any:
         """Validate ownership and execute one decode call."""
 
         self._ensure_active()
@@ -327,10 +353,10 @@ class Llama3Executor:
     def can_trace_prefill(
         self,
         *,
-        tokens,
-        prompt_lens=None,
-        start_pos=None,
-        **_: Any,
+        tokens: torch.Tensor,  # ↓ Core request
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
     ) -> bool:
         """Classify whether the prefill request can use this lane's trace."""
 
@@ -342,21 +368,45 @@ class Llama3Executor:
             start_pos=start_pos,
         )
 
-    def read_decode_output(self, tt_out: Any, async_read: bool = False) -> Any:
+    def read_decode_output(self, tt_out: Any, *, async_read: bool = False) -> Any:
         self._ensure_active()
-        return self.decode_runtime.read_decode_output(tt_out, async_read=async_read)
+        return self.decode_runtime.read_decode_output(tt_out=tt_out, async_read=async_read)
 
-    def process_decode_output_host(self, tt_out: Any, is_tokens: bool = False):
+    def process_decode_output_host(self, tt_out: Any, *, is_tokens: bool = False) -> tuple[Any, Any]:
         self._ensure_active()
-        return self.decode_runtime.process_decode_output_host(tt_out, is_tokens=is_tokens)
+        return self.decode_runtime.process_decode_output_host(tt_out=tt_out, is_tokens=is_tokens)
 
-    def warmup_model_prefill(self, *args: Any, **kwargs: Any) -> None:
+    def warmup_model_prefill(
+        self,
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
+    ) -> None:
         self._ensure_active()
-        return self.warmup.warmup_prefill(*args, **kwargs)
+        return self.warmup.warmup_prefill(
+            kv_cache=kv_cache,
+            can_sample_on_device=can_sample_on_device,
+            enable_trace=enable_trace,
+        )
 
-    def warmup_model_decode(self, *args: Any, **kwargs: Any) -> None:
+    def warmup_model_decode(
+        self,
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        max_batch_size: int,  # ↓ Coverage dimensions
+        num_blocks: int,
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
+    ) -> None:
         self._ensure_active()
-        return self.warmup.warmup_decode(*args, **kwargs)
+        return self.warmup.warmup_decode(
+            kv_cache=kv_cache,
+            max_batch_size=max_batch_size,
+            num_blocks=num_blocks,
+            can_sample_on_device=can_sample_on_device,
+            enable_trace=enable_trace,
+        )
 
     def cleanup(self) -> None:
         """Release runtime, trace, program, sampling, and KV resources in order."""

@@ -57,8 +57,21 @@ class FakeModel:
     def embed_prefill(self, tokens):
         return tokens
 
-    def prefill_forward(self, hidden, rot_mats, **kwargs):
-        self.chunk_starts.append(kwargs["chunk_start_idx"])
+    def prefill_forward(
+        self,
+        x_embed,
+        rot_mats,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        batch_size=1,
+        chunk_start_idx_tensor=None,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        self.chunk_starts.append(chunk_start_idx)
         return SimpleNamespace(shape=(1, 1, 1, self.vocab_size))
 
 
@@ -125,11 +138,23 @@ def _plan(*, prompt_length, cached_tokens=0, token_width=None, page_width=256, s
 def test_trace_applicability_classification_does_not_allocate_a_prefill_plan(monkeypatch):
     runtime = _runtime()
     tokens, _, prompt_lens, start_pos = _inputs(prompt_length=80, rows=2)
-    monkeypatch.setattr(
-        prefill_module,
-        "_plan_prefill_requests",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("planned")),
-    )
+
+    def fail_if_planned(
+        *,
+        tokens,
+        page_table,
+        prompt_lens,
+        empty_slots,
+        start_pos,
+        block_size,
+        max_batch_size,
+        max_prefill_chunk_size,
+        max_actual_page_table_width=None,
+        canonical_page_table_width=None,
+    ):
+        raise AssertionError("planned")
+
+    monkeypatch.setattr(prefill_module, "_plan_prefill_requests", fail_if_planned)
 
     assert runtime.can_trace(tokens=tokens, prompt_lens=prompt_lens, start_pos=start_pos)
     assert not runtime.can_trace(
@@ -212,11 +237,20 @@ def test_trace_finish_reuses_trace_owned_sample_output(monkeypatch):
         sampled_output="persistent-output",
     )
     seen = []
-    monkeypatch.setattr(
-        runtime,
-        "_finish_regular_prefill",
-        lambda *args, **kwargs: seen.append((args, kwargs)) or "tokens",
-    )
+
+    def finish_regular_prefill(
+        prepared,
+        hidden,
+        kpt,
+        position_inputs,
+        *,
+        sampled_output=None,
+        owned=None,
+    ):
+        seen.append(((prepared, hidden, kpt, position_inputs), {"sampled_output": sampled_output, "owned": owned}))
+        return "tokens"
+
+    monkeypatch.setattr(runtime, "_finish_regular_prefill", finish_regular_prefill)
 
     result = runtime.finish_trace(prepared, "hidden", persistent)
 
@@ -242,6 +276,7 @@ def test_trace_refresh_skips_unchanged_position_and_sampling_inputs(monkeypatch)
         kpt_signature=[(k, p, temperature)],
     )
     monkeypatch.setattr(prefill_module.ttnn, "ReplicateTensorToMesh", lambda mesh: "mapper")
+    # ttnn.from_torch is an overloaded backend API; this test only distinguishes source dtype.
     monkeypatch.setattr(
         prefill_module.ttnn,
         "from_torch",
@@ -253,8 +288,15 @@ def test_trace_refresh_skips_unchanged_position_and_sampling_inputs(monkeypatch)
         "copy_host_to_device_tensor",
         lambda host, device: copied.append((host, device)),
     )
-    monkeypatch.setattr(runtime, "_prepare_position_inputs_host", lambda *args: pytest.fail("position refreshed"))
-    monkeypatch.setattr(runtime, "_refresh_kpt", lambda *args, **kwargs: pytest.fail("sampling refreshed"))
+
+    def fail_position_refresh(relative_last, sequence_length):
+        pytest.fail("position refreshed")
+
+    def fail_sampling_refresh(device_kpt, sampling_params, batch_size, force_topk):
+        pytest.fail("sampling refreshed")
+
+    monkeypatch.setattr(runtime, "_prepare_position_inputs_host", fail_position_refresh)
+    monkeypatch.setattr(runtime, "_refresh_kpt", fail_sampling_refresh)
 
     runtime.refresh_trace(prepared, persistent)
 
@@ -273,13 +315,17 @@ def test_eager_sampled_prefill_uses_preallocated_output(monkeypatch):
     monkeypatch.setattr(
         runtime,
         "_stage_prefill_step",
-        lambda *args: events.append("stage") or ("device-inputs", "positions"),
+        lambda prepared, chunk, final_relative_last: events.append("stage") or ("device-inputs", "positions"),
     )
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: events.append("kpt") or "kpt")
+    monkeypatch.setattr(
+        runtime,
+        "_make_device_kpt",
+        lambda sampling_params, batch_size, force_topk: events.append("kpt") or "kpt",
+    )
     monkeypatch.setattr(
         runtime,
         "_execute_prefill_step",
-        lambda *args: events.append("execute") or "hidden",
+        lambda prepared, chunk, device_inputs, position_inputs: events.append("execute") or "hidden",
     )
     monkeypatch.setattr(
         runtime,
@@ -287,11 +333,26 @@ def test_eager_sampled_prefill_uses_preallocated_output(monkeypatch):
         lambda batch_size: events.append("sample-output") or "sample-output",
     )
     seen = []
-    monkeypatch.setattr(
-        runtime,
-        "_finish_regular_prefill",
-        lambda *args, **kwargs: events.append("finish") or seen.append((args, kwargs)) or kwargs["sampled_output"],
-    )
+
+    def finish_regular_prefill(
+        prepared,
+        hidden,
+        kpt,
+        position_inputs,
+        *,
+        sampled_output=None,
+        owned=None,
+    ):
+        events.append("finish")
+        seen.append(
+            (
+                (prepared, hidden, kpt, position_inputs),
+                {"sampled_output": sampled_output, "owned": owned},
+            )
+        )
+        return sampled_output
+
+    monkeypatch.setattr(runtime, "_finish_regular_prefill", finish_regular_prefill)
 
     result = runtime._run_prefill_sequence(prepared)
 
@@ -305,6 +366,7 @@ def test_eager_sampled_prefill_uses_preallocated_output(monkeypatch):
 def test_sampling_output_is_allocated_before_capture_with_device_shape(monkeypatch):
     runtime = _runtime()
     seen = []
+    # ttnn.from_torch is overloaded; allocation options are the behavior under test.
     monkeypatch.setattr(
         prefill_module.ttnn,
         "from_torch",
@@ -533,9 +595,19 @@ def test_static_q128_single_topk_uses_tile_output_and_exact_host_row(monkeypatch
         sampling_params=sampling,
     )[0]
     seen = []
-    runtime.config.model.post_process_prefill_output = lambda *args, **kwargs: seen.append((args, kwargs)) or "logits"
+
+    def post_process_prefill_output(
+        hidden_states,
+        last_token_idx,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        seen.append(((hidden_states, last_token_idx), {}))
+        return "logits"
+
+    runtime.config.model.post_process_prefill_output = post_process_prefill_output
     monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: logits)
-    monkeypatch.setattr(runtime, "_sample_device", lambda logits, kpt, output: output)
+    monkeypatch.setattr(runtime, "_sample_device", lambda logits, kpt, sampled_output=None: sampled_output)
 
     assert runtime._sampling_output_rows(prepared) == 32
     assert (
@@ -655,8 +727,42 @@ def test_cached_one_chunk_uses_chunk_model_contract(monkeypatch):
     device_inputs = PrefillDeviceInputs("tokens", "cos", "sin", "page", "chunk-page", "pos", "chunk-start")
     position_inputs = PrefillPositionInputs("slice-start", "slice-end", "row")
     seen = []
-    runtime.config.model.prefill_forward = lambda *args, **kwargs: seen.append((args, kwargs)) or "output"
-    monkeypatch.setattr(runtime, "_run_hidden_body", lambda *args: pytest.fail("regular model body used"))
+
+    def prefill_forward(
+        x_embed,
+        rot_mats,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        batch_size=1,
+        chunk_start_idx_tensor=None,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        seen.append(
+            (
+                (x_embed, rot_mats),
+                {
+                    "user_id": user_id,
+                    "page_table": page_table,
+                    "chunk_page_table": chunk_page_table,
+                    "chunk_start_idx": chunk_start_idx,
+                    "get_last_token": get_last_token,
+                    "chunk_start_idx_tensor": chunk_start_idx_tensor,
+                    "last_token_slice": last_token_slice,
+                    "last_token_index": last_token_index,
+                },
+            )
+        )
+        return "output"
+
+    def fail_regular_model_body(request, device_inputs):
+        pytest.fail("regular model body used")
+
+    runtime.config.model.prefill_forward = prefill_forward
+    monkeypatch.setattr(runtime, "_run_hidden_body", fail_regular_model_body)
 
     assert runtime._execute_prefill_step(prepared, chunk, device_inputs, position_inputs) == "output"
     assert seen == [
@@ -685,10 +791,59 @@ def test_regular_batched_step_and_finalization_preserve_exact_model_contract(mon
     position_inputs = PrefillPositionInputs("slice-start", "slice-end", "row")
     calls = []
     runtime.config.model.embed_prefill = lambda tokens: calls.append(("embed", tokens)) or "embedded"
-    runtime.config.model.prefill_forward = lambda *args, **kwargs: calls.append(("forward", args, kwargs)) or "hidden"
-    runtime.config.model.post_process_batched_prefill_output = (
-        lambda *args, **kwargs: calls.append(("postprocess", args, kwargs)) or "logits"
-    )
+
+    def prefill_forward(
+        x_embed,
+        rot_mats,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        batch_size=1,
+        chunk_start_idx_tensor=None,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        calls.append(
+            (
+                "forward",
+                (x_embed, rot_mats),
+                {
+                    "user_id": user_id,
+                    "page_table": page_table,
+                    "chunk_page_table": chunk_page_table,
+                    "get_last_token": get_last_token,
+                    "batch_size": batch_size,
+                    "chunk_start_idx_tensor": chunk_start_idx_tensor,
+                },
+            )
+        )
+        return "hidden"
+
+    def post_process_batched_prefill_output(
+        hidden_states,
+        last_token_idx_list,
+        padded_batch,
+        prefill_seq_len,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        calls.append(
+            (
+                "postprocess",
+                (hidden_states, last_token_idx_list, padded_batch, prefill_seq_len),
+                {
+                    "last_token_slice": last_token_slice,
+                    "last_token_index": last_token_index,
+                },
+            )
+        )
+        return "logits"
+
+    runtime.config.model.prefill_forward = prefill_forward
+    runtime.config.model.post_process_batched_prefill_output = post_process_batched_prefill_output
+    # ttnn.untilize is overloaded; this test intentionally records backend options.
     monkeypatch.setattr(
         prefill_module.ttnn,
         "untilize",
@@ -760,27 +915,47 @@ def test_regular_logits_and_argmax_preserve_operation_order(
     monkeypatch.setattr(
         runtime,
         "_stage_prefill_step",
-        lambda *args: events.append("stage") or ("device", PrefillPositionInputs("start", "end", "row")),
+        lambda prepared, chunk, final_relative_last: events.append("stage")
+        or ("device", PrefillPositionInputs("start", "end", "row")),
     )
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: events.append("kpt") or None)
+    monkeypatch.setattr(
+        runtime,
+        "_make_device_kpt",
+        lambda sampling_params, batch_size, force_topk: events.append("kpt") or None,
+    )
     monkeypatch.setattr(
         runtime,
         "_execute_prefill_step",
-        lambda *args: events.append("execute") or "hidden",
+        lambda prepared, chunk, device_inputs, position_inputs: events.append("execute") or "hidden",
     )
-    runtime.config.model.post_process_prefill_output = lambda *args, **kwargs: events.append("postprocess") or "logits"
+
+    def post_process_prefill_output(
+        hidden_states,
+        last_token_idx,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        events.append("postprocess")
+        return "logits"
+
+    runtime.config.model.post_process_prefill_output = post_process_prefill_output
     monkeypatch.setattr(
         prefill_module,
         "_pad_prefill_logits",
-        lambda *args: events.append("pad") or "padded",
+        lambda logits, sampler: events.append("pad") or "padded",
     )
-    monkeypatch.setattr(runtime, "_sample_device", lambda *args: events.append("sample") or "sampled")
+    monkeypatch.setattr(
+        runtime,
+        "_sample_device",
+        lambda logits, kpt, sampled_output=None: events.append("sample") or "sampled",
+    )
+    # ttnn.untilize is overloaded; this test only checks operation order.
     monkeypatch.setattr(
         prefill_module.ttnn,
         "untilize",
         lambda *args, **kwargs: events.append("untilize") or "untilized",
     )
-    monkeypatch.setattr(runtime, "_make_sampling_output", lambda *args: pytest.fail("output preallocated"))
+    monkeypatch.setattr(runtime, "_make_sampling_output", lambda batch_size: pytest.fail("output preallocated"))
 
     runtime._run_prefill_sequence(prepared)
 
@@ -793,18 +968,42 @@ def test_cached_one_chunk_stages_planned_chunk_metadata(monkeypatch):
     prepared = SimpleNamespace(request=request)
     chunk = request.chunks[0]
     seen = []
-    monkeypatch.setattr(
-        runtime,
-        "_prepare_inputs_host",
-        lambda tokens, page_table, **kwargs: seen.append((tokens, page_table, kwargs)) or "host",
-    )
-    monkeypatch.setattr(runtime, "_stage_device_inputs", lambda host: "device")
+
+    def prepare_inputs_host(
+        tokens,
+        page_table,
+        *,
+        start_pos=0,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        last_token_idx=None,
+    ):
+        seen.append(
+            (
+                tokens,
+                page_table,
+                {
+                    "start_pos": start_pos,
+                    "chunk_page_table": chunk_page_table,
+                    "chunk_start_idx": chunk_start_idx,
+                    "last_token_idx": last_token_idx,
+                },
+            )
+        )
+        return "host"
+
+    monkeypatch.setattr(runtime, "_prepare_inputs_host", prepare_inputs_host)
+    monkeypatch.setattr(runtime, "_stage_device_inputs", lambda host_inputs: "device")
     monkeypatch.setattr(
         runtime,
         "_prepare_position_inputs_host",
-        lambda relative_last, chunk_size: PrefillPositionInputs(relative_last, chunk_size, "row"),
+        lambda relative_last, sequence_length: PrefillPositionInputs(relative_last, sequence_length, "row"),
     )
-    monkeypatch.setattr(prefill_module, "_copy_host_to_device", lambda values, **kwargs: values)
+    monkeypatch.setattr(
+        prefill_module,
+        "_copy_host_to_device",
+        lambda host_tensors, device_tensors=None, mesh_device=None: host_tensors,
+    )
 
     assert runtime._stage_prefill_step(prepared, chunk, 127) == (
         "device",
@@ -831,7 +1030,7 @@ def test_chunk_sequence_allocates_kpt_before_steps_and_reuses_final_position(mon
     monkeypatch.setattr(
         runtime,
         "_make_device_kpt",
-        lambda *args, **kwargs: events.append("kpt") or None,
+        lambda sampling_params, batch_size, force_topk: events.append("kpt") or None,
     )
 
     def stage(_prepared, chunk, relative_last):
@@ -843,13 +1042,15 @@ def test_chunk_sequence_allocates_kpt_before_steps_and_reuses_final_position(mon
     monkeypatch.setattr(
         runtime,
         "_execute_prefill_step",
-        lambda _prepared, chunk, *args: events.append(("execute", chunk.chunk_start_idx)) or next(step_outputs),
+        lambda prepared, chunk, device_inputs, position_inputs: events.append(("execute", chunk.chunk_start_idx))
+        or next(step_outputs),
     )
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: events.append("release") or [])
     monkeypatch.setattr(
         runtime,
         "_finish_prefill_sequence",
-        lambda _prepared, output, *args, **kwargs: events.append("finish") or output,
+        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned: events.append("finish")
+        or final_step_output,
     )
 
     runtime._run_prefill_sequence(prepared)
@@ -892,9 +1093,17 @@ def test_sequence_preserves_sampling_output_preallocation_matrix(
         sampling_path=sampling_path,
     )
     allocated = []
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runtime, "_stage_prefill_step", lambda *args: (object(), object()))
-    monkeypatch.setattr(runtime, "_execute_prefill_step", lambda *args: object())
+    monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
+    monkeypatch.setattr(
+        runtime,
+        "_stage_prefill_step",
+        lambda prepared, chunk, final_relative_last: (object(), object()),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_execute_prefill_step",
+        lambda prepared, chunk, device_inputs, position_inputs: object(),
+    )
     monkeypatch.setattr(
         runtime,
         "_make_sampling_output",
@@ -903,7 +1112,7 @@ def test_sequence_preserves_sampling_output_preallocation_matrix(
     monkeypatch.setattr(
         runtime,
         "_finish_prefill_sequence",
-        lambda _prepared, output, *args, **kwargs: output,
+        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned: final_step_output,
     )
 
     runtime._run_prefill_sequence(prepared)
@@ -922,9 +1131,18 @@ def test_prefill_sequence_consumes_planned_chunks_and_releases_intermediate(monk
     released = []
     staged = iter(zip(device_inputs, position_inputs))
     executed = iter(step_outputs)
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runtime, "_stage_prefill_step", lambda *args: next(staged))
-    monkeypatch.setattr(runtime, "_execute_prefill_step", lambda *args: next(executed))
+    monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
+    monkeypatch.setattr(
+        runtime,
+        "_stage_prefill_step",
+        lambda prepared, chunk, final_relative_last: next(staged),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_execute_prefill_step",
+        lambda prepared, chunk, device_inputs, position_inputs: next(executed),
+    )
+    # ttnn.untilize is overloaded; this test only verifies its input and output.
     monkeypatch.setattr(
         prefill_module.ttnn,
         "untilize",
@@ -958,9 +1176,22 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     )
     raw_regular, padded_regular, sampled_regular = object(), object(), object()
     regular_owned = []
-    runtime.config.model.post_process_prefill_output = lambda *args, **kwargs: raw_regular
-    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda *args: padded_regular)
-    monkeypatch.setattr(runtime, "_sample_device", lambda *args: sampled_regular)
+
+    def post_process_prefill_output(
+        hidden_states,
+        last_token_idx,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        return raw_regular
+
+    runtime.config.model.post_process_prefill_output = post_process_prefill_output
+    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: padded_regular)
+    monkeypatch.setattr(
+        runtime,
+        "_sample_device",
+        lambda logits, kpt, sampled_output=None: sampled_regular,
+    )
 
     assert (
         runtime._finish_regular_prefill(
@@ -982,8 +1213,12 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     )
     raw_chunked, padded_chunked, sampled_chunked = object(), object(), object()
     chunked_owned = [raw_chunked]
-    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda *args: padded_chunked)
-    monkeypatch.setattr(runtime, "_sample_device", lambda *args: sampled_chunked)
+    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: padded_chunked)
+    monkeypatch.setattr(
+        runtime,
+        "_sample_device",
+        lambda logits, kpt, sampled_output=None: sampled_chunked,
+    )
 
     assert (
         runtime._finish_prefill_sequence(
@@ -999,9 +1234,13 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     assert chunked_owned == [raw_chunked, padded_chunked, sampled_chunked]
 
     alias_owned = []
-    runtime.config.model.post_process_prefill_output = lambda *args, **kwargs: raw_regular
-    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda *args: raw_regular)
-    monkeypatch.setattr(runtime, "_sample_device", lambda *args: raw_regular)
+    runtime.config.model.post_process_prefill_output = post_process_prefill_output
+    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: raw_regular)
+    monkeypatch.setattr(
+        runtime,
+        "_sample_device",
+        lambda logits, kpt, sampled_output=None: raw_regular,
+    )
     assert (
         runtime._finish_regular_prefill(
             regular,
@@ -1025,13 +1264,25 @@ def test_sampling_output_failure_releases_all_sequence_resources(monkeypatch, ex
     )
     device_inputs, position_inputs, kpt, hidden = object(), object(), object(), object()
     released = []
-    monkeypatch.setattr(runtime, "_stage_prefill_step", lambda *args: (device_inputs, position_inputs))
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: kpt)
-    monkeypatch.setattr(runtime, "_execute_prefill_step", lambda *args: hidden)
+    monkeypatch.setattr(
+        runtime,
+        "_stage_prefill_step",
+        lambda prepared, chunk, final_relative_last: (device_inputs, position_inputs),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_make_device_kpt",
+        lambda sampling_params, batch_size, force_topk: kpt,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_execute_prefill_step",
+        lambda prepared, chunk, device_inputs, position_inputs: hidden,
+    )
     monkeypatch.setattr(
         runtime,
         "_make_sampling_output",
-        lambda rows: (_ for _ in ()).throw(RuntimeError("allocation failed")),
+        lambda batch_size: (_ for _ in ()).throw(RuntimeError("allocation failed")),
     )
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda values: released.append(values) or [])
 
@@ -1047,13 +1298,17 @@ def test_step_execution_failure_releases_staged_sequence_resources(monkeypatch, 
     prepared = SimpleNamespace(request=request, sampling_params=None, sampling_path="logits")
     device_inputs, position_inputs = object(), object()
     released = []
-    monkeypatch.setattr(runtime, "_stage_prefill_step", lambda *args: (device_inputs, position_inputs))
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runtime,
-        "_execute_prefill_step",
-        lambda *args: (_ for _ in ()).throw(RuntimeError("execution failed")),
+        "_stage_prefill_step",
+        lambda prepared, chunk, final_relative_last: (device_inputs, position_inputs),
     )
+    monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
+
+    def fail_step_execution(prepared, chunk, device_inputs, position_inputs):
+        raise RuntimeError("execution failed")
+
+    monkeypatch.setattr(runtime, "_execute_prefill_step", fail_step_execution)
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda values: released.append(values) or [])
 
     with expect_error(RuntimeError, "execution failed"):
@@ -1069,9 +1324,9 @@ def test_staging_failure_after_prior_chunk_releases_prior_sequence_resources(mon
     device_inputs, position_inputs, intermediate = object(), object(), object()
     stage_calls = 0
     released = []
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
 
-    def stage(*args):
+    def stage(prepared, chunk, final_relative_last):
         nonlocal stage_calls
         stage_calls += 1
         if stage_calls == 2:
@@ -1079,7 +1334,11 @@ def test_staging_failure_after_prior_chunk_releases_prior_sequence_resources(mon
         return device_inputs, position_inputs
 
     monkeypatch.setattr(runtime, "_stage_prefill_step", stage)
-    monkeypatch.setattr(runtime, "_execute_prefill_step", lambda *args: intermediate)
+    monkeypatch.setattr(
+        runtime,
+        "_execute_prefill_step",
+        lambda prepared, chunk, device_inputs, position_inputs: intermediate,
+    )
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda values: released.append(values) or [])
 
     with expect_error(RuntimeError, "second staging failed"):
@@ -1101,25 +1360,39 @@ def test_finalization_failure_releases_every_resource_acquired_before_failure(mo
     device_inputs, hidden, raw, padded = (object() for _ in range(4))
     position_inputs = PrefillPositionInputs("start", "end", "row")
     released = []
-    monkeypatch.setattr(runtime, "_stage_prefill_step", lambda *args: (device_inputs, position_inputs))
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runtime, "_execute_prefill_step", lambda *args: hidden)
+    monkeypatch.setattr(
+        runtime,
+        "_stage_prefill_step",
+        lambda prepared, chunk, final_relative_last: (device_inputs, position_inputs),
+    )
+    monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
+    monkeypatch.setattr(
+        runtime,
+        "_execute_prefill_step",
+        lambda prepared, chunk, device_inputs, position_inputs: hidden,
+    )
 
-    def postprocess(*args, **kwargs):
+    def postprocess(
+        hidden_states,
+        last_token_idx,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
         if failure_point == "postprocess":
             raise RuntimeError("postprocess failed")
         return raw
 
-    def pad(*args):
+    def pad(logits, sampler):
         if failure_point == "pad":
             raise RuntimeError("pad failed")
         return padded
 
-    def sample(*args):
+    def sample(logits, kpt, sampled_output=None):
         if failure_point == "sample":
             raise RuntimeError("sample failed")
         return object()
 
+    # ttnn.untilize is overloaded; the failure hook must accept its backend options.
     def untilize(*args, **kwargs):
         if failure_point == "untilize":
             raise RuntimeError("untilize failed")
@@ -1149,13 +1422,17 @@ def test_unified_path_preserves_primary_error_and_retries_cleanup_orphan(monkeyp
     primary = RuntimeError("execution failed")
     cleanup_failure = RuntimeError("device busy")
     calls = []
-    monkeypatch.setattr(runtime, "_stage_prefill_step", lambda *args: ("device", "position"))
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runtime,
-        "_execute_prefill_step",
-        lambda *args: (_ for _ in ()).throw(primary),
+        "_stage_prefill_step",
+        lambda prepared, chunk, final_relative_last: ("device", "position"),
     )
+    monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
+
+    def fail_step_execution(prepared, chunk, device_inputs, position_inputs):
+        raise primary
+
+    monkeypatch.setattr(runtime, "_execute_prefill_step", fail_step_execution)
 
     def release(values, completed):
         calls.append(values)
@@ -1181,9 +1458,17 @@ def test_intermediate_release_failure_is_not_reowned_by_sequence(monkeypatch, ex
     prepared = SimpleNamespace(request=request, sampling_params=None, sampling_path="logits")
     device_inputs, position_inputs, intermediate = object(), object(), object()
     released = []
-    monkeypatch.setattr(runtime, "_make_device_kpt", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runtime, "_stage_prefill_step", lambda *args: (device_inputs, position_inputs))
-    monkeypatch.setattr(runtime, "_execute_prefill_step", lambda *args: intermediate)
+    monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
+    monkeypatch.setattr(
+        runtime,
+        "_stage_prefill_step",
+        lambda prepared, chunk, final_relative_last: (device_inputs, position_inputs),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_execute_prefill_step",
+        lambda prepared, chunk, device_inputs, position_inputs: intermediate,
+    )
 
     def release(values):
         released.append(values)
@@ -1216,9 +1501,9 @@ def test_trace_capture_uses_hidden_body_without_eager_sequence(monkeypatch):
     monkeypatch.setattr(
         runtime,
         "_run_hidden_body",
-        lambda request, inputs: seen.append((request, inputs)) or "hidden",
+        lambda request, device_inputs: seen.append((request, device_inputs)) or "hidden",
     )
-    monkeypatch.setattr(runtime, "_run_prefill_sequence", lambda *args: pytest.fail("eager sequence used"))
+    monkeypatch.setattr(runtime, "_run_prefill_sequence", lambda prepared: pytest.fail("eager sequence used"))
 
     assert runtime.capture_plan(prepared).capture(persistent) == "hidden"
     assert seen == [(prepared.request, "device-inputs")]
@@ -1356,6 +1641,44 @@ def test_disabled_device_sampling_rejects_sampling_at_runtime_boundary(expect_er
             start_pos=start_pos,
             sampling_params=SamplingParams(temperature=0.0, top_k=1, top_p=1.0),
         )
+
+
+def test_prefill_runtime_request_signatures_are_exact():
+    empty = inspect.Parameter.empty
+    positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
+    keyword_only = inspect.Parameter.KEYWORD_ONLY
+    expected = {
+        PrefillRuntime.can_trace: (
+            (
+                ("self", positional, empty, empty),
+                ("tokens", keyword_only, empty, "torch.Tensor"),
+                ("prompt_lens", keyword_only, None, "torch.Tensor | None"),
+                ("start_pos", keyword_only, None, "torch.Tensor | None"),
+            ),
+            "bool",
+        ),
+        PrefillRuntime.prepare: (
+            (
+                ("self", positional, empty, empty),
+                ("tokens", keyword_only, empty, "torch.Tensor"),
+                ("page_table", keyword_only, empty, "torch.Tensor"),
+                ("prompt_lens", keyword_only, None, "torch.Tensor | None"),
+                ("start_pos", keyword_only, None, "torch.Tensor | None"),
+                ("empty_slots", keyword_only, None, "Sequence[int] | None"),
+                ("sampling_params", keyword_only, None, "SamplingParams | None"),
+            ),
+            "tuple[PreparedPrefill, ...]",
+        ),
+    }
+
+    for method, (expected_parameters, expected_return) in expected.items():
+        signature = inspect.signature(method)
+        parameters = tuple(
+            (parameter.name, parameter.kind, parameter.default, parameter.annotation)
+            for parameter in signature.parameters.values()
+        )
+        assert parameters == expected_parameters
+        assert signature.return_annotation == expected_return
 
 
 def test_prefill_runtime_is_plain_orchestration_with_one_config_surface():

@@ -842,6 +842,7 @@ def test_attention_prefill_selects_scalar_or_tensor_chunk_start_api(monkeypatch,
     k_heads = _AttentionPrefillTensor((1, 8, 128, 128), bfloat16)
     v_heads = _AttentionPrefillTensor((1, 8, 128, 128), bfloat16)
     output = _AttentionPrefillTensor((1, 1, 128, 4096), bfloat8_b)
+    # TTNN operation fakes retain backend-specific overload arguments.
     fake_ttnn = SimpleNamespace(
         DRAM_MEMORY_CONFIG=object(),
         bfloat16=bfloat16,
@@ -897,6 +898,7 @@ def test_attention_prefill_selects_scalar_or_tensor_chunk_start_api(monkeypatch,
     page_table = object()
     chunk_start_idx_tensor = object() if use_runtime_tensor else None
     monkeypatch.setattr(attention_1d_module, "ttnn", fake_ttnn)
+    # This loader is a generic bypass, not the API under test.
     monkeypatch.setattr(attention_1d_module, "_load_input_device_tensor", lambda tensor, *_args, **_kwargs: tensor)
 
     Attention1D.prefill_forward(

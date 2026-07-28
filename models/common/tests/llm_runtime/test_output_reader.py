@@ -174,7 +174,12 @@ def test_nested_dict_and_list_preserve_shape(monkeypatch):
 
 def test_record_event_failure_synchronizes_device(monkeypatch):
     device_synchronizations = []
-    monkeypatch.setattr(ttnn, "record_event", lambda *_: (_ for _ in ()).throw(RuntimeError("record failed")))
+
+    # record_event is an external nanobind API with optional backend arguments.
+    def fail_record_event(*_args, **_kwargs):
+        raise RuntimeError("record failed")
+
+    monkeypatch.setattr(ttnn, "record_event", fail_record_event)
     monkeypatch.setattr(ttnn, "synchronize_device", device_synchronizations.append)
     reader = OutputReader("mesh")
 

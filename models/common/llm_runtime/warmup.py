@@ -308,10 +308,9 @@ class WarmupCoordinator:
     def warmup_prefill(
         self,
         *,
-        kv_cache: Any,
+        kv_cache: Any,  # ↓ Borrowed resources
+        can_sample_on_device: bool,  # ↓ Execution policy
         enable_trace: bool,
-        can_sample_on_device: bool,
-        **_: Any,
     ) -> None:
         """Compile prefill coverage and capture once decode coverage is ready."""
 
@@ -366,10 +365,9 @@ class WarmupCoordinator:
                 compile_target.compile_prefill(
                     tokens=tokens,
                     page_table=page_table,
-                    kv_cache=kv_cache,
                     prompt_lens=prompt_lens,
-                    empty_slots=list(range(case.batch_size)),
                     start_pos=start_pos,
+                    empty_slots=list(range(case.batch_size)),
                     sampling_params=sampling,
                 )
             destination.add(case)
@@ -378,12 +376,11 @@ class WarmupCoordinator:
     def warmup_decode(
         self,
         *,
-        kv_cache: Any,
-        enable_trace: bool,
-        max_batch_size: int,
+        kv_cache: Any,  # ↓ Borrowed resources
+        max_batch_size: int,  # ↓ Coverage dimensions
         num_blocks: int,
-        can_sample_on_device: bool,
-        **_: Any,
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
     ) -> None:
         """Compile decode coverage and capture once prefill coverage is ready."""
 
@@ -413,7 +410,6 @@ class WarmupCoordinator:
                 tokens=torch.zeros(lane_batch, dtype=torch.long),
                 start_pos=torch.zeros(lane_batch, dtype=torch.long),
                 page_table=torch.zeros((lane_batch, int(num_blocks)), dtype=torch.int32),
-                kv_cache=kv_cache,
                 sampling_params=sampling,
             )
             if not enable_trace:

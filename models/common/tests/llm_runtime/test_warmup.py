@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import Any, Sequence
 
 import pytest
+import torch
 
 from models.common.llm_runtime.config import PageTableLayout, TraceConfig, WarmupConfig
 from models.common.llm_runtime.decode import DecodeRuntimeConfig
@@ -23,21 +26,73 @@ class RecordingExecution:
         self.fail_decode_call = None
         self.prefill_replays = []
 
-    def compile_prefill(self, **kwargs):
+    def compile_prefill(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        page_table: torch.Tensor,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        sampling_params: Any = None,  # ↓ Sampling
+    ) -> None:
         self.events.append("compile_prefill")
-        self.prefill_calls.append(kwargs)
+        self.prefill_calls.append(
+            {
+                "tokens": tokens,
+                "page_table": page_table,
+                "prompt_lens": prompt_lens,
+                "start_pos": start_pos,
+                "empty_slots": empty_slots,
+                "sampling_params": sampling_params,
+            }
+        )
 
-    def compile_decode(self, **kwargs):
+    def compile_decode(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+    ) -> None:
         call = len(self.decode_calls) + 1
         self.events.append("compile_decode")
         if call == self.fail_decode_call:
             self.fail_decode_call = None
             raise RuntimeError("decode compile failed")
-        self.decode_calls.append(kwargs)
+        self.decode_calls.append(
+            {
+                "tokens": tokens,
+                "start_pos": start_pos,
+                "page_table": page_table,
+                "sampling_params": sampling_params,
+                "reset_batch": reset_batch,
+            }
+        )
 
-    def prefill_forward(self, **kwargs):
+    def prefill_forward(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        page_table: torch.Tensor,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        sampling_params: Any = None,  # ↓ Sampling
+    ) -> None:
         self.events.append("prefill_replay")
-        self.prefill_replays.append(kwargs)
+        self.prefill_replays.append(
+            {
+                "tokens": tokens,
+                "page_table": page_table,
+                "prompt_lens": prompt_lens,
+                "start_pos": start_pos,
+                "empty_slots": empty_slots,
+                "sampling_params": sampling_params,
+            }
+        )
 
 
 class RecordingTraceCompiler:
@@ -68,7 +123,10 @@ def make_runtime_configs(
     sampling_config.max_batch_size = lane_capacity
     model = model or SimpleNamespace(
         config=SimpleNamespace(max_batch_size=lane_capacity, mesh_device=mesh, num_devices=1),
-        sampling=SimpleNamespace(config=sampling_config, decode_forward=lambda *args, **kwargs: None),
+        sampling=SimpleNamespace(
+            config=sampling_config,
+            decode_forward=lambda logits, *, k=None, p=None, temp=None, seeds=None, tt_out_tok=None, enable_log_probs=False: None,
+        ),
         vocab_size=128,
     )
     mesh = model.config.mesh_device
@@ -87,7 +145,7 @@ def make_runtime_configs(
             max_batch_size=lane_capacity,
             max_prefill_chunk_size=128,
             device_sampling_enabled=sampling,
-            can_enable_trace=lambda *_: True,
+            can_enable_trace=lambda _sequence_length, _batch_size: True,
         ),
         DecodeRuntimeConfig.resolve(
             model=model,
@@ -158,6 +216,94 @@ def make_coordinator(
         validate_bound_cache=validate_bound,
     )
     return coordinator, execution, trace_compiler, sampling_calls, bound_calls, events
+
+
+@pytest.mark.parametrize(
+    ("method_name", "parameter_names"),
+    [
+        ("warmup_prefill", ("self", "kv_cache", "can_sample_on_device", "enable_trace")),
+        (
+            "warmup_decode",
+            ("self", "kv_cache", "max_batch_size", "num_blocks", "can_sample_on_device", "enable_trace"),
+        ),
+    ],
+)
+def test_warmup_signatures_match_registered_plugin_contract(method_name, parameter_names):
+    parameters = inspect.signature(getattr(WarmupCoordinator, method_name)).parameters
+
+    assert tuple(parameters) == parameter_names
+    assert parameters["self"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    for name in parameter_names[1:]:
+        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameters[name].default is inspect.Parameter.empty
+
+
+def test_registered_plugin_warmup_calls_validate_cache_without_forwarding_it():
+    cache = object()
+    coordinator, execution, _, _, bound_calls, _ = make_coordinator(
+        trace_mode="none",
+        sampling=False,
+        warmup_config=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
+        sequence_lengths=(128,),
+        lane_capacity=1,
+    )
+    prefill_kwargs = {
+        "kv_cache": cache,
+        "can_sample_on_device": False,
+    }
+    decode_kwargs = {
+        "kv_cache": cache,
+        "max_batch_size": 1,
+        "num_blocks": 8,
+        "can_sample_on_device": False,
+    }
+
+    coordinator.warmup_prefill(enable_trace=False, **prefill_kwargs)
+    coordinator.warmup_decode(enable_trace=False, **decode_kwargs)
+
+    assert bound_calls == [cache, cache]
+    assert all(
+        tuple(call) == ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params")
+        for call in execution.prefill_calls
+    )
+    assert all(
+        tuple(call) == ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch")
+        for call in execution.decode_calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("method_name", "plugin_kwargs", "unexpected_name"),
+    [
+        (
+            "warmup_prefill",
+            {"kv_cache": "cache", "can_sample_on_device": False, "enable_trace": False},
+            "greedy_only",
+        ),
+        (
+            "warmup_decode",
+            {
+                "kv_cache": "cache",
+                "max_batch_size": 1,
+                "num_blocks": 8,
+                "can_sample_on_device": False,
+                "enable_trace": False,
+            },
+            "read_from_device",
+        ),
+    ],
+)
+def test_warmup_contract_rejects_unregistered_plugin_keywords(
+    method_name,
+    plugin_kwargs,
+    unexpected_name,
+    expect_error,
+):
+    coordinator, *_ = make_coordinator(trace_mode="none", sampling=False, lane_capacity=1)
+    plugin_kwargs[unexpected_name] = False
+
+    with expect_error(TypeError, unexpected_name):
+        getattr(coordinator, method_name)(**plugin_kwargs)
 
 
 def test_configured_prefill_lengths_override_model_supported_defaults():

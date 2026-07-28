@@ -62,7 +62,8 @@ def test_compiler_memoizes_program_key_by_canonical_material(monkeypatch):
     monkeypatch.setattr(
         program_compiler_module,
         "signature_digest",
-        lambda *args: calls.append(args) or digest(*args),
+        lambda domain, schema_version, signature: calls.append((domain, schema_version, signature))
+        or digest(domain, schema_version, signature),
     )
     compiler = _compiler()
 
@@ -86,7 +87,8 @@ def test_compiler_program_key_memo_tracks_mutated_material(monkeypatch):
     monkeypatch.setattr(
         program_compiler_module,
         "signature_digest",
-        lambda *args: calls.append(args) or digest(*args),
+        lambda domain, schema_version, signature: calls.append((domain, schema_version, signature))
+        or digest(domain, schema_version, signature),
     )
     compiler = _compiler()
     signature = MutableSignature()

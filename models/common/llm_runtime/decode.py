@@ -304,9 +304,9 @@ class DecodeRuntime:
         tokens: torch.Tensor,
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
-        sampling_params: SamplingParams | None = None,
         *,
-        reset_batch: bool = False,
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
     ) -> PreparedDecode:
         """Normalize one host decode request into an immutable prepared value."""
 
@@ -455,7 +455,7 @@ class DecodeRuntime:
             raise_cleanup_failures(failures)
         return normalized
 
-    def read_decode_output(self, tt_out: Any, async_read: bool = False) -> Any:
+    def read_decode_output(self, tt_out: Any, *, async_read: bool = False) -> Any:
         """Read a raw externally leased decode output, optionally asynchronously."""
 
         if not async_read:
@@ -470,7 +470,7 @@ class DecodeRuntime:
             self._external_by_host_id[id(pending.value)] = lease
         return pending.value, list(pending.events)
 
-    def process_decode_output_host(self, tt_out: Any, is_tokens: bool = False) -> tuple[Any, Any]:
+    def process_decode_output_host(self, tt_out: Any, *, is_tokens: bool = False) -> tuple[Any, Any]:
         """Complete and normalize a host value returned by async decode read."""
 
         completed = self.config.output_reader.complete(tt_out)
@@ -780,7 +780,7 @@ def _validate_module_inputs(model: Any):
 
         def make_wrapper(orig, module_name, expected_memcfg):
             @functools.wraps(orig)
-            def wrapper(x, *args, **kwargs):
+            def wrapper(x: Any, *args: Any, **kwargs: Any) -> Any:
                 if isinstance(x, ttnn.Tensor) and x.is_allocated():
                     actual = x.spec.memory_config
                     if actual != expected_memcfg:

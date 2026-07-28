@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
+from typing import Any, Sequence
+from unittest.mock import create_autospec
 
 import pytest
+import torch
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
@@ -114,6 +117,285 @@ def test_model_owned_executor_constructs_exact_composition(mode):
         assert executor.traced_executor.eager_executor is executor.eager_executor
         assert executor.traced_executor.trace_compiler is executor.trace_compiler
         assert executor.trace_compiler.program_compiler is executor.program_compiler
+
+
+@pytest.mark.parametrize(
+    ("method_name", "positional_names", "keyword_only_names"),
+    [
+        (
+            "compile_prefill",
+            ("self",),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "kv_cache",
+                "sampling_params",
+                "execution",
+            ),
+        ),
+        (
+            "compile_decode",
+            ("self",),
+            (
+                "tokens",
+                "start_pos",
+                "page_table",
+                "kv_cache",
+                "sampling_params",
+                "reset_batch",
+                "execution",
+            ),
+        ),
+        (
+            "prefill_forward",
+            ("self", "tokens", "page_table"),
+            (
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "kv_cache",
+                "sampling_params",
+                "execution",
+            ),
+        ),
+        (
+            "decode_forward",
+            ("self", "tokens", "start_pos", "page_table"),
+            ("kv_cache", "sampling_params", "reset_batch", "read_from_device", "execution"),
+        ),
+        ("read_decode_output", ("self", "tt_out"), ("async_read",)),
+        ("process_decode_output_host", ("self", "tt_out"), ("is_tokens",)),
+        (
+            "can_trace_prefill",
+            ("self",),
+            ("tokens", "prompt_lens", "start_pos", "empty_slots"),
+        ),
+        (
+            "warmup_model_prefill",
+            ("self",),
+            ("kv_cache", "can_sample_on_device", "enable_trace"),
+        ),
+        (
+            "warmup_model_decode",
+            ("self",),
+            ("kv_cache", "max_batch_size", "num_blocks", "can_sample_on_device", "enable_trace"),
+        ),
+    ],
+)
+def test_model_owned_executor_has_exact_call_contract(method_name, positional_names, keyword_only_names):
+    signature = inspect.signature(getattr(llama_executor.Llama3Executor, method_name))
+    parameters = signature.parameters
+    required_names = {
+        "compile_prefill": {"tokens", "page_table"},
+        "compile_decode": {"tokens", "start_pos", "page_table"},
+        "prefill_forward": {"tokens", "page_table"},
+        "decode_forward": {"tokens", "start_pos", "page_table"},
+        "read_decode_output": {"tt_out"},
+        "process_decode_output_host": {"tt_out"},
+        "can_trace_prefill": {"tokens"},
+        "warmup_model_prefill": {"kv_cache", "can_sample_on_device", "enable_trace"},
+        "warmup_model_decode": {
+            "kv_cache",
+            "max_batch_size",
+            "num_blocks",
+            "can_sample_on_device",
+            "enable_trace",
+        },
+    }[method_name]
+    special_defaults = {
+        "reset_batch": False,
+        "read_from_device": True,
+        "async_read": False,
+        "is_tokens": False,
+    }
+
+    assert tuple(parameters) == positional_names + keyword_only_names
+    assert all(parameters[name].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD for name in positional_names)
+    assert all(parameters[name].kind is inspect.Parameter.KEYWORD_ONLY for name in keyword_only_names)
+    for name, parameter in tuple(parameters.items())[1:]:
+        expected_default = inspect.Parameter.empty if name in required_names else special_defaults.get(name)
+        assert parameter.default == expected_default
+        assert parameter.annotation is not inspect.Parameter.empty
+    assert signature.return_annotation is not inspect.Signature.empty
+    if "execution" in parameters:
+        assert parameters["execution"].annotation == "EagerExecutor | TracedExecutor | None"
+
+
+def test_model_owned_executor_validates_cache_then_omits_it_from_execution():
+    execution = create_autospec(EagerExecutor, instance=True)
+    execution.prefill_forward.return_value = "prefill"
+    execution.decode_forward.return_value = "decode"
+    executor = object.__new__(llama_executor.Llama3Executor)
+    executor._prefill_execution = execution
+    executor._decode_execution = execution
+    executor._ensure_active = lambda: None
+    validated_caches = []
+    sampling_values = []
+    executor._validate_bound_cache = validated_caches.append
+    executor._ensure_sampling_for = sampling_values.append
+
+    tokens = torch.zeros((1, 4), dtype=torch.long)
+    start_pos = torch.zeros((1,), dtype=torch.long)
+    page_table = torch.zeros((1, 1), dtype=torch.int32)
+    prompt_lens = torch.full((1,), 4, dtype=torch.long)
+    empty_slots = [0]
+    kv_cache = object()
+    sampling_params = object()
+
+    executor.compile_prefill(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=empty_slots,
+        kv_cache=kv_cache,
+        sampling_params=sampling_params,
+    )
+    executor.compile_decode(
+        tokens=tokens,
+        start_pos=start_pos,
+        page_table=page_table,
+        kv_cache=kv_cache,
+        sampling_params=sampling_params,
+        reset_batch=True,
+    )
+    assert (
+        executor.prefill_forward(
+            tokens,
+            page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=empty_slots,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+        )
+        == "prefill"
+    )
+    assert (
+        executor.decode_forward(
+            tokens,
+            start_pos,
+            page_table,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+            reset_batch=True,
+            read_from_device=False,
+        )
+        == "decode"
+    )
+
+    assert validated_caches == [kv_cache] * 4
+    assert sampling_values == [sampling_params] * 4
+    for target, expected_names in (
+        (
+            execution.compile_prefill,
+            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+        ),
+        (
+            execution.compile_decode,
+            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch"),
+        ),
+        (
+            execution.prefill_forward,
+            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+        ),
+        (
+            execution.decode_forward,
+            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch", "read_from_device"),
+        ),
+    ):
+        assert target.call_count == 1
+        assert tuple(target.call_args.kwargs) == expected_names
+
+
+def test_model_owned_executor_trace_output_and_warmup_forwarding_is_named():
+    calls = []
+
+    class _PrefillRuntime:
+        def can_trace(
+            self,
+            *,
+            tokens: torch.Tensor,  # ↓ Core request
+            prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+            start_pos: torch.Tensor | None = None,
+        ) -> bool:
+            calls.append(("can_trace", tokens, prompt_lens, start_pos))
+            return True
+
+    class _DecodeRuntime:
+        def read_decode_output(self, tt_out: Any, *, async_read: bool = False) -> Any:
+            calls.append(("read_decode_output", tt_out, async_read))
+            return "read"
+
+        def process_decode_output_host(self, tt_out: Any, *, is_tokens: bool = False) -> tuple[Any, Any]:
+            calls.append(("process_decode_output_host", tt_out, is_tokens))
+            return "processed", "event"
+
+    class _Warmup:
+        def warmup_prefill(
+            self,
+            *,
+            kv_cache: Any,  # ↓ Borrowed resources
+            can_sample_on_device: bool,  # ↓ Execution policy
+            enable_trace: bool,
+        ) -> None:
+            calls.append(("warmup_prefill", kv_cache, can_sample_on_device, enable_trace))
+
+        def warmup_decode(
+            self,
+            *,
+            kv_cache: Any,  # ↓ Borrowed resources
+            max_batch_size: int,  # ↓ Coverage dimensions
+            num_blocks: int,
+            can_sample_on_device: bool,  # ↓ Execution policy
+            enable_trace: bool,
+        ) -> None:
+            calls.append(("warmup_decode", kv_cache, max_batch_size, num_blocks, can_sample_on_device, enable_trace))
+
+    executor = object.__new__(llama_executor.Llama3Executor)
+    executor.traced_executor = object()
+    executor.config = SimpleNamespace(trace=SimpleNamespace(prefill_enabled=True))
+    executor.prefill_runtime = _PrefillRuntime()
+    executor.decode_runtime = _DecodeRuntime()
+    executor.warmup = _Warmup()
+    executor._ensure_active = lambda: None
+
+    tokens = torch.zeros((1, 4), dtype=torch.long)
+    prompt_lens = torch.full((1,), 4, dtype=torch.long)
+    start_pos = torch.zeros((1,), dtype=torch.long)
+    kv_cache = object()
+
+    assert executor.can_trace_prefill(
+        tokens=tokens,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=[0],
+    )
+    assert executor.read_decode_output("device-output", async_read=True) == "read"
+    assert executor.process_decode_output_host("host-output", is_tokens=True) == ("processed", "event")
+    executor.warmup_model_prefill(
+        kv_cache=kv_cache,
+        can_sample_on_device=True,
+        enable_trace=False,
+    )
+    executor.warmup_model_decode(
+        kv_cache=kv_cache,
+        max_batch_size=4,
+        num_blocks=8,
+        can_sample_on_device=True,
+        enable_trace=False,
+    )
+
+    assert calls == [
+        ("can_trace", tokens, prompt_lens, start_pos),
+        ("read_decode_output", "device-output", True),
+        ("process_decode_output_host", "host-output", True),
+        ("warmup_prefill", kv_cache, True, False),
+        ("warmup_decode", kv_cache, 4, 8, True, False),
+    ]
 
 
 def test_vllm_capacity_resolution_reconfigures_existing_runtime_owners_before_allocation(monkeypatch):
@@ -386,8 +668,19 @@ def test_generator_constructs_model_owned_lane_configs(monkeypatch):
     executor_calls = []
     monkeypatch.setattr(llama_generator, "_create_submeshes", lambda mesh, dp: [_Mesh(), _Mesh()])
 
-    def fake_from_pretrained(**kwargs):
-        return SimpleNamespace(model=_model(max_batch_size=kwargs["max_batch_size"]), runtime_config=_runtime_config())
+    def fake_from_pretrained(
+        mesh_device,
+        *,
+        hf_model: str | None = None,
+        instruct: bool | None = None,
+        max_batch_size: int,
+        max_seq_len: int,
+        optimizations="performance",
+        n_layers: int | None = None,
+        dtype=ttnn.bfloat8_b,
+        paged_attention_config=None,
+    ):
+        return SimpleNamespace(model=_model(max_batch_size=max_batch_size), runtime_config=_runtime_config())
 
     def fake_build_executor(llm, config):
         executor_calls.append((llm, config))
@@ -446,34 +739,74 @@ class _RecordingTarget:
     traced_prefill_execution = object()
     traced_decode_execution = object()
 
-    def __init__(self):
+    def __init__(self, *, traceable_prefill=True):
         self.calls = []
+        self.traceable_prefill = traceable_prefill
 
-    def can_trace_prefill(self, **kwargs):
-        self.calls.append(("can_trace_prefill", (), kwargs))
-        return True
+    def _record(self, name, arguments):
+        arguments = {key: value for key, value in arguments.items() if key != "self"}
+        self.calls.append((name, (), arguments))
+        return name
 
-    def __getattr__(self, name):
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return lambda *args, **kwargs: self.calls.append((name, args, kwargs)) or name
+    def can_trace_prefill(
+        self,
+        *,
+        tokens: torch.Tensor,  # ↓ Core request
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+    ) -> bool:
+        self._record("can_trace_prefill", locals())
+        return self.traceable_prefill
+
+    def prefill_forward(
+        self,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
+    ) -> str:
+        return self._record("prefill_forward", locals())
+
+    def decode_forward(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        read_from_device: bool = True,  # ↓ Output policy
+        execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
+    ) -> str:
+        return self._record("decode_forward", locals())
+
+    def cleanup(self) -> str:
+        self.calls.append(("cleanup", (), {}))
+        return "cleanup"
+
+
+def _recording_generator(target):
+    target.model = _model()
+    target.config = _config("all")
+    return llama_generator.Llama3Generator(target, adapter=llama_generator._build_vllm_adapter(target))
 
 
 def test_generator_delegates_without_concrete_type_checks():
     target = _RecordingTarget()
-    adapter = SimpleNamespace(
-        normalize_prefill=lambda args, kwargs: {"tokens": args[0], **kwargs},
-        normalize_decode=lambda args, kwargs: {
-            "tokens": args[0],
-            "start_pos": args[1],
-            "page_table": args[2],
-            **kwargs,
-        },
-    )
-    generator = llama_generator.Llama3Generator(target, adapter=adapter)
+    generator = _recording_generator(target)
+    tokens = torch.tensor([[1]], dtype=torch.long)
+    start_pos = torch.tensor([0], dtype=torch.long)
+    page_table = torch.tensor([[0]], dtype=torch.int32)
 
-    assert generator.prefill_forward("tokens", page_table="pages", enable_trace=True) == "prefill_forward"
-    assert generator.decode_forward("tokens", "positions", "pages", enable_trace=False) == "decode_forward"
+    assert generator.prefill_forward(tokens, page_table, enable_trace=True) == "prefill_forward"
+    assert generator.decode_forward(tokens, start_pos, page_table, enable_trace=False) == "decode_forward"
     assert generator.cleanup() == "cleanup"
     assert [name for name, _, _ in target.calls] == [
         "can_trace_prefill",
@@ -486,33 +819,26 @@ def test_generator_delegates_without_concrete_type_checks():
 
 
 def test_generator_selects_eager_before_trace_ineligible_prefill_enters_execution():
-    target = _RecordingTarget()
-    target.can_trace_prefill = lambda **kwargs: False
-    adapter = SimpleNamespace(
-        normalize_prefill=lambda args, kwargs: {"tokens": args[0], **kwargs},
-    )
-    generator = llama_generator.Llama3Generator(target, adapter=adapter)
+    target = _RecordingTarget(traceable_prefill=False)
+    generator = _recording_generator(target)
+    tokens = torch.tensor([[1]], dtype=torch.long)
+    page_table = torch.tensor([[0]], dtype=torch.int32)
 
-    assert generator.prefill_forward("tokens", page_table="pages", enable_trace=True) == "prefill_forward"
-    assert [name for name, _, _ in target.calls] == ["prefill_forward"]
-    assert target.calls[0][2]["execution"] is target.eager_execution
+    assert generator.prefill_forward(tokens, page_table, enable_trace=True) == "prefill_forward"
+    assert [name for name, _, _ in target.calls] == ["can_trace_prefill", "prefill_forward"]
+    assert target.calls[1][2]["execution"] is target.eager_execution
 
 
 def test_generator_rejects_unavailable_traced_execution(expect_error):
     target = _RecordingTarget()
     target.traced_decode_execution = None
-    adapter = SimpleNamespace(
-        normalize_decode=lambda args, kwargs: {
-            "tokens": args[0],
-            "start_pos": args[1],
-            "page_table": args[2],
-            **kwargs,
-        },
-    )
-    generator = llama_generator.Llama3Generator(target, adapter=adapter)
+    generator = _recording_generator(target)
+    tokens = torch.tensor([1], dtype=torch.long)
+    start_pos = torch.tensor([0], dtype=torch.long)
+    page_table = torch.tensor([[0]], dtype=torch.int32)
 
     with expect_error(RuntimeError, "unavailable traced decode execution"):
-        generator.decode_forward("tokens", "positions", "pages", enable_trace=True)
+        generator.decode_forward(tokens, start_pos, page_table, enable_trace=True)
 
     assert target.calls == []
 
@@ -534,14 +860,39 @@ def test_demo_uses_model_owned_config_and_order_independent_warmup(monkeypatch):
     assert isinstance(captured[0], llama_executor.Llama3ExecutorConfig)
 
     calls = []
+
+    def fake_warmup_model_prefill(
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
+    ) -> None:
+        calls.append(("prefill", kv_cache, can_sample_on_device, enable_trace))
+
+    def fake_warmup_model_decode(
+        *,
+        kv_cache: Any,  # ↓ Borrowed resources
+        max_batch_size: int,  # ↓ Coverage dimensions
+        num_blocks: int,
+        can_sample_on_device: bool,  # ↓ Execution policy
+        enable_trace: bool,
+    ) -> None:
+        calls.append(("decode", kv_cache, max_batch_size, num_blocks, can_sample_on_device, enable_trace))
+
     executor = SimpleNamespace(
         config=SimpleNamespace(
             trace=TraceConfig("all"),
             device_sampling_enabled=False,
         ),
         model=SimpleNamespace(config=SimpleNamespace(max_batch_size=4)),
-        warmup_model_prefill=lambda **kwargs: calls.append(("prefill", kwargs["enable_trace"])),
-        warmup_model_decode=lambda **kwargs: calls.append(("decode", kwargs["enable_trace"])),
+        warmup_model_prefill=fake_warmup_model_prefill,
+        warmup_model_decode=fake_warmup_model_decode,
     )
-    llama_demo._warmup_demo_executor(executor, kv_cache=object(), page_table=SimpleNamespace(shape=(4, 8)))
-    assert calls == [("prefill", False), ("decode", False), ("prefill", True), ("decode", True)]
+    kv_cache = object()
+    llama_demo._warmup_demo_executor(executor, kv_cache=kv_cache, page_table=SimpleNamespace(shape=(4, 8)))
+    assert calls == [
+        ("prefill", kv_cache, False, False),
+        ("decode", kv_cache, 4, 8, False, False),
+        ("prefill", kv_cache, False, True),
+        ("decode", kv_cache, 4, 8, False, True),
+    ]

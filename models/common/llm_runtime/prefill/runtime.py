@@ -211,10 +211,9 @@ class PrefillRuntime:
     def can_trace(
         self,
         *,
-        tokens: torch.Tensor,
-        prompt_lens: torch.Tensor | None = None,
+        tokens: torch.Tensor,  # ↓ Core request
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
         start_pos: torch.Tensor | None = None,
-        **_: Any,
     ) -> bool:
         """Classify trace applicability without allocating planned request tensors."""
 
@@ -240,12 +239,12 @@ class PrefillRuntime:
     def prepare(
         self,
         *,
-        tokens: torch.Tensor,
+        tokens: torch.Tensor,  # ↓ Core request
         page_table: torch.Tensor,
-        prompt_lens: torch.Tensor | None = None,
-        empty_slots: Sequence[int] | None = None,
+        prompt_lens: torch.Tensor | None = None,  # ↓ Sequence metadata
         start_pos: torch.Tensor | None = None,
-        sampling_params: SamplingParams | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        sampling_params: SamplingParams | None = None,  # ↓ Sampling
     ) -> tuple[PreparedPrefill, ...]:
         """Plan host inputs once and return immutable requests for execution.
 
@@ -260,8 +259,8 @@ class PrefillRuntime:
             tokens=tokens,
             page_table=page_table,
             prompt_lens=prompt_lens,
-            empty_slots=empty_slots,
             start_pos=start_pos,
+            empty_slots=empty_slots,
             block_size=layout.block_size,
             max_batch_size=self.config.max_batch_size,
             max_prefill_chunk_size=self.config.max_prefill_chunk_size,

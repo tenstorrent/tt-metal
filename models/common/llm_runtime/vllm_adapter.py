@@ -8,13 +8,17 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 import torch
 
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig
 from models.common.llm_runtime.paged_kv_cache import torch_dtype_for_ttnn
 
+# These plugin fields are meaningful to other model families, but the registered
+# text-only TTTv2 Llama path does not implement their hybrid-cache, penalty-state,
+# batch-remap, or mRoPE semantics. Preserve the pre-refactor behavior by accepting
+# and discarding only this reviewed set at the external boundary.
 _IGNORED_VLLM_KWARGS = frozenset(
     {
         "page_tables_per_layer",
@@ -24,6 +28,25 @@ _IGNORED_VLLM_KWARGS = frozenset(
         "rope_deltas_all_users",
     }
 )
+
+
+class NormalizedPrefillKwargs(TypedDict):
+    tokens: torch.Tensor  # ↓ Core request
+    page_table: torch.Tensor
+    prompt_lens: torch.Tensor | None  # ↓ Sequence metadata
+    start_pos: torch.Tensor | None
+    empty_slots: Sequence[int] | None  # ↓ Lane routing
+    kv_cache: Any  # ↓ Borrowed resources
+    sampling_params: Any  # ↓ Sampling
+
+
+class NormalizedDecodeKwargs(TypedDict):
+    tokens: torch.Tensor  # ↓ Core request
+    start_pos: torch.Tensor
+    page_table: torch.Tensor
+    kv_cache: Any  # ↓ Borrowed resources
+    sampling_params: Any  # ↓ Sampling
+    reset_batch: bool  # ↓ State transition
 
 
 @dataclass(frozen=True)
@@ -82,8 +105,8 @@ class VLLMAdapter:
 
     `Llama3Generator` calls `normalize_prefill` or
     `normalize_decode` before choosing an eager or traced execution
-    target. The normalized dictionary contains typed host tensors and an
-    explicit Boolean trace choice. During vLLM initialization,
+    target. Each call returns typed host tensors and its validated Boolean
+    trace choice separately. During vLLM initialization,
     `resolve_legacy_kv_cache_config` validates the external cache shape
     and returns the one allowed capacity-resolved runtime configuration.
 
@@ -98,26 +121,62 @@ class VLLMAdapter:
 
     # Public API
 
-    def normalize_prefill(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        """Normalize legacy prefill (tokens, page_table) calls."""
+    def normalize_prefill(
+        self,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        enable_trace: bool,  # ↓ Required policy
+        prompt_lens: Sequence[int] | torch.Tensor | None = None,  # ↓ Sequence metadata
+        start_pos: torch.Tensor | None = None,
+        empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        compatibility_kwargs: Mapping[str, Any] | None = None,  # ↓ Compatibility
+    ) -> tuple[NormalizedPrefillKwargs, bool]:
+        """Normalize one explicit prefill request and return trace intent separately."""
 
-        normalized = _bind_positional(args, kwargs, ("tokens", "page_table"), "prefill")
-        self._drop_ignored_kwargs(normalized)
-        self._validate_trace_selection(normalized, operation="prefill")
-        _require_arguments(normalized, ("tokens", "page_table"), "prefill")
+        self._validate_compatibility_kwargs(compatibility_kwargs, operation="prefill")
+        self._validate_trace_selection(enable_trace, operation="prefill")
+        normalized: NormalizedPrefillKwargs = {
+            "tokens": tokens,
+            "page_table": page_table,
+            "prompt_lens": prompt_lens,
+            "start_pos": start_pos,
+            "empty_slots": empty_slots,
+            "kv_cache": kv_cache,
+            "sampling_params": sampling_params,
+        }
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "page_table", torch.int32)
         _normalize_tensor(normalized, "prompt_lens", torch.long)
         _normalize_tensor(normalized, "start_pos", torch.long)
-        return normalized
+        return normalized, enable_trace
 
-    def normalize_decode(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        """Normalize legacy decode (tokens, start_pos, page_table) calls."""
+    def normalize_decode(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+        *,
+        enable_trace: bool,  # ↓ Required policy
+        kv_cache: Any = None,  # ↓ Borrowed resources
+        sampling_params: Any = None,  # ↓ Sampling
+        reset_batch: bool = False,  # ↓ State transition
+        compatibility_kwargs: Mapping[str, Any] | None = None,  # ↓ Compatibility
+    ) -> tuple[NormalizedDecodeKwargs, bool]:
+        """Normalize one explicit decode request and return trace intent separately."""
 
-        normalized = _bind_positional(args, kwargs, ("tokens", "start_pos", "page_table"), "decode")
-        self._drop_ignored_kwargs(normalized)
-        self._validate_trace_selection(normalized, operation="decode")
-        _require_arguments(normalized, ("tokens", "start_pos", "page_table"), "decode")
+        self._validate_compatibility_kwargs(compatibility_kwargs, operation="decode")
+        self._validate_trace_selection(enable_trace, operation="decode")
+        normalized: NormalizedDecodeKwargs = {
+            "tokens": tokens,
+            "start_pos": start_pos,
+            "page_table": page_table,
+            "kv_cache": kv_cache,
+            "sampling_params": sampling_params,
+            "reset_batch": reset_batch,
+        }
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "start_pos", torch.long)
         _normalize_tensor(normalized, "page_table", torch.int32)
@@ -125,7 +184,7 @@ class VLLMAdapter:
         tokens = normalized["tokens"]
         if tokens.ndim == 2 and tokens.shape[-1] == 1:
             normalized["tokens"] = tokens.reshape(-1)
-        return normalized
+        return normalized, enable_trace
 
     def resolve_legacy_kv_cache_config(
         self,
@@ -182,14 +241,20 @@ class VLLMAdapter:
     # Private implementation
 
     @staticmethod
-    def _drop_ignored_kwargs(kwargs: dict[str, Any]) -> None:
-        for key in _IGNORED_VLLM_KWARGS:
-            kwargs.pop(key, None)
+    def _validate_compatibility_kwargs(
+        compatibility_kwargs: Mapping[str, Any] | None,
+        *,
+        operation: str,
+    ) -> None:
+        if compatibility_kwargs is None:
+            return
+        if not isinstance(compatibility_kwargs, Mapping):
+            raise TypeError("compatibility_kwargs must be a mapping")
+        unknown_keys = sorted(key for key in compatibility_kwargs if key not in _IGNORED_VLLM_KWARGS)
+        if unknown_keys:
+            raise TypeError(f"{operation} got an unexpected keyword argument {unknown_keys[0]!r}")
 
-    def _validate_trace_selection(self, kwargs: dict[str, Any], *, operation: str) -> None:
-        if "enable_trace" not in kwargs:
-            raise TypeError(f"{operation} requires an explicit enable_trace boolean")
-        enable_trace = kwargs["enable_trace"]
+    def _validate_trace_selection(self, enable_trace: bool, *, operation: str) -> None:
         if not isinstance(enable_trace, bool):
             raise TypeError("enable_trace must be bool")
         if operation == "prefill":
@@ -252,28 +317,6 @@ def _validate_resolved_adapter_config(config: VLLMAdapterConfig) -> None:
 def _require_resolved_positive_int(name: str, value: Any) -> None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
-
-
-def _bind_positional(
-    args: tuple[Any, ...],
-    kwargs: Mapping[str, Any],
-    names: tuple[str, ...],
-    operation: str,
-) -> dict[str, Any]:
-    if len(args) > len(names):
-        raise TypeError(f"{operation} accepts at most {len(names)} positional arguments, got {len(args)}")
-    normalized = dict(kwargs)
-    for name, value in zip(names, args):
-        if name in normalized:
-            raise TypeError(f"{operation} got multiple values for argument {name!r}")
-        normalized[name] = value
-    return normalized
-
-
-def _require_arguments(kwargs: Mapping[str, Any], names: tuple[str, ...], operation: str) -> None:
-    missing = [name for name in names if name not in kwargs]
-    if missing:
-        raise TypeError(f"{operation} missing required arguments: {', '.join(missing)}")
 
 
 def _normalize_tensor(kwargs: dict[str, Any], name: str, dtype: torch.dtype) -> None:

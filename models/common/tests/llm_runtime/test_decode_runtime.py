@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import torch
@@ -32,7 +34,7 @@ class FakeMesh:
 class FakeSampling:
     config = SimpleNamespace(allow_force_argmax=True, max_batch_size=2)
 
-    def decode_forward(self, logits, **kwargs):
+    def decode_forward(self, logits, *, k=None, p=None, temp=None, tt_out_tok=None):
         return logits, None
 
 
@@ -123,9 +125,65 @@ def prepare(runtime, *, positions=(0, -1), page_table=None, sampling_params=None
         torch.tensor([11, 0]),
         torch.tensor(positions),
         page_table,
-        sampling_params,
+        sampling_params=sampling_params,
         reset_batch=reset,
     )
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    (
+        (
+            DecodeRuntime.prepare,
+            (
+                ("self", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+                ("tokens", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+                ("start_pos", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+                ("page_table", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+                ("sampling_params", inspect.Parameter.KEYWORD_ONLY, None),
+                ("reset_batch", inspect.Parameter.KEYWORD_ONLY, False),
+            ),
+        ),
+        (
+            DecodeRuntime.read_decode_output,
+            (
+                ("self", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+                ("tt_out", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+                ("async_read", inspect.Parameter.KEYWORD_ONLY, False),
+            ),
+        ),
+        (
+            DecodeRuntime.process_decode_output_host,
+            (
+                ("self", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+                ("tt_out", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+                ("is_tokens", inspect.Parameter.KEYWORD_ONLY, False),
+            ),
+        ),
+    ),
+)
+def test_runtime_api_signatures_are_exact(method, expected):
+    parameters = inspect.signature(method).parameters.values()
+
+    assert tuple((parameter.name, parameter.kind, parameter.default) for parameter in parameters) == expected
+
+
+def test_runtime_api_preserves_positional_prefixes_and_rejects_extra_fields(expect_error):
+    cases = (
+        (DecodeRuntime.prepare, ("tokens", "start_pos", "page_table"), "sampling_params"),
+        (DecodeRuntime.read_decode_output, ("tt_out",), "async_read"),
+        (DecodeRuntime.process_decode_output_host, ("tt_out",), "is_tokens"),
+    )
+
+    for method, positional_prefix, keyword_name in cases:
+        signature = inspect.signature(method)
+        signature.bind(None, *positional_prefix, **{keyword_name: True})
+        with expect_error(TypeError, "too many positional arguments"):
+            signature.bind(None, *positional_prefix, True)
+        with expect_error(TypeError, "unexpected keyword argument 'unknown'"):
+            signature.bind(None, *positional_prefix, unknown=True)
+
+    assert inspect.get_annotations(DecodeRuntime.prepare, eval_str=True)["sampling_params"] is Any
 
 
 def test_config_resolves_canonical_static_capabilities_and_is_frozen(expect_error):
@@ -299,10 +357,18 @@ def test_sampling_values_are_formatted_once_during_prepare(monkeypatch):
     runtime = make_runtime(force_greedy_top_k=True)
     calls = []
     formatter = decode_module._formatted_sampling_values
+
+    def formatter_spy(
+        sampling_params: SamplingParams,
+        batch_size: int,
+    ) -> tuple[tuple[int, ...], tuple[float, ...], tuple[float, ...], bool]:
+        calls.append((sampling_params, batch_size))
+        return formatter(sampling_params, batch_size)
+
     monkeypatch.setattr(
         decode_module,
         "_formatted_sampling_values",
-        lambda *args: calls.append(args) or formatter(*args),
+        formatter_spy,
     )
     prepared = prepare(runtime, sampling_params=greedy_sampling())
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: "mapper")
@@ -449,7 +515,11 @@ def test_capture_plan_describes_full_step_refresh_and_typed_persistent_inputs(mo
     device = DecodeDeviceInputs("tokens", "positions", "rotary", "page_table")
     monkeypatch.setattr(runtime, "_prepare_inputs_host", lambda request: "host")
     monkeypatch.setattr(runtime, "_stage_inputs_and_kpt", lambda host, request: (device, "kpt"))
-    monkeypatch.setattr(runtime, "_run_body", lambda *args, **kwargs: "captured")
+
+    def run_body(inputs, sampling_params, kpt, *, device_feedback):
+        return "captured"
+
+    monkeypatch.setattr(runtime, "_run_body", run_body)
 
     plan = runtime.capture_plan(prepared)
     persistent = plan.prepare_inputs()
@@ -473,7 +543,11 @@ def test_trace_refresh_skips_unchanged_sampling_values(monkeypatch):
         kpt="kpt",
         kpt_signature=[prepared.sampling_values[:3]],
     )
-    monkeypatch.setattr(runtime, "_refresh_kpt", lambda *args: pytest.fail("unchanged KPT was refreshed"))
+
+    def fail_refresh_kpt(device_kpt, prepared):
+        pytest.fail("unchanged KPT was refreshed")
+
+    monkeypatch.setattr(runtime, "_refresh_kpt", fail_refresh_kpt)
 
     runtime.refresh_trace(
         persistent,

@@ -27,6 +27,7 @@ models/common/models/executor.py.
 """
 
 import math
+import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -1229,7 +1230,10 @@ def build_llama3_transformer_1d_config(
             mesh_shape_override=ttnn.MeshShape([num_devices]),
         )
 
-    def cache_path_for(base, *parts):
+    def cache_path_for(
+        base: str | os.PathLike[str] | None,
+        *parts: str | os.PathLike[str],
+    ) -> Path | None:
         if base is None:
             return None
         return Path(base).joinpath(*parts)

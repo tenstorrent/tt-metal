@@ -79,6 +79,7 @@ def fake_allocator(monkeypatch):
     allocated = []
     deallocated = []
 
+    # Non-failure TTNN fakes retain overloaded backend keyword options for assertions.
     def as_tensor(host_tensor, **kwargs):
         tensor = FakeTensor(host_tensor.shape, kwargs["dtype"])
         allocated.append((tensor, host_tensor, kwargs))
@@ -231,7 +232,16 @@ def test_partial_allocation_failure_deallocates_created_tensors(monkeypatch, exp
     calls = 0
     deallocated = []
 
-    def fail_second_allocation(*args, **kwargs):
+    def fail_second_allocation(
+        host_tensor,
+        *,
+        device,
+        mesh_mapper,
+        layout,
+        memory_config,
+        dtype,
+        cache_file_name,
+    ):
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -357,7 +367,16 @@ def test_partial_allocation_cleanup_failure_preserves_tensor_for_release_retry(m
     allocation_calls = 0
     deallocation_calls = 0
 
-    def fail_second_allocation(*args, **kwargs):
+    def fail_second_allocation(
+        host_tensor,
+        *,
+        device,
+        mesh_mapper,
+        layout,
+        memory_config,
+        dtype,
+        cache_file_name,
+    ):
         nonlocal allocation_calls
         allocation_calls += 1
         if allocation_calls == 2:
