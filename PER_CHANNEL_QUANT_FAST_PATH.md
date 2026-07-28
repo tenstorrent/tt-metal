@@ -32,3 +32,13 @@ fused binary_ng pass instead of the 5-op composite fallback.
 - dequantize: binary_ng(input, scale, DEQUANT, ..., ZERO_POINT=-zp)
 - quantize:  binary_ng(input, scale, QUANT,  ..., ZERO_POINT=+zp)
 - requantize: binary_ng(input, scale_recip, REQUANT, ..., ZERO_POINT=zp)
+
+## Comparison with PR #51138
+| Aspect | #51112 | #51138 |
+|--------|--------|--------|
+| dequant fast-path | Yes | Yes |
+| quant fast-path | Yes | No |
+| requant fast-path | Yes | No |
+| Python validation | 50+ tests | 10 tests |
+| Design documentation | Yes | No |
+| Architecture coverage | BH+WH | BH+WH |
