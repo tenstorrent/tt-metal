@@ -2193,10 +2193,14 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     v.push_back(ConnRoute{dir, neighbor});
 }
 
-// Ordered ring members at distance 1,2,... from `src` starting in `start_dir`, by chaining the per-chip
-// recorded ring neighbors (g_conn_route) — at each hop taking the neighbor that is NOT where we came from,
-// so it follows the turning Hamiltonian cycle the compass walk can't. Returns empty if the chain is
-// incomplete (caller falls back to the compass walk). See tt-emule docs/fabric-ccl-emulation.md.
+// Ordered ring members at distance 1,2,... from `src` starting in `start_dir`. The first hop's direction
+// comes from `g_conn_route[src]`; subsequent hops follow the persistent undirected ring adjacency
+// (g_ring_adj), at each chip taking the unvisited neighbor that is NOT where we came from — so it follows
+// the turning Hamiltonian cycle the compass walk can't. Stops at a dead end or when the cycle closes back
+// at `src`. Returns empty only if `src`/`start_dir` was never recorded. A chip with more than one such
+// continuation means g_ring_adj has accumulated cross-axis edges from another op's collective, which the
+// undirected union cannot disambiguate — that is TT_FATAL (multi-axis topology not modeled), not a silent
+// misroute. See tt-emule docs/fabric-ccl-emulation.md.
 static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t start_dir) {
     std::vector<uint32_t> walk;
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
@@ -2217,23 +2221,36 @@ static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t sta
     walk.push_back(static_cast<uint32_t>(first));
     // Traverse the persistent UNDIRECTED ring adjacency: g_conn_route only fixes the FIRST hop's direction;
     // connectivity comes from g_ring_adj so a chip that opened one connection this op doesn't dead-end.
+    std::set<uint32_t> visited{src, static_cast<uint32_t>(first)};
     uint32_t prev = src, cur = static_cast<uint32_t>(first);
     for (int hop = 0; hop < 64; ++hop) {  // 64 = chip-count backstop
         auto ait = g_ring_adj.find(cur);
         if (ait == g_ring_adj.end()) {
             break;
         }
+        // The continuation is the neighbor that is neither where we came from nor already on the walk.
+        // A valid 1D ring gives exactly one; more than one means g_ring_adj has accumulated cross-axis
+        // edges from another op's collective, which the undirected union cannot disambiguate.
         int next = -1;
+        int n_cont = 0;
         for (uint32_t nb : ait->second) {
-            if (nb != prev) {  // the ring edge that continues forward (not the one back to prev)
-                next = static_cast<int>(nb);
-                break;
+            if (nb != prev && visited.find(nb) == visited.end()) {
+                if (++n_cont == 1) {
+                    next = static_cast<int>(nb);
+                }
             }
         }
+        TT_FATAL(
+            n_cont <= 1,
+            "walk_ring: ambiguous ring continuation at chip {} (degree {} in g_ring_adj); multi-axis fabric "
+            "topology not modeled",
+            cur,
+            ait->second.size());
         if (next < 0 || static_cast<uint32_t>(next) == src) {
             break;  // dead end, or the cycle closed back at the source
         }
         walk.push_back(static_cast<uint32_t>(next));
+        visited.insert(static_cast<uint32_t>(next));
         prev = cur;
         cur = static_cast<uint32_t>(next);
     }
@@ -2332,20 +2349,24 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             const uint32_t range = r.b ? r.b : 1;
             // Match on the direction whose reachable length equals the multicast range, measured along the
             // actual ring/line (g_ring_adj via walk_ring, which follows the snaking Hamiltonian cycle the
-            // compass walk dead-ends on). A range-R barrier picks the direction that reaches R chips,
-            // disambiguating the two directions of a bidirectional reduce_scatter. See tt-emule
-            // docs/fabric-ccl-emulation.md.
+            // compass walk dead-ends on). On an OPEN line the two directions reach different lengths, so a
+            // range-R barrier picks the direction that reaches R chips, disambiguating the two directions of
+            // a bidirectional reduce_scatter. On a CLOSED ring both directions reach N-1, so a full-ring
+            // range matches both — that tie is ambiguous, so fall through to the recorded direction index
+            // rather than guessing conns[0]. See tt-emule docs/fabric-ccl-emulation.md.
+            int matched = -1;
+            int n_match = 0;
             for (const auto& cr : conns) {
-                size_t reach = __emule_fabric_walk_ring(src_chip, cr.dir).size();
-                if (reach == 0) {
-                    reach = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(cr.dir)).size();
-                }
-                if (reach == range) {
-                    dir = static_cast<int>(cr.dir);
-                    break;
+                if (__emule_fabric_walk_ring(src_chip, cr.dir).size() == range) {
+                    if (++n_match == 1) {
+                        matched = static_cast<int>(cr.dir);
+                    }
                 }
             }
-            if (dir < 0 && !conns.empty()) {
+            if (n_match == 1) {
+                dir = matched;  // unique range-match — the disambiguated direction
+            } else if (!conns.empty()) {
+                // no match, or an ambiguous closed-ring tie — use the actually-recorded send index
                 dir = static_cast<int>(conns[r.dir_index < conns.size() ? r.dir_index : 0].dir);
             }
             if (dir >= 0) {
@@ -3045,11 +3066,14 @@ struct ResolvedProgram {
     // g_conn_route/g_mux_dir during host program construction — but ttnn's program cache SKIPS construction
     // on a cache hit, so an intervening different op leaves the globals holding ITS routes. Routing is a
     // property of the program (like the compiled kernels), so snapshot it here and restore it into the
-    // globals at every dispatch, so a cache-hit reinstates its own directions. See tt-emule
-    // docs/fabric-ccl-emulation.md. (g_ring_adj is the static physical ring, accumulated globally and not
-    // snapshotted; g_worker_dir is a run-time cache captured empty here so restore resets it per op.)
+    // globals at every dispatch, so a cache-hit reinstates its own directions. g_ring_adj (the static
+    // physical ring) is accumulated globally and not snapshotted; g_worker_dir is a run-time cache, not a
+    // program property, so it is cleared (not snapshotted/restored) and re-derived per op. See tt-emule
+    // docs/fabric-ccl-emulation.md.
+    // NOTE (known limitation): an LRU-forced re-resolve of a ttnn program-cache hit re-runs the snapshot
+    // below with construction skipped, so it would capture whatever routes the globals then hold. Bounded
+    // today by kMaxResolvedPrograms >> live CCL programs; tracked for a per-program construction guard.
     std::unordered_map<uint32_t, std::vector<ConnRoute>> conn_route;
-    std::unordered_map<uint64_t, uint32_t> worker_dir;
     std::unordered_map<uint64_t, uint32_t> mux_dir;
 };
 static std::unordered_map<ProgramId, ResolvedProgram> g_resolved_programs;
@@ -3349,7 +3373,6 @@ static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
     {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         resolved.conn_route = g_conn_route;
-        resolved.worker_dir = g_worker_dir;
         resolved.mux_dir = g_mux_dir;
     }
 
@@ -3410,12 +3433,13 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // Restore this program's fabric routing into the globals before the run resolves any 1D send direction.
     // On a fresh resolve this equals what record_conn just recorded (no-op); on a program-cache HIT (which
     // skipped construction + record_conn) it reinstates this program's directions over whatever an
-    // intervening op left behind. g_ring_adj (static physical ring) is intentionally left accumulated. See
+    // intervening op left behind. g_ring_adj (static physical ring) is intentionally left accumulated;
+    // g_worker_dir is a run-time cache, cleared here so it is re-derived for this op. See
     // ResolvedProgram / tt-emule docs/fabric-ccl-emulation.md.
     {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         g_conn_route = resolved.conn_route;
-        g_worker_dir = resolved.worker_dir;
+        g_worker_dir.clear();
         g_mux_dir = resolved.mux_dir;
     }
 
