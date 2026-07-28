@@ -56,9 +56,15 @@ for b in base fuse-advise fuse-noadvise nofuse-advise nofuse-noadvise; do
 done | tee -a ~/skillexp-logs/ENV.md
 ```
 
-The pinned values for this experiment are in the copy of this file at
-`~/skillexp-run-plan.md` on machine A (`§1.1 Exact commits`). If your resolved SHAs differ from
-those, **stop and reconcile** — somebody moved a branch, and every completed run is suspect.
+The pinned values are in the experiment record's `README.md` (§Compiler, device, pinned commits) in
+agentic-research `skill-contribution-experiments/skillexp-fusing-advisor/` on branch
+`mvasiljevic/skillexp-fusing-advisor` — retrievable from git, not from someone's home directory. If
+your resolved SHAs differ from those, **stop and reconcile**: somebody moved a branch, and every
+completed run is suspect.
+
+Per-machine setup a clone cannot provide — container launch, Codex login (**a second machine needs its
+own device auth**), the HF token, the tt-metal build, the advisor fix — is in that record's
+`setup/PREREQS.md`.
 
 `base` is `mvasiljevic/gpt-oss-pipeline-progress` (`aab03552379`) plus skills/prompt-only commits.
 Nothing in `ttnn/`, `tt_metal/`, or `models/` changed, so an existing build of `aab03552379` is
