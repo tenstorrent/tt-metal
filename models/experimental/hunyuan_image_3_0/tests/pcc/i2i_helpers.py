@@ -148,12 +148,9 @@ def rgb_image(size=I2I_IMAGE_SIZE):
 
 
 def build_host_bundle(*, cfg_factor=CFG_FACTOR, vit_layers=VIT_LAYERS, seed=42):
-    from models.experimental.hunyuan_image_3_0.ref.image_gen.model_loaders import (
-        load_aligner,
-        load_patch_embed,
-        load_siglip2_vision,
-        load_timestep_embedder,
-    )
+    from models.experimental.hunyuan_image_3_0.ref.image_gen.patch_embed import load_patch_embed
+    from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import load_timestep_embedder
+    from models.experimental.hunyuan_image_3_0.ref.vision.siglip2 import load_aligner, load_siglip2_vision
     from models.experimental.hunyuan_image_3_0.ref.weights import load_tensors
 
     if USE_INSTRUCT_I2I:

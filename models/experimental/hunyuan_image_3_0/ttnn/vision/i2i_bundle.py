@@ -14,7 +14,7 @@ from typing import Any
 import torch
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.ref.cond_vae_encode import prepare_vae_encode_input
+from models.experimental.hunyuan_image_3_0.ref.cond_encode import first_section_type, prepare_vae_encode_input
 from models.experimental.hunyuan_image_3_0.ref.model_config import IMAGE_BASE_SIZE, VAE_SCALING_FACTOR, VIT_CONFIG
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
     GenImageHostInputs,
@@ -569,7 +569,7 @@ def vae_encode_image_tt(
     cond_encode_trace: bool = True,
 ) -> tuple[torch.Tensor, ttnn.Tensor]:
     """Encode one cond image on device -> ``(timesteps, latents_bthwc)`` on device."""
-    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import cond_encode_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import cond_encode_trace_enabled
 
     t0 = time.perf_counter()
     vae_encoder = _resolve_tt_vae_encoder(mesh_device, image, vae_encoder)
@@ -621,10 +621,7 @@ def encode_cond_images_tt(
     if batch_cond_images is None or len(batch_cond_images) == 0 or len(batch_cond_images[0]) == 0:
         return CondVaeEncodeTT(cond_vae_images=None, cond_timesteps=None)
 
-    from models.experimental.hunyuan_image_3_0.ref.cond_vae_encode import _first_section_type
-
-    section_type = _first_section_type(batch_cond_images)
-    if section_type not in ("cond_vae_image", "cond_joint_image"):
+    if first_section_type(batch_cond_images) not in ("cond_vae_image", "cond_joint_image"):
         return CondVaeEncodeTT(cond_vae_images=None, cond_timesteps=None)
 
     if scaling_factor is None:
@@ -696,7 +693,7 @@ def _encode_vit_cond_image_tt(
     *,
     cond_encode_trace: bool = True,
 ) -> ttnn.Tensor:
-    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import cond_encode_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import cond_encode_trace_enabled
 
     pv, hw, mask = _vit_host_tensors(vit_tensor)
     if cond_encode_trace and cond_encode_trace_enabled():
@@ -715,7 +712,7 @@ def _encode_vit_batch_row_tt(
     *,
     cond_encode_trace: bool = True,
 ) -> ttnn.Tensor:
-    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import cond_encode_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import cond_encode_trace_enabled
 
     t0 = time.perf_counter()
     traced = cond_encode_trace and cond_encode_trace_enabled()

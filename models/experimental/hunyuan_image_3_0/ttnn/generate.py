@@ -197,7 +197,7 @@ def make_recaption_logits_fn(
     When ``HY_RECAPTION_TRACE=1`` (default; set ``HY_RECAPTION_TRACE=0`` to disable) and
     KV + ``sp_factor=1``, captures one decode step on CQ0 and replays it for subsequent
     AR tokens; prefix prefill uses chunked KV and optional trace capture
-    (``tt/ar_prefill.py``).
+    (``ttnn/ar_trace.py``).
 
     ``return_device_logits=True`` keeps logits on device for ``HY_DEVICE_SAMPLING``
     (incompatible with trace replay returning host logits — disable trace or fall back).

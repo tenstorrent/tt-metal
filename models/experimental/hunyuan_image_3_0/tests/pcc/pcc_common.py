@@ -5,14 +5,9 @@
 
 from __future__ import annotations
 
-import csv
-import os
-from pathlib import Path
-
 import torch
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.hunyuan_image_3_0.ref.safe_paths import safe_join, safe_output_path
 from models.experimental.hunyuan_image_3_0.ref.model_config import (
     IMAGE_BASE_SIZE,
     PRODUCTION_IMAGE_TOKENS,
@@ -27,8 +22,6 @@ from models.experimental.hunyuan_image_3_0.ref.model_config import (
     production_image_span,
     transformer_cfg,  # noqa: F401 — re-export for sibling PCC tests
 )
-
-ROOT = Path(__file__).resolve().parents[5]
 
 PCC_STRICT = 0.999
 PCC_BLOCK = 0.99
@@ -188,28 +181,3 @@ def pcc_metrics(ref: torch.Tensor, tt_out: torch.Tensor, threshold: float) -> tu
     _, p = comp_pcc(ref, tt_out, threshold)
     d = (ref.float() - tt_out.float()).abs().max().item()
     return p, d
-
-
-def write_isl_csv(rows: list[dict], path: Path | str) -> Path:
-    # Absolutized and extension-checked inline, so the path reaching ``open`` is a
-    # normalized .csv artifact path and an HY_PCC_CSV typo cannot clobber something else.
-    csv_path = os.path.abspath(str(path))
-    if not csv_path.endswith(".csv"):
-        raise ValueError(f"refusing output path {csv_path!r}: expected a .csv file")
-    out = Path(csv_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if not rows:
-        return out
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    return out
-
-
-def isl_csv_path(default_name: str = "hunyuan_isl_sweep.csv") -> Path | None:
-    if env := os.environ.get("HY_PCC_CSV"):
-        return safe_output_path(env, suffix=".csv")
-    if csv_dir := os.environ.get("HY_PCC_CSV_DIR"):
-        return safe_join(csv_dir, default_name)
-    return None

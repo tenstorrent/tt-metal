@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Conditional VAE encode glue for I2I (host PyTorch).
+# Conditional-image encode glue for I2I (host PyTorch): VAE latents + SigLIP2 pack.
 #
 # Mirrors upstream:
 #   HunyuanImage-3.0/hunyuan_image_3/modeling_hunyuan_image_3.py
-#     vae_encode()           (~2426)
-#     _encode_cond_image()   (~2456)
+#     vae_encode()                         (~2426)
+#     _encode_cond_image()   VAE branch    (~2456)
+#     _encode_cond_image()   ViT branch    (~2514)
+#     _prepare_vit_image_kwargs()          (~2539)
 #
 # References
 # ----------
@@ -22,11 +24,46 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from .vae.encoder import Encoder, Z_CHANNELS
-
-FFACTOR_TEMPORAL = 4
+from .vae.encoder import FFACTOR_TEMPORAL, Encoder
 
 
+# ---------------------------------------------------------------------------
+# Shared CondImage helpers
+# ---------------------------------------------------------------------------
+def _cond_attr(cond_image: Any, attr: str) -> Tensor:
+    """``CondImage.<attr>`` when wrapped, else the already-unwrapped tensor."""
+    from .tokenizer.image_info import CondImage
+
+    if isinstance(cond_image, CondImage):
+        return getattr(cond_image, attr)
+    return cond_image
+
+
+def _vae_tensor(cond_image: Any) -> Tensor:
+    return _cond_attr(cond_image, "vae_image")
+
+
+def _vit_tensor(cond_image: Any) -> Tensor:
+    return _cond_attr(cond_image, "vit_image")
+
+
+def first_section_type(batch_cond_images: list[list[Any]], default: str = "cond_vae_image") -> str:
+    """Section type of the first cond image; ``default`` for plain tensors."""
+    from .tokenizer.image_info import CondImage
+
+    first = batch_cond_images[0][0]
+    if isinstance(first, CondImage):
+        return first.section_type
+    return getattr(first, "section_type", default)
+
+
+def _is_empty(batch_cond_images: list[list[Any]] | None) -> bool:
+    return batch_cond_images is None or len(batch_cond_images) == 0 or len(batch_cond_images[0]) == 0
+
+
+# ---------------------------------------------------------------------------
+# VAE branch
+# ---------------------------------------------------------------------------
 def _randn_tensor(
     shape: tuple[int, ...],
     *,
@@ -121,23 +158,6 @@ def vae_encode_image(
     return t, latents
 
 
-def _cond_vae_tensor(cond_image: Any) -> Tensor:
-    from .tokenizer.image_info import CondImage
-
-    if isinstance(cond_image, CondImage):
-        return cond_image.vae_image
-    return cond_image
-
-
-def _first_section_type(batch_cond_images: list[list[Any]]) -> str:
-    from .tokenizer.image_info import CondImage
-
-    first = batch_cond_images[0][0]
-    if isinstance(first, CondImage):
-        return first.section_type
-    return getattr(first, "section_type", "cond_vae_image")
-
-
 @dataclass
 class CondVaeEncodeOutput:
     """Encoded conditional VAE latents per upstream ``_encode_cond_image``."""
@@ -157,11 +177,10 @@ def encode_cond_images(
     dtype: torch.dtype = torch.float32,
 ) -> CondVaeEncodeOutput:
     """Mirror ``HunyuanImage3ForCausalMM._encode_cond_image`` (VAE branch only)."""
-    if batch_cond_images is None or len(batch_cond_images) == 0 or len(batch_cond_images[0]) == 0:
+    if _is_empty(batch_cond_images):
         return CondVaeEncodeOutput(cond_vae_images=None, cond_timesteps=None)
 
-    section_type = _first_section_type(batch_cond_images)
-    if section_type not in ("cond_vae_image", "cond_joint_image"):
+    if first_section_type(batch_cond_images) not in ("cond_vae_image", "cond_joint_image"):
         return CondVaeEncodeOutput(cond_vae_images=None, cond_timesteps=None)
 
     batch_cond_vae_images: list[list[Tensor]] = []
@@ -170,10 +189,9 @@ def encode_cond_images(
         cond_vae_image_list: list[Tensor] = []
         cond_t_list: list[Tensor] = []
         for cond_image in cond_images:
-            vae_image = _cond_vae_tensor(cond_image)
             cond_t_i, cond_vae_i = vae_encode_image(
                 encoder,
-                vae_image,
+                _vae_tensor(cond_image),
                 scaling_factor=scaling_factor,
                 shift_factor=shift_factor,
                 generator=generator,
@@ -207,5 +225,77 @@ def encode_cond_images(
     return CondVaeEncodeOutput(cond_vae_images=cond_vae_images, cond_timesteps=cond_t)
 
 
-def latent_channels() -> int:
-    return Z_CHANNELS
+# ---------------------------------------------------------------------------
+# ViT (SigLIP2 + aligner) branch
+# ---------------------------------------------------------------------------
+@dataclass
+class CondVitEncodeOutput:
+    """Packed conditional ViT pixel tensors + encoder kwargs."""
+
+    cond_vit_images: list[Tensor] | None
+    cond_vit_image_kwargs: dict[str, list[Tensor]] | None
+
+
+def prepare_cond_vit_images(
+    batch_cond_images: list[list[Any]] | None,
+    *,
+    cfg_factor: int = 1,
+    dtype: torch.dtype = torch.float32,
+) -> list[Tensor] | None:
+    """Mirror ``_encode_cond_image`` ViT branch (stack per batch row, no forward)."""
+    if _is_empty(batch_cond_images):
+        return None
+
+    if first_section_type(batch_cond_images, "cond_vit_image") not in ("cond_vit_image", "cond_joint_image"):
+        return None
+
+    cond_vit_images: list[Tensor] = []
+    for cond_images in batch_cond_images:
+        cond_vit_image_list = [_vit_tensor(cond_image) for cond_image in cond_images]
+        cond_vit_images.append(torch.stack(cond_vit_image_list, dim=0).to(dtype=dtype))
+
+    if cfg_factor > 1:
+        cond_vit_images = cond_vit_images * cfg_factor
+    return cond_vit_images
+
+
+def prepare_cond_vit_image_kwargs(
+    batch_cond_images: list[list[Any]] | None,
+    *,
+    cfg_factor: int = 1,
+) -> dict[str, list[Tensor]] | None:
+    """Mirror ``_prepare_vit_image_kwargs`` (spatial_shapes + attention_mask lists)."""
+    if _is_empty(batch_cond_images):
+        return None
+
+    first_vit = _vit_tensor(batch_cond_images[0][0])
+    if not hasattr(first_vit, "vision_encoder_kwargs") or not first_vit.vision_encoder_kwargs:
+        return None
+
+    cond_vit_image_kwargs: dict[str, list[Tensor]] = {"spatial_shapes": [], "attention_mask": []}
+    for cond_images in batch_cond_images:
+        cond_vit_image_kwargs["spatial_shapes"].append(
+            torch.stack([_vit_tensor(cond_image).vision_encoder_kwargs["spatial_shapes"] for cond_image in cond_images])
+        )
+        cond_vit_image_kwargs["attention_mask"].append(
+            torch.stack(
+                [_vit_tensor(cond_image).vision_encoder_kwargs["pixel_attention_mask"] for cond_image in cond_images]
+            )
+        )
+    if cfg_factor > 1:
+        cond_vit_image_kwargs["spatial_shapes"] = cond_vit_image_kwargs["spatial_shapes"] * cfg_factor
+        cond_vit_image_kwargs["attention_mask"] = cond_vit_image_kwargs["attention_mask"] * cfg_factor
+    return cond_vit_image_kwargs
+
+
+def encode_cond_vit_images(
+    batch_cond_images: list[list[Any]] | None,
+    *,
+    cfg_factor: int = 1,
+    dtype: torch.dtype = torch.float32,
+) -> CondVitEncodeOutput:
+    """Pack cond ViT tensors and kwargs for ``instantiate_vit_image_tokens``."""
+    return CondVitEncodeOutput(
+        cond_vit_images=prepare_cond_vit_images(batch_cond_images, cfg_factor=cfg_factor, dtype=dtype),
+        cond_vit_image_kwargs=prepare_cond_vit_image_kwargs(batch_cond_images, cfg_factor=cfg_factor),
+    )

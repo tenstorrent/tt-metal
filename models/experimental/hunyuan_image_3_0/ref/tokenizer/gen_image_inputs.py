@@ -764,8 +764,7 @@ def build_i2i_inputs_embeds(
     vit_num_layers: int | None = None,
 ) -> GenImageHostInputs:
     """Encode cond VAE/ViT and scatter into ``inputs_embeds`` (upstream forward steps 4+8)."""
-    from models.experimental.hunyuan_image_3_0.ref.cond_vae_encode import encode_cond_images
-    from models.experimental.hunyuan_image_3_0.ref.cond_vit_encode import encode_cond_vit_images
+    from models.experimental.hunyuan_image_3_0.ref.cond_encode import encode_cond_images, encode_cond_vit_images
     from models.experimental.hunyuan_image_3_0.ref.image_gen.input_instantiate import (
         instantiate_continuous_tokens,
         instantiate_vae_image_tokens,
