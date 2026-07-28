@@ -55,6 +55,10 @@ struct RegimeAMatmulParams {
     // Back to kernel-behaviour bits (invalid output, unfused/single-output only):
     //   bit11 (2048) SKIP_IN1_READ         - drop the in1 DRAM read payload; keep CB reserve/push, rotated
     //                                       shard order, barriers, M-split forwarding, semaphores, compute
+    // And one more HOST-ONLY, correctness-preserving bit (valid output, allowed on every path):
+    //   bit12 (4096) PLACE_IN1_OPT         - CROSS placement: put each (bank, noc) reader group in the region
+    //                                       downstream of THAT endpoint on THAT NoC instead of one spiral
+    //                                       around the NOC_0-optimal core (also supersedes IN1_NEAR pass 1)
     // Bits combine freely (pair-interaction matrix). bit0 dominates bit1 (normalize skip-all+redundant to
     // skip-all). Set from TT_REGIME_A_DIAG_MASK in invoke(); part of the reflection program-cache hash so
     // each mask is a distinct cached program. Diagnostic outputs are intentionally invalid; correctness is
