@@ -56,8 +56,11 @@ def tilize_block(
     # Determine tile dimensions
     if tile_dimensions is not None:
         tile_rows, tile_cols = tile_dimensions
-        # get_tile_params validates tile_dimensions internally
-        face_r_dim, _, _ = get_tile_params(tile_dimensions)
+        # get_tile_params validates tile_dimensions internally. Derive num_faces from
+        # the tile geometry too (like untilize_block), otherwise tilized_elements_per_tile
+        # below keeps the default 4-face count and mismatches the actual tilized output.
+        face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+        num_faces = num_faces_r_dim * num_faces_c_dim
     else:
         # Default to standard 32x32 tiles
         tile_rows, tile_cols = DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM

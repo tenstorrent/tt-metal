@@ -1,0 +1,9 @@
+{
+  "env": {
+    "PREFILL_MODEL": "minimax_m3",
+    "PREFILL_NUM_LAYERS": "60",
+    "M3_INDEX_CACHE_BF16": "1",
+    "PREFILL_STANDALONE_NCHUNKS": "2",
+    "PREFILL_STANDALONE_PCC": "1"
+  }
+}

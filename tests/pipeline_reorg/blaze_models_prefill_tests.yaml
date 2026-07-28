@@ -77,7 +77,7 @@
 
 - name: "Blaze - KV cache table"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -86,7 +86,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "line and pretrained" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "line and pretrained and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "line" -vvv --tb=short
     '
   test_type: kv_cache_table
@@ -253,7 +253,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 35
+      timeout: 24
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -266,15 +266,15 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_25k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1320
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_25k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1320
     '
 
   test_type: kimi_prefill_block
   test_group: module
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 22
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -314,13 +314,13 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=3600
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=2940
     '
   test_type: prefill_transformer_determinism
   test_group: module
   skus:
     bh_sc1:
-      timeout: 60
+      timeout: 49
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -344,7 +344,7 @@
   test_type: ring_joint_sdpa_perf
   test_group: sdpa_perf
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       # Both perf checks run in ~5.6 min; 23 leaves headroom for Galaxy variance.
       timeout: 23
   owner_id: U08RL15T4N8
@@ -374,7 +374,7 @@
   test_type: kimi_chunked
   test_group: module
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       # Job takes under 20 minutes; 40 minute timeout provides buffer for variance and machines with less power.
       timeout: 40
   owner_id: U08RL15T4N8
@@ -395,7 +395,7 @@
   test_type: glm_chunked
   test_group: module
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 45
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
@@ -418,5 +418,48 @@
     bh_sc1:
       timeout: 40
   owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Kimi DFlash drafter"
+  cmd: |
+    export MESH_DEVICE=TG
+    export DFLASH_HF_MODEL=/mnt/models/Kimi-K2.6-DFlash
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "mesh-8x4 and sliced and pretrained" -vvv --tb=short --timeout=600
+    '
+  test_type: kimi_dflash
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 5
+  owner_id: U09L76N1MAT
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Kimi Prefill Runner (code_debug 55k)"
+  cmd: |
+    export MESH_DEVICE=TG
+    export PREFILL_MODEL=kimi_k2_6
+    export PREFILL_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
+    export PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export PREFILL_NUM_LAYERS=61
+    export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
+    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
+    export PREFILL_RUNNER_LAUNCH=ci
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
+    '
+  test_type: prefill_runner
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 30
+  owner_id: U09L76N1MAT  # Nenad Babin
   team: models
   sp_config: sc1

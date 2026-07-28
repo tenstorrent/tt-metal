@@ -91,8 +91,11 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
 
+    // UInt8 requires fp32 dest acc on Blackhole: hardware promotes 8-bit integers to 32-bit in
+    // dest but keeps them as integers (not float), so the output CB stays as UInt8 (not Float32).
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
+                        a.dtype() == DataType::UINT8;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -105,7 +108,13 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / tile_width;
 
     uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / tile_hw;
-    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    // Fold push_cb_pair's c_1 staging (bytes/tile + fixed) into the limit or the region overruns L1.
+    uint32_t staging_bytes_per_tile = input_single_tile_size / tile_height;
+    uint32_t fixed_staging_bytes = 2 * dram_alignment;
+    uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
+    uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
+    uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
 
     auto
         [ncores,
@@ -138,8 +147,6 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
     const TileDescriptor tile_descriptor(operation_attributes.tile);
 
@@ -245,7 +252,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     uint32_t single_sub_block_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sub_block_size;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_llk_acc) {
+    // UInt8 uses 32-bit dest as integer (not float): do not enable FP32 unpack-to-dest mode.
+    if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
 
