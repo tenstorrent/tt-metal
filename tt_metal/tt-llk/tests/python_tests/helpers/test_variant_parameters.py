@@ -338,7 +338,8 @@ class USE_RUNTIME(TemplateParameter):
 
 @dataclass
 class REINIT_MODE(TemplateParameter):
-    """Selects the reduce_block_max_row re-arm path: 0=none, 1=short, 2=minimal."""
+    """Selects the reduce_block_max_row re-arm path: 0=none, 1=short (MOP + addrmods),
+    2=minimal (ADDR_MOD_1/2/6), 3=addrmod-only reinit (ADDR_MOD_1/2/3/6)."""
 
     reinit_mode: int = 0
 
@@ -350,7 +351,8 @@ class REINIT_MODE(TemplateParameter):
 class CLOBBER_OP(TemplateParameter):
     """Op run between reduce init and reinit to overwrite the reduce MOP/addrmods
     (reconfig-escape guard for the reinit paths):
-    0=none, 1=eltwise binary (all addrmods + MOP), 2=minimal_safe (ADDR_MOD_1/2/6 only).
+    0=none, 1=eltwise binary (all addrmods + MOP), 2=minimal_safe (ADDR_MOD_1/2/6 only),
+    3=addrmod_all (ADDR_MOD_1/2/3/6).
     """
 
     clobber_op: int = 0

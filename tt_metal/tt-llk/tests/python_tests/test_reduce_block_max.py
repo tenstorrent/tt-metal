@@ -21,9 +21,10 @@ pure MAX and the scaler is a no-op multiplier.
 Coverage (Blackhole + Wormhole B0):
   * compile-time path, ``block_ct_dim`` sweep, bf16 and fp32-dest;
   * runtime path (dynamic ``block_ct_dim``);
-  * reinit_short / reinit_minimal re-arm after the init, guarding the reconfig-escape
-    path. Compile-time reinit_short/minimal are Blackhole-only lib fns; runtime
-    reinit_short runs on both arches, runtime reinit_minimal is Blackhole-only.
+  * reinit_short / reinit_minimal / reinit (addrmod-only) re-arm after a clobbering op,
+    guarding the reconfig-escape path. Compile-time reinit_short/minimal are
+    Blackhole-only lib fns; runtime reinit_short and runtime reinit run on both arches,
+    runtime reinit_minimal is Blackhole-only.
   * trigger handshake (respect_trigger, + overlap_first_half on the runtime family):
     the unpack splits the block reduce into two half-width MOP runs gated by HW
     semaphores; the PACK thread plays the producer. Both arches. Validates split-MOP
@@ -60,8 +61,9 @@ FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
 ]
 
-# REINIT_MODE C++ selector: 0 = plain init, 1 = reinit_short, 2 = reinit_minimal.
-_REINIT_DEFINE = {"none": 0, "short": 1, "minimal": 2}
+# REINIT_MODE C++ selector: 0 = plain init, 1 = reinit_short, 2 = reinit_minimal,
+# 3 = reinit (addrmod-only, all four; runtime only).
+_REINIT_DEFINE = {"none": 0, "short": 1, "minimal": 2, "full": 3}
 
 # CLOBBER_OP C++ selector: op run between init and reinit to overwrite the reduce config,
 # so the reinit path must actually restore it (reconfig-escape guard).
@@ -70,10 +72,17 @@ _REINIT_DEFINE = {"none": 0, "short": 1, "minimal": 2}
 #       paired with reinit_short (which reprograms the MOP and all addrmods).
 #   2 = scramble ADDR_MOD_1/2/6 only, preserving ADDR_MOD_3 + MOP; paired with reinit_minimal
 #       (which restores only 1/2/6 and relies on 3/MOP being intact, as matmul/sub_exp do).
-_CLOBBER_DEFINE = {"none": 0, "eltwise": 1, "minimal_safe": 2}
+#   3 = scramble ADDR_MOD_1/2/3/6 (every addrmod the reduce consumes), preserving the MOP +
+#       replay buffer; paired with the addrmod-only reinit ("full"), which reprograms exactly
+#       those four and nothing else.
+_CLOBBER_DEFINE = {"none": 0, "eltwise": 1, "minimal_safe": 2, "addrmod_all": 3}
 
 # The clobber must match the reinit's restore contract, or the reduce hangs.
-_CLOBBER_FOR_REINIT = {"short": "eltwise", "minimal": "minimal_safe"}
+_CLOBBER_FOR_REINIT = {
+    "short": "eltwise",
+    "minimal": "minimal_safe",
+    "full": "addrmod_all",
+}
 
 
 def _dest_acc(output_format):
@@ -92,7 +101,14 @@ def _run_reduce_block_max(
     clobber="none",
     respect_trigger=False,
     overlap_first_half=False,
+    expect_mismatch=False,
 ):
+    """Run one reduce_block_max_row variant and validate column [0] against golden.
+
+    ``expect_mismatch`` inverts the verdict: the run must diverge from golden. Used by
+    the negative controls, which pin that a clobber left un-repaired really does corrupt
+    the reduce (so the reinit cases are not passing for free).
+    """
     dest_acc = _dest_acc(formats.output_format)
 
     # Build operand A row-major (32 rows x block_ct_dim*32 cols), so the canonical
@@ -168,12 +184,26 @@ def _run_reduce_block_max(
 
     # Only column [0] of each physical row is defined (the row-max); the packer's
     # REDUCE_ROW mask leaves every other lane unspecified, so validate column [0].
-    for pr in range(TILE_DIM):
-        g = float(golden_rowmajor[pr, 0])
-        d = float(res[pr, 0])
-        assert abs(d - g) <= tol.atol + tol.rtol * abs(g), (
+    mismatches = [
+        (pr, float(res[pr, 0]), float(golden_rowmajor[pr, 0]))
+        for pr in range(TILE_DIM)
+        if abs(float(res[pr, 0]) - float(golden_rowmajor[pr, 0]))
+        > tol.atol + tol.rtol * abs(float(golden_rowmajor[pr, 0]))
+    ]
+
+    if expect_mismatch:
+        assert mismatches, (
+            "expected the un-repaired clobber to corrupt the reduce, but every row "
+            f"matched golden (block_ct_dim={block_ct_dim}, reinit={reinit}, "
+            f"clobber={clobber}); this negative test is no longer meaningful"
+        )
+        return
+
+    if mismatches:
+        pr, d, g = mismatches[0]
+        raise AssertionError(
             f"reduce_block_max_row mismatch at row {pr}: device={d} golden={g} "
-            f"(block_ct_dim={block_ct_dim})"
+            f"(block_ct_dim={block_ct_dim}, {len(mismatches)} row(s) off)"
         )
 
 
@@ -230,11 +260,17 @@ def test_reduce_block_max_reinit(formats, block_ct_dim, reinit):
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[2, 4],
-    reinit=["short", "minimal"],
+    reinit=["short", "minimal", "full"],
 )
 def test_reduce_block_max_reinit_runtime(formats, block_ct_dim, reinit):
-    """Runtime reinit paths: reinit_short_runtime on both arches;
-    reinit_minimal_runtime is a Blackhole-only lib fn."""
+    """Runtime reinit paths: reinit_short_runtime and reinit_runtime on both arches;
+    reinit_minimal_runtime is a Blackhole-only lib fn.
+
+    full is _llk_math_reduce_block_max_row_reinit_runtime_, the addrmod-only
+    re-arm that reprograms all four addrmods the reduce consumes (ADDR_MOD_1/2/3/6) and
+    nothing else. Its clobber (addrmod_all) scrambles exactly those four and leaves
+    the MOP intact, so dropping any one of them from the lib fn breaks this test.
+    """
     if reinit == "minimal" and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip(
             "runtime reduce_block_max_row reinit_minimal is a Blackhole-only lib path"
@@ -245,6 +281,37 @@ def test_reduce_block_max_reinit_runtime(formats, block_ct_dim, reinit):
         use_runtime=True,
         reinit=reinit,
         clobber=_CLOBBER_FOR_REINIT[reinit],
+    )
+
+
+@parametrize(
+    block_ct_dim=[2, 4],
+    reinit=["none", "minimal"],
+)
+def test_reduce_block_max_reinit_negative_control(block_ct_dim, reinit):
+    """Negative control for the `addrmod_all` clobber, so the reinit cases above
+    cannot silently go vacuous.
+
+    The clobber zeroes ADDR_MOD_1/2/3/6, which only reinit_runtime ("full")
+    reprograms in full. This test pins that the escape is real:
+      * `none`: clobber with no re-arm at all must diverge from golden;
+      * `minimal`: reinit_minimal_runtime restores 1/2/6 but deliberately not
+        ADDR_MOD_3, so it must also diverge. If it ever passed, the "full" case would
+        no longer prove that reinit_runtime restores ADDR_MOD_3.
+
+    bf16 only: the escape is a DEST addressing failure, independent of DEST precision.
+    """
+    if reinit == "minimal" and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "runtime reduce_block_max_row reinit_minimal is a Blackhole-only lib path"
+        )
+    _run_reduce_block_max(
+        FORMATS[0],
+        block_ct_dim,
+        use_runtime=True,
+        reinit=reinit,
+        clobber="addrmod_all",
+        expect_mismatch=True,
     )
 
 

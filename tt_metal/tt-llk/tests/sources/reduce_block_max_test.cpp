@@ -22,10 +22,13 @@
 //                     MOP/addrmods: 0 = none, 1 = eltwise binary init (reprograms
 //                     ALL addrmods + MOP, as matmul / sub_exp do in the SDPA inner
 //                     loop), 2 = scramble ADDR_MOD_1/2/6 only (preserving ADDR_MOD_3
-//                     + MOP, the narrow escape reinit_minimal expects).
+//                     + MOP, the narrow escape reinit_minimal expects), 3 = scramble
+//                     ADDR_MOD_1/2/3/6 (preserving the MOP and replay buffer, the escape
+//                     the addrmod-only reinit expects).
 //   * REINIT_MODE   - re-arm the reduce config after the clobber, matching the SDPA
 //                     inner-loop reinit paths: 0 = none, 1 = reinit_short (reprogram
-//                     MOP + addrmods), 2 = reinit_minimal (ADDR_MOD_1/2/6 only).
+//                     MOP + addrmods), 2 = reinit_minimal (ADDR_MOD_1/2/6 only),
+//                     3 = reinit (all four addrmods; runtime only).
 //   * RESPECT_TRIGGER   - split the block reduce into two half-width unpack MOP runs
 //                     separated by a HW semaphore wait; the PACK thread plays the
 //                     producer and posts the tokens. Requires an even BLOCK_CT_DIM.
@@ -124,8 +127,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 //   2 = scramble ONLY ADDR_MOD_1/2/6, preserving ADDR_MOD_3 + the MOP — the narrow escape
 //       reinit_minimal expects (it restores 1/2/6 and relies on 3 + MOP being intact, as
 //       the real SDPA predecessors matmul / sub_exp / copy_tile_custom leave them).
+//   3 = scramble ADDR_MOD_1/2/3/6 (every addrmod the reduce consumes), but preserve the MOP
+//       and the replay buffer, which is the escape the addrmod-only reinit (mode 3) expects.
+//       Unlike clobber 2 this also destroys ADDR_MOD_3.
 static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorShape& tensor_shape)
 {
+    // Plainly wrong (zeroed) addrmod: no counter advances at all, so a reduce that runs
+    // with it writes every transposed row on top of row 0 instead of striding through the
+    // faces.
+    [[maybe_unused]] const ckernel::addr_mod_t zeroed = {
+        .srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}};
+
     if constexpr (CLOBBER_OP == 1)
     {
         // ELWADD requires LoFi (HiFi is multiply-only); fidelity is irrelevant here since
@@ -135,13 +147,19 @@ static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorS
     }
     else if constexpr (CLOBBER_OP == 2)
     {
-        // Overwrite ADDR_MOD_1/2/6 with plainly wrong (zeroed) values; leave ADDR_MOD_3 and
-        // the reduce MOP intact, matching reinit_minimal's contract. reinit_minimal must then
-        // restore 1/2/6 for the reduce to produce the correct row-max.
-        const ckernel::addr_mod_t zeroed = {
-            .srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}};
+        // Overwrite ADDR_MOD_1/2/6; leave ADDR_MOD_3 and the reduce MOP intact, matching
+        // reinit_minimal's contract. reinit_minimal must then restore 1/2/6 for the reduce
+        // to produce the correct row-max.
         zeroed.set(ckernel::ADDR_MOD_1);
         zeroed.set(ckernel::ADDR_MOD_2);
+        zeroed.set(ckernel::ADDR_MOD_6);
+    }
+    else if constexpr (CLOBBER_OP == 3)
+    {
+        // Overwrite every addrmod the reduce consumes.
+        zeroed.set(ckernel::ADDR_MOD_1);
+        zeroed.set(ckernel::ADDR_MOD_2);
+        zeroed.set(ckernel::ADDR_MOD_3);
         zeroed.set(ckernel::ADDR_MOD_6);
     }
 }
@@ -176,6 +194,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_reduce_block_max_row_reinit_minimal_runtime_();
         }
 #endif
+        else if constexpr (REINIT_MODE == 3)
+        {
+            // reduce_block_max_row_reinit_runtime: restore all four addrmods the reduce consumes
+            // (ADDR_MOD_1/2/3/6) and nothing else. Paired with CLOBBER_OP 3 (addrmod-only scramble).
+            _llk_math_reduce_block_max_row_reinit_runtime_();
+        }
 
         _llk_math_wait_for_dest_available_<DST_SYNC>();
         _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
