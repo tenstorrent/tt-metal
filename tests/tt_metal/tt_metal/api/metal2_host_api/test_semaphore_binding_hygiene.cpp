@@ -34,10 +34,15 @@ namespace {
 //     noc_semaphore_set_remote(...)
 //
 // A raw access is an UNDECLARED WRITER: the host cannot see it, so the census can
-// undercount and AUTO may choose the cheap non-atomic mechanism for a semaphore that
-// actually has concurrent writers. (That is not a regression -- before AUTO, every
-// semaphore was non-atomic anyway -- but it caps what AUTO can guarantee, and it is the
-// reason AUTO must never auto-select the DM_LOCAL_CACHED cached fast path.)
+// undercount and AUTO may choose the wrong mechanism for a semaphore that actually has
+// concurrent writers.
+//
+// The stakes rose once AUTO gained the ability to auto-select DM_LOCAL_CACHED: a cached
+// semaphore is RELOCATED into the cached-only pool (noc_semaphore.h sem_l1_offset()), so a
+// declared binder and an undeclared toucher address two DIFFERENT words -- the semaphore
+// SPLITS and a wait() never completes, rather than merely losing an update as it would
+// under LOCAL_NONATOMIC/EXTERNAL (both of which stay in the kernel_config ring). Keeping
+// this lint green is therefore load-bearing for the cached pick.
 //
 // An audit found ZERO production Metal 2.0 kernels using the raw path. This test keeps
 // it that way: it fails if a Metal 2.0 kernel source starts using raw semaphore access.
@@ -46,8 +51,12 @@ namespace {
 //  - LEGACY kernels are not checked and do not matter: they never reach the AUTO path
 //    (it lives in MakeProgramFromSpec), and they manage their own CreateSemaphore words.
 //  - This is a source lint, not a proof. It can be defeated by macros, helper functions,
-//    or an address handed in as a plain runtime arg. It catches accidental regressions;
-//    it is NOT sufficient on its own to justify auto-selecting DM_LOCAL_CACHED.
+//    or an address handed in as a plain runtime arg, so it is a regression guard rather
+//    than a soundness proof. The cached pick does not rest on it alone: the classifier
+//    independently requires Gen2, a single-cell semaphore, every binder on that node, and
+//    exactly ONE binder kernel.
+//  - The detector itself is covered by DetectorFlagsKnownViolations below; without that
+//    positive control this sweep could go silently vacuous.
 // ============================================================================
 
 // A Metal 2.0 kernel is one that uses the generated accessors/args.
@@ -56,29 +65,60 @@ bool looks_like_metal2_kernel(const std::string& text) {
            text.find("dfb::") != std::string::npos;
 }
 
-// Strip // comments and obvious block-comment continuation lines, so prose mentioning a
-// pattern (e.g. explanatory comments in the keystone kernels) is not flagged as code.
+// Strip comments so prose mentioning a pattern (e.g. the explanatory comments in the keystone
+// kernels) is not flagged as code. Tracks /* */ state properly: an earlier version skipped any line
+// whose first non-space character was '*', which also silently dropped real statements such as
+//     *(volatile uint32_t*)get_semaphore(3) += 1;
+// i.e. it hid exactly the raw accesses this lint exists to find.
 std::string strip_comments(const std::string& text) {
-    std::istringstream in(text);
-    std::ostringstream out;
-    std::string line;
-    while (std::getline(in, line)) {
-        const size_t first = line.find_first_not_of(" \t");
-        if (first != std::string::npos && (line.compare(first, 2, "//") == 0 || line[first] == '*')) {
-            continue;  // whole-line comment, or a line inside a block comment
+    std::string out;
+    out.reserve(text.size());
+    bool in_block = false;
+    bool in_line_comment = false;
+    for (size_t i = 0; i < text.size(); i++) {
+        if (in_line_comment) {
+            if (text[i] == '\n') {
+                in_line_comment = false;
+                out += '\n';
+            }
+            continue;
         }
-        const size_t slashes = line.find("//");
-        out << (slashes == std::string::npos ? line : line.substr(0, slashes)) << '\n';
+        if (in_block) {
+            if (text[i] == '*' && i + 1 < text.size() && text[i + 1] == '/') {
+                in_block = false;
+                i++;
+            } else if (text[i] == '\n') {
+                out += '\n';
+            }
+            continue;
+        }
+        if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+            in_line_comment = true;
+            continue;
+        }
+        if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+            in_block = true;
+            i++;
+            continue;
+        }
+        out += text[i];
     }
-    return out.str();
+    return out;
 }
 
-// Raw (undeclared) semaphore access patterns.
+// Raw (undeclared) semaphore access patterns. Each is matched on its OWN, not as a literal pair:
+// an earlier version only flagged "noc_semaphore_inc(get_noc_addr(" and so missed the (very common)
+// two-statement form where the address is computed on a previous line -- which let a real in-tree
+// raw writer through. A declared binding never needs any of these: it uses Semaphore(sem::<name>),
+// whose up()/down() call into these primitives from inside the framework header, not kernel source.
 std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
     static const char* kPatterns[] = {
-        "get_semaphore(",             // turning an id into an address directly
-        "noc_semaphore_inc(get_noc_addr(",  // atomic poke at a computed address
-        "noc_semaphore_set_remote(",  // remote set
+        "get_semaphore(",                // turning a semaphore id into a raw address
+        "noc_semaphore_inc(",            // atomic increment at a raw address (local or remote)
+        "noc_semaphore_set(",            // raw set
+        "noc_semaphore_set_remote(",     // remote set
+        "noc_semaphore_set_multicast(",  // multicast set
+        "noc_semaphore_inc_multicast(",  // multicast increment
     };
     std::vector<std::string> found;
     for (const char* pat : kPatterns) {
@@ -92,12 +132,29 @@ std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
 // Files intentionally exempt, with the reason. Keep this list MINIMAL: an entry here can
 // mask a real regression in that file.
 bool is_allowlisted(const std::string& path) {
-    // Hardware keystone probes: these deliberately issue raw NoC atomics at SCRATCH L1
-    // addresses (not at any declared semaphore) to measure hardware behaviour -- the
-    // self-targeted-atomic keystone and the DM cache-line-width probe. They must stay raw;
-    // that is the thing under test.
-    return path.find("dm_cacheline_probe.cpp") != std::string::npos ||
-           path.find("noc_self_atomic.cpp") != std::string::npos;
+    // Hardware keystone probes: these deliberately issue raw NoC atomics at SCRATCH L1 addresses
+    // (never at a declared semaphore) in order to MEASURE hardware behaviour -- the
+    // self-targeted-atomic keystone, the DM cache-line-width probe, and the NoC atomic-opcode probe.
+    // Raw access is the thing under test, so they must stay raw.
+    if (path.find("dm_cacheline_probe.cpp") != std::string::npos ||
+        path.find("noc_self_atomic.cpp") != std::string::npos ||
+        path.find("noc_atomic_ops_probe.cpp") != std::string::npos) {
+        return true;
+    }
+    // Residency instrumentation: sem_census_probe deliberately reads its OWN declared semaphore's
+    // kernel_config RING slot (read-only, via the uncached alias) so a test can prove that a cached
+    // semaphore's count really lives in the pool. It adds no undeclared writer.
+    if (path.find("sem_census_probe.cpp") != std::string::npos) {
+        return true;
+    }
+    // Watcher fault injection: this kernel issues a raw multicast atomic at an INVALID range,
+    // targeting a data-buffer address, specifically to trip the watcher's sanitizer. Its host test
+    // (debug_tools/watcher/test_sanitize.cpp) declares no SemaphoreSpec at all, so no semaphore --
+    // declared or otherwise -- is involved; the malformed op is the thing under test.
+    if (path.find("dram_copy_to_noc_coord_2_0.cpp") != std::string::npos) {
+        return true;
+    }
+    return false;
 }
 
 // Kernel sources worth scanning: the metal test kernels and the ttnn op kernels.
@@ -109,15 +166,60 @@ bool is_kernel_source(const std::filesystem::path& p) {
     return s.find("test_kernels") != std::string::npos || s.find("/kernels/") != std::string::npos;
 }
 
+// POSITIVE CONTROL for the detector itself. Without this, the scan test above is
+// "always green by construction": if strip_comments or the pattern list silently stopped matching,
+// the sweep would still report zero violations and pass. (That is not hypothetical -- an earlier
+// version dropped '*'-leading statement lines and only matched noc_semaphore_inc when it was
+// literally followed by get_noc_addr, which let a real in-tree raw writer through.)
+TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
+    struct Case {
+        const char* name;
+        std::string body;
+        bool should_flag;
+    };
+    const std::vector<Case> cases = {
+        {"id_to_address", "void kernel_main() { uint32_t a = get_semaphore(get_arg_val<uint32_t>(0)); }", true},
+        // Must survive comment-stripping: the statement starts with '*'.
+        {"deref_leading_star", "void kernel_main() {\n    *(volatile uint32_t*)get_semaphore(3) += 1;\n}", true},
+        // Address computed on a PREVIOUS line -- the two-statement form that used to escape.
+        {"split_noc_poke",
+         "void kernel_main() {\n    uint64_t a = get_noc_addr(1, 1, 64);\n    noc_semaphore_inc(a, 1);\n}",
+         true},
+        {"raw_local_set", "void kernel_main() { noc_semaphore_set(ptr, 5); }", true},
+        {"multicast_set", "void kernel_main() { noc_semaphore_set_multicast(a, b, 1); }", true},
+        // A declared binding: the managed accessor only, no raw primitive in kernel source.
+        {"clean_declared", "void kernel_main() {\n    Semaphore s(sem::counter);\n    s.up(1);\n}", false},
+        // Prose mentioning the patterns must NOT be flagged (line and block comments).
+        {"comment_only_line", "// calls get_semaphore(id) and noc_semaphore_inc(addr, 1)\nvoid kernel_main() {}", false},
+        {"comment_only_block",
+         "/*\n * uses get_semaphore(x)\n * and noc_semaphore_inc(y, 1)\n */\nvoid kernel_main() {}",
+         false},
+    };
+
+    for (const auto& c : cases) {
+        const auto found = find_raw_semaphore_uses(strip_comments(c.body));
+        if (c.should_flag) {
+            EXPECT_FALSE(found.empty()) << "detector MISSED a raw semaphore access in case '" << c.name
+                                        << "' -- the scan test would silently pass on this code";
+        } else {
+            EXPECT_TRUE(found.empty()) << "detector FALSE-POSITIVED on case '" << c.name << "' (first: "
+                                       << (found.empty() ? std::string{} : found.front()) << ")";
+        }
+    }
+}
+
 TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
     const char* home = std::getenv("TT_METAL_HOME");
     if (home == nullptr) {
         GTEST_SKIP() << "TT_METAL_HOME not set; cannot locate kernel sources to lint";
     }
     const std::filesystem::path root{home};
+    // Broad roots: "tests" (not just tests/tt_metal -- tests/ttnn also holds Metal 2.0 kernels, e.g.
+    // tests/ttnn/unit_tests/gtests/accessor/kernels/) and all of "ttnn". The per-file predicate below
+    // narrows to kernel sources.
     const std::vector<std::filesystem::path> scan_roots = {
-        root / "tests" / "tt_metal",
-        root / "ttnn" / "cpp",
+        root / "tests",
+        root / "ttnn",
     };
 
     std::vector<std::string> violations;
