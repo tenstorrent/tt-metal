@@ -5,14 +5,29 @@
 # Weights: real HunyuanImage checkpoint (HUNYUAN_MODEL_DIR / ref/weights.MODEL_DIR).
 # Inputs: random activations with fixed seed (same pattern as VAE PCC tests).
 #
-# Run (fast, 1 encoder layer):
+# Two scales in one file:
+#   * smoke     — S=64 (8×8 patches), 1 encoder layer; per-submodule + end-to-end.
+#   * full-dim  — S=1024 (32×32 patches, processor max_num_patches), full 27-layer
+#                 stack; whole-tower only, marked ``@slow``.
+#
+# Run (fast smoke suite):
 #   python_env/bin/python -m pytest \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_siglip2_ttnn.py -v
 #
-# Full 27-layer vision stack:
+# Full 27-layer vision stack on the smoke inputs:
 #   HY_VIT_NUM_LAYERS=27 python_env/bin/python -m pytest \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_siglip2_ttnn.py -v
+#
+# Full-dimension (S=1024, 27L):
+#   python_env/bin/python -m pytest \
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_siglip2_ttnn.py \
+#     -k full_dim -v -s --timeout=10800
 
+from __future__ import annotations
+
+import os
+
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -21,6 +36,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.hunyuan_image_3_0.ref.vision.siglip2 import (
     ALIGNER_CONFIG,
     VIT_CONFIG,
+    load_siglip2_vision,
     prepare_4d_attention_mask,
 )
 from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import (
@@ -30,6 +46,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import (
     HunyuanTtSiglip2MLP,
     HunyuanTtSiglip2Vision,
     HunyuanTtSiglip2VisionEmbeddings,
+    Siglip2VisionInputs,
     build_siglip2_attention_mask,
     forward_vision_with_aligner,
 )
@@ -45,6 +62,12 @@ from models.experimental.hunyuan_image_3_0.tests.pcc.siglip2_helpers import (
 )
 
 LAYER_IDX = 0
+
+# Full HF / processor dimensions (config.json vit_processor.max_num_patches + vit layers).
+FULL_LAYERS = int(os.environ.get("HY_VIT_NUM_LAYERS", str(VIT_CONFIG["num_hidden_layers"])))
+FULL_S = int(os.environ.get("HY_VIT_SEQ", "1024"))  # max_num_patches
+FULL_HW = (int(FULL_S**0.5), int(FULL_S**0.5))
+assert FULL_HW[0] * FULL_HW[1] == FULL_S, f"HY_VIT_SEQ={FULL_S} must be a perfect square"
 
 
 def assert_pcc(ref: torch.Tensor, tt: torch.Tensor, *, label: str) -> float:
@@ -77,6 +100,17 @@ def _random_hidden() -> torch.Tensor:
     return torch.randn(B, S, VIT_CONFIG["hidden_size"], dtype=torch.float32)
 
 
+def _vision_inputs_tt(device, pixel_values, pixel_attention_mask, spatial_hw) -> Siglip2VisionInputs:
+    return Siglip2VisionInputs.create(
+        upload_pixel_values(device, pixel_values),
+        spatial_hw,
+        upload_attention_mask(device, pixel_attention_mask),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Smoke scale: S=64 (8×8), NUM_LAYERS (default 1)
+# ---------------------------------------------------------------------------
 def test_attention_mask_tt_matches_host(device, vision_inputs):
     """Device-built 4D mask: zeros on valid keys, large negative on padded keys."""
     _, _, pixel_attention_mask = vision_inputs
@@ -193,16 +227,10 @@ def test_vision_pcc_no_mask(device, ref_vision, vision_inputs, vision_state_dict
     with torch.no_grad():
         pt_out = ref_vision(pixel_values, None, spatial_shapes)
 
-    from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import Siglip2VisionInputs
-
     tt_mod = HunyuanTtSiglip2Vision(device, vision_state_dict, num_layers=NUM_LAYERS)
     tt_mod.prewarm_pos_geometries([(8, 8, S)])
     all_valid = torch.ones(B, S, dtype=torch.long)
-    inputs_nomask = Siglip2VisionInputs.create(
-        upload_pixel_values(device, pixel_values),
-        SPATIAL_SHAPES_HW,
-        upload_attention_mask(device, all_valid),
-    )
+    inputs_nomask = _vision_inputs_tt(device, pixel_values, all_valid, SPATIAL_SHAPES_HW)
     tt_out = to_torch_squeezed(tt_mod(inputs_nomask))
     assert_pcc(pt_out, tt_out, label=f"vision_no_mask_{NUM_LAYERS}L")
 
@@ -235,3 +263,55 @@ def test_end_to_end_vision_aligner(
 
     assert pt_out.shape == tt_out.shape == (B, S, ALIGNER_CONFIG["n_embed"])
     assert_pcc(pt_out, tt_out, label=f"e2e_vision_aligner_{NUM_LAYERS}L")
+
+
+# ---------------------------------------------------------------------------
+# Full-dimension scale: S=1024 (32×32), FULL_LAYERS (default 27) — @slow
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def full_vision_inputs():
+    """Host inputs at processor max_num_patches (1024) with a 32×32 spatial layout."""
+    torch.manual_seed(0)
+    patch_dim = VIT_CONFIG["num_channels"] * VIT_CONFIG["patch_size"] ** 2
+    pixel_values = torch.randn(B, FULL_S, patch_dim, dtype=torch.float32)
+    spatial_shapes = torch.tensor([list(FULL_HW)], dtype=torch.long)
+    # Keep most patches valid; zero a trailing tile-aligned pad block to exercise mask.
+    pixel_attention_mask = torch.ones(B, FULL_S, dtype=torch.long)
+    pixel_attention_mask[0, FULL_S - 32 :] = 0
+    return pixel_values, spatial_shapes, pixel_attention_mask
+
+
+@pytest.fixture(scope="module")
+def ref_vision_full(model_dir):
+    return load_siglip2_vision(model_dir, num_layers=FULL_LAYERS)
+
+
+@pytest.mark.slow
+def test_vision_full_dim_masked_pcc(device, ref_vision_full, full_vision_inputs):
+    """Full 27L vision @ S=1024 (32×32 patches) vs fp32 ref."""
+    pixel_values, spatial_shapes, pixel_attention_mask = full_vision_inputs
+    with torch.no_grad():
+        pt_out = ref_vision_full(pixel_values, pixel_attention_mask, spatial_shapes)
+
+    tt_mod = HunyuanTtSiglip2Vision(device, ref_vision_full.state_dict(), num_layers=FULL_LAYERS)
+    tt_mod.prewarm_pos_geometries([(FULL_HW[0], FULL_HW[1], FULL_S)])
+    inputs = _vision_inputs_tt(device, pixel_values, pixel_attention_mask, (FULL_HW,))
+    tt_out = to_torch_squeezed(tt_mod(inputs))
+    assert pt_out.shape == tt_out.shape == (B, FULL_S, VIT_CONFIG["hidden_size"])
+    assert_pcc(pt_out, tt_out, label=f"vision_full_dim_masked_{FULL_LAYERS}L_S{FULL_S}")
+
+
+@pytest.mark.slow
+def test_e2e_vision_aligner_full_dim_pcc(device, ref_vision_full, ref_aligner, full_vision_inputs):
+    """Full vision+aligner @ S=1024 / 27L (output embed dim = backbone H=4096)."""
+    pixel_values, spatial_shapes, pixel_attention_mask = full_vision_inputs
+    with torch.no_grad():
+        pt_out = ref_aligner(ref_vision_full(pixel_values, pixel_attention_mask, spatial_shapes))
+
+    vision_tt = HunyuanTtSiglip2Vision(device, ref_vision_full.state_dict(), num_layers=FULL_LAYERS)
+    vision_tt.prewarm_pos_geometries([(FULL_HW[0], FULL_HW[1], FULL_S)])
+    aligner_tt = HunyuanTtLightProjector(device, ref_aligner.state_dict())
+    inputs = _vision_inputs_tt(device, pixel_values, pixel_attention_mask, (FULL_HW,))
+    tt_out = to_torch_squeezed(forward_vision_with_aligner(vision_tt, aligner_tt, inputs))
+    assert pt_out.shape == tt_out.shape == (B, FULL_S, ALIGNER_CONFIG["n_embed"])
+    assert_pcc(pt_out, tt_out, label=f"e2e_vision_aligner_full_dim_{FULL_LAYERS}L_S{FULL_S}")

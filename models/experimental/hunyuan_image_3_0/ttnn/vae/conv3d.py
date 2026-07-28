@@ -1,12 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Shared VAE Conv3d layer (weight prep uses tt_dit Module hook; kept separate from model logic)."""
+"""Shared VAE conv primitives (weight prep uses tt_dit Module hooks; kept separate from model logic).
+
+HunyuanSymmetricConv3d — 3x3x3 Conv3d with symmetric padding + H-chunking
+HunyuanResnetConvPair  — ResnetBlock conv1/conv2 with shared chunk geometry
+HunyuanPointwiseLinear — 1x1x1 Conv3d expressed as ``ttnn.linear``
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any
 
+import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import LATENT_H, LATENT_T, LATENT_W
@@ -198,9 +204,9 @@ class HunyuanSymmetricConv3d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2
-            if (is_blackhole() and dtype == ttnn.float32)
-            else ttnn.MathFidelity.LoFi,
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi2 if (is_blackhole() and dtype == ttnn.float32) else ttnn.MathFidelity.LoFi
+            ),
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -446,3 +452,167 @@ class HunyuanSymmetricConv3d(Module):
         for o_t in outs:
             ttnn.deallocate(o_t)
         return out
+
+
+# ---------------------------------------------------------------------------------------
+# ResnetBlock conv pair — shared spatial metadata and aligned H-chunk plans
+# ---------------------------------------------------------------------------------------
+
+
+class HunyuanResnetConvPair(Module):
+    """ResnetBlock conv1 + conv2 with shared chunk geometry when shapes match.
+
+    GroupNorm + SiLU sit between the two convs, so weights cannot be fused. When
+    in==out (both convs are C->C at the same resolution), both convs share the
+    same H-chunk strip height so slice/concat boundaries align across conv1 and
+    conv2 on the spatial-sharded decode path.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType,
+        t: int,
+        h: int,
+        w: int,
+    ) -> None:
+        super().__init__()
+        conv_kwargs = dict(mesh_device=mesh_device, dtype=dtype, t=t, h=h, w=w)
+        self.conv1 = HunyuanSymmetricConv3d(
+            in_channels, out_channels, kernel_size=3, stride=1, padding=1, **conv_kwargs
+        )
+        self.conv2 = HunyuanSymmetricConv3d(
+            out_channels, out_channels, kernel_size=3, stride=1, padding=1, **conv_kwargs
+        )
+        self._same_channel_count = in_channels == out_channels
+
+    def _apply_chunk_overrides(self, x_bthwc: ttnn.Tensor) -> None:
+        _, t, h, w, _ = x_bthwc.shape
+        valid_conv = self.conv1.spatial_sharded
+        hc1 = conv3d_h_chunk_size(t=t, h=h, w=w, in_channels=self.conv1.in_channels, valid_conv=valid_conv)
+        hc2 = conv3d_h_chunk_size(t=t, h=h, w=w, in_channels=self.conv2.in_channels, valid_conv=valid_conv)
+        if self._same_channel_count and hc1 is not None and hc2 is not None:
+            shared = max(hc1, hc2)
+            self.conv1._h_chunk_override = shared
+            self.conv2._h_chunk_override = shared
+        else:
+            self.conv1._h_chunk_override = hc1
+            self.conv2._h_chunk_override = hc2
+
+    def forward_conv1(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        self._apply_chunk_overrides(x_bthwc)
+        return self.conv1(x_bthwc)
+
+    def forward_conv2(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        return self.conv2(x_bthwc)
+
+    def enable_spatial(self, ccl, *, h_mesh_axis, w_mesh_axis) -> None:
+        for conv in (self.conv1, self.conv2):
+            conv.ccl = ccl
+            conv.h_mesh_axis = h_mesh_axis
+            conv.w_mesh_axis = w_mesh_axis
+            conv.spatial_sharded = True
+
+    def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        raise RuntimeError("HunyuanResnetConvPair: use forward_conv1/forward_conv2 from ResnetBlockTTNN")
+
+
+# ---------------------------------------------------------------------------------------
+# Pointwise (1x1x1) conv as ttnn.linear — avoids im2col-bound conv3d for pointwise ops
+# ---------------------------------------------------------------------------------------
+
+
+class HunyuanPointwiseLinear(Module):
+    """Pointwise (1x1x1) projection on BTHWC tensors via ``ttnn.linear``."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
+        super().__init__()
+        self.unpadded_in_channels = in_channels
+        self.in_channels = aligned_channels(in_channels)
+        self.out_channels = out_channels
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+
+        self.weight = Parameter(
+            total_shape=[self.in_channels, out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
+        self.bias = Parameter(
+            total_shape=[1, out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi2 if (is_blackhole() and dtype == ttnn.float32) else ttnn.MathFidelity.LoFi
+            ),
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    def _prepare_torch_state(self, state: dict[str, Any]) -> None:
+        weight = state.get("weight")
+        if weight is not None:
+            if weight.ndim == 5:
+                # Conv3d checkpoint: [out, in, 1, 1, 1] -> linear [in, out]
+                weight = weight.squeeze(-1).squeeze(-1).squeeze(-1)
+                weight = weight.transpose(0, 1).contiguous()
+            elif tuple(weight.shape) == (self.in_channels, self.out_channels):
+                # Already linear layout (e.g. fused QKV from load_attn_block).
+                weight = weight.contiguous()
+            elif weight.shape[0] == self.out_channels:
+                weight = weight.transpose(0, 1).contiguous()
+            if weight.shape[0] < self.in_channels:
+                weight = torch.nn.functional.pad(weight, (0, 0, 0, self.in_channels - weight.shape[0]))
+            state["weight"] = weight
+        bias = state.get("bias")
+        if bias is not None:
+            state["bias"] = bias.reshape(1, -1)
+
+    def forward(self, x_bthwc: ttnn.Tensor, *, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
+        x_tile = ttnn.to_layout(x_bthwc, ttnn.TILE_LAYOUT)
+        y_tile = ttnn.linear(
+            x_tile,
+            self.weight.data,
+            bias=self.bias.data,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=self.dtype,
+            memory_config=memory_config,
+            core_grid=self.mesh_device.core_grid,
+        )
+        ttnn.deallocate(x_tile)
+        y = ttnn.to_layout(y_tile, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(y_tile)
+        return y
+
+    def forward_b1sc(
+        self,
+        x_b1sc: ttnn.Tensor,
+        *,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
+        """Linear on ``[B, 1, S, C]`` TILE input (last dim = channels)."""
+        return ttnn.linear(
+            x_b1sc,
+            self.weight.data,
+            bias=self.bias.data,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=self.dtype,
+            memory_config=memory_config,
+            core_grid=self.mesh_device.core_grid,
+        )

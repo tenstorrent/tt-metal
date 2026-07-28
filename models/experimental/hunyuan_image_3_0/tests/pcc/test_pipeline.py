@@ -64,7 +64,6 @@ from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
 from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
 from models.experimental.hunyuan_image_3_0.ttnn.transformer_layer import HunyuanTtDecoderLayer
 from models.tt_dit.parallel.manager import CCLManager
-from denoise_helpers import _forward_ref_layers, clear_ref_layer_cache
 from pcc_common import (
     LEAN_ISL_CASES,
     PCC_BACKBONE_32L,
@@ -77,8 +76,10 @@ from pcc_common import (
     transformer_cfg,
 )
 from pipeline_helpers import (
+    _forward_ref_layers,
     bf16_layers_from_env,
     build_denoise_step_tt,
+    clear_ref_layer_cache,
     e2e_pcc_thresholds,
     load_e2e_module,
     patch_embed_dims,
@@ -483,7 +484,7 @@ def _host_e2e_reference(e2e, c, down_sd, up_sd, init_latent, text_embeds, text_e
     NUM_LAYERS, STEPS, SCALING = e2e.NUM_LAYERS, e2e.STEPS, e2e.SCALING
     LATENT, HID, HSZ = patch_embed_dims(down_sd)
     H = c["H"]
-    # Keys expected by denoise_helpers._make_ref_layer / _forward_ref_layers.
+    # Keys expected by pipeline_helpers._make_ref_layer / _forward_ref_layers.
     c_ref = transformer_cfg()
     stream_layers = NUM_LAYERS > 8
     if stream_layers:

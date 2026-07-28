@@ -25,7 +25,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.pipeline import (
     classifier_free_guidance_tt,
     latent_tt_to_torch,
 )
-from models.experimental.hunyuan_image_3_0.ttnn.trace_config import denoise_execute_trace_enabled
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import denoise_execute_trace_enabled
 
 
 def _upload_trace_buffer(device, torch_data: torch.Tensor, *, dtype, layout) -> ttnn.Tensor:

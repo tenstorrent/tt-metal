@@ -87,7 +87,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import Hun
 from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
 from models.experimental.hunyuan_image_3_0.ttnn.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
-from models.experimental.hunyuan_image_3_0.ttnn.trace_config import (
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import (
     open_pipeline_mesh,
     print_trace_policy,
     release_stage_resources,
