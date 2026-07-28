@@ -683,16 +683,13 @@ def _denoise_moe_forward(moe, router_input, expert_input):
         # Silently winning that race is how DG_TERMINAL_SHARDED became a no-op and how a corrupting
         # DG_VLLM_GUMBEL_MODE default survived two weeks: the run looks fine and the label lies.
         # Fail loud instead, naming both knobs, in the style of the DG_SPARSE_MOE=0 guard below.
-        from models.experimental.diffusion_gemma.tt.sparse_moe import (
-            compact_ragged_denoise_enabled,
-            expert_weight_bfp8_enabled,
-        )
+        from models.experimental.diffusion_gemma.tt.sparse_moe import compact_ragged_denoise_enabled
 
+        # DG_MOE_EXPERT_BFP8 used to be checked here. It was deleted along with the sparse path's
+        # only consumer of it; the supported route to quantized experts is DG_EXPERTS_DTYPE /
+        # DG_EXPERTS_BFP8 in tt/precision_build.py, which quantizes at build time and so applies to
+        # the concat weights too — no conflict to report.
         conflicts = []
-        if expert_weight_bfp8_enabled():
-            # Only sparse_experts_forward calls _bfp8_expert_weights; concat reads experts.weights
-            # directly, so the arm would be labelled bfp8 and run bf16 — with a different footprint.
-            conflicts.append("DG_MOE_EXPERT_BFP8=1 (concat reads the unquantized expert weights)")
         if not _sparse_moe_enabled():
             conflicts.append("DG_SPARSE_MOE=0 (asks for the dense reference, would silently get concat)")
         if compact_ragged_denoise_enabled():
@@ -1897,10 +1894,7 @@ class DenoiseLogitsAdapter:
         tt_model = self.tt_model
         read_buf, write_buf = self._signal_read_write_bufs(step)
         canvas_hidden = embed_canvas_tokens(tt_model, canvas_tokens)
-        if self.self_conditioning is None or "sc" in _skip_components():
-            # DG_SKIP=sc: price the self-conditioning soft-embedding (a [C,V] @ [V,H] matmul over the
-            # 262144 vocab) plus its gated MLP. Passing the raw canvas embedding through is exactly
-            # what step 0 does anyway, so the shape and the rest of the graph are untouched.
+        if self.self_conditioning is None:
             conditioned = canvas_hidden
         else:
             # Uniform: forward over the persistent signal read buffer (zeroed for step 0).

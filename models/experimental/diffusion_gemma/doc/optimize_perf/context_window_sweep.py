@@ -167,7 +167,6 @@ def run(args) -> dict:
                 "DG_SELFCOND_PRECHUNK_EMBED",
                 "DG_SELFCOND_LOGITS_L1",
                 "DG_NORM_FULLCANVAS",
-                "DG_MOE_L1",
                 "DG_PREFIX_CACHE",
                 "TT_METAL_WATCHER",
                 "TT_METAL_DEVICE_PROFILER",
