@@ -21,7 +21,7 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
 
     using tensor_args_t = RingAttentionAllGatherAsyncInputs;
 
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
     using tensor_return_value_t = std::vector<Tensor>;
 

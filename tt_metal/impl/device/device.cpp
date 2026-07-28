@@ -115,8 +115,10 @@ void Device::initialize_smc_dispatch_telemetry_control() {
     }
 
     smc_dispatch_telemetry_control_ = dispatch_telemetry_types::SMCDispatchTelemetryControl{};
+    // TODO: When dispatch telemetry is supported on Quasar, we'll need to pass in the command queue id(s) here.
     smc_dispatch_telemetry_control_.dispatch_telemetry_addr =
-        context_->dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+        context_->dispatch_mem_map().get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
     smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
     write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }

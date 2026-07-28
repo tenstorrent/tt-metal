@@ -126,7 +126,7 @@ struct GatedReduce {
             // Init once before the loop
             // Assumes all input cbs are configured the same, and the intermediate cb is configured the same as the
             // output cb
-            reconfig_data_format<false, true>(args.group1_cb, args.group1_cb);
+            reconfig_data_format<SrcOrder::Regular, true>(args.group1_cb, args.group1_cb);
             pack_reconfig_data_format<true>(args.out_cb);
             silu_tile_init();
             for (uint32_t k = 0; k < k_num_tiles; k++) {

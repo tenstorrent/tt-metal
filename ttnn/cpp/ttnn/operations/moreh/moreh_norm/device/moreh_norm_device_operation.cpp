@@ -23,10 +23,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 
 inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
     const auto input_rank = input.logical_shape().rank();
-    TT_FATAL(
-        (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
-        "dim must be between 0 and {}.",
-        tt::tt_metal::MAX_NUM_DIMENSIONS);
+    TT_FATAL((dim >= 0 && dim <= ttnn::MAX_NUM_DIMENSIONS), "dim must be between 0 and {}.", ttnn::MAX_NUM_DIMENSIONS);
     TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
@@ -75,7 +72,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
     if (operation_attributes.keepdim) {
         auto shape = input_shape;
         shape[dim] = 1;
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             shape,
             TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
@@ -88,7 +85,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
         }
         shape.push_back((is_reduced_dim && is_tile_dim) ? 1 : input_shape[i]);
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(shape),
         TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };

@@ -25,12 +25,7 @@
 
 #include <tt_stl/optional_reference.hpp>
 
-namespace tt::tt_metal {
-
-namespace distributed {
-class MeshDevice;
-class MeshCommandQueue;
-}  // namespace distributed
+namespace ttnn {
 
 class Tensor {
 public:
@@ -45,33 +40,33 @@ public:
     //                                  Hi Level APIs
     // ======================================================================================
     [[nodiscard]] explicit Tensor() = default;
-    [[nodiscard]] Tensor(const Tensor& other);
+    [[nodiscard]] Tensor(const Tensor& other) = default;
     [[nodiscard]] Tensor(Tensor&& other) noexcept = default;
-    Tensor& operator=(const Tensor& other);
+    Tensor& operator=(const Tensor& other) = default;
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
     [[nodiscard]] explicit Tensor(DeviceStorage storage);
 
-    [[nodiscard]] explicit Tensor(HostTensor tensor);
-    [[nodiscard]] explicit Tensor(MeshTensor tensor);
+    [[nodiscard]] explicit Tensor(tt::tt_metal::HostTensor tensor);
+    [[nodiscard]] explicit Tensor(tt::tt_metal::MeshTensor tensor);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
     [[nodiscard]] Tensor(
-        HostBuffer buffer,
+        tt::tt_metal::HostBuffer buffer,
         const tt::tt_metal::Shape& shape,
-        DataType dtype,
-        Layout layout,
-        const std::optional<Tile>& tile = std::nullopt);
+        tt::tt_metal::DataType dtype,
+        tt::tt_metal::Layout layout,
+        const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
     [[nodiscard]] Tensor(
-        HostBuffer buffer,
+        tt::tt_metal::HostBuffer buffer,
         const tt::tt_metal::Shape& logical_shape,
         const tt::tt_metal::Shape& padded_shape,
-        DataType dtype,
-        Layout layout,
-        const std::optional<Tile>& tile = std::nullopt);
-    [[nodiscard]] Tensor(HostBuffer buffer, TensorSpec tensor_spec);
+        tt::tt_metal::DataType dtype,
+        tt::tt_metal::Layout layout,
+        const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
+    [[nodiscard]] Tensor(tt::tt_metal::HostBuffer buffer, tt::tt_metal::TensorSpec tensor_spec);
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
@@ -81,8 +76,8 @@ public:
     template <typename T>
     [[nodiscard]] static Tensor from_span(
         ttsl::Span<const T> buffer,
-        const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        const tt::tt_metal::TensorSpec& spec,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
@@ -107,7 +102,7 @@ public:
         ttsl::Span<T> buffer,
         const tt::tt_metal::Shape& shape,
         tt::tt_metal::MemoryPin buffer_pin,
-        const std::optional<Tile>& tile = std::nullopt);
+        const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
     // Overload that takes `on_creation_callback` and `on_destruction_callback` as separate arguments.
     template <typename T>
@@ -116,16 +111,17 @@ public:
         const tt::tt_metal::Shape& shape,
         const std::function<void()>& on_creation_callback,
         const std::function<void()>& on_destruction_callback,
-        const std::optional<Tile>& tile = std::nullopt) {
-        return from_borrowed_data(buffer, shape, MemoryPin(on_creation_callback, on_destruction_callback), tile);
+        const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
+        return from_borrowed_data(
+            buffer, shape, tt::tt_metal::MemoryPin(on_creation_callback, on_destruction_callback), tile);
     }
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
     [[nodiscard]] static Tensor from_vector(
         const std::vector<T>& buffer,
-        const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        const tt::tt_metal::TensorSpec& spec,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
         return from_span(ttsl::Span<const T>(buffer), spec, device, cq_id, pad_value);
@@ -136,8 +132,8 @@ public:
     template <typename T>
     [[nodiscard]] static Tensor from_vector(
         std::vector<T>&& buffer,
-        const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        const tt::tt_metal::TensorSpec& spec,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
@@ -150,11 +146,11 @@ public:
     [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_device(
-        distributed::MeshDevice* mesh_device,
-        ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
+        tt::tt_metal::distributed::MeshDevice* mesh_device,
+        ttsl::optional_reference<const tt::tt_metal::MemoryConfig> mem_config = std::nullopt,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
-    [[nodiscard]] Tensor to_layout(Layout target_layout) const;
+    [[nodiscard]] Tensor to_layout(tt::tt_metal::Layout target_layout) const;
 
     [[nodiscard]] Tensor pad(
         const tt::tt_metal::Shape& output_padded_shape,
@@ -176,7 +172,7 @@ public:
     // If the tensor is on host, does nothing.
     void deallocate(bool force = false);
 
-    [[nodiscard]] Tensor extract_shard(const CoreCoord& core) const;
+    [[nodiscard]] Tensor extract_shard(const tt::tt_metal::CoreCoord& core) const;
     [[nodiscard]] Tensor extract_shard(const uint32_t& core_id) const;
 
     // ======================================================================================
@@ -186,25 +182,25 @@ public:
     [[nodiscard]] Tensor reshape(
         const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const;
 
-    void update_tensor_topology(const TensorTopology& tensor_topology);
+    void update_tensor_topology(const tt::tt_metal::TensorTopology& tensor_topology);
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    DataType dtype() const;
-    Layout layout() const;
+    tt::tt_metal::DataType dtype() const;
+    tt::tt_metal::Layout layout() const;
     const tt::tt_metal::Shape& logical_shape() const;
     const tt::tt_metal::Shape& padded_shape() const;
-    const TensorSpec& tensor_spec() const;
+    const tt::tt_metal::TensorSpec& tensor_spec() const;
     uint64_t logical_volume() const;
     uint64_t physical_volume() const;
-    const MemoryConfig& memory_config() const;
+    const tt::tt_metal::MemoryConfig& memory_config() const;
 
     // Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-    const TensorTopology& tensor_topology() const;
+    const tt::tt_metal::TensorTopology& tensor_topology() const;
 
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    const std::optional<ShardSpec>& shard_spec() const;
-    const std::optional<NdShardSpec>& nd_shard_spec() const;
+    const std::optional<tt::tt_metal::ShardSpec>& shard_spec() const;
+    const std::optional<tt::tt_metal::NdShardSpec>& nd_shard_spec() const;
 
     // ======================================================================================
     //                                      Extra Helper Functions
@@ -218,7 +214,7 @@ public:
 
     // Returns device `Buffer`.
     // Throws if the tensor is not allocated on a device.
-    Buffer* buffer() const;
+    tt::tt_metal::Buffer* buffer() const;
 
     // Returns device `Storage`.
     // Throws if the tensor is not on device.
@@ -233,20 +229,20 @@ public:
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns the associated HostTensor.
-    const HostTensor& host_tensor() const&;
-    const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+    const tt::tt_metal::HostTensor& host_tensor() const&;
+    const tt::tt_metal::HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns the associated MeshTensor.
-    const MeshTensor& mesh_tensor() const&;
-    const MeshTensor& mesh_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+    const tt::tt_metal::MeshTensor& mesh_tensor() const&;
+    const tt::tt_metal::MeshTensor& mesh_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    const distributed::MeshBuffer& mesh_buffer() const;
+    const tt::tt_metal::distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
-    // Throws if the tensor is not allocated on a device.
-    distributed::MeshDevice* device() const;
+    // Returns nullptr if the tensor is not allocated on a device (on host/ deallocated).
+    tt::tt_metal::distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
 
@@ -264,23 +260,11 @@ public:
     static std::uint64_t next_tensor_id();
 
 private:
-    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
-    // If not set, the tensor can either be on host or allocated on a single device.
-    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
-    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-
     void deallocate_impl(bool force);
 };
 
 Tensor set_tensor_id(const Tensor& tensor);
 
 std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
-
-}  // namespace tt::tt_metal
-
-namespace ttnn {
-
-using Tensor = tt::tt_metal::Tensor;
-using TensorSpec = tt::tt_metal::TensorSpec;
 
 }  // namespace ttnn

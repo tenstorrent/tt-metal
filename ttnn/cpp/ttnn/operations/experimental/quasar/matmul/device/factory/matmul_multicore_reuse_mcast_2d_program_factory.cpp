@@ -3261,7 +3261,7 @@ m2::KernelSpec make_compute_kernel(
 // mcast_in0_in1 (ProgramArtifacts). Mirrors create_program_mcast_in0_in1_descriptor.
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,

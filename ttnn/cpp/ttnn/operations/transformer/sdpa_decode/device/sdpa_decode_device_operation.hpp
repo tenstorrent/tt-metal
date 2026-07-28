@@ -89,7 +89,7 @@ inline TreeReductionParams get_tree_reduction_params(uint32_t core_id, uint32_t 
 struct SdpaDecodeDeviceOperation {
     using operation_attributes_t = SdpaDecodeParams;
     using tensor_args_t = SdpaDecodeInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -127,8 +127,7 @@ Tensor sdpa_decode(
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
-    std::optional<uint32_t> block_size_override = std::nullopt,
-    std::optional<uint32_t> num_kv_heads_override = std::nullopt,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 }  // namespace ttnn::prim

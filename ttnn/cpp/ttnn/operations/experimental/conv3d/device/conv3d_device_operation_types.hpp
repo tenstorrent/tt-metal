@@ -24,7 +24,7 @@ struct Conv3dConfig {
         uint32_t C_in_block_ = 0,
         std::array<uint32_t, 3> dilation_ = {1, 1, 1},
         uint32_t alignment_ = 32,
-        CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
+        tt::tt_metal::CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
         T_out_block(T_out_block_),
@@ -45,7 +45,7 @@ struct Conv3dConfig {
     uint32_t C_in_block;
     std::array<uint32_t, 3> dilation;
     uint32_t alignment;
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
