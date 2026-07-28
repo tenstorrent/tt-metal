@@ -119,7 +119,7 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
              resolved_dispatch_core_type_ == CoreType::DISPATCH);
         distributed_dispatcher_ = (num_hw_cqs == 1 and resolved_dispatch_core_type_ == CoreType::ETH);
     } else {
-        // WH/BH: keep config-derived type/flags (BH Galaxy prefill regression with resolve path).
+        // WH/BH: keep config-derived type/flags.
         resolved_dispatch_core_type_ = get_core_type_from_config(dispatch_core_config_);
         dispatch_s_enabled_ =
             (num_hw_cqs == 1 or dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::WORKER);
