@@ -117,6 +117,7 @@ namespace tt::tt_metal {
 
 using ttnn::DeviceStorage;
 using ttnn::is_cpu_tensor;
+using ttnn::QueueId;
 using ttnn::StorageType;
 using ttnn::Tensor;
 

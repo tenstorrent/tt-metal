@@ -92,7 +92,7 @@ ttnn::Tensor to_device(
     const ttnn::Tensor& input_tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
-    std::optional<QueueId> cq_id = std::nullopt);
+    std::optional<ttnn::QueueId> cq_id = std::nullopt);
 
 ttnn::Tensor to_layout(const ttnn::Tensor& input_tensor, Layout target_layout);
 
