@@ -105,8 +105,8 @@ class POLLUTER(TemplateParameter):
     polluter: int = 0
 
     def convert_to_cpp(self) -> str:
-        # A #define (not a constexpr) so the CPP kernel can switch on it with #if.
-        return f"#define POLLUTER {self.polluter}"
+        # A constexpr (the CPP kernel switches on it with `if constexpr`, not `#if`).
+        return f"constexpr int POLLUTER = {self.polluter};"
 
 
 @dataclass
@@ -116,7 +116,7 @@ class SEQUENCE(TemplateParameter):
     sequence: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"#define SEQUENCE {int(self.sequence)}"
+        return f"constexpr int SEQUENCE = {int(self.sequence)};"
 
 
 # bf16 and a real fp32 data format. bf16 exercises the ADDR_MOD / Haloize holes (and,
