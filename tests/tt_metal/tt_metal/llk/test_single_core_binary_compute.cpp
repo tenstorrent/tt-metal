@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -66,8 +67,14 @@ const map<std::string, std::string> binary_op_name_to_op_kernel = {
     {"mul", "mul_tiles"},
 };
 
+enum class BinaryDestReuseType {
+    SrcA,
+    SrcB,
+};
+
 struct SingleCoreBinaryConfig {
     size_t num_tiles = 0;
+    size_t block_size = 1;
     size_t tile_byte_size = 0;
     size_t input_dram_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
@@ -77,6 +84,7 @@ struct SingleCoreBinaryConfig {
     bool acc_to_dest = false;
     bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
+    BinaryDestReuseType dest_reuse_type = BinaryDestReuseType::SrcA;
     tt::tt_metal::Tile tile = tt::tt_metal::Tile({32, 32});
 };
 
@@ -167,14 +175,20 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
                 return (static_cast<float>(lhs) + rhs);
             }
             if (test_config.binary_op == "sub_with_dest_reuse") {
-                return (static_cast<float>(lhs) - rhs);
+                return test_config.dest_reuse_type == BinaryDestReuseType::SrcA ? static_cast<float>(lhs) - rhs
+                                                                                : rhs - static_cast<float>(lhs);
             }
             if (test_config.binary_op == "mul_with_dest_reuse") {
-                return (
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
-                    static_cast<float>(std::bit_cast<bfloat16>(
-                        static_cast<uint16_t>(std::bit_cast<uint16_t>(bfloat16(rhs)) & srcb_fid_mask))));
+                const bfloat16 dest_value = lhs;
+                const bfloat16 input_value = bfloat16(rhs);
+                const bfloat16 srca =
+                    test_config.dest_reuse_type == BinaryDestReuseType::SrcA ? dest_value : input_value;
+                const bfloat16 srcb =
+                    test_config.dest_reuse_type == BinaryDestReuseType::SrcA ? input_value : dest_value;
+                return static_cast<float>(std::bit_cast<bfloat16>(
+                           static_cast<uint16_t>(std::bit_cast<uint16_t>(srca) & srca_fid_mask))) *
+                       static_cast<float>(std::bit_cast<bfloat16>(
+                           static_cast<uint16_t>(std::bit_cast<uint16_t>(srcb) & srcb_fid_mask)));
             }
             return rhs;
         });
@@ -217,9 +231,13 @@ static bool read_and_validate_binary_result(
     distributed::MeshCommandQueue& cq,
     const std::shared_ptr<distributed::MeshBuffer>& output_dram_buffer,
     const distributed::MeshCoordinate& zero_coord,
-    const BinaryStimulus& stimulus) {
+    const BinaryStimulus& stimulus,
+    std::vector<uint32_t>* packed_result = nullptr) {
     std::vector<uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, zero_coord, false);
+    if (packed_result != nullptr) {
+        *packed_result = dest_buffer_data;
+    }
 
     return is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, stimulus.packed_golden, [&](const bfloat16& a, const bfloat16& b) {
@@ -231,7 +249,9 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
     std::map<std::string, std::string> defines = {
         {"ELTWISE_OP_TYPE", binary_op_name_to_op_type.at(test_config.binary_op)}};
     if (test_config.binary_op.find("_with_dest_reuse") != std::string::npos) {
-        defines["ELTWISE_DEST_REUSE_TYPE"] = "EltwiseBinaryReuseDestType::DEST_TO_SRCA";
+        defines["ELTWISE_DEST_REUSE_TYPE"] = test_config.dest_reuse_type == BinaryDestReuseType::SrcA
+                                                 ? "EltwiseBinaryReuseDestType::DEST_TO_SRCA"
+                                                 : "EltwiseBinaryReuseDestType::DEST_TO_SRCB";
     } else {
         defines["ELTWISE_OP"] = binary_op_name_to_op_kernel.at(test_config.binary_op);
         if (test_config.full_init) {
@@ -254,7 +274,12 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
 /// @param test_config - Configuration of the test -- see SingleCoreBinaryConfig
 /// @return true if the test passed, false otherwise
 bool single_core_binary(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SingleCoreBinaryConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const SingleCoreBinaryConfig& test_config,
+    uint32_t num_runs = 1) {
+    TT_FATAL(
+        num_runs > 0 && test_config.block_size > 0 && test_config.num_tiles % test_config.block_size == 0,
+        "num_runs and block_size must be positive, and num_tiles must be divisible by block_size");
     const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
@@ -446,15 +471,30 @@ bool single_core_binary(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node, {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}),
+                node,
+                {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles / test_config.block_size)},
+                 {"per_core_block_size", static_cast<uint32_t>(test_config.block_size)},
+                 {"acc_to_dst", 0u}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
 
     auto* dev = mesh_device->get_devices()[0];
-    tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    std::vector<uint32_t> first_result;
+    for (uint32_t run = 0; run < num_runs; ++run) {
+        tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
-    return read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus);
+        std::vector<uint32_t> packed_result;
+        if (!read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus, &packed_result)) {
+            return false;
+        }
+        if (run == 0) {
+            first_result = std::move(packed_result);
+        } else if (packed_result != first_result) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace unit_tests::compute::binary
@@ -650,6 +690,36 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
+        }
+    }
+}
+
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileDestReuseDirections) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "Back-to-back destination-reuse tests are not yet supported on Quasar";
+    }
+
+    for (const auto reuse_type :
+         {unit_tests::compute::binary::BinaryDestReuseType::SrcA,
+          unit_tests::compute::binary::BinaryDestReuseType::SrcB}) {
+        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+            .num_tiles = 8,
+            .block_size = 8,
+            .tile_byte_size = 2 * 32 * 32,
+            .l1_input_data_format = tt::DataFormat::Float16_b,
+            .l1_output_data_format = tt::DataFormat::Float16_b,
+            .core = CoreCoord(0, 0),
+            .binary_op = "sub_with_dest_reuse",
+            .math_fidelity = MathFidelity::HiFi4,
+            .dest_reuse_type = reuse_type,
+        };
+
+        log_info(
+            tt::LogTest,
+            "Testing destination reuse through {}",
+            reuse_type == unit_tests::compute::binary::BinaryDestReuseType::SrcA ? "SrcA" : "SrcB");
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config, 2));
         }
     }
 }
