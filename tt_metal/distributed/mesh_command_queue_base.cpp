@@ -445,7 +445,7 @@ void MeshCommandQueue::enqueue_write_shards(
                                                        .host_data(shard_data_transfer.host_data)
                                                        .region(shard_data_transfer.region));
     }
-    this->enqueue_write_shards(mesh_buffer, distributed_shard_data_transfers, blocking);
+    this->enqueue_write_shards(*mesh_buffer, distributed_shard_data_transfers, blocking);
 }
 
 void MeshCommandQueue::enqueue_read_shards(
@@ -459,7 +459,7 @@ void MeshCommandQueue::enqueue_read_shards(
                                                        .host_data(shard_data_transfer.host_data)
                                                        .region(shard_data_transfer.region));
     }
-    this->enqueue_read_shards(distributed_shard_data_transfers, mesh_buffer, blocking);
+    this->enqueue_read_shards(distributed_shard_data_transfers, *mesh_buffer, blocking);
 }
 
 }  // namespace tt::tt_metal::distributed
