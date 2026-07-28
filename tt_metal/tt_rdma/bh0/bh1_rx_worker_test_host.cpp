@@ -257,10 +257,14 @@ int main(int argc, char** argv) {
     // with; lapped>0 means too few workers for this frame RATE (small frames = high fps = worst case).
     uint64_t produced_seen = 0, final_valid = 0, sum_completions = 0;
     uint32_t workers_on_gen2 = 0;
+    uint32_t baseline = 0xFFFFFFFFu;  // per-run head anchor (earliest = smallest across workers)
     for (uint32_t i = 0; i < nworkers; ++i) {
         auto w = rd(wphys[i]);
         if (w[5] > produced_seen) {
             produced_seen = w[5];
+        }
+        if (w[8] != 0u && w[8] < baseline) {
+            baseline = w[8];
         }
         final_valid += w[2];
         sum_completions += w[7];
@@ -268,14 +272,22 @@ int main(int argc, char** argv) {
             ++workers_on_gen2;
         }
         std::printf(
-            "    worker %u: produced_seen=%u processed=%u lapped=%u valid=%u completions=%u\n",
+            "    worker %u: baseline=%u produced_seen=%u delivered=%u processed=%u lapped=%u valid=%u completions=%u\n",
             i,
+            w[8],
             w[5],
+            (w[5] >= w[8]) ? (w[5] - w[8]) : 0u,
             w[3],
             w[4],
             w[2],
             w[7]);
     }
+    if (baseline == 0xFFFFFFFFu) {
+        baseline = 0u;
+    }
+    // PKT_END is cumulative; the per-run delivered frame count is produced_seen - baseline (frames that
+    // arrived after the pool anchored its head). Coverage is measured against THAT, not the cumulative count.
+    const uint64_t delivered = (produced_seen >= baseline) ? (produced_seen - baseline) : 0u;
     // Shared-MR-table check: after the central invalidate, every worker must have refreshed to gen 2 and
     // slot-0 WRITEs must have stopped validating (final_valid ~ valid_at_change -- froze at the change).
     const bool shared_mr_ok =
@@ -333,22 +345,24 @@ int main(int argc, char** argv) {
         nworkers,
         cq_ok ? "MULTI-WRITER RING OK (disjoint interleaved slots, no collision)" : "COMPLETIONS FAIL");
     const uint64_t accounted = fin_processed + fin_lapped;
-    const double cover = produced_seen ? 100.0 * (double)fin_processed / (double)produced_seen : 0.0;
-    const bool exactly_once = (accounted == produced_seen);  // no frame double-processed or dropped-unaccounted
+    const double cover = delivered ? 100.0 * (double)fin_processed / (double)delivered : 0.0;
+    const bool exactly_once = (accounted == delivered);  // no frame double-processed or dropped-unaccounted (per-run)
     std::printf(
         "\n  === Phase 3.1b RESULT (bounded multi-consumer claim) ===\n"
-        "  %u workers: consumed peak %.1f Gbps  processed=%llu / produced_seen=%llu (%.1f%% kept up)  lapped=%llu  eth "
-        "drop=%u\n"
-        "  exactly-once (processed+lapped==produced): %llu vs %llu -> %s  |  %s\n",
+        "  %u workers: consumed peak %.1f Gbps  processed=%llu / delivered=%llu (%.1f%% kept up)  lapped=%llu  "
+        "[baseline=%u produced_seen=%llu cumulative]  eth drop=%u\n"
+        "  exactly-once (processed+lapped==delivered): %llu vs %llu -> %s  |  %s\n",
         nworkers,
         peak_gbps,
         (unsigned long long)fin_processed,
-        (unsigned long long)produced_seen,
+        (unsigned long long)delivered,
         cover,
         (unsigned long long)fin_lapped,
+        baseline,
+        (unsigned long long)produced_seen,
         max_drop,
         (unsigned long long)accounted,
-        (unsigned long long)produced_seen,
+        (unsigned long long)delivered,
         exactly_once ? "HOLDS" : "VIOLATED",
         (fin_lapped == 0) ? "LOSSLESS: pool kept up (no lapping)"
                           : "pool fell behind for this frame RATE -> add workers or use jumbo (fewer fps)");

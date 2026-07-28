@@ -67,6 +67,13 @@ void kernel_main() {
     const uint32_t nslots = ring_size / stride;  // whole frames that fit (avoid straddle)
     uint32_t next_idx = wid;                     // monotonic frame index this worker owns next
     uint32_t produced = 0;
+    // PKT_END_CNT is CUMULATIVE across runs (== total frames the MAC ever landed), so a fresh worker must
+    // measure only frames delivered during ITS window. Prime a per-run baseline at the first non-zero head:
+    // start next_idx at the freshest index >= baseline (skip cumulative history) instead of index 0, which
+    // otherwise forces a giant startup "lap" and leaves only the tail. Then processed+lapped == produced -
+    // baseline == this run's delivered frames.
+    uint32_t baseline = 0;
+    bool primed = false;
     uint32_t cached_gen = 0xFFFFFFFFu;  // force a shared-MR-table cache load on the first poll
     uint64_t bytes = 0;
     uint32_t valid = 0, processed = 0, lapped = 0, poll = 0, completions = 0;
@@ -87,6 +94,14 @@ void kernel_main() {
 
         // Read the produce head from LOCAL L1 (pushed by RISC1) -- no NoC read, no stale-read hazard.
         produced = ph[0];
+
+        // Per-run baseline: on the first real (non-zero) head, anchor next_idx at the current frontier so we
+        // count only frames delivered from here on (PKT_END is cumulative -- see the decl above).
+        if (!primed && produced != 0u) {
+            baseline = produced;
+            next_idx = baseline + ((wid + nworkers - (baseline % nworkers)) % nworkers);  // first owned idx >= baseline
+            primed = true;
+        }
 
         // Lapping guard: if the MAC has advanced > (nslots - N) frames past our next index, our claimed
         // slot is already overwritten -> jump to the freshest index we own and count the skipped gap.
@@ -158,6 +173,7 @@ void kernel_main() {
             stats[5] = produced;
             stats[6] = cached_gen;  // MR-table generation this worker has cached (proves shared-table refresh)
             stats[7] = completions;
+            stats[8] = baseline;  // per-run head baseline: delivered-this-run = produced - baseline
             if (stop != nullptr && *stop != 0) {
                 break;
             }
@@ -171,4 +187,5 @@ void kernel_main() {
     stats[5] = produced;
     stats[6] = cached_gen;
     stats[7] = completions;
+    stats[8] = baseline;
 }
