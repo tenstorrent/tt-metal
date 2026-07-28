@@ -97,52 +97,44 @@
 # =============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
 # =============================================================================
-# Count allocation: Phase 1 automapper cwd=/ci/tt-metal (NFS). Copy generated/ttrun/<id>
-# into TT_METAL_HOME on runner+workers, then Phase 2 from /home/user/tt-metal with
-# in-tree relative --rank-binding / rankfile paths. PRTE misparses map-by paths that
-# leave cwd (relative paths starting with ../ into /ci). --bind-to none (not hwt).
-# Runner OOM: per-rank bash -c redirect to NFS (not MPI --output-filename).
-# Quiet ranks: LOGURU_LEVEL=ERROR (-x), TT_LOGGER_LEVEL=error.
+# Count allocation + generate_blitz_decode_pipeline_configs.py (not tt-run automapper).
+# Needs build/test/tt_metal/tt_fabric/test_physical_discovery.
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
     TTRUN_DIR=/etc/ttop
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    SCALEOUT_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     RANKLOG_DIR="${PIPELINE_DIR}/ranklogs"
-    mkdir -p "${RANKLOG_DIR}"
+    BINDINGS_DIR="${PIPELINE_DIR}/blitz_bindings"
+    mkdir -p "${RANKLOG_DIR}" "${BINDINGS_DIR}"
     export LOGURU_LEVEL=ERROR
     export TT_LOGGER_LEVEL=error
 
-    # Phase 1: NFS cwd so generated/ttrun is visible to runner + all workers.
-    cd /ci/tt-metal
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
-      --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "$MGD" \
-      --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME}" \
-      /bin/true \
-      > "${PIPELINE_DIR}/launch-phase1.log" 2>&1
+    cd "${BINDINGS_DIR}"
+    python3 "${SCALEOUT_DIR}/generate_blitz_decode_pipeline_configs.py" \
+      "${SCALEOUT_DIR}/blitz_pipeline_config_superpod_ci.yaml" \
+      --hostfile "${TTRUN_DIR}/hostfile" \
+      --preserve-hostfile-order \
+      --stage-size 4x2 \
+      --worker-tt-metal-home "${TT_METAL_HOME}" \
+      --output-dir "${BINDINGS_DIR}"
 
-    CACHE_ID=$(basename "$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)")
-    NFS_CACHE="/ci/tt-metal/generated/ttrun/${CACHE_ID}"
-    LOCAL_CACHE="${TT_METAL_HOME}/generated/ttrun/${CACHE_ID}"
-    test -f "${NFS_CACHE}/rank_bindings.yaml" && test -f "${NFS_CACHE}/rankfile"
-    # PRTE map-by requires rankfile under mpirun cwd (no ../../../ci/... rewrite).
-    mkdir -p "${TT_METAL_HOME}/generated/ttrun"
-    rm -rf "${LOCAL_CACHE}"
-    cp -r "${NFS_CACHE}" "${LOCAL_CACHE}"
-    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -r '${NFS_CACHE}' '${LOCAL_CACHE}'"
+    RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
+    RF=blitz_decode_pipeline_rank_file_superpod_ci
+    LOCAL_BIND="${TT_METAL_HOME}/generated/blitz_sc16"
+    mkdir -p "${LOCAL_BIND}"
+    cp -f "${BINDINGS_DIR}/${RB}" "${BINDINGS_DIR}/${RF}" "${LOCAL_BIND}/"
+    mpirun --pernode bash -lc "mkdir -p '${LOCAL_BIND}' && cp -f '${BINDINGS_DIR}/${RB}' '${BINDINGS_DIR}/${RF}' '${LOCAL_BIND}/'"
 
-    # Phase 2: local tree only (ORIGINAL_CWD == TT_METAL_HOME == --wdir).
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-binding "generated/ttrun/${CACHE_ID}/rank_bindings.yaml" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/ttrun/${CACHE_ID}/rankfile -x LOGURU_LEVEL=ERROR" \
+      --rank-binding "generated/blitz_sc16/${RB}" \
+      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -165,37 +157,36 @@
     TTRUN_DIR=/etc/ttop
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    SCALEOUT_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     RANKLOG_DIR="${PIPELINE_DIR}/ranklogs"
-    mkdir -p "${RANKLOG_DIR}"
+    BINDINGS_DIR="${PIPELINE_DIR}/blitz_bindings"
+    mkdir -p "${RANKLOG_DIR}" "${BINDINGS_DIR}"
     export LOGURU_LEVEL=ERROR
     export TT_LOGGER_LEVEL=error
 
-    cd /ci/tt-metal
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
-      --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "$MGD" \
-      --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME}" \
-      /bin/true \
-      > "${PIPELINE_DIR}/launch-phase1.log" 2>&1
+    cd "${BINDINGS_DIR}"
+    python3 "${SCALEOUT_DIR}/generate_blitz_decode_pipeline_configs.py" \
+      "${SCALEOUT_DIR}/blitz_pipeline_config_superpod_ci.yaml" \
+      --hostfile "${TTRUN_DIR}/hostfile" \
+      --preserve-hostfile-order \
+      --stage-size 4x2 \
+      --worker-tt-metal-home "${TT_METAL_HOME}" \
+      --output-dir "${BINDINGS_DIR}"
 
-    CACHE_ID=$(basename "$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)")
-    NFS_CACHE="/ci/tt-metal/generated/ttrun/${CACHE_ID}"
-    LOCAL_CACHE="${TT_METAL_HOME}/generated/ttrun/${CACHE_ID}"
-    test -f "${NFS_CACHE}/rank_bindings.yaml" && test -f "${NFS_CACHE}/rankfile"
-    mkdir -p "${TT_METAL_HOME}/generated/ttrun"
-    rm -rf "${LOCAL_CACHE}"
-    cp -r "${NFS_CACHE}" "${LOCAL_CACHE}"
-    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -r '${NFS_CACHE}' '${LOCAL_CACHE}'"
+    RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
+    RF=blitz_decode_pipeline_rank_file_superpod_ci
+    LOCAL_BIND="${TT_METAL_HOME}/generated/blitz_sc16"
+    mkdir -p "${LOCAL_BIND}"
+    cp -f "${BINDINGS_DIR}/${RB}" "${BINDINGS_DIR}/${RF}" "${LOCAL_BIND}/"
+    mpirun --pernode bash -lc "mkdir -p '${LOCAL_BIND}' && cp -f '${BINDINGS_DIR}/${RB}' '${BINDINGS_DIR}/${RF}' '${LOCAL_BIND}/'"
 
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-binding "generated/ttrun/${CACHE_ID}/rank_bindings.yaml" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/ttrun/${CACHE_ID}/rankfile -x LOGURU_LEVEL=ERROR" \
+      --rank-binding "generated/blitz_sc16/${RB}" \
+      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -217,37 +208,36 @@
     TTRUN_DIR=/etc/ttop
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    SCALEOUT_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     RANKLOG_DIR="${PIPELINE_DIR}/ranklogs"
-    mkdir -p "${RANKLOG_DIR}"
+    BINDINGS_DIR="${PIPELINE_DIR}/blitz_bindings"
+    mkdir -p "${RANKLOG_DIR}" "${BINDINGS_DIR}"
     export LOGURU_LEVEL=ERROR
     export TT_LOGGER_LEVEL=error
 
-    cd /ci/tt-metal
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
-      --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "$MGD" \
-      --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME}" \
-      /bin/true \
-      > "${PIPELINE_DIR}/launch-phase1.log" 2>&1
+    cd "${BINDINGS_DIR}"
+    python3 "${SCALEOUT_DIR}/generate_blitz_decode_pipeline_configs.py" \
+      "${SCALEOUT_DIR}/blitz_pipeline_config_superpod_ci.yaml" \
+      --hostfile "${TTRUN_DIR}/hostfile" \
+      --preserve-hostfile-order \
+      --stage-size 4x2 \
+      --worker-tt-metal-home "${TT_METAL_HOME}" \
+      --output-dir "${BINDINGS_DIR}"
 
-    CACHE_ID=$(basename "$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)")
-    NFS_CACHE="/ci/tt-metal/generated/ttrun/${CACHE_ID}"
-    LOCAL_CACHE="${TT_METAL_HOME}/generated/ttrun/${CACHE_ID}"
-    test -f "${NFS_CACHE}/rank_bindings.yaml" && test -f "${NFS_CACHE}/rankfile"
-    mkdir -p "${TT_METAL_HOME}/generated/ttrun"
-    rm -rf "${LOCAL_CACHE}"
-    cp -r "${NFS_CACHE}" "${LOCAL_CACHE}"
-    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -r '${NFS_CACHE}' '${LOCAL_CACHE}'"
+    RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
+    RF=blitz_decode_pipeline_rank_file_superpod_ci
+    LOCAL_BIND="${TT_METAL_HOME}/generated/blitz_sc16"
+    mkdir -p "${LOCAL_BIND}"
+    cp -f "${BINDINGS_DIR}/${RB}" "${BINDINGS_DIR}/${RF}" "${LOCAL_BIND}/"
+    mpirun --pernode bash -lc "mkdir -p '${LOCAL_BIND}' && cp -f '${BINDINGS_DIR}/${RB}' '${BINDINGS_DIR}/${RF}' '${LOCAL_BIND}/'"
 
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-binding "generated/ttrun/${CACHE_ID}/rank_bindings.yaml" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/ttrun/${CACHE_ID}/rankfile -x LOGURU_LEVEL=ERROR" \
+      --rank-binding "generated/blitz_sc16/${RB}" \
+      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \

@@ -419,6 +419,7 @@ def generate_pipeline_config_files(
     worker_tt_metal_home=None,
     output_dir=None,
     stage_size="4x2",
+    preserve_hostfile_order=False,
 ):
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
@@ -436,9 +437,13 @@ def generate_pipeline_config_files(
                 f"Hostfile has {len(allocated_hosts)} hosts but pipeline config has {len(config_hosts)} unique hosts"
             )
             sys.exit(1)
-        # Sort allocated hosts into canonical order (low_u08, low_u02, high_u02, high_u08)
-        # so that they match config_hosts order regardless of hostfile ordering.
-        allocated_hosts = sort_hosts_canonical(allocated_hosts)
+        if preserve_hostfile_order:
+            # Hostfile line i maps to config_hosts[i] (blitz pipeline / ring order).
+            logger.info("Preserving hostfile order for remapping (no canonical sort)")
+        else:
+            # Sort allocated hosts into canonical order (low_u08, low_u02, high_u02, high_u08)
+            # so that they match config_hosts order regardless of hostfile ordering.
+            allocated_hosts = sort_hosts_canonical(allocated_hosts)
         host_map = dict(zip(config_hosts, allocated_hosts))
         logger.info(f"Remapping hosts: {host_map}")
         stage_contributions = remap_stage_contribution_hosts(stage_contributions, host_map)
@@ -482,7 +487,14 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="File with one hostname per line. Overrides hosts in pipeline config. "
-        "Hosts are sorted into canonical order (low_u08, low_u02, high_u02, high_u08) before matching.",
+        "By default hosts are sorted into canonical order (low_u08, low_u02, high_u02, high_u08) "
+        "before matching. Use --preserve-hostfile-order for SC16 blitz ring order.",
+    )
+    parser.add_argument(
+        "--preserve-hostfile-order",
+        action="store_true",
+        help="With --hostfile, map hostfile line i to pipeline config host i without canonical sort. "
+        "Required for SC16 when the hostfile is already in blitz pipeline / ring order.",
     )
     parser.add_argument(
         "--worker-tt-metal-home",
@@ -507,4 +519,5 @@ if __name__ == "__main__":
         args.worker_tt_metal_home,
         args.output_dir,
         stage_size=args.stage_size,
+        preserve_hostfile_order=args.preserve_hostfile_order,
     )
