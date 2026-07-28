@@ -164,8 +164,8 @@ class RotarySetup1D(LightweightModule):
         self.load_device_weights()
         cfg = self.config
 
-        # Send to device if needed
-        if rot_idxs.device != cfg.device:
+        # Send to device if needed (tensor.device() is a method; returns None for host tensors)
+        if rot_idxs.device() != cfg.device:
             rot_idxs = ttnn.to_device(rot_idxs, cfg.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Embedding lookup: [1, batch] → [1, batch, head_dim]

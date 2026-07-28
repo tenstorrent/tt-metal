@@ -5,6 +5,7 @@
 import contextlib
 import fcntl
 import os
+import tempfile
 import time
 
 import pytest
@@ -15,7 +16,26 @@ import ttnn
 # Device Lock - Coordinates exclusive access to TT devices across processes
 # ==============================================================================
 
-_TT_DEVICE_LOCK_PATH = os.environ.get("TT_DEVICE_LOCK_PATH", "/tmp/tt_device.lock")
+
+def _sanitize_lock_path(raw: str) -> str:
+    """Confine the (env-derived, untrusted) lock path to the system temp directory.
+
+    ``TT_DEVICE_LOCK_PATH`` is operator-controlled input, so it is treated as
+    untrusted: only its basename is kept and anchored under the trusted temp dir,
+    preventing path traversal or writes outside the intended location. All
+    processes on a host still resolve to the same lock file, so cross-process
+    coordination is preserved.
+    """
+    base = os.path.realpath(tempfile.gettempdir())
+    name = os.path.basename(raw) or "tt_device.lock"
+    resolved = os.path.realpath(os.path.join(base, name))
+    # Defense in depth: never allow the resolved path to escape the trusted base.
+    if os.path.commonpath([base, resolved]) != base:
+        resolved = os.path.join(base, "tt_device.lock")
+    return resolved
+
+
+_TT_DEVICE_LOCK_PATH = _sanitize_lock_path(os.environ.get("TT_DEVICE_LOCK_PATH", "/tmp/tt_device.lock"))
 _TT_DEVICE_LOCK_TIMEOUT = float(os.environ.get("TT_DEVICE_LOCK_TIMEOUT", "60"))  # 1 min default
 
 
@@ -41,9 +61,13 @@ def tt_device_lock(lock_path: str = _TT_DEVICE_LOCK_PATH, timeout: float = _TT_D
     Debug stuck locks with: lsof /tmp/tt_device.lock
 
     Environment variables:
-        TT_DEVICE_LOCK_PATH: Override lock file path (default: /tmp/tt_device.lock)
+        TT_DEVICE_LOCK_PATH: Override lock file NAME (its basename is anchored under
+            the system temp dir; directory/traversal components are stripped)
         TT_DEVICE_LOCK_TIMEOUT: Override timeout in seconds (default: 300)
     """
+    # Re-sanitize at the sink: guarantee the path reaching the filesystem is
+    # confined to the trusted temp dir, regardless of what the caller passed.
+    lock_path = _sanitize_lock_path(lock_path)
     lock_dir = os.path.dirname(lock_path)
     if lock_dir and not os.path.exists(lock_dir):
         os.makedirs(lock_dir, exist_ok=True)
@@ -196,15 +220,19 @@ def ttnn_mesh_device(request):
     # Acquire exclusive lock to prevent concurrent device access across processes
     with tt_device_lock():
         try:
-            if req_shape != parent_shape:
+            # Device *setup* only inside this inner try/except: a failure here means the
+            # device is unavailable or the configuration is unsupported, which is a
+            # legitimate skip. The yield is deliberately kept OUTSIDE the skip-converting
+            # except so that exceptions raised by the test body propagate as real
+            # failures instead of being masked as skips.
+            try:
                 parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
-                submesh_device = parent_device.create_submesh(ttnn.MeshShape(req_shape))
-                yield submesh_device
-            else:
-                parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
-                yield parent_device
-        except Exception as e:
-            pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
+                if req_shape != parent_shape:
+                    submesh_device = parent_device.create_submesh(ttnn.MeshShape(req_shape))
+            except Exception as e:
+                pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
+
+            yield submesh_device if submesh_device is not None else parent_device
         finally:
             if submesh_device is not None:
                 ttnn.close_mesh_device(submesh_device)

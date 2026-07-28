@@ -61,19 +61,20 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
 
     op_kwargs = {"sub_core_grids": context.sub_core_grids} if context.sub_core_grids else {}
     # presence
-    presence_term = ttnn.multiply(
-        ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
-    )
+    output_mask_bf16 = ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs)
+    presence_term = ttnn.multiply(output_mask_bf16, context.presence_penalties, **op_kwargs)
+    output_mask_bf16.deallocate()
     presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
+    presence_term.deallocate()
     logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
     presence_term_bf16.deallocate()
 
     # frequency
     output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
-
     freq_term = ttnn.multiply(output_counts_bf16, context.frequency_penalties, **op_kwargs)
-
+    output_counts_bf16.deallocate()
     freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op_kwargs)
+    freq_term.deallocate()
     logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op_kwargs)
     freq_term_bf16.deallocate()
 
@@ -91,6 +92,7 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     # If logits are >0, divide by penalty, otherwise multiply by penalty.
     logits_bf16 = ttnn.typecast(logits, ttnn.bfloat16, **op_kwargs)
     logits_gt1 = ttnn.gt(logits_bf16, 0, **op_kwargs)
+    logits_bf16.deallocate()
     scaling = ttnn.where(logits_gt1, inverse_penalties, penalties, **op_kwargs)
     logits_gt1.deallocate()
     penalties.deallocate()

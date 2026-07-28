@@ -16,7 +16,7 @@ penalties with optional trace capture.
 
 ## Quick Start
 ```python
-from models.common.sampling import SamplingGenerator, format_sampling_params
+from models.experimental.llama32_1b_quasar.sampling import SamplingGenerator, format_sampling_params
 
 sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=tt_ccl)
 

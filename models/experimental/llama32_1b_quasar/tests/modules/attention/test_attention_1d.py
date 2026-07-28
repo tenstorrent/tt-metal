@@ -257,7 +257,8 @@ class RotarySetupHelper:
         """Get rotation matrices for given position indices."""
         rot_idxs = self.get_rot_idxs(position_idxs)
 
-        if rot_idxs.device != self.device:
+        # tensor.device() is a method; returns None for host tensors
+        if rot_idxs.device() != self.device:
             rot_idxs = ttnn.to_device(rot_idxs, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=ttnn.TILE_LAYOUT)

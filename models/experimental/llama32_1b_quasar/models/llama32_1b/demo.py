@@ -251,6 +251,8 @@ def test_llama32_1b_executor_prefill_smoke(mesh_device, hf_model_id, seq_len: in
 
     ttnn.SetDefaultDevice(mesh_device)
     try:
+        # Model build already skips above; execution errors and the shape assertions
+        # below must surface as real failures (not skips) so a prefill regression fails CI.
         ex = EagerLlama32_1BExecutor(model, mesh_device)
         kv = ex.allocate_kv_cache(kv_shape, torch.bfloat16, ma.n_layers)
         page_table = make_contiguous_page_table(1, ma.max_seq_len, 32)
@@ -261,8 +263,6 @@ def test_llama32_1b_executor_prefill_smoke(mesh_device, hf_model_id, seq_len: in
         assert (
             logits.shape[-1] == model.vocab_size
         ), f"expected last dim == vocab_size={model.vocab_size}, got {logits.shape}"
-    except Exception as e:
-        pytest.skip(f"Executor prefill not runnable: {e}")
     finally:
         ttnn.SetDefaultDevice(None)
         cleanup_model_case(model, mesh_device)
