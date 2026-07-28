@@ -58,7 +58,7 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
         {
             addr_mod_t {
                 .srcb = {.incr = 0},
-                .dest = {.incr = static_cast<std::uint16_t>(tensor_shape.face_r_dim * 2)},
+                .dest = {.incr = static_cast<std::uint16_t>(tensor_shape.face_r_dim * tensor_shape.num_faces_c_dim)},
             }
                 .set(ADDR_MOD_3);
         }
@@ -81,7 +81,7 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
 }
 
 /**
- * @brief MOP / replay configuration for MOVB2D unary-broadcast (srcB -> dest).
+ * @brief MOP / replay configuration for unary math broadcast.
  *
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
  * @tparam unpack_to_dest: When true, unpack filled dest; MOVB2D reads srcB only, so @ref _llk_math_eltwise_unary_broadcast_ runs MOVD2B (dest->srcB) first,
@@ -102,11 +102,11 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-                    // Read F0/F1 hi16 from DEST → SrcB[0:15]
+                    // Read F0/F2 hi16 from DEST → SrcB[0:15]
                     TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
                     TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
 
-                    // Read F0/F1 lo16 from DEST → SrcB[16:31]
+                    // Read F0/F2 lo16 from DEST → SrcB[16:31]
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
 
@@ -127,7 +127,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
             temp.program_bank0_sw_cntl(instrn_buffer);
         }
-        else if (BROADCAST_TYPE == BroadcastType::ROW)
+        else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
         {
             constexpr std::uint32_t replay_buf_len = 10;
             load_replay_buf<0, replay_buf_len>(
@@ -164,7 +164,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
                     TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
                     TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
 
-                    // Write hi16 and lo0 to DEST[0:63] from SrcB[0:15] (row and column broadcast ON)
+                    // Write hi16 and lo16 to DEST[0:63] from SrcB[0:15] (row and column broadcast ON)
                     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1);
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1); // dst += 8
                 });
@@ -211,10 +211,10 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 }
 
 /**
- * @brief Init unary-broadcast math: addrmods, MOP when not unpack_to_dest, reset counters.
+ * @brief Init unary-broadcast math: addrmods, mop configuration, reset counters.
  *
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
- * @tparam unpack_to_dest: UNP path wrote to dest; MOVB2D MOP deferred to per-tile call
+ * @tparam unpack_to_dest: UNP path wrote to dest
  * @param tensor_shape: Passed to addrmod / MOP setup
  * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE/unpack_to_dest.
  * @note @ref _llk_math_eltwise_unary_broadcast_ runs the configured op with matching template args.
@@ -231,7 +231,7 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape& tensor_sh
 }
 
 /**
- * @brief Run one tile of unary broadcast math: set dest write addr, optional D2B then MOVB2D when unpack_to_dest.
+ * @brief Run one tile of unary broadcast math: set dest write addr
  *
  * @param tile_idx: Destination tile index within current dest bank (SyncHalf)
  * @note Call @ref _llk_math_eltwise_unary_broadcast_init_ with matching template args before this function.

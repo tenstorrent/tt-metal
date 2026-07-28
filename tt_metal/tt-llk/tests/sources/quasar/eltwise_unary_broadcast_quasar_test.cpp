@@ -30,7 +30,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.INPUT_NUM_BLOCKS);
 
     // Setup data valid scheme
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     }
@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     }
@@ -142,10 +142,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    std::uint32_t const buf_desc_id        = 8;
+    constexpr std::uint32_t buf_desc_id    = 8;
     const std::uint32_t num_tiles_per_pack = 1;
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     }

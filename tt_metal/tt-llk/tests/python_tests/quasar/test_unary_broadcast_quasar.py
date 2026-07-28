@@ -93,7 +93,7 @@ def test_unary_broadcast_quasar(
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
-    # Test fails when unpack_to_dest=False, DstSync::Half and Dest bank switching, ISSUE: #51329
+    # Test fails when unpack_to_dest=True, DstSync::Half and Dest bank switching, ISSUE: #51329
     input_dimensions = (
         [32, 96] if unpack_to_dest and dest_sync_mode == DestSync.Half else [512, 32]
     )
