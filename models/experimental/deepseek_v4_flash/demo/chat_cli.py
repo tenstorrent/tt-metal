@@ -160,6 +160,102 @@ class _PrefillProgress:
             self.drawn = False
 
 
+_ANSI = {"gray": "\033[90m", "blue": "\033[94m", "reset": "\033[0m"}
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+class _ReplyStream:
+    """Detokenize a reply incrementally and print it as it arrives.
+
+    Two things make this more than a ``print``:
+
+    * **Partial characters.** A token can carry half a UTF-8 sequence (or half an
+      emoji's surrogate pair), so decoding the ids so far can end in U+FFFD that the
+      *next* token completes. Writing that would leave a replacement character on
+      screen forever, so a trailing one is held back until it resolves. If a re-decode
+      ever revises text already written, the cursor rewinds to the common prefix and
+      carries on from there rather than dropping the rest of the reply.
+    * **Thinking blocks.** ``<think>`` / ``</think>`` are kept in the output rather
+      than skipped: the tags are printed in blue, the reasoning between them in gray,
+      and a newline follows the closing tag so the answer starts on its own line. A tag
+      split across two tokens is held back until it is whole.
+    """
+
+    def __init__(self, tokenizer, thinking: bool):
+        self.tokenizer = tokenizer
+        self.color = sys.stdout.isatty()
+        self.in_think = thinking
+        self.text = ""  # stable decoded reply, tags included, no escapes
+        self.cursor = 0  # how much of it has been written out
+        self.painted: str | None = None  # colour the terminal is currently set to
+        if thinking:
+            # In thinking mode the template opens the block itself, so the model's
+            # output holds only the closing tag; show the state it is already in.
+            self._write(_THINK_OPEN, "blue")
+
+    # -- output ---------------------------------------------------------------- #
+    def _write(self, text: str, color: str | None = None) -> None:
+        """Write ``text``, switching the terminal colour only when it changes -- the
+        reply arrives a few characters at a time and wrapping every one of them in its
+        own escape pair would bloat anything piped or copied out of the terminal."""
+        if self.color and color != self.painted:
+            sys.stdout.write(_ANSI["reset"] if color is None else _ANSI[color])
+            self.painted = color
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def _body(self, text: str) -> None:
+        self._write(text, "gray" if self.in_think else None)
+
+    # -- incremental decode ---------------------------------------------------- #
+    def push(self, token_ids) -> None:
+        """Take the reply's ids so far and write whatever new text they resolve to."""
+        full = self.tokenizer.decode(token_ids, skip_special_tokens=False)
+        full = full.rstrip("\ufffd")  # an unfinished character: wait for the next token
+        if not full.startswith(self.text):
+            self.cursor = min(self.cursor, len(os.path.commonprefix([full, self.text])))
+        self.text = full
+        self._flush()
+
+    def close(self) -> None:
+        """Write the tail held back for a possible partial tag, drop any colour and end
+        the line (a reply cut short by the token cap can end inside a think block)."""
+        self._flush(final=True)
+        self._write("\n", None)
+
+    def _next_tag(self, start: int):
+        """The first whole think tag at or after ``start``, as ``(index, tag)``."""
+        hits = [(self.text.find(t, start), t) for t in (_THINK_OPEN, _THINK_CLOSE)]
+        hits = [(i, t) for i, t in hits if i != -1]
+        return min(hits) if hits else (None, None)
+
+    def _held_back(self) -> int:
+        """Characters at the end that could still turn into a tag once more arrive."""
+        for tag in (_THINK_CLOSE, _THINK_OPEN):
+            for n in range(len(tag) - 1, 0, -1):
+                if self.text.endswith(tag[:n]):
+                    return n
+        return 0
+
+    def _flush(self, final: bool = False) -> None:
+        while self.cursor < len(self.text):
+            index, tag = self._next_tag(self.cursor)
+            if index is None:
+                end = len(self.text) - (0 if final else self._held_back())
+                if end > self.cursor:
+                    self._body(self.text[self.cursor : end])
+                    self.cursor = end
+                return
+            if index > self.cursor:
+                self._body(self.text[self.cursor : index])
+            self._write(tag, "blue")
+            self.cursor = index + len(tag)
+            self.in_think = tag == _THINK_OPEN
+            if tag == _THINK_CLOSE:
+                self._write("\n", None)
+
+
 class ChatEngine:
     """The resident model, plus the users that share it.
 
@@ -410,7 +506,7 @@ class UserSession:
 
         print("bot> ", end="", flush=True)
         generated: list[int] = []
-        shown = ""
+        stream = _ReplyStream(tokenizer, self.thinking_mode == "thinking")
         decode_time = 0.0
         try:
             for _ in range(engine.max_new_tokens):
@@ -420,14 +516,7 @@ class UserSession:
                     print("\n[context full -- use /reset]", flush=True)
                     break
                 generated.append(next_id)
-                # Detokenize the reply as a whole each step and print only the new
-                # text: a single token can be half a multi-byte character or word
-                # piece.
-                full = tokenizer.decode(generated, skip_special_tokens=True)
-                if full.startswith(shown):
-                    sys.stdout.write(full[len(shown) :])
-                    sys.stdout.flush()
-                    shown = full
+                stream.push(generated)
                 t1 = time.perf_counter()
                 next_id = engine.step(self, next_id, self.pos)
                 self.pos += 1
@@ -443,11 +532,11 @@ class UserSession:
             # valid, so keep it and let the user free space with /reset.
             print(f"\n[cache pool full: {e} -- /reset a user]", flush=True)
 
+        stream.close()
         # ``next_id`` was produced but never fed; the next turn starts with it.
         self.pending_id = next_id
-        self.messages.append({"role": "assistant", "content": shown})
+        self.messages.append({"role": "assistant", "content": stream.text})
         self._next_render = len(self.messages)
-        print(flush=True)
         rate = f"{len(generated) / decode_time:.2f} tok/s" if decode_time else "n/a"
         logger.info(
             f"user {self.index}: prefill {len(prompt_ids)} tokens in {prefill_time:.2f}s | "
@@ -490,7 +579,7 @@ def repl(engine: ChatEngine) -> None:
         "/help for commands.\n"
     )
     if engine.user.thinking_mode == "thinking":
-        print("[thinking mode: the reasoning block is streamed inline before the reply]\n")
+        print("[thinking mode: the reasoning block is streamed inline in gray before the reply]\n")
     while True:
         try:
             line = input(f"you[{engine.active}]> ").strip()
@@ -638,6 +727,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 @torch.no_grad()
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # The model emits plenty of non-ASCII (CJK, emoji, typographic punctuation), which
+    # an ASCII/POSIX locale would turn into a UnicodeEncodeError mid-reply.
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     if args.quiet:
         logger.remove()
         logger.add(sys.stderr, level="WARNING")

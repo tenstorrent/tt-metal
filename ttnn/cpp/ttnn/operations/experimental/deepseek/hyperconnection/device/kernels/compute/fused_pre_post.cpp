@@ -7,6 +7,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/matmul.h"
@@ -87,6 +88,7 @@ void kernel_main() {
     constexpr uint32_t eps_bits = get_compile_time_arg_val(11);
     constexpr uint32_t two_bits = get_compile_time_arg_val(12);
 
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_pre, cb_hidden, cb_collapsed);
     binary_op_init_common(cb_pre_w, cb_pre_bias, cb_pre);
 
     // pre  = sigmoid(pre_w  * pre_scale  + pre_bias) + eps   -> cb_pre   (matmul in0).
@@ -97,7 +99,7 @@ void kernel_main() {
 
     // collapsed = pre[1,H] @ hidden[H,D] -> [1,D]. Padding rows of hidden (>= H) are zero, so
     // the K reduction only accumulates the H valid streams regardless of pre's padding values.
-    mm_init(cb_pre, cb_hidden, cb_collapsed);
+    matmul_init(cb_pre, cb_hidden);
     cb_wait_front(cb_pre, 1);
     cb_wait_front(cb_hidden, d_tiles);
     for (uint32_t n = 0; n < d_tiles; ++n) {
@@ -107,6 +109,7 @@ void kernel_main() {
 
         cb_reserve_back(cb_collapsed, 1);
         tile_regs_wait();
+        pack_reconfig_data_format(cb_collapsed);
         pack_tile(0, cb_collapsed);
         tile_regs_release();
         cb_push_back(cb_collapsed, 1);
