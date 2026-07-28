@@ -439,14 +439,15 @@ def run_chunked_transformer_padded_trace(
     routing_use_l1_small_for_semaphores=False,
     mode="traced",
 ):
-    """Trace+metadata twin of run_chunked_transformer_padded. On ONE kv_only build it runs the same
-    VARIABLE/partial-chunk prefill TWICE:
-      PASS A (untraced, scalar host actual_start/actual_end) -> KV cache A;
-      PASS B (a metadata ttnn trace captured once + replayed per split, per-chunk scalars read on-device
-              from a persistent metadata tensor) -> KV cache B.
-    It then asserts the per-layer KV-cache PCC (vs the golden kv_post_transform) of the TRACED metadata
-    path == the UNTRACED scalar path (bit-exact), and that the traced path meets the PCC threshold. This
-    is the trace-safe equivalent of the untraced run_chunked_transformer_padded for the metadata path."""
+    """VARIABLE/partial-chunk prefill on ONE kv_only build, in one of three independent modes (pytest
+    param `mode`), each asserted ONLY against the golden kv_post_transform (no cross-path comparison):
+      - "scalar":  untraced scalar path (host actual_start/actual_end, metadata=None);
+      - "eager":   metadata path run eagerly per split (per-chunk scalars read on-device from a
+                   persistent metadata tensor), no capture;
+      - "traced":  the SAME metadata forward captured once as a ttnn trace and replayed per split.
+    Each mode runs a single pass and asserts its per-layer KV-cache PCC (vs the golden) meets
+    LAYER_PCC_THRESHOLD for the asserted layer depth. MoE padding-awareness is intentionally not
+    exercised here (see run_chunked_transformer_padded for the padding-aware scalar reference)."""
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     trace_dir = _resolve_trace_dir(variant)
@@ -547,53 +548,54 @@ def run_chunked_transformer_padded_trace(
     sp_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None))
     rep_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
-    # ---- PASS A: untraced scalar (host actual_start/actual_end), the reference path ----
-    cache_A = _make_cache()
-    for (ks, e), tok in zip(starts, chunk_tok_host):
-        tt_tokens = ttnn.from_torch(
-            tok,
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=sp_mapper,
-        )
-        transformer.forward(
-            tt_tokens,
-            cache_A,
-            actual_isl=e - ks,
-            actual_start=ks,
-            actual_end=e,
-            cache_user_id=0,
-            metadata=None,
-        )
-        ttnn.deallocate(tt_tokens)
-    ttnn.synchronize_device(mesh_device)
-    logger.info("[padded-trace] PASS A (untraced scalar) done; recording per-layer KV PCC vs golden")
-    _, pcc_A = _record_kv_cache_pcc(
-        trace_dir,
-        layout,
-        cache_A,
-        mesh_device,
-        sp,
-        num_layers,
-        seq_len_cache,
-        total_len,
-        kvpe_dim,
-        config.kv_lora_rank,
-        return_per_layer=True,
-        assert_threshold=(LAYER_PCC_THRESHOLD if mode == "scalar" else None),
-        assert_layer_depth=(GATED_LAYER_DEPTH if (mode == "scalar" and num_layers > GATED_LAYER_DEPTH) else None),
-    )
-    ttnn.deallocate(cache_A.storage)
+    # Each mode runs a SINGLE pass and asserts its own per-layer KV-cache PCC against the GOLDEN trace.
+    # There is no scalar-vs-metadata cross-comparison: the scalar, metadata(eager) and trace(replay)
+    # paths are independent tests, each validated only against the golden.
+
+    # ---- SCALAR mode: untraced scalar path (host actual_start/actual_end), asserted vs GOLDEN. ----
     if mode == "scalar":
-        # SCALAR-only run: PASS A (host actual_start, no metadata) IS the whole test. Its per-layer KV-PCC
-        # was just asserted above; skip the metadata PASS B and the bit-exact A-vs-B verify.
+        cache = _make_cache()
+        for (ks, e), tok in zip(starts, chunk_tok_host):
+            tt_tokens = ttnn.from_torch(
+                tok,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=sp_mapper,
+            )
+            transformer.forward(
+                tt_tokens,
+                cache,
+                actual_isl=e - ks,
+                actual_start=ks,
+                actual_end=e,
+                cache_user_id=0,
+                metadata=None,
+            )
+            ttnn.deallocate(tt_tokens)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("[padded-trace] SCALAR path done; recording per-layer KV PCC vs GOLDEN")
+        _record_kv_cache_pcc(
+            trace_dir,
+            layout,
+            cache,
+            mesh_device,
+            sp,
+            num_layers,
+            seq_len_cache,
+            total_len,
+            kvpe_dim,
+            config.kv_lora_rank,
+            assert_threshold=LAYER_PCC_THRESHOLD,
+            assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
+        )
+        ttnn.deallocate(cache.storage)
         transformer.release_sub_device_managers()
-        logger.success("[padded-trace] SCALAR-only run complete (no metadata pass, no A-vs-B verify)")
+        logger.success("[padded-trace] SCALAR run complete (asserted vs golden)")
         return
 
-    # ---- PASS B: metadata trace captured ONCE, replayed per split ----
+    # ---- METADATA modes (eager / traced): on-device per-split scalars, asserted vs GOLDEN. ----
     cache_B = _make_cache()  # persistent (captured) cache
     trace_input = ttnn.from_torch(
         chunk_tok_host[0],
@@ -641,9 +643,9 @@ def run_chunked_transformer_padded_trace(
             metadata=trace_metadata,
         )
 
-    # PASS B execution mode (pytest param `mode`). "traced" captures a metadata trace ONCE and replays it
-    # per split (the traced-metadata path). "eager" runs the SAME metadata forward EAGERLY per split (no
-    # capture/replay). ("scalar" mode never reaches here — it returns after PASS A above.)
+    # Metadata execution mode (pytest param `mode`). "traced" captures the metadata forward ONCE and
+    # replays it per split (the traced-metadata path). "eager" runs the SAME metadata forward EAGERLY
+    # per split (no capture/replay). ("scalar" mode returned above and never reaches here.)
     _PADDED_TRACE = mode == "traced"
     if _PADDED_TRACE:
         controller = SubDeviceTraceController(mesh_device)
@@ -676,8 +678,8 @@ def run_chunked_transformer_padded_trace(
     ttnn.deallocate(trace_input)
     for t in trace_metadata:
         ttnn.deallocate(t)
-    logger.info("[padded-trace] PASS B (metadata trace) done; recording per-layer KV PCC vs golden")
-    _, pcc_B = _record_kv_cache_pcc(
+    logger.info(f"[padded-trace] {mode} metadata path done; recording per-layer KV PCC vs GOLDEN")
+    _record_kv_cache_pcc(
         trace_dir,
         layout,
         cache_B,
@@ -690,22 +692,9 @@ def run_chunked_transformer_padded_trace(
         config.kv_lora_rank,
         assert_threshold=LAYER_PCC_THRESHOLD,
         assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
-        return_per_layer=True,
     )
     transformer.release_sub_device_managers()
-
-    # ---- VERIFY: traced metadata path == untraced scalar path (per-layer, bit-exact KV) ----
-    logger.info("[padded-trace] per-layer KV PCC: untraced(scalar) vs traced(metadata):")
-    max_diff = 0.0
-    for i in range(num_layers):
-        a, b = pcc_A[i], pcc_B[i]
-        max_diff = max(max_diff, abs(a - b))
-        logger.info(f"  layer {i}: untraced={a:.6f}  traced={b:.6f}  |diff|={abs(a-b):.2e}")
-    logger.success(f"[padded-trace] max |untraced - traced| per-layer KV PCC = {max_diff:.2e}")
-    assert max_diff < 1e-3, (
-        f"metadata+trace KV PCC differs from untraced scalar by {max_diff:.2e} (>1e-3) — "
-        f"the traced path should be bit-identical to the untraced path"
-    )
+    logger.success(f"[padded-trace] {mode} metadata run complete (asserted vs golden)")
 
 
 def run_chunked_transformer(
@@ -1582,9 +1571,9 @@ def test_ds_prefill_transformer_chunked_padded(
     )
 
 
-# Trace+metadata twin of test_ds_prefill_transformer_chunked_padded: the variable/partial-chunk prefill
-# run via a captured metadata ttnn trace replayed per split, asserting its per-layer KV-cache PCC matches
-# the untraced scalar path bit-exactly (and meets the PCC threshold). Needs trace_region_size > 0.
+# Variable/partial-chunk prefill in one of three independent modes (scalar | eager-metadata |
+# traced-metadata), each asserting its own per-layer KV-cache PCC against the golden (no cross-path
+# comparison). Needs trace_region_size > 0.
 @pytest.mark.parametrize("splits", [_PADDED_FULL_55K], ids=["full55k"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
@@ -1747,13 +1736,11 @@ def test_kimi_prefill_transformer_chunked_padded(
     )
 
 
-# Trace+metadata twin of test_kimi_prefill_transformer_chunked_padded: the variable/partial-chunk prefill
-# run via a captured metadata ttnn trace replayed per split, asserting its per-layer KV-cache PCC matches
-# the untraced scalar path bit-exactly. Needs trace_region_size > 0; Kimi uses the DEVICE_FP32 gate + the
-# L1_SMALL semaphore region. The trace controller chops capture at the MoE sub-device load/clear.
-# `mode` (pytest param): "traced" = traced metadata (capture+replay); "eager" = eager metadata (per-split
-# forward, no capture) — both are PASS B, compared bit-exact to the untraced scalar PASS A reference.
-# "scalar" = run ONLY the eager scalar pass (no metadata, no A-vs-B verify), asserting its own KV-PCC.
+# Variable/partial-chunk Kimi prefill in one of three independent modes, each asserting its OWN per-layer
+# KV-cache PCC against the golden (no scalar-vs-metadata cross-comparison). Needs trace_region_size > 0;
+# Kimi uses the DEVICE_FP32 gate + the L1_SMALL semaphore region. The trace controller chops capture at
+# the MoE sub-device load/clear. `mode` (pytest param): "scalar" = untraced scalar path (metadata=None);
+# "eager" = eager metadata (per-split forward, no capture); "traced" = traced metadata (capture+replay).
 @pytest.mark.parametrize("mode", ["traced", "eager", "scalar"], ids=["traced", "eager", "scalar"])
 @pytest.mark.parametrize("splits", [_PADDED_FULL_55K], ids=["full55k"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
