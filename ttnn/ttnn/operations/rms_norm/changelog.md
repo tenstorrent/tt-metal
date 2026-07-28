@@ -105,3 +105,94 @@
 - **Artifacts**: `verification_report.md`, `verifier_report.json` (trimmed: summary + loud-category
   node lists + xfail axis histogram), `op_requirements.md` (5 refinements: 3 generality + 2 measured
   perf, at the 2:1 cadence), this changelog.
+
+## Refinement 1 — Numerical configurability expansion (unlocks every perf target)
+
+- **Date**: 2026-07-28
+- **Device**: blackhole_p150b, 11 × 10 = 110-core compute grid, AICLK 1350 MHz
+
+- **What was done**: opened the full float surface `{bfloat16, float32, bfloat8_b} ×
+  {fp32_dest_acc_en True, False}`. **Zero kernel changes** — the compute/reader/writer triple was
+  already helper-based and dtype-agnostic (runtime `get_tile_size`, host-computed byte counts), so
+  the skill's pass condition held and every edit is in the op file + program descriptor.
+
+  - `SUPPORTED`: `dtype += bfloat8_b`, `gamma_dtype += bfloat8_b`, `fp32_dest_acc_en = [True, False]`.
+  - `default_compute_kernel_config()` **unchanged** (`fp32_dest_acc_en=True`), so
+    `axes.py:40-43` and `test_rms_norm_default_config_matches_factory` still hold.
+  - The existing `{float32, fp32_dest_acc_en=False}` `EXCLUSIONS` entry became *reachable* — kept,
+    as the queue requires; it is now exercised (64 skips in the precision matrix).
+  - `_row_elem_bytes()`: `Tensor.element_size()` **raises** for block-float dtypes (no per-datum
+    width). It is consumed only on the ROW_MAJOR stick path, which a block-quantized tensor can
+    never take, so it returns a documented structurally-unused placeholder rather than letting the
+    exception escape a branch that discards it.
+  - `x_squared_dtype`: the reduce programs srcA/srcB from its **input CB** (`cb_x_squared`), so that
+    — not the input tensor's dtype — is the format `fold_partial_last` reads the partial-W mask at.
+    Phase 0 conflated the two because they were always equal. Block-float inputs now square into a
+    **bfloat16** `cb_x_squared`; `cb_scaler` derives from it, single-source.
+
+- **Accuracy achieved** (`precision_matrix_results.md`, 320 cells = 8 shapes × 3 dtypes ×
+  4 math_fidelity × 2 fp32_dest_acc_en × 2 distributions; gate PCC ≥ 0.99):
+  - **320 / 320 pass**; worst PCC anywhere is **0.999325** (bfloat8_b / LoFi / bf16 DEST), ~75×
+    inside the gate. 64 cells skipped via the op's own `EXCLUSIONS`.
+  - `bfloat16`: PCC ≥ 0.999980 / rel-RMS ≤ 6.2e-03 at HiFi4 with `fp32_dest_acc_en=False`
+    (vs 0.999992 / 2.5e-03 with it on) — the new DEST mode costs ~2.5× rel-RMS at HiFi4 and
+    **nothing** at HiFi2/LoFi, where fidelity already dominates.
+  - `bfloat8_b`: PCC ≥ 0.99979 / rel-RMS ≤ 2.2e-02 at HiFi4 (both DEST modes), flat across
+    fidelity — its error is input/output block-float quantization, not the compute pipeline.
+  - `float32`: unchanged from Phase 0 (PCC ≥ 0.999999 / rel-RMS 1.6e-03 at HiFi4).
+  - **Accuracy watch item resolved**: the 8 interleaved perf loose cases (bf16 / HiFi2 /
+    `fp32_dest_acc_en=False`, W up to 7168, `NW = 7`) pass their tighter `pcc_threshold = 0.9995`
+    soft gate. The pairwise-add `AccumulateViaAdd` datapath was the right one; no SFPU finalize
+    needed, no gate widened.
+
+- **Golden test progress**: the refinement's gating criterion is met — **all 8 interleaved
+  perf-flagged loose cases now run as `supported_pass`** (they were 8/8 xfail before, because every
+  one pins `fp32_dest_acc_en=False`). Nothing downstream is blocked on measurement any more. The
+  remaining 8 loose xfails are the sharded schemes (Refinements 2 / 4). Targeted cartesian slice
+  over `1x1x64x128` (aligned) + `1x1x64x17` (W non-aligned) + `1x1x17x64` (H non-aligned):
+  **120 passed, 0 failed, 0 XPASS-drift**, with bfloat8_b cells passing at every `gamma_dtype`
+  including bf8 gamma. Unit suite: **456 passed** (136 prior + 320 new matrix cells) + 25 element-count
+  cells, no regression.
+
+- **Issues encountered**:
+  1. **A silently-wrong bfloat8_b cell that PCC could not see.** With a `Bfp8_b` reduce datapath the
+     `Float16_b` partial-W mask decoded as all-zeros (a bf8 tile's leading bytes are the
+     shared-exponent header), so the final reduce-dim tile contributed **nothing**: an all-ones
+     `W=49` row summed to **32**, not 49. Random-data PCC was **0.9998** and the golden gate
+     (0.99 / 0.10) passed anyway — because dropping elements only *rescales* each row and PCC is
+     scale-invariant. Caught by a deterministic all-ones probe (`probes/probe_005.py`), fixed by the
+     `x_squared_dtype` rule above, and pinned by
+     `test_partial_w_reduce_counts_every_element`, which inverts the kernel's own output back into
+     the element count it actually summed. Post-fix the recovered sum is exact at
+     `W = 33 / 49 / 63 / 100 / 4097`. **No `EXCLUSIONS` entry was needed for bf8 non-aligned** —
+     both buckets are genuinely correct now (they remain `feature_spec.INVALID`-skipped, so this is
+     honesty rather than new golden coverage).
+  2. **`UnpackToDestFp32` is unavailable on the generic-op path** — investigated and reverted, see
+     "Measured null" below.
+
+- **Measured null — the `UnpackToDestFp32` upside the queue flagged**: the verifier suggested
+  tagging the fp32 *inputs* to the two FPU multiplies. That is forbidden outright by the tag's
+  exclusivity rule (a tagged CB can never be an FPU operand), so the only legal candidates here are
+  `cb_partials` (the `AccumulateViaAdd` running sum, reloaded via `copy_tile`) and `cb_rms_sum`
+  (read only by `CopyTile` → SFPU). Those looked genuinely promising: the reduce path's accuracy
+  degrades exactly with the reload count — **12.02 effective mantissa bits at `NW=2`, 11.11 at
+  `NW=8`, 9.89 at `NW=16`** (`probes/probe_007/008.py`) — the signature of per-reload TF32
+  truncation compounding. The tag was implemented and correctly reached the descriptor (CBs 25/26
+  tagged, vector length 64, verified by readback). It produced **bitwise-identical output**.
+  Falsification test (`probes/probe_010.py`, plus three *separate processes* on a fresh shape to
+  rule out the program cache): tagging `cb_rms_recip` — an **FPU srcB operand**, which by the
+  exclusivity rule *must* corrupt the result if the tag were honoured — is also bitwise identical
+  (`md5=a7c265c57d4719bb` for off / legal / illegal alike). Conclusion:
+  `ComputeConfigDescriptor.unpack_to_dest_mode` is **inert on the `ttnn.generic_op` ProgramDescriptor
+  path**. Reverted rather than left in as dead code, because the wrapper had to rebuild the caller's
+  config field-by-field and would silently drop any future `ComputeConfigDescriptor` field — a real
+  latent hazard bought for a measured-zero benefit. fp32 retains ≥13× tolerance headroom regardless.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_matrix.py` (**new** — 320
+    matrix cells + 25 partial-W element-count cells; imports the op's `EXCLUSIONS` rather than
+    copying it, so the skip list cannot drift)
+  - `tests/ttnn/unit_tests/operations/rms_norm/precision_matrix_results.md` (**new** — the §10
+    results file)
+  - `probes/probe_003..013.py` (bf8 bring-up, the deterministic mask probe that found the bug, the
+    fp32 error attribution, and the `UnpackToDestFp32` falsification)

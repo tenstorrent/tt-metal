@@ -65,3 +65,12 @@
 {"source":"run_safe_pytest","pid":669898,"started_at_ms":1785203486055,"wait_ms":2,"run_ms":36212,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
 {"source":"run_safe_pytest","pid":670597,"started_at_ms":1785203562102,"wait_ms":2,"run_ms":44364,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
 {"source":"run_safe_pytest","pid":671552,"started_at_ms":1785203615316,"wait_ms":2,"run_ms":22158,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"tt-probe","pid":673081,"started_at_ms":1785203733893,"wait_ms":128,"run_ms":47478,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":673480,"started_at_ms":1785203817250,"wait_ms":146,"run_ms":47504,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":674246,"started_at_ms":1785203966336,"wait_ms":181,"run_ms":51916,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":675018,"started_at_ms":1785204070320,"wait_ms":123,"run_ms":48492,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":675638,"started_at_ms":1785204187456,"wait_ms":176,"run_ms":48514,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":675992,"started_at_ms":1785204236152,"wait_ms":123,"run_ms":47377,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":676619,"started_at_ms":1785204331662,"wait_ms":2,"run_ms":55718,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"tt-probe","pid":677215,"started_at_ms":1785204408997,"wait_ms":161,"run_ms":49042,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":678056,"started_at_ms":1785204584581,"wait_ms":2,"run_ms":25365,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
