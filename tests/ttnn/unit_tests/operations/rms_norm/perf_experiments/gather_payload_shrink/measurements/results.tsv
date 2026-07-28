@@ -84,3 +84,61 @@ FLOOR_nocombine     focus_hb1         1         64      72330
 FLOOR_nocombine     w32x1024          1         8       3381
 FLOOR_nocombine     w32x7168          1         28      3774
 FLOOR_nocombine     block8192x2304    1         64      90596
+#
+# =====================================================================
+# ROUND 2 (colpack_regraduate) — fork RE-FORKED from the CURRENT op, which now
+# carries Perf-1's phase-4 SFPU rewrite (RsqrtAddUnaryColZero, commit 83e64b50c7).
+# Gamma-mcast reuse (commit 80ce979d50) NOT ported: predicate cw==1, never true
+# in any row below (every case is W-split). Same box, same precision contract,
+# combine topology still PINNED FLAT for every row (see caveat below the table
+# for w32x5120/w32x7168/i32x5120/i32x7168, whose real-op default is TWO-STAGE
+# since cw = cx*cy > COMBINE_MAX_FLAT_FANIN=24 there — colpack's own precondition
+# (not two_stage) means it is INERT on those four in the real op regardless of
+# this bench's flat pin; bf16 has no topology dependence so is unaffected).
+# One fresh-cache dispatch per (variant, case) except the focus baseline gate.
+#
+# variant           case              HT_BLOCK  cores   ns
+baseline            focus             8         64      54270
+baseline            focus_hb4         4         64      58729
+baseline            focus_hb2         2         64      69059
+baseline            focus_hb1         1         64      87199
+baseline            w32x1024          1         8       4508
+baseline            w32x2304          1         9       5235
+baseline            w32x5120          1         32      6722
+baseline            w32x7168          1         28      7593
+baseline            block8192x2304    1         64      105270
+baseline            i32x5120          1         40      9181
+baseline            i32x7168          1         56      10619
+colpack              focus             8         64      36581
+colpack              focus_hb4         4         64      44362
+colpack              focus_hb2         2         64      61610
+colpack              focus_hb1         1         64      91923
+colpack              w32x1024          1         8       4751
+colpack              w32x2304          1         9       5301
+colpack              w32x5120          1         32      6788
+colpack              w32x7168          1         28      7568
+colpack              block8192x2304    1         64      109790
+colpack              i32x5120          1         40      9121
+colpack              i32x7168          1         56      10672
+bf16                 focus             8         64      46533
+bf16                 focus_hb4         4         64      51181
+bf16                 focus_hb2         2         64      62782
+bf16                 focus_hb1         1         64      85543
+bf16                 w32x1024          1         8       4162
+bf16                 w32x2304          1         9       4918
+bf16                 w32x5120          1         32      5627
+bf16                 w32x7168          1         28      6428
+bf16                 block8192x2304    1         64      103182
+bf16                 i32x5120          1         40      7716
+bf16                 i32x7168          1         56      9081
+colpack_bf16         focus             8         64      36014
+colpack_bf16         focus_hb4         4         64      43734
+colpack_bf16         focus_hb2         2         64      60528
+colpack_bf16         focus_hb1         1         64      90177
+colpack_bf16         w32x1024          1         8       4355
+colpack_bf16         w32x2304          1         9       5032
+colpack_bf16         w32x5120          1         32      5780
+colpack_bf16         w32x7168          1         28      6653
+colpack_bf16         block8192x2304    1         64      107665
+colpack_bf16         i32x5120          1         40      8081
+colpack_bf16         i32x7168          1         56      9372

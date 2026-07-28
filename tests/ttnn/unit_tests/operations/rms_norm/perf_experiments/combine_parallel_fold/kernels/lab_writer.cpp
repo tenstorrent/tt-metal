@@ -42,17 +42,23 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 namespace {
 constexpr uint32_t cb_group_partials = 6;
+constexpr uint32_t cb_rms_mean = 7;
 constexpr uint32_t cb_partial_out = 8;
 constexpr uint32_t cb_group_partials2 = 9;
-// Perf 2 — the column-pack's two non-canonical scaler banks, filled here.
+// row_rotate / pack_rotate reuse slot 9 as the OWNER-output CB (two_stage's
+// stage-2 gather CB is unused there), so the fold's push granularity gets its
+// own buffer.
+constexpr uint32_t cb_owner_out = 9;
+// PERF-2 (combine_parallel_fold): column-pack/select scalers, reused verbatim
+// from gather_payload_shrink's mechanism.
 constexpr uint32_t cb_packsel = 10;
 constexpr uint32_t cb_colsel = 11;
 constexpr uint32_t cb_output_tiles = 16;
@@ -86,18 +92,22 @@ void kernel_main() {
     constexpr uint32_t CW1 = get_compile_time_arg_val(24);
     constexpr uint32_t CW2 = get_compile_time_arg_val(25);
     constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(26);
+    // ---- LAB: SCHEME 2 (per-tile-row root rotation) — see lab_reader.cpp ----
+    constexpr bool ROW_ROTATE = get_compile_time_arg_val(27) != 0;
+    constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(28);
+    // ---- PERF-2 IDEA (combine_parallel_fold): the K-way pack/rotate hybrid ----
+    constexpr bool PACK_ROTATE = get_compile_time_arg_val(29) != 0;
+    constexpr uint32_t PACK_K = get_compile_time_arg_val(30);
     constexpr bool TWO_STAGE = CW2 > 1;
     static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
+    static_assert(!ROW_ROTATE || CW2 == 1, "row_rotate has no leader tree");
+    static_assert(!PACK_ROTATE || CW2 == 1, "pack_rotate has no leader tree");
+    static_assert(!(ROW_ROTATE && PACK_ROTATE), "row_rotate and pack_rotate are mutually exclusive");
+    (void)GATHER_PAGES;
 
-    // 27..36 are the two combine multicast-family CT blocks and 37..47 the Perf 1
-    // gamma-broadcast tail (flag word + two families); both are reader-side, but
-    // the writer shares the layout so a knob cannot drift between them.
-    // Perf 2: 48 is the gather-PAYLOAD flag word — the SAME single source the
-    // reader and the compute kernel read (bit0 colpack, bit1 bf16 wire datum), so
-    // the ship count here can never drift from the landing window there.
-    constexpr uint32_t PAYLOAD_FLAGS = get_compile_time_arg_val(48);
-    constexpr bool COLPACK = (PAYLOAD_FLAGS & 0x1u) != 0;
-    constexpr auto out_args = TensorAccessorArgs<49>();
+    // 31..40 are the two multicast-family CT blocks (reader-side; the writer
+    // shares the layout so a knob cannot drift between them).
+    constexpr auto out_args = TensorAccessorArgs<41>();
 
     static_assert(WT_LAST == WT_CHUNK, "writer assumes uniform chunk widths");
 
@@ -113,9 +123,6 @@ void kernel_main() {
     const uint32_t root_y = get_arg_val<uint32_t>(9);
     const uint32_t s2_slot = get_arg_val<uint32_t>(10);
     const uint32_t is_leader = get_arg_val<uint32_t>(11);
-    // Perf 2: the grand element count W, for the 1/N the column-SELECT scaler
-    // carries (colpack applies the mean in the same op that selects the column).
-    [[maybe_unused]] const uint32_t n_reduced = get_arg_val<uint32_t>(12);
 
     // Filler core (inside the multicast rectangle, owns no data).
     if (num_tile_rows == 0) {
@@ -136,32 +143,52 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t gather_sem_addr = get_semaphore<ProgrammableCoreType::TENSIX>(SEM_GATHER);
     [[maybe_unused]] const uint32_t gather2_sem_addr = get_semaphore<ProgrammableCoreType::TENSIX>(SEM_GATHER2);
 
-    // ===== Perf 2: the column-pack's two scaler BANKS =======================
+    // SCHEME 2 / PERF-2: the destination of tile-row h (row_rotate) or pack-lane
+    // p (pack_rotate) is a group slot, so this core needs every slot's virtual
+    // coords (RT 12.., 2 words per slot) and the grid-uniform base of
+    // cb_rms_mean (the root's collect buffer).
+    constexpr bool NEEDS_OWNER_COORDS = ROW_ROTATE || PACK_ROTATE;
+    [[maybe_unused]] const uint32_t rms_mean_base = get_write_ptr(cb_rms_mean);
+    uint32_t owner_vx[NEEDS_OWNER_COORDS ? CW : 1];
+    uint32_t owner_vy[NEEDS_OWNER_COORDS ? CW : 1];
+    if constexpr (NEEDS_OWNER_COORDS) {
+        for (uint32_t j = 0; j < CW; ++j) {
+            owner_vx[j] = get_arg_val<uint32_t>(12 + 2 * j);
+            owner_vy[j] = get_arg_val<uint32_t>(12 + 2 * j + 1);
+        }
+    } else {
+        owner_vx[0] = 0;
+        owner_vy[0] = 0;
+    }
+    // PERF-2 (combine_parallel_fold): owner_rt is 2*CW words wide unconditionally
+    // (see rms_norm host descriptor), so N_REDUCED — appended LAST, after it —
+    // sits at a compile-time-known offset.
+    [[maybe_unused]] const uint32_t n_reduced_arg = get_arg_val<uint32_t>(12 + 2 * CW);
+
+    // ==== PERF-2 (combine_parallel_fold): the column-pack's two scaler BANKS ==
     //
-    // RAW L1 FILL — a deliberate helper bypass, authorized by measurement.
-    // dataflow_kernel_lib's reduce-scaler helpers emit only the CANONICAL layout
-    // (face-row 0 of every face, optionally prefix-masked along the reduce axis),
-    // because that is the only layout a plain REDUCE_ROW needs. This idea's whole
-    // mechanism is two NON-canonical layouts, each verified on device:
+    // RAW L1 FILL — deliberate helper bypass, reusing gather_payload_shrink's
+    // measured mechanism verbatim (its probe_mechanism.py established this on
+    // real silicon): dataflow_kernel_lib's reduce-scaler helpers emit only the
+    // CANONICAL layout (face-row 0 of every face), because that is the only
+    // layout a plain REDUCE_ROW needs. This idea's mechanism is two NON-canonical
+    // layouts:
     //
-    //   cb_packsel[h]  1.0 across FACE-ROW h of every face
-    //                  -> reduce_tile writes the row-sum into COLUMN h, so `ht`
-    //                     reduce_tiles accumulating into ONE dest tile
-    //                     column-PACK `ht` tile-rows' row-sums.
-    //   cb_colsel[h]   1/W at (face-row 0, col h) of faces 0 and 2
-    //                  -> reduce_tile SELECTS input column h into column 0 AND
+    //   cb_packsel[m]  1.0 across FACE-ROW m of every face
+    //                  -> reduce_tile writes the row-sum into COLUMN m, so
+    //                     `ho = HT_BLOCK/PACK_K` reduce_tiles accumulating into
+    //                     ONE dest tile column-PACK a pack-lane's row-sums.
+    //   cb_colsel[m]   1/W at (face-row 0, col m) of faces 0 and 2
+    //                  -> reduce_tile SELECTS input column m into column 0 and
     //                     applies the 1/N in the same op.
     //
-    // TWO measured placement decisions, both of which the first cut got wrong:
-    //   * the ZEROING is a NoC memset (`async_write_zeros`), not a RISC-V store
-    //     loop. 2*HT_BLOCK fp32 tiles is 16 384 word stores; doing them by hand
-    //     cost +20.5 us on the focus shape and made the whole idea read as a
-    //     REGRESSION (96.0 us against a 75.5 us baseline) from its own prologue
-    //     alone. Only the ~2*HT_BLOCK*64 non-zero words go through the RISC.
-    //   * it runs HERE, on the writer (BRISC/NoC1), which is idle until its first
-    //     gather hop — NOT on the reader, where it would sit in front of the
-    //     shard publish that compute's very first pass waits on.
-    if constexpr (W_SPLIT && COLPACK) {
+    // Sized HT_BLOCK unconditionally (a superset of the `ho <= HT_BLOCK` columns
+    // any PACK_K actually uses), so PACK_K can vary without a second CB size.
+    // Runs on the WRITER (idle until its first gather hop), not the reader —
+    // gather_payload_shrink measured +20.5 us / a false REGRESSION from doing
+    // this by hand on the reader, in front of the shard publish compute's first
+    // pass waits on; the NoC memset (`async_write_zeros`) is what makes it cheap.
+    if constexpr (W_SPLIT && PACK_ROTATE) {
         MaybeDeviceZoneScope("wtr_selectors");
         constexpr uint32_t FACE_W = 16;
         constexpr uint32_t FACE_WORDS = 256;  // fp32 16x16 face
@@ -177,10 +204,10 @@ void kernel_main() {
         const uint32_t sel_bytes = get_tile_size(cb_packsel);
         zero_noc.async_write_zeros(psel, HT_BLOCK * sel_bytes);
         zero_noc.write_zeros_l1_barrier();
-        for (uint32_t h = 0; h < HT_BLOCK; ++h) {
+        for (uint32_t m = 0; m < HT_BLOCK; ++m) {
             for (uint32_t f = 0; f < 4; ++f) {
                 for (uint32_t c = 0; c < FACE_W; ++c) {
-                    put(pa + h * sel_bytes, f, h, c, 1.0f);
+                    put(pa + m * sel_bytes, f, m, c, 1.0f);
                 }
             }
         }
@@ -192,33 +219,28 @@ void kernel_main() {
         const uint32_t csel_bytes = get_tile_size(cb_colsel);
         zero_noc.async_write_zeros(csel, HT_BLOCK * csel_bytes);
         zero_noc.write_zeros_l1_barrier();
-        const float inv_n = 1.0f / static_cast<float>(n_reduced);
-        for (uint32_t h = 0; h < HT_BLOCK; ++h) {
-            put(ca + h * csel_bytes, 0, 0, h, inv_n);
-            put(ca + h * csel_bytes, 2, 0, h, inv_n);
+        const float inv_n = 1.0f / static_cast<float>(n_reduced_arg);
+        for (uint32_t m = 0; m < HT_BLOCK; ++m) {
+            put(ca + m * csel_bytes, 0, 0, m, inv_n);
+            put(ca + m * csel_bytes, 2, 0, m, inv_n);
         }
         csel.push_back(HT_BLOCK);
     }
 
-    // One gather hop: ship `n_tiles` settled cb_partial_out tiles into `slot` of the
+    // One gather hop: ship `ht` settled cb_partial_out tiles into `slot` of the
     // destination core's gather CB (laid out h-major, tile h*fan_in + slot, so
     // the folding core reads them as a contiguous (ht x fan_in) block), then let
     // it know they LANDED.
-    // Perf 2: `n_tiles` is 1 under COLPACK (all `ht` row-sums ride distinct
-    // COLUMNS of one tile) and `ht` otherwise, and the page is bf16-narrow when
-    // the payload guard says so. Both come off `partial_tile_bytes` and the
-    // caller's count, so the wire volume follows the host's CB plan by
-    // construction rather than by a second literal here.
-    [[maybe_unused]] auto gather_hop = [&](uint32_t n_tiles,
+    [[maybe_unused]] auto gather_hop = [&](uint32_t ht,
                                            uint32_t dst_x,
                                            uint32_t dst_y,
                                            uint32_t base,
                                            uint32_t fan_in,
                                            uint32_t slot,
                                            uint32_t sem_addr) {
-        cb_wait_front(cb_partial_out, n_tiles);
+        cb_wait_front(cb_partial_out, ht);
         uint32_t src = get_read_ptr(cb_partial_out);
-        for (uint32_t h = 0; h < n_tiles; ++h) {
+        for (uint32_t h = 0; h < ht; ++h) {
             const uint64_t dst = get_noc_addr(dst_x, dst_y, base + (h * fan_in + slot) * partial_tile_bytes);
             noc_async_write(src, dst, partial_tile_bytes);
             src += partial_tile_bytes;
@@ -226,7 +248,7 @@ void kernel_main() {
         // The data must have LANDED before the destination sees the counter move.
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(dst_x, dst_y, sem_addr), 1);
-        cb_pop_front(cb_partial_out, n_tiles);
+        cb_pop_front(cb_partial_out, ht);
     };
 
     const uint32_t num_row_blocks = (num_tile_rows + HT_BLOCK - 1) / HT_BLOCK;
@@ -249,12 +271,101 @@ void kernel_main() {
         // the row sum compute folded out of the stage-1 gather.
         if constexpr (W_SPLIT) {
             MaybeDeviceZoneScope("wtr_gather_hop");
-            // Perf 2: ONE column-packed tile carries every tile-row's row-sum.
-            const uint32_t n_ship = COLPACK ? 1u : ht;
-            gather_hop(n_ship, leader_x, leader_y, gather_base, CW1, s1_slot, gather_sem_addr);
-            if constexpr (TWO_STAGE) {
-                if (is_leader) {
-                    gather_hop(n_ship, root_x, root_y, gather2_base, CW2, s2_slot, gather2_sem_addr);
+            if constexpr (ROW_ROTATE) {
+                // ---- leg 1: SPREAD. Tile-row h lands on the core that OWNS it
+                // (group slot h % CW), so no single core's inbound NoC absorbs
+                // the whole group's ht x CW payload — each takes CW tiles.
+                // ONE barrier covers all ht writes; then one atomic per distinct
+                // destination (data-before-signal, per destination).
+                cb_wait_front(cb_partial_out, ht);
+                uint32_t src = get_read_ptr(cb_partial_out);
+                for (uint32_t h = 0; h < ht; ++h) {
+                    const uint32_t j = h % CW;
+                    const uint32_t k = h / CW;
+                    const uint64_t dst =
+                        get_noc_addr(owner_vx[j], owner_vy[j], gather_base + (k * CW + s1_slot) * partial_tile_bytes);
+                    noc_async_write(src, dst, partial_tile_bytes);
+                    src += partial_tile_bytes;
+                }
+                noc_async_write_barrier();
+                const uint32_t owners = (ht < CW) ? ht : CW;
+                for (uint32_t j = 0; j < owners; ++j) {
+                    noc_semaphore_inc(get_noc_addr(owner_vx[j], owner_vy[j], gather_sem_addr), 1);
+                }
+                cb_pop_front(cb_partial_out, ht);
+
+                // ---- leg 2: the owner's FINALIZED mean(x^2) tiles go straight
+                // into slot h of the root's cb_rms_mean, so the broadcast leg is
+                // byte-for-byte the flat topology's. ht tiles reach the root here,
+                // not ht * CW.
+                if (s1_slot < ht) {
+                    const uint32_t ho = (ht - s1_slot + CW - 1) / CW;
+                    // cb_owner_out, NOT cb_partial_out: mixing an `ht`-page push
+                    // (pass A) with an `ho`-page push on one CB straddles
+                    // fifo_limit on the next row-block (measured hang).
+                    cb_wait_front(cb_owner_out, ho);
+                    uint32_t osrc = get_read_ptr(cb_owner_out);
+                    for (uint32_t k = 0; k < ho; ++k) {
+                        const uint32_t h = k * CW + s1_slot;
+                        const uint64_t dst = get_noc_addr(root_x, root_y, rms_mean_base + h * partial_tile_bytes);
+                        noc_async_write(osrc, dst, partial_tile_bytes);
+                        osrc += partial_tile_bytes;
+                    }
+                    noc_async_write_barrier();
+                    noc_semaphore_inc(get_noc_addr(root_x, root_y, gather2_sem_addr), 1);
+                    cb_pop_front(cb_owner_out, ho);
+                }
+            } else if constexpr (PACK_ROTATE) {
+                // PERF-2 (combine_parallel_fold). ---- leg 1: SHIP the PACK_K
+                // column-packed tiles compute produced this row-block, one per
+                // pack-lane p, to the FIXED owner of lane p (group slot p, same
+                // core every row-block — unlike row_rotate's per-tile-row target,
+                // which core owns which LANE never changes). Every owner still
+                // receives CW tiles total (one per group member, at THIS core's
+                // own slot s1_slot), because every worker computes all PACK_K
+                // lanes regardless of who owns the fold.
+                //
+                // The host's uniform-block invariant (rows_core_max % HT_BLOCK
+                // == 0, asserted in create_program_descriptor) guarantees ht ==
+                // HT_BLOCK on every row-block this kernel ever runs, so PACK_K
+                // packed tiles are unconditionally in cb_partial_out here.
+                cb_wait_front(cb_partial_out, PACK_K);
+                uint32_t src = get_read_ptr(cb_partial_out);
+                for (uint32_t p = 0; p < PACK_K; ++p) {
+                    const uint64_t dst =
+                        get_noc_addr(owner_vx[p], owner_vy[p], gather_base + s1_slot * partial_tile_bytes);
+                    noc_async_write(src, dst, partial_tile_bytes);
+                    src += partial_tile_bytes;
+                }
+                noc_async_write_barrier();
+                for (uint32_t p = 0; p < PACK_K; ++p) {
+                    noc_semaphore_inc(get_noc_addr(owner_vx[p], owner_vy[p], gather_sem_addr), 1);
+                }
+                cb_pop_front(cb_partial_out, PACK_K);
+
+                // ---- leg 2: the owner's `ho = HT_BLOCK/PACK_K` FINALIZED
+                // mean(x^2) tiles (rows p, p+PACK_K, p+2*PACK_K, ...) go straight
+                // into the root's cb_rms_mean, exactly as row_rotate's leg 2 does.
+                if (s1_slot < PACK_K) {
+                    const uint32_t ho_real = HT_BLOCK / PACK_K;
+                    cb_wait_front(cb_owner_out, ho_real);
+                    uint32_t osrc = get_read_ptr(cb_owner_out);
+                    for (uint32_t m = 0; m < ho_real; ++m) {
+                        const uint32_t h = m * PACK_K + s1_slot;
+                        const uint64_t dst = get_noc_addr(root_x, root_y, rms_mean_base + h * partial_tile_bytes);
+                        noc_async_write(osrc, dst, partial_tile_bytes);
+                        osrc += partial_tile_bytes;
+                    }
+                    noc_async_write_barrier();
+                    noc_semaphore_inc(get_noc_addr(root_x, root_y, gather2_sem_addr), 1);
+                    cb_pop_front(cb_owner_out, ho_real);
+                }
+            } else {
+                gather_hop(ht, leader_x, leader_y, gather_base, CW1, s1_slot, gather_sem_addr);
+                if constexpr (TWO_STAGE) {
+                    if (is_leader) {
+                        gather_hop(ht, root_x, root_y, gather2_base, CW2, s2_slot, gather2_sem_addr);
+                    }
                 }
             }
         }

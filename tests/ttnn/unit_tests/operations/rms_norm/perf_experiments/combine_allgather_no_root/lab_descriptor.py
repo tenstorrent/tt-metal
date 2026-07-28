@@ -56,6 +56,40 @@ separate emitted knob so the general case remains expressible.  The knob is
 still "coarsest that fits L1" for every ``Wt`` with a divisor near the budget;
 only a prime ``Wt`` larger than the budget degrades (correct, just more
 chunks) — a follow-up could recover it with a padded tail on the TILE path.
+
+--------------------------------------------------------------------------
+LAB FORK — ``combine_allgather_no_root`` (Perf tournament round 2)
+--------------------------------------------------------------------------
+Forked byte-for-byte from the CURRENT op (post round-1 graduated perf: the
+reuse-shared gamma broadcast + phase-4 SFPU column-0 scoping). ONE lab knob,
+``combine_variant``:
+
+    "baseline"        THE HONEST BASELINE — byte-identical to the real op's
+                      cross-core combine (flat root gather / two-stage gather,
+                      per ``_two_stage_extents``, then a Mcast2D broadcast of
+                      the combined mean(x^2) back over the group). Never
+                      overridden here.
+    "allgather_pull"  THE IDEA. Delete the round trip instead of shrinking it:
+                      every core in the group PULLS all CW peers' raw partial
+                      tiles directly out of their L1 (unicast NoC reads — no
+                      multicast, no root, no gather tree), then folds all CW
+                      tiles LOCALLY via the SAME AccumulateViaAdd reduce the
+                      root used to run alone. Every core ends the round already
+                      holding the final mean(x^2) — no broadcast-back at all.
+                      Readiness is a per-peer unicast semaphore increment with
+                      a MONOTONIC cumulative target (`wait_min((hb+1)*CW)`,
+                      never reset to 0) rather than the reset-then-wait(CW)
+                      pattern the baseline's gather uses: a reset-based counter
+                      shared across row-blocks is a real hazard here (a fast
+                      core's next-round announce could land before a slow
+                      peer's this-round wait fires), and `wait_min` on a
+                      never-reset counter is immune to it by construction.
+
+``cb_group_partials`` is resized to ``H * CW`` (not ``H * CW1``) whenever
+``combine_variant == "allgather_pull"``, because every core now gathers the
+FULL group, not just the root or a row leader — this is the idea's honest L1
+cost on the two-stage decode geometries (CW1 < CW there) and is exactly the
+kind of thing the predicate must record.
 """
 
 from __future__ import annotations
@@ -70,6 +104,17 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE_DIM = 32
+
+# ---------------------------------------------------------------------------
+# LAB KNOB — the ONE thing this bake-off varies (combine_allgather_no_root).
+# ---------------------------------------------------------------------------
+COMBINE_VARIANTS = ("baseline", "allgather_pull")
+
+# New semaphore id for the all-to-all readiness counter. The real op's combine
+# uses ids 0..9 (SEM_GATHER=0, SEM_MCAST_BASE 1-4, SEM_GATHER2=5, SEM_GAMMA_BASE
+# 6-9); this lab never engages the gamma broadcast (w_split forces it off
+# anyway, since GAMMA_MCAST requires cw == 1), so 10 is free.
+SEM_ALLGATHER = 10
 
 # ---------------------------------------------------------------------------
 # The knob family (§1.2). One definition each; everything else derives.
@@ -242,68 +287,6 @@ SEM_GAMMA_BASE = 6
 # the noise band for the smaller shapes, so the guard sits above it.
 GAMMA_MCAST_MIN_CORES = 44
 
-# ===========================================================================
-# Perf 2 — the cross-core combine's gather PAYLOAD
-# ===========================================================================
-#
-# MEASURED MOTIVE. After Perf 1, the combine round trip was the op's #1 item and
-# the ENTIRE gap to the perf-flagged reference. On the focus profile
-# ((1,1,8192,1024) BLOCK_SHARDED, shard [1024,128], grid (8,8), 64 cores, cw=8
-# cw1=8 cw2=1, ht_block=8, nh_core=4) cumulative ablation measured:
-#
-#     full 54_377 ns | combine ablated 35_026 ns  =>  19_351 ns (35.6%)
-#
-# and the three-TRISC compute floor with the combine gone is ~23 us — i.e. BELOW
-# the 25_640 ns reference. Two independent inefficiencies caused it:
-#
-#   BYTES.  Each worker shipped `ht` RAW 4 KB Float32 tiles per row-block in
-#           which all 32 columns still held live x^2 partial sums. The only
-#           information in each tile is its 32 row-sums — 128 B of 4096. The root
-#           received ~1 MB per group to carry 8 KB, 128x more than necessary.
-#   SERIAL FOLD. The root then folded `ht * CW1` tiles alone (256 fp32
-#           tile-reduces per core over the kernel; `cmp_combine` measured 25_668
-#           ns MAX on the root) while its cw-1 group members idled — their wait
-#           showing up as ~27_300 ns buried inside `cmp_rsqrt`.
-#
-# THE FIX, and its two independent halves (each with its own predicate):
-#
-#   COLPACK.  Fold each tile-row within-tile and land the `ht` results in `ht`
-#             DISTINCT COLUMNS of ONE tile. The payload becomes 1 tile instead of
-#             `ht`, AND the root's fold becomes `CW1 + ht` FPU ops instead of
-#             `ht * CW1` — the column-pack moves the fold off the root as a side
-#             effect of moving it into the columns. Needs HT_BLOCK >= 2 (at 1
-#             there is nothing to pack and only the overhead is paid), a FLAT
-#             gather (a staged one would have to pack twice) and NW == 1 (the
-#             fold reads one settled accumulator per tile-row).
-#   BF16 PAYLOAD. Narrow the wire datum. This is FREE, not a precision trade:
-#             at fp32_dest_acc_en=False DEST is already 16-bit, so the Float32
-#             container never held a keepable bit — re-verified on the current op
-#             as bit-identical output. Load-bearing at fp32_dest_acc_en=True, so
-#             it carries `not fp32_dest_acc_en`. It has NO topology precondition,
-#             which is why it is the wider of the two guards and covers every
-#             geometry colpack refuses.
-#
-# MEASURED, focus shape, one fresh-cache profiled run per variant:
-#
-#     baseline      54_270 ns   1.000x   PCC 0.99998402
-#     bf16          46_533 ns   1.166x   PCC 0.99998402  (bit-identical)
-#     colpack       36_581 ns   1.483x   PCC 0.99998256
-#     colpack_bf16  36_014 ns   1.507x   PCC 0.99998256  <- graduated
-#
-# 36_014 against the 35_026 ns combine-ablated floor leaves only 988 ns of
-# combine cost — 94.9% of the 19_351 ns recovered. Root `cmp_combine` 25.4 us ->
-# 6.7 us; `wtr_gather_hop` 43.2 -> 23.8 us; `rdr_mcast` 42.7 -> 25.7 us.
-#
-# The win is monotone in HT_BLOCK (it IS the pack factor), which is what sets the
-# guard: 1.507x / 1.343x / 1.141x / 0.967x at HT_BLOCK 8 / 4 / 2 / 1.
-COLPACK_MIN_HT_BLOCK = 2
-
-# The column-pack writes tile-row h's row-sum into COLUMN h of one tile via a
-# scaler whose FACE-ROW index selects the output column, and a reduce scaler can
-# only address face-rows 0..15 — so at most 16 tile-rows pack into one tile. This
-# is a hard mechanism limit, not a tuning choice.
-COLPACK_MAX_HT_BLOCK = 16
-
 # Buffer depths (§1.2). Phase-1 minimal = 2 (double buffer).
 X_DEPTH = 2
 OUT_DEPTH = 2
@@ -367,10 +350,6 @@ CB_GROUP_PARTIALS = 6  # stage-1 gather: raw sum(x^2), CW1 slots per tile-row (l
 CB_RMS_MEAN = 7  # root's combined mean(x^2)  compute -> reader (mcast source)
 CB_PARTIAL_OUT = 8  # this core's raw sum(x^2)  compute -> writer (gather source)
 CB_GROUP_PARTIALS2 = 9  # stage-2 gather: leaders' row sums, CW2 slots per tile-row (root)
-# Perf 2 — the column-packed gather payload (see COLPACK_MIN_HT_BLOCK).
-CB_PACKSEL = 10  # scaler h: 1.0 across face-row h of every face -> pack into column h
-CB_COLSEL = 11  # scaler h: 1/W one-hot at (face-row 0, col h) of faces 0,2 -> select column h
-CB_ROOTSUM = 12  # root's elementwise sum of the CW1 column-packed tiles
 CB_OUTPUT_TILES = 16
 CB_OUTPUT_RM = 17
 CB_X_SQUARED = 24
@@ -430,13 +409,11 @@ class _Blocking:
         sharded_in=False,
         sharded_out=False,
         l1_total_budget=None,
-        fp32_dest_acc_en=True,
+        combine_variant="baseline",
     ):
+        self.combine_variant = combine_variant
         self.sharded_in = bool(sharded_in)
         self.sharded_out = bool(sharded_out)
-        # Perf 2: the ONLY thing the payload guard reads off the precision
-        # contract. It is read, never chosen — see COLPACK_MIN_HT_BLOCK.
-        self.fp32_dest_acc_en = bool(fp32_dest_acc_en)
         # The physical L1 wall (program CBs + resident shards). Defaults to the
         # CB budget, which reproduces the pre-Refinement-4 single-budget model
         # exactly — and is what every interleaved cell sees anyway, since its
@@ -561,35 +538,6 @@ class _Blocking:
             # drives the srcB reconfig, and R1 measured what a mismatch costs.
             self.scaler_dtype = ttnn.float32
             self.scaler_tile_bytes = self.fp32_tile_bytes
-
-        # --- Perf 2: the cross-core combine's gather payload -----------------
-        # Decided here, after the block factors it reads (HT_BLOCK is the pack
-        # factor) and before the CB plan, whose page counts and page FORMATS both
-        # depend on it. Two independent guards, deliberately of different width —
-        # see the block comment at COLPACK_MIN_HT_BLOCK for every measured clause.
-        #
-        # `partial_bf16` is the wide one: the wire datum only, no topology
-        # precondition, free at fp32_dest_acc_en=False (DEST is already 16-bit,
-        # so the Float32 container held no keepable bit — verified bit-identical),
-        # load-bearing at True.
-        self.partial_bf16 = self.w_split and not self.fp32_dest_acc_en
-        # `colpack` is the narrow one: it restructures the payload's SHAPE, so it
-        # needs a flat gather (a staged one would have to pack twice), NW == 1
-        # (the fold reads one settled accumulator per tile-row), and an HT_BLOCK
-        # in [2, 16] — below 2 there is nothing to pack (measured 0.967x) and
-        # above 16 the scaler cannot address the face-row.
-        self.colpack = (
-            self.w_split
-            and not self.two_stage
-            and self.nw == 1
-            and COLPACK_MIN_HT_BLOCK <= self.ht_block <= COLPACK_MAX_HT_BLOCK
-        )
-        # What the two guards resolve to on the wire. These two numbers ARE the
-        # graduated change: `gather_ht` is the tile COUNT per core per row-block
-        # and `gather_tile_bytes` the page size.
-        self.gather_dtype = ttnn.bfloat16 if self.partial_bf16 else ttnn.float32
-        self.gather_tile_bytes = ttnn.tile_size(self.gather_dtype)
-        self.gather_ht = 1 if self.colpack else self.ht_block
 
         # --- residency fast-path predicates (§1.3) ---------------------------
         #
@@ -716,37 +664,27 @@ class _Blocking:
             # --- cross-core W-split (Refinement 2). Every page count is a
             # function of the SAME knobs (HT_BLOCK and the group width CW),
             # never of a whole-op dimension. Sized 1 (dummy) when CW == 1.
-            ("cb_ones", CB_ONES, self.gather_tile_bytes, 1),
-            # Perf 2: `gather_ht` collapses BOTH the per-core ship CB and the
-            # per-slot gather window from HT_BLOCK tiles to ONE tile under
-            # `colpack`, and `gather_tile_bytes` halves the page under
-            # `partial_bf16`. Everything else about the combine is untouched.
+            ("cb_ones", CB_ONES, self.fp32_tile_bytes, 1),
             (
                 "cb_group_partials",
                 CB_GROUP_PARTIALS,
-                self.gather_tile_bytes,
-                (self.gather_ht * self.cw1) if self.w_split else 0,
+                self.fp32_tile_bytes,
+                # allgather_pull gathers the FULL group on every core (H * CW),
+                # not just the root/leader's fan-in (H * CW1) -- see the LAB
+                # FORK docstring. Equal to the baseline's own sizing whenever
+                # the group is flat (CW1 == CW), which is exactly the focus
+                # geometry; strictly larger on a two-stage group.
+                (H * (self.cw if self.combine_variant == "allgather_pull" else self.cw1)) if self.w_split else 0,
             ),
             (
                 "cb_group_partials2",
                 CB_GROUP_PARTIALS2,
-                self.gather_tile_bytes,
-                (self.gather_ht * self.cw2) if self.two_stage else 0,
+                self.fp32_tile_bytes,
+                (H * self.cw2) if self.two_stage else 0,
             ),
             ("cb_rms_mean", CB_RMS_MEAN, self.fp32_tile_bytes, H if self.w_split else 0),
-            ("cb_partial_out", CB_PARTIAL_OUT, self.gather_tile_bytes, self.gather_ht if self.w_split else 0),
+            ("cb_partial_out", CB_PARTIAL_OUT, self.fp32_tile_bytes, H if self.w_split else 0),
             ("cb_partials", CB_PARTIALS, self.fp32_tile_bytes, 2 * H),
-            # Perf 2 — the column-pack's two non-canonical scaler banks (one tile
-            # per packed column) and the root's elementwise sum of the CW1 packed
-            # tiles. `cb_rootsum` must be its OWN CB, not a spare page of
-            # cb_partials: a CB's per-row-block pushes must DIVIDE its page count
-            # or a multi-page cb_reserve_back straddles fifo_limit and the
-            # non-wrapping pack_tile corrupts. Sharing cb_partials made it 8 + 1
-            # pushes into 16 pages and silently corrupted 12.5% of tile-rows —
-            # caught only by an ABSOLUTE all-ones check (PCC read 0.9998, a pass).
-            ("cb_packsel", CB_PACKSEL, self.fp32_tile_bytes, H if self.colpack else 0),
-            ("cb_colsel", CB_COLSEL, self.fp32_tile_bytes, H if self.colpack else 0),
-            ("cb_rootsum", CB_ROOTSUM, self.gather_tile_bytes, 2 if self.colpack else 0),
             ("cb_rms_sum", CB_RMS_SUM, self.fp32_tile_bytes, H),
             ("cb_rms_recip", CB_RMS_RECIP, self.fp32_tile_bytes, H),
             ("cb_scaled", CB_SCALED, self.tile_bytes, B if self.has_gamma else 0),
@@ -828,7 +766,7 @@ def _derive_blocking(
     sharded_in=False,
     sharded_out=False,
     l1_total_budget=None,
-    fp32_dest_acc_en=True,
+    combine_variant="baseline",
 ):
     """Derive the blocking, halving the block budget until the CBs fit.
 
@@ -849,7 +787,7 @@ def _derive_blocking(
         sharded_in=sharded_in,
         sharded_out=sharded_out,
         l1_total_budget=l1_total_budget,
-        fp32_dest_acc_en=fp32_dest_acc_en,
+        combine_variant=combine_variant,
     )
     budget = L1_BLOCK_BUDGET_BYTES
     blk = _Blocking(input_tensor, gamma, budget, grid_cores, **kwargs)
@@ -1233,6 +1171,10 @@ def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes, runs):
                 "root": root,
                 "subrects": [(x0, y0, x0 + cw_x - 1, y0 + cw_y - 1)],
                 "acks": [cw - 1],
+                # LAB: the group's full member list in slot order (row-major over
+                # the rectangle) -- the allgather_pull variant's peer list. Every
+                # member is real here (a dense wsplit rectangle has no fillers).
+                "slots": [ttnn.CoreCoord(xx, yy) for yy in range(y0, y0 + cw_y) for xx in range(x0, x0 + cw_x)],
             }
         )
         slot = 0
@@ -1340,6 +1282,9 @@ def _placement_sharded(input_tensor, ht_total, wt_global, runs):
         for gy in range(ny):
             y = y0 + gy
             grp = _make_group(ttnn.CoreCoord(x0, y), x0, y, x1, y, runs, owned)
+            # LAB: allgather_pull's peer list -- the group's row, in slot order.
+            # BLOCK_SHARDED asserts a full rectangle, so every slot is real.
+            grp["slots"] = [ttnn.CoreCoord(x0 + gx, y) for gx in range(nx)]
             groups.append(grp)
             for gx in range(nx):
                 core = ttnn.CoreCoord(x0 + gx, y)
@@ -1365,6 +1310,9 @@ def _placement_sharded(input_tensor, ht_total, wt_global, runs):
     else:  # WIDTH_SHARDED — one group, every shard core owns a W slice of all rows
         cw = len(cores)  # combine width == real W slices (fillers do not contribute)
         grp = _make_group(cores[0], x0, y0, x1, y1, runs, owned)
+        # LAB: allgather_pull's peer list -- real shard cores only (fillers never
+        # produce a partial and must never be pulled from).
+        grp["slots"] = list(cores)
         groups.append(grp)
         for slot, core in enumerate(cores):
             works.append(
@@ -1403,7 +1351,9 @@ def create_program_descriptor(
     epsilon: float = 1e-6,
     compute_kernel_config=None,
     device=None,
+    combine_variant="baseline",
 ) -> "ttnn.ProgramDescriptor":
+    assert combine_variant in COMBINE_VARIANTS, f"unknown combine_variant {combine_variant!r}"
     if device is None:
         device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
@@ -1430,10 +1380,7 @@ def create_program_descriptor(
         sharded_in=in_sharded,
         sharded_out=out_sharded,
         l1_total_budget=_l1_total_budget(device),
-        # Perf 2: READ off the user's precision contract, never chosen — it gates
-        # the bf16 gather payload, which is bit-identical only when DEST is
-        # already 16-bit. See COLPACK_MIN_HT_BLOCK.
-        fp32_dest_acc_en=bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True)),
+        combine_variant=combine_variant,
     )
 
     all_cores = placement.all_cores
@@ -1482,6 +1429,11 @@ def create_program_descriptor(
         semaphores = [ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0)]
         if placement.two_stage:
             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_GATHER2, core_ranges=all_cores, initial_value=0))
+        if combine_variant == "allgather_pull":
+            # LAB: the all-to-all readiness counter. Never reset (monotonic
+            # `wait_min`), so ONE id serves every row-block of every group --
+            # disjoint groups reuse it exactly like SEM_GATHER does.
+            semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_ALLGATHER, core_ranges=all_cores, initial_value=0))
         for f in range(MAX_MCAST_FAMILIES):
             base = SEM_MCAST_BASE + 2 * f
             semaphores.append(ttnn.SemaphoreDescriptor(id=base, core_ranges=all_cores, initial_value=0))
@@ -1563,13 +1515,10 @@ def create_program_descriptor(
     gamma_ct = [1 if gamma_fams else 0]
     for f in range(MAX_MCAST_FAMILIES):
         gamma_ct += list(gamma_mcasts[f].compile_time_args()) if f in gamma_mcasts else [0, 0, 0, 0, 0]
-    # Perf 2: the gather-payload guard, as ONE flag word so both dataflow kernels
-    # and the compute kernel read the same single source (bit0 = colpack, bit1 =
-    # bf16 wire datum). Never two literals.
-    dataflow_ct_args = dataflow_ct_args + gamma_ct + [_payload_flags(blk)]
-    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<49>
-    assert DATAFLOW_ACCESSOR_ARG_BASE == 49, (
-        "rms_norm: reader/writer read TensorAccessorArgs<49>; the shared CT block "
+    dataflow_ct_args = dataflow_ct_args + gamma_ct
+    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<48>
+    assert DATAFLOW_ACCESSOR_ARG_BASE == 48, (
+        "rms_norm: reader/writer read TensorAccessorArgs<48>; the shared CT block "
         f"is now {DATAFLOW_ACCESSOR_ARG_BASE} long — update both kernels together"
     )
 
@@ -1581,6 +1530,11 @@ def create_program_descriptor(
         if gamma is not None
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+    # LAB: the combine-variant flag, appended AFTER every TensorAccessorArgs
+    # block so `TensorAccessorArgs<48>`'s own offset arithmetic is untouched;
+    # the kernel reads it at `gamma_args.next_compile_time_args_offset()`.
+    combine_variant_flag = 1 if combine_variant == "allgather_pull" else 0
+    reader_ct_args.append(combine_variant_flag)
 
     src_addr = input_tensor.buffer_address()
     gamma_addr = gamma.buffer_address() if gamma is not None else 0
@@ -1611,6 +1565,21 @@ def create_program_descriptor(
         # The core whose slice ENDS on the tensor's last W-tile is the one that
         # must mask the tile-padded columns of that tile.
         is_last_w = 1 if (w.wt_start + wt_real == wt_global) else 0
+
+        # LAB: allgather_pull's peer list -- every group member's VIRTUAL coords,
+        # in fixed slot order (0..CW-1), identical for every core in the group
+        # (a full all-to-all, not a tree). Emitted at 2*CW words whenever the
+        # placement is split, regardless of variant, so the RT shape never
+        # differs between baseline and allgather_pull (only the CT flag does).
+        peer_rt = [0, 0] * placement.cw
+        if placement.w_split:
+            peer_rt = []
+            for sc in placement.groups[w.group]["slots"]:
+                sv = device.worker_core_from_logical_core(sc)
+                peer_rt += [sv.x, sv.y]
+            assert (
+                len(peer_rt) == 2 * placement.cw
+            ), f"rms_norm lab: group {w.group} has {len(peer_rt) // 2} slots, expected CW={placement.cw}"
 
         # Perf 1: this core's gamma-broadcast role. `g_inject` is a per-family
         # BITMASK — set means "I read gamma from DRAM and broadcast it to that
@@ -1645,6 +1614,7 @@ def create_program_descriptor(
             + mcast_rt
             + [g_inject, g_family]
             + gamma_rt
+            + peer_rt
         )
         writer_rt[core.x][core.y] = [
             dst_addr,
@@ -1659,15 +1629,11 @@ def create_program_descriptor(
             root_v[1],
             w.s2_slot,
             1 if w.is_leader else 0,
-            # Perf 2: the grand element count, for the 1/N the column-SELECT
-            # scaler carries. The writer fills that bank because it is the idle
-            # RISC until its first gather hop — see the kernel's justification.
-            blk.W,
         ]
         compute_rt[core.x][core.y] = [w.num_rows, eps_bits, is_root, is_last_w, 1 if w.is_leader else 0]
 
     reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+        kernel_source=str(KERNEL_DIR / "ag_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
@@ -1677,9 +1643,10 @@ def create_program_descriptor(
     # ---------- writer (BRISC / NoC1) ----------
     writer_ct_args = list(dataflow_ct_args)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.append(combine_variant_flag)
 
     writer_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
+        kernel_source=str(KERNEL_DIR / "ag_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt,
@@ -1701,13 +1668,12 @@ def create_program_descriptor(
             placement.cw1,
             placement.cw2,
             1 if blk.fuse_sq else 0,
-            # Perf 2: the SAME payload flag word the dataflow kernels read.
-            _payload_flags(blk),
+            combine_variant_flag,
         ]
     )
 
     compute_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
+        kernel_source=str(KERNEL_DIR / "ag_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
@@ -1746,17 +1712,6 @@ def _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharde
     return _placement_rows(grid, ht_total)
 
 
-def _payload_flags(blk):
-    """Perf 2 — the gather-payload guard as one CT word (bit0 colpack, bit1 bf16).
-
-    ONE source of truth, shared verbatim by the reader, the writer and the compute
-    kernel, so the host's CB sizing and every kernel's loop trip count can never
-    disagree about how many tiles of what width are on the wire. See the block
-    comment at COLPACK_MIN_HT_BLOCK for the measured predicate behind each bit.
-    """
-    return (1 if blk.colpack else 0) | (2 if blk.partial_bf16 else 0)
-
-
 def _cb_format(name, blk, input_tensor, gamma):
     if name in ("cb_gamma", "cb_gamma_rm"):
         return gamma.dtype if gamma is not None else input_tensor.dtype
@@ -1768,19 +1723,104 @@ def _cb_format(name, blk, input_tensor, gamma):
         # Must match the format srcB is configured at inside the reduce, i.e.
         # cb_x_squared's; see _Blocking.x_squared_dtype for the full rationale.
         return blk.scaler_dtype
-    if name in ("cb_group_partials", "cb_group_partials2", "cb_partial_out", "cb_rootsum", "cb_ones"):
-        # Perf 2: the wire format of the gather payload. `cb_ones` follows it
-        # because the combine's reduce programs srcB at its INPUT CB's format —
-        # the same single-source rule R1 established for the partial-W mask, and a
-        # mismatch there is a measured cost, not a no-op.
-        return blk.gather_dtype
     if name in (
         "cb_partials",
         "cb_rms_sum",
         "cb_rms_recip",
+        "cb_ones",
+        "cb_group_partials",
+        "cb_group_partials2",
         "cb_rms_mean",
-        "cb_packsel",
-        "cb_colsel",
+        "cb_partial_out",
     ):
         return ttnn.float32
     return input_tensor.dtype
+
+
+# ---------------------------------------------------------------------------
+# LAB entry point (kept in THIS module on purpose)
+# ---------------------------------------------------------------------------
+#
+# ttnn/ttnn/operations/__init__.py exec_module()s every .py it walks at
+# `import ttnn` time, so a second lab module that imported this one at module
+# level would run a cross-package import while `ttnn.operations` is still
+# initializing. One module, module-level `import ttnn` only — the same shape
+# the real op's descriptor already proves safe. This file lives OUTSIDE
+# ttnn/ttnn/operations/ (under tests/), so that hazard does not even apply
+# here, but the discipline (lazy torch import, no side effects) is kept
+# identical to the sibling lab forks for consistency.
+
+
+def lab_rms_norm(
+    input_tensor,
+    *,
+    gamma=None,
+    epsilon: float = 1e-6,
+    compute_kernel_config=None,
+    memory_config=None,
+    combine_variant: str = "baseline",
+):
+    """A stripped rms_norm: no registry validate(), the LAB descriptor, one knob."""
+    device = input_tensor.device()
+    out_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(input_tensor.shape)),
+        input_tensor.dtype,
+        input_tensor.layout,
+        device,
+        out_memory_config,
+    )
+
+    program_descriptor = create_program_descriptor(
+        input_tensor,
+        output_tensor,
+        gamma=gamma,
+        epsilon=epsilon,
+        compute_kernel_config=compute_kernel_config,
+        device=device,
+        combine_variant=combine_variant,
+    )
+
+    io_tensors = [input_tensor]
+    if gamma is not None:
+        io_tensors.append(gamma)
+    io_tensors.append(output_tensor)
+
+    return ttnn.generic_op(io_tensors, program_descriptor)
+
+
+def lab_report(device, input_tensor, gamma, combine_variant="baseline"):
+    """Host-only: the derived combine shape for one (geometry, variant) pair."""
+    grid = device.compute_with_storage_grid_size()
+    ht_total, wt_global = _tile_geometry(input_tensor)
+    tile_shard = input_tensor.layout == ttnn.TILE_LAYOUT
+    in_sharded = tile_shard and input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    placement = _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharded)
+    blk = _derive_blocking(
+        input_tensor,
+        gamma,
+        grid.x * grid.y,
+        placement,
+        sharded_in=in_sharded,
+        sharded_out=in_sharded,
+        l1_total_budget=_l1_total_budget(device),
+        combine_variant=combine_variant,
+    )
+    gp = next(p for p in blk.cb_plan() if p[0] == "cb_group_partials")
+    return {
+        "combine_variant": combine_variant,
+        "cores": placement.num_cores,
+        "groups": len(placement.groups),
+        "cw": placement.cw,
+        "cw1": placement.cw1,
+        "cw2": placement.cw2,
+        "ht_block": blk.ht_block,
+        "nh_core": blk.nh_core_max,
+        "wt_core": blk.Wt,
+        "nw": blk.nw,
+        "gather_kb": gp[2] * gp[3] // 1024,  # cb_group_partials bytes
+        "program_cb_kb": blk.program_cb_bytes // 1024,
+        "l1_budget_kb": blk.l1_total_budget // 1024,
+        "fuse_sq": blk.fuse_sq,
+    }

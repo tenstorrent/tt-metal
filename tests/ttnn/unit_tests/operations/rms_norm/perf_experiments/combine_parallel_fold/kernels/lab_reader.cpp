@@ -121,8 +121,31 @@ void kernel_main() {
     constexpr uint32_t CW1 = get_compile_time_arg_val(24);
     constexpr uint32_t CW2 = get_compile_time_arg_val(25);
     constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(26);
+    // ---- LAB: SCHEME 2 (per-tile-row root rotation) ----
+    // Core `slot` of the group owns the FOLD for the row-block's tile-rows h with
+    // h % CW == slot, so every core receives CW tiles instead of ONE core
+    // receiving CW * HT_BLOCK. There is no leader tree and no second REDUCE_ROW:
+    // the owner's fold IS the final one (reduce_mean with n_reduced = W), and the
+    // owners unicast their finalized tiles into the root's cb_rms_mean, which the
+    // root then multicasts back byte-for-byte as the flat topology does.
+    constexpr bool ROW_ROTATE = get_compile_time_arg_val(27) != 0;
+    constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(28);
+    // ---- PERF-2 IDEA (combine_parallel_fold): the K-way pack/rotate hybrid ----
+    // See kernels/lab_compute.cpp's PACK_ROTATE block for the full mechanism.
+    // Here the reader only needs to know: (a) am I one of the PACK_K owners
+    // (my_slot < PACK_K), in which case I wait for CW contributions to MY lane
+    // before compute folds them; and (b) is this the root, in which case I wait
+    // for PACK_K owners' finalized tiles (instead of row_rotate's min(ht, CW)) —
+    // PACK_K is a FIXED per-core-role count, not clamped to ht, because every
+    // pack lane always has ho = HT_BLOCK / PACK_K > 0 rows by construction
+    // (PACK_K is resolved to a divisor of HT_BLOCK on the host).
+    constexpr bool PACK_ROTATE = get_compile_time_arg_val(29) != 0;
+    constexpr uint32_t PACK_K = get_compile_time_arg_val(30);
     constexpr bool TWO_STAGE = CW2 > 1;
     static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
+    static_assert(!ROW_ROTATE || CW2 == 1, "row_rotate has no leader tree");
+    static_assert(!PACK_ROTATE || CW2 == 1, "pack_rotate has no leader tree");
+    static_assert(!(ROW_ROTATE && PACK_ROTATE), "row_rotate and pack_rotate are mutually exclusive");
     (void)SHARDED_OUT;
 
     // ONE multicast family per virtually-contiguous column run of the group. A
@@ -132,33 +155,9 @@ void kernel_main() {
     // must broadcast as two rectangles rather than one bounding box that would
     // target non-worker endpoints. Family B is inactive (`active == 0`) whenever
     // the group fits in one run, and then compiles away entirely.
-    constexpr auto mc_a = dkl::McastArgs</*CT=*/27, /*RT=*/11>();
+    constexpr auto mc_a = dkl::McastArgs</*CT=*/31, /*RT=*/11>();
     constexpr auto mc_b = dkl::McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
-
-    // ---- Perf 1: the reuse-shared gamma broadcast (op_design Lamp L2) -------
-    // Flag word (bit0) plus one multicast family per virtually-contiguous column
-    // run. The host owns the predicate — see _gamma_mcast_plan; when it refuses,
-    // GAMMA_MCAST is 0 and every leg below compiles away, leaving the per-core
-    // TensorAccessor read byte-identical to the pre-Perf-1 spelling.
-    constexpr uint32_t GAMMA_FLAGS = get_compile_time_arg_val(mc_b.next_compile_time_args_offset());
-    constexpr bool GAMMA_MCAST = (GAMMA_FLAGS & 0x1u) != 0;
-    constexpr auto gmc_a =
-        dkl::McastArgs<mc_b.next_compile_time_args_offset() + 1, mc_b.next_runtime_args_offset() + 2>();
-    constexpr auto gmc_b = dkl::McastArgs<gmc_a.next_compile_time_args_offset(), gmc_a.next_runtime_args_offset()>();
-    // ---- Perf 2: the gather PAYLOAD guard (one shared flag word) ------------
-    // bit0 = colpack (the `ht` row-sums ride distinct COLUMNS of ONE tile, so
-    // this core's gather window is 1 tile per slot instead of HT_BLOCK), bit1 =
-    // bf16 wire datum (page size only — the CB format carries it, so nothing
-    // here changes). The host owns both predicates; see COLPACK_MIN_HT_BLOCK.
-    constexpr uint32_t PAYLOAD_FLAGS = get_compile_time_arg_val(gmc_b.next_compile_time_args_offset());
-    constexpr bool COLPACK = (PAYLOAD_FLAGS & 0x1u) != 0;
-    // Gather-window tiles per slot. This is the ONLY thing the payload guard
-    // changes on the reader side, and it must agree with the host's CB page count
-    // and the writer's ship count exactly — hence the single flag word.
-    constexpr uint32_t GATHER_HT = COLPACK ? 1u : HT_BLOCK;
-
-    constexpr auto in_args = TensorAccessorArgs<gmc_b.next_compile_time_args_offset() + 1>();
-    static_assert(gmc_b.next_compile_time_args_offset() + 1 == 49, "shared dataflow CT block must be 49 words");
+    constexpr auto in_args = TensorAccessorArgs<mc_b.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     static_assert(WT_LAST == WT_CHUNK, "reader assumes uniform chunk widths");
@@ -169,16 +168,12 @@ void kernel_main() {
     const uint32_t start_tile_row = get_arg_val<uint32_t>(2);
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(3);
     const uint32_t wt_start = get_arg_val<uint32_t>(4);
+    const uint32_t my_slot = get_arg_val<uint32_t>(5);
     const uint32_t is_root = get_arg_val<uint32_t>(6);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(7);
     const uint32_t wt_real = get_arg_val<uint32_t>(8);
     const uint32_t mcast_family = get_arg_val<uint32_t>(9);
     const uint32_t is_leader = get_arg_val<uint32_t>(10);
-    // Perf 1: gamma-broadcast role. `gamma_inject` is a per-family bitmask ("I
-    // read gamma from DRAM and broadcast it to that family"); `gamma_family` is
-    // the rectangle this core receives in.
-    [[maybe_unused]] const uint32_t gamma_inject = get_arg_val<uint32_t>(mc_b.next_runtime_args_offset() + 0);
-    [[maybe_unused]] const uint32_t gamma_family = get_arg_val<uint32_t>(mc_b.next_runtime_args_offset() + 1);
 
     // Filler core: inside the multicast rectangle so the broadcast lands
     // somewhere legal, but it owns no data and takes no part in the combine.
@@ -234,53 +229,12 @@ void kernel_main() {
         } else {
             const uint32_t gt = get_tile_size(cb_gamma);
             cb_reserve_back(cb_gamma, WT);
-            const uint32_t base = get_write_ptr(cb_gamma);
-            if constexpr (GAMMA_MCAST) {
-                // Perf 1 — the reuse-shared broadcast. `cb_gamma` is declared at
-                // the identical size on every core of the rectangle, so its write
-                // pointer is the SAME L1 address everywhere: the injector sends
-                // `src == dst` (its own copy is already in place, so the pipe
-                // picks EXCLUDE-source) and every receiver's landing address is
-                // right by construction. Delivery stays in the PROLOGUE: measured
-                // 1.09x SLOWER when moved after the first pass-A read, because the
-                // prologue is the one window where the injector's own DRAM read is
-                // uncontended. The rectangle, the corner ordering and the
-                // readiness handshake are mcast_pipe's, exactly as for 1/rms.
-                Noc gnoc;
-                if (gamma_inject) {
-                    uint32_t addr = base;
-                    for (uint32_t t = 0; t < WT; ++t) {
-                        noc_async_read_page(gamma_page(t), gamma_acc, addr);
-                        addr += gt;
-                    }
-                    noc_async_read_barrier();
-                    if constexpr (gmc_a.active) {
-                        if (gamma_inject & 0x1u) {
-                            auto pipe = gmc_a.sender(gnoc);
-                            pipe.send(base, base, WT * gt);
-                        }
-                    }
-                    if constexpr (gmc_b.active) {
-                        if (gamma_inject & 0x2u) {
-                            auto pipe = gmc_b.sender(gnoc);
-                            pipe.send(base, base, WT * gt);
-                        }
-                    }
-                } else if (gamma_family == 0) {
-                    auto pipe = gmc_a.receiver(gnoc);
-                    pipe.receive();
-                } else {
-                    auto pipe = gmc_b.receiver(gnoc);
-                    pipe.receive();
-                }
-            } else {
-                uint32_t addr = base;
-                for (uint32_t t = 0; t < WT; ++t) {
-                    noc_async_read_page(gamma_page(t), gamma_acc, addr);
-                    addr += gt;
-                }
-                noc_async_read_barrier();
+            uint32_t addr = get_write_ptr(cb_gamma);
+            for (uint32_t t = 0; t < WT; ++t) {
+                noc_async_read_page(gamma_page(t), gamma_acc, addr);
+                addr += gt;
             }
+            noc_async_read_barrier();
             cb_push_back(cb_gamma, WT);
         }
     }
@@ -387,6 +341,10 @@ void kernel_main() {
     [[maybe_unused]] Noc noc;
     [[maybe_unused]] Semaphore<> gather_sem(SEM_GATHER);
     [[maybe_unused]] Semaphore<> gather2_sem(SEM_GATHER2);
+    // SCHEME 2: cb_rms_mean is filled by the OWNERS' remote writes, not by this
+    // core's compute, so it carries no CB credits — the semaphore is the whole
+    // handshake and the landing base is the (grid-uniform) CB base address.
+    [[maybe_unused]] const uint32_t rms_mean_base = get_write_ptr(cb_rms_mean);
 
     // ---- 3. row-block loop -------------------------------------------------
     const uint32_t num_row_blocks = (num_tile_rows + HT_BLOCK - 1) / HT_BLOCK;
@@ -420,19 +378,56 @@ void kernel_main() {
             // flat topology the root is the only leader and CW1 == CW.
             {
                 MaybeDeviceZoneScope("rdr_gather_wait");
-                if (is_leader) {
-                    cb_reserve_back(cb_group_partials, GATHER_HT * CW1);
-                    gather_sem.wait(CW1);
-                    gather_sem.set(0);
-                    cb_push_back(cb_group_partials, GATHER_HT * CW1);
-                }
-                // stage 2 — the root folds the CW2 row-sums the leaders shipped.
-                if constexpr (TWO_STAGE) {
+                if constexpr (ROW_ROTATE) {
+                    // SCHEME 2. Every core with an owned tile-row waits for the CW
+                    // contributions to ITS tile-rows — an ht-fold reduction in peak
+                    // inbound bytes vs. one core waiting for CW * ht tiles.
+                    if (my_slot < ht) {
+                        cb_reserve_back(cb_group_partials, GATHER_PAGES);
+                        gather_sem.wait(CW);
+                        gather_sem.set(0);
+                        cb_push_back(cb_group_partials, GATHER_PAGES);
+                    }
+                    // The root then collects the owners' FINALIZED tiles (ht tiles
+                    // total, one per tile-row) before broadcasting the block.
                     if (is_root) {
-                        cb_reserve_back(cb_group_partials2, GATHER_HT * CW2);
-                        gather2_sem.wait(CW2);
+                        const uint32_t owners = (ht < CW) ? ht : CW;
+                        gather2_sem.wait(owners);
                         gather2_sem.set(0);
-                        cb_push_back(cb_group_partials2, GATHER_HT * CW2);
+                    }
+                } else if constexpr (PACK_ROTATE) {
+                    // PERF-2 (combine_parallel_fold). Only the PACK_K owner slots
+                    // (my_slot < PACK_K) ever fold anything; every one of them
+                    // receives CW contributions (one packed tile per GROUP MEMBER,
+                    // not per pack-lane — see the writer). The root then waits for
+                    // exactly PACK_K owners' finalized tile-batches — a FIXED count,
+                    // unlike row_rotate's ht-dependent one, because every lane
+                    // always owns ho = HT_BLOCK/PACK_K > 0 rows.
+                    if (my_slot < PACK_K) {
+                        cb_reserve_back(cb_group_partials, GATHER_PAGES);
+                        gather_sem.wait(CW);
+                        gather_sem.set(0);
+                        cb_push_back(cb_group_partials, GATHER_PAGES);
+                    }
+                    if (is_root) {
+                        gather2_sem.wait(PACK_K);
+                        gather2_sem.set(0);
+                    }
+                } else {
+                    if (is_leader) {
+                        cb_reserve_back(cb_group_partials, HT_BLOCK * CW1);
+                        gather_sem.wait(CW1);
+                        gather_sem.set(0);
+                        cb_push_back(cb_group_partials, HT_BLOCK * CW1);
+                    }
+                    // stage 2 — the root folds the CW2 row-sums the leaders shipped.
+                    if constexpr (TWO_STAGE) {
+                        if (is_root) {
+                            cb_reserve_back(cb_group_partials2, HT_BLOCK * CW2);
+                            gather2_sem.wait(CW2);
+                            gather2_sem.set(0);
+                            cb_push_back(cb_group_partials2, HT_BLOCK * CW2);
+                        }
                     }
                 }
             }
@@ -441,8 +436,13 @@ void kernel_main() {
                 cb_reserve_back(cb_rms_sum, HT_BLOCK);
                 const uint32_t dst = get_write_ptr(cb_rms_sum);
                 if (is_root) {
-                    cb_wait_front(cb_rms_mean, ht);
-                    const uint32_t src = get_read_ptr(cb_rms_mean);
+                    uint32_t src;
+                    if constexpr (ROW_ROTATE || PACK_ROTATE) {
+                        src = rms_mean_base;  // the owners wrote it; gather2_sem said so
+                    } else {
+                        cb_wait_front(cb_rms_mean, ht);
+                        src = get_read_ptr(cb_rms_mean);
+                    }
                     const uint32_t bytes = ht * fp32_tile_bytes;
                     // The root is inside exactly one family's rectangle, so that
                     // send() loops the data back into its OWN cb_rms_sum; the other
@@ -455,7 +455,9 @@ void kernel_main() {
                         auto pipe = mc_b.sender(noc);
                         pipe.send(src, dst, bytes);
                     }
-                    cb_pop_front(cb_rms_mean, ht);
+                    if constexpr (!ROW_ROTATE && !PACK_ROTATE) {
+                        cb_pop_front(cb_rms_mean, ht);
+                    }
                 } else if (mcast_family == 0) {
                     auto pipe = mc_a.receiver(noc);
                     pipe.receive();
@@ -489,7 +491,7 @@ void kernel_main() {
     // ReceiverPipe's readiness ack is a NON-POSTED remote atomic; drain it
     // before the kernel exits so the core's NoC transaction counters balance
     // (an outstanding atomic at exit stalls dispatch completion).
-    if constexpr (W_SPLIT || GAMMA_MCAST) {
+    if constexpr (W_SPLIT) {
         noc_async_atomic_barrier();
     }
 }

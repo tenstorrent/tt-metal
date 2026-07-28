@@ -65,75 +65,15 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-// gather_payload_shrink: the column-pack / column-select mechanism is raw
+// combine_parallel_fold (PERF-2): the column-pack/select mechanism is raw
 // compute-API (reduce_tile with a NON-canonical scaler + an explicit packer-mask
-// clear). No kernel_lib reduce helper can express either — see the block comment
-// at the fold below.
+// clear), reused verbatim from gather_payload_shrink's measured mechanism — no
+// kernel_lib reduce helper can express either; see the block comment at the
+// pack/fold below.
 #include "api/compute/reduce.h"
 #include "api/compute/pack.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/reconfig_data_format.h"
-
-// ===========================================================================
-// REFRESHED FORK (colpack_regraduate, Perf 2). Round 1's `gather_payload_shrink`
-// fork was taken BEFORE the Perf 1 tournament graduated a 3.53x cut to this same
-// kernel's phase 4 (commit 83e64b50c7, "phase-4 SFPU scoped to column 0"), so its
-// `baseline` variant no longer reproduces the current op (76_112 pre-cut vs
-// 54_986 post-cut on the focus shape — a 1.38x gap that has nothing to do with
-// the gather payload). Ported verbatim from
-// ttnn/ttnn/operations/rms_norm/kernels/rms_norm_compute.cpp so this fork's
-// `baseline` is the CURRENT op again. The gamma-multicast graduation (commit
-// 80ce979d509b) is NOT ported: its predicate is `cw == 1` (row-only split), and
-// every case this bench exercises is W-split (cw > 1) — porting ~240 lines of
-// host+kernel wiring that provably never fires in this bench buys zero measured
-// delta, so it is left out and noted rather than blind-copied.
-// ===========================================================================
-//
-// MEASURED MOTIVE (verbatim from the real op). Phase 4 (`AddUnary(eps)` then
-// `Rsqrt` over the REDUCE_ROW statistic) was the op's single largest real
-// compute item: 906 ns per tile, 29.0 us per core on the BLOCK_SHARDED
-// (1,1,8192,1024) profile = 38% of that kernel — measured with the cross-core
-// combine ABLATED AWAY, so it is work, not waiting.
-//
-// THE WASTE. `cb_rms_sum` holds a REDUCE_ROW result, so only COLUMN 0 is
-// meaningful. Its sole consumer is phase 5's `BinaryFpu<..., Mul,
-// BroadcastDim::Col>`, which never reads columns 1..31. The stock chain
-// nevertheless computed all 32 vector ops per tile per pass, twice (AddUnary and
-// Rsqrt are separate chain elements => separate SFPU passes). 8 vector ops in
-// ONE pass produce the identical column 0: 912.7 -> 258.3 ns/tile, 3.53x.
-//
-// RAW-LLK JUSTIFICATION (ported from the real op verbatim; carried forward so a
-// later helper-usage pass does not "fix" this back). Two mechanisms are not
-// reachable through the stock helpers today:
-//   (a) SFPU WORK SCOPE — `rsqrt_tile` hardcodes `VectorMode::RC` and
-//       `ITERATIONS = 8`; neither the compute-API wrapper nor the
-//       `Rsqrt`/`AddUnary` chain elements expose a vector-mode, iteration-count
-//       or DEST-address-stride knob.
-//   (b) PASS FUSION — `AddUnary` and `Rsqrt` are separate chain elements, hence
-//       separate SFPU passes with separate DEST-address setup + STALLWAIT and
-//       separate full walks. There is no "unary op with a pre-added scalar"
-//       element to compose.
-// The BODY is the stock accurate rsqrt kernel verbatim:
-// `_calculate_sqrt_body_<APPROX, RECIPROCAL=true, FAST_APPROX=false>` plus the
-// `!fp32_dest_acc_en` round-to-nearest store. Same function, same precision,
-// fewer lanes. The precision contract is untouched.
-// Everything else stays on the helper surface: this is a `ckl::UnaryOp` CRTP
-// element, so `eltwise_chain` still owns the CB lifecycle, the dtype reconfig
-// and the dst-sync window — only the SFPU body is ours.
-//
-// PREDICATE. Compile-time and architectural only (guarded on !ARCH_QUASAR).
-#if defined(ARCH_QUASAR)
-#define RMS_NORM_COL0_RSQRT 0
-#else
-#define RMS_NORM_COL0_RSQRT 1
-#endif
-
-#if RMS_NORM_COL0_RSQRT
-#ifdef TRISC_MATH
-#include "ckernel_sfpu_sqrt.h"            // _calculate_sqrt_body_
-#include "sfpu/ckernel_sfpu_converter.h"  // Converter::as_float
-#endif
-#endif
 
 namespace {
 constexpr uint32_t cb_input_tiles = 0;
@@ -146,9 +86,15 @@ constexpr uint32_t cb_group_partials = 6;
 constexpr uint32_t cb_rms_mean = 7;
 constexpr uint32_t cb_partial_out = 8;
 constexpr uint32_t cb_group_partials2 = 9;
-constexpr uint32_t cb_packsel = 10;  // gather_payload_shrink: column-PACK scalers
-constexpr uint32_t cb_colsel = 11;   // gather_payload_shrink: column-SELECT scalers
-constexpr uint32_t cb_rootsum = 12;  // gather_payload_shrink: root's elementwise sum of the packed tiles
+// row_rotate / pack_rotate reuse slot 9 as the OWNER-output CB (two_stage's
+// stage-2 gather CB is unused there), so the fold's push granularity gets its
+// own buffer.
+constexpr uint32_t cb_owner_out = 9;
+// PERF-2 (combine_parallel_fold): column-pack/select scalers + the owner's raw
+// elementwise sum, reused verbatim from gather_payload_shrink's CB layout.
+constexpr uint32_t cb_packsel = 10;
+constexpr uint32_t cb_colsel = 11;
+constexpr uint32_t cb_rootsum = 12;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t cb_x_squared = 24;
@@ -160,7 +106,38 @@ constexpr uint32_t cb_scaled = 28;
 
 namespace ckl = compute_kernel_lib;
 
+// ===========================================================================
+// BASELINE REFRESH — Perf 1's phase-4 SFPU-scoped rsqrt, ported verbatim.
+// ===========================================================================
+//
+// The op's `RsqrtAddUnaryColZero` (rms_norm_compute.cpp, "Perf 1" section):
+// `cb_rms_sum` is a REDUCE_ROW result (column-0-only) whose sole consumer is a
+// BroadcastDim::Col multiply, so 24 of 32 SFPU lanes computed nothing anyone
+// reads — twice over (AddUnary and Rsqrt were separate chain elements/passes).
+// This fuses `+eps` into the rsqrt body and scopes it to the 8 even-parity
+// vectors holding column 0: 912.7 -> 258.3 ns/tile, 3.53x. Ported here so this
+// bake-off's baseline is the CURRENT op, not the pre-Perf-1 snapshot round 1
+// forked from — the coordinator's round-2 brief measured the gap as ~20 us on
+// the focus shape (76_112 -> 54_986), and every ratio in this lab is wrong
+// unless the baseline carries it too.
+//
+// PRECISION CONTRACT: untouched. Folding +eps into the body's argument removes
+// one bf16 DEST round trip, so this is marginally MORE accurate than the stock
+// two-element chain (measured col-0 PCC 0.9999968 vs 0.9999967) — never a
+// tuned knob (fp32_dest_acc_en / math_fidelity / math_approx_mode / dtypes are
+// all held at the op's pinned perf config, identical to every candidate here).
+#if defined(ARCH_QUASAR)
+#define RMS_NORM_COL0_RSQRT 0
+#else
+#define RMS_NORM_COL0_RSQRT 1
+#endif
+
 #if RMS_NORM_COL0_RSQRT
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_sqrt.h"            // _calculate_sqrt_body_
+#include "sfpu/ckernel_sfpu_converter.h"  // Converter::as_float
+#endif
+
 namespace {
 #ifdef TRISC_MATH
 // The SFPU walks a face as [rg0-even, rg0-odd, rg1-even, rg1-odd, ...]; column 0
@@ -238,14 +215,24 @@ void kernel_main() {
     // the accumulator never has to survive a tile_regs_acquire; and no
     // partial-W mask, which lives on the reduce helper's scaler hook).
     constexpr bool FUSE_SQ = get_compile_time_arg_val(18) != 0;
-    // ---- gather_payload_shrink (CT 19) ----------------------------------
-    // COLPACK collapses the gather payload from `ht` full tiles to ONE tile
-    // whose COLUMN h holds tile-row h's row-sum. Everything else — placement,
-    // core count, per-core slice, precision contract — is untouched.
-    constexpr uint32_t VARIANT = get_compile_time_arg_val(19);
-    constexpr bool COLPACK = W_SPLIT && ((VARIANT == 1) || (VARIANT == 3));
-    static_assert(!COLPACK || NW == 1, "colpack requires NW == 1 (the fold reads one settled tile/row)");
-    static_assert(!COLPACK || HT_BLOCK <= 16, "colpack packs into face-rows 0..15");
+    // ---- LAB: SCHEME 2 (per-tile-row root rotation) ----
+    // This core owns the fold for the row-block's tile-rows h with h % CW ==
+    // my_slot, so the combine's fp32 tile-reduces are spread over min(ht, CW)
+    // cores instead of all landing on the root. The owner's fold is the FINAL one
+    // (reduce_mean, n_reduced = W) — there is no second REDUCE_ROW anywhere in
+    // this topology, so the Accumulate::at / at_last double-count trap that a
+    // staged tree has to dodge cannot arise by construction.
+    constexpr bool ROW_ROTATE = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t GATHER_PAGES = get_compile_time_arg_val(20);
+    // ---- PERF-2 IDEA (combine_parallel_fold): the K-way pack/rotate hybrid ----
+    // See the "PERF-2" block comment at the pack+fold below for the mechanism.
+    constexpr bool PACK_ROTATE = get_compile_time_arg_val(21) != 0;
+    constexpr uint32_t PACK_K = get_compile_time_arg_val(22);
+    constexpr uint32_t HO = PACK_ROTATE ? (HT_BLOCK / PACK_K) : 1;  // tile-rows per owner lane
+    static_assert(!ROW_ROTATE || CW2 == 1, "row_rotate has no leader tree");
+    static_assert(!PACK_ROTATE || CW2 == 1, "pack_rotate has no leader tree");
+    static_assert(!(ROW_ROTATE && PACK_ROTATE), "row_rotate and pack_rotate are mutually exclusive");
+    static_assert(!PACK_ROTATE || HT_BLOCK % PACK_K == 0, "PACK_K must divide HT_BLOCK");
     static_assert(!FUSE_SQ || NW == 1, "fused square-accumulate requires NW == 1");
     static_assert(!FUSE_SQ || !HAS_PARTIAL_W, "fused square-accumulate cannot apply the partial-W mask");
 
@@ -259,6 +246,7 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(2);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(3);
     const uint32_t is_leader = get_arg_val<uint32_t>(4);
+    const uint32_t my_slot = get_arg_val<uint32_t>(5);
 
     // Filler core (inside a group's multicast rectangle, owns no data).
     if (num_tile_rows == 0) {
@@ -292,10 +280,10 @@ void kernel_main() {
     // W-split that tile is the writer's gather payload and goes straight to
     // cb_partial_out (one producer, one consumer, exactly as the NW == 1
     // pairwise path already did); otherwise it stays compute-internal and the
-    // fold below reads it back out of cb_partials.
-    // COLPACK inserts the fold+pack pass between the square and the ship, so the
-    // raw accumulator has to land in a compute-internal CB first.
-    constexpr uint32_t cb_accum = (W_SPLIT && !COLPACK) ? cb_partial_out : cb_partials;
+    // fold below reads it back out of cb_partials. PACK_ROTATE inserts the
+    // pack pass between the square and the ship (like gather_payload_shrink's
+    // COLPACK), so the raw accumulator has to land in cb_partials first.
+    constexpr uint32_t cb_accum = (W_SPLIT && !PACK_ROTATE) ? cb_partial_out : cb_partials;
 
     // Tiles per DEST-sync window (Refinement 5). `EltwiseShape`'s block_size
     // defaults to 1, and at 1 the chain runs a WHOLE
@@ -477,13 +465,13 @@ void kernel_main() {
                             ckernel::ReduceDim::REDUCE_ROW,
                             cb_x_squared,
                             cb_scaler,
-                            cb_accum,
+                            cb_partial_out,
                             ckl::ReduceInputPolicy::BulkWaitBulkPop,
                             ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                             ckl::ReduceAlgorithm::AccumulateViaAdd>(
                             rshape,
                             ckl::ReduceInputMemoryLayout::contiguous(),
-                            ckl::Accumulate::at(cb_accum, wc),
+                            ckl::Accumulate::at(cb_partial_out, wc),
                             ckl::NoOp{},
                             partial);
                     } else {
@@ -552,56 +540,66 @@ void kernel_main() {
             ckl::copy<cb_partials, cb_partial_out>(ckl::EltwiseShape::tiles(ht));
         }
 
-        // ===== gather_payload_shrink: FOLD + COLUMN-PACK the gather payload ===
+        // ===== PERF-2 (combine_parallel_fold): FOLD + COLUMN-PACK per lane ===
         //
-        // The baseline ships `ht` RAW 4 KB fp32 tiles per row-block, in which all
-        // 32 columns are still live x^2 partial sums. The only information in
-        // each is its 32 row-sums — 128 B of 4096. This pass folds each tile-row
-        // within-tile AND lands the `ht` results in `ht` DISTINCT COLUMNS of ONE
-        // tile, so the payload becomes 1 tile instead of `ht` (8x on the focus
-        // shape) — for `ht` FPU ops and one pack.
+        // Generalizes gather_payload_shrink's COLPACK (there: ONE pack covering
+        // all HT_BLOCK tile-rows) into PACK_K independent packs, one per
+        // pack-lane p: lane p column-packs the `HO = HT_BLOCK/PACK_K` tile-rows
+        // h = p, p+PACK_K, p+2*PACK_K, ... into ONE tile (HO valid columns), so
+        // this worker ships PACK_K tiles per row-block instead of `ht`
+        // (row_rotate) or 1 (pure colpack) — and each of the PACK_K streams gets
+        // its OWN owner below, folding in PARALLEL.
         //
-        // MECHANISM (raw compute API, verified on device by probe_mechanism.py):
-        // BH's REDUCE_ROW SUM is an MVMUL with the scaler in SrcA (transposed on
-        // unpack) and the data in SrcB, so `dest[i,j] = sum_k data[i,k] *
-        // scaler[j,k]`: the scaler's FACE-ROW index j picks the output COLUMN.
-        // `cb_packsel[h]` is 1.0 across face-row h, so `ht` reduce_tiles
-        // accumulating into ONE dest tile column-pack the row-sums (probe tile 9
-        // measured live columns {0,1,3} at 32.0 each from scalers at face-rows
-        // 0,1,3).
+        // MECHANISM — identical to gather_payload_shrink's, reused verbatim
+        // (verified on device by its probe_mechanism.py): BH's REDUCE_ROW SUM is
+        // an MVMUL with the scaler in SrcA (transposed on unpack) and the data
+        // in SrcB, so `dest[i,j] = sum_k data[i,k] * scaler[j,k]` — the scaler's
+        // FACE-ROW index j picks the OUTPUT COLUMN. `cb_packsel[m]` is 1.0
+        // across face-row m (all columns), so `reduce_tile(cb_partials,
+        // cb_packsel, itile=h, itile_scaler=m, idst=0)` folds tile-row h's
+        // per-actual-row values across the input tile's columns AND lands the
+        // scalar result at OUTPUT COLUMN m — HO such calls into one DEST
+        // column-pack the lane's HO tile-rows.
         //
-        // HELPERS BYPASSED and why:
-        //   ckl::reduce / ckl::reduce_mean — their scaler is ONE tile (no
-        //     per-output scaler index), and they cannot express a non-canonical
-        //     scaler at all. The whole mechanism is a per-output-column scaler.
-        //   the pack — reduce_init programs a PACKER EDGE MASK that writes every
-        //     datum outside column 0 as zero (reduce.h:44-52). That mask would
-        //     erase columns 1..ht-1 of a column-packed tile, so `reduce_uninit()`
-        //     (mask clear) must be issued between tile_regs_commit and the pack.
-        //     Measured: probe tile 8 (mask on) kept only column 0; probe tile 9
-        //     (mask cleared) kept all three. No helper exposes that seam.
-        if constexpr (COLPACK) {
+        // HELPERS BYPASSED (same as gather_payload_shrink; see its kernel-head
+        // comment for the full justification):
+        //   ckl::reduce / ckl::reduce_mean — no per-output-column scaler.
+        //   the pack — reduce_init's packer edge mask would erase columns
+        //     1..HO-1; reduce_uninit() (mask clear) must run between
+        //     tile_regs_commit and the pack. Repeated INSIDE the p loop (not
+        //     hoisted out) rather than once for all PACK_K lanes: reduce_uninit
+        //     calls `llk_math_reduce_uninit()` on the MATH thread, which is
+        //     documented ("Resets ... may lead to incorrect packing behavior in
+        //     subsequent operations" — reduce.h) as resetting reduce's MATH-side
+        //     config, so a second lane's reduce_tile calls after an unpaired
+        //     reduce_uninit are unverified. Each lane therefore gets its own
+        //     complete, gather_payload_shrink-verified
+        //     init/accumulate/commit/uninit/pack sequence — PACK_K repeats of
+        //     the exact mechanism that idea proved on silicon, not a new one.
+        if constexpr (PACK_ROTATE) {
             MaybeDeviceZoneScope("cmp_colpack");
-            cb_wait_front(cb_partials, ht);
+            cb_wait_front(cb_partials, HT_BLOCK);
             cb_wait_front(cb_packsel, HT_BLOCK);
-            cb_reserve_back(cb_partial_out, 1);
-            // REDUCE_ROW SUM maps scaler -> SrcA, data -> SrcB (reduce.h:70-76).
+            cb_reserve_back(cb_partial_out, PACK_K);
             reconfig_data_format(cb_packsel, cb_partials);
             pack_reconfig_data_format(cb_partial_out);
-            reduce_init<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-                cb_partials, cb_packsel, cb_partial_out);
-            tile_regs_acquire();
-            for (uint32_t h = 0; h < ht; ++h) {
-                reduce_tile<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-                    cb_partials, cb_packsel, /*itile=*/h, /*itile_scaler=*/h, /*idst=*/0);
+            for (uint32_t p = 0; p < PACK_K; ++p) {
+                reduce_init<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                    cb_partials, cb_packsel, cb_partial_out);
+                tile_regs_acquire();
+                for (uint32_t m = 0; m < HO; ++m) {
+                    const uint32_t h = m * PACK_K + p;
+                    reduce_tile<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                        cb_partials, cb_packsel, /*itile=*/h, /*itile_scaler=*/m, /*idst=*/0);
+                }
+                tile_regs_commit();
+                reduce_uninit();  // MUST precede the pack — see above.
+                tile_regs_wait();
+                pack_tile(0, cb_partial_out);
+                tile_regs_release();
             }
-            tile_regs_commit();
-            reduce_uninit();  // MUST precede the pack — see above.
-            tile_regs_wait();
-            pack_tile(0, cb_partial_out);
-            tile_regs_release();
-            cb_push_back(cb_partial_out, 1);
-            cb_pop_front(cb_partials, ht);
+            cb_push_back(cb_partial_out, PACK_K);
+            cb_pop_front(cb_partials, HT_BLOCK);
         }
 
         // ========== phase 3b: cross-core combine (W-split only) ============
@@ -620,68 +618,102 @@ void kernel_main() {
         // produces, so the second fold cannot double-count the surviving x^2
         // lanes — and republishes it through cb_partial_out for its own writer.
         // The root then finalizes over just the CW2 row-sums.
-        if constexpr (W_SPLIT && COLPACK) {
-            // ===== gather_payload_shrink: the COLUMN-PACKED combine ===========
-            //
-            // The gathered payload is CW1 column-packed tiles, one per core, in
-            // which column h is that core's row-sum for tile-row h. Two steps,
-            // CW1 + ht FPU ops total, vs the baseline root's ht * CW1:
-            //
-            //  (1) ELEMENTWISE sum the CW1 packed tiles. Column h of the sum is
-            //      the sum of column h, so this is exactly the raw accumulate the
-            //      leader stage already uses (`AccumulateViaAdd` +
-            //      `Accumulate::at`, never `at_last` — it must NOT fold within
-            //      the tile, which would collapse the ht columns into one and
-            //      double-count them; that is the Refinement-2 trap, and here it
-            //      would be a silent RESCALE that PCC would score >= 0.9998).
-            //  (2) COLUMN-SELECT: `cb_colsel[h]` is a one-hot 1/W at reduce-axis
-            //      position h, so one reduce_tile pulls column h into column 0
-            //      AND applies the 1/N in the same op (probe tiles 3,4,5). The
-            //      packer edge mask is deliberately LEFT ON here — its zeroing of
-            //      everything outside column 0 is exactly the shape phase 4 wants
-            //      — and cleared once at the end, before phase 5/6 pack full
-            //      tiles again.
-            if (is_root) {
-                MaybeDeviceZoneScope("cmp_combine");
-                // (1) raw elementwise sum of the CW1 packed tiles -> cb_partials[0]
-                ckl::reduce<
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_group_partials,
-                    cb_ones,
-                    cb_rootsum,
-                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                    ckl::ReduceInputBlockShape::of(1, CW1, 1),
-                    ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(cb_rootsum, 0),
-                    ckl::NoOp{},
-                    ckl::ReducePartialScaler::none());
-
-                // (2) ht column-selects -> ht mean(x^2) tiles for the multicast.
-                cb_wait_front(cb_rootsum, 1);
-                cb_wait_front(cb_colsel, HT_BLOCK);
-                cb_reserve_back(cb_rms_mean, ht);
-                reconfig_data_format(cb_colsel, cb_rootsum);
-                pack_reconfig_data_format(cb_rms_mean);
-                reduce_init<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(cb_rootsum, cb_colsel, cb_rms_mean);
-                for (uint32_t h = 0; h < ht; ++h) {
-                    tile_regs_acquire();
-                    reduce_tile<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-                        cb_rootsum, cb_colsel, /*itile=*/0, /*itile_scaler=*/h, /*idst=*/0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, cb_rms_mean);
-                    tile_regs_release();
-                }
-                reduce_uninit();  // AFTER the packs: phases 5/6 pack full tiles.
-                cb_push_back(cb_rms_mean, ht);
-                cb_pop_front(cb_rootsum, 1);
-            }
-        } else if constexpr (W_SPLIT) {
+        if constexpr (W_SPLIT) {
             MaybeDeviceZoneScope("cmp_combine");
-            if constexpr (TWO_STAGE) {
+            if constexpr (ROW_ROTATE) {
+                // SCHEME 2. `ho` = the tile-rows THIS core owns in this row-block
+                // (h = my_slot, my_slot + CW, ...). The gather block is laid out
+                // h-major (tile k*CW + contributor), so of(ho, CW, 1) reads it
+                // contiguously — the identical shape the flat root uses, just
+                // ho rows deep instead of ht, on min(ht, CW) cores at once.
+                if (my_slot < ht) {
+                    const uint32_t ho = (ht - my_slot + CW - 1) / CW;
+                    // Output goes to cb_group_partials2 (reused as the OWNER-output
+                    // CB), never to cb_partial_out: pass A pushes `ht` pages there
+                    // and this pushes `ho`, and a CB whose push granularity is
+                    // mixed lands its pointer mid-buffer so the next full push
+                    // straddles fifo_limit. Measured as a device hang on the focus
+                    // geometry (4 row-blocks) while passing at 1.
+                    ckl::reduce_mean<
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_group_partials,
+                        cb_ones,
+                        cb_owner_out,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        ckl::ReduceInputBlockShape::of(ho, CW, 1),
+                        N_REDUCED,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::NoAccumulation{},
+                        ckl::ReducePartialScaler::none());
+                    // The reader publishes a fixed GATHER_PAGES block so the gather
+                    // slots stay at a constant L1 offset; drop the unused tail.
+                    if (ho * CW < GATHER_PAGES) {
+                        cb_pop_front(cb_group_partials, GATHER_PAGES - ho * CW);
+                    }
+                }
+            } else if constexpr (PACK_ROTATE) {
+                // PERF-2 IDEA (combine_parallel_fold). Only the PACK_K owner
+                // slots (my_slot < PACK_K) ever fold anything; every OTHER core
+                // computed all PACK_K lanes above but owns none of the folds —
+                // it is a pure contributor here, same as row_rotate's non-owner
+                // slots. Two steps per owner, CW + HO FPU ops total (vs the flat
+                // root's CW*HT_BLOCK, and vs row_rotate's CW ops on CW DIFFERENT
+                // owners — this is CW ops on PACK_K owners, each covering HO
+                // rows instead of 1):
+                //
+                //  (1) ELEMENTWISE sum the CW column-packed contributions for
+                //      THIS lane -> cb_rootsum. `Accumulate::at` (never
+                //      `at_last`) is a pure elementwise add — it must NOT fold
+                //      within the tile, which would collapse the HO packed
+                //      columns into one and double-count them (the same trap
+                //      Refinement 2 established; here it would silently rescale
+                //      HO-1 of every HO rows, a bug PCC alone would miss).
+                //  (2) COLUMN-SELECT: `cb_colsel[m]` pulls column m into column 0
+                //      AND applies 1/N in the same op, producing this lane's HO
+                //      finalized tile-rows. The packer edge mask is deliberately
+                //      LEFT ON here (reduce_init's default) — its zeroing of
+                //      everything outside column 0 is exactly the shape phase 4
+                //      wants — and cleared once at the end, before phase 5/6
+                //      pack full tiles again.
+                if (my_slot < PACK_K) {
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_group_partials,
+                        cb_ones,
+                        cb_rootsum,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        ckl::ReduceInputBlockShape::of(1, CW, 1),
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::Accumulate::at(cb_rootsum, 0),
+                        ckl::NoOp{},
+                        ckl::ReducePartialScaler::none());
+
+                    cb_wait_front(cb_rootsum, 1);
+                    cb_wait_front(cb_colsel, HT_BLOCK);
+                    cb_reserve_back(cb_owner_out, HO);
+                    reconfig_data_format(cb_colsel, cb_rootsum);
+                    pack_reconfig_data_format(cb_owner_out);
+                    reduce_init<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                        cb_rootsum, cb_colsel, cb_owner_out);
+                    for (uint32_t m = 0; m < HO; ++m) {
+                        tile_regs_acquire();
+                        reduce_tile<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                            cb_rootsum, cb_colsel, /*itile=*/0, /*itile_scaler=*/m, /*idst=*/0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(0, cb_owner_out);
+                        tile_regs_release();
+                    }
+                    reduce_uninit();  // AFTER the packs: phases 5/6 pack full tiles.
+                    cb_push_back(cb_owner_out, HO);
+                    cb_pop_front(cb_rootsum, 1);
+                }
+            } else if constexpr (TWO_STAGE) {
                 if (is_leader) {
                     // One accumulate call, never reloaded -> pack the row sum
                     // straight back into cb_partial_out for this core's own
@@ -753,8 +785,8 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("cmp_rsqrt");
 #if RMS_NORM_COL0_RSQRT
-            // Perf 1 fast path (ported): one SFPU pass over the 8 vectors that
-            // hold column 0. 3.53x measured on the real op.
+            // Baseline refresh (see the block comment above kernel_main): the
+            // op's Perf-1 fast path, ported verbatim. 3.53x on this stage alone.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(ht),
                 ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},

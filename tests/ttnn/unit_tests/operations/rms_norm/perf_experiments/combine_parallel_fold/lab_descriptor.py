@@ -72,6 +72,67 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
 
 # ---------------------------------------------------------------------------
+# LAB KNOB — the ONE thing this bake-off varies (gather_spread_topology).
+# ---------------------------------------------------------------------------
+#
+#   "op_current"    THE HONEST BASELINE — whatever the op picks today for this
+#                   geometry.  That is the flat root gather on every BLOCK_SHARDED
+#                   group (one grid row, so `_two_stage_extents` refuses to stage
+#                   it) and the R3 grid two-stage on a WIDTH_SHARDED cx x cy group
+#                   wider than COMBINE_MAX_FLAT_FANIN.  Never overridden here.
+#   "flat"          forced flat root gather (cw2 == 1) at the same CW.  Equals
+#                   "op_current" on the 1-D groups; on the already-staged WIDTH
+#                   groups it is the R2 topology, kept as a reference point.
+#   "two_stage_1d"  SCHEME 1 — factorize CW itself along x.  The group (one grid
+#                   row, so `cw_y == 1` and the op's `_two_stage_extents` refuses
+#                   to stage it) is cut into CW/A sub-groups of A cores, each led
+#                   by its leftmost core; sub-leaders fold A tiles raw and ship
+#                   the row sum on to the root, which folds CW/A.  Busiest
+#                   receiver takes A + CW/A tiles instead of CW.
+#                   KERNELS ARE UNCHANGED — this is exactly the existing
+#                   TWO_STAGE path with a different leader assignment.
+#   "row_rotate"    SCHEME 2 — per-tile-row root rotation.  Core j of the group
+#                   OWNS the fold for the row-block's tile-rows h with
+#                   h % CW == j, so every core receives CW tiles instead of one
+#                   core receiving CW * HT_BLOCK.  The owner's fold is the FINAL
+#                   one (reduce_mean with n_reduced = W), so there is no second
+#                   REDUCE_ROW anywhere and the at/at_last double-count trap is
+#                   gone by construction.  Owners then unicast their finalized
+#                   tiles into the root's cb_rms_mean and the root multicasts the
+#                   block back exactly as the flat topology does.
+#   "pack_rotate"   PERF-2 IDEA (combine_parallel_fold) — the K-way hybrid this
+#                   bake-off exists to measure.  Parameterized by PACK_K (a
+#                   divisor of HT_BLOCK, 1 <= PACK_K <= CW).  Every WORKER
+#                   column-packs its `ht/PACK_K` row-sums for pack-lane
+#                   p = h % PACK_K into ONE fp32 tile (gather_payload_shrink's
+#                   raw-reduce_tile column-pack mechanism, reused verbatim), so
+#                   it ships PACK_K tiles per row-block instead of `ht` (row_rotate)
+#                   or 1 (pure colpack).  Each of the PACK_K packed streams has
+#                   its OWN owner (group slot p < PACK_K): the owner elementwise-
+#                   sums the CW contributions for its lane (colpack step 1, one
+#                   reduce_tile call) then column-selects `ht/PACK_K` times with
+#                   1/N folded in (colpack step 2) to produce its finalized
+#                   tile-rows, and unicasts them into the root's cb_rms_mean
+#                   exactly as row_rotate's owners do.  PACK_K == HT_BLOCK
+#                   degenerates to row_rotate's shape (ho == 1, no packing
+#                   benefit, full CW1 tile-index parallelism); PACK_K == 1
+#                   degenerates to pure colpack (one owner, full ht/1 packing,
+#                   zero fold parallelism).  1 < PACK_K < HT_BLOCK is the new
+#                   interior point: payload shrinks ht/PACK_K x AND the fold is
+#                   PACK_K-way parallel.
+TOPOLOGIES = ("op_current", "flat", "two_stage_1d", "row_rotate", "pack_rotate")
+
+# Sub-group width A for "two_stage_1d" (stage-1 fan-in).  None => the divisor of
+# CW closest to sqrt(CW), which minimises A + CW/A (the busiest receiver).
+STAGE1_WIDTH = None
+
+# Pack factor K for "pack_rotate" (combine_parallel_fold).  None => HT_BLOCK
+# (row_rotate's shape, via the pack_rotate code path — a self-check that the
+# generalization subsumes it).  Must divide HT_BLOCK and be <= CW; both are
+# asserted on the host once HT_BLOCK is derived (see create_program_descriptor).
+PACK_K = None
+
+# ---------------------------------------------------------------------------
 # The knob family (§1.2). One definition each; everything else derives.
 # ---------------------------------------------------------------------------
 
@@ -215,94 +276,6 @@ FUSE_SQUARE_ACCUM = True
 SEM_GATHER = 0  # stage 1: row members -> their row leader ("my partial landed")
 SEM_MCAST_BASE = 1  # Mcast2D takes SEM_MCAST_BASE (data_ready) and +1 (consumer_ready)
 SEM_GATHER2 = 5  # stage 2: row leaders -> the group root (two-stage combine only)
-# Perf 1 (op_design Lamp L2): the gamma broadcast. One semaphore PAIR per
-# multicast family, starting here (family f -> data_ready = base + 2f,
-# consumer_ready = base + 2f + 1). 0..5 are taken by the combine above.
-#
-# The families must NOT share an id pair even though their rectangles are
-# disjoint: `SenderPipe` resets consumer_ready to 0 after each send, so a shared
-# cell would wipe the other family's acks.
-SEM_GAMMA_BASE = 6
-
-# Perf 1: the measured core-count floor for the gamma broadcast. `gamma` is
-# reuse-shared only in the row-only split (cw == 1), and the broadcast only pays
-# when DRAM is the binding constraint — below ~40 active cores the grid does not
-# saturate it and the ~15 us serial injector prologue exceeds the DRAM time it
-# saves. Measured on (1,1,8192,7168), one run per point:
-#
-#     active cores   per-core DRAM read   broadcast   speedup
-#              110              354_010     253_671    1.386x
-#               55              171_124     146_270    1.170x
-#               44              137_969     121_122    1.139x
-#               33              104_810      99_423    1.054x
-#               22               74_654      74_344    1.004x  (NULL)
-#               11               41_782      49_658    0.841x  (REGRESSION)
-#
-# 44 is the measured spelling of "the broadcast wins"; 33 is marginal and inside
-# the noise band for the smaller shapes, so the guard sits above it.
-GAMMA_MCAST_MIN_CORES = 44
-
-# ===========================================================================
-# Perf 2 — the cross-core combine's gather PAYLOAD
-# ===========================================================================
-#
-# MEASURED MOTIVE. After Perf 1, the combine round trip was the op's #1 item and
-# the ENTIRE gap to the perf-flagged reference. On the focus profile
-# ((1,1,8192,1024) BLOCK_SHARDED, shard [1024,128], grid (8,8), 64 cores, cw=8
-# cw1=8 cw2=1, ht_block=8, nh_core=4) cumulative ablation measured:
-#
-#     full 54_377 ns | combine ablated 35_026 ns  =>  19_351 ns (35.6%)
-#
-# and the three-TRISC compute floor with the combine gone is ~23 us — i.e. BELOW
-# the 25_640 ns reference. Two independent inefficiencies caused it:
-#
-#   BYTES.  Each worker shipped `ht` RAW 4 KB Float32 tiles per row-block in
-#           which all 32 columns still held live x^2 partial sums. The only
-#           information in each tile is its 32 row-sums — 128 B of 4096. The root
-#           received ~1 MB per group to carry 8 KB, 128x more than necessary.
-#   SERIAL FOLD. The root then folded `ht * CW1` tiles alone (256 fp32
-#           tile-reduces per core over the kernel; `cmp_combine` measured 25_668
-#           ns MAX on the root) while its cw-1 group members idled — their wait
-#           showing up as ~27_300 ns buried inside `cmp_rsqrt`.
-#
-# THE FIX, and its two independent halves (each with its own predicate):
-#
-#   COLPACK.  Fold each tile-row within-tile and land the `ht` results in `ht`
-#             DISTINCT COLUMNS of ONE tile. The payload becomes 1 tile instead of
-#             `ht`, AND the root's fold becomes `CW1 + ht` FPU ops instead of
-#             `ht * CW1` — the column-pack moves the fold off the root as a side
-#             effect of moving it into the columns. Needs HT_BLOCK >= 2 (at 1
-#             there is nothing to pack and only the overhead is paid), a FLAT
-#             gather (a staged one would have to pack twice) and NW == 1 (the
-#             fold reads one settled accumulator per tile-row).
-#   BF16 PAYLOAD. Narrow the wire datum. This is FREE, not a precision trade:
-#             at fp32_dest_acc_en=False DEST is already 16-bit, so the Float32
-#             container never held a keepable bit — re-verified on the current op
-#             as bit-identical output. Load-bearing at fp32_dest_acc_en=True, so
-#             it carries `not fp32_dest_acc_en`. It has NO topology precondition,
-#             which is why it is the wider of the two guards and covers every
-#             geometry colpack refuses.
-#
-# MEASURED, focus shape, one fresh-cache profiled run per variant:
-#
-#     baseline      54_270 ns   1.000x   PCC 0.99998402
-#     bf16          46_533 ns   1.166x   PCC 0.99998402  (bit-identical)
-#     colpack       36_581 ns   1.483x   PCC 0.99998256
-#     colpack_bf16  36_014 ns   1.507x   PCC 0.99998256  <- graduated
-#
-# 36_014 against the 35_026 ns combine-ablated floor leaves only 988 ns of
-# combine cost — 94.9% of the 19_351 ns recovered. Root `cmp_combine` 25.4 us ->
-# 6.7 us; `wtr_gather_hop` 43.2 -> 23.8 us; `rdr_mcast` 42.7 -> 25.7 us.
-#
-# The win is monotone in HT_BLOCK (it IS the pack factor), which is what sets the
-# guard: 1.507x / 1.343x / 1.141x / 0.967x at HT_BLOCK 8 / 4 / 2 / 1.
-COLPACK_MIN_HT_BLOCK = 2
-
-# The column-pack writes tile-row h's row-sum into COLUMN h of one tile via a
-# scaler whose FACE-ROW index selects the output column, and a reduce scaler can
-# only address face-rows 0..15 — so at most 16 tile-rows pack into one tile. This
-# is a hard mechanism limit, not a tuning choice.
-COLPACK_MAX_HT_BLOCK = 16
 
 # Buffer depths (§1.2). Phase-1 minimal = 2 (double buffer).
 X_DEPTH = 2
@@ -367,10 +340,12 @@ CB_GROUP_PARTIALS = 6  # stage-1 gather: raw sum(x^2), CW1 slots per tile-row (l
 CB_RMS_MEAN = 7  # root's combined mean(x^2)  compute -> reader (mcast source)
 CB_PARTIAL_OUT = 8  # this core's raw sum(x^2)  compute -> writer (gather source)
 CB_GROUP_PARTIALS2 = 9  # stage-2 gather: leaders' row sums, CW2 slots per tile-row (root)
-# Perf 2 — the column-packed gather payload (see COLPACK_MIN_HT_BLOCK).
-CB_PACKSEL = 10  # scaler h: 1.0 across face-row h of every face -> pack into column h
-CB_COLSEL = 11  # scaler h: 1/W one-hot at (face-row 0, col h) of faces 0,2 -> select column h
-CB_ROOTSUM = 12  # root's elementwise sum of the CW1 column-packed tiles
+# --- pack_rotate (combine_parallel_fold) — column-pack/select scalers, reused
+# verbatim from the gather_payload_shrink mechanism (raw compute-API reduce_tile
+# with a non-canonical scaler; see kernels/lab_compute.cpp's PACK_ROTATE block).
+CB_PACKSEL = 10  # scaler m: face-row m of every face, 1.0  -> pack column m
+CB_COLSEL = 11  # scaler m: one-hot (face-row 0, col m) of faces 0,2, 1/W -> select col m
+CB_ROOTSUM = 12  # owner's raw elementwise sum of its CW column-packed tiles
 CB_OUTPUT_TILES = 16
 CB_OUTPUT_RM = 17
 CB_X_SQUARED = 24
@@ -430,13 +405,13 @@ class _Blocking:
         sharded_in=False,
         sharded_out=False,
         l1_total_budget=None,
-        fp32_dest_acc_en=True,
+        topology="op_current",
+        pack_k=None,
     ):
+        self.topology = topology
+        self._pack_k_req = pack_k
         self.sharded_in = bool(sharded_in)
         self.sharded_out = bool(sharded_out)
-        # Perf 2: the ONLY thing the payload guard reads off the precision
-        # contract. It is read, never chosen — see COLPACK_MIN_HT_BLOCK.
-        self.fp32_dest_acc_en = bool(fp32_dest_acc_en)
         # The physical L1 wall (program CBs + resident shards). Defaults to the
         # CB budget, which reproduces the pre-Refinement-4 single-budget model
         # exactly — and is what every interleaved cell sees anyway, since its
@@ -462,6 +437,15 @@ class _Blocking:
         self.cw2 = int(cw2)
         self.two_stage = self.w_split and self.cw2 > 1
         assert self.cw1 * self.cw2 == self.cw, f"combine stages {self.cw1}x{self.cw2} must tile CW={self.cw}"
+        # SCHEME 2 — per-tile-row root rotation. The gather CB stops being
+        # HT_BLOCK * CW tiles wide (one slot per contributor per tile-row on ONE
+        # core) and becomes ceil(HT_BLOCK/CW) * CW: each core only ever holds the
+        # contributions for the tile-rows IT owns.
+        self.row_rotate = self.w_split and topology == "row_rotate"
+        # combine_parallel_fold — the K-way hybrid. `pack_k` is resolved once
+        # HT_BLOCK is known (below): PACK_K must divide HT_BLOCK and be <= CW so
+        # every one of the PACK_K owner slots is a real core in the group.
+        self.pack_rotate = self.w_split and topology == "pack_rotate"
 
         # §5.1 tile geometry — alignment-aware, per image, ceil everywhere.
         if self.is_rm:
@@ -544,6 +528,19 @@ class _Blocking:
         assert self.wt_last == self.wt_chunk, "chunk-uniformity invariant broken"
         assert not (self.nw > 1 and self.ht_block > 1), "R7: NW > 1 requires HT_BLOCK == 1"
 
+        # combine_parallel_fold: resolve PACK_K now that HT_BLOCK is known.
+        # None => HT_BLOCK (row_rotate's shape via this same code path). Clamped
+        # to [1, min(HT_BLOCK, CW)] and rounded DOWN to the nearest divisor of
+        # HT_BLOCK so every owner folds a uniform `ho = HT_BLOCK / PACK_K` tiles
+        # (the same uniform-granularity requirement row_rotate's `owner_pages`
+        # comment establishes for the fixed-push-count CB).
+        if self.pack_rotate:
+            want = self.ht_block if self._pack_k_req is None else int(self._pack_k_req)
+            want = max(1, min(want, self.ht_block, self.cw))
+            self.pack_k = _coarsest_divisor(self.ht_block, want)
+        else:
+            self.pack_k = 1
+
         # --- fused square-accumulate (R5) ------------------------------------
         # Decided here, between the block factors it depends on and the CB plan
         # that depends on it: fusing retires cb_x_squared, and the L1 that frees
@@ -561,35 +558,6 @@ class _Blocking:
             # drives the srcB reconfig, and R1 measured what a mismatch costs.
             self.scaler_dtype = ttnn.float32
             self.scaler_tile_bytes = self.fp32_tile_bytes
-
-        # --- Perf 2: the cross-core combine's gather payload -----------------
-        # Decided here, after the block factors it reads (HT_BLOCK is the pack
-        # factor) and before the CB plan, whose page counts and page FORMATS both
-        # depend on it. Two independent guards, deliberately of different width —
-        # see the block comment at COLPACK_MIN_HT_BLOCK for every measured clause.
-        #
-        # `partial_bf16` is the wide one: the wire datum only, no topology
-        # precondition, free at fp32_dest_acc_en=False (DEST is already 16-bit,
-        # so the Float32 container held no keepable bit — verified bit-identical),
-        # load-bearing at True.
-        self.partial_bf16 = self.w_split and not self.fp32_dest_acc_en
-        # `colpack` is the narrow one: it restructures the payload's SHAPE, so it
-        # needs a flat gather (a staged one would have to pack twice), NW == 1
-        # (the fold reads one settled accumulator per tile-row), and an HT_BLOCK
-        # in [2, 16] — below 2 there is nothing to pack (measured 0.967x) and
-        # above 16 the scaler cannot address the face-row.
-        self.colpack = (
-            self.w_split
-            and not self.two_stage
-            and self.nw == 1
-            and COLPACK_MIN_HT_BLOCK <= self.ht_block <= COLPACK_MAX_HT_BLOCK
-        )
-        # What the two guards resolve to on the wire. These two numbers ARE the
-        # graduated change: `gather_ht` is the tile COUNT per core per row-block
-        # and `gather_tile_bytes` the page size.
-        self.gather_dtype = ttnn.bfloat16 if self.partial_bf16 else ttnn.float32
-        self.gather_tile_bytes = ttnn.tile_size(self.gather_dtype)
-        self.gather_ht = 1 if self.colpack else self.ht_block
 
         # --- residency fast-path predicates (§1.3) ---------------------------
         #
@@ -652,6 +620,57 @@ class _Blocking:
         self.cb_total_bytes = self.program_cb_bytes + self.resident_shard_bytes
         self.fits = self._fits(self.x_res_depth, self.gamma_resident)
         self.base_cb_total_bytes = base
+
+    # -- gather-CB sizing (the L1 cost of the topology) ----------------------
+    @property
+    def gather_pages(self):
+        """fp32 pages of ``cb_group_partials`` this topology needs per core.
+
+        flat / two_stage_1d : HT_BLOCK * CW1 — one slot per contributor for EVERY
+                              tile-row of the row-block, all landing on one core.
+        row_rotate          : ceil(HT_BLOCK/CW) * CW — a core only holds the
+                              contributions for the tile-rows it OWNS.  At the
+                              focus geometry (HT_BLOCK 8, CW 8) that is 8 pages
+                              instead of 64: 32 KB instead of 256 KB.
+        pack_rotate         : CW — every worker ships ONE column-packed tile per
+                              pack-lane, so whichever of the PACK_K owner cores is
+                              currently receiving lane p holds exactly CW slots
+                              (one per group member), independent of PACK_K.
+                              Smallest gather footprint of all four topologies
+                              whenever PACK_K < HT_BLOCK (the packing is what
+                              shrinks it, not the rotation).
+        """
+        if not self.w_split:
+            return 0
+        if self.row_rotate:
+            return _ceil_div(self.ht_block, self.cw) * self.cw
+        if self.pack_rotate:
+            return self.cw
+        return self.ht_block * self.cw1
+
+    @property
+    def owner_pages(self):
+        """Pages of the row_rotate/pack_rotate OWNER-output CB (cb_group_partials2 reused).
+
+        The owner's fold CANNOT share `cb_partial_out` with pass A. A CB's
+        pointer may never straddle `fifo_limit` (dataflow_api.h:216-222), and
+        pass A pushes `ht` pages while the fold pushes `ho` — a mixed push
+        sequence on a fixed-size CB lands the write pointer mid-buffer and the
+        next full push runs past the limit. MEASURED as a device hang on the
+        focus geometry (4 row-blocks; it passed at 1). So the fold gets its own
+        uniform-granularity CB.
+
+        row_rotate  : ho = ceil(HT_BLOCK/CW) — CW owners, each folding one
+                      tile-index's worth of rows.
+        pack_rotate : ho = HT_BLOCK/PACK_K — PACK_K owners, each folding its
+                      lane's `ht/PACK_K` rows (uniform by construction: PACK_K
+                      is resolved to a divisor of HT_BLOCK).
+        """
+        if self.pack_rotate:
+            return self.ht_block // self.pack_k
+        if not self.row_rotate:
+            return 0
+        return _ceil_div(self.ht_block, self.cw)
 
     # -- CB plan ------------------------------------------------------------
     def cb_plan(self, x_res_depth=None, gamma_resident=None):
@@ -716,40 +735,36 @@ class _Blocking:
             # --- cross-core W-split (Refinement 2). Every page count is a
             # function of the SAME knobs (HT_BLOCK and the group width CW),
             # never of a whole-op dimension. Sized 1 (dummy) when CW == 1.
-            ("cb_ones", CB_ONES, self.gather_tile_bytes, 1),
-            # Perf 2: `gather_ht` collapses BOTH the per-core ship CB and the
-            # per-slot gather window from HT_BLOCK tiles to ONE tile under
-            # `colpack`, and `gather_tile_bytes` halves the page under
-            # `partial_bf16`. Everything else about the combine is untouched.
+            ("cb_ones", CB_ONES, self.fp32_tile_bytes, 1),
             (
                 "cb_group_partials",
                 CB_GROUP_PARTIALS,
-                self.gather_tile_bytes,
-                (self.gather_ht * self.cw1) if self.w_split else 0,
+                self.fp32_tile_bytes,
+                self.gather_pages,
             ),
             (
                 "cb_group_partials2",
                 CB_GROUP_PARTIALS2,
-                self.gather_tile_bytes,
-                (self.gather_ht * self.cw2) if self.two_stage else 0,
+                self.fp32_tile_bytes,
+                self.owner_pages
+                if (self.row_rotate or self.pack_rotate)
+                else ((H * self.cw2) if self.two_stage else 0),
             ),
             ("cb_rms_mean", CB_RMS_MEAN, self.fp32_tile_bytes, H if self.w_split else 0),
-            ("cb_partial_out", CB_PARTIAL_OUT, self.gather_tile_bytes, self.gather_ht if self.w_split else 0),
+            # pack_rotate ships PACK_K packed tiles per row-block instead of H raw
+            # ones; sized H unconditionally (superset) so the same CB serves every
+            # topology without a second size knob.
+            ("cb_partial_out", CB_PARTIAL_OUT, self.fp32_tile_bytes, H if self.w_split else 0),
             ("cb_partials", CB_PARTIALS, self.fp32_tile_bytes, 2 * H),
-            # Perf 2 — the column-pack's two non-canonical scaler banks (one tile
-            # per packed column) and the root's elementwise sum of the CW1 packed
-            # tiles. `cb_rootsum` must be its OWN CB, not a spare page of
-            # cb_partials: a CB's per-row-block pushes must DIVIDE its page count
-            # or a multi-page cb_reserve_back straddles fifo_limit and the
-            # non-wrapping pack_tile corrupts. Sharing cb_partials made it 8 + 1
-            # pushes into 16 pages and silently corrupted 12.5% of tile-rows —
-            # caught only by an ABSOLUTE all-ones check (PCC read 0.9998, a pass).
-            ("cb_packsel", CB_PACKSEL, self.fp32_tile_bytes, H if self.colpack else 0),
-            ("cb_colsel", CB_COLSEL, self.fp32_tile_bytes, H if self.colpack else 0),
-            ("cb_rootsum", CB_ROOTSUM, self.gather_tile_bytes, 2 if self.colpack else 0),
             ("cb_rms_sum", CB_RMS_SUM, self.fp32_tile_bytes, H),
             ("cb_rms_recip", CB_RMS_RECIP, self.fp32_tile_bytes, H),
             ("cb_scaled", CB_SCALED, self.tile_bytes, B if self.has_gamma else 0),
+            # --- pack_rotate (combine_parallel_fold): column-pack/select scalers,
+            # sized H unconditionally (a superset of the ho <= H columns actually
+            # used) so PACK_K can vary at runtime without a host-side CB resize.
+            ("cb_packsel", CB_PACKSEL, self.fp32_tile_bytes, H if self.pack_rotate else 0),
+            ("cb_colsel", CB_COLSEL, self.fp32_tile_bytes, H if self.pack_rotate else 0),
+            ("cb_rootsum", CB_ROOTSUM, self.fp32_tile_bytes, 2 if self.pack_rotate else 0),
         ]
         return [(n, i, ps, max(1, np)) for (n, i, ps, np) in plan]
 
@@ -821,14 +836,7 @@ def _l1_total_budget(device):
 
 
 def _derive_blocking(
-    input_tensor,
-    gamma,
-    grid_cores,
-    placement,
-    sharded_in=False,
-    sharded_out=False,
-    l1_total_budget=None,
-    fp32_dest_acc_en=True,
+    input_tensor, gamma, grid_cores, placement, sharded_in=False, sharded_out=False, l1_total_budget=None
 ):
     """Derive the blocking, halving the block budget until the CBs fit.
 
@@ -849,7 +857,8 @@ def _derive_blocking(
         sharded_in=sharded_in,
         sharded_out=sharded_out,
         l1_total_budget=l1_total_budget,
-        fp32_dest_acc_en=fp32_dest_acc_en,
+        topology=placement.topology,
+        pack_k=getattr(placement, "pack_k_req", None),
     )
     budget = L1_BLOCK_BUDGET_BYTES
     blk = _Blocking(input_tensor, gamma, budget, grid_cores, **kwargs)
@@ -916,74 +925,6 @@ def _virtual_x_runs(device, grid):
             lo = x
     runs.append((lo, grid.x - 1))
     return runs
-
-
-def _gamma_mcast_plan(placement, runs, blk, gamma, sharded_in):
-    """Perf 1 — the reuse-shared gamma broadcast (op_design Lamp L2), or ``None``.
-
-    `gamma` does not vary along the tile-row axis, which is the axis the row-only
-    split (``cw == 1``) distributes across cores, so every active core reads the
-    SAME ``Wt`` pages — op_design §1.4's operand-reuse table calls this out
-    explicitly. This plans the broadcast that replaces those ``num_cores x Wt``
-    DRAM reads with one ``Wt``-page read per virtually-contiguous column run.
-
-    Returns ``([(rect, injector, ack_count)], {(x, y): family})``, or ``None``
-    when the predicate refuses — in which case the caller keeps the per-core
-    `TensorAccessor` read, byte-identical.
-
-    Every clause of the predicate is MEASURED, not assumed (see the table at
-    GAMMA_MCAST_MIN_CORES and the Perf 1 changelog entry):
-
-      * ``cw == 1``          — a W-split already hands every core a DISJOINT
-                               gamma slice, so gamma is read exactly once in
-                               total and there is nothing to share.
-      * ``gamma_resident``   — a broadcast is one shot; the streamed spelling
-                               re-reads per chunk per row-block. This also
-                               excludes the cases where gamma cannot fit L1.
-      * ``not is_rm_gamma``  — the RM path's landing CB is a stick buffer
-                               consumed by compute's own tilize, not a tile CB
-                               whose address is uniform across the rectangle.
-      * ``not sharded_in``   — measured 0.735x on HEIGHT_SHARDED (1,1,256,512):
-                               both tensors are zero-copy L1 shards there, so
-                               gamma is the only DRAM traffic and it is
-                               uncontended (ablation 4_307 -> 4_319 ns, i.e.
-                               ZERO data-movement headroom to win back).
-      * ``>= GAMMA_MCAST_MIN_CORES`` active cores — below that the grid does not
-                               saturate DRAM and the injector prologue costs more
-                               than it saves.
-      * at most ``MAX_MCAST_FAMILIES`` DENSE rectangles, one per virtual-x run —
-                               a broadcast rectangle covering a core that runs no
-                               kernel has nothing to reserve the landing CB and
-                               nothing to ack the handshake. A ragged active set
-                               falls back rather than guess.
-    """
-    if gamma is None or sharded_in or not blk.gamma_resident or blk.is_rm_gamma:
-        return None
-    if placement.cw != 1:
-        return None
-    active = [(int(w.core.x), int(w.core.y)) for w in placement.works if w.num_rows > 0]
-    if len(active) < GAMMA_MCAST_MIN_CORES:
-        return None
-    fams, fam_of = [], {}
-    for lo, hi in runs:
-        sub = [c for c in active if lo <= c[0] <= hi]
-        if not sub:
-            continue
-        x0, x1 = min(c[0] for c in sub), max(c[0] for c in sub)
-        y0, y1 = min(c[1] for c in sub), max(c[1] for c in sub)
-        area = (x1 - x0 + 1) * (y1 - y0 + 1)
-        if len(sub) != area or len(fams) >= MAX_MCAST_FAMILIES:
-            return None  # ragged, or needs more families than the CT block carries
-        f = len(fams)
-        # Injector at the rectangle's low corner: its own copy is already in the
-        # CB, so `send(src == dst)` makes the pipe EXCLUDE-source and the fan-out
-        # is `area - 1`. One injector PER RUN (rather than one for the grid) is
-        # the measured winner — two injections overlap on two cores instead of
-        # serializing on one, for one extra gamma read (0.2% of traffic).
-        fams.append(((x0, y0, x1, y1), (x0, y0), area - 1))
-        for c in sub:
-            fam_of[c] = f
-    return (fams, fam_of) if fams else None
 
 
 def _split_rect_by_runs(x0, y0, x1, y1, runs):
@@ -1082,6 +1023,53 @@ def _assign_combine_roles(works, group_index, root, cw1, cw2, x0, y0):
             w.is_leader = int(w.core.x) == int(root.x) and int(w.core.y) == int(root.y)
 
 
+def _sqrt_divisor(n):
+    """The divisor of ``n`` closest to sqrt(n) — minimises ``A + n/A``."""
+    best = 1
+    for a in range(1, n + 1):
+        if n % a == 0 and abs(a + n // a - 2 * (n**0.5)) < abs(best + n // best - 2 * (n**0.5)):
+            best = a
+    return best
+
+
+def _stage_extents_1d(cw, stage1_width):
+    """(A, CW/A) for SCHEME 1 — factorize CW itself, in SLOT space.
+
+    The op's ``_two_stage_extents`` reads the group's GRID extents and refuses a
+    group that is one grid row (``cy == 1``), which is exactly the BLOCK_SHARDED
+    geometry.  This one factorizes the group's *slot* count instead, so a 1x8
+    line stages as 2 sub-groups of 4 (or 4 of 2).  For a dense cx x cy group with
+    A == cx it reproduces the op's geometric split byte-for-byte, because slots
+    are numbered row-major over the group rectangle.
+    """
+    if cw < 4:
+        return cw, 1
+    a = int(stage1_width) if stage1_width else _sqrt_divisor(cw)
+    if a < 2 or cw % a != 0 or cw // a < 2:
+        return cw, 1
+    return a, cw // a
+
+
+def _assign_roles_slotwise(works, group_index, slot_cores, cw1, cw2):
+    """SCHEME 1's role assignment: purely slot arithmetic, no grid geometry.
+
+    ``slot_cores[s]`` is the logical core holding slot ``s`` of the group (slots
+    are contiguous and every one is a REAL core, so a sub-leader always exists —
+    the density precondition the op's geometric version needs is satisfied by
+    construction).  Sub-group of slot ``s`` is ``s // cw1``; its leader is slot
+    ``(s // cw1) * cw1``.
+    """
+    for w in works:
+        if w.group != group_index or w.num_rows == 0:
+            continue
+        s = int(w.slot)
+        sub = s // cw1
+        w.leader = slot_cores[sub * cw1]
+        w.s1_slot = s % cw1
+        w.s2_slot = sub
+        w.is_leader = (s % cw1) == 0
+
+
 class _Placement:
     """Core assignment + cross-core combine topology (op_design.md §5 and §4.2).
 
@@ -1099,7 +1087,10 @@ class _Placement:
     zero-work filler cores.
     """
 
-    def __init__(self, all_cores, works, groups, cw, wt_core, rows_core_max, cw1=None, cw2=1):
+    def __init__(
+        self, all_cores, works, groups, cw, wt_core, rows_core_max, cw1=None, cw2=1, topology="op_current", pack_k=None
+    ):
+        self.topology = topology if cw > 1 else "op_current"
         self.all_cores = all_cores
         self.works = works
         # [{root, subrects: [(x0,y0,x1,y1), ...], acks: [n, ...]}]
@@ -1112,6 +1103,9 @@ class _Placement:
         self.cw2 = cw2
         self.wt_core = wt_core
         self.rows_core_max = rows_core_max
+        # combine_parallel_fold: requested PACK_K (resolved against HT_BLOCK by
+        # _Blocking, which is derived AFTER placement — this is just the ask).
+        self.pack_k_req = pack_k
 
     @property
     def w_split(self):
@@ -1122,8 +1116,46 @@ class _Placement:
         return self.w_split and self.cw2 > 1
 
     @property
+    def row_rotate(self):
+        return self.w_split and self.topology == "row_rotate"
+
+    @property
+    def pack_rotate(self):
+        return self.w_split and self.topology == "pack_rotate"
+
+    @property
     def num_cores(self):
         return len(self.works)
+
+    def retopologize(self, stage1_width):
+        """Apply the LAB topology knob to an already-built flat/staged placement.
+
+        Everything the measurement must hold constant — the core set, which core
+        owns which tile-rows and which W slice, the multicast rectangles and their
+        ack counts — is untouched.  Only the gather TREE moves.
+        """
+        if not self.w_split:
+            return self
+        if self.topology == "op_current":
+            return self
+        for g, grp in enumerate(self.groups):
+            slot_cores = grp["slots"]
+            if self.topology == "flat":
+                self.cw1, self.cw2 = self.cw, 1
+                _assign_combine_roles(self.works, g, grp["root"], self.cw, 1, 0, 0)
+            elif self.topology == "two_stage_1d":
+                cw1, cw2 = _stage_extents_1d(self.cw, stage1_width)
+                self.cw1, self.cw2 = cw1, cw2
+                _assign_roles_slotwise(self.works, g, slot_cores, cw1, cw2)
+            elif self.topology in ("row_rotate", "pack_rotate"):
+                # No leader tree at all: the OWNER (of a tile-row, or of a
+                # pack-lane) is a fixed group slot, resolved per tile-row/lane on
+                # the device, so every core is both a contributor and (maybe) a
+                # folder. `leader` stays the root purely so the runtime-arg block
+                # keeps its shape.
+                self.cw1, self.cw2 = self.cw, 1
+                _assign_combine_roles(self.works, g, grp["root"], self.cw, 1, 0, 0)
+        return self
 
 
 def _rect(x0, y0, x1, y1):
@@ -1233,6 +1265,7 @@ def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes, runs):
                 "root": root,
                 "subrects": [(x0, y0, x0 + cw_x - 1, y0 + cw_y - 1)],
                 "acks": [cw - 1],
+                "slots": [ttnn.CoreCoord(xx, yy) for yy in range(y0, y0 + cw_y) for xx in range(x0, x0 + cw_x)],
             }
         )
         slot = 0
@@ -1340,6 +1373,7 @@ def _placement_sharded(input_tensor, ht_total, wt_global, runs):
         for gy in range(ny):
             y = y0 + gy
             grp = _make_group(ttnn.CoreCoord(x0, y), x0, y, x1, y, runs, owned)
+            grp["slots"] = [ttnn.CoreCoord(x0 + gx, y) for gx in range(nx)]
             groups.append(grp)
             for gx in range(nx):
                 core = ttnn.CoreCoord(x0 + gx, y)
@@ -1365,6 +1399,7 @@ def _placement_sharded(input_tensor, ht_total, wt_global, runs):
     else:  # WIDTH_SHARDED — one group, every shard core owns a W slice of all rows
         cw = len(cores)  # combine width == real W slices (fillers do not contribute)
         grp = _make_group(cores[0], x0, y0, x1, y1, runs, owned)
+        grp["slots"] = list(cores)
         groups.append(grp)
         for slot, core in enumerate(cores):
             works.append(
@@ -1403,7 +1438,15 @@ def create_program_descriptor(
     epsilon: float = 1e-6,
     compute_kernel_config=None,
     device=None,
+    topology="op_current",
+    stage1_width=None,
+    pack_k=None,
 ) -> "ttnn.ProgramDescriptor":
+    assert topology in TOPOLOGIES, f"unknown topology {topology!r}; expected one of {TOPOLOGIES}"
+    if stage1_width is None:
+        stage1_width = STAGE1_WIDTH
+    if pack_k is None:
+        pack_k = PACK_K
     if device is None:
         device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
@@ -1421,7 +1464,17 @@ def create_program_descriptor(
     in_sharded = tile_shard and input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
     out_sharded = tile_shard and output_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
 
-    placement = _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharded)
+    placement = _select_placement(
+        device,
+        grid,
+        input_tensor,
+        ht_total,
+        wt_global,
+        in_sharded,
+        topology=topology,
+        stage1_width=stage1_width,
+        pack_k=pack_k,
+    )
     blk = _derive_blocking(
         input_tensor,
         gamma,
@@ -1430,11 +1483,30 @@ def create_program_descriptor(
         sharded_in=in_sharded,
         sharded_out=out_sharded,
         l1_total_budget=_l1_total_budget(device),
-        # Perf 2: READ off the user's precision contract, never chosen — it gates
-        # the bf16 gather payload, which is bit-identical only when DEST is
-        # already 16-bit. See COLPACK_MIN_HT_BLOCK.
-        fp32_dest_acc_en=bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True)),
     )
+
+    # row_rotate's owner-output CB is pushed `ho` pages at a time, so `ho` must be
+    # the SAME on every row-block and every owner or the fifo pointer straddles
+    # fifo_limit (see _Blocking.owner_pages — measured as a hang). Two structural
+    # conditions, both host-checkable, and both part of the graduation predicate.
+    if placement.row_rotate:
+        uniform_blocks = blk._rows_core_max % blk.ht_block == 0
+        uniform_ho = blk.ht_block <= placement.cw or blk.ht_block % placement.cw == 0
+        assert uniform_blocks and uniform_ho, (
+            f"row_rotate needs a uniform per-owner fold count: rows/core={blk._rows_core_max} "
+            f"ht_block={blk.ht_block} cw={placement.cw}"
+        )
+    # pack_rotate needs the SAME uniformity (ho = HT_BLOCK / PACK_K, constant
+    # across row-blocks and owners) PLUS PACK_K <= CW (every owner slot must be a
+    # real group member) — both already enforced by _Blocking.pack_k's derivation
+    # (_coarsest_divisor clamps to a divisor of HT_BLOCK, <= CW), so this is a
+    # restated host-checkable invariant, not a second source of truth.
+    if placement.pack_rotate:
+        uniform_blocks = blk._rows_core_max % blk.ht_block == 0
+        assert uniform_blocks and blk.ht_block % blk.pack_k == 0 and blk.pack_k <= placement.cw, (
+            f"pack_rotate needs a uniform per-owner fold count: rows/core={blk._rows_core_max} "
+            f"ht_block={blk.ht_block} pack_k={blk.pack_k} cw={placement.cw}"
+        )
 
     all_cores = placement.all_cores
     x_read_chunks = _x_read_chunks(blk)
@@ -1480,7 +1552,13 @@ def create_program_descriptor(
     mcasts = {}  # (group index, family) -> Mcast2D
     if placement.w_split:
         semaphores = [ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0)]
-        if placement.two_stage:
+        # SEM_GATHER2 carries the second gather round of BOTH staged topologies:
+        # the leaders -> root row sums (two_stage) and the owners -> root
+        # finalized-tile collect (row_rotate / pack_rotate). Creating it only for
+        # `two_stage` left row_rotate incrementing an UNINITIALIZED semaphore
+        # cell — the root then waited on garbage and the whole grid hung
+        # (measured); pack_rotate uses the identical leg-2 mechanism.
+        if placement.two_stage or placement.row_rotate or placement.pack_rotate:
             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_GATHER2, core_ranges=all_cores, initial_value=0))
         for f in range(MAX_MCAST_FAMILIES):
             base = SEM_MCAST_BASE + 2 * f
@@ -1491,19 +1569,6 @@ def create_program_descriptor(
                 cfg = ttnn.McastConfig(sem_ids=[SEM_MCAST_BASE + 2 * f, SEM_MCAST_BASE + 2 * f + 1])
                 rect_set = ttnn.CoreRangeSet([_rect(*rect)])
                 mcasts[(g, f)] = ttnn.Mcast2D(device, rect_set, grp["root"], cfg, ack)
-
-    # ---------- Perf 1: the reuse-shared gamma broadcast (Lamp L2) ----------
-    # Predicate-guarded fast path; `None` keeps the per-core TensorAccessor read
-    # exactly as it was. Disjoint from the combine's wiring above by construction:
-    # this engages only when `cw == 1`, and the combine only when `cw > 1`.
-    gamma_plan = _gamma_mcast_plan(placement, _virtual_x_runs(device, grid), blk, gamma, in_sharded)
-    gamma_fams, gamma_fam_of = gamma_plan if gamma_plan is not None else ([], {})
-    gamma_mcasts = {}
-    for f, (rect, inj, ack) in enumerate(gamma_fams):
-        for sid in (SEM_GAMMA_BASE + 2 * f, SEM_GAMMA_BASE + 2 * f + 1):
-            semaphores.append(ttnn.SemaphoreDescriptor(id=sid, core_ranges=all_cores, initial_value=0))
-        gcfg = ttnn.McastConfig(sem_ids=[SEM_GAMMA_BASE + 2 * f, SEM_GAMMA_BASE + 2 * f + 1])
-        gamma_mcasts[f] = ttnn.Mcast2D(device, ttnn.CoreRangeSet([_rect(*rect)]), ttnn.CoreCoord(*inj), gcfg, ack)
 
     # ---------- shared compile-time knobs ----------
     chunk_row_bytes = blk.wt_chunk * TILE_DIM * blk.elem_bytes
@@ -1554,22 +1619,18 @@ def create_program_descriptor(
             placement.cw1,
             placement.cw2,
             SEM_GATHER2,
+            # --- LAB knob: SCHEME 2 (per-tile-row root rotation) --------------
+            1 if placement.row_rotate else 0,
+            blk.gather_pages,  # fixed page block the reader publishes per row-block
+            # --- PERF-2 IDEA (combine_parallel_fold): the K-way pack/rotate hybrid
+            1 if placement.pack_rotate else 0,
+            blk.pack_k,
         ]
         + mcast_ct
     )
-    # Perf 1: the gamma-broadcast block — one flag word (bit0 = the broadcast is
-    # engaged) plus one 5-word mcast block per family. An unengaged family emits a
-    # zeroed block and `McastArgs::active` compiles the whole leg away.
-    gamma_ct = [1 if gamma_fams else 0]
-    for f in range(MAX_MCAST_FAMILIES):
-        gamma_ct += list(gamma_mcasts[f].compile_time_args()) if f in gamma_mcasts else [0, 0, 0, 0, 0]
-    # Perf 2: the gather-payload guard, as ONE flag word so both dataflow kernels
-    # and the compute kernel read the same single source (bit0 = colpack, bit1 =
-    # bf16 wire datum). Never two literals.
-    dataflow_ct_args = dataflow_ct_args + gamma_ct + [_payload_flags(blk)]
-    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<49>
-    assert DATAFLOW_ACCESSOR_ARG_BASE == 49, (
-        "rms_norm: reader/writer read TensorAccessorArgs<49>; the shared CT block "
+    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<41>
+    assert DATAFLOW_ACCESSOR_ARG_BASE == 41, (
+        "lab: reader/writer read TensorAccessorArgs<41>; the shared CT block "
         f"is now {DATAFLOW_ACCESSOR_ARG_BASE} long — update both kernels together"
     )
 
@@ -1597,7 +1658,15 @@ def create_program_descriptor(
         root_v = (0, 0)
         leader_v = (0, 0)
         mcast_rt = [0, 0, 0, 0] * MAX_MCAST_FAMILIES
+        # SCHEME 2: the destination of tile-row h is group slot (h % CW), so the
+        # writer needs every slot's virtual coords. Always emitted (2 * CW words,
+        # zeros without a split) so the RT layout is one shape for all topologies.
+        owner_rt = [0, 0] * placement.cw
         if placement.w_split:
+            owner_rt = []
+            for sc in placement.groups[w.group]["slots"]:
+                sv = device.worker_core_from_logical_core(sc)
+                owner_rt += [sv.x, sv.y]
             root = placement.groups[w.group]["root"]
             is_root = 1 if (int(core.x) == int(root.x) and int(core.y) == int(root.y)) else 0
             rv = device.worker_core_from_logical_core(root)
@@ -1612,62 +1681,53 @@ def create_program_descriptor(
         # must mask the tile-padded columns of that tile.
         is_last_w = 1 if (w.wt_start + wt_real == wt_global) else 0
 
-        # Perf 1: this core's gamma-broadcast role. `g_inject` is a per-family
-        # BITMASK — set means "I read gamma from DRAM and broadcast it to that
-        # family's rectangle"; `g_family` is which rectangle I receive in.
-        here = (int(core.x), int(core.y))
-        g_family = gamma_fam_of.get(here, 0)
-        g_inject = 0
-        gamma_rt = [0, 0, 0, 0] * MAX_MCAST_FAMILIES
-        if gamma_fams:
-            for f, (_, inj, _) in enumerate(gamma_fams):
-                if here == inj:
-                    g_inject |= 1 << f
-            gamma_rt = []
-            for f in range(MAX_MCAST_FAMILIES):
-                gmc = gamma_mcasts.get(f)
-                gamma_rt += list(gmc.runtime_args(core)) if gmc is not None else [0, 0, 0, 0]
-
-        reader_rt[core.x][core.y] = (
-            [
-                src_addr,
-                gamma_addr,
-                w.start_row,
-                w.num_rows,
-                w.wt_start,
-                w.slot,
-                is_root,
-                is_last_w,
-                wt_real,
-                w.family,
-                1 if w.is_leader else 0,
-            ]
-            + mcast_rt
-            + [g_inject, g_family]
-            + gamma_rt
-        )
-        writer_rt[core.x][core.y] = [
-            dst_addr,
+        reader_rt[core.x][core.y] = [
+            src_addr,
+            gamma_addr,
             w.start_row,
             w.num_rows,
             w.wt_start,
-            w.s1_slot,
-            leader_v[0],
-            leader_v[1],
+            w.slot,
+            is_root,
             is_last_w,
-            root_v[0],
-            root_v[1],
-            w.s2_slot,
+            wt_real,
+            w.family,
             1 if w.is_leader else 0,
-            # Perf 2: the grand element count, for the 1/N the column-SELECT
-            # scaler carries. The writer fills that bank because it is the idle
-            # RISC until its first gather hop — see the kernel's justification.
-            blk.W,
+        ] + mcast_rt
+        writer_rt[core.x][core.y] = (
+            [
+                dst_addr,
+                w.start_row,
+                w.num_rows,
+                w.wt_start,
+                w.s1_slot,
+                leader_v[0],
+                leader_v[1],
+                is_last_w,
+                root_v[0],
+                root_v[1],
+                w.s2_slot,
+                1 if w.is_leader else 0,
+            ]
+            + owner_rt
+            # PERF-2 (combine_parallel_fold): the grand element count W, so the
+            # writer can build the column-SELECT scaler's 1/W in-place (same
+            # raw-L1-fill mechanism gather_payload_shrink established). Appended
+            # LAST so every existing fixed-index read (0..11) and owner_rt's
+            # variable-length block are untouched.
+            + [blk.W]
+        )
+        compute_rt[core.x][core.y] = [
+            w.num_rows,
+            eps_bits,
+            is_root,
+            is_last_w,
+            1 if w.is_leader else 0,
+            w.slot,  # SCHEME 2: this core's group slot == the tile-rows it owns
         ]
-        compute_rt[core.x][core.y] = [w.num_rows, eps_bits, is_root, is_last_w, 1 if w.is_leader else 0]
 
     reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+        kernel_source=str(KERNEL_DIR / "lab_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
@@ -1679,7 +1739,7 @@ def create_program_descriptor(
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
+        kernel_source=str(KERNEL_DIR / "lab_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt,
@@ -1701,13 +1761,16 @@ def create_program_descriptor(
             placement.cw1,
             placement.cw2,
             1 if blk.fuse_sq else 0,
-            # Perf 2: the SAME payload flag word the dataflow kernels read.
-            _payload_flags(blk),
+            1 if placement.row_rotate else 0,
+            blk.gather_pages,
+            # --- PERF-2 IDEA (combine_parallel_fold) ------------------------
+            1 if placement.pack_rotate else 0,
+            blk.pack_k,
         ]
     )
 
     compute_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
+        kernel_source=str(KERNEL_DIR / "lab_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
@@ -1721,7 +1784,17 @@ def create_program_descriptor(
     )
 
 
-def _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharded):
+def _select_placement(
+    device,
+    grid,
+    input_tensor,
+    ht_total,
+    wt_global,
+    in_sharded,
+    topology="op_current",
+    stage1_width=None,
+    pack_k=None,
+):
     """Pick the core assignment: data-pinned when sharded, else the §5 row split
     optionally widened by the cross-core W-split (Lamp L1).
 
@@ -1732,7 +1805,10 @@ def _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharde
     """
     runs = _virtual_x_runs(device, grid)
     if in_sharded:
-        return _placement_sharded(input_tensor, ht_total, wt_global, runs)
+        p = _placement_sharded(input_tensor, ht_total, wt_global, runs)
+        p.topology = topology if p.cw > 1 else "op_current"
+        p.pack_k_req = pack_k
+        return p.retopologize(stage1_width)
 
     ht_cap = grid.y if W_SPLIT_MAX_HT_FOR_SPLIT is None else W_SPLIT_MAX_HT_FOR_SPLIT
     env = os.environ.get("RMS_NORM_W_SPLIT")
@@ -1742,19 +1818,10 @@ def _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharde
     if want_split:
         p = _placement_wsplit(grid, ht_total, wt_global, ttnn.tile_size(ttnn.float32), runs)
         if p is not None:
-            return p
+            p.topology = topology if p.cw > 1 else "op_current"
+            p.pack_k_req = pack_k
+            return p.retopologize(stage1_width)
     return _placement_rows(grid, ht_total)
-
-
-def _payload_flags(blk):
-    """Perf 2 — the gather-payload guard as one CT word (bit0 colpack, bit1 bf16).
-
-    ONE source of truth, shared verbatim by the reader, the writer and the compute
-    kernel, so the host's CB sizing and every kernel's loop trip count can never
-    disagree about how many tiles of what width are on the wire. See the block
-    comment at COLPACK_MIN_HT_BLOCK for the measured predicate behind each bit.
-    """
-    return (1 if blk.colpack else 0) | (2 if blk.partial_bf16 else 0)
 
 
 def _cb_format(name, blk, input_tensor, gamma):
@@ -1768,19 +1835,119 @@ def _cb_format(name, blk, input_tensor, gamma):
         # Must match the format srcB is configured at inside the reduce, i.e.
         # cb_x_squared's; see _Blocking.x_squared_dtype for the full rationale.
         return blk.scaler_dtype
-    if name in ("cb_group_partials", "cb_group_partials2", "cb_partial_out", "cb_rootsum", "cb_ones"):
-        # Perf 2: the wire format of the gather payload. `cb_ones` follows it
-        # because the combine's reduce programs srcB at its INPUT CB's format —
-        # the same single-source rule R1 established for the partial-W mask, and a
-        # mismatch there is a measured cost, not a no-op.
-        return blk.gather_dtype
     if name in (
         "cb_partials",
         "cb_rms_sum",
         "cb_rms_recip",
+        "cb_ones",
+        "cb_group_partials",
+        "cb_group_partials2",
         "cb_rms_mean",
+        "cb_partial_out",
         "cb_packsel",
         "cb_colsel",
+        "cb_rootsum",
     ):
         return ttnn.float32
     return input_tensor.dtype
+
+
+# ---------------------------------------------------------------------------
+# LAB entry point (kept in THIS module on purpose)
+# ---------------------------------------------------------------------------
+#
+# ttnn/ttnn/operations/__init__.py exec_module()s every .py it walks at
+# `import ttnn` time, so a second lab module that imported this one at module
+# level would run a cross-package import while `ttnn.operations` is still
+# initializing. One module, module-level `import ttnn` only — the same shape the
+# real op's descriptor already proves safe.
+
+
+def lab_rms_norm(
+    input_tensor,
+    *,
+    gamma=None,
+    epsilon: float = 1e-6,
+    compute_kernel_config=None,
+    memory_config=None,
+    topology: str = "op_current",
+    stage1_width=None,
+    pack_k=None,
+):
+    """A stripped rms_norm: no registry validate(), the LAB descriptor, one knob."""
+    device = input_tensor.device()
+    out_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(input_tensor.shape)),
+        input_tensor.dtype,
+        input_tensor.layout,
+        device,
+        out_memory_config,
+    )
+
+    program_descriptor = create_program_descriptor(
+        input_tensor,
+        output_tensor,
+        gamma=gamma,
+        epsilon=epsilon,
+        compute_kernel_config=compute_kernel_config,
+        device=device,
+        topology=topology,
+        stage1_width=stage1_width,
+        pack_k=pack_k,
+    )
+
+    io_tensors = [input_tensor]
+    if gamma is not None:
+        io_tensors.append(gamma)
+    io_tensors.append(output_tensor)
+
+    return ttnn.generic_op(io_tensors, program_descriptor)
+
+
+def lab_report(device, input_tensor, gamma, topology, stage1_width=None, pack_k=None):
+    """Host-only: the derived combine shape for one (geometry, topology) pair."""
+    grid = device.compute_with_storage_grid_size()
+    ht_total, wt_global = _tile_geometry(input_tensor)
+    tile_shard = input_tensor.layout == ttnn.TILE_LAYOUT
+    in_sharded = tile_shard and input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    placement = _select_placement(
+        device,
+        grid,
+        input_tensor,
+        ht_total,
+        wt_global,
+        in_sharded,
+        topology=topology,
+        stage1_width=stage1_width,
+        pack_k=pack_k,
+    )
+    blk = _derive_blocking(
+        input_tensor,
+        gamma,
+        grid.x * grid.y,
+        placement,
+        sharded_in=in_sharded,
+        sharded_out=in_sharded,
+        l1_total_budget=_l1_total_budget(device),
+    )
+    return {
+        "topology": placement.topology,
+        "cores": placement.num_cores,
+        "groups": len(placement.groups),
+        "cw": placement.cw,
+        "cw1": placement.cw1,
+        "cw2": placement.cw2,
+        "ht_block": blk.ht_block,
+        "nh_core": blk.nh_core_max,
+        "wt_core": blk.Wt,
+        "nw": blk.nw,
+        "pack_k": blk.pack_k,
+        "gather_pages": blk.gather_pages,
+        "gather_kb": blk.gather_pages * blk.fp32_tile_bytes // 1024,
+        "program_cb_kb": blk.program_cb_bytes // 1024,
+        "shard_kb": blk.resident_shard_bytes // 1024,
+        "l1_budget_kb": blk.l1_total_budget // 1024,
+        "fuse_sq": blk.fuse_sq,
+    }

@@ -124,6 +124,14 @@ void kernel_main() {
     constexpr bool TWO_STAGE = CW2 > 1;
     static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
     (void)SHARDED_OUT;
+    // ---- combine_latency_hiding: the alternate-parity gather semaphore + the
+    // CB/address pipeline depth (1 = baseline single-buffered, matching the
+    // real op byte-for-byte; 2 = doubled, alternating by hb parity). See
+    // cb_group_partials' CT sizing (clh_program_descriptor.py) for the
+    // correctness reasoning -- this is a FIX for prefetch_a's write-after-read
+    // race on the root's fixed-address combine landing zone, not an optimization.
+    constexpr uint32_t SEM_GATHER_ALT = get_compile_time_arg_val(27);
+    constexpr uint32_t CLH_PIPELINE_DEPTH = get_compile_time_arg_val(28);
 
     // ONE multicast family per virtually-contiguous column run of the group. A
     // NoC multicast addresses a VIRTUAL rectangle, and the logical compute grid
@@ -132,7 +140,7 @@ void kernel_main() {
     // must broadcast as two rectangles rather than one bounding box that would
     // target non-worker endpoints. Family B is inactive (`active == 0`) whenever
     // the group fits in one run, and then compiles away entirely.
-    constexpr auto mc_a = dkl::McastArgs</*CT=*/27, /*RT=*/11>();
+    constexpr auto mc_a = dkl::McastArgs</*CT=*/29, /*RT=*/11>();
     constexpr auto mc_b = dkl::McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
 
     // ---- Perf 1: the reuse-shared gamma broadcast (op_design Lamp L2) -------
@@ -145,21 +153,16 @@ void kernel_main() {
     constexpr auto gmc_a =
         dkl::McastArgs<mc_b.next_compile_time_args_offset() + 1, mc_b.next_runtime_args_offset() + 2>();
     constexpr auto gmc_b = dkl::McastArgs<gmc_a.next_compile_time_args_offset(), gmc_a.next_runtime_args_offset()>();
-    // ---- Perf 2: the gather PAYLOAD guard (one shared flag word) ------------
-    // bit0 = colpack (the `ht` row-sums ride distinct COLUMNS of ONE tile, so
-    // this core's gather window is 1 tile per slot instead of HT_BLOCK), bit1 =
-    // bf16 wire datum (page size only — the CB format carries it, so nothing
-    // here changes). The host owns both predicates; see COLPACK_MIN_HT_BLOCK.
-    constexpr uint32_t PAYLOAD_FLAGS = get_compile_time_arg_val(gmc_b.next_compile_time_args_offset());
-    constexpr bool COLPACK = (PAYLOAD_FLAGS & 0x1u) != 0;
-    // Gather-window tiles per slot. This is the ONLY thing the payload guard
-    // changes on the reader side, and it must agree with the host's CB page count
-    // and the writer's ship count exactly — hence the single flag word.
-    constexpr uint32_t GATHER_HT = COLPACK ? 1u : HT_BLOCK;
-
-    constexpr auto in_args = TensorAccessorArgs<gmc_b.next_compile_time_args_offset() + 1>();
-    static_assert(gmc_b.next_compile_time_args_offset() + 1 == 49, "shared dataflow CT block must be 49 words");
+    constexpr auto in_args = TensorAccessorArgs<gmc_b.next_compile_time_args_offset()>();
+    static_assert(gmc_b.next_compile_time_args_offset() == 50, "shared dataflow CT block must be 50 words");
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    // combine_latency_hiding SENSITIVITY-STUDY ABLATION ONLY (never a
+    // candidate lever): overrides how many of the CW1 stage-1 partials the
+    // combine root actually waits for. 0 = disabled (real CW1 wait, the
+    // op's real behavior). >0 and < CW1 makes the root proceed on an
+    // INCOMPLETE gather -- output WRONG by design -- to model "a sibling
+    // idea shrunk the round trip" without implementing that sibling here.
+    constexpr uint32_t CLH_STALL_WAIT_OVERRIDE = get_compile_time_arg_val(gamma_args.next_compile_time_args_offset());
 
     static_assert(WT_LAST == WT_CHUNK, "reader assumes uniform chunk widths");
     static_assert(X_READ_CHUNKS >= 1 && NW % X_READ_CHUNKS == 0, "read batch must tile NW");
@@ -386,6 +389,13 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t fp32_tile_bytes = get_tile_size(cb_rms_sum);
     [[maybe_unused]] Noc noc;
     [[maybe_unused]] Semaphore<> gather_sem(SEM_GATHER);
+    // combine_latency_hiding: the odd-parity twin of gather_sem. A single
+    // reused semaphore cannot tell "hb's arrivals" apart from "hb+1's
+    // arrivals" once a pipelined variant lets a fast core's writer ship hb+1
+    // before this leader/root has finished draining hb -- see the
+    // cb_group_partials CT-sizing comment in clh_program_descriptor.py.
+    // Unused (stays at 0 forever) when CLH_PIPELINE_DEPTH == 1 (baseline).
+    [[maybe_unused]] Semaphore<> gather_sem_alt(SEM_GATHER_ALT);
     [[maybe_unused]] Semaphore<> gather2_sem(SEM_GATHER2);
 
     // ---- 3. row-block loop -------------------------------------------------
@@ -421,18 +431,44 @@ void kernel_main() {
             {
                 MaybeDeviceZoneScope("rdr_gather_wait");
                 if (is_leader) {
-                    cb_reserve_back(cb_group_partials, GATHER_HT * CW1);
-                    gather_sem.wait(CW1);
-                    gather_sem.set(0);
-                    cb_push_back(cb_group_partials, GATHER_HT * CW1);
+                    // Alternate the landing half (cb_group_partials is sized
+                    // CLH_PIPELINE_DEPTH * HT_BLOCK * CW1, so the reserve/push
+                    // below naturally ping-pongs through it) AND the semaphore
+                    // id, so an early hb+1 arrival can never be counted toward
+                    // -- or overwrite the data behind -- hb's own wait.
+                    const bool odd = (CLH_PIPELINE_DEPTH > 1) && ((hb & 1u) != 0);
+                    // Sensitivity-study ablation ONLY: waiting for fewer than
+                    // CW1 arrivals makes the fold run on an incomplete gather
+                    // (output wrong by design) -- models a shrunk round trip.
+                    // `wait_min` (>= threshold, never decrements) rather than
+                    // `wait` (EXACT match) is load-bearing here: with WAIT_N <
+                    // CW1 real writers still land, so the counter races PAST
+                    // WAIT_N almost immediately, and an exact-match wait for a
+                    // value the counter never settles AT (it settles at CW1)
+                    // hangs forever -- measured, this is exactly what
+                    // `.wait(1)` did. `wait_min` degrades gracefully to the
+                    // unablated `wait(CW1)`'s behavior when WAIT_N == CW1
+                    // (the counter DOES settle there), so this is a safe swap
+                    // for the real (non-ablated) path too, not just the ablation.
+                    constexpr uint32_t WAIT_N =
+                        (CLH_STALL_WAIT_OVERRIDE > 0 && CLH_STALL_WAIT_OVERRIDE < CW1) ? CLH_STALL_WAIT_OVERRIDE : CW1;
+                    cb_reserve_back(cb_group_partials, HT_BLOCK * CW1);
+                    if (odd) {
+                        gather_sem_alt.wait_min(WAIT_N);
+                        gather_sem_alt.set(0);
+                    } else {
+                        gather_sem.wait_min(WAIT_N);
+                        gather_sem.set(0);
+                    }
+                    cb_push_back(cb_group_partials, HT_BLOCK * CW1);
                 }
                 // stage 2 — the root folds the CW2 row-sums the leaders shipped.
                 if constexpr (TWO_STAGE) {
                     if (is_root) {
-                        cb_reserve_back(cb_group_partials2, GATHER_HT * CW2);
+                        cb_reserve_back(cb_group_partials2, HT_BLOCK * CW2);
                         gather2_sem.wait(CW2);
                         gather2_sem.set(0);
-                        cb_push_back(cb_group_partials2, GATHER_HT * CW2);
+                        cb_push_back(cb_group_partials2, HT_BLOCK * CW2);
                     }
                 }
             }

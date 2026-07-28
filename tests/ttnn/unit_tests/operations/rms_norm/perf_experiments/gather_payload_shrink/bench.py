@@ -105,6 +105,77 @@ PRECISION — no option trades precision beyond the contract. Focus shape:
 NOT WORTH PURSUING (measured): shrinking the MULTICAST leg too (root packs ->
 mcast 1 tile -> every core column-selects). colpack already sits 1 481 ns above
 the fully-ablated no-combine floor, so the entire remaining prize is < 2.6%.
+
+-------------------------------------------------------------------------------
+ROUND 2 (colpack_regraduate) — REFRESHED against the CURRENT op (idea unchanged)
+-------------------------------------------------------------------------------
+Round 1 graduated a DIFFERENT idea from the same tournament (a 3.53x cut to
+phase 4's SFPU, commit 83e64b50c7) that shrank the same kernel this bench
+measures — so round 1's baseline (75 490 ns @ focus) no longer exists; the
+current op measures 54 377 ns there. This fork was re-forked from the current
+`rms_norm_program_descriptor.py` / kernels (RsqrtAddUnaryColZero ported
+verbatim into `kernels/gps_compute.cpp`'s phase 4; gamma-mcast reuse, commit
+80ce979d50, NOT ported — its predicate is `cw == 1` and every case here is
+W-split, so it is structurally inert and porting ~240 lines for a proven-zero
+delta was skipped). GATE: baseline measured 54 270 ns @ focus vs the target
+54 377 (0.2%, well inside noise) — the fork is faithful.
+
+Full raw table: measurements/results.tsv (ROUND 2 section). Same box, same
+precision contract, combine topology still PINNED FLAT for every row.
+
+FOCUS shape, full menu:
+
+    variant          ns       vs baseline   PCC          all-ones max-err
+    baseline         54 270   1.000x        0.99998402   0.000000
+    bf16             46 533   1.166x        0.99998402   0.000000   (BIT-IDENTICAL)
+    colpack          36 581   1.483x        0.99998256   0.000000
+    colpack_bf16     36 014   1.507x        0.99998256   0.000000
+
+colpack_bf16 is now the clear best option at the focus shape — BETTER than
+round 1's 1.320x, because phase 4 is now ~3.5x cheaper, so the combine is a
+LARGER fraction of a SMALLER total: the -combine floor (measured separately,
+RMS_NORM_ABLATE=combine on the real op) is 35 026 ns, and colpack_bf16's
+36 014 sits only 988 ns above it — computed against this fork's own 54 270
+baseline, that is (54270-36014)/(54270-35026) = 94.9% of the combine's whole
+critical-path cost recovered.
+
+HT_BLOCK / predicate sweep (11 cases; the four WIDTH_SHARDED + 2 interleaved
+decode geometries all derive HT_BLOCK==1, confirmed via GPS_REPORT, so the
+predicate collapses to ONE host-visible knob):
+
+    case             HT_BLOCK  baseline  colpack   colpack_bf16   bf16     colpack_bf16x   bf16x
+    focus                8      54270     36581       36014       46533      1.507x        1.166x
+    focus_hb4            4      58729     44362       43734       51181      1.343x        1.147x
+    focus_hb2            2      69059     61610       60528       62782      1.141x        1.100x
+    focus_hb1            1      87199     91923       90177       85543      0.967x        1.019x
+    w32x1024             1       4508      4751        4355        4162      1.035x        1.083x
+    w32x2304             1       5235      5301        5032        4918      1.040x        1.064x
+    w32x5120*            1       6722      6788        5780        5627      1.163x        1.195x
+    w32x7168*            1       7593      7568        6653        6428      1.141x        1.181x
+    block8192x2304       1     105270    109790      107665      103182      0.978x        1.020x
+    i32x5120*            1       9181      9121        8081        7716      1.136x        1.190x
+    i32x7168*            1      10619     10672        9372        9081      1.133x        1.169x
+
+    * w32x5120/w32x7168/i32x5120/i32x7168: this bench pins the combine topology
+      FLAT (COMBINE_MAX_FLAT_FANIN=1e6) for every row per the isolation note
+      above. GPS_REPORT shows their (cw, cw1, cw2) as (32,32,1) / (28,28,1) /
+      (40,40,1) / (56,56,1) under that pin — but their cw EXCEEDS the real op's
+      default COMBINE_MAX_FLAT_FANIN=24, so the REAL op picks the TWO-STAGE
+      topology there (cw2 > 1) by construction, not the flat one this bench
+      measures. colpack's own precondition is `not two_stage`, so on these four
+      geometries colpack (and colpack_bf16) is STRUCTURALLY INERT in the real
+      op regardless of what this flat-pinned bench reports for it — it falls
+      back to baseline, byte-identical. bf16 has no topology dependence, so its
+      numbers here DO transfer to the real op unchanged.
+
+PREDICATE (graduation-ready):
+    bf16 payload:      w_split and not fp32_dest_acc_en                 -> WIN, every case, every regime
+    colpack payload:    ^ and HT_BLOCK >= 2 and cw2 == 1 (flat)           -> WIN, monotone in HT_BLOCK
+                        ^ and HT_BLOCK == 1                              -> REGRESSION (~2-4%), use bf16 alone
+                        ^ and cw2 > 1 (staged, cw > 24)                  -> STRUCTURALLY INERT (falls back automatically)
+RECOMMENDATION: colpack_bf16 when (w_split and HT_BLOCK>=2 and cw2==1 and
+not fp32_dest_acc_en); else bf16 alone (safe, wins or is flat everywhere else
+measured, including every HT_BLOCK==1 / staged-topology case above).
 """
 
 from __future__ import annotations
@@ -143,11 +214,22 @@ CASES = {
     "focus_hb2": ((1, 1, 8192, 1024), "BLOCK", (1024, 128), (8, 8), 2),
     "focus_hb1": ((1, 1, 8192, 1024), "BLOCK", (1024, 128), (8, 8), 1),
     # ht == 1 decode geometries: the payload is ONE tile per core already, so the
-    # column-pack has nothing to pack and can only cost.
+    # column-pack has nothing to pack and can only cost. These four are the exact
+    # SHARDED_REFERENCE_NS geometries from test_rms_norm_perf.py (shard shape +
+    # core grid reproduced exactly, not left to auto_shard_config).
     "w32x1024": ((1, 1, 32, 1024), "WIDTH", (32, 128), (8, 1), None),
+    "w32x2304": ((1, 1, 32, 2304), "WIDTH", (32, 256), (9, 1), None),
+    "w32x5120": ((1, 1, 32, 5120), "WIDTH", (32, 160), (8, 4), None),
     "w32x7168": ((1, 1, 32, 7168), "WIDTH", (32, 256), (7, 4), None),
     # A second, wider BLOCK_SHARDED prefill cell (Wt/core = 9).
     "block8192x2304": ((1, 1, 8192, 2304), "BLOCK", (1024, 288), (8, 8), None),
+    # Guard-set representatives: the two interleaved W-split decode geometries
+    # (test_rms_norm_perf_decode_pinned). `kind="INTERLEAVED"` skips shard_config
+    # entirely (shard_shape/core_grid unused) — the placement takes the row+W
+    # split path exactly as the real decode test does (in_sharded is derived
+    # from the tensor's own memory_config, which is plain interleaved DRAM).
+    "i32x5120": ((1, 1, 32, 5120), "INTERLEAVED", None, None, None),
+    "i32x7168": ((1, 1, 32, 7168), "INTERLEAVED", None, None, None),
 }
 
 
@@ -218,10 +300,13 @@ def run_case(device, case, variant, mode="random"):
 
         pd._select_placement = _no_combine
 
-    memory_layout = getattr(ttnn.TensorMemoryLayout, f"{kind}_SHARDED")
-    mc = shard_config(
-        list(shard_shape), core_grid, memory_layout, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
-    )
+    if kind == "INTERLEAVED":
+        mc = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        memory_layout = getattr(ttnn.TensorMemoryLayout, f"{kind}_SHARDED")
+        mc = shard_config(
+            list(shard_shape), core_grid, memory_layout, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+        )
 
     torch.manual_seed(42)
     if mode == "ones":
@@ -305,14 +390,18 @@ def _report_blocking(device, shape, mc, torch_x, torch_gamma):
     )
     grid = device.compute_with_storage_grid_size()
     ht_total, wt_global = pd._tile_geometry(tt_x)
-    placement = pd._select_placement(device, grid, tt_x, ht_total, wt_global, True)
+    # in_sharded must come from the TENSOR's own memory_layout (exactly what
+    # create_program_descriptor does), not be hardcoded True — hardcoding it
+    # crashes on an INTERLEAVED case (_shard_geometry reads a None shard_spec).
+    in_sharded = tt_x.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    placement = pd._select_placement(device, grid, tt_x, ht_total, wt_global, in_sharded)
     blk = pd._derive_blocking(
         tt_x,
         tt_g,
         grid.x * grid.y,
         placement,
-        sharded_in=True,
-        sharded_out=True,
+        sharded_in=in_sharded,
+        sharded_out=in_sharded,
         l1_total_budget=pd._l1_total_budget(device),
     )
     return (

@@ -77,8 +77,16 @@ constexpr uint32_t cb_gamma_rm = 4;
 constexpr uint32_t cb_ones = 5;
 constexpr uint32_t cb_group_partials = 6;
 constexpr uint32_t cb_rms_mean = 7;
+// LAB: allgather_pull consumes cb_partial_out directly (the writer's gather_hop
+// is skipped entirely for this variant -- see rms_norm_writer.cpp), so this
+// kernel now needs the index the baseline reader never touched.
+constexpr uint32_t cb_partial_out = 8;
 constexpr uint32_t cb_group_partials2 = 9;
 constexpr uint32_t cb_rms_sum = 26;
+// LAB: new semaphore id for the all-to-all readiness counter (see
+// lab_descriptor.py's SEM_ALLGATHER -- ids 0..9 are all spoken for by the
+// op's own combine + gamma broadcast, so 10 is free).
+constexpr uint32_t SEM_ALLGATHER = 10;
 }  // namespace
 
 namespace dkl = dataflow_kernel_lib;
@@ -145,21 +153,23 @@ void kernel_main() {
     constexpr auto gmc_a =
         dkl::McastArgs<mc_b.next_compile_time_args_offset() + 1, mc_b.next_runtime_args_offset() + 2>();
     constexpr auto gmc_b = dkl::McastArgs<gmc_a.next_compile_time_args_offset(), gmc_a.next_runtime_args_offset()>();
-    // ---- Perf 2: the gather PAYLOAD guard (one shared flag word) ------------
-    // bit0 = colpack (the `ht` row-sums ride distinct COLUMNS of ONE tile, so
-    // this core's gather window is 1 tile per slot instead of HT_BLOCK), bit1 =
-    // bf16 wire datum (page size only — the CB format carries it, so nothing
-    // here changes). The host owns both predicates; see COLPACK_MIN_HT_BLOCK.
-    constexpr uint32_t PAYLOAD_FLAGS = get_compile_time_arg_val(gmc_b.next_compile_time_args_offset());
-    constexpr bool COLPACK = (PAYLOAD_FLAGS & 0x1u) != 0;
-    // Gather-window tiles per slot. This is the ONLY thing the payload guard
-    // changes on the reader side, and it must agree with the host's CB page count
-    // and the writer's ship count exactly — hence the single flag word.
-    constexpr uint32_t GATHER_HT = COLPACK ? 1u : HT_BLOCK;
-
-    constexpr auto in_args = TensorAccessorArgs<gmc_b.next_compile_time_args_offset() + 1>();
-    static_assert(gmc_b.next_compile_time_args_offset() + 1 == 49, "shared dataflow CT block must be 49 words");
+    constexpr auto in_args = TensorAccessorArgs<gmc_b.next_compile_time_args_offset()>();
+    static_assert(gmc_b.next_compile_time_args_offset() == 48, "shared dataflow CT block must be 48 words");
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+
+    // ---- LAB: combine_allgather_no_root -----------------------------------
+    // COMBINE_VARIANT selects the combine's transport: 0 = the op's own
+    // gather-to-root + Mcast2D-back (byte-identical baseline); 1 =
+    // allgather_pull (this idea) -- delete the round trip instead of shrinking
+    // it. Appended AFTER every TensorAccessorArgs block so their own
+    // next_compile_time_args_offset() chaining is untouched.
+    constexpr uint32_t COMBINE_VARIANT = get_compile_time_arg_val(gamma_args.next_compile_time_args_offset());
+    constexpr bool ALLGATHER_PULL = COMBINE_VARIANT == 1;
+    // Fixed RT layout emitted by the host (create_program_descriptor): 11 base
+    // args + mcast_rt(4*MAX_MCAST_FAMILIES) + [g_inject, g_family] +
+    // gamma_rt(4*MAX_MCAST_FAMILIES) = 29 words, THEN the peer list (2*CW
+    // words, only when W_SPLIT). See lab_descriptor.py's reader_rt assembly.
+    constexpr uint32_t PEER_RT_BASE = 29;
 
     static_assert(WT_LAST == WT_CHUNK, "reader assumes uniform chunk widths");
     static_assert(X_READ_CHUNKS >= 1 && NW % X_READ_CHUNKS == 0, "read batch must tile NW");
@@ -169,11 +179,13 @@ void kernel_main() {
     const uint32_t start_tile_row = get_arg_val<uint32_t>(2);
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(3);
     const uint32_t wt_start = get_arg_val<uint32_t>(4);
-    const uint32_t is_root = get_arg_val<uint32_t>(6);
+    // LAB: unused under allgather_pull (no root/leader distinction, no mcast
+    // receive), hence [[maybe_unused]].
+    [[maybe_unused]] const uint32_t is_root = get_arg_val<uint32_t>(6);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(7);
     const uint32_t wt_real = get_arg_val<uint32_t>(8);
-    const uint32_t mcast_family = get_arg_val<uint32_t>(9);
-    const uint32_t is_leader = get_arg_val<uint32_t>(10);
+    [[maybe_unused]] const uint32_t mcast_family = get_arg_val<uint32_t>(9);
+    [[maybe_unused]] const uint32_t is_leader = get_arg_val<uint32_t>(10);
     // Perf 1: gamma-broadcast role. `gamma_inject` is a per-family bitmask ("I
     // read gamma from DRAM and broadcast it to that family"); `gamma_family` is
     // the rectangle this core receives in.
@@ -184,6 +196,20 @@ void kernel_main() {
     // somewhere legal, but it owns no data and takes no part in the combine.
     if (num_tile_rows == 0) {
         return;
+    }
+
+    // ---- LAB: allgather_pull's peer list (virtual coords, slot order) ------
+    // A flat all-to-all list, not a tree: every real core in the group reads
+    // this SAME list (built host-side from the group's "slots"), including its
+    // own slot (a harmless same-core NoC loopback -- gather_hop already relies
+    // on the identical trick when a worker's leader is itself).
+    uint32_t peer_vx[CW];
+    uint32_t peer_vy[CW];
+    if constexpr (W_SPLIT && ALLGATHER_PULL) {
+        for (uint32_t i = 0; i < CW; ++i) {
+            peer_vx[i] = get_arg_val<uint32_t>(PEER_RT_BASE + 2 * i);
+            peer_vy[i] = get_arg_val<uint32_t>(PEER_RT_BASE + 2 * i + 1);
+        }
     }
 
     // ---- 1. scaler / partial-W mask: one tile, pushed once, never popped ----
@@ -415,24 +441,60 @@ void kernel_main() {
         // This sits BETWEEN the two reader passes on purpose: compute's pass B
         // cannot start before the broadcast lands, so a reader that queued its
         // pass-B reads first would fill cb_input_tiles and deadlock.
-        if constexpr (W_SPLIT) {
+        if constexpr (W_SPLIT && ALLGATHER_PULL) {
+            // ---- LAB IDEA: one-hop, no-root all-gather -----------------------
+            // Every core (not just the root) pulls all CW peers' raw partial
+            // tiles directly out of their L1 -- no gather target, no mcast-back.
+            MaybeDeviceZoneScope("rdr_allgather");
+            cb_wait_front(cb_partial_out, ht);
+            const uint32_t my_partial_addr = get_read_ptr(cb_partial_out);
+            const uint32_t partial_tile_bytes = get_tile_size(cb_partial_out);
+            Semaphore<> ag_sem(SEM_ALLGATHER);
+            // Announce: bump every peer's copy of the shared readiness counter
+            // (including our own, via a same-core NoC loopback). MONOTONIC --
+            // never reset -- so a fast peer's NEXT round-block announce landing
+            // early can never be misattributed to THIS round: wait_min on an
+            // ever-growing counter is immune to interleaving order, unlike a
+            // reset-to-0-then-wait(CW) counter would be (see lab_descriptor.py).
+            for (uint32_t i = 0; i < CW; ++i) {
+                ag_sem.up(noc, peer_vx[i], peer_vy[i], 1);
+            }
+            ag_sem.wait_min((hb + 1) * CW);
+            // Pull: read every peer's `ht` raw tiles into OUR OWN cb_group_partials,
+            // landing h-major (tile h*CW + slot) -- the SAME layout the fold below
+            // (and the baseline's root fold) already expects.
+            cb_reserve_back(cb_group_partials, HT_BLOCK * CW);
+            const uint32_t base = get_write_ptr(cb_group_partials);
+            for (uint32_t i = 0; i < CW; ++i) {
+                const uint64_t src = get_noc_addr(peer_vx[i], peer_vy[i], my_partial_addr);
+                for (uint32_t h = 0; h < ht; ++h) {
+                    const uint32_t dst = base + (h * CW + i) * partial_tile_bytes;
+                    noc_async_read(src + h * partial_tile_bytes, dst, partial_tile_bytes);
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_group_partials, HT_BLOCK * CW);
+            cb_pop_front(cb_partial_out, ht);
+            // NO broadcast-back: compute folds cb_group_partials straight into
+            // cb_rms_sum itself (see rms_norm_compute.cpp's cmp_combine).
+        } else if constexpr (W_SPLIT) {
             // stage 1 — every leader folds its own fan-in (CW1 cores). On the
             // flat topology the root is the only leader and CW1 == CW.
             {
                 MaybeDeviceZoneScope("rdr_gather_wait");
                 if (is_leader) {
-                    cb_reserve_back(cb_group_partials, GATHER_HT * CW1);
+                    cb_reserve_back(cb_group_partials, HT_BLOCK * CW1);
                     gather_sem.wait(CW1);
                     gather_sem.set(0);
-                    cb_push_back(cb_group_partials, GATHER_HT * CW1);
+                    cb_push_back(cb_group_partials, HT_BLOCK * CW1);
                 }
                 // stage 2 — the root folds the CW2 row-sums the leaders shipped.
                 if constexpr (TWO_STAGE) {
                     if (is_root) {
-                        cb_reserve_back(cb_group_partials2, GATHER_HT * CW2);
+                        cb_reserve_back(cb_group_partials2, HT_BLOCK * CW2);
                         gather2_sem.wait(CW2);
                         gather2_sem.set(0);
-                        cb_push_back(cb_group_partials2, GATHER_HT * CW2);
+                        cb_push_back(cb_group_partials2, HT_BLOCK * CW2);
                     }
                 }
             }

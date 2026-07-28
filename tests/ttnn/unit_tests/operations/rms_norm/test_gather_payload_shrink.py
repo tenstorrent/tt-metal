@@ -49,8 +49,12 @@ _BENCH_CASES = [
     "focus_hb2",
     "focus_hb1",
     "w32x1024",  # (1,1,32,1024) WIDTH shard (32,128) grid (8,1)  ht 1
+    "w32x2304",  # (1,1,32,2304) WIDTH shard (32,256) grid (9,1)  ht 1
+    "w32x5120",  # (1,1,32,5120) WIDTH shard (32,160) grid (8,4)  ht 1
     "w32x7168",  # (1,1,32,7168) WIDTH shard (32,256) grid (7,4)  ht 1
     "block8192x2304",
+    "i32x5120",  # (1,1,32,5120) INTERLEAVED DRAM  guard-set representative
+    "i32x7168",  # (1,1,32,7168) INTERLEAVED DRAM  guard-set representative
 ]
 
 
