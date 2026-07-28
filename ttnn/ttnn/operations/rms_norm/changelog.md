@@ -440,3 +440,115 @@
     so `CW` and the combine topology stay A/B-measurable without editing the op.
   - `probes/probe_026.py`, `probes/probe_027.py` — clock/placement readback and the topology
     resolution check.
+
+---
+
+## Refinement 4 — `HEIGHT_SHARDED` placement (local shard, zero-copy)
+
+- **Date**: 2026-07-28
+- **Device**: blackhole_p150b, 11 × 10 = 110-core compute grid, AICLK 1349.98 MHz,
+  per-core L1 bank **1 461 504 B** (read from the live device, not assumed)
+
+- **What was done**: op_design Lamp L3 — the Phase-0 row split made *physical*. `SUPPORTED["memory_layout"]`
+  gains `HEIGHT_SHARDED`. It really is a knob-turn: **zero kernel changes**, and the whole placement is one
+  ~10-line branch in `_placement_sharded` that hands back `cw = 1`, no groups, no semaphores and no multicast,
+  with the shard grid as the core assignment and the shard height as `rows_core_max`. Everything downstream
+  was already generalized by Refinement 2 and is reused verbatim: `ttnn.cb_descriptor_from_sharded_tensor`
+  backs `cb_input_tiles` **and** `cb_output_tiles` on the core's own L1 shards, so the reader issues no input
+  read and the writer no output write, and the compute phases are byte-identical to the interleaved resident
+  regime. Because each core holds WHOLE rows, the reduce stays entirely local — none of the R2/R3 combine
+  machinery is built, allocated or executed.
+
+  Two supporting changes, both single-source:
+
+  1. **`ROW_MAJOR` shards route to the accessor path** (`tile_shard` gate, 3 lines in
+     `create_program_descriptor`). "Sharded" in this op means *zero-copy*, which is only meaningful for a TILE
+     shard. `eval.sharding`'s RM granule is `(1 row, L1_align/elem_bytes columns)`, so an RM height shard is
+     `[1..3, W]` — a handful of sticks. That is **not** this core's block, and no amount of CB placement makes
+     it one.
+  2. **The L1 budget is now two budgets** (see "Issues encountered" — this is the R2 verifier note coming due).
+
+- **Accuracy achieved**: PCC ≥ 0.999 on every cell measured; PCC = **1.000000** on the fp32 and the
+  multi-tile-row shards, 0.999870 worst case (bfloat8_b). The all-ones **absolute** element-count check
+  (`test_height_shard_counts_every_element`) recovers `mean(x²) = 1.0` exactly on
+  `(1,1,256,512)` / `(1,1,2048,256)` / `(1,1,32,4096)` / `(1,1,17,64)` / `(1,1,32,50)` — chosen over a PCC gate
+  because a wrong row→core map, a dropped W-tile or a wrong `n_reduced` only *rescales* rows, which PCC scores
+  0.9999 (the R1/R2 lesson).
+
+- **Golden test progress**: `test_op_loose` is **19 passed / 0 xfail** — the `(1,1,256,512)` HEIGHT_SHARDED case
+  was the last remaining loose xfail in the suite. Cross-product slice over five shapes spanning all four
+  placements (`1x1x256x512`, `1x1x17x64`, `4x8x32x256`, `1x1x32x8192`, `2x512x1024` — TILE/RM × gamma/no-gamma ×
+  every dtype × INTERLEAVED/HEIGHT/WIDTH/BLOCK): **536 passed, 0 failed, 0 XPASS**, 228 xfailed.
+  `memory_layout` is now complete against TARGET — no value is left queued.
+
+- **Issues encountered** — one real bug, found exactly where Refinement 2's verifier note pointed
+  ("make sure the block shrink is not what is paying for the shard"):
+
+  **The resident shard was being charged against the CB budget.** A zero-copy sharded CB is *aliased* onto the
+  tensor's own buffer, which the **buffer** allocator already reserved out of the same L1 bank — it is not part
+  of the program's CB region. Charging it against `L1_CB_BUDGET_BYTES` (a budget calibrated for
+  *program-allocated* CBs on the interleaved path, where tensors live in DRAM) double-counts it, and the
+  halve-and-re-derive loop then pays for the shard by shrinking the block. HEIGHT shards are full-W and so the
+  largest of the three schemes, which is what made this load-bearing rather than cosmetic:
+
+  - bf16 `(1,1,32,8192)`: `WT_CHUNK` collapsed **32 → 1** (`NW = 256` on a single core) — a 256-pass compute
+    loop where 16 passes fit;
+  - every fp32 `W = 4096` HEIGHT cell (`(1,1,32,4096)`, `(1,1,128,4096)`, `(2,1,64,4096)`, `(1,32,4096)`,
+    `(32,4096)`) was **refused outright** — `AssertionError`, i.e. hard `supported_fail` — by **10 KB**, with
+    **361 KB of the 1 461 504 B bank still free**.
+
+  Fixed by budgeting the two quantities separately in `_Blocking._fits`:
+
+      program CBs                  <= L1_CB_BUDGET_BYTES              (unchanged)
+      program CBs + resident shard <= bank size - L1_ALLOC_HEADROOM_BYTES
+
+  The bank size is read from the live device (`ttnn.get_memory_view(...).total_bytes_per_bank`), never
+  hardcoded — it is arch- and dispatch-config-specific. After the fix: fp32 `W = 4096` runs at `WT_CHUNK = 8`,
+  bf16 `W = 8192` at `WT_CHUNK = 16`.
+
+  **No regression, and it is provable rather than merely measured.** On an interleaved tensor the shard term is
+  0, so the second wall can never bind and the derivation is *byte-identical* to the single-budget model
+  (pinned by `test_interleaved_blocking_is_unchanged_by_the_two_budget_split`). On the sharded side exactly one
+  of the geometries the suites exercise moves — surveyed across all six pinned + eight auto geometries — and it
+  gets **faster** (pinned perf config, one fresh-cache run per variant via `RMS_NORM_L1_HEADROOM_KB`):
+
+      geometry                                single-budget   two-budget
+      (1,1,32,1024)   WIDTH [32,128]  (8,1)           5_007        5_016
+      (1,1,32,2304)   WIDTH [32,256]  (9,1)           5_684        5_667
+      (1,1,32,5120)   WIDTH [32,160]  (8,4)           5_878        5_890
+      (1,1,32,7168)   WIDTH [32,256]  (7,4)           6_295        6_284
+      (1,1,8192,1024) BLOCK [1024,128](8,8)          89_413       85_107   HT_BLOCK 4 -> 8, 1.05x
+
+  **No EXCLUSIONS entry was needed**, which was not the expected outcome. `ROW_MAJOR × HEIGHT_SHARDED` looked
+  like R2's `{ROW_MAJOR, WIDTH/BLOCK_SHARDED}` precedent, but the two differ: an RM height shard's tile-row is
+  spread over up to 32 *different* cores, so the read is genuinely **non-local** — precisely the case
+  `TensorAccessor` exists for, and the opposite of re-reading a core's own block. Routing it there costs 3
+  lines and it passes at PCC ≥ 0.99999, clean under `--dev`. The same mechanism very likely unblocks R2's two
+  RM exclusions; deliberately **not** attempted here, as it is outside this heading's scope.
+
+  One case is refused and correctly so: fp32 `(1,1,32,8192)` HEIGHT_SHARDED needs 2 MB of shards on one core
+  against a 1.46 MB bank. It is unreachable through the public entry point — `allocate_tensor_on_device` OOMs
+  on the output shard first, which the harness classifies as an infeasible skip.
+
+- **Perf note, a finding for Refinement 5 rather than a task it must rediscover**: the A/B above also
+  re-measures the five pinned sharded geometries against their `achievable_ns` references. The four WIDTH ones
+  are close (5 016–6 284 ns vs 4 110–5 481, i.e. 1.15–1.22× away), but `(1,1,8192,1024)` BLOCK_SHARDED sits at
+  **85 107 ns against a 25 640 ns reference — a 3.3× gap**, by far the largest of the five and the obvious
+  first target for R5's sharded column.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_height_sharded.py` (**new**, 47 cases) — the
+    placement is pinned by the shard and the reduce stays local (core map, per-core row count, `cw == 1`,
+    empty `groups`, no semaphores in the descriptor, tile-rows covered exactly once); the input **and** output
+    CBs are aliased onto the shards (descriptor-level, because an accessor read of a core's own shard passes
+    every numerical gate in the file); the RM shard is asserted **not** aliased, since it is the deliberate
+    non-local exception; the all-ones absolute element-count check; the reference across
+    dtype × gamma × 5 shapes; and the two budget-model guards described above.
+  - `test_rms_norm_perf.py::test_rms_norm_perf_sharded_pinned` (**new**, 5 cases) — the five pinned sharded
+    geometries at the pinned perf config, one dispatch each with the 0.9995 soft gate. Added as this
+    refinement's no-regression guard for the budget change; it is also R5's measurement surface.
+  - `RMS_NORM_L1_HEADROOM_KB` env override (read in the op, same style as `RMS_NORM_W_SPLIT`) so the
+    single-budget vs two-budget A/B stays re-runnable without editing the op.
+  - `probes/probe_028..034.py` — HEIGHT bring-up, the RM-shard granule check, the L1-tight corner, and the
+    old-vs-new blocking survey across every sharded geometry the suites emit.
+  - Unit suite: **582 passed, 73 skipped** (`--run-all`), and the sharded suites green under `--dev`.

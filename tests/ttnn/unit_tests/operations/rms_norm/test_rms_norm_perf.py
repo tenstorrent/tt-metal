@@ -115,6 +115,21 @@ where under the flat one it had been actively harmful:
     (1,1,32,7168) 12_016      —    10_116*      8_917
     (1,1,32,1024)  5_739      —         —       5_709
     (* flat-topology measurement; the staged one is not CW-limited there)
+
+Refinement 4 added `RMS_NORM_L1_HEADROOM_KB`, which sets L1_ALLOC_HEADROOM_BYTES
+(see the op). A zero-copy sharded CB is aliased onto the tensor's own buffer, so
+it is NOT program-allocated; charging it against L1_CB_BUDGET_BYTES double-counts
+it and makes the halving loop pay for the shard by shrinking the block. Set the
+headroom wider than the L1 bank to get that single-budget model back for an A/B.
+Measured on the five pinned sharded geometries (test_rms_norm_perf_sharded_pinned,
+pinned perf config), only the one whose blocking actually moves changes:
+
+    geometry                                single-budget   two-budget
+    (1,1,32,1024)   WIDTH [32,128]  (8,1)           5_007        5_016
+    (1,1,32,2304)   WIDTH [32,256]  (9,1)           5_684        5_667
+    (1,1,32,5120)   WIDTH [32,160]  (8,4)           5_878        5_890
+    (1,1,32,7168)   WIDTH [32,256]  (7,4)           6_295        6_284
+    (1,1,8192,1024) BLOCK [1024,128](8,8)          89_413       85_107   HT_BLOCK 4->8
 """
 
 import os
@@ -308,6 +323,60 @@ def test_rms_norm_perf_decode_pinned(device, shape):
     )
 
     tt_out = rms_norm(tt_x, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=perf_compute_kernel_config())
+
+    xf = torch_x.to(torch.float32)
+    expected = xf / torch.sqrt(torch.mean(xf**2, dim=-1, keepdim=True) + 1e-6)
+    expected = expected * torch_gamma.to(torch.float32).reshape(-1)
+
+    actual = ttnn.to_torch(tt_out).to(torch.float32)
+    passed, message = check_with_pcc(expected, actual, 0.9995)
+    assert passed, message
+
+
+# The five measured-fastest SHARDED geometries feature_spec pins (shard_shape +
+# core_grid come straight from its extras, so the geometry is reproduced exactly
+# rather than left to auto_shard_config). Refinement 5 owns optimizing these;
+# Refinement 4 added them as its no-regression guard, because splitting the L1
+# budget into "program CBs" + "resident shard" (L1_ALLOC_HEADROOM_BYTES) is the
+# one change that can move a SHARDED cell's blocking. Measured, exactly one of
+# them moves: (1,1,8192,1024) BLOCK_SHARDED, HT_BLOCK 4 -> 8.
+SHARDED_REFERENCE_NS = {
+    ((1, 1, 32, 1024), "WIDTH", (32, 128), (8, 1)): 4110,
+    ((1, 1, 32, 2304), "WIDTH", (32, 256), (9, 1)): 4617,
+    ((1, 1, 32, 5120), "WIDTH", (32, 160), (8, 4)): 5267,
+    ((1, 1, 32, 7168), "WIDTH", (32, 256), (7, 4)): 5481,
+    ((1, 1, 8192, 1024), "BLOCK", (1024, 128), (8, 8)): 25640,
+}
+
+
+@pytest.mark.parametrize("case", list(SHARDED_REFERENCE_NS), ids=lambda c: f"{'x'.join(map(str, c[0]))}-{c[1].lower()}")
+def test_rms_norm_perf_sharded_pinned(device, case):
+    """The pinned sharded geometries at the PINNED perf config, one dispatch each.
+
+    Same shape as test_rms_norm_perf_decode_pinned: no timing assertion here (the
+    number comes from `--profile`'s CSV), just the 0.9995 soft gate those loose
+    cases carry, so an A/B can never be taken on a wrong-but-fast kernel.
+    """
+    from eval.sharding import shard_config
+
+    shape, kind, shard_shape, core_grid = case
+    memory_layout = getattr(ttnn.TensorMemoryLayout, f"{kind}_SHARDED")
+    mc = shard_config(
+        list(shard_shape), core_grid, memory_layout, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+
+    torch.manual_seed(42)
+    torch_x = torch.randn(shape, dtype=torch.bfloat16)
+    torch_gamma = torch.randn(shape[-1], dtype=torch.bfloat16)
+
+    tt_x = ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    tt_gamma = ttnn.from_torch(
+        torch_gamma.reshape(1, 1, 1, shape[-1]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    tt_out = rms_norm(
+        tt_x, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=perf_compute_kernel_config(), memory_config=mc
+    )
 
     xf = torch_x.to(torch.float32)
     expected = xf / torch.sqrt(torch.mean(xf**2, dim=-1, keepdim=True) + 1e-6)

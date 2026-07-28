@@ -125,7 +125,7 @@ Three findings worth carrying into R3/R5. **(1) The bottleneck moved.** `(1,1,32
 
 ---
 
-### [ ] Refinement 4 — `HEIGHT_SHARDED` placement (local shard, zero-copy)
+### [x] Refinement 4 — `HEIGHT_SHARDED` placement (local shard, zero-copy)
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` to `SUPPORTED["memory_layout"]` for both the input and the output. This is the Phase-0 row split made physical: the shard grid pins the core assignment, the shard height pins `HT_BLOCK`, and **the reduction stays entirely local** — each core holds full rows, so no cross-core traffic is added.
 
@@ -137,6 +137,14 @@ Three findings worth carrying into R3/R5. **(1) The bottleneck moved.** `(1,1,32
 - No implementation skill matches: `memory_layout` / placement is **not** `/memory-layouts` (that is RM ↔ TILE), and `/interleaved-parallel` explicitly excludes sharded tensors. The pattern to follow is the `cb_descriptor_from_sharded_tensor` CB placement named above.
 
 **Done when**: `HEIGHT_SHARDED` is in `SUPPORTED["memory_layout"]`, its golden cells and the `(1,1,256,512)` HEIGHT_SHARDED loose case pass, the input shard is consumed via a sharded CB descriptor (no `TensorAccessor` read of a core's own shard), prior phases still pass, and all three loud verifier categories stay at 0.
+
+**Outcome**: Landed in full, and it really was a knob-turn — **zero kernel changes**, one new branch in `_placement_sharded` (~10 lines) that emits `cw = 1`, no groups, no semaphores, no multicast, with the shard grid as the core assignment and the shard height as `rows_core_max`. Everything downstream (`cb_descriptor_from_sharded_tensor` on both sides, the reader's `SHARDED_IN` no-read push, the writer's `SHARDED_OUT` no-write) was already generalized by R2 and is reused verbatim. `test_op_loose` is now **19 passed / 0 xfail** — the HEIGHT_SHARDED loose case was the last one — and a 5-shape × 4-placement golden slice is **536 passed / 0 failed / 0 XPASS**. Unit suite **582 passed**, green under `--dev`.
+
+**No EXCLUSIONS entry was needed.** `ROW_MAJOR × HEIGHT_SHARDED` looked like the R2 precedent (`{ROW_MAJOR, WIDTH/BLOCK_SHARDED}` are refused because an RM shard is a few *sticks*, not a tile block) — but the two cases differ. An RM height shard is `[1..3, W]`: the 32 sticks of one tile-row live on up to 32 *different* cores, so the read is genuinely **non-local**, which is exactly what `TensorAccessor` is for. Routing RM-sharded inputs to the accessor path (`tile_shard` gate, 3 lines) makes them work with no scheme change — PCC ≥ 0.99999, clean under `--dev`. **This very likely unblocks R2's two RM exclusions the same way; deliberately not attempted here** (out of this heading's scope, and it would move golden accounting outside the axis this refinement owns).
+
+**One real bug found and fixed, exactly where R2's verifier note pointed.** The note said to check that the halve-and-re-derive loop was not paying for the resident shard by shrinking the block. It was. A zero-copy sharded CB is *aliased* onto the tensor's own buffer — the **buffer** allocator already reserved it — so charging it against `L1_CB_BUDGET_BYTES` (a budget for *program-allocated* CBs) double-counts it. HEIGHT shards are full-W and so the largest of the three schemes, which made it load-bearing: bf16 `(1,1,32,8192)` collapsed `WT_CHUNK` from 32 to **1** (`NW = 256` on one core), and every fp32 `W = 4096` cell was **refused outright** by 10 KB — with **361 KB of the 1 461 504 B L1 bank still free**. Fixed by budgeting the two quantities separately (`program CBs ≤ L1_CB_BUDGET_BYTES`, `program + resident shard ≤ bank − L1_ALLOC_HEADROOM_BYTES`, bank read from the live device, never hardcoded). Interleaved cells are **byte-identical** by construction (shard term is 0, so the second wall cannot bind — pinned by `test_interleaved_blocking_is_unchanged_by_the_two_budget_split`), and of the five pinned sharded perf geometries exactly one moves: `(1,1,8192,1024)` BLOCK_SHARDED, `HT_BLOCK` 4 → 8, measured **89 413 → 85 107 ns (1.05× faster)**. `RMS_NORM_L1_HEADROOM_KB` keeps that A/B re-runnable.
+
+**Finding for Refinement 5, not a task for it to inherit blind**: that same measurement puts `(1,1,8192,1024)` BLOCK_SHARDED at **85 107 ns against its 25 640 ns reference** — a 3.3× gap and by far the largest of the five pinned sharded geometries (the four WIDTH ones sit at 5 016–6 284 ns against 4 110–5 481, i.e. 1.15–1.22×). `test_rms_norm_perf_sharded_pinned` was added as this refinement's no-regression guard and doubles as R5's measurement surface.
 
 ---
 

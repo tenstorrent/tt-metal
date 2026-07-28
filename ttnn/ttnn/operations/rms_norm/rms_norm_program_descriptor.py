@@ -28,6 +28,13 @@ and multicasts ``1/rms`` back. ``_Placement`` owns that topology; ``_Blocking``
 is unchanged by it, because the per-core W extent is simply the axis it derives
 against. Measured on the decode profiles: 1 busy core -> 32-56, 1.75-5.11x.
 
+A HEIGHT_SHARDED input (Lamp L3) is the row split above made *physical*: the
+shard grid pins the core assignment and the shard height pins the per-core row
+count, each core still owns whole rows, and the reduce therefore stays entirely
+local (``cw == 1``, no combine). The only thing that changes is CB *placement* —
+``cb_input_tiles`` / ``cb_output_tiles`` are backed straight on the resident L1
+shards, so the reader issues no input read and the writer no output write.
+
 --------------------------------------------------------------------------
 Chunk-uniformity invariant (implementation constraint, documented deviation)
 --------------------------------------------------------------------------
@@ -73,9 +80,28 @@ TILE_DIM = 32
 # L1_CB_BUDGET_BYTES (documented fallback, same single source).
 L1_BLOCK_BUDGET_BYTES = 512 * 1024
 
-# Total per-core CB budget. Worker L1 is 1.5 MB; the remainder is
-# firmware/stack/kernel-args headroom.
+# Total per-core budget for PROGRAM-ALLOCATED CBs. Worker L1 is 1.5 MB; the
+# remainder is firmware/stack/kernel-args headroom.
 L1_CB_BUDGET_BYTES = 1_100_000
+
+# ...and the second, physical wall (Refinement 4). A zero-copy sharded CB is
+# ALIASED onto the tensor's own buffer, which the *buffer* allocator already
+# reserved out of the same per-core L1 bank — it is not part of the program's CB
+# region. Charging it against L1_CB_BUDGET_BYTES therefore double-counts it, and
+# the halve-and-re-derive loop below pays for the shard by shrinking the block:
+# measured, a HEIGHT_SHARDED (1,1,32,8192) bf16 collapsed WT_CHUNK from 32 to 1,
+# and fp32 W=4096 was refused outright by 10 KB — with 361 KB of the bank still
+# free. So the two quantities are budgeted separately:
+#
+#     program CBs                  <= L1_CB_BUDGET_BYTES      (unchanged)
+#     program CBs + resident shard <= bank size - headroom     (the real wall)
+#
+# The bank size is read from the live device (see _l1_total_budget), never
+# hardcoded — it is arch- and dispatch-config-specific (1_461_504 B on
+# blackhole_p150b). On an interleaved tensor the shard term is 0, so the first
+# condition is the binding one and every interleaved cell is byte-identical to
+# before this refinement.
+L1_ALLOC_HEADROOM_BYTES = 128 * 1024
 
 # ---------------------------------------------------------------------------
 # Cross-core W-split knobs (Refinement 2; op_design.md Lamp L1 / §4.2)
@@ -263,9 +289,15 @@ class _Blocking:
         cw2=1,
         sharded_in=False,
         sharded_out=False,
+        l1_total_budget=None,
     ):
         self.sharded_in = bool(sharded_in)
         self.sharded_out = bool(sharded_out)
+        # The physical L1 wall (program CBs + resident shards). Defaults to the
+        # CB budget, which reproduces the pre-Refinement-4 single-budget model
+        # exactly — and is what every interleaved cell sees anyway, since its
+        # shard term is 0.
+        self.l1_total_budget = L1_CB_BUDGET_BYTES if l1_total_budget is None else int(l1_total_budget)
         self.is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
         self.has_gamma = gamma is not None
         self.is_rm_gamma = self.has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -395,7 +427,7 @@ class _Blocking:
 
         # A sharded input is resident BY PLACEMENT — the shard is already in this
         # core's L1, so the residency predicate is not a choice here.
-        self.x_res_depth = 1 if (self.sharded_in or self._cb_total(1, False) <= L1_CB_BUDGET_BYTES) else 0
+        self.x_res_depth = 1 if (self.sharded_in or self._fits(1, False)) else 0
         self.x_resident = self.x_res_depth > 0
 
         # Gamma residency removes (NH_core - 1) * Wt gamma re-reads per core — so
@@ -406,7 +438,7 @@ class _Blocking:
         # core: resident gamma 47_571 ns vs streamed gamma 42_407 ns (1.12x).
         self.gamma_resident = False
         if self.has_gamma and self.nh_core_max > 1:
-            self.gamma_resident = self._cb_total(self.x_res_depth, True) <= L1_CB_BUDGET_BYTES
+            self.gamma_resident = self._fits(self.x_res_depth, True)
 
         # Extra resident depth overlaps row-block hb+1's read with hb's compute,
         # so it likewise needs NH_core > 1 — and needs spare latency to hide
@@ -418,11 +450,13 @@ class _Blocking:
         # filled ahead — it would only cost L1 (and can evict gamma).
         if self.x_resident and not self.is_rm and not self.grid_full and self.nh_core_max > 1:
             for depth in range(X_RESIDENT_DEPTH, self.x_res_depth, -1):
-                if self._cb_total(depth, self.gamma_resident) <= L1_CB_BUDGET_BYTES:
+                if self._fits(depth, self.gamma_resident):
                     self.x_res_depth = depth
                     break
 
-        self.cb_total_bytes = self._cb_total(self.x_res_depth, self.gamma_resident)
+        self.program_cb_bytes, self.resident_shard_bytes = self._cb_bytes(self.x_res_depth, self.gamma_resident)
+        self.cb_total_bytes = self.program_cb_bytes + self.resident_shard_bytes
+        self.fits = self._fits(self.x_res_depth, self.gamma_resident)
         self.base_cb_total_bytes = base
 
     # -- CB plan ------------------------------------------------------------
@@ -508,8 +542,32 @@ class _Blocking:
         ]
         return [(n, i, ps, max(1, np)) for (n, i, ps, np) in plan]
 
+    def _is_aliased(self, name):
+        """Is this CB's storage the tensor's own buffer (zero-copy sharded I/O)?
+
+        Such a CB costs L1 but is NOT program-allocated — the buffer allocator
+        reserved it when the tensor was created. See L1_ALLOC_HEADROOM_BYTES.
+        """
+        return (self.sharded_in and name == "cb_input_tiles") or (self.sharded_out and name == "cb_output_tiles")
+
+    def _cb_bytes(self, x_res_depth, gamma_resident):
+        """(program-allocated bytes, aliased resident-shard bytes) for one plan."""
+        prog = shard = 0
+        for name, _, ps, np in self.cb_plan(x_res_depth, gamma_resident):
+            if self._is_aliased(name):
+                shard += ps * np
+            else:
+                prog += ps * np
+        return prog, shard
+
     def _cb_total(self, x_res_depth, gamma_resident):
-        return sum(ps * np for (_, _, ps, np) in self.cb_plan(x_res_depth, gamma_resident))
+        prog, shard = self._cb_bytes(x_res_depth, gamma_resident)
+        return prog + shard
+
+    def _fits(self, x_res_depth, gamma_resident):
+        """Both walls: the program's CB region, and the whole L1 bank."""
+        prog, shard = self._cb_bytes(x_res_depth, gamma_resident)
+        return prog <= L1_CB_BUDGET_BYTES and prog + shard <= self.l1_total_budget
 
 
 def _tile_geometry(input_tensor):
@@ -523,11 +581,40 @@ def _tile_geometry(input_tensor):
     return ht_total, wt_global
 
 
-def _derive_blocking(input_tensor, gamma, grid_cores, placement, sharded_in=False, sharded_out=False):
-    """Derive the blocking, halving the block budget until the CB total fits.
+def _l1_total_budget(device):
+    """Per-core L1 the op may commit to (program CBs + any resident shard).
+
+    Read from the live device's L1 bank size — arch- and dispatch-config
+    specific — minus ``L1_ALLOC_HEADROOM_BYTES`` for allocator fragmentation.
+    Falls back to the CB budget alone (the pre-Refinement-4 single-budget model)
+    if the memory view is unavailable, which is always safe: it can only make
+    the derivation more conservative.
+    """
+    try:
+        bank = int(ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank)
+    except Exception:
+        return L1_CB_BUDGET_BYTES
+    # A/B hook, same style as RMS_NORM_W_SPLIT: a headroom wider than the bank
+    # clamps back to L1_CB_BUDGET_BYTES, i.e. the pre-Refinement-4 model where
+    # the resident shard was charged against the CB budget.
+    headroom = os.environ.get("RMS_NORM_L1_HEADROOM_KB")
+    headroom = int(headroom) * 1024 if headroom else L1_ALLOC_HEADROOM_BYTES
+    return max(L1_CB_BUDGET_BYTES, bank - headroom)
+
+
+def _derive_blocking(
+    input_tensor, gamma, grid_cores, placement, sharded_in=False, sharded_out=False, l1_total_budget=None
+):
+    """Derive the blocking, halving the block budget until the CBs fit.
+
+    Two walls, per ``_Blocking._fits``: the program's own CB region
+    (``L1_CB_BUDGET_BYTES``) and the whole L1 bank once any zero-copy shard is
+    counted (``l1_total_budget``). On an interleaved tensor the shard term is 0
+    and only the first can bind, so this is byte-identical to the single-budget
+    loop it replaces.
 
     The halving loop also absorbs the ROOT core's gather buffer
-    (``HT_BLOCK * CW`` fp32 tiles): it is charged into ``cb_total_bytes`` for
+    (``HT_BLOCK * CW`` fp32 tiles): it is charged into ``program_cb_bytes`` for
     every core, so an over-wide combine shrinks ``HT_BLOCK`` rather than
     silently overflowing L1 on the roots.
     """
@@ -539,15 +626,18 @@ def _derive_blocking(input_tensor, gamma, grid_cores, placement, sharded_in=Fals
         cw2=placement.cw2,
         sharded_in=sharded_in,
         sharded_out=sharded_out,
+        l1_total_budget=l1_total_budget,
     )
     budget = L1_BLOCK_BUDGET_BYTES
     blk = _Blocking(input_tensor, gamma, budget, grid_cores, **kwargs)
-    while blk.cb_total_bytes > L1_CB_BUDGET_BYTES and budget > blk.unit_bytes:
+    while not blk.fits and budget > blk.unit_bytes:
         budget //= 2
         blk = _Blocking(input_tensor, gamma, budget, grid_cores, **kwargs)
-    assert blk.cb_total_bytes <= L1_CB_BUDGET_BYTES, (
-        f"rms_norm: per-core CB total {blk.cb_total_bytes} B exceeds "
-        f"L1_CB_BUDGET_BYTES={L1_CB_BUDGET_BYTES} even at the minimum block size"
+    assert blk.fits, (
+        f"rms_norm: per-core L1 does not fit even at the minimum block size — "
+        f"program CBs {blk.program_cb_bytes} B (budget {L1_CB_BUDGET_BYTES}) + "
+        f"resident shards {blk.resident_shard_bytes} B "
+        f"(total budget {blk.l1_total_budget})"
     )
     return blk
 
@@ -914,14 +1004,19 @@ def _family_of(core, subrects):
 
 
 def _placement_sharded(input_tensor, ht_total, wt_global, runs):
-    """Placement pinned by the input's shard grid (WIDTH / BLOCK sharded).
+    """Placement pinned by the input's shard grid.
 
-    WIDTH: one group over every shard core (each owns a W slice of ALL rows).
-    BLOCK: one group per grid row (each row owns a tile-row band, split by W).
+    HEIGHT: one core per shard, each owning ht_s tile-rows of the FULL W — the
+            phase-0 row split made physical, so the reduce stays LOCAL (cw == 1,
+            no combine, no semaphore, no multicast).
+    WIDTH:  one group over every shard core (each owns a W slice of ALL rows).
+    BLOCK:  one group per grid row (each row owns a tile-row band, split by W).
 
     A ragged shard grid (auto_shard_config emits full rows + a partial last row)
     is padded up to its bounding box with zero-work filler cores so the group
-    stays the single rectangle a multicast can address.
+    stays the single rectangle a multicast can address. HEIGHT needs none of
+    that: with no broadcast there is no rectangle to keep legal, so the core set
+    IS the shard grid.
     """
     layout = input_tensor.memory_config().memory_layout
     ht_s, wt_s, cores, grid = _shard_geometry(input_tensor)
@@ -930,6 +1025,19 @@ def _placement_sharded(input_tensor, ht_total, wt_global, runs):
     works = []
     groups = []
     owned = {(int(c.x), int(c.y)) for c in cores}
+
+    if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        # Refinement 4 / op_design Lamp L3 — a knob-turn, not a scheme change.
+        # The shard grid pins which core owns which tile-rows and the shard
+        # height pins how many (rows_core_max -> HT_BLOCK); nothing else in the
+        # model moves. Each core still owns WHOLE rows, so the dependent W axis
+        # is never split: cw stays 1 and every W-split structure collapses out
+        # exactly as it does on the interleaved row-split path.
+        for i, core in enumerate(cores):
+            start = i * ht_s
+            rows = max(0, min(ht_s, ht_total - start))
+            works.append(_CoreWork(core, start, rows, 0, min(wt_s, wt_global), 0, -1))
+        return _Placement(grid, works, [], 1, wt_s, ht_s)
     # Two-stage needs a DENSE rectangle: every row must have a real core at
     # column x0 to lead it, and every row's fan-in must be the same cx. A ragged
     # shard grid (auto_shard_config's full rows + partial last row) has neither,
@@ -1010,12 +1118,28 @@ def create_program_descriptor(
         device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
     ht_total, wt_global = _tile_geometry(input_tensor)
-    in_sharded = input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-    out_sharded = output_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    # "Sharded" here means ZERO-COPY: the shard is the per-core block, so its CB
+    # is aliased straight onto the tensor buffer and no NoC transfer happens.
+    # That is only meaningful for a TILE shard. eval.sharding's ROW_MAJOR granule
+    # is (1 row, L1_align/elem_bytes columns), so an RM shard is a handful of
+    # STICKS (e.g. [1, 128] or [3, 512]) — never the 32 sticks the in-place
+    # tilize consumes. An RM shard therefore is NOT this core's block: the 32
+    # sticks of one tile-row live on up to 32 DIFFERENT cores, so the read is
+    # genuinely non-local and goes through the TensorAccessor, exactly as an
+    # interleaved tensor's does. Only the placement of the pages changes.
+    tile_shard = input_tensor.layout == ttnn.TILE_LAYOUT
+    in_sharded = tile_shard and input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    out_sharded = tile_shard and output_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
 
     placement = _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharded)
     blk = _derive_blocking(
-        input_tensor, gamma, grid.x * grid.y, placement, sharded_in=in_sharded, sharded_out=out_sharded
+        input_tensor,
+        gamma,
+        grid.x * grid.y,
+        placement,
+        sharded_in=in_sharded,
+        sharded_out=out_sharded,
+        l1_total_budget=_l1_total_budget(device),
     )
 
     all_cores = placement.all_cores

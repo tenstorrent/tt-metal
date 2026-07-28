@@ -97,9 +97,14 @@ SUPPORTED = {
     # Refinement 2: the cross-core W-split makes the two W-splitting placements
     # native — each core's shard is consumed in place from its own L1 (a
     # zero-copy CB, no NoC read) and the dependent reduce is combined across the
-    # shard's cores. HEIGHT_SHARDED is Refinement 4.
+    # shard's cores.
+    # Refinement 4: HEIGHT_SHARDED is the phase-0 row split made physical — the
+    # shard grid pins the core assignment, the shard height pins the per-core
+    # row count, and because each core holds WHOLE rows the reduce stays local
+    # (no combine, no multicast). Same zero-copy CB placement on both sides.
     "memory_layout": [
         ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
@@ -144,7 +149,9 @@ PROPERTIES = {
     # fallback; the root's gather buffer (HT_BLOCK * CW) is capped by
     # L1_GATHER_BUDGET_BYTES on the interleaved path and by the halve-and-
     # re-derive loop on the sharded one; and the host asserts the final per-core
-    # CB total against L1_CB_BUDGET_BYTES.
+    # footprint against BOTH budgets — program-allocated CBs against
+    # L1_CB_BUDGET_BYTES, and those plus any zero-copy resident shard against the
+    # live device's L1 bank size less L1_ALLOC_HEADROOM_BYTES.
     "bounded_cb": {"value": True, "source": "declared"},
     "math_fidelity": {"value": ["LoFi", "HiFi2", "HiFi3", "HiFi4"], "source": "declared"},
 }
