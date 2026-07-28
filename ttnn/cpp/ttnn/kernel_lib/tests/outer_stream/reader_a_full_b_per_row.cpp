@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Feeds the OuterStream toy chain (test_outer_stream.py):
+// Feeds the OuterStream lifecycle scenario:
 //   cb_a (c_0): the full Ht*Wt walk, one tile per (ht, wt), pushed in order.
 //   cb_b (c_1): ONE tile per row (b[ht]), pushed at the top of each row so it is present when
 //               the compute kernel starts that row. cb_b stays shallow (2-deep) — the producer
