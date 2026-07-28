@@ -50,3 +50,34 @@ def check_output_sanity(frames, *, num_frames, height, width):
         f"Output sanity OK: shape={frames.shape}, range=[{vmin},{vmax}], "
         f"std={global_std:.2f}, mean_frame_delta={mean_frame_delta:.2f}"
     )
+
+
+def check_first_frame_matches_seed(frames, *, seed_image, width, height, pcc_floor=0.3):
+    """Seed-agnostic correctness signal for I2V: decoded frame 0 must resemble the seed image.
+
+    The pipeline conditions frame 0 on the seed image (VAE-encodes it into the first latent frame),
+    so the decoded first frame must strongly resemble the seed. This catches a broken
+    image-conditioning path, and unlike VBench it works regardless of seed content (fractal or
+    natural). VAE round-trip + denoising means it won't be pixel-identical, so we gate on
+    correlation, not equality.
+
+    Args:
+        frames: decoded video array/tensor, shape (num_frames, height, width, 3), batch dim removed.
+        seed_image: the PIL seed image conditioned into frame 0.
+        width, height: target resolution; the seed is resized to this before comparison.
+        pcc_floor: minimum Pearson correlation. Provisional floor -- catches a totally-broken
+            conditioning path (near-zero correlation); a healthy round-trip correlates well above it.
+            Tighten once real values are observed.
+    """
+    f0 = frames[0]
+    if isinstance(f0, torch.Tensor):
+        f0 = f0.cpu().numpy()
+    f0 = np.asarray(f0).astype(np.float64)
+    seed = np.asarray(seed_image.convert("RGB").resize((width, height))).astype(np.float64)
+    assert f0.shape == seed.shape, f"frame-0 shape {f0.shape} != seed shape {seed.shape}"
+    pcc = float(np.corrcoef(f0.ravel(), seed.ravel())[0, 1])
+    logger.info(f"I2V frame-0 vs seed-image correlation (PCC) = {pcc:.4f}")
+    assert pcc > pcc_floor, (
+        f"Decoded frame 0 barely correlates with the seed image (PCC={pcc:.3f}); "
+        "the I2V image-conditioning path is likely broken"
+    )

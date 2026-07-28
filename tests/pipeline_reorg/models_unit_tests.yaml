@@ -1005,14 +1005,6 @@
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    # Legacy tt-run using the rank_bindings.yaml + rankfile that the bh_sc4-mgd SKU pre-stages on the
-    # shared /etc/ttop volume (its mgd_file is the 32x4 quad descriptor). We deliberately do NOT use the
-    # automapper (--mesh-graph-descriptor/--hosts): its Phase-1 generate_rank_bindings writes to the
-    # launcher cwd (/home/user/tt-metal/generated/ttrun) on rank 0's COMPUTE host, which the separate CI
-    # runner container cannot read back ("Phase 1 output not found"). Legacy mode has no Phase 1. Mirrors
-    # the proven fabric-multihost-exabox leg. --tcp-interface ens5f0np0 is still REQUIRED: the job env sets
-    # OMPI_MCA_btl_tcp_if_include=ens5f0np0, so without it tt-run adds the conflicting default
-    # btl_tcp_if_exclude docker0,lo (mutually-exclusive MCA vars -> TCP dropped -> MPI_Comm_dup abort).
     python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
       --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
       --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \

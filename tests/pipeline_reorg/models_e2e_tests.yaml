@@ -840,23 +840,9 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    # VBench reads its model weights from the infra-provisioned, pre-populated /mnt/models/vbench cache.
-    # /mnt/models is a READ-ONLY NFS mount, but that is fine now that the dir EXISTS and is populated:
-    # vbench's os.makedirs(CACHE_DIR, exist_ok=True) becomes a no-op (CPython swallows the mkdir EROFS
-    # when the dir already exists), and our assert_vbench_quality writes results to a tempdir, not the
-    # cache -- so usage is read-only. Same pattern as the WH-galaxy WAN tests (/mnt/MLPerf/vbench). This
-    # cache (models + torch_hub) must stay populated; #48682 was just the dir-missing case.
     export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    # Legacy tt-run using the rank_bindings.yaml + rankfile that the bh_sc4-mgd SKU pre-stages on the
-    # shared /etc/ttop volume (its mgd_file is the 32x4 quad descriptor). We deliberately do NOT use the
-    # automapper (--mesh-graph-descriptor/--hosts): its Phase-1 generate_rank_bindings writes to the
-    # launcher cwd (/home/user/tt-metal/generated/ttrun) on rank 0's COMPUTE host, which the separate CI
-    # runner container cannot read back ("Phase 1 output not found"). Legacy mode has no Phase 1. Mirrors
-    # the proven fabric-multihost-exabox leg. --tcp-interface ens5f0np0 is still REQUIRED: the job env sets
-    # OMPI_MCA_btl_tcp_if_include=ens5f0np0, so without it tt-run adds the conflicting default
-    # btl_tcp_if_exclude docker0,lo (mutually-exclusive MCA vars -> TCP dropped -> MPI_Comm_dup abort).
     python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
       --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
       --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
@@ -878,14 +864,9 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    # VBench reads models from the pre-populated read-only /mnt/models/vbench cache -- see the T2V entry
-    # above for why a RO mount is fine once the dir exists (makedirs no-op; results go to a tempdir).
     export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    # Legacy tt-run reading the bh_sc4-mgd pre-staged /etc/ttop bindings -- see the T2V entry above for the
-    # full rationale (automapper Phase-1 output isn't visible to the CI runner; --tcp-interface ens5f0np0
-    # still required to avoid the btl_tcp_if_exclude/if_include MCA conflict).
     python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
       --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
       --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \

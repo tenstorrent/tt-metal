@@ -59,7 +59,6 @@ def assert_vbench_quality(
     for metric, score in scores.items():
         logger.info(f"VBench {metric} = {score:.4f}")
 
-    # report all failures at once -- otherwise each (expensive) run surfaces only the first miss.
     failures = []
     for metric, minimum in thresholds.items():
         if metric not in scores:

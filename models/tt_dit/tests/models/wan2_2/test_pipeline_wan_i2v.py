@@ -24,7 +24,7 @@ from ....utils.test import (
     ring_params_req_exact_devices,
     skip_if_unsupported_num_links,
 )
-from .common import check_output_sanity
+from .common import check_first_frame_matches_seed, check_output_sanity
 
 
 def create_fractal_image(width: int, height: int) -> Image.Image:
@@ -130,27 +130,6 @@ def test_pipeline_inference(
 
     prompt = "The cat in the hat runs up the hill to the house."
 
-    def check_first_frame_matches_seed(frames):
-        # The direct, seed-agnostic correctness signal for I2V: the pipeline conditions frame 0 on the
-        # seed image (VAE-encodes it into the first latent frame), so the decoded first frame must
-        # strongly resemble the seed. This catches a broken image-conditioning path, and unlike VBench
-        # it works regardless of seed content (fractal or natural). VAE round-trip + denoising means it
-        # won't be pixel-identical, so we gate on correlation, not equality.
-        f0 = frames[0]
-        if isinstance(f0, torch.Tensor):
-            f0 = f0.cpu().numpy()
-        f0 = np.asarray(f0).astype(np.float64)
-        seed = np.asarray(test_image.convert("RGB").resize((width, height))).astype(np.float64)
-        assert f0.shape == seed.shape, f"frame-0 shape {f0.shape} != seed shape {seed.shape}"
-        pcc = float(np.corrcoef(f0.ravel(), seed.ravel())[0, 1])
-        logger.info(f"I2V frame-0 vs seed-image correlation (PCC) = {pcc:.4f}")
-        # Provisional floor -- catches a totally-broken conditioning path (near-zero correlation).
-        # A healthy round-trip should correlate well above this; tighten once real values are observed.
-        assert pcc > 0.3, (
-            f"Decoded frame 0 barely correlates with the seed image (PCC={pcc:.3f}); "
-            "the I2V image-conditioning path is likely broken"
-        )
-
     def run(*, prompt, number, seed):
         logger.info(f"Running inference with prompt: '{prompt}'")
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
@@ -180,7 +159,7 @@ def test_pipeline_inference(
         frames = frames[0]
         if int(ttnn.distributed_context_get_rank()) == 0:
             check_output_sanity(frames, num_frames=num_frames, height=height, width=width)
-            check_first_frame_matches_seed(frames)
+            check_first_frame_matches_seed(frames, seed_image=test_image, width=width, height=height)
         output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
         try:
             from models.tt_dit.utils.video import export_to_video

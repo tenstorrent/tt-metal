@@ -205,16 +205,6 @@ def test_pipeline_inference(
         },
     }
 
-    # Per-config VBench floor overrides, keyed by the parametrize `id` (see `ids=[...]` above).
-    # The 4x32 BH quad's fully-distributed VAE/denoising yields a marginally lower
-    # background_consistency (~0.928) than the WH-calibrated 0.93 floor -- within VBench's
-    # run-to-run noise, not a quality regression. Give this config its own floor so it can
-    # gate in CI without loosening the thresholds the other (WH) configs are calibrated to.
-    if "4x32sp1tp0nl2_ring_is_fsdp0" in request.node.callspec.id:
-        vbench_thresholds_by_height[720]["background_consistency"] = 0.92
-        vbench_thresholds_by_height[720]["subject_consistency"] = 0.91
-        vbench_thresholds_by_height[720]["imaging_quality"] = 0.62
-
     def check_output_with_vbench(prompt, number):
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
