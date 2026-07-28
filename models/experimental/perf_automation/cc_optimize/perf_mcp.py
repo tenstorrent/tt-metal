@@ -3211,16 +3211,30 @@ def termination_check() -> dict:
 
 
 def _tp_mesh_shapes(ttnn_mod) -> list:
-    """Mesh shapes to try for the TP levers, best first, derived from the DEVICES ACTUALLY PRESENT.
+    """Mesh shapes to try for the TP levers, best first, taken from what the tool ALREADY KNOWS.
 
-    Both TP entry points opened a literal MeshShape(2, 2) -- the shape of the QB2 bench machine the
-    lever was written on (commit f08b2ce8cc: "Verified on the real (2,2) mesh"). That is wrong
-    anywhere else: a 1x8 board, a galaxy 2x4 or a 2-chip p300c would be asked for a topology it does
-    not have, so the lever failed for reasons that had nothing to do with the fracture.
+    Both TP entry points opened a literal MeshShape(2, 2) -- the QB2 bench machine the lever was
+    written on (f08b2ce8cc: "Verified on the real (2,2) mesh"). Nothing else fits that, and it is why
+    the all_gather bug survived: 2x2 was the only shape the lever ever ran on.
 
-    1xN comes first because a degenerate mesh needs no cluster_axis at all under 1-D fabric; factor
-    pairs follow, most balanced first, for boards whose links cannot form a single ring, so the sweep
-    still sees every chip. Each entry is only a CANDIDATE -- the caller opens the first that succeeds.
+    Deriving a shape arithmetically is no better, because chip count does not imply topology: QB2 has
+    4 chips but its fabric is 2x2 only (8 QSFP-DD, 2 links/chip), so a "sensible" 1x4 ring cannot be
+    formed at all. The tool already records the answer in two places, so ask them in order:
+
+      1. PERF_MCP_TP_MESH          an explicit pin, for debugging a fabric problem
+      2. TT_PERF_MESH_ROWS/COLS    the mesh THIS RUN planned and the model actually opens
+                                   (optimize._derive_topology_env -> plan_parallelism), read through
+                                   perf_adapter.resolve_mesh_shape so the lever measures the same
+                                   topology as everything else in the run. Asked with 0x0 defaults,
+                                   so an UNPARSEABLE setting returns 0x0 and is rejected here: taking
+                                   resolve_mesh_shape's own 1x1 default as a plan would run the TP
+                                   sweep on ONE chip and report it as the planned topology
+      3. the box registry          scripts/tt_hw_planner/hardware.HARDWARE, matched on the tt-smi
+                                   board_type: default_mesh first, then the box's own canonical
+                                   mesh_shapes that use every chip
+      4. chip count                last resort, only when the board is unrecognised
+
+    Every entry is a CANDIDATE; the caller opens the first that works.
     """
     override = (os.environ.get("PERF_MCP_TP_MESH") or "").strip()
     if override:
@@ -3229,10 +3243,45 @@ def _tp_mesh_shapes(ttnn_mod) -> list:
             return [(r, c)]
         except Exception:  # noqa: BLE001
             pass
+
+    planned = []
+    if (os.environ.get("TT_PERF_MESH_ROWS") or os.environ.get("TT_PERF_MESH_COLS") or "").strip():
+        try:
+            from agent.perf_adapter import resolve_mesh_shape
+
+            r, c = resolve_mesh_shape(0, 0)
+            if r >= 1 and c >= 1:
+                planned = [(int(r), int(c))]
+        except Exception:  # noqa: BLE001
+            planned = []
+
     try:
         num = int(ttnn_mod.get_num_devices())
     except Exception:  # noqa: BLE001
         num = 0
+
+    box_shapes = []
+    box = _tp_box(num)
+    if box is not None:
+        canonical = [tuple(m) for m in (box.mesh_shapes or []) if len(m) == 2]
+        chips = int(getattr(box, "chips", 0) or 0)
+        full = [m for m in canonical if m[0] * m[1] == chips] or canonical
+        default = tuple(box.default_mesh) if box.default_mesh else None
+        if default and default in full:
+            box_shapes.append(default)
+        for m in full:
+            if m not in box_shapes:
+                box_shapes.append(m)
+        if not num:
+            num = chips
+
+    out = []
+    for s in planned + box_shapes:
+        if s not in out:
+            out.append(s)
+    if out:
+        return out
+
     if num < 1:
         return [(1, 1)]
     pairs = []
@@ -3245,6 +3294,45 @@ def _tp_mesh_shapes(ttnn_mod) -> list:
         if s not in out:
             out.append(s)
     return out
+
+
+def _tp_box(num_devices: int = 0):
+    """The Box this machine is, from the tt-hw-planner registry, or None.
+
+    Matched on the tt-smi board_type the way probes.board_to_arch does, then REQUIRED to agree with
+    the devices actually present -- a registry entry describes one box, and several entries describe a
+    single CARD. This machine reports board_type p300 with 4 devices visible: the P300 entry is a
+    2-chip dual-ASIC card, so two of them are installed. Trusting its mesh_shapes there would sweep
+    2 of the 4 chips and report the result as the board's TP. A mismatch means the system is not that
+    box, so the caller falls through to deriving from the real device count. An UNKNOWN device count
+    returns None for the same reason: without it the box cannot be confirmed, and picking one by
+    board-name similarity is a guess dressed as a lookup.
+
+    Guarded: the registry is a sibling package, and the levers must still work without it.
+    """
+    try:
+        from scripts.tt_hw_planner.hardware import HARDWARE
+    except Exception:  # noqa: BLE001
+        return None
+    board = ""
+    try:
+        from agent.probes import tt_smi_probe
+
+        board = str((json.loads(tt_smi_probe()) or {}).get("card") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        board = ""
+    matches = []
+    for box in HARDWARE:
+        for bt in box.board_types or ():
+            if bt and board.startswith(bt.lower()):
+                matches.append(box)
+                break
+    if not matches:
+        return None
+    if not num_devices:
+        return None
+    exact = [b for b in matches if int(getattr(b, "chips", 0) or 0) == int(num_devices)]
+    return exact[0] if exact else None
 
 
 def _open_tp_mesh(ttnn_mod):

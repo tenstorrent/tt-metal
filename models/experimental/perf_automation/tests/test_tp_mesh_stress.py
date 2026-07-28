@@ -27,11 +27,15 @@ sys.path.insert(0, str(_ROOT))
 def pm(tmp_path, monkeypatch):
     monkeypatch.setenv("PERF_MCP_MANIFEST", str(tmp_path / "m.json"))
     (tmp_path / "m.json").write_text('{"config": {}, "perf_test_resolved": {"path": "t.py"}}')
-    monkeypatch.delenv("PERF_MCP_TP_MESH", raising=False)
+    for var in ("PERF_MCP_TP_MESH", "TT_PERF_MESH_ROWS", "TT_PERF_MESH_COLS"):
+        monkeypatch.delenv(var, raising=False)
     spec = importlib.util.spec_from_file_location("pm_stress_ut", _ROOT / "cc_optimize" / "perf_mcp.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules["pm_stress_ut"] = mod
     spec.loader.exec_module(mod)
+    # The arithmetic path is the LAST resort; these tests exercise it unless they say otherwise, so
+    # the box registry is neutralised per-test rather than depending on the machine running them.
+    monkeypatch.setattr(mod, "_tp_box", lambda num=0: None)
     return mod
 
 
@@ -197,3 +201,114 @@ def test_no_hardcoded_mesh_literal_remains_in_the_tp_levers(pm):
         ]
         assert not calls, "%s builds a MeshShape directly instead of calling _open_tp_mesh" % node.name
         assert "_open_tp_mesh" in ast.dump(node), "%s does not open the mesh via the shared helper" % node.name
+
+
+# --- the sources that OUTRANK arithmetic -----------------------------------------------------------
+# Chip count does not imply topology. QB2 has 4 chips but its fabric is 2x2 only, so the arithmetic
+# "prefer a 1x4 ring" is a shape that cannot be formed there. These pin the priority order.
+
+
+class _Box:
+    def __init__(self, name, chips, mesh_shapes, default_mesh=None, board_types=()):
+        self.name = name
+        self.chips = chips
+        self.mesh_shapes = mesh_shapes
+        self.default_mesh = default_mesh
+        self.board_types = board_types
+        self.arch = "Blackhole"
+
+
+_QB2 = _Box("QB2", 4, [(1, 1), (2, 2)], default_mesh=(2, 2), board_types=("p150c",))
+_GALAXY = _Box("GalaxyBH", 32, [(1, 1), (1, 8), (4, 8), (2, 16), (1, 32)], default_mesh=(4, 8))
+
+
+def test_the_run_planned_mesh_wins_over_everything_but_an_explicit_pin(pm, monkeypatch):
+    """optimize._derive_topology_env exports the mesh plan_parallelism chose and the model opens.
+    The TP lever must measure THAT topology, or it reports timings for a mesh the run never used."""
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: _QB2)
+    monkeypatch.setenv("TT_PERF_MESH_ROWS", "1")
+    monkeypatch.setenv("TT_PERF_MESH_COLS", "4")
+    assert pm._tp_mesh_shapes(_Ttnn(4))[0] == (1, 4)
+
+
+def test_an_explicit_pin_outranks_the_planned_mesh(pm, monkeypatch):
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: _QB2)
+    monkeypatch.setenv("TT_PERF_MESH_ROWS", "1")
+    monkeypatch.setenv("TT_PERF_MESH_COLS", "4")
+    monkeypatch.setenv("PERF_MCP_TP_MESH", "2x2")
+    assert pm._tp_mesh_shapes(_Ttnn(4)) == [(2, 2)]
+
+
+def test_the_box_registry_is_used_when_no_mesh_was_planned(pm, monkeypatch):
+    """THE CORRECTION: on QB2 the arithmetic path would lead with 1x4, which the fabric cannot form.
+    The registry says [(1,1), (2,2)] with default (2,2), so (2,2) leads and 1x4 is never offered."""
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: _QB2)
+    shapes = pm._tp_mesh_shapes(_Ttnn(4))
+    assert shapes[0] == (2, 2), shapes
+    assert (1, 4) not in shapes, shapes
+
+
+def test_the_box_default_mesh_leads_on_galaxy(pm, monkeypatch):
+    """Galaxy's canonical large-scale shape is (4,8), not the 1x32 ring arithmetic would pick."""
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: _GALAXY)
+    shapes = pm._tp_mesh_shapes(_Ttnn(32))
+    assert shapes[0] == (4, 8), shapes
+    assert all(r * c == 32 for r, c in shapes), shapes
+
+
+def test_box_shapes_that_do_not_use_every_chip_are_dropped(pm, monkeypatch):
+    """(1,1) is listed for single-chip bring-up; a TP sweep on it would measure no parallelism."""
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: _QB2)
+    assert (1, 1) not in pm._tp_mesh_shapes(_Ttnn(4))
+
+
+def test_a_half_set_planned_mesh_does_not_silently_become_1x1(pm, monkeypatch):
+    """resolve_mesh_shape owns this: a half-set pair once opened 1x1 while the plan said TP=4."""
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: None)
+    monkeypatch.setenv("TT_PERF_MESH_COLS", "4")
+    monkeypatch.delenv("TT_PERF_MESH_ROWS", raising=False)
+    assert pm._tp_mesh_shapes(_Ttnn(4))[0] == (1, 4)
+
+
+def test_an_unparseable_planned_mesh_falls_through_to_the_box(pm, monkeypatch):
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: _QB2)
+    monkeypatch.setenv("TT_PERF_MESH_ROWS", "junk")
+    monkeypatch.setenv("TT_PERF_MESH_COLS", "junk")
+    assert pm._tp_mesh_shapes(_Ttnn(4))[0] == (2, 2)
+
+
+def test_an_unrecognised_board_still_gets_candidates(pm, monkeypatch):
+    """A board absent from the registry must not disable the lever -- arithmetic is the fallback."""
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: None)
+    assert pm._tp_mesh_shapes(_Ttnn(8)) == [(1, 8), (2, 4)]
+
+
+def test_box_lookup_never_raises_when_the_registry_is_absent(pm, monkeypatch):
+    """Guarded import: perf_automation must run without scripts/tt_hw_planner importable."""
+    import builtins
+
+    real = builtins.__import__
+
+    def _no_planner(name, *a, **k):
+        if "tt_hw_planner" in name:
+            raise ImportError("planner absent")
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_planner)
+    assert pm._tp_box(4) is None
+
+
+def test_a_box_entry_that_describes_one_card_is_not_trusted_for_a_multi_card_system(pm, monkeypatch):
+    """THE REAL CASE: this machine reports board_type p300 with 4 devices, and the registry's P300 is
+    a 2-chip dual-ASIC CARD -- two are installed. Trusting its mesh_shapes would sweep 2 of 4 chips
+    and call that the board's TP."""
+    _p300_card = _Box("P300", 2, [(1, 1), (1, 2), (2, 1)], board_types=("p300",))
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: _p300_card if num == 2 else None)
+    shapes = pm._tp_mesh_shapes(_Ttnn(4))
+    assert all(r * c == 4 for r, c in shapes), shapes
+    assert shapes == [(1, 4), (2, 2)], shapes
+
+
+def test_the_box_is_used_when_the_system_really_is_that_box(pm, monkeypatch):
+    monkeypatch.setattr(pm, "_tp_box", lambda num=0: _QB2 if num == 4 else None)
+    assert pm._tp_mesh_shapes(_Ttnn(4))[0] == (2, 2)

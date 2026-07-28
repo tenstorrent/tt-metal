@@ -127,11 +127,16 @@ def _perf_mcp(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PERF_MCP_MANIFEST", str(tmp_path / "m.json"))
     (tmp_path / "m.json").write_text('{"config": {}, "perf_test_resolved": {"path": "t.py"}}')
+    for var in ("PERF_MCP_TP_MESH", "TT_PERF_MESH_ROWS", "TT_PERF_MESH_COLS"):
+        monkeypatch.delenv(var, raising=False)
     root = Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location("pm_tpmesh_ut", root / "cc_optimize" / "perf_mcp.py")
     mod = importlib.util.module_from_spec(spec)
     _sys.modules["pm_tpmesh_ut"] = mod
     spec.loader.exec_module(mod)
+    # These cover the arithmetic fallback, so the box registry is neutralised: otherwise the result
+    # depends on which board the suite happens to run on (this one answers p300).
+    monkeypatch.setattr(mod, "_tp_box", lambda num=0: None)
     return mod
 
 
