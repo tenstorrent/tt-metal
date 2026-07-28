@@ -77,10 +77,44 @@ DURATION [ns], fresh JIT cache per variant:
 The decode column is the whole win, and it is grid occupancy: the split turns
 1 busy core into 32-56. Prefill is untouched (the split is not engaged there —
 its row axis already fills the grid), every prefill row inside the 1-2% noise
-band. `(1,1,32,7168)` at 11_279 ns is already inside Refinement 3's clock-scaled
-<= 14_894 ns ceiling at THIS config; R3 re-measures at the pinned perf config
-(HiFi2 / fp32_dest_acc_en=False) and tunes the split's own knobs (cores per
-group, combine shape, per-core chunk granularity).
+band.
+
+Refinement 3 tuned that split's own knobs, at the PINNED perf config every
+`achievable_ns` reference was taken at (bf16 / TILE / HiFi2 /
+fp32_dest_acc_en=False / bf16 TILE gamma — `perf_compute_kernel_config()`, used
+by `test_rms_norm_perf_decode_pinned`). Measured AICLK 1349.98 MHz, i.e. the
+reference clock, so no scaling applies.
+
+    shape          R2 flat   R3 staged   speedup   ceiling   margin
+    (1,1,32,1024)    6_938       5_709     1.22x     9_149    1.60x inside
+    (1,1,32,2304)    7_555       6_219     1.21x    17_003    2.73x inside
+    (1,1,32,5120)    9_309       7_933     1.17x    75_825    9.56x inside
+    (1,1,32,7168)   10_929       8_917     1.23x    14_894    1.67x inside
+
+The `(1,1,32,7168)` ceiling is `104_259 / minimum_expected_speedup 7.0`; the op
+delivers 104_259 / 8_917 = **11.7x** against that 7.0x requirement.
+
+Where the time goes, by ABLATION (`RMS_NORM_ABLATE=combine[,gamma]`, which keeps
+the placement and every DRAM read/write and removes only the named stage):
+
+    shape          full   no-combine   combine   combine share
+    (1,1,32,1024)  6_938       3_524     3_414        49%
+    (1,1,32,2304)  7_555       3_827     3_728        49%
+    (1,1,32,5120)  9_309       5_152     4_157        45%
+    (1,1,32,7168) 10_929       5_759     5_170        47%
+
+so the combine, not the data movement, was the decode bottleneck (NCRISC is only
+1.0-2.2 us of it). gamma costs 117-468 ns total — noise by comparison.
+
+Two knobs came out of that. `RMS_NORM_MAX_FLAT_FANIN` picks the combine topology
+at fixed CW (see COMBINE_MAX_FLAT_FANIN); `RMS_NORM_GATHER_BUDGET_KB` caps CW.
+CW re-swept under the staged topology — widest-that-fits is confirmed optimal,
+where under the flat one it had been actively harmful:
+
+    shape          CW=8    CW=16    CW=32    CW=36-56 (widest)
+    (1,1,32,7168) 12_016      —    10_116*      8_917
+    (1,1,32,1024)  5_739      —         —       5_709
+    (* flat-topology measurement; the staged one is not CW-limited there)
 """
 
 import os

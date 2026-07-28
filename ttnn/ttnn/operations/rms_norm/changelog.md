@@ -294,3 +294,149 @@
     numerical gate, so this is checked on the descriptor, not on the test colour.
   - `test_rms_norm_perf.py::test_report_blocking` now reports `CW` and the real core count, and the
     module docstring carries the row-split vs W-split A/B table.
+
+---
+
+## Refinement 3 — Speed up the perf-flagged **decode** column
+
+- **Date**: 2026-07-28
+- **Device**: blackhole_p150b, 11 × 10 = 110-core compute grid, measured AICLK
+  **1349.98 MHz** — the references' `reference_aiclk_mhz`, so `scaled_ns == achievable_ns`
+  and no clock scaling applies to any number below.
+
+- **What was done**: a perf-only refinement (no SUPPORTED change) on the four pinned decode
+  profiles `(1,1,32,W)`, `W ∈ {1024, 2304, 5120, 7168}`, measured at the config
+  `feature_spec` actually pins for them — bf16 / TILE / `fp32_dest_acc_en=False` /
+  `math_fidelity=HiFi2` / bf16 TILE gamma — never at the op's default HiFi4 / fp32-on corner.
+
+  **Measure first.** A new `test_rms_norm_perf_decode_pinned` re-baselined the column at that
+  config, and a new opt-in ablation (`test_rms_norm_ablate`, `RMS_NORM_ABLATE=combine[,gamma]`)
+  attributed the time. The ablation holds the cross-core placement byte-for-byte — same core
+  count, same per-core W slice, same DRAM reads and writes, same per-core square/reduce/scale —
+  and removes only the named stage, so the delta is that stage's real cost on the critical path:
+
+      shape           cores    full   no-combine   combine   share
+      (1,1,32,1024)      32   6_938        3_524     3_414     49%
+      (1,1,32,2304)      36   7_555        3_827     3_728     49%
+      (1,1,32,5120)      40   9_309        5_152     4_157     45%
+      (1,1,32,7168)      56  10_929        5_759     5_170     47%
+
+  The **combine was the bottleneck**, not the data movement (NCRISC 1.0–2.2 µs) and not gamma
+  (117–468 ns total, i.e. noise). It also grew ~73 ns per contributor — the signature of one
+  core absorbing `CW × 4 KB` of NoC writes and then running `CW` fp32 tile-adds back to back.
+
+  **Lever 1 — the two-stage combine** (`examples/tensix_all_reduce`'s measured
+  `two_stage_grid_reduce`, the topology R2 deliberately deferred to a tuning phase). Row members
+  gather to their grid-row leader, the row leaders gather to the group root: the serial fan-in
+  becomes `cx + cy` instead of `cx · cy`. Deliberately small delta — one CB
+  (`cb_group_partials2`), one semaphore, and a `CW1 × CW2` factorization of the existing `CW`.
+  The leader's fold is *literally the worker's own chunk-accumulate* (`Accumulate::at`, never
+  `at_last`, so the raw elementwise accumulator survives and the root's single finalize cannot
+  double-count the surviving x² lanes), and its row sum rides the **same** `cb_partial_out` the
+  slice partial did — one producer, one consumer, two sequential pushes, so no CB was added for it.
+  Fan-in 32/36/40/56 → **12/12/13/15**; per-core gather L1 174/204/248/312 KB → **94/108/140/148 KB**.
+
+  **Lever 2 — delete the republishing `copy` pass.** When a gather source comes from a *single*
+  accumulate call (`NW == 1` workers, and every leader's stage-1 fold) the accumulator is written
+  once and never reloaded, so the reduce packs straight into `cb_partial_out` instead of into
+  `cb_partials` + a `copy`. That is a whole compute pass (~320 ns fixed, `examples/compute_block_size`)
+  off the combine's serial path, twice over on a leader. `NW > 1` keeps the copy — there the
+  accumulator genuinely is a compute→compute read-modify-write.
+
+  Both levers are single-source knobs, not inlined constants: `COMBINE_MAX_FLAT_FANIN` selects the
+  topology at fixed `CW` (raise it past any reachable group area to get R2's flat root back), and
+  the existing `L1_GATHER_BUDGET_BYTES` still caps `CW` — now interpreted through `_gather_tiles`,
+  which charges `cx + cy` for a staged rectangle and `cx · cy` for a flat one, so the same budget
+  reaches a much wider group once the gather is staged.
+
+- **Measured result** (pinned perf config, DEVICE KERNEL DURATION ns, one fresh-cache run per
+  variant; a repeat of the winning configuration reproduced to 0.4–2.3 %, consistent with the
+  op's established 1–2 % noise band):
+
+      shape          R2 flat   +two-stage   +no-copy   speedup   ceiling   margin
+      (1,1,32,1024)    6_938        5_987      5_709     1.22x     9_149    1.60x inside
+      (1,1,32,2304)    7_555        6_513      6_219     1.21x    17_003    2.73x inside
+      (1,1,32,5120)    9_309        8_320      7_933     1.17x    75_825    9.56x inside
+      (1,1,32,7168)   10_929        9_200      8_917     1.23x    14_894    1.67x inside
+
+  The headline `(1,1,32,7168)` ceiling is `104_259 / minimum_expected_speedup 7.0`; the op now
+  delivers **104 259 / 8 917 = 11.7×** against that 7.0× requirement.
+
+  At the op's *default* config the same shapes go 6_999 → 5_762 · 7_663 → 6_318 · 9_611 → 8_273 ·
+  11_279 → 9_273 (1.16–1.22×), and **prefill is unmoved** — 101_152 / 219_255 / 479_801 / 831_397 ns
+  against R2's 101_922 / 215_814 / 487_581 / 834_799, all inside the noise band. The W-split is
+  not engaged at prefill (its row axis already fills the grid), so `CW == 1` and none of this code
+  runs there.
+
+- **Accuracy achieved**: `pcc_threshold = 0.9995` holds on all four pinned decode cases (asserted
+  by `test_rms_norm_perf_decode_pinned`). Staging changes the *association order* of an exact
+  elementwise fp32 add tree, nothing else — worst PCC across the golden slices is unchanged, and
+  the all-ones absolute check recovers `mean(x²) = 1.0` exactly on both topologies.
+
+- **Golden test progress**: unchanged by design (perf refinement, no SUPPORTED change).
+  `test_op_loose` **18 passed / 1 xfail** (the xfail is HEIGHT_SHARDED — Refinement 4), including
+  all five sharded perf geometries; the `(8,4)` and `(7,4)` WIDTH_SHARDED ones are dense
+  rectangles and now take the staged combine too. Golden cross-product slices, 0 failed and
+  0 XPASS-drift throughout: `1x1x32x8192` 108 passed (wide → staged combine, across TILE/RM ×
+  gamma/no-gamma × every dtype × interleaved/WIDTH/BLOCK sharded), `2x1x64x4096` 108, `1x1x17x50`
+  72 (both-non-aligned, no split), `4x8x32x47` 72 (W-non-aligned, row-split with the grid full).
+  Unit suite **527 passed / 73 skipped**; the W-split suite is green under `--dev` (watcher + NoC
+  sanitizer), which R2's changelog flags as non-optional for this scheme — the second gather leg's
+  `noc_semaphore_inc` is drained by the existing `noc_async_atomic_barrier()`.
+
+- **Issues encountered**: none — no hang, no numerical failure, no debug cycle. The two structural
+  hazards were anticipated from R2's findings rather than hit: (a) a leader must fold with
+  `Accumulate::at` and never `at_last`, or the root's finalize double-counts the surviving x² lanes
+  exactly as R2 measured (8.75 instead of 1.0) with PCC scoring it 0.9999; and (b) two-stage needs a
+  **dense** rectangle — every grid row needs a real core at column `x0` to lead it — so a ragged
+  shard grid (auto_shard_config's full rows + partial last row, whose filler cores own no work) and
+  any single-row group keep the flat topology by construction.
+
+- **Knob defaults are measured, not assumed**:
+  - `COMBINE_MAX_FLAT_FANIN = 24`. The second stage buys back ~73 ns per contributor removed from
+    the root but costs one extra gather round (~1.3 µs, fitted from the matched-CW A/B), so it only
+    pays above a wide fan-in. The cap is set at the widest flat gather still measured to be
+    competitive rather than at the fitted break-even (~28): every group at or below it — notably the
+    24-core `(1,1,64,12288)` loose case — keeps R2's flat topology byte-for-byte, and staging engages
+    only in the 32–56 range where it is measured to win.
+  - `CW` stays at *widest that fits*. Re-swept under the staged topology, that is now optimal
+    (`(1,1,32,7168)`: 8 cores 12_016 ns, 32 cores 10_116, widest-56 **8_917**) — the reverse of the
+    flat topology, where the same sweep had shown narrowing to be a 1.06–1.17× *win*. That inversion
+    is the cleanest evidence the fan-in cost is what got removed. `CW` is in any case already at its
+    structural maximum for these shapes: it must divide `Wt` and its rectangle must fit one
+    virtually-contiguous column run (≤ 7 wide on this part).
+
+- **Remaining headroom — a finding, not a queued task**. The combine is still the largest single
+  item (~2.4–3.4 µs, 30–38 %) but its *shape* changed: it now fits ≈ **2.35 µs fixed + 73 ns ×
+  (cw1+cw2)**, i.e. it is dominated by the fixed cost of two semaphore rounds plus the multicast
+  handshake, not by fan-in — so a third gather stage would add another ~1.3 µs round and lose. The
+  rest is a ~2.7 µs compute floor that is **per-pass-overhead bound**, not tile-work bound (1
+  tile/core still costs 3.5 µs across 5–6 helper passes, ≈ 540 ns each). The next lever is therefore
+  pass elimination, not topology: fold `AddUnary(eps) → Rsqrt` into the root's stage-2 reduce as a
+  `post_reduce_op` so the multicast carries `1/rms` instead of `mean(x²)`, deleting one whole compute
+  pass from *every* core on the serial tail after the broadcast (~5 %, and the value becomes
+  bit-identical across the group instead of recomputed per core). Not done here because `reduce_mean`
+  already occupies the `post_reduce_op` slot with its 1/N multiply, so it means dropping to
+  `reduce<SUM>` and re-inlining that normalization — duplicating helper logic on the numerics path —
+  for ~5 % on top of a result that already clears its ceiling by 1.67×. Fusing phases 5 and 6 (the
+  two broadcast multiplies) into one `eltwise_chain` was investigated and is **not** expressible:
+  `DestReuseBinary` combines DEST with a CB tile but carries no `BroadcastDim`, and the gamma
+  multiply needs a row broadcast.
+
+- **Tests added**:
+  - `test_rms_norm_perf.py::test_rms_norm_perf_decode_pinned` (**new**, 4 cases) — the decode column
+    at the pinned perf config, with the tighter `pcc_threshold = 0.9995` soft gate those loose cases
+    carry. `perf_compute_kernel_config()` is the single source for that config so a knob A/B can
+    never be taken on the wrong datapath.
+  - `test_rms_norm_perf.py::test_rms_norm_ablate` (**new**, opt-in via `RMS_NORM_ABLATE`) — the
+    stage-peeling ablation harness. Asserts nothing by design (never PCC-gate an ablated kernel) and
+    is skipped unless explicitly requested, so a normal suite run never executes it.
+  - `test_rms_norm_wsplit.py::test_combine_topologies_agree` (**new**, 4 cases) — an *absolute*
+    all-ones check on **both** topologies plus an agreement check between them at matched `CW`.
+    Staging is exactly where a premature within-tile fold could creep back one level up, and PCC is
+    blind to it (one scale factor per row), so this is the R2 element-count discipline extended to
+    the new fan-in tree.
+  - `test_rms_norm_perf.py` knob overrides `RMS_NORM_GATHER_BUDGET_KB` / `RMS_NORM_MAX_FLAT_FANIN`,
+    so `CW` and the combine topology stay A/B-measurable without editing the op.
+  - `probes/probe_026.py`, `probes/probe_027.py` — clock/placement readback and the topology
+    resolution check.

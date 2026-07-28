@@ -213,18 +213,22 @@ void kernel_main() {
             const bool finalize_here = !W_SPLIT && (wc + 1 == NW);
             if constexpr (NW == 1) {
                 if constexpr (W_SPLIT) {
+                    // Single chunk, so the accumulator is written ONCE and never
+                    // reloaded: pack it straight into the writer's gather CB and
+                    // skip the republishing copy below. cb_partial_out still has
+                    // exactly one producer (this) and one consumer (the writer).
                     ckl::reduce<
                         ckernel::PoolType::SUM,
                         ckernel::ReduceDim::REDUCE_ROW,
                         cb_x_squared,
                         cb_scaler,
-                        cb_partials,
+                        cb_partial_out,
                         ckl::ReduceInputPolicy::BulkWaitBulkPop,
                         ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                         ckl::ReduceAlgorithm::AccumulateViaAdd>(
                         rshape,
                         ckl::ReduceInputMemoryLayout::contiguous(),
-                        ckl::Accumulate::at(cb_partials, wc),
+                        ckl::Accumulate::at(cb_partial_out, wc),
                         ckl::NoOp{},
                         partial);
                 } else {
@@ -274,11 +278,16 @@ void kernel_main() {
             }
         }
 
-        // Hand the raw accumulator to the writer's gather leg. cb_partials is a
-        // compute->compute read-modify-write across the chunk loop, so it cannot
-        // also be the writer's CB (single producer / single consumer); this copy
-        // publishes exactly one settled tile per tile-row.
-        if constexpr (W_SPLIT) {
+        // Hand the raw accumulator to the writer's gather leg. With NW > 1
+        // cb_partials is a compute->compute read-modify-write across the chunk
+        // loop, so it cannot ALSO be the writer's CB (single producer / single
+        // consumer) and one copy publishes the settled tile per tile-row. With
+        // NW == 1 there is no read-modify-write, so the reduce above already
+        // packed into cb_partial_out and this whole pass is gone — worth having
+        // as its own case because a compute pass costs ~320 ns of fixed
+        // overhead (examples/compute_block_size) and this one sits on the
+        // combine's serial path, ahead of the gather.
+        if constexpr (W_SPLIT && NW > 1) {
             ckl::copy<cb_partials, cb_partial_out>(ckl::EltwiseShape::tiles(ht));
         }
 
@@ -301,24 +310,27 @@ void kernel_main() {
         if constexpr (W_SPLIT) {
             if constexpr (TWO_STAGE) {
                 if (is_leader) {
+                    // One accumulate call, never reloaded -> pack the row sum
+                    // straight back into cb_partial_out for this core's own
+                    // writer to ship on to the root (same CB the slice partial
+                    // rode: one producer, one consumer, two sequential pushes).
                     ckl::reduce<
                         ckernel::PoolType::SUM,
                         ckernel::ReduceDim::REDUCE_ROW,
                         cb_group_partials,
                         cb_ones,
-                        cb_partials,
+                        cb_partial_out,
                         ckl::ReduceInputPolicy::BulkWaitBulkPop,
                         ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                         ckl::ReduceAlgorithm::AccumulateViaAdd>(
                         ckl::ReduceInputBlockShape::of(ht, CW1, 1),
                         ckl::ReduceInputMemoryLayout::contiguous(),
-                        ckl::Accumulate::at(cb_partials, 0),
+                        ckl::Accumulate::at(cb_partial_out, 0),
                         ckl::NoOp{},
                         ckl::ReducePartialScaler::none());
                     if (ht < HT_BLOCK) {
                         cb_pop_front(cb_group_partials, (HT_BLOCK - ht) * CW1);
                     }
-                    ckl::copy<cb_partials, cb_partial_out>(ckl::EltwiseShape::tiles(ht));
                 }
                 if (is_root) {
                     ckl::reduce_mean<

@@ -19,6 +19,12 @@ Pins the three things about this scheme that a correlational check cannot see:
    inputs are read from the core's own L1 shard (a zero-copy CB), including the
    geometries auto_shard_config actually emits — ragged core grids and shard
    grids that over-cover W with padding tiles.
+
+Refinement 3 added a fourth, for the same reason as (2): the combine's fan-in
+tree became a knob (flat root vs two-stage row-leaders, `COMBINE_MAX_FLAT_FANIN`),
+and BOTH topologies must sum every element exactly once. A leader that finalized
+its row sum instead of keeping the raw accumulator would re-introduce the (2)
+bug one level up, and PCC would again score it 0.9999.
 """
 
 from __future__ import annotations
@@ -131,6 +137,45 @@ def test_cross_core_combine_counts_every_element(device, W):
     assert torch.allclose(
         out, torch.ones_like(out), rtol=2e-3, atol=2e-3
     ), f"W={W}: implied mean(x^2) = {1.0 / (out[0, 0, 0, 0].item() ** 2):.4f}, expected 1.0"
+
+
+@pytest.mark.parametrize("W", [1024, 2304, 5120, 7168], ids=lambda w: f"W{w}")
+def test_combine_topologies_agree(device, W):
+    """Refinement 3: the STAGED gather must equal the FLAT one, bit-for-bit-close.
+
+    Both topologies fold the same raw slice-accumulators over the same core set —
+    only the fan-in tree differs — so they must produce the same answer. Staging
+    is the exact place a second, premature within-tile fold would creep back in
+    (a leader that *finalized* its row sum would double-count the surviving x^2
+    lanes downstream), and PCC is blind to it because the error is one scale
+    factor per row. So this is an all-ones ABSOLUTE check on both paths plus an
+    agreement check between them, never a correlation.
+    """
+    shape = (1, 1, 32, W)
+    saved = pd.COMBINE_MAX_FLAT_FANIN
+    try:
+        pd.COMBINE_MAX_FLAT_FANIN = 24  # the shipped default -> staged here
+        staged = _placement(device, shape)
+        assert staged.two_stage, f"W={W} must exercise the staged combine (CW={staged.cw})"
+        assert staged.cw1 * staged.cw2 == staged.cw
+
+        x = torch.ones(shape, dtype=torch.bfloat16)
+        tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        out_staged = ttnn.to_torch(rms_norm(tt_x, epsilon=1e-6)).to(torch.float32)
+
+        pd.COMBINE_MAX_FLAT_FANIN = 1 << 30  # force the Refinement 2 flat root
+        flat = _placement(device, shape)
+        assert not flat.two_stage and flat.cw == staged.cw, "the A/B must hold CW fixed"
+        out_flat = ttnn.to_torch(rms_norm(tt_x, epsilon=1e-6)).to(torch.float32)
+    finally:
+        pd.COMBINE_MAX_FLAT_FANIN = saved
+
+    ones = torch.ones_like(out_staged)
+    for name, out in (("staged", out_staged), ("flat", out_flat)):
+        assert torch.allclose(
+            out, ones, rtol=2e-3, atol=2e-3
+        ), f"W={W} {name}: implied mean(x^2) = {1.0 / (out[0, 0, 0, 0].item() ** 2):.4f}, expected 1.0"
+    assert torch.allclose(out_staged, out_flat, rtol=2e-3, atol=2e-3), "topologies disagree"
 
 
 @pytest.mark.parametrize(
