@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
         }
 
         if ((iteration % 1000) == 0) {
-            MPI_Allreduce(MPI_IN_PLACE, &expected, 1, MPI_UNSIGNED_CHAR, MPI_BXOR, MPI_COMM_WORLD);
+            MPI_Allreduce(MPI_IN_PLACE, &expected, 1, MPI_UINT8_T, MPI_BXOR, MPI_COMM_WORLD);
         }
     }
 
