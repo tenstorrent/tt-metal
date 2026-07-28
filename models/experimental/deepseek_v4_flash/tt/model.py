@@ -264,6 +264,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # Paged multi-session decode (traced path; see :meth:`prepare_static_decode`).
         self._paged: Optional[PagedKVManager] = None
         self._paged_groups: dict[str, PagedGroup] = {}
+        self._external_pools: Optional[dict[int, ttnn.Tensor]] = None
         self._active_sid: Optional[int] = None
         # session id -> (submesh index, layer) -> compressor window buffers, held while
         # the session is not the active one (see :meth:`activate_session`).
@@ -823,12 +824,37 @@ class DeepSeekV4Model(DeepSeekV4Module):
             paged=self._paged is not None,
         )
 
+    def _external_pool_blocks(self, pools: dict[int, ttnn.Tensor]) -> dict[str, int]:
+        """Validate caller-owned pools against this model's geometry and read the pool
+        size of each group off them."""
+        blocks: dict[str, int] = {}
+        for li in range(self.num_layers):
+            if li not in pools:
+                raise ValueError(f"no external block pool for layer {li}")
+            group = self._paged_groups[self.config.layer_types[li]]
+            shape = list(pools[li].shape)
+            want = [1, group.block_size, self.config.head_dim]
+            if shape[1:] != want:
+                raise ValueError(
+                    f"layer {li} ({group.layer_type}) pool has block shape {shape[1:]}, expected {want} "
+                    f"for a {group.block_size}-row block"
+                )
+            seen = blocks.setdefault(group.layer_type, shape[0])
+            if seen != shape[0]:
+                raise ValueError(
+                    f"every pool of group {group.layer_type} must have the same block count, "
+                    f"got {seen} and {shape[0]}"
+                )
+        return blocks
+
     def _build_block_pool(self, li: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
         """One layer's KV block pool ``[num_blocks, 1, block_size, Dh]`` (all-zero).
 
         Block ``0`` is the shared zero block every unmapped page-table entry points at,
         so it must stay zero -- :class:`PagedKVManager` never hands it out.
         """
+        if self._external_pools is not None:
+            return self._external_pools[li]
         group = self._paged_groups[self.config.layer_types[li]]
         num_blocks = self._paged.pools[group.layer_type].num_blocks
         return ttnn.from_torch(
@@ -886,6 +912,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         num_sessions: int = 0,
         total_tokens: int | None = None,
         block_size: int = 32,
+        tokens_per_block: int | None = None,
+        pools: dict[int, ttnn.Tensor] | None = None,
     ) -> None:
         """Allocate the traced-decode state (the prompt is prefilled by replaying
         :meth:`decode_traced` once per prompt token into these empty caches).
@@ -905,23 +933,41 @@ class DeepSeekV4Model(DeepSeekV4Module):
         conversations sharing the budget. Everything a session needs is allocated here,
         before any trace exists, because allocating on a device that holds a trace is
         unsafe; :meth:`open_session` then only claims a slot.
+
+        Block geometry comes from either ``block_size`` (the same row count for every
+        layer type) or ``tokens_per_block`` (row counts scaled by compress rate, so a
+        block spans the same context everywhere -- see :func:`.paged_cache.build_groups`).
+        ``pools`` supplies externally allocated block pools keyed by layer index, for a
+        caller that owns the KV memory (the vLLM wrapper, whose pool size the serving
+        stack decides); their block count then replaces the internal pool plan.
         """
         if not self.use_submeshes:
             raise NotImplementedError("traced decode requires use_submeshes=True")
         cfg = self.config
         for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}:
             assert max_seq % cr == 0, f"max_seq ({max_seq}) must be a multiple of compress_rate {cr}"
+        self._external_pools = pools
         if num_sessions > 0:
             self._paged_groups = build_groups(
-                cfg.layer_types[: self.num_layers], cfg.compress_rates, self.sliding_window, max_seq, block_size
+                cfg.layer_types[: self.num_layers],
+                cfg.compress_rates,
+                self.sliding_window,
+                max_seq,
+                block_size=None if tokens_per_block else block_size,
+                tokens_per_block=tokens_per_block,
             )
-            pool_blocks = plan_pool_blocks(self._paged_groups, num_sessions, total_tokens or max_seq)
+            pool_blocks = (
+                self._external_pool_blocks(pools)
+                if pools is not None
+                else plan_pool_blocks(self._paged_groups, num_sessions, total_tokens or max_seq)
+            )
             self._paged = PagedKVManager(self._paged_groups, pool_blocks)
             logger.info(
                 "paged decode: "
                 + ", ".join(
-                    f"{name} {pool_blocks[name]} blocks of {g.block_size} "
-                    f"({g.logical_blocks} per session, {g.kv_len}-token axis)"
+                    f"{name} {pool_blocks[name]} blocks of {g.block_size} rows "
+                    f"({g.block_size * (g.compress_rate or 1)} tokens each, {g.logical_blocks} per session, "
+                    f"{g.axis_rows}-row axis)"
                     for name, g in self._paged_groups.items()
                 )
             )
@@ -1026,6 +1072,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     n_win_cap = self._cr_caps[cr][1]
                     a = torch.cat([torch.arange(w), torch.full((n_win_cap,), -1)]).float()
                     b = torch.cat([torch.full((w,), -1), torch.arange(n_win_cap)]).float()
+                # A block wider than the axis leaves a tail of unmapped rows, which SDPA
+                # still reads (it covers whole blocks). Filling A past the axis with a
+                # position no step can reach makes ``A > pos`` true there, so the tail
+                # is masked out however the compressor compare falls.
+                pad = (self._paged_groups[lt].kv_len - a.numel()) if self._paged else 0
+                if pad:
+                    a = torch.cat([a, torch.full((pad,), float(max_seq))])
+                    b = torch.cat([b, torch.full((pad,), -1.0)]) if b is not None else None
                 a_tt = ttnn.from_torch(
                     a.reshape(1, 1, 1, -1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
                 )
