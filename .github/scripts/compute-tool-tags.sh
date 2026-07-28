@@ -28,9 +28,12 @@ YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | 
 ZSTD_VERSION=$(grep -E "^ARG ZSTD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 OPENMPI_VERSION=$(grep -E "^ARG OMPI_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
+ORAS_VERSION=$(grep -E "^ARG ORAS_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+SYFT_SCANNER_VERSION=$(grep -E "^ARG SYFT_SCANNER_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+DOCKERFILE_FRONTEND_VERSION=$(grep -E "^ARG DOCKERFILE_FRONTEND_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 
 # Compute hashes for each tool (version + install script)
-for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd; do
+for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd oras; do
     hash_var="$(printf '%s_HASH' "$tool" | tr '[:lower:]' '[:upper:]')"
     declare "$hash_var=$(cat "dockerfile/scripts/install-${tool}.sh" | sha1sum | cut -d' ' -f1 | head -c 12)"
 done
@@ -38,6 +41,10 @@ done
 # Handle special cases (sfpi and openmpi) separately
 SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 12)
 OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh .github/scripts/install-slurm.sh | sha1sum | cut -d' ' -f1 | head -c 12)
+# syft-scanner and dockerfile-frontend have no install script of their own
+# (single-stage passthroughs of an upstream image - see Dockerfile.tools) -
+# version alone fully determines their content, so no hash suffix is needed
+# or meaningful.
 
 # Generate canonical tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
 BASE="ghcr.io/${REPO}/tt-metalium/tools"
@@ -53,6 +60,9 @@ jq -n \
   --arg zstd "${BASE}/zstd:${ZSTD_VERSION}-${ZSTD_HASH}" \
   --arg sfpi "${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" \
   --arg openmpi "${BASE}/openmpi:${OPENMPI_VERSION}-${OPENMPI_HASH}" \
+  --arg oras "${BASE}/oras:${ORAS_VERSION}-${ORAS_HASH}" \
+  --arg syftscanner "${BASE}/syft-scanner:${SYFT_SCANNER_VERSION}" \
+  --arg dockerfilefrontend "${BASE}/dockerfile-frontend:${DOCKERFILE_FRONTEND_VERSION}" \
   '{
     "ccache-tag": $ccache,
     "mold-tag": $mold,
@@ -63,5 +73,8 @@ jq -n \
     "yq-tag": $yq,
     "zstd-tag": $zstd,
     "sfpi-tag": $sfpi,
-    "openmpi-tag": $openmpi
+    "openmpi-tag": $openmpi,
+    "oras-tag": $oras,
+    "syft-scanner-tag": $syftscanner,
+    "dockerfile-frontend-tag": $dockerfilefrontend
   }'

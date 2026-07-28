@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1
+# syntax=ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/dockerfile-frontend:1.25
+# (docker/dockerfile:1.25, the latest release, re-hosted on our own ghcr.io - was untagged
+# `docker/dockerfile:1` (floating); see dockerfile/Dockerfile's syntax line for why)
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #

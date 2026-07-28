@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1.7
+# syntax=ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/dockerfile-frontend:1.25
+# (docker/dockerfile:1.25, re-hosted on our own ghcr.io - see
+# dockerfile/Dockerfile.tools' dockerfile-frontend target)
 # TT-Metalium Dockerfile
 # Optimized with multi-stage builds for tool and Python dependency caching.
 #
