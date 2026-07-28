@@ -82,6 +82,20 @@ class Qwen36ModelArgs(ModelArgs):
         self.linear_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
         self.linear_v_dim = self.linear_num_value_heads * self.linear_value_head_dim
 
+        # MTP (multi-token prediction) head. Every Qwen3.5/3.6 checkpoint ships a single-layer
+        # MTP head (mtp.*) that reuses the main embedding + LM head; it is the speculative-decode
+        # drafter. mtp_use_dedicated_embeddings=False means it shares tok_embeddings.
+        self.mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
+        self.mtp_use_dedicated_embeddings = getattr(text_config, "mtp_use_dedicated_embeddings", False)
+        self.has_mtp = self.mtp_num_hidden_layers > 0
+        if self.has_mtp:
+            assert (
+                self.mtp_num_hidden_layers == 1
+            ), f"Only single-layer MTP is supported (got mtp_num_hidden_layers={self.mtp_num_hidden_layers})"
+            assert (
+                not self.mtp_use_dedicated_embeddings
+            ), "mtp_use_dedicated_embeddings=True is unsupported (would need a separate MTP embedding/head)"
+
         # Lazy import for CPU-only testing.
         if mesh_device is not None:
             import ttnn
@@ -283,11 +297,13 @@ class Qwen36ModelArgs(ModelArgs):
         Overrides base meta-key loader."""
         from models.demos.blackhole.qwen36.tt.weight_mapping import (
             is_fp8_checkpoint,
+            load_mtp_tensors,
             load_qwen36_state_dict_fp8,
             remap_qwen36_state_dict,
         )
 
         # Block FP8 checkpoints: dequant + remap for TP loaders (skip AutoModelForCausalLM).
+        # The FP8 loader already keeps mtp.* (read raw from safetensors), so no extra merge.
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
@@ -296,4 +312,7 @@ class Qwen36ModelArgs(ModelArgs):
         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, dtype="auto", trust_remote_code=True)
         state_dict = remap_qwen36_state_dict(model.state_dict())
         del model
+        # AutoModelForCausalLM drops mtp.* before remap; read the drafter weights directly.
+        if getattr(self, "has_mtp", False):
+            state_dict.update(load_mtp_tensors(self.CKPT_DIR))
         return state_dict

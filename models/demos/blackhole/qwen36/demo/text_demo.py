@@ -374,8 +374,72 @@ def _should_use_chunked_trace(model):
     )
 
 
+def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
+    """MTP speculative decode (QWEN36_SPEC=1). draft -> traced verify -> slot commit via
+    SpeculativeDecoder. Returns (tokens, perf_dict) shaped like _run_tp_generation so the caller
+    prints/saves it unchanged. Lossless: reproduces the plain-decode greedy trajectory exactly.
+    """
+    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
+
+    T = token_ids.shape[1]
+    num_blocks = ((num_blocks + 31) // 32) * 32
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
+    kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    prompt_ids = token_ids[0, :T].tolist()
+
+    # spec decode captures no separate prefill trace (eager); keep the key present for the CI JSON.
+    profiler.start("compile_prefill")
+    profiler.end("compile_prefill")
+
+    # Warmup (compile prefill/verify/decode/MTP programs; results discarded).
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    signpost("compile_decode")
+    profiler.start("compile_decode")
+    SpeculativeDecoder(model, page_table).generate(prompt_ids, min(6, max_generated_tokens))
+    profiler.end("compile_decode")
+    model.free_kv_caches()
+
+    # Timed run. generate() records dec.prefill_time (TTFT) and dec.decode_time (spec loop) internally.
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    dec = SpeculativeDecoder(model, page_table)
+    signpost("inference_prefill")
+    profiler.start("inference_prefill")
+    generated = dec.generate(prompt_ids, max_generated_tokens)
+    profiler.end("inference_prefill")
+    signpost("inference_decode")
+    profiler.start("inference_decode")
+    profiler.end("inference_decode")  # real decode timing comes from dec.decode_time below
+    model.free_kv_caches()
+    profiler.end("run")
+
+    ttft = dec.prefill_time
+    decode_tok_s = (len(generated) / dec.decode_time) if dec.decode_time > 0 else 0.0
+    logger.info(
+        f"[TP SPEC] accept={dec.accept_rate():.2f}/{dec.K} "
+        f"-> {dec.accept_rate() + 1:.2f} committed/iter over {dec.iters} iters; "
+        f"ttft={ttft:.2f}s decode={decode_tok_s:.2f} tok/s (compare vs no-QWEN36_SPEC run)"
+    )
+    return generated, {"ttft_s": ttft, "decode_tok_s": decode_tok_s, "profiler": profiler}
+
+
 def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict)."""
+    # MTP speculative decode opt-in (greedy only; needs an MTP head). Falls through to plain decode
+    # when unavailable/incompatible so the flag is safe to leave set.
+    if os.environ.get("QWEN36_SPEC") == "1":
+        _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
+        _rep = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
+        _nr = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
+        if model.mtp is not None and _temp == 0 and _rep == 1.0 and _nr == 0:
+            logger.info("[TP] QWEN36_SPEC=1 -> MTP speculative decode (eager)")
+            return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
+        logger.warning(
+            f"[TP] QWEN36_SPEC=1 ignored (mtp={model.mtp is not None}, temp={_temp}, rep={_rep}, "
+            f"no_repeat={_nr}); spec decode needs an MTP head + pure greedy. Using plain decode."
+        )
     vocab = model.args.vocab_size
     T = token_ids.shape[1]
 
