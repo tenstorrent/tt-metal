@@ -748,6 +748,44 @@ def _set_crash_hang_defaults(result):
     result["peak_l1_memory_device"] = None
 
 
+def _mark_infra_abort(result, reason: str):
+    """Classify a result as an infrastructure abort (NOT_RUN) and stop the run.
+
+    Mirrors the _is_infra_failure_message path: the vector is NOT a test failure,
+    the suite aborts unconditionally and run_sweeps exits the run early, so the job
+    surfaces one infrastructure error instead of a wall of false results.
+    """
+    result["status"] = TestStatus.NOT_RUN
+    result["exception"] = "INFRASTRUCTURE ERROR (degraded host): " + reason
+    result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+    result["_child_process"] = None
+    result["_abort_suite"] = True
+    result["_infra_abort"] = True
+
+
+def _reset_or_infra_abort(reset_util, result, input_hash) -> bool:
+    """Reset the devices. Returns True on success.
+
+    When every configured reset mechanism is exhausted (ResetFailed) the host is
+    unrecoverable for this job, so mark the result as an infra abort and return
+    False; the caller must return `result` immediately rather than respawn a child
+    against a wedged device. Previously ResetFailed propagated as an uncaught
+    exception (all five reset call sites were bare), which is now reachable on
+    Galaxy since the known-bad `tt-smi -r all` fallback was removed.
+    """
+    try:
+        reset_util.reset()
+        return True
+    except tt_smi_util.ResetFailed as e:
+        logger.error(
+            f"DEVICE RESET FAILED for input_hash='{input_hash}': {e}. All reset mechanisms are "
+            f"exhausted — the host is unrecoverable for this job; exiting the run early instead "
+            f"of launching further vectors against a wedged device."
+        )
+        _mark_infra_abort(result, f"device reset failed ({e})")
+        return False
+
+
 def _execute_vector_with_retry(
     test_vector,
     module_name,
@@ -804,7 +842,14 @@ def _execute_vector_with_retry(
             # that state, so reset + RETRY the vector -- it runs clean on the next
             # attempt. Falls through to the abort path below only if it hangs AGAIN on
             # the last attempt (a genuine, non-transient hang).
-            if _is_device_hang_message(result.get("message")) and attempt < MAX_RETRIES:
+            # NOT on Galaxy: the reset-then-retry recovery re-opens the mesh device, and a
+            # SECOND device open inside a Galaxy job re-enters the force-reinit race this
+            # framework's one-device-per-job design exists to avoid. Observed in run
+            # 30324574397: after a dispatch-hang reset the reopen succeeded and the very
+            # next operation blocked forever (49 min mid-vector / 24 min in teardown),
+            # invisible to the per-vector watchdog because the block is below Python.
+            # On Galaxy fall through to the abort path instead of retrying.
+            if _is_device_hang_message(result.get("message")) and attempt < MAX_RETRIES and not _is_galaxy_job():
                 logger.warning(
                     f"DEVICE HANG (likely intermittent dispatch-state stall) for "
                     f"input_hash='{input_hash}': {result.get('message')}. Resetting + retrying on a "
@@ -812,7 +857,8 @@ def _execute_vector_with_retry(
                 )
                 _kill_child(p, timeout_before_rejoin)
                 p = None
-                reset_util.reset()
+                if not _reset_or_infra_abort(reset_util, result, input_hash):
+                    return result
                 if child_mode:
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
@@ -828,7 +874,23 @@ def _execute_vector_with_retry(
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(result.get("message", "DEVICE HANG"))
                 result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-                reset_util.reset()
+                if not _reset_or_infra_abort(reset_util, result, input_hash):
+                    return result
+                # On Galaxy, stop the whole run rather than continue: every later module
+                # re-opens the mesh device, and a reopen after a hang re-enters the
+                # force-reinit race (see the retry branch above). The hanging vector keeps
+                # its FAIL_CRASH_HANG status -- a genuine op hang is still reported as a
+                # test failure, not hidden -- but the remaining vectors are marked NOT_RUN
+                # instead of being run against a device we cannot safely reopen.
+                if _is_galaxy_job():
+                    logger.error(
+                        "DEVICE HANG on Galaxy: a device reopen after a hang re-enters the "
+                        "force-reinit race, so exiting the run early instead of continuing."
+                    )
+                    result["_child_process"] = None
+                    result["_abort_suite"] = True
+                    result["_infra_abort"] = True
+                    return result
                 if child_mode:
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
@@ -850,7 +912,8 @@ def _execute_vector_with_retry(
                 )
                 _kill_child(p, timeout_before_rejoin)
                 p = None
-                reset_util.reset()
+                if not _reset_or_infra_abort(reset_util, result, input_hash):
+                    return result
                 if child_mode:
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
@@ -905,7 +968,8 @@ def _execute_vector_with_retry(
                     f"TEST TIMED OUT (attempt {attempt + 1}/{1 + MAX_RETRIES}) for "
                     f"input_hash='{input_hash}'. Resetting devices and retrying..."
                 )
-                reset_util.reset()
+                if not _reset_or_infra_abort(reset_util, result, input_hash):
+                    return result
                 if child_mode:
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
@@ -921,7 +985,8 @@ def _execute_vector_with_retry(
             result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
             result["host"] = get_hostname()
             result["user"] = get_username()
-            reset_util.reset()
+            if not _reset_or_infra_abort(reset_util, result, input_hash):
+                return result
 
             if child_mode:
                 p = Process(target=run, args=(input_queue, output_queue, config))

@@ -80,7 +80,17 @@ class ResetUtil:
         elif tt_smi:
             p_args = primary[1]
             if any("glx" in a for a in p_args):
-                mechanisms.append((tt_smi, ["-r", "all"]))  # PCIe-level reset
+                # NO auto-fallback on Galaxy. The only other mechanism is the PCIe-level
+                # reset (`tt-smi -r`), which is known-bad on 6u Galaxy: it hangs / leaves
+                # the driver half-initialized. Observed in run 30324574397 (both timed-out
+                # jobs): `-glx_reset_auto` failed 3x, the auto-appended `tt-smi -r all`
+                # then reported "Reset Complete Successfully", and the very next device
+                # operation blocked forever -- 49 min mid-vector in one job, 24 min in
+                # teardown in the other, each burning the full 60-min job budget.
+                # Failing fast (ResetFailed -> infra abort) is strictly better than a
+                # half-reset that hangs. Set TT_SMI_RESET_FALLBACK_COMMAND explicitly to
+                # opt back in.
+                pass
             elif any(a in ("-r", "--reset") for a in p_args):
                 mechanisms.append((tt_smi, ["-glx_reset"]))  # IPMI/tray reset
 
