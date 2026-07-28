@@ -569,10 +569,10 @@ struct WorkerToFabricEdmSenderBase {
     // for the ack from the fabric before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) close_finish().
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+    template <bool posted = false>
     void close_start() {
         const auto dest_noc_addr_coord_only =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, WORKER_HANDSHAKE_NOC) & ~(uint64_t)NOC_COORDINATE_MASK;
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, this->send_noc) & ~(uint64_t)NOC_COORDINATE_MASK;
 
         // Persist the producer cursor for the next connection on this channel. Only
         // worker-style producers participate in this protocol: the block is read back
@@ -583,12 +583,12 @@ struct WorkerToFabricEdmSenderBase {
                 remote_producer_cursor_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
                 this->buffer_slot_write_counter.counter,
                 0xF,
-                WORKER_HANDSHAKE_NOC);
+                this->send_noc);
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
                 remote_producer_cursor_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_index),
                 static_cast<uint32_t>(this->get_buffer_slot_index()),
                 0xF,
-                WORKER_HANDSHAKE_NOC);
+                this->send_noc);
         } else {
             // Deliberate no-op: stream-reg (EDM-style) producers never read the cursor
             // block in open_start(), so there is nothing to hand off. This must stay a
@@ -600,20 +600,20 @@ struct WorkerToFabricEdmSenderBase {
             dest_edm_connection_state_addr,
             tt::tt_fabric::connection_interface::close_connection_request_value,
             0xF,
-            WORKER_HANDSHAKE_NOC);
+            this->send_noc);
     }
 
     // Advanced usage API:
     // Completes the connection closing process. Induces a write barrier
     // !!! IMPORTANT !!!
     // Must be called alongside (after) close_start().
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+    template <bool posted = false>
     void close_finish() {
         WAYPOINT("FCFW");
         if constexpr (posted) {
-            noc_async_posted_writes_flushed(WORKER_HANDSHAKE_NOC);
+            noc_async_posted_writes_flushed(this->send_noc);
         }
-        noc_async_write_barrier(WORKER_HANDSHAKE_NOC);
+        noc_async_write_barrier(this->send_noc);
 
         // Need to wait for the ack to teardown notice, from edm
         while (*this->worker_teardown_addr != 1) {
@@ -623,10 +623,10 @@ struct WorkerToFabricEdmSenderBase {
         *(this->worker_teardown_addr) = 0;
     }
 
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+    template <bool posted = false>
     void close() {
-        close_start<posted, WORKER_HANDSHAKE_NOC>();
-        close_finish<posted, WORKER_HANDSHAKE_NOC>();
+        close_start<posted>();
+        close_finish<posted>();
     }
 
     uint32_t edm_buffer_addr;
@@ -666,9 +666,10 @@ struct WorkerToFabricEdmSenderBase {
     uint8_t data_noc_cmd_buf;
     uint8_t sync_noc_cmd_buf;
 
-    // NoC used for the entire worker->fabric path (open handshake, packet sends, close). Overridable
-    // per-connection so callers can steer this path off a NoC lane reserved by e.g. a persistent
-    // linked mcast (#1819). Set by build_from_args()/init() (both default to get_fabric_worker_noc()
+    // NoC used for the entire worker->fabric path (open handshake, packet sends, close). This is runtime
+    // connection state so split-phase operations cannot select different NoCs through independent template
+    // arguments. Callers can steer this path off a NoC lane reserved by e.g. a persistent linked mcast
+    // (#1819). Set by build_from_args()/init() (both default to get_fabric_worker_noc()
     // for byte-identical legacy behavior); left uninitialized here like the other members so the
     // class keeps a trivial default constructor (static-storage instances of this type -- e.g.
     // CQRelayClient's embedded WorkerToFabricMuxSender -- are declared before init() ever runs).
