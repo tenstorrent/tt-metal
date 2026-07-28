@@ -48,3 +48,20 @@ def test_bf16_compatibility():
     assert pcc > 0.999, f'BF16 PCC too low: {pcc}'
 
 print('All per-channel quantization tests pass')
+
+@pytest.mark.parametrize('shape', [(4096,4096),(2048,8192)])
+def test_perf_shapes(shape):
+    torch.manual_seed(99)
+    x=torch.rand(*shape,dtype=torch.float32)*2-1
+    scale=_per_channel_scale(x,0)
+    zp=0
+    import time;t0=time.time()
+    for _ in range(10): q=torch.round(x/scale)+zp;dq=(q-zp)*scale
+    assert time.time()-t0<30
+@pytest.mark.parametrize('zp',[0,-128,127])
+def test_multi_zp(zp):
+    torch.manual_seed(3)
+    x=torch.rand(128,128)*4-2
+    scale=_per_channel_scale(x,-1)
+    q=torch.round(x/scale)+zp;dq=(q-zp)*scale
+    assert dq.shape==x.shape
