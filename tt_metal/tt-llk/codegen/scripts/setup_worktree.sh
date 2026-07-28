@@ -1,5 +1,5 @@
 #!/bin/bash
-# Worktree setup for codegen agents. Creates a branch from origin/main
+# Worktree setup for codegen agents. Creates a branch from origin/main by default.
 #
 # Usage (sourced):
 #   worktree-name example: issue-123
@@ -14,6 +14,7 @@
 #   CODEGEN_WORKTREE_ROOT  — worktree parent dir (default: /proj_sw/user_dev/llk-codegen-worktrees)
 #   CODEGEN_KEEP_WORKTREE  — "false" (default) removes the worktree after the run;
 #                            "true" keeps the live checkout
+#   CODEGEN_BASE_COMMIT    — optional full commit SHA to use instead of origin/main
 # Exports: WORKTREE_BRANCH, WORKTREE_DIR
 
 # Strict mode: Avoid strict mode if user sourced the script
@@ -66,6 +67,22 @@ codegen_worktree_dirs() {
     | grep -F "${CODEGEN_WORKTREE_ROOT}/" || true
 }
 
+resolve_worktree_base() {
+  local requested="${CODEGEN_BASE_COMMIT:-}"
+  if [[ -z "$requested" ]]; then
+    echo "origin/main"
+    return
+  fi
+  if [[ ! "$requested" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "[worktree] CODEGEN_BASE_COMMIT must be a full 40-character commit SHA" >&2
+    return 1
+  fi
+  git -C "$REPO_ROOT" rev-parse --verify "${requested}^{commit}" 2>/dev/null || {
+    echo "[worktree] CODEGEN_BASE_COMMIT is not available locally: $requested" >&2
+    return 1
+  }
+}
+
 # ── Main functions ───────────────────────────────────────────────────────
 
 # Create a branch + worktree for the given task, with codegen infra symlinked in.
@@ -77,7 +94,11 @@ setup_worktree() {
 
   mkdir -p "$CODEGEN_WORKTREE_ROOT"
   cd "$REPO_ROOT"
-  git fetch origin main --quiet 2>/dev/null || true
+  if [[ -z "${CODEGEN_BASE_COMMIT:-}" ]]; then
+    git fetch origin main --quiet 2>/dev/null || true
+  fi
+  local base_ref
+  base_ref="$(resolve_worktree_base)"
 
   # Reserve a unique branch + dir under a lock (concurrency-safe).
   local lock_fd
@@ -90,8 +111,8 @@ setup_worktree() {
   # Version in the dir name too, so concurrent same-task runs don't collide.
   WORKTREE_DIR="${CODEGEN_WORKTREE_ROOT}/${task_id}-v${version}"
 
-  echo "[worktree] Creating branch $WORKTREE_BRANCH from origin/main"
-  git branch "$WORKTREE_BRANCH" origin/main
+  echo "[worktree] Creating branch $WORKTREE_BRANCH from $base_ref"
+  git branch "$WORKTREE_BRANCH" "$base_ref"
 
   # Clean only THIS exact dir (a crashed prior run of this version).
   if [[ -d "$WORKTREE_DIR" ]] || git -C "$REPO_ROOT" worktree list 2>/dev/null | grep -q "$WORKTREE_DIR"; then
@@ -174,8 +195,8 @@ CLAUDE.md
 tests/.venv
 GITIGNORE
 
-  # .gitignore doesn't hide files already tracked on the base commit (e.g. .mcp.json
-  # on origin/main): the symlink shows up as a typechange. Mark such tracked paths
+  # .gitignore doesn't hide files already tracked on the base commit (e.g. .mcp.json):
+  # the symlink shows up as a typechange. Mark such tracked paths
   # --skip-worktree so git ignores the worktree symlink. (.gitignore is included so
   # its own appended lines stay hidden too.)
   for rel in CLAUDE.md .mcp.json .gitignore .claude/scripts/run_test.sh; do

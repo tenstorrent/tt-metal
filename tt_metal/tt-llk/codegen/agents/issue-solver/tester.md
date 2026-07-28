@@ -256,6 +256,7 @@ set +e
 $HW_TEST_DISPATCH_CMD --kind llk --arch "$arch" \
   --test "$QUEUE_TEST" \
   --worktree "$WORKTREE_DIR" \
+  --base "$(sg GIT_COMMIT)" \
   --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
   --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/run.log"
 dispatch_exit=${PIPESTATUS[0]}
