@@ -40,7 +40,7 @@ struct MatmulDecodeDeviceOperation {
         const Tensor& input_tensor_b;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct FullWidthSharded {

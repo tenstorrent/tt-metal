@@ -268,7 +268,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
         const auto memory_config = operation_attributes.output_mem_config.value_or(
             MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
 
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 dtype,
@@ -296,7 +296,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     auto memory_config = operation_attributes.output_mem_config.value_or(
         MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec));
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             dtype,
