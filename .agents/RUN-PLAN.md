@@ -62,9 +62,10 @@ agentic-research `skill-contribution-experiments/skillexp-fusing-advisor/` on br
 your resolved SHAs differ from those, **stop and reconcile**: somebody moved a branch, and every
 completed run is suspect.
 
-Per-machine setup a clone cannot provide — container launch, Codex login (**a second machine needs its
-own device auth**), the HF token, the tt-metal build, the advisor fix — is in that record's
-`setup/PREREQS.md`.
+Per-machine setup is not in git — it is machine-local infra. Get the container launch script from
+machine A (`~/run_tt_xla_container.sh`), pass `HF_TOKEN` through the environment rather than copying a
+hardcoded one, and note that **Codex auth is per-machine**: `~/.codex` does not travel, so a second
+machine needs its own `codex login` plus an `AUTH_OK` probe before it runs anything.
 
 `base` is `mvasiljevic/gpt-oss-pipeline-progress` (`aab03552379`) plus skills/prompt-only commits.
 Nothing in `ttnn/`, `tt_metal/`, or `models/` changed, so an existing build of `aab03552379` is
