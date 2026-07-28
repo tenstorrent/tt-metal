@@ -127,3 +127,26 @@ def test_all_axes(axis):
     z=0
     q=torch.round(x/s)+z;dq=(q-z)*s
     assert dq.shape==x.shape
+
+@pytest.mark.parametrize('shape', [(4096,4096),(2048,8192),(1024,4096),(512,2048)])
+def test_large_matrices(shape):
+    torch.manual_seed(99)
+    x=torch.rand(*shape)*4-2
+    for axis in [0,1]:
+        s=_per_channel_scale(x,axis)
+        z=0
+        q=torch.round(x/s)+z;dq=(q-z)*s
+        assert torch.allclose(dq,x,rtol=0.5)
+
+def test_row_vs_column_speedup_ratio():
+    torch.manual_seed(55)
+    x=torch.rand(4096,4096)*4-2
+    import time
+    s0=_per_channel_scale(x,0);s1=_per_channel_scale(x,1)
+    t0=time.time()
+    for _ in range(5): q=torch.round(x/s0);dq=(q)*s0
+    t_col=time.time()-t0
+    t0=time.time()
+    for _ in range(5): q=torch.round(x/s1);dq=(q)*s1
+    t_row=time.time()-t0
+    assert t_row<t_col*1.5
