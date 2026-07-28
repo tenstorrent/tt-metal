@@ -118,8 +118,6 @@ def _validate_contract(args) -> None:
             )
     if not args.prefill_only and os.environ.get("DG_SPARSE_MOE") != "1":
         raise ValueError("set DG_SPARSE_MOE=1 for the comparison contract")
-    if not args.prefill_only and os.environ.get("DG_DEDUP_ARGMAX") != "1":
-        raise ValueError("set DG_DEDUP_ARGMAX=1 for the comparison contract")
     if not tuned_prefill_moe_enabled():
         raise ValueError("tuned prefill MoE must resolve enabled")
     if not args.prefill_only and not tuned_configs_enabled():
@@ -163,7 +161,6 @@ def run(args) -> dict:
                 "DG_SELFCOND_PRECHUNK_EMBED",
                 "DG_SELFCOND_LOGITS_L1",
                 "DG_NORM_FULLCANVAS",
-                "DG_PREFIX_CACHE",
                 "TT_METAL_WATCHER",
                 "TT_METAL_DEVICE_PROFILER",
             )

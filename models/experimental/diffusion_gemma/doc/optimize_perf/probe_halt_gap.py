@@ -17,7 +17,7 @@ every step). Both gates are downstream of the shared-gemma4 bf16-MoE precision c
 
 EAGER path only (real StableAndConfident halt, `tt_denoise_block`); no trace region needed.
 
-    DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1 DG_CKPT=... \
+    DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 DG_CKPT=... \
       python -u models/experimental/diffusion_gemma/doc/optimize_perf/probe_halt_gap.py --blocks 2
 
 Markers: RESULT_HALT_GAP <json>. *** DEVICE-OWNERSHIP: run only when QB2 is free. ***

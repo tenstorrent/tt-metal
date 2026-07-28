@@ -132,7 +132,10 @@ def run(num_layers, canvas_length, max_seq_len):
             dh1 = _layer(_mk())
             dh2 = _layer(_mk())  # dense-vs-dense noise floor
             os.environ["DG_SPARSE_MOE"] = "1"
-            os.environ["DG_SPARSE_MOE_CAPACITY"] = "32"
+            # DG_SPARSE_MOE_CAPACITY was deleted 2026-07-28. Setting it to 32 here is what
+            # produced the retracted "~5x vs dense-128" figure: at C=32 the sparse path
+            # silently discarded 41-84% of the active routes per layer. The capacity is now
+            # the canvas length, which is what the comparison should have used all along.
             sh = _layer(_mk())
             os.environ["DG_SPARSE_MOE"] = "0"
             return _pcc(dh1, dh2), _pcc(dh1, sh)

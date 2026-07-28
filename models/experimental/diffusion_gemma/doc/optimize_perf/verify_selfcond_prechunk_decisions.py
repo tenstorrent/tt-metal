@@ -45,7 +45,7 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 
 
-BASE_ENV = {"DG_SPARSE_MOE": "1", "DG_SPARSE_MOE_TUNED": "1", "DG_DEDUP_ARGMAX": "1"}
+BASE_ENV = {"DG_SPARSE_MOE": "1", "DG_SPARSE_MOE_TUNED": "1"}
 TENSOR_DECISION_FIELDS = ("argmax", "sampled", "accept_mask", "canvas", "entropy")
 DECISION_FIELDS = (*TENSOR_DECISION_FIELDS, "commit_candidate")
 

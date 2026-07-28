@@ -17,7 +17,7 @@ The MoE rows use the same effective capacity as production (zero-drop canvas
 capacity by default), assert that no routed assignment is dropped, and report
 both the experts-only micro and the selected router+MoE implementation.
 
-    DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 DG_DEDUP_ARGMAX=1 DG_CKPT=... \
+    DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 DG_CKPT=... \
       python -u models/experimental/diffusion_gemma/doc/optimize_perf/prof_step_breakdown.py --num-layers 2 --iters 15
 
 Markers: RESULT_COMPONENT name=.. ms=..   RESULT_BREAKDOWN <json>
@@ -218,7 +218,7 @@ def run(num_layers, canvas_length, iters, prompt, max_seq_len):
             # Match the measured denoise path exactly.  The production default is
             # zero-drop capacity == canvas length; the old hard-coded capacity=32
             # micro silently measured the pre-#48291 drop-route path instead.
-            moe_capacity = int(os.environ.get("DG_SPARSE_MOE_CAPACITY", str(canvas_length)))
+            moe_capacity = canvas_length  # zero-drop; DG_SPARSE_MOE_CAPACITY deleted 2026-07-28
             routing_host = ttnn.to_torch(ttnn.get_device_tensors(dense_routing)[0])[0, 0]
             expert_load = (routing_host != 0).sum(dim=0)
             dropped_routes = torch.clamp(expert_load - moe_capacity, min=0)

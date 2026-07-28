@@ -310,7 +310,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
         # shared across sessions so a request whose aligned prompt is a prefix of the
         # resident contiguous-cache prompt can skip its prefill. Inert unless
-        # DG_PREFIX_CACHE is set (checked per-prefill inside the session); safe for
+        # (the DG_PREFIX_CACHE reuse tier was deleted 2026-07-28); safe for
         # max_num_seqs=1 (one contiguous cache = one resident prompt).
 
     # ── construction ────────────────────────────────────────────────────
