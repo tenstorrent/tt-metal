@@ -344,7 +344,7 @@
   test_type: ring_joint_sdpa_perf
   test_group: sdpa_perf
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       # Both perf checks run in ~5.6 min; 23 leaves headroom for Galaxy variance.
       timeout: 23
   owner_id: U08RL15T4N8
@@ -374,7 +374,7 @@
   test_type: kimi_chunked
   test_group: module
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       # Job takes under 20 minutes; 40 minute timeout provides buffer for variance and machines with less power.
       timeout: 40
   owner_id: U08RL15T4N8
@@ -395,7 +395,7 @@
   test_type: glm_chunked
   test_group: module
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 45
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
