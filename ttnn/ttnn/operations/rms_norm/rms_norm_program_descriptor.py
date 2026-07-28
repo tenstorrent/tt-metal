@@ -144,7 +144,18 @@ class _Blocking:
         self.gamma_tile_bytes = ttnn.tile_size(gamma.dtype) if self.has_gamma else self.tile_bytes
         self.gamma_elem_bytes = gamma.element_size() if self.has_gamma else self.elem_bytes
         self.fp32_tile_bytes = ttnn.tile_size(ttnn.float32)
-        self.scaler_tile_bytes = ttnn.tile_size(ttnn.bfloat16)
+        # cb_scaler carries the partial-W 0/1 MASK tile, which
+        # reduce_accumulate_via_add's fold_partial_last reads through srcB via
+        # llk_unpack_AB<ROW>(input_dfb, scaler_dfb) WITHOUT reconfiguring srcB —
+        # reduce entry already programmed reconfig_data_format(input, input), so
+        # srcB is configured at the INPUT format. The mask CB must therefore
+        # match the input dtype, not a fixed bfloat16 (op_design.md R4's
+        # Float16_b is right for the ReduceTile datapath, wrong for this one):
+        # a Float16_b mask under an fp32 input is reinterpreted as fp32.
+        # prepare_reduce_mask supports Float16_b and Float32 and deduces the
+        # format from the CB, so both cells are covered.
+        self.scaler_dtype = input_tensor.dtype
+        self.scaler_tile_bytes = self.tile_bytes
 
         # --- BLOCK_CB_UNITS: CB pages charged per block tile (§6.3) ----------
         units = 0
@@ -418,7 +429,9 @@ def _cb_format(name, blk, input_tensor, gamma):
     if name in ("cb_gamma", "cb_gamma_rm"):
         return gamma.dtype if gamma is not None else input_tensor.dtype
     if name == "cb_scaler":
-        return ttnn.bfloat16
+        # Must match the format srcB is configured at inside the reduce; see
+        # _Blocking.scaler_dtype for the full rationale.
+        return blk.scaler_dtype
     if name in ("cb_partials", "cb_rms_sum", "cb_rms_recip"):
         return ttnn.float32
     return input_tensor.dtype
