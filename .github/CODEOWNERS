@@ -512,6 +512,7 @@ models/demos/deepseek_v3_b1/weights @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @tt
 models/demos/deepseek_v3_d_p @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
 models/demos/common/prefill @tenstorrent/metalium-developers-ds-prefill @philei-tt @tenstorrent/codeowner-bypass
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @djordje-tt @handrewsTT @tenstorrent/codeowner-bypass
+models/demos/gpt_oss_d_p @mdragulaTT @philei-tt @vmelnykovTT @ayerofieiev-tt @jmalone-tt @tenstorrent/codeowner-bypass
 models/demos/minimax_m3 @philei-tt @vmelnykovTT @zbaczewskiTT @ayerofieiev-tt @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/codeowner-bypass
@@ -584,6 +585,7 @@ models/experimental/tt_transformers_v2 @gwangTT @yieldthought @uaydonat @tenstor
 models/experimental/tt_symbiote @alnah005 @mbahnasTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/retinanet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/efficientdetd0 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 models/vllm_test_utils/ @viktorpusTT @tchedaTT @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass

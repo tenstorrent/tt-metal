@@ -14,6 +14,7 @@ from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
+from .parallel_embedding import TtParallelEmbedding, cache_name_for, embed_shard_2d
 from .rms_norm import RMSNorm
 
 
@@ -168,26 +169,27 @@ class Model:
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
 
-        # Embedding: first rank only (later ranks receive an already-embedded hidden state).
+        # Sharded token embedding — first rank only (later pipeline ranks get an already-embedded hidden
+        # state). Default 2D (vocab+hidden sharded); M3_EMBED_SHARD_VOCAB=0 for 1D. See tt/parallel_embedding.py.
         if is_first_rank:
+            shard_vocab = embed_shard_2d()
             if state_dict:
-                embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
-                embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+                embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]  # [vocab, hidden]
             else:
-                embedding_weight = None
-            # TODO: the token embedding is currently REPLICATED on every device (DRAM). Shard it
-            # across the mesh (reuse deepseek_v3_d_p's TtParallelEmbedding) to save ~1.85 GB/device.
-            # Deferred to a follow-up PR.
-            self.embedding_weight = ttnn.as_tensor(
-                embedding_weight,
+                embedding_weight = None  # cache-only: the sharded .tensorbin is loaded on a cache hit
+            self.embedding = TtParallelEmbedding(
+                mesh_device,
+                self.vocab_size,
+                hf_config.hidden_size,
+                self.mesh_config,
+                self.ccl_manager,
+                torch_weight=embedding_weight,
+                cache_file_name=get_cache_file_name(tensor_cache_path, cache_name_for(shard_vocab)),
                 dtype=ttnn.bfloat16,
-                device=mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                shard_vocab_on_sp=shard_vocab,
             )
         else:
-            self.embedding_weight = None
+            self.embedding = None
         # Global layer index (first_layer_idx + local) drives weight-cache keys + dense/MoE/sparse
         # selection; the local index drives the KV-cache slot. They coincide for single-rank.
         self.layers = [
@@ -520,7 +522,8 @@ class Model:
         if not trace_enabled:
             # bf16 (not bf8) so the residual stream it seeds keeps full dynamic range — bf8's per-tile
             # shared exponent crushes small channels once massive activations appear (see layer.py adds).
-            tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            # Sharded lookup + managed TP all-gather -> full-hidden, TP-replicated embedding.
+            tokens_embd = self.embedding(tokens)
             tokens.deallocate(True)
 
             # Ensure proper 4D shape
