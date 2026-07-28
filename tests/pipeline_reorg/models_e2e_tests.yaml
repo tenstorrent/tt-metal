@@ -840,8 +840,13 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    mkdir -p /mnt/models/vbench/torch_hub 2>/dev/null || true
+    # VBench cache MUST live on a writable path. The exabox /mnt/models NFS is mounted READ-ONLY
+    # (the workflow only asserts `test -r /mnt/models`), and vbench's init_submodules() does an
+    # un-wrapped os.makedirs(VBENCH_CACHE_DIR) -> OSError on a read-only mount (see #48682, same
+    # failure previously hit /mnt/MLPerf/vbench). Use ${HOME}/.cache, where the job already keeps
+    # its other caches (TT_METAL_CACHE, pip).
+    export VBENCH_CACHE_DIR="${HOME}/.cache/vbench" TORCH_HOME="${HOME}/.cache/vbench/torch_hub"
+    mkdir -p "${TORCH_HOME}"
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
@@ -866,8 +871,10 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    mkdir -p /mnt/models/vbench/torch_hub 2>/dev/null || true
+    # VBench cache on a writable path (${HOME}/.cache) -- /mnt/models is read-only on exabox and vbench
+    # os.makedirs() would crash there. See the T2V entry above (#48682) for the full rationale.
+    export VBENCH_CACHE_DIR="${HOME}/.cache/vbench" TORCH_HOME="${HOME}/.cache/vbench/torch_hub"
+    mkdir -p "${TORCH_HOME}"
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
