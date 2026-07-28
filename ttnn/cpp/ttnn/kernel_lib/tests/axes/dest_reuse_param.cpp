@@ -29,7 +29,7 @@ void kernel_main() {
     using CbOnSrcA = DestReuseBinary<input(cb_c), BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCB>;
     using CbOnSrcB = DestReuseBinary<input(cb_c), BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCA>;
     using ReconfigDisabled = DestReuseBinary<
-        input(cb_c, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+        input(cb_c, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
         BinaryFpuOp::Add,
         DestReuseType::DEST_TO_SRCA>;
     static_assert(CbOnSrcA::reconfig_srca_dfb == cb_c && CbOnSrcA::reconfig_srcb_dfb == NO_PREV_DFB);

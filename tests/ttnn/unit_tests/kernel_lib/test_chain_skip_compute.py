@@ -2,134 +2,142 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Skip-compute (CKL_ELTWISE_CHAIN_SKIP_COMPUTE) performance-analysis knob for eltwise_chain.
+"""Coverage for the CKL_ELTWISE_CHAIN_SKIP_COMPUTE profiling knob.
 
-Skip makes the chain emit ONLY the CB lifecycle (input wait/pop, output reserve/push) plus the
-tile_regs dst-sync window, and skip ALL init + reconfig + compute (unpack, exp_tile, pack_tile).
-The CB counts are byte-for-byte identical to a normal run, so the reader/writer dataflow kernels are
-unmodified and still handshake — the kernel must NOT hang.
-
-This test runs a streaming exp(x) chain compiled with the skip-compute macro set to 1 and asserts
-two things:
-  1. It runs to completion (reaching the assert at all proves the CB handshake stayed intact — a
-     broken handshake would hang and run_safe_pytest.sh would report it).
-  2. Output does NOT match exp(x) (low PCC) — proving init + compute were actually elided.
-
-The normal-run counterpart (same chain producing exp(x) with PCC ~1.0) is covered by
-test_chain_setup_owner.py and test_chain_blocking.py.
+Each test compiles an existing functional chain with the build knob enabled. Completion proves
+that the helper retained its CB and tile-register synchronization lifecycle; disagreement with the
+real golden proves that helper-owned init, reconfiguration, compute, and pack execution were
+elided. The ordinary and unified accumulation fixtures are intentionally shared with the normal
+correctness tests so skip-on and skip-off exercise identical call sites.
 """
 
-import torch
 import pytest
+import torch
 import ttnn
 from loguru import logger
-from tests.ttnn.utils_for_testing import comp_pcc
-import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/skip_compute_exp.cpp"
-DEST_ACCUM_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/dest_accumulation/skip_compute_dest_accum.cpp"
-L1_ACCUM_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/l1_accumulation/skip_compute_l1_accum.cpp"
+import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
+from tests.ttnn.utils_for_testing import comp_pcc
+
+HOIST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist.cpp"
+ACCUMULATION_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/accumulation.cpp"
+SKIP_DEFINE = [("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")]
 
 
 @pytest.mark.parametrize("n", [8, 32])
-def test_skip_compute_skips_compute(device, n):
-    """Skip-compute (ordinary walk): chain runs (no hang) but output is garbage (compute skipped)."""
-    dt = ttnn.bfloat16
+def test_skip_compute_ordinary_walk_preserves_handshake(device, n):
+    dtype = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
     core_grid = lib.single_core_grid()
+    torch_in, tt_in = lib.make_input(shape, dtype, device, seed=90011)
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_in], n, core_grid),
+            lib.build_writer_1out_kernel(tt_out, n, core_grid),
+            lib.build_compute_kernel(HOIST_KERNEL, [n, 0], core_grid, defines=SKIP_DEFINE),
+        ],
+        semaphores=[],
+        cbs=[
+            lib.cb_descriptor(0, dtype, 2, core_grid),
+            lib.cb_descriptor(16, dtype, 2, core_grid),
+        ],
+    )
 
-    torch_in, tt_in = lib.make_input(shape, dt, device, seed=777)
-    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
-    cbs = [lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)]
-    reader = lib.build_reader_kernel([tt_in], n, core_grid)
-    writer = lib.build_writer_1out_kernel(tt_out, n, core_grid)
-    compute = lib.build_compute_kernel(KERNEL, [n], core_grid)
-    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
-
-    # Reaching the line after generic_op proves the CB handshake did not deadlock.
-    output = ttnn.generic_op([tt_in, tt_out], program)
+    output = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).to(torch.float32)
     golden = torch.exp(torch_in.to(torch.float32))
-    out = ttnn.to_torch(output).to(torch.float32)
-
-    ok_exp, msg = comp_pcc(golden, out, 0.99)
-    logger.info(f"skip-compute n={n} | ran without hang | PCC(out, exp(x))={msg}")
-    assert not ok_exp, f"Skip output matched exp(x) (PCC {msg}) — compute was NOT skipped; the knob is a no-op."
+    matches, message = comp_pcc(golden, output, 0.99)
+    logger.info(f"skip ordinary n={n} | completed without deadlock | {message}")
+    assert not matches, f"Skip output matched exp(x) ({message}); compute was not elided"
 
 
+@pytest.mark.parametrize("whole_shape", [False, True], ids=["per-row", "whole-shape"])
 @pytest.mark.parametrize("block_size", [1, 8])
-@pytest.mark.parametrize("caller_managed", [False, True])
-def test_skip_compute_skips_dest_accumulation(device, block_size, caller_managed):
-    """Skip-compute (DEST-accumulation walk): the sticky-D0 reduction runs (no hang) but the packed
-    output is garbage — proving the knob covers the DEST-accumulation loop too, not just the ordinary
-    walk. Golden is the real (local + remote) row reduction; skip must NOT reproduce it."""
-    n = 8
+@pytest.mark.parametrize("caller_managed", [False, True], ids=["managed", "caller-managed"])
+def test_skip_compute_dest_accumulation_preserves_handshake(device, whole_shape, block_size, caller_managed):
+    tiles_per_output = 8
     num_outputs = 3
-    total_input_tiles = n * num_outputs
-    dt = ttnn.bfloat16
-    input_shape = [1, 1, 32, 32 * total_input_tiles]
-    output_shape = [1, 1, 32, 32 * num_outputs]
+    total_input_tiles = tiles_per_output * num_outputs
+    output_tiles = 1 if whole_shape else num_outputs
+    dtype = ttnn.bfloat16
     core_grid = lib.single_core_grid()
-
-    # Seeds unique to this test (NOT the functional DEST test's 1701/1702): with the compute
-    # skipped, the writer publishes whatever uninitialized/stale L1 the pack never overwrote, so
-    # reusing another test's seeds could alias a DRAM address still holding that test's real
-    # reduction and mask the skip. Unique seeds keep the golden uncorrelated with any stale tile.
-    torch_local, tt_local = lib.make_input(input_shape, dt, device, seed=90011)
-    torch_remote, tt_remote = lib.make_input(input_shape, dt, device, seed=90022)
+    input_shape = [1, 1, 32, 32 * total_input_tiles]
+    torch_a, tt_a = lib.make_input(input_shape, dtype, device, seed=90021)
+    torch_b, tt_b = lib.make_input(input_shape, dtype, device, seed=90022)
     tt_out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(output_shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, 1, 32, 32 * output_tiles]),
+        dtype,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
-    cbs = [
-        lib.cb_descriptor(0, dt, total_input_tiles, core_grid),
-        lib.cb_descriptor(1, dt, total_input_tiles, core_grid),
-        lib.cb_descriptor(16, dt, num_outputs, core_grid),
-    ]
-    reader = lib.build_reader_kernel([tt_local, tt_remote], total_input_tiles, core_grid)
-    writer = lib.build_writer_1out_kernel(tt_out, num_outputs, core_grid)
-    compute = lib.build_compute_kernel(DEST_ACCUM_KERNEL, [n, block_size, int(caller_managed), num_outputs], core_grid)
-    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_a, tt_b], total_input_tiles, core_grid),
+            lib.build_writer_1out_kernel(tt_out, output_tiles, core_grid),
+            lib.build_compute_kernel(
+                ACCUMULATION_KERNEL,
+                [0, tiles_per_output, block_size, int(caller_managed), num_outputs, int(whole_shape)],
+                core_grid,
+                defines=SKIP_DEFINE,
+            ),
+        ],
+        semaphores=[],
+        cbs=[
+            lib.cb_descriptor(0, dtype, total_input_tiles, core_grid),
+            lib.cb_descriptor(1, dtype, total_input_tiles, core_grid),
+            lib.cb_descriptor(16, dtype, output_tiles, core_grid),
+        ],
+    )
 
-    # Reaching the line after generic_op proves the CB handshake did not deadlock.
-    out = ttnn.to_torch(ttnn.generic_op([tt_local, tt_remote, tt_out], program)).to(torch.float32)
-
-    local_tiles = torch.stack(torch_local.to(torch.float32).split(32, dim=-1)).reshape(num_outputs, n, 1, 1, 32, 32)
-    remote_tiles = torch.stack(torch_remote.to(torch.float32).split(32, dim=-1)).reshape(num_outputs, n, 1, 1, 32, 32)
-    reduced = (local_tiles + remote_tiles).sum(dim=1)
-    golden = torch.cat([reduced[i] for i in range(num_outputs)], dim=-1)
-
-    ok_reduce, msg = comp_pcc(golden, out, 0.99)
+    output = ttnn.to_torch(ttnn.generic_op([tt_a, tt_b, tt_out], program)).to(torch.float32)
+    a_tiles = torch.stack(torch_a.to(torch.float32).split(32, dim=-1)).reshape(
+        num_outputs, tiles_per_output, 1, 1, 32, 32
+    )
+    b_tiles = torch.stack(torch_b.to(torch.float32).split(32, dim=-1)).reshape(
+        num_outputs, tiles_per_output, 1, 1, 32, 32
+    )
+    reduced = (a_tiles + b_tiles).sum(dim=1)
+    golden = reduced.sum(dim=0) if whole_shape else torch.cat([reduced[i] for i in range(num_outputs)], dim=-1)
+    matches, message = comp_pcc(golden, output, 0.99)
     logger.info(
-        f"skip-compute DEST-accum block={block_size} caller_managed={caller_managed} | "
-        f"ran without hang | PCC(out, reduction)={msg}"
+        f"skip DEST whole_shape={whole_shape}, block={block_size}, caller_managed={caller_managed} | "
+        f"completed without deadlock | {message}"
     )
-    assert not ok_reduce, f"Skip output matched the reduction (PCC {msg}) — DEST-accum compute was NOT skipped."
+    assert not matches, f"Skip output matched the DEST reduction ({message}); compute was not elided"
 
 
-@pytest.mark.parametrize("caller_managed", [False, True])
-def test_skip_compute_skips_l1_accumulation(device, caller_managed):
-    """Skip-compute (L1-accumulation walk): the seed-first accumulate + copy runs (no hang) but the
-    output is garbage — proving the knob covers the L1-accumulation loop too. Golden is the real
-    n-tile running sum; skip must NOT reproduce it. Private seed (see the note above)."""
+@pytest.mark.parametrize("caller_managed", [False, True], ids=["managed", "caller-managed"])
+def test_skip_compute_l1_accumulation_preserves_handshake(device, caller_managed):
     n = 8
-    dt = ttnn.bfloat16
+    dtype = ttnn.bfloat16
+    core_grid = lib.single_core_grid()
     shape = [1, 1, 32, 32 * n]
-    cg = lib.single_core_grid()
-
-    torch_in, tt_in = lib.make_input(shape, dt, device, seed=90033, scale=0.125, bias=0.0)
+    torch_in, tt_in = lib.make_input(shape, dtype, device, seed=90031, scale=0.125, bias=0.0)
     tt_out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 32, 32]), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, 1, 32, 32]), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
-    cbs = [lib.cb_descriptor(0, dt, 2, cg), lib.cb_descriptor(15, dt, 1, cg), lib.cb_descriptor(16, dt, 2, cg)]
-    reader = lib.build_reader_kernel([tt_in], n, cg)
-    writer = lib.build_writer_1out_kernel(tt_out, 1, cg)
-    compute = lib.build_compute_kernel(L1_ACCUM_KERNEL, [n, int(caller_managed)], cg)
-    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_in], n, core_grid),
+            lib.build_writer_1out_kernel(tt_out, 1, core_grid),
+            lib.build_compute_kernel(
+                ACCUMULATION_KERNEL,
+                [1, n, 1, int(caller_managed), 1, 0],
+                core_grid,
+                defines=SKIP_DEFINE,
+            ),
+        ],
+        semaphores=[],
+        cbs=[
+            lib.cb_descriptor(0, dtype, 2, core_grid),
+            lib.cb_descriptor(15, dtype, 1, core_grid),
+            lib.cb_descriptor(16, dtype, 2, core_grid),
+        ],
+    )
 
-    # Reaching the line after generic_op proves the CB handshake did not deadlock.
-    out = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).to(torch.float32)
-    golden = torch.stack(torch_in.to(torch.float32).split(32, dim=-1)).sum(dim=0)  # n-tile running sum
-
-    ok_sum, msg = comp_pcc(golden, out, 0.99)
-    logger.info(f"skip-compute L1-accum caller_managed={caller_managed} | ran without hang | PCC(out, sum)={msg}")
-    assert not ok_sum, f"Skip output matched the accumulation (PCC {msg}) — L1-accum compute was NOT skipped."
+    output = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).to(torch.float32)
+    golden = torch_in.to(torch.float32).reshape(1, 1, 32, n, 32).sum(dim=3)
+    matches, message = comp_pcc(golden, output, 0.99)
+    logger.info(f"skip L1 caller_managed={caller_managed} | completed without deadlock | {message}")
+    assert not matches, f"Skip output matched the L1 accumulation ({message}); compute was not elided"

@@ -26,7 +26,7 @@ DTYPE_TILE_BYTES = {
 
 # Reusable generic dataflow kernels (live alongside the reconfig suite).
 DATAFLOW_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig"
-READER = {n: f"{DATAFLOW_DIR}/reader_{n}_input{'s' if n > 1 else ''}.cpp" for n in (1, 2, 3, 4)}
+READER = f"{DATAFLOW_DIR}/reader_inputs.cpp"
 WRITER_1OUT = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
 WRITER_2OUT = f"{DATAFLOW_DIR}/writer_2_outputs.cpp"
 
@@ -80,13 +80,18 @@ def cb_descriptor(cb_id, dtype, num_pages, core_grid):
 def build_reader_kernel(input_tensors, num_tiles, core_grid):
     """N-input streamer; N inferred from len(input_tensors). Pushes num_tiles to each CB c_0..c_{N-1}."""
     n = len(input_tensors)
-    cta = []
+    cta = [n]
     for t in input_tensors:
         cta.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    # The device compiler validates TensorAccessorArgs in discarded branches of the
+    # 1..4-input reader. Pad metadata so all four declarations remain well-formed;
+    # only the selected NumInputs branch emits reads or consumes runtime addresses.
+    for _ in range(4 - n):
+        cta.extend(ttnn.TensorAccessorArgs(input_tensors[0]).get_compile_time_args())
     rt = ttnn.RuntimeArgs()
     rt[0][0] = [t.buffer_address() for t in input_tensors] + [num_tiles, 0]
     return ttnn.KernelDescriptor(
-        kernel_source=READER[n],
+        kernel_source=READER,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=cta,
@@ -166,9 +171,11 @@ def build_compute_kernel(
     fp32_dest_acc_en=False,
     dst_full_sync_en=False,
     math_fidelity=None,
+    defines=None,
 ):
     """kernel_source is a full repo-relative path. compile_time_args is a list of uint32.
-    math_fidelity is an optional ttnn.MathFidelity (defaults to the descriptor default when None)."""
+    math_fidelity is an optional ttnn.MathFidelity (defaults to the descriptor default when None).
+    defines optionally supplies (name, value) preprocessor definitions."""
     cfg_kwargs = dict(fp32_dest_acc_en=fp32_dest_acc_en, dst_full_sync_en=dst_full_sync_en)
     if math_fidelity is not None:
         cfg_kwargs["math_fidelity"] = math_fidelity
@@ -177,6 +184,7 @@ def build_compute_kernel(
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=list(compile_time_args),
+        defines=[] if defines is None else list(defines),
         runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(**cfg_kwargs),
     )
