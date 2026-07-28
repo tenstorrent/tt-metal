@@ -268,33 +268,52 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
         case SemaphoreScope::LOCAL_NONATOMIC: return SemScope::LOCAL_NONATOMIC;
         case SemaphoreScope::AUTO:
         default: {
-            // AUTO: pick the CHEAPEST CORRECT mechanism. NEVER DM_LOCAL_CACHED (unsound to auto-select
-            // through the raw-coordinate back doors; it stays user-forced). LOCAL_NONATOMIC (cheap,
-            // non-atomic uncached RMW) is safe ONLY when no concurrent RMW can exist: at most one writer
-            // instance AND the sem is a single L1 cell. Otherwise EXTERNAL (self-targeted NoC atomic,
-            // which serializes local + remote writers at one NIU). Strict improvement over today's
-            // blanket LOCAL_NONATOMIC: LOCAL_NONATOMIC == today; EXTERNAL is more atomic, never less.
-            const bool single_writer = binders.writer_instance_count <= 1;
-            const bool single_node = to_node_range_set(sem.target_nodes).num_cores() == 1;
-            if (single_writer && single_node) {
+            // AUTO picks the CHEAPEST CORRECT mechanism from the who-touches census:
+            //
+            //   1 writer instance, single-cell sem  -> LOCAL_NONATOMIC (plain uncached RMW; nothing to
+            //                                          race, and no NoC round-trip -- cheapest of all)
+            //   many writers, all confined to the
+            //   semaphore's ONE node                -> DM_LOCAL_CACHED (cached-pool RISC-V AMO: atomic
+            //                                          among the node's mutually-coherent DM cores, and
+            //                                          no NoC round-trip)
+            //   anything else (multi-node sem, or a
+            //   binder off the sem's node)          -> EXTERNAL (self-targeted NoC atomic; serializes
+            //                                          local + remote writers at one NIU)
+            const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
+            const bool single_node = sem_nodes.num_cores() == 1;
+            if (binders.writer_instance_count <= 1 && single_node) {
                 return SemScope::LOCAL_NONATOMIC;
             }
-            // EXTERNAL pick. Honesty: EXTERNAL's up()/inc is fully atomic, but it CANNOT make a
-            // concurrent down() or a racing set() atomic -- fail loud rather than silently promise it.
+
+            // Concurrent writers from here on. These two hazards are MECHANISM-INDEPENDENT -- neither
+            // EXTERNAL nor DM_LOCAL_CACHED can make them atomic -- so fail loud rather than silently
+            // promise a guarantee the hardware cannot keep. (Dormant unless a binding is labelled
+            // CONSUME/SET; the INCREMENT default never trips them.)
             TT_FATAL(
                 binders.consuming_instance_count < 2,
-                "SemaphoreSpec '{}' resolves AUTO->EXTERNAL but has {} concurrent CONSUME (down()) "
-                "instances; EXTERNAL atomizes the decrement step, but check-then-decrement is "
-                "single-consumer-only. Use a single consumer, host-guard the drain, or force an explicit scope.",
+                "SemaphoreSpec '{}' has {} concurrent CONSUME (down()) instances; the decrement step can be "
+                "atomized but check-then-decrement is single-consumer-only under EVERY scope. Use a single "
+                "consumer, host-guard the drain, or force an explicit scope.",
                 sem.unique_id,
                 binders.consuming_instance_count);
             TT_FATAL(
                 !(binders.setting_instance_count >= 1 && binders.writer_instance_count >= 2),
-                "SemaphoreSpec '{}' resolves AUTO->EXTERNAL but a SET (set()/set_multicast()) races {} "
-                "total writer instance(s); set() is a non-atomic destructive store under ALL scopes. Use "
-                "set() only for init/reset with no concurrent writer, or serialize it.",
+                "SemaphoreSpec '{}' has a SET (set()/set_multicast()) racing {} total writer instance(s); "
+                "set() is a non-atomic destructive store under ALL scopes. Use set() only for init/reset "
+                "with no concurrent writer, or serialize it.",
                 sem.unique_id,
                 binders.writer_instance_count);
+
+            // Prefer the cached fast path when the semaphore is PROVABLY confined to one node: the pool
+            // is a per-core region in the DM cache domain, so every binder (writers AND readers) must
+            // live on that node -- a binder elsewhere would address its own node's pool copy and the
+            // semaphore would split. merge()-then-compare-count detects any binder outside.
+            // Not eligible => EXTERNAL, which is always correct.
+            const bool binders_confined_to_sem_node =
+                sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores();
+            if (single_node && binders_confined_to_sem_node) {
+                return SemScope::DM_LOCAL_CACHED;
+            }
             return SemScope::EXTERNAL;
         }
     }
