@@ -47,8 +47,8 @@ void emit_runtime_args_hc_rm(
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores; i++) {
-        const CoreCoord& core = cores[i];
+    uint32_t curr_sticks_read = 0, curr_sticks_write = 0;
+    for (const auto& core : cores) {
         uint32_t num_sticks_per_core;
 
         if (core_group_1.contains(core)) {

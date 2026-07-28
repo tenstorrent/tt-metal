@@ -45,12 +45,10 @@ void emit_runtime_args_hc_tiled_interleaved(
     auto* output_buffer = output_tensor.buffer();
 
     auto cores = corerange_to_cores(active_cores, std::nullopt);
-    uint32_t num_active_cores = cores.size();
 
     uint32_t start_idx = 0;
     uint32_t padded_start_idx = 0;
-    for (uint32_t i = 0; i < num_active_cores; i++) {
-        const CoreCoord& core = cores[i];
+    for (const auto& core : cores) {
         uint32_t num_tiles_per_core;
         uint32_t padded_tiles_per_core;
 

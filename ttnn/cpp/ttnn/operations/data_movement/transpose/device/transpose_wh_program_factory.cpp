@@ -44,8 +44,8 @@ void emit_runtime_args_wh_tiled(
     compute_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
-        const CoreCoord& core = cores[i];
+    uint32_t num_tiles_read = 0;
+    for (const auto& core : cores) {
         uint32_t num_tiles_per_core;
 
         if (core_group_1.contains(core)) {
@@ -99,8 +99,8 @@ void emit_runtime_args_wh_rm(
     compute_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, num_sticks_read = 0, num_sticks_write = 0; i < num_cores; i++) {
-        const CoreCoord& core = cores[i];
+    uint32_t num_sticks_read = 0, num_sticks_write = 0;
+    for (const auto& core : cores) {
         uint32_t num_hw_blocks_per_core;
 
         if (core_group_1.contains(core)) {
