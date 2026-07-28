@@ -6,7 +6,6 @@
 #include "groupnorm_program_utils.hpp"
 
 #include <bit>
-#include <cmath>
 #include <map>
 #include <string>
 #include <optional>
@@ -562,20 +561,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
-    // Non-tile-aligned H*W (#50682): rescale the reduce scaler to divide by the real element
-    // count and pass K for the compute kernel's variance correction; see compute/groupnorm.cpp.
-    // Kernels re-derive the flag from (padded_hw != logical_hw), so pass logical == padded when
-    // the correction is off, otherwise the flag could disagree with the CB allocation and hang.
-    const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
-    const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
-    const bool has_pad_correction = !use_welford && (logical_hw != padded_hw);
-    const uint32_t reduce_factor_w_val = num_rows_per_batch_per_core * num_datum_row_per_group;
-    const float pad_scaler = 1.0f / std::sqrt(static_cast<float>(reduce_factor_w_val) *
-                                              static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
-    const uint32_t pad_scaler_bits = std::bit_cast<uint32_t>(pad_scaler);
-    const float pad_k = static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f;
-    const uint32_t pad_k_bits = std::bit_cast<uint32_t>(pad_k);
-    const uint32_t compute_logical_hw = has_pad_correction ? logical_hw : padded_hw;
+    // Non-tile-aligned H*W (#50682): rescale the reduce scaler to divide by the real element count
+    // and pass K for the compute kernel's variance correction. See GroupNormPadCorrection for why
+    // an inactive correction still reports logical == padded, and compute/groupnorm.cpp for the
+    // derivation. Unlike the interleaved paths these ship as RUNTIME args (8, 9).
+    const auto pad = make_group_norm_pad_correction(
+        static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
+    const uint32_t pad_scaler_bits = pad.scaler_bits(num_rows_per_batch_per_core * num_datum_row_per_group);
 
     // writer defines
     std::map<std::string, std::string> writer_defines;
@@ -583,7 +575,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (negative_mask.has_value()) {
         writer_defines["FUSE_NEGATIVE_MASK"] = "1";
     }
-    if (has_pad_correction) {
+    if (pad.active) {
         writer_defines["PAD_CORRECTION"] = "1";
     }
     // writer compile time args
@@ -696,8 +688,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     mcast_sender_compute_compile_time_args.push_back(tile_width);
     // #50682. Appended last: index is 25/26 without Welford, 26/27 with it (the conditional arg
     // above shifts them). Only the two-pass kernel reads them.
-    mcast_sender_compute_compile_time_args.push_back(compute_logical_hw);
-    mcast_sender_compute_compile_time_args.push_back(padded_hw);
+    mcast_sender_compute_compile_time_args.push_back(pad.kernel_logical_hw);
+    mcast_sender_compute_compile_time_args.push_back(pad.padded_hw);
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         0,
         static_cast<uint32_t>(gamma.has_value()),
@@ -732,8 +724,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_receiver_compute_compile_time_args.push_back(tile_width);
-    mcast_receiver_compute_compile_time_args.push_back(compute_logical_hw);
-    mcast_receiver_compute_compile_time_args.push_back(padded_hw);
+    mcast_receiver_compute_compile_time_args.push_back(pad.kernel_logical_hw);
+    mcast_receiver_compute_compile_time_args.push_back(pad.padded_hw);
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -1130,19 +1122,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     });
 
     // #50682 pad-correction scalars/scratch: cb_k written by the writer, cb_msq / cb_kmsq scratch.
-    if (has_pad_correction) {
-        for (uint32_t pad_cb_index : {tt::CBIndex::c_18, tt::CBIndex::c_19, tt::CBIndex::c_20}) {
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = single_tile_size,
-                .core_ranges = all_cores,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(pad_cb_index),
-                    .data_format = cb_data_format,
-                    .page_size = single_tile_size,
-                }}},
-            });
-        }
-    }
+    append_group_norm_pad_correction_cbs(
+        desc.cbs,
+        pad,
+        {tt::CBIndex::c_18, tt::CBIndex::c_19, tt::CBIndex::c_20},
+        all_cores,
+        cb_data_format,
+        single_tile_size);
 
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
@@ -1296,7 +1282,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         // args 8, 9: only read when PAD_CORRECTION.
         writer_mcast_sender_args.push_back(pad_scaler_bits);
-        writer_mcast_sender_args.push_back(pad_k_bits);
+        writer_mcast_sender_args.push_back(pad.k_bits);
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
 
         if (gamma.has_value()) {

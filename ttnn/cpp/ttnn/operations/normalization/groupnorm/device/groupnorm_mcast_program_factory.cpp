@@ -7,7 +7,6 @@
 #include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
-#include <cmath>
 #include <map>
 #include <string>
 #include <optional>
@@ -515,21 +514,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .noc = reader_noc,
     };
 
-    // Non-tile-aligned H*W (#50682): rescale the reduce scaler to divide by the real element
-    // count and pass K for the compute kernel's variance correction; see compute/groupnorm.cpp.
-    // Kernels re-derive the flag from (padded_hw != logical_hw), so pass logical == padded when
-    // the correction is off, otherwise the flag could disagree with the CB allocation and hang.
-    const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
-    const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
-    const bool has_pad_correction = !use_welford && (logical_hw != padded_hw);
-    const uint32_t kernel_logical_hw = has_pad_correction ? logical_hw : padded_hw;
-    const float pad_k = static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f;
-    const uint32_t pad_k_bits = std::bit_cast<uint32_t>(pad_k);
-    auto pad_scaler_bits = [&](uint32_t reduce_factor_w) {
-        const float sc = 1.0f / std::sqrt(static_cast<float>(reduce_factor_w) *
-                                          static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
-        return std::bit_cast<uint32_t>(sc);
-    };
+    // Non-tile-aligned H*W (#50682): rescale the reduce scaler to divide by the real element count
+    // and pass K for the compute kernel's variance correction. See GroupNormPadCorrection for why
+    // an inactive correction still reports logical == padded, and compute/groupnorm.cpp for the
+    // derivation.
+    const auto pad = make_group_norm_pad_correction(
+        static_cast<uint32_t>(a.logical_shape()[2]), static_cast<uint32_t>(a.padded_shape()[2]), use_welford);
 
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
@@ -559,10 +549,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"TILE_HW", tile_hw},
         {"reduce_factor_w", num_rows_per_batch_per_core_group_1 * num_channels_per_group},
         {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
-        {"logical_hw", kernel_logical_hw},
-        {"padded_hw", padded_hw},
-        {"pad_scaler_bits", pad_scaler_bits(num_rows_per_batch_per_core_group_1 * num_channels_per_group)},
-        {"pad_k_bits", pad_k_bits},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
+        {"pad_scaler_bits", pad.scaler_bits(num_rows_per_batch_per_core_group_1 * num_channels_per_group)},
+        {"pad_k_bits", pad.k_bits},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -643,8 +633,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"reciprocal_size", num_reciprocals},
         {"TILE_WIDTH", tile_width},
-        {"logical_hw", kernel_logical_hw},
-        {"padded_hw", padded_hw},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {};
@@ -679,8 +669,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"reciprocal_size", num_reciprocals},
         {"TILE_WIDTH", tile_width},
-        {"logical_hw", kernel_logical_hw},
-        {"padded_hw", padded_hw},
+        {"logical_hw", pad.kernel_logical_hw},
+        {"padded_hw", pad.padded_hw},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
@@ -858,19 +848,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     });
 
     // #50682 pad-correction scalars/scratch: cb_k written by the writer, cb_msq / cb_kmsq scratch.
-    if (has_pad_correction) {
-        for (uint32_t pad_cb_index : {tt::CBIndex::c_1, tt::CBIndex::c_7, tt::CBIndex::c_11}) {
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = single_tile_size,
-                .core_ranges = all_cores,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(pad_cb_index),
-                    .data_format = cb_data_format,
-                    .page_size = single_tile_size,
-                }}},
-            });
-        }
-    }
+    append_group_norm_pad_correction_cbs(
+        desc.cbs,
+        pad,
+        {tt::CBIndex::c_1, tt::CBIndex::c_7, tt::CBIndex::c_11},
+        all_cores,
+        cb_data_format,
+        single_tile_size);
 
     if (gamma.has_value()) {
         constexpr uint32_t in5_cb_index = tt::CBIndex::c_5;
