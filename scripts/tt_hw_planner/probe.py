@@ -67,6 +67,29 @@ PIPELINE_CATEGORY = {
     "keypoint-detection": "CNN",
     "image-to-3d": "CNN",
     "video-classification": "Video",
+    # HF publishes 47 pipeline tags; these 19 were absent, so a model carrying one fell through to the
+    # keyword guess in _classify_category and, failing that, to "Unknown" -- which drives category
+    # routing, the reference loader and the placement plan. Sourced from huggingface.co/api/tasks
+    # rather than invented, so the list can be re-diffed when HF adds more.
+    "audio-text-to-text": "VLM",
+    "video-text-to-text": "VLM",
+    "document-question-answering": "VLM",
+    "visual-document-retrieval": "VLM",
+    "image-text-to-image": "Image",
+    "unconditional-image-generation": "Image",
+    "text-to-3d": "Image",
+    "image-text-to-video": "Video",
+    "question-answering": "LLM",
+    "summarization": "LLM",
+    "translation": "LLM",
+    "table-question-answering": "LLM",
+    "text-classification": "Embed",
+    "token-classification": "Embed",
+    "text-ranking": "Embed",
+    "zero-shot-classification": "Embed",
+    "tabular-classification": "Embed",
+    "tabular-regression": "Embed",
+    "reinforcement-learning": "Unknown",
 }
 
 
