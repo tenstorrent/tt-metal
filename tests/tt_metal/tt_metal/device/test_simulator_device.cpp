@@ -40,6 +40,20 @@ namespace tt::tt_metal {
 using namespace tt;
 using namespace tt::test_utils;
 
+class FastDispatchSimulatorFixture : public FastDispatchMeshDeviceFixture {
+protected:
+    void SetUp() override {
+        // Check if simulator mode is enabled
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+            GTEST_SKIP()
+                << "Simulator mode not enabled. Set TT_METAL_SIMULATOR environment variable to run simulator tests.";
+        }
+
+        // Call parent SetUp to initialize devices
+        FastDispatchMeshDeviceFixture::SetUp();
+    }
+};
+
 class SimulatorFixture : public MeshDeviceFixture {
 protected:
     void SetUp() override {
@@ -74,7 +88,7 @@ TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     }
 }
 
-TEST_F(FastDispatchMeshDeviceFixture, QuasarStaticTlbReadWrite) {
+TEST_F(FastDispatchSimulatorFixture, QuasarStaticTlbReadWrite) {
     auto& cluster = MetalContext::instance().get_cluster();
     if (cluster.arch() != tt::ARCH::QUASAR) {
         GTEST_SKIP();
