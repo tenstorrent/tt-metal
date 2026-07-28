@@ -28,17 +28,33 @@ torch = pytest.importorskip("torch")
 _QWEN3_EXAMPLE_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "sources", "examples", "qwen3")
 )
-if _QWEN3_EXAMPLE_DIR not in sys.path:
-    sys.path.insert(0, _QWEN3_EXAMPLE_DIR)
+# Force the qwen3 example dir to the front of sys.path so ``import utils`` resolves
+# here even if a sibling example dir is already on the path.
+if _QWEN3_EXAMPLE_DIR in sys.path:
+    sys.path.remove(_QWEN3_EXAMPLE_DIR)
+sys.path.insert(0, _QWEN3_EXAMPLE_DIR)
 
 from ttml.models.qwen3.weights import unpermute_proj_rows  # noqa: E402
 
-from utils.lora import (  # noqa: E402
-    LORA_TARGETS_ACCEPTED,
-    LORA_TARGETS_ALL,
-    normalize_lora_targets,
-)
-from utils.save_load import _split_fused_kv  # noqa: E402
+# The qwen3 example ships a top-level ``utils`` package, and so do sibling example
+# dirs (e.g. examples/grpo, imported by test_grpo_trainer). In a single pytest
+# session another test module may have already imported its own ``utils`` first,
+# caching it in sys.modules and shadowing ours (sys.path.insert cannot override an
+# already-imported module). Temporarily evict any cached ``utils*`` so the imports
+# below resolve against _QWEN3_EXAMPLE_DIR, then restore the sibling's modules so
+# we do not break whichever test imported them.
+_saved_utils = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "utils" or k.startswith("utils.")}
+try:
+    from utils.lora import (  # noqa: E402
+        LORA_TARGETS_ACCEPTED,
+        LORA_TARGETS_ALL,
+        normalize_lora_targets,
+    )
+    from utils.save_load import _split_fused_kv  # noqa: E402
+finally:
+    for _k in [k for k in list(sys.modules) if k == "utils" or k.startswith("utils.")]:
+        del sys.modules[_k]
+    sys.modules.update(_saved_utils)
 
 # ---------------------------------------------------------------------------
 # LoRA target retargeting / alias normalization
