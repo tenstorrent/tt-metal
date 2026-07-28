@@ -31,28 +31,28 @@ void kernel_main() {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-                input(cb_b, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
                 BroadcastDim::Row>{},
-            PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
+            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
     } else if constexpr (dim == 1) {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-                input(cb_b, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
                 BroadcastDim::Col>{},
-            PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
+            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
     } else {  // dim == 3 -> Scalar
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-                input(cb_b, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
                 BroadcastDim::Scalar>{},
-            PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
+            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
     }
 }

@@ -104,12 +104,14 @@ struct RuntimeConditionalSequenceBase<false> : DestOnlyTag {};
 
 template <>
 struct RuntimeConditionalSequenceBase<true> : CbReaderTag {
-    static constexpr InputLifecycle Policy = InputLifecycle::CallerManaged;
+    static constexpr WaitPolicy Wait = WaitPolicy::None;
+    static constexpr PopPolicy Pop = PopPolicy::None;
     static constexpr uint32_t dfb = INVALID_DFB;
-    static constexpr bool is_upfront = false;
 
     static constexpr uint32_t dfb_a_id() { return INVALID_DFB; }
-    static constexpr InputLifecycle a_policy() { return Policy; }
+    static constexpr InputSpec a_input() {
+        return {INVALID_DFB, Wait, Pop, OperandKind::Scalar, DataFormatReconfig::Disabled, TileOffset::Unset};
+    }
 };
 
 }  // namespace detail
