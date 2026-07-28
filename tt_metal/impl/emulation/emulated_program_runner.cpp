@@ -1715,6 +1715,30 @@ static void collect_kernels(
                 for (const auto& [k, v] : sorted_named) {
                     key += ":N" + k + "=" + std::to_string(v);
                 }
+                ////////////////////////////////////////////////////////////
+                // Blaze-only experimental named args
+                // Removal is tracked by issue #50953
+                // The compiled wrapper depends on named_runtime_arg_namespaces through
+                // named_args_generated.h (the blaze_rt_args:: Arg/ArrayArg descriptors),
+                // so the full named RT schema — ns, field, index, length, dispatch — must
+                // be part of the key. Without it, two kernels sharing source/CT args/defines
+                // but differing in Blaze RT names or layout alias in the JIT and disk caches
+                // and load a stale descriptor layout (the .so then reads runtime args from
+                // the wrong slots). The named CT namespaces need no separate entry: they are
+                // a deterministic split of the flat named_compile_args serialized above.
+                // Determinism: NamedRuntimeArgNamespaces is a std::map (sorted ns order) of
+                // declaration-ordered vectors, so this iteration order is fixed; ns/field are
+                // validated C++ identifiers (alnum + '_'), so they cannot contain the
+                // ':'/'='/',' separators and the serialization is unambiguous.
+                for (const auto& [ns, entries] : named_runtime_arg_namespaces) {
+                    key += ":brtns:" + ns;
+                    for (const auto& entry : entries) {
+                        key += ":brt:" + entry.field + "=" + std::to_string(entry.index) + "," +
+                               std::to_string(entry.length) + "," +
+                               std::to_string(static_cast<uint32_t>(entry.dispatch));
+                    }
+                }
+                ////////////////////////////////////////////////////////////
                 for (const auto& [k, v] : defs) {
                     key += ":" + k + "=" + v;
                 }
