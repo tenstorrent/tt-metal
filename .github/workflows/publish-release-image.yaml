@@ -137,6 +137,14 @@ jobs:
           set-lines: ${{ steps.bake.outputs.set }}
           syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
           oras-image: ${{ steps.bake.outputs.oras-image }}
+          # Default retries=1 is effectively zero retries (the loop runs once and
+          # stops). We've now seen transient "dial tcp ... i/o timeout" failures
+          # against three different hosts here (docker.io, mirror.gcr.io, ghcr.io)
+          # with no retry attempted - that points at occasional runner-side
+          # network blips rather than any one registry being unreliable, so retry
+          # instead of continuing to chase a "safer" host.
+          retries: "4"
+          retry-delay-seconds: "15"
           harbor-prefix: ${{ inputs.harbor-prefix }}
       - name: Get image digest
         if: ${{ !inputs.dry-run }}
