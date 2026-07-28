@@ -40,7 +40,7 @@ from typing import Dict, List, Optional
 import torch
 import ttnn
 
-from models.experimental.vibevoice.tt.vibevoice_config import SemanticTokenizerConfig, damp_weight, mm_damp
+from models.experimental.vibevoice.tt.vibevoice_config import SemanticTokenizerConfig
 
 
 _HIFI4 = ttnn.WormholeComputeKernelConfig(
@@ -239,17 +239,7 @@ def preprocess_semantic_tokenizer_weights(
 
 
 def _tile_linear(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
-    """[out, in] → [1, 1, in, out] TILE for ttnn.linear (x @ w semantics).
-
-    Folds in the pre-#50250 matmul K-reduction damping (see mm_damp) so these tokenizer linears
-    match the LM/diffusion-head weights.  Conv weights deliberately do NOT get this: conv uses
-    conv_bmm_tilize.cpp, which #50250 did not touch, and the conv path is byte-identical across
-    the two builds.
-    """
-    if dtype == ttnn.bfloat16:
-        t = damp_weight(t, t.shape[1], 2)
-    else:
-        t = t.to(torch.float32) * mm_damp(t.shape[1], 2)  # fp32 path: no bf16 rounding to account for
+    """[out, in] → [1, 1, in, out] TILE for ttnn.linear (x @ w semantics)."""
     return ttnn.as_tensor(
         t.t().unsqueeze(0).unsqueeze(0).contiguous(),
         device=device,
