@@ -221,9 +221,12 @@ def run_recaption_on_device(
     )
 
     def _copy_logits_fn_meta(src, dst):
+        # dst is always a plain closure defined below, so writing its __dict__ is
+        # exactly what setattr would do — minus a dynamic attribute-name sink. The
+        # keys are fixed by the _logits_fn_meta literal above.
         for attr in _logits_fn_meta:
             if hasattr(src, attr):
-                setattr(dst, attr, getattr(src, attr))
+                dst.__dict__[attr] = getattr(src, attr)
 
     # TTFT/TPS: track wall-clock per AR forward step regardless of verbosity.
     _step_times: list[float] = []

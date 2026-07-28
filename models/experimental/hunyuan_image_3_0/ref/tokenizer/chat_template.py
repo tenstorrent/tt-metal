@@ -26,7 +26,6 @@
 
 from __future__ import annotations
 
-import random
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -143,7 +142,10 @@ class ChatTemplateEncoder:
             uncond_enabled = [True] * len(texts)
         elif isinstance(uncond_enabled, bool):
             uncond_enabled = [uncond_enabled] * len(texts)
-        do_uncond_drop = uncond_p is not None and random.random() < uncond_p
+        # CFG dropout draw. torch's generator (not `random`) so the decision stays tied
+        # to torch.manual_seed and a run stays byte-reproducible. In this port uncond_p is
+        # only ever 0.0 or 1.0 (cond / uncond batch halves), so the draw is a formality.
+        do_uncond_drop = uncond_p is not None and float(torch.rand(())) < uncond_p
 
         text_tokens: list[int] = []
         cum_length = 0

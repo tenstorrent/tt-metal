@@ -12,6 +12,7 @@ from pathlib import Path
 import torch
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.hunyuan_image_3_0.ref.safe_paths import safe_join, safe_output_path
 from models.experimental.hunyuan_image_3_0.ref.model_config import (
     IMAGE_BASE_SIZE,
     PRODUCTION_IMAGE_TOKENS,
@@ -190,7 +191,9 @@ def pcc_metrics(ref: torch.Tensor, tt_out: torch.Tensor, threshold: float) -> tu
 
 
 def write_isl_csv(rows: list[dict], path: Path | str) -> Path:
-    path = Path(path)
+    # Normalized + extension-checked so an HY_PCC_CSV typo can't clobber an
+    # arbitrary file through this writer.
+    path = safe_output_path(path, suffix=".csv")
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         return path
@@ -203,7 +206,7 @@ def write_isl_csv(rows: list[dict], path: Path | str) -> Path:
 
 def isl_csv_path(default_name: str = "hunyuan_isl_sweep.csv") -> Path | None:
     if env := os.environ.get("HY_PCC_CSV"):
-        return Path(env)
-    if os.environ.get("HY_PCC_CSV_DIR"):
-        return Path(os.environ["HY_PCC_CSV_DIR"]) / default_name
+        return safe_output_path(env, suffix=".csv")
+    if csv_dir := os.environ.get("HY_PCC_CSV_DIR"):
+        return safe_join(csv_dir, default_name)
     return None

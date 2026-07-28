@@ -38,6 +38,7 @@ import torch
 from torch import Tensor
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
+from ..safe_paths import safe_join
 from .chat_template import ChatTemplateEncoder, TokenizerEncodeOutput
 from .image_info import CondImage, ImageInfo, build_gen_image_info
 from .special_tokens import SpecialTokens, build_special_tokens, validate_special_tokens
@@ -89,7 +90,18 @@ class HunyuanConfig:
         )
 
 
+CONFIG_FILENAME = "config.json"
+
+
 def load_config(config_path: Path = CONFIG_PATH) -> HunyuanConfig:
+    """Load the tokenizer-stack config from bundled assets or a checkpoint dir.
+
+    Callers only ever choose the *directory*; the filename is fixed. Rebuilding the
+    path from ``parent`` + the constant ``config.json`` makes that explicit and keeps
+    a caller from pointing this at an arbitrary file.
+    """
+    config_dir = Path(config_path).parent if Path(config_path).name == CONFIG_FILENAME else Path(config_path)
+    config_path = safe_join(config_dir, CONFIG_FILENAME)
     if not config_path.is_file():
         raise FileNotFoundError(f"Missing bundled config: {config_path}")
     with open(config_path) as f:
@@ -168,7 +180,7 @@ class HunyuanTokenizer:
     ) -> HunyuanTokenizer:
         """Load config (and optionally tokenizer) from a checkpoint directory."""
         model_dir = Path(model_dir)
-        config_path = model_dir / "config.json"
+        config_path = safe_join(model_dir, CONFIG_FILENAME)
         if not config_path.is_file():
             raise FileNotFoundError(f"Missing config.json under {model_dir}")
         config = load_config(config_path)

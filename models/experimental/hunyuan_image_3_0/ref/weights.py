@@ -14,16 +14,33 @@ import torch
 from safetensors import safe_open
 from torch import Tensor
 
+from models.experimental.hunyuan_image_3_0.ref.safe_paths import safe_join
+
 # HuggingFace model repos (``hf download <repo>`` → ~/.cache/huggingface/hub/…).
 HF_REPO_BASE = "tencent/HunyuanImage-3.0"
 HF_REPO_INSTRUCT = "tencent/HunyuanImage-3.0-Instruct"
 HF_REPO_INSTRUCT_DISTIL = "tencent/HunyuanImage-3.0-Instruct-Distil"
+
+# Only these three repos may be handed to `hf download` / snapshot_download.
+_ALLOWED_REPOS = frozenset({HF_REPO_BASE, HF_REPO_INSTRUCT, HF_REPO_INSTRUCT_DISTIL})
 
 ENV_BASE = "HUNYUAN_MODEL_DIR"
 ENV_INSTRUCT = "HUNYUAN_INSTRUCT_MODEL_DIR"
 ENV_INSTRUCT_DISTIL = "HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR"
 
 _WEIGHT_INDEX = "model.safetensors.index.json"
+
+
+def _checked_repo_id(repo_id: str) -> str:
+    """Reject any repo id outside the hardcoded HunyuanImage-3.0 safelist."""
+    if repo_id not in _ALLOWED_REPOS:
+        raise ValueError(f"refusing to download unknown repo {repo_id!r}; expected one of {sorted(_ALLOWED_REPOS)}")
+    return repo_id
+
+
+def _index_path(model_dir: Path) -> Path:
+    """``model_dir/model.safetensors.index.json``, pinned inside ``model_dir``."""
+    return safe_join(model_dir, _WEIGHT_INDEX)
 
 
 def _hub_cache_dir() -> Path:
@@ -41,7 +58,7 @@ def _repo_snapshots_dir(repo_id: str) -> Path:
 
 def _weight_shard_names(model_dir: Path) -> list[str]:
     """Unique safetensor shard filenames listed in ``model.safetensors.index.json``."""
-    index_path = model_dir / _WEIGHT_INDEX
+    index_path = _index_path(model_dir)
     if not index_path.is_file():
         return []
     with open(index_path) as f:
@@ -51,7 +68,11 @@ def _weight_shard_names(model_dir: Path) -> list[str]:
 
 def _shard_exists(model_dir: Path, shard: str) -> bool:
     """True when the shard file is present and its blob target resolves (HF uses symlinks)."""
-    path = model_dir / shard
+    # ``shard`` comes out of the checkpoint's index JSON — pin it under model_dir.
+    try:
+        path = safe_join(model_dir, shard)
+    except ValueError:
+        return False
     if not path.is_file():
         return False
     try:
@@ -68,7 +89,7 @@ def missing_weight_shards(model_dir: Path) -> list[str]:
 
 def is_checkpoint_complete(model_dir: Path) -> bool:
     """True when the index exists and every referenced safetensor shard is on disk."""
-    if not (model_dir / _WEIGHT_INDEX).is_file():
+    if not _index_path(model_dir).is_file():
         return False
     return len(missing_weight_shards(model_dir)) == 0
 
@@ -81,7 +102,7 @@ def find_hf_snapshot(repo_id: str) -> Path | None:
     candidates = [snap for snap in snaps.iterdir() if snap.is_dir() and is_checkpoint_complete(snap)]
     if not candidates:
         # Fall back to newest snapshot with an index so ensure_checkpoint can resume it.
-        partial = [snap for snap in snaps.iterdir() if snap.is_dir() and (snap / _WEIGHT_INDEX).is_file()]
+        partial = [snap for snap in snaps.iterdir() if snap.is_dir() and _index_path(snap).is_file()]
         if not partial:
             return None
         return max(partial, key=lambda p: p.stat().st_mtime)
@@ -114,7 +135,11 @@ def _hf_download(repo_id: str, local_dir: Path | None = None) -> None:
 
     When ``local_dir`` is set (e.g. ``HUNYUAN_MODEL_DIR``), files land there so CI
     paths stay stable across runs. Otherwise the HF hub cache under ``HF_HOME`` is used.
+
+    ``repo_id`` is checked against the ``_ALLOWED_REPOS`` safelist before it reaches
+    ``hf download``, so only the three known HunyuanImage-3.0 repos are ever fetched.
     """
+    repo_id = _checked_repo_id(repo_id)
     if os.environ.get("HY_SKIP_WEIGHT_DOWNLOAD", "0") == "1":
         where = f" (expected at {local_dir})" if local_dir is not None else ""
         raise FileNotFoundError(f"Checkpoint for {repo_id!r} not found{where} and HY_SKIP_WEIGHT_DOWNLOAD=1")
@@ -138,14 +163,16 @@ def _hf_download(repo_id: str, local_dir: Path | None = None) -> None:
     if hf is None:
         raise RuntimeError(f"Install huggingface_hub or put `hf` on PATH to download {repo_id!r}")
 
+    # argv list form (never shell=True); `hf` is an absolute path from shutil.which,
+    # the repo id is safelisted above, and dest is normalized to an absolute path.
     if local_dir is not None:
         local_dir.mkdir(parents=True, exist_ok=True)
-        dest = str(local_dir)
+        dest = os.path.abspath(str(local_dir))
         print(f"[weights] downloading {repo_id} → {dest} ...", flush=True)
-        proc = subprocess.run([hf, "download", repo_id, "--local-dir", dest])
+        proc = subprocess.run([hf, "download", repo_id, "--local-dir", dest], shell=False)
     else:
         print(f"[weights] downloading {repo_id} → {_hub_cache_dir()} ...", flush=True)
-        proc = subprocess.run([hf, "download", repo_id])
+        proc = subprocess.run([hf, "download", repo_id], shell=False)
     if proc.returncode == 0:
         return
     # ``hf download`` often prints "Download complete" then exits 1 (click Exit quirk).
@@ -230,11 +257,11 @@ def try_find_instruct_model_dir() -> Path | None:
     """
     if override := os.environ.get(ENV_INSTRUCT):
         path = Path(override)
-        if (path / _WEIGHT_INDEX).is_file():
+        if _index_path(path).is_file():
             return path
         return None
     snap = find_hf_snapshot(HF_REPO_INSTRUCT)
-    if snap is not None and (snap / _WEIGHT_INDEX).is_file():
+    if snap is not None and _index_path(snap).is_file():
         return snap
     return None
 
@@ -266,7 +293,7 @@ def ensure_checkpoint(*, env_var: str, repo_id: str) -> Path:
         if is_checkpoint_complete(path):
             print(f"[weights] using {path}", flush=True)
             return path
-        if not (path / _WEIGHT_INDEX).is_file():
+        if not _index_path(path).is_file():
             reason = f"incomplete checkpoint at {path}: missing {_WEIGHT_INDEX}"
         else:
             missing = missing_weight_shards(path)
@@ -306,7 +333,7 @@ def ensure_checkpoint(*, env_var: str, repo_id: str) -> Path:
             return snap
 
     missing = missing_weight_shards(path)
-    index_ok = (path / _WEIGHT_INDEX).is_file()
+    index_ok = _index_path(path).is_file()
     hint = f" --local-dir {local_dir}" if local_dir is not None else ""
     raise RuntimeError(
         f"Download finished but checkpoint still incomplete under {path}: "
@@ -354,7 +381,7 @@ def __getattr__(name: str):
 
 
 def load_tensors(model_dir: Path, keys: list[str]) -> dict[str, Tensor]:
-    index_path = model_dir / _WEIGHT_INDEX
+    index_path = _index_path(model_dir)
     with open(index_path) as f:
         weight_map = json.load(f)["weight_map"]
 
@@ -366,7 +393,8 @@ def load_tensors(model_dir: Path, keys: list[str]) -> dict[str, Tensor]:
 
     tensors: dict[str, Tensor] = {}
     for shard_file, shard_keys in shard_to_keys.items():
-        shard_path = model_dir / shard_file
+        # Shard names come from the index JSON; pin them under model_dir.
+        shard_path = safe_join(model_dir, shard_file)
         if not shard_path.exists():
             raise FileNotFoundError(f"Missing weight shard: {shard_path}")
         with safe_open(shard_path, framework="pt", device="cpu") as f:
@@ -376,7 +404,7 @@ def load_tensors(model_dir: Path, keys: list[str]) -> dict[str, Tensor]:
 
 
 def load_prefixed_state_dict(model_dir: Path, prefix: str, dtype: torch.dtype = torch.float32) -> dict[str, Tensor]:
-    index_path = model_dir / _WEIGHT_INDEX
+    index_path = _index_path(model_dir)
     with open(index_path) as f:
         weight_map = json.load(f)["weight_map"]
 
