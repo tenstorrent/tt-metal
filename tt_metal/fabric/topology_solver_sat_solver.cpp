@@ -206,12 +206,8 @@ TopologySatSolver::TopologySatSolver() : impl_(std::make_unique<Impl>()) {}
 void TopologySatSolver::configure_for_blocking_clause_enumeration() {
     // Only valid in CONFIGURING state (before the first non-config add()).
     // ILB: incremental lazy backtracking — reuse trail across incremental clause additions (CaDiCaL NEWS 1.7.3+).
-    // A/B knob (TT_TOPO_SAT_ILB, default 2) to isolate whether ILB degrades the minimal-host lock solve.
-    int ilb = 2;
-    if (const char* e = std::getenv("TT_TOPO_SAT_ILB")) {
-        ilb = std::atoi(e);
-    }
-    (void)impl_->solver.set("ilb", ilb);
+    // Fixed at 2 ("reuse everything") on purpose, used for iterative solving without re-encoding.
+    (void)impl_->solver.set("ilb", 2);
 }
 
 TopologySatSolver::~TopologySatSolver() = default;
