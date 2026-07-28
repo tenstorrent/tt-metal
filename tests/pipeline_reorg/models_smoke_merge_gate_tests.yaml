@@ -4,19 +4,13 @@
 # For max allowed timeout refer to .github/time_budget.yaml (models -> smoke).
 #
 # TEST-ONLY (SYS-4772) -- DO NOT MERGE.
-# The decoder test is duplicated into two identical "slots". A self-hosted runner executes
-# one job at a time, so queueing two jobs with the same runs_on forces GitHub Actions to
-# spread them across BOTH dedicated merge-gate boards -- meaning one of them must land on
-# the faulty OM1-01A04-STGWH01. GitHub cannot target a runner by name (runs_on matches
-# labels only, and both boards carry identical labels and the same runner group), so each
-# slot instead gates on $RUNNER_NAME and only the slot that landed on STGWH01 actually
-# runs pytest. The other slot exits without touching the device.
-#
-# Reading the result:
-#   - one slot reports "on TARGET"          -> the test really executed on STGWH01
-#   - BOTH slots report a non-target board  -> STGWH01 is not in the merge-gate pool
+# Routing to the single faulty board OM1-01A04-STGWH01 is done in .github/sku_config.yaml,
+# by pinning the wh_galaxy_merge_gate SKU's runs_on to a label unique to that board. The
+# $RUNNER_NAME check below is only a safety net: if the pinning label turns out to also match
+# the healthy twin STGWH02, the test is skipped instead of running on the wrong board and
+# producing a misleading pass.
 
-- name: GPT-OSS 120B decoder unit test [slot A]
+- name: GPT-OSS 120B decoder unit test
   cmd: |
     echo "SYS-4772 gate: RUNNER_NAME=${RUNNER_NAME:-<empty>}"
     if [ -z "${RUNNER_NAME:-}" ]; then
@@ -24,29 +18,8 @@
       exit 1
     fi
     if [ "$RUNNER_NAME" != "OM1-01A04-STGWH01" ]; then
-      echo "::notice::SYS-4772 gate: on $RUNNER_NAME, not the target OM1-01A04-STGWH01 - skipping test."
-      exit 0
-    fi
-    echo "::notice::SYS-4772 gate: on TARGET $RUNNER_NAME - running the decoder test."
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
-    pytest "models/demos/gpt_oss/tests/unit/test_modules.py::test_decoder[wormhole_b0-paged-layer_0-decode_high_throughput-4x8]" --timeout 1500
-  skus:
-    wh_galaxy_merge_gate:
-      timeout: 7
-  model: gpt-oss-120b
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  team: models
-
-- name: GPT-OSS 120B decoder unit test [slot B]
-  cmd: |
-    echo "SYS-4772 gate: RUNNER_NAME=${RUNNER_NAME:-<empty>}"
-    if [ -z "${RUNNER_NAME:-}" ]; then
-      echo "::error::SYS-4772 gate: RUNNER_NAME is empty; cannot tell which board this is."
+      echo "::error::SYS-4772 gate: landed on $RUNNER_NAME, expected OM1-01A04-STGWH01 - the sku_config pin is not selective enough. Skipping test."
       exit 1
-    fi
-    if [ "$RUNNER_NAME" != "OM1-01A04-STGWH01" ]; then
-      echo "::notice::SYS-4772 gate: on $RUNNER_NAME, not the target OM1-01A04-STGWH01 - skipping test."
-      exit 0
     fi
     echo "::notice::SYS-4772 gate: on TARGET $RUNNER_NAME - running the decoder test."
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
