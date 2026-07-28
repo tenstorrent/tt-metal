@@ -82,6 +82,8 @@ constexpr size_t kMaxConsumerBatchCap = 1u << 20;  // hard ceiling on the above
 constexpr size_t kRingHeadroomBatches = 4;         // batches of backlog the ring absorbs while a consumer works
 constexpr size_t kMaxRingCapacity = 1u << 22;      // hard ceiling on the ring size
 
+// How often each device is resynced. Devices take their turn one per tick rather than all together, so the interval
+// sets the per-device cadence while the tick sets how long draining can be blocked by a resync.
 constexpr auto kClockSyncInterval = std::chrono::milliseconds(50);
 
 inline RealtimeProfilerCoreL1Addrs compute_rt_profiler_core_l1_addrs(uint32_t base) {
@@ -511,19 +513,15 @@ void RealtimeProfilerReceiver::publish_pages(
     ring_.writer().publish_batch(records);
 }
 
-void RealtimeProfilerReceiver::resync_all_devices(std::chrono::steady_clock::time_point now) {
-    uint64_t unanswered = 0;
-    for (auto& dev_state : devices_) {
-        if (!dev_state.clock_sync.resync(now)) {
-            ++unanswered;
-        }
-    }
-    if (unanswered != 0) {
-        if (const auto total = probe_timeout_warns_.record(now, unanswered)) {
+void RealtimeProfilerReceiver::resync_next_device(std::chrono::steady_clock::time_point now) {
+    DeviceState& dev_state = devices_[next_resync_device_];
+    next_resync_device_ = (next_resync_device_ + 1) % devices_.size();
+    if (!dev_state.clock_sync.resync(now)) {
+        if (const auto total = probe_timeout_warns_.record(now, 1)) {
             log_warning(
                 tt::LogMetal,
-                "[Real-time profiler] {} clock resync probe(s) went unanswered; keeping the previous mapping on those "
-                "devices",
+                "[Real-time profiler] {} clock resync probe(s) went unanswered; keeping the previous mapping on the "
+                "affected devices",
                 *total);
         }
     }
@@ -774,6 +772,7 @@ uint64_t RealtimeProfilerReceiver::run_loop(
     constexpr std::chrono::microseconds kReceiverMaxBackoff{100};
     std::chrono::microseconds backoff{1};
     uint64_t num_pages_received = 0;
+    const auto clock_sync_tick = kClockSyncInterval / devices_.size();
     auto last_clock_sync = std::chrono::steady_clock::now();
 #if defined(TRACY_ENABLE) && TT_TRACY_CATEGORY_RT_PROFILER
     constexpr auto kFifoPlotInterval = std::chrono::milliseconds(10);
@@ -783,8 +782,8 @@ uint64_t RealtimeProfilerReceiver::run_loop(
         const auto now = std::chrono::steady_clock::now();
         const uint32_t num_pages = drain_all_devices(now, page_buf, record_buf);
         num_pages_received += num_pages;
-        if (now - last_clock_sync >= kClockSyncInterval) {
-            resync_all_devices(now);
+        if (now - last_clock_sync >= clock_sync_tick) {
+            resync_next_device(now);
             last_clock_sync = now;
         }
 #if defined(TRACY_ENABLE) && TT_TRACY_CATEGORY_RT_PROFILER

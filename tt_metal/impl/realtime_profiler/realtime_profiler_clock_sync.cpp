@@ -50,6 +50,14 @@ constexpr uint32_t kRttProbeHealthyPolls = 128;
 // How long a cached calibration stays usable across a MeshDevice close/reopen.
 constexpr auto kCalibrationCacheMaxAge = std::chrono::seconds(60);
 
+// How close to the floor a round trip has to land for the rest of the burst to be not worth firing.
+constexpr double kBurstStopSlack = 1.05;
+
+// How much the floor climbs per resync, so it can recover when the path's real best round trip gets worse. A fraction
+// of the floor, not of the sample's excess over it: rising in proportion to that excess lets the bulk of the
+// distribution drag the floor up to its own mean, which is the one thing the floor must not become.
+constexpr double kRttFloorRise = 1.0 / 4096.0;
+
 // Host ACK buffer, 32-bit words: [device_time_lo, device_time_hi, token]. device_time is at the base so it is 8-byte
 // aligned; NOC PCIe writes require src/dst to share the low 4 bits, so its L1 source is 16-aligned and the token's is
 // 8-mod-16.
@@ -309,6 +317,7 @@ bool RealtimeProfilerClockSync::run_fit() {
             // The first probe pays the cold PCIe path.
             if (i > 0) {
                 samples.push_back(*p);
+                update_rtt_floor(p->rtt);
             }
         }
     }
@@ -354,26 +363,37 @@ bool RealtimeProfilerClockSync::try_restore_calibration(std::chrono::steady_cloc
     return true;
 }
 
+void RealtimeProfilerClockSync::update_rtt_floor(std::chrono::nanoseconds rtt) {
+    if (rtt_floor_ == std::chrono::nanoseconds::zero() || rtt < rtt_floor_) {
+        rtt_floor_ = rtt;
+        return;
+    }
+    rtt_floor_ +=
+        std::chrono::nanoseconds(static_cast<int64_t>(static_cast<double>(rtt_floor_.count()) * kRttFloorRise));
+}
+
 bool RealtimeProfilerClockSync::resync(std::chrono::steady_clock::time_point now) {
     if (ack_host_ptr_ == nullptr) {
         return true;
     }
     try {
-        // A/B: fire a burst and keep the tightest round trip, so one slow probe cannot set the published bound.
-        // Eight probes per resync, keeping the tightest: measured to flatten the published bound's tail (a single
-        // probe gave p99 1.00us / max 4.54us; eight give p99 0.64us / max 0.64us) while leaving the receiver thread's
-        // page draining untouched at this depth (peak FIFO 120 of 32768 pages under peak load).
-        constexpr int kBurst = 8;
+        // Fire a burst and keep the tightest round trip, so one slow probe cannot set the published bound.
+        constexpr int kMaxBurst = 8;
         std::optional<ClockSyncSample> best;
-        for (int i = 0; i < kBurst; i++) {
+        for (int i = 0; i < kMaxBurst; i++) {
             const auto sample = probe();
             if (sample.has_value() && (!best.has_value() || sample->rtt < best->rtt)) {
                 best = sample;
+            }
+            if (best.has_value() && rtt_floor_ != std::chrono::nanoseconds::zero() &&
+                best->rtt <= rtt_floor_ * kBurstStopSlack) {
+                break;
             }
         }
         if (!best.has_value()) {
             return false;
         }
+        update_rtt_floor(best->rtt);
         if (model_.accept_reanchor(best->rtt, now)) {
             model_.reanchor(now, *best);
         }

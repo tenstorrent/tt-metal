@@ -144,8 +144,8 @@ private:
         const uint32_t* page_buf,
         uint32_t num_pages,
         std::vector<ProgramRealtimeRecord>& records);
-    // One resync attempt per device, on kClockSyncInterval from run_loop.
-    void resync_all_devices(std::chrono::steady_clock::time_point now);
+    // Resyncs one device and advances the rotation, so a full pass takes kClockSyncInterval.
+    void resync_next_device(std::chrono::steady_clock::time_point now);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
     // context doesn't leak to silicon DEFAULT_CONTEXT_ID. See #38445 / #39849.
@@ -156,6 +156,7 @@ private:
 
     // What the receiver thread drains, and where it publishes.
     std::vector<DeviceState> devices_;
+    size_t next_resync_device_ = 0;
     RealtimeProfilerRecordRing ring_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};
