@@ -29,8 +29,12 @@ Usage::
     live_score.py /home/zni/dg_runs/flip_8192/both
     live_score.py /home/zni/dg_runs/flip_8192/both --follow
 
-Reports running accuracy, the extractable-answer rate, and how many completions the guard truncated
-— which is what distinguishes "reasoning wrong" from "never got to an answer".
+Reports the extractable-answer rate, the answer distribution, and how many completions the guard
+truncated — which is what distinguishes "reasoning wrong" from "never got to an answer". It does
+NOT report accuracy: gold answers are LETTERS, and lm_eval reshuffles the choices per run, so this
+run's "(B)" and the reference run's "(B)" are different answers. ``compare_same_questions.py`` is
+the tool for a real score; it joins on the stable ``doc["Record ID"]`` and compares each run's own
+``exact_match`` rather than letters.
 """
 from __future__ import annotations
 
@@ -67,7 +71,22 @@ def extract_choice(text: str):
 
 
 def load_gold(gate_dir: Path):
-    """Gold letters per question index, from the CUDA reference arm."""
+    """Gold letters per question index, from the CUDA reference arm.
+
+    OFF BY DEFAULT, and that is not caution -- these letters are only valid for the choice shuffle
+    of the run that produced them. lm_eval reshuffles the multiple-choice options per run, so the
+    same question is "(A)" in one run and "(B)" in another; scoring this run's extracted letters
+    against another run's gold silently produces a number that means nothing. (The same reshuffling
+    is why doc_hash matches only 18 of 198 across two runs.)
+
+    For a real accuracy number use ``compare_same_questions.py``, which joins on the stable
+    ``doc["Record ID"]``, compares each run's own ``exact_match`` rather than letters, and verifies
+    the join against the shuffle-independent correct-answer TEXT.
+
+    What this script reports without gold -- extractable-answer rate, answer distribution, guard
+    truncations -- is shuffle-independent and is the part that is actually useful mid-run: it
+    separates "reasoning is wrong" from "never reached an answer".
+    """
     path = gate_dir / "gpu_reference.jsonl"
     if not path.exists():
         return {}
@@ -83,12 +102,22 @@ def load_gold(gate_dir: Path):
     return gold
 
 
-def render_prompts(task_name: str, checkpoint: str, thinking: bool):
-    """(padded_len, index) for every question, rendered through lm_eval's task object."""
-    from lm_eval.tasks import TaskManager, get_task_dict
+def load_tokenizer(checkpoint: str):
+    """Just the tokenizer -- all the default path needs, and it does not require lm_eval."""
     from transformers import AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True)
+    return AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True)
+
+
+def render_prompts(task_name: str, tok, thinking: bool):
+    """(padded_len, index) for every question, rendered through lm_eval's task object.
+
+    Only needed to map a served request back to a question index, which in turn is only needed to
+    score against gold letters -- so it is called only under --unsafe-gold. Keeping it out of the
+    default path also keeps lm_eval out of it, which is why this runs from any venv mid-run.
+    """
+    from lm_eval.tasks import TaskManager, get_task_dict
+
     task = get_task_dict([task_name], TaskManager())[task_name]
     while isinstance(task, dict):
         task = next(iter(task.values()))
@@ -104,7 +133,7 @@ def render_prompts(task_name: str, checkpoint: str, thinking: bool):
         while isinstance(ids, (list, tuple)) and ids and isinstance(ids[0], (list, tuple)):
             ids = ids[0]
         out.append((max(TILE, -(-len(ids) // TILE) * TILE), idx))
-    return out, tok
+    return out
 
 
 def read_completions(server_log: Path):
@@ -135,7 +164,7 @@ def read_completions(server_log: Path):
     return requests, guard_trips
 
 
-def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: Path):
+def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: Path, unsafe_gold: bool = False):
     server_log = run_dir / "server.log"
     if not server_log.exists():
         return f"no server.log under {run_dir}"
@@ -147,29 +176,32 @@ def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: P
             "emitted a block. A run started before that landed can only be scored at the end."
         )
 
-    prompts, tok = render_prompts(task, checkpoint, thinking)
-    gold = load_gold(gate_dir)
+    tok = load_tokenizer(checkpoint)
+    gold = load_gold(gate_dir) if unsafe_gold else {}
 
-    # Match on padded prompt length + arrival order. Ambiguity is reported, never guessed.
-    by_len = {}
-    for plen, idx in prompts:
-        by_len.setdefault(plen, []).append(idx)
-    served_order, unmatched, ambiguous = [], 0, 0
-    cursor = {k: 0 for k in by_len}
-    for req in requests:
-        plen = max(TILE, -(-int(req["prompt_len"] or 0) // TILE) * TILE)
-        pool = by_len.get(plen)
-        if not pool:
-            unmatched += 1
-            served_order.append(None)
-            continue
-        i = cursor[plen]
-        if i >= len(pool):
-            ambiguous += 1
-            served_order.append(None)
-            continue
-        cursor[plen] = i + 1
-        served_order.append(pool[i])
+    served_order, unmatched, ambiguous = [None] * len(requests), 0, 0
+    if gold:
+        # Match on padded prompt length + arrival order. Ambiguity is reported, never guessed.
+        # Only needed to reach gold; skipped entirely otherwise.
+        by_len = {}
+        for plen, idx in render_prompts(task, tok, thinking):
+            by_len.setdefault(plen, []).append(idx)
+        served_order = []
+        cursor = {k: 0 for k in by_len}
+        for req in requests:
+            plen = max(TILE, -(-int(req["prompt_len"] or 0) // TILE) * TILE)
+            pool = by_len.get(plen)
+            if not pool:
+                unmatched += 1
+                served_order.append(None)
+                continue
+            i = cursor[plen]
+            if i >= len(pool):
+                ambiguous += 1
+                served_order.append(None)
+                continue
+            cursor[plen] = i + 1
+            served_order.append(pool[i])
 
     n = correct = extractable = truncated = 0
     letters = Counter()
@@ -196,9 +228,12 @@ def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: P
             if extractable
             else f"correct: {correct}/{n}"
         )
-        L.append("  bar: A100 CUDA reference 70.71% / 70.20% flexible-extract (thinking, 2 reps)")
+        L.append("  !! --unsafe-gold: these letters come from ANOTHER run's choice shuffle, so this")
+        L.append("     number is only valid if both runs shuffled identically. It is not a score.")
     else:
-        L.append(f"correct: unknown — no gold letters found in {gate_dir/'gpu_reference.jsonl'}")
+        L.append("correct: not reported here on purpose — gold LETTERS are per-run (lm_eval reshuffles")
+        L.append("  the choices), so scoring this run against another run's letters is meaningless.")
+        L.append("  For the real number: compare_same_questions.py <run_dir>  (joins on Record ID).")
     if letters:
         L.append(
             f"answer distribution: {dict(sorted(letters.items()))}"
@@ -214,6 +249,13 @@ def main() -> int:
     ap.add_argument("--checkpoint", default="/home/zni/dg_models/diffusiongemma-26B-A4B-it")
     ap.add_argument("--thinking", type=int, choices=(0, 1), default=1)
     ap.add_argument("--gate-dir", type=Path, default=Path(__file__).resolve().parent)
+    ap.add_argument(
+        "--unsafe-gold",
+        action="store_true",
+        help="also score against gpu_reference.jsonl's gold LETTERS. Only meaningful if that file "
+        "came from a run with the same choice shuffle as this one -- lm_eval reshuffles per run. "
+        "Use compare_same_questions.py for a real score.",
+    )
     ap.add_argument("-f", "--follow", action="store_true")
     ap.add_argument("-i", "--interval", type=float, default=60.0)
     args = ap.parse_args()
@@ -226,7 +268,17 @@ def main() -> int:
 
     while True:
         print(time.strftime("%H:%M:%S"))
-        print(score(run_dir, args.task, args.checkpoint, bool(args.thinking), args.gate_dir), flush=True)
+        print(
+            score(
+                run_dir,
+                args.task,
+                args.checkpoint,
+                bool(args.thinking),
+                args.gate_dir,
+                unsafe_gold=args.unsafe_gold,
+            ),
+            flush=True,
+        )
         if not args.follow:
             return 0
         time.sleep(args.interval)

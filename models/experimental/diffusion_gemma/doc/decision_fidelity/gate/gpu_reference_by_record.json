@@ -1,0 +1,1404 @@
+{
+ "meta": {
+  "rep1": {
+   "correct": 140,
+   "n": 198,
+   "score": 0.707071,
+   "source": "/home/ttuser/zni/benchmarks/results/lmeval_gpqa_cot_262k/google__diffusiongemma-26B-A4B-it/samples_gpqa_diamond_cot_zeroshot_2026-07-27T11-39-49.625551.jsonl"
+  },
+  "rep2": {
+   "correct": 139,
+   "n": 198,
+   "score": 0.70202,
+   "source": "/home/ttuser/zni/benchmarks/results/lmeval_gpqa_cot_262k_rep2/google__diffusiongemma-26B-A4B-it/samples_gpqa_diamond_cot_zeroshot_2026-07-27T16-32-43.660068.jsonl"
+  }
+ },
+ "per_record": {
+  "rec06pnAkLOr2t2mp": {
+   "answer_text": "10^-4 eV",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "rec0Arme2jcXQZnAW": {
+   "answer_text": "11",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "rec0VuKUjt1SZ7NYv": {
+   "answer_text": "+\\infty",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Relativistic Mechanics"
+  },
+  "rec0wZvZgiz320KRs": {
+   "answer_text": "-0.7",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "rec0yTRmO1o1xCA6H": {
+   "answer_text": "The ones related to the circulation of the electric field and the divergence of the magnetic field.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Electromagnetism and Photonics"
+  },
+  "rec1oj2DveQWl9Rpw": {
+   "answer_text": "pH 2.69; 30.09 cm3",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Chemistry (general)"
+  },
+  "rec1zl5LvaatzGhFt": {
+   "answer_text": "(\\cos(\\theta/2), \\sin (\\theta/2))",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "rec260hNUCEj109Dj": {
+   "answer_text": "E = (2n_x+n_y+3/2)\u210f*sqrt(k/m)",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "rec2UlKqC6RFHdcro": {
+   "answer_text": "2.6*1e5 GeV",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "rec2ZTsqazBZ3LTWZ": {
+   "answer_text": "G2 is a transcription factor, G1 and G3 show gene redundancy, G1 is epistatic towards G3",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Genetics"
+  },
+  "rec2fsnzUuvNtUYK8": {
+   "answer_text": "triphenyleno[1,2-c:5,6-c':9,10-c'']trifuran-1,3,6,8,11,13-hexaone",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "rec32C1ZEapBnCC0E": {
+   "answer_text": "~ 0.4",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "rec47oNPXudlTIk4y": {
+   "answer_text": "One can use a catalyst of a group VIa transition metal in combination with specific activators.",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "rec4JrWy7Il8ho5vk": {
+   "answer_text": "c",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "rec4L69T0Y1AS4AFS": {
+   "answer_text": "SARS-CoV-2 nsp10/nsp14-ExoN operates as heterodimers in a mismatch repair mechanism. The N-terminal ExoN domain of nsp14 could bind to nsp10 making an active exonuclease complex that prevents the breakdown of dsRNA.",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Molecular Biology"
+  },
+  "rec4UqStf9WUVif1f": {
+   "answer_text": "4.12 MeV, 29.8 MeV",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "rec4r4KWNLrT7g2kR": {
+   "answer_text": "(1S,2S,4R)-4-isopropyl-2-methoxy-1-methylcyclohexyl propionate",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "rec527dNeEtWJrYNl": {
+   "answer_text": "At active promoters and enhancers",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Molecular Biology"
+  },
+  "rec5eA17Qr1ucNLUf": {
+   "answer_text": "Planet_1 is preferred due to its ~1.65 times higher probability to transit.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "rec5rjeLsEq5Fg7Oj": {
+   "answer_text": "3",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "rec6sE2CRtD4drtHg": {
+   "answer_text": "M_{h_{2}}^{2}=\\frac{1}{8\\pi^{2}\\left(x^{2}+v^{2}\\right)}\\left\\{ \\alpha_{1}M_{h_{1}}^{4}+\\alpha_{2}M_{W}^{4}+\\alpha_{3}M_{Z}^{4}-\\alpha_{4}M_{t}^{4}+\\alpha_{5}M_{H^{\\pm}}^{4}+\\alpha_{6}M_{H^{0}}^{4}+\\alpha_{7}M_{A^{0}}^{4}-\\alpha_{8}\\sum M_{N_{i}}^{4}\\right\\}",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "rec7C06XOB2h298ue": {
+   "answer_text": "6.3x10^-7 M",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "rec7qmSnbud4FHSqL": {
+   "answer_text": "~12.6",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Physics (general)"
+  },
+  "rec8nshandHARTkrg": {
+   "answer_text": "A = methyl 1-(2-((2,4-dimethylphenyl)sulfinyl)ethyl)-2-oxocyclohexane-1-carboxylate, B = ethyl 2-ethyl-2-(1-(2-methoxy-2-oxo-1-phenylethyl)cyclopentyl)butanoate",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "rec8y3ZrBOcLgNEkE": {
+   "answer_text": "1,2,4",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "rec9GugrngvsQR99A": {
+   "answer_text": "A = benzoquinone, B = methyl 2-hydroxypropanoate",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "rec9W28HgpEUeUN8k": {
+   "answer_text": "1.38",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "rec9ubQihAh6g9bft": {
+   "answer_text": "weaker - slower",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Chemistry (general)"
+  },
+  "recA1i5ZAh0Uzclxp": {
+   "answer_text": "3,3,4-trimethylchromane and 3-isopropyl-3-methyl-2,3-dihydrobenzofuran",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recAAJoHMW45Lv5je": {
+   "answer_text": "18",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recAYkd96NNuNl1Ei": {
+   "answer_text": "3 and 4",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Genetics"
+  },
+  "recBGxVySx1pkrO1i": {
+   "answer_text": "A = 2,7-dimethyloctahydronaphthalene-4a,8a-diol, B = (((3-methylbut-2-en-1-yl)oxy)methyl)benzene",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recBXlqrZUCR897It": {
+   "answer_text": "A = 2,2-diiodoethen-1-one, B = 3, 1, 2, 4",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recBhnXrUyTJ6WHIR": {
+   "answer_text": "The spectrum remains continuous with an adjusted shape, and the endpoint increases.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recBtVK8rBVtIlXDq": {
+   "answer_text": "cytosol to the extracellular space",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recCJJOeBGERaHYax": {
+   "answer_text": "(2S,3R,4S,6S)-2-benzyl-4-hydroxy-6-methyl-3-phenylcyclohexan-1-one",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recD8oX1KevFbl7bL": {
+   "answer_text": "Mutant 2",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Genetics"
+  },
+  "recDDxpS9s8cwkqfq": {
+   "answer_text": "Red",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recDj2Y2BbtV02Wv5": {
+   "answer_text": "c2h",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recDytVnNYZe2HuUU": {
+   "answer_text": "20.132 GeV",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recE2ihVfqEK4R9d0": {
+   "answer_text": "-12*hbar/25",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recEmTBhx2hgw6tPQ": {
+   "answer_text": "(3aR,4R,7S,7aS)-4,7-dimethyl-3a,4,7,7a-tetrahydro-4,7-epithioisobenzofuran-1,3-dione",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recFaL6j8UMhutXrc": {
+   "answer_text": "A = 3-ethyl-3-phenylpentan-2-one, B = 3-(4-hydroxyphenyl)-3-phenylpentan-2-one, C = 2,2,2-tris(4-methoxyphenyl)-1-phenylethan-1-one",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recG1ljJQcVy6CbSl": {
+   "answer_text": "The eigenfunction of the operator Ay can also be an eigenfunction of A^2, but not of the Z-component, Az.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recGFKDUd8qgz81Zl": {
+   "answer_text": "Cold atomic interstellar medium.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "recGFNRVl1qBZGwyU": {
+   "answer_text": "3",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recGee5m84dg5FZkc": {
+   "answer_text": "4<6<2<1<5<3",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recHVUd2DkoKfedJZ": {
+   "answer_text": "A = (i) LDA, DME (ii) CH3CH2I (iii) H3O+ B = heptan-4-one",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recI1ls9OXdxatHQn": {
+   "answer_text": "0.85",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recIDiDKKrN61Auyr": {
+   "answer_text": "The compounds they are working with have similar polarities.",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recIIUynGGpsGEYuo": {
+   "answer_text": "(1+n*v)/(n+v)",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Relativistic Mechanics"
+  },
+  "recIMcQfaQNa6vzsT": {
+   "answer_text": "~ 33.4",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "recINGR1z01Fh1Z3A": {
+   "answer_text": "ln(2) = [ (T_1 - T_2) / (T1*T2)]",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recINSFEYLCyyd08m": {
+   "answer_text": "3-cyano-6-(dimethylamino)-5-formyl-2-hydroxy-4-methoxybenzoic acid",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recIOlKBsOeEcgkA1": {
+   "answer_text": "Differential centrifugation extraction of mitochondria followed by the Glucose Uptake Colorimetric Assay Kit",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recIj8lR4tuDgrHou": {
+   "answer_text": "10E, 15E, 18E",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recIlghoOw5VbY4Zh": {
+   "answer_text": "6",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recJJcOHhFeSaRpl4": {
+   "answer_text": "ethyl 4-aminobenzoate",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recJZ3QEfRKjYw9a7": {
+   "answer_text": "6",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recJpyGtGIsxulevT": {
+   "answer_text": "~10^(-16) J",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recK9F5aqdaybl8bb": {
+   "answer_text": "A = (Z)-1-(but-2-en-2-yloxy)ethen-1-amine, B = (3Z,4E)-3,4-diethylidenecyclobut-1-ene, C = 4-methylenehexanal",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recKcjTwONILZqHAX": {
+   "answer_text": "3",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recKm6LNWykGapmCr": {
+   "answer_text": "U=- (1/2) *kq^2 R/(d^2 -R^2)",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Electromagnetism and Photonics"
+  },
+  "recKv4hFyNpViUXnL": {
+   "answer_text": "~4.5",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Astrophysics"
+  },
+  "recL9MFV5zmdlle5T": {
+   "answer_text": "C11H12O2",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recLAgwx9vbgB5EHk": {
+   "answer_text": "5-isopropyl-3,4-dimethylocta-1,7-diene",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recLB0EkQ54bYVhnd": {
+   "answer_text": "5 MeV.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recLSzwBUS3olCjhl": {
+   "answer_text": "Trans-propenyl acetate",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recLrRirj7iXoB0rU": {
+   "answer_text": "|3,0,0\\rangle\\rightarrow|2,1,0\\rangle\\rightarrow|1,0,0\\rangle and \\frac{1}{3}",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recMicVBcqy1xM1jq": {
+   "answer_text": "3/4, \\lambda^(-6)",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Electromagnetism and Photonics"
+  },
+  "recN4DY9Q5V03glmQ": {
+   "answer_text": "251.271 fm",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recNAiPUKOulQbKVP": {
+   "answer_text": "Superstring Theory",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recNFJjE5PPTqVJGv": {
+   "answer_text": "12.62",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recNu3MXkvWUzHZr9": {
+   "answer_text": "81 years",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Relativistic Mechanics"
+  },
+  "recNuT2oSnO86bxOx": {
+   "answer_text": "3-bromo-4'-methoxy-1,1'-biphenyl",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recO3hvCWRGiG0odN": {
+   "answer_text": "1. NaNH2, methyl chloride\n2. H2/Pd-calcium carbonate\n3. O3/ (CH3)2S\n4. Ba(OH)2",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recOYsaYs6RmtlTDy": {
+   "answer_text": "p = 1.4*10^(-28) N*s",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recOkA2zsy4GSMD9R": {
+   "answer_text": "17",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Inorganic Chemistry"
+  },
+  "recOvqPKUtyy9ISA1": {
+   "answer_text": "A = (E)-bicyclo[5.3.1]undec-1(11)-en-4-one, B = lithium 3-ethylpent-4-enoate",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recPIzpnuYpB4yvmp": {
+   "answer_text": "1/6",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recPL4ZPpVYxgMu57": {
+   "answer_text": "1,2,4",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recPSTGXK3P39yNYT": {
+   "answer_text": "0",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recPzW1WqRnPs57D6": {
+   "answer_text": "gamma*B",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recQ8oxSY2aCwFRS8": {
+   "answer_text": "2.08*1e-6 m",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recQiWOxhkXRz9NVE": {
+   "answer_text": "C2v",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Chemistry (general)"
+  },
+  "recRTiyaRymerDJ4y": {
+   "answer_text": "~0.83",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recRZjaElf8ft7xTq": {
+   "answer_text": "~2.23",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recReg13iV2HwJTaA": {
+   "answer_text": "The mass dimension \\left[\\kappa\\right]_{M}=-1. The theory is not renormalizable.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recRgabRzMaEoBRcM": {
+   "answer_text": "4",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recRhwQwHijW0gCLo": {
+   "answer_text": "(e^X)*Y*(e^{-X}) represents a quantum state.",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recS48OsU6kVadBPW": {
+   "answer_text": "v_rel = 0.14c , E= 5.96 mc^2",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Relativistic Mechanics"
+  },
+  "recSBcGLPatKb3Ygu": {
+   "answer_text": "44%",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recTs7qzfJs6kfLUK": {
+   "answer_text": "The ribosome terminated the translation early",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recUBgVlkKzcRPDdK": {
+   "answer_text": "cytoplasmic localization of the red signal",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recUOePh79cp4T2Bg": {
+   "answer_text": "A = 4-methyl-1-phenylpent-3-en-1-ol, B = 2,3,4,6,7,8-hexamethyl-5,9,10,11-tetrahydro-1H-benzo[3,4]azuleno[1,8,7,6-cdef]fluorine",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recUc29lMDBEvurYo": {
+   "answer_text": "2.822 x 10^-26",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recV1nqYQvpII94oC": {
+   "answer_text": "V(\\vec{r},t) = \\dfrac{qc}{4\\pi\\epsilon_o (d c - \\vec{d}. \\vec{v})},  \\vec{A(\\vec{r},t)} = \\dfrac{\\mu_o qc \\vec{v}}{4\\pi (d c - \\vec{d}. \\vec{v})}",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Electromagnetism and Photonics"
+  },
+  "recVE8cUNHpHZIAvL": {
+   "answer_text": "0.01 (10^-2).",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "recVEXvhYxAhELVqB": {
+   "answer_text": "2-(4-methylstyryl)oxirane",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recVvpD8miVjmmyfe": {
+   "answer_text": "315",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Molecular Biology"
+  },
+  "recWPMm91mGDLXONm": {
+   "answer_text": "1. Zn, ether\n2. Cl2/hv\n3. Aq. KOH\n4. Pyridine + CrO3 + HCl\n5. Aq. NaOH",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recWXwn9v4IG9ZrM6": {
+   "answer_text": "The Mott-Gurney equation is valid for a trap-free single-carrier device with no carrier injection barrier and negligible diffusion current.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Condensed Matter Physics"
+  },
+  "recWxGU8Q4YReJ1tb": {
+   "answer_text": "name: dimethyl (1R,4S,4aS,4bR,5S,8R,8aS,8bR,10S,11R)-1,4,4a,4b,5,8,8a,8b-octahydro-1,4-ethano-5,8-methanobiphenylene-10,11-dicarboxylate\n\nSMILES: O=C(OC)[C@H]1[C@@H](C=C2)[C@@H]3[C@@H]([C@@H]4[C@H]3[C@@H]5C=C[C@H]4C5)[C@@H]2[C@H]1C(OC)=O",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recWzUUYBN0NuXO2k": {
+   "answer_text": "4.26; 8.52",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recXsYa3i2UhGF5fe": {
+   "answer_text": "1",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recXsuOHRBLcyenF2": {
+   "answer_text": "Linear partial fraction of fractional approximation",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recXvQ6gWAmyakrpD": {
+   "answer_text": "~ 0.53",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "recYA3LPsCvF1fTMI": {
+   "answer_text": "A = (S)-3-ethyl-5-isobutoxy-5-oxopentanoic acid , B = (S)-3-ethyl-5-isobutoxy-5-oxopentanoic acid",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recYCMJWH7IpcdqwE": {
+   "answer_text": "i) tert-butyl chloride/AlCl3 ; ii) SO3/H2SO4 ; iii) HNO3/H2SO4 iv) Fe/HCl ; v) NaNO2/HCl ; vi) HNO3/H2SO4 ; vii) H3O+, H2O/Heat ; viii) dilute H2SO4 ix) NaOH/EtBr",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recYOzCsevNz61Lyn": {
+   "answer_text": "1H NMR: chemical reference (ppm): 7.8 (2H, d), 7.6 (2H, d), 2.3 (3H, s)",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recYt8xx80OTyDsL0": {
+   "answer_text": "somatic hypermutation",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recZ13cwgDQf9jRd9": {
+   "answer_text": "triplet of triplets",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recZSGUkn56v9kEp1": {
+   "answer_text": "3,4-dimethyl-5,6-dioxooctanoic acid",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recZWeueB7lSPR6wN": {
+   "answer_text": "((R)-((R)-2,2-difluorocyclohexyl)fluoromethyl)benzene",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recZbxrocrxh9YENH": {
+   "answer_text": "11.44 kJ/g",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recZdZxsN0AxDx0pB": {
+   "answer_text": "Ct values are not in agreement with the amount of target nucleic acid in samples",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Molecular Biology"
+  },
+  "recZt4x514UQNnsgy": {
+   "answer_text": "methyl (2E,8E,10E)-tetradeca-2,8,10-trienoate",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "reca44yABeO2fx7UB": {
+   "answer_text": "6-hydroxy-2,2,5,5-tetramethyloctan-4-one",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recaXdGn3FAIkxLGM": {
+   "answer_text": "10^62 J/K",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recafnH3RRnMBXEb1": {
+   "answer_text": "chromatin methylation by histone methyltransferases in the post-zygote",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recakFKZioXUuldcd": {
+   "answer_text": "bicyclo[3.2.0]hept-6-ene",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recatj4YXzbOaq3Ar": {
+   "answer_text": "+ \\varepsilon, -\\varepsilon",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recb2M22zaD3tL6Qc": {
+   "answer_text": "CH3C(H)(C2H5)C(H)(C2H5)CH2COOH",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Chemistry (general)"
+  },
+  "recb4cGsC6BJUCU3V": {
+   "answer_text": "H gives a yellow color with the addition of ferric chloride solution.",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recb80OwMgNnceA9t": {
+   "answer_text": "4,4a,7,7a-tetrahydro-1H-cyclopenta[c]pyridine",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "reccOKzFNmyqeJ6ry": {
+   "answer_text": "A = cyclohexanecarbaldehyde, B = TsOH",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "reccVBrYdwsB84fGy": {
+   "answer_text": "3",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Astrophysics"
+  },
+  "reccVFW11Elovnf8T": {
+   "answer_text": "the receptor and the eGFP are not in the frame",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recclFbsjbaiVVnnV": {
+   "answer_text": "i) HNO3/H2SO4 ; ii) Fe/HCl ; iii) CH3COCl/AlCl3 ; iv) Br2/FeBr3 ; v) HNO3/H2SO4 ; vi) NaNO2/HCl ; vii) H3PO2",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recdya6FuYraBU5Rh": {
+   "answer_text": "~ 0.36",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "receYQxnUBvxPcvbQ": {
+   "answer_text": "~0.32",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "receo3UUzRvWCqyfA": {
+   "answer_text": "A = TsOH, B = 3-(2-oxocyclohexyl)propanal",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recf6ayQmL1SxKbvW": {
+   "answer_text": "Combine in silico predictions with preliminary in vitro binding affinity assays to validate the most promising forms of Xantheraquin before extensive docking studies.",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Molecular Biology"
+  },
+  "recfTlTMjZBuOducT": {
+   "answer_text": "9.54 Angstrom",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Physics (general)"
+  },
+  "recgC4GJ8wUemlUQD": {
+   "answer_text": "Skyrmion",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recgI6tUQ7RLJRWGx": {
+   "answer_text": "\\left\\langle H\\right\\rangle \\ll\\Delta E",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recgM7o1tcc7tP778": {
+   "answer_text": "1S0 -> 3P0 + s",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recgXxEgllSGEpELP": {
+   "answer_text": "Star3 and Star5",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "rechKl68Uc6H7vU0N": {
+   "answer_text": "A = ethyl 3-(3-ethyl-1,3-dimethyl-2-oxocyclohexyl)propanoate, B = 3-methyl-4-nitrohexanenitrile",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "rechgQucGlrnt8KRV": {
+   "answer_text": "0.64, 0.36 and hbar / 7",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "rechtUKxC6G67H7Pr": {
+   "answer_text": "C6H10O2",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recihePFulRgNKsIn": {
+   "answer_text": "A = NaHSO3, B = HCl",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "reciuppdQde4FGX1z": {
+   "answer_text": "138",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recixxJmdux0d8LZQ": {
+   "answer_text": "5, 2, 1, 3 and 4",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recjJ54TXc04enRkZ": {
+   "answer_text": "(1S,4R,5S,6S)-4,5,6-trimethylcyclohex-2-enol",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recjgMJaMxz4ESDF2": {
+   "answer_text": "1 and 2",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "reck1zKeCssmN82Ga": {
+   "answer_text": "2-bromo-4,4-dimethylcyclopentanone",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "reck4G4xxv3YnpbtQ": {
+   "answer_text": "3a,4,5a-trimethyl-1,2,3,3a,5a,6,7,8-octahydrocyclopenta[c]pentalene",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "reckEnrOPFT9Ru7tW": {
+   "answer_text": "(3-isopropylcyclohexyl)methanol",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "reckYqR92oJkqJXkE": {
+   "answer_text": "~ 1/plx^4",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "reckl6PkaEMWM50yZ": {
+   "answer_text": "(1R,2R,4R,5R)-1,2,4,5-tetramethylcyclohexan-1-ol",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recl1UtgTVKishAq4": {
+   "answer_text": "8",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recmI7EiLv72PxmYK": {
+   "answer_text": "3 060 000 km.",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Relativistic Mechanics"
+  },
+  "recmkvk6EFAmqyMxR": {
+   "answer_text": "54",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Relativistic Mechanics"
+  },
+  "recmwwQJnx7ll7bqL": {
+   "answer_text": "(9/2) \\hbar \\omega , 10",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recn3NhOhqAPLda16": {
+   "answer_text": "5 Peaks in chiral HPLC and 4 peaks in normal-phase HPLC",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recnGEpF1srQpaqWq": {
+   "answer_text": "4-ethyl-3-methyldeca-1,5-diene",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recnTTKdBzfuoZ7w7": {
+   "answer_text": "ATGGAGGAGCCGCAGTCAGATCCTAGCGTCGAGCCGCCTCTGAGTCAGGAAACATTTTCAGACCTATGGAAACTACTTCCTGAAAACAACGTTCTGTCCCCGTTGCCGTCCCAAGCAATGGATGATTTGATGCTGTCCCCGGACGATATTGAACAATGGTTCACTGAAGACCCAGGTCCAGATGAAGCTCCCCGCATGCCAGAGGCTGCTCCCCCCGTGGCCCCTGCACCAGCAGCTCCTACACCGGCGGCCCCTGCACCAGCCCCCTCCTGGCCCCTGTCATCTTCTGTCCCTTCCCAGAAAACCTACCAGGGCAGCTACGGTTTCCGTCTGGGCTTCTTGCATTCTGGGACAGCCAAGTCTGTGACTTGCACGTACTCCCCTGCCCTCAACAAGATGTTTTGCCAACTGGCCAAGACCTGCCCTGTGCAGCTGTGGGTTGATTCCACACCCCCGCCCGGCACCCGCGTCCGCGCCATGGCCATCTACAAGCAGTCACAGCACATGACGGAGGTTGTGAGGCGCTGCCCCCACCATGAGCGCTGCTCAGATAGCGATGGTCTGGCCCCTCCTCAGCATCTTATCCGCGTGGAAGGAAATTTGCGTGTGGAGTATTTGGATGACAGAAACACTTTTCGACATAGTGTGGTGGTGCCCTATGAGCCGCCTGAGGTTGGCTCTGACTGTACCACCATCCACTACAACTACATGTGTAACAGTTCCTGCATGGGCGGCATGAACCGGAGGCCCATCCTCACCATCATCACACTGGAAGACTCCAGTGGTAATCTACTGGGACGGAACAGCTTTGAGGTGCGTGTTTGTGCCTGTCCTGGGCGCGACCGGCGCACAGAGGAAGAGAATCTCCGCAAGAAAGGGGAGCCTCACCACGAGCTGCCGCCAGGGAGCACTAAGCGAGCACTGCCCAACAACACCAGCTCCTCTCCCCAGCCAAAGAAGAAACCACTGGATGGAGAATATTTCACCCTTCAGATCCGTGGGCGTGAGCGCTTCGAGATGTTCCGAGAGCTGAATGAGGCCTTGGAACTCAAGGATGCCCAGGCTGGGAAGGAGCCAGGGGGGAGCAGGGCTCACTCCAGCCACCTGAAGTCCAAAAAGGGTCAGTCTACCTCCCGCCATAAAAAACTCATGTTCAAGACAGAAGGGCCTGACTCAGACTGA",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Molecular Biology"
+  },
+  "recnawZPumSCLMVgp": {
+   "answer_text": "3,4-dimethylcyclohexan-1-one",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recnjViFrqlZNL3fY": {
+   "answer_text": "1.9",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Physics (general)"
+  },
+  "reco8WSc71p8zAv4q": {
+   "answer_text": "A 1H doublet at ~1.5 ppm and a 2H singlet at ~3.5 ppm",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recoiTJPGUmzAkief": {
+   "answer_text": "$E = \\dfrac{1}{4 \\pi \\epsilon_o} \\dfrac{q}{L^2}$",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Electromagnetism and Photonics"
+  },
+  "recooG6bivTUJpDBz": {
+   "answer_text": "1,2,4,5-tetramethylbenzene and 1,2,3,4-tetramethylbenzene",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recoy9ZLBsc7HIRBy": {
+   "answer_text": "6.24x10^-7 M",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recpJmTOXx6T48nDJ": {
+   "answer_text": "-2.72 kcal",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recpki12iG9RUGrz9": {
+   "answer_text": "X\\rightarrow c\\bar{c},s\\bar{s},u\\bar{u},d\\bar{d},\\tau^{+}\\tau^{-},\\mu^{+}\\mu^{-},e^{+}e^{-}",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recqFDvYKKRmbnoUb": {
+   "answer_text": "4 \u03c0",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Electromagnetism and Photonics"
+  },
+  "recqGD3fxPCI59vPQ": {
+   "answer_text": "3536",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recqLRu4BcJvlSANc": {
+   "answer_text": "The increased pH of the solution",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recr3VHM4zYf6dMFY": {
+   "answer_text": "A = 4-isopropylcyclohexan-1-one, B = 5-methylhexan-2-one",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recrHBEJJoDTV05JR": {
+   "answer_text": "35",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recrNbtgTNoabJJi6": {
+   "answer_text": "3",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recrs0kUo7Ua1xhKO": {
+   "answer_text": "r=(0,0,0)",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recs3PLPUEMiqg4P8": {
+   "answer_text": "A = 1-(hydroxydi-p-tolylmethyl)cyclopentan-1-ol, B = methyl 3-oxo-2-(p-tolyl)butanoate",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "rect4iLrSfUwkNTno": {
+   "answer_text": "4.0655 * 10^-15 m",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "rectXfsCM1dj4Kv2c": {
+   "answer_text": "16",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "rectlyG9pCAAuWhoB": {
+   "answer_text": "(3aR,4R,7S,7aS,8r)-8-fluoro-3a,4,7,7a-tetrahydro-4,7-methanoisobenzofuran-1,3-dione",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recuYEkVjdVUwA3c0": {
+   "answer_text": "0.77c",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "High-energy particle physics"
+  },
+  "recuyeuT5rQ6qDt8F": {
+   "answer_text": "110-130",
+   "domain": "Chemistry",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Chemistry (general)"
+  },
+  "recv7GsQg3f0fvB1f": {
+   "answer_text": "The crude compound exists as a mixture of diastereoisomers",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "recvZlMbpPz0yLDle": {
+   "answer_text": "2,4-bis(4-hydroxyphenyl)but-2-enal",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recvlnu8BuLmXZhSX": {
+   "answer_text": "1/3",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recw4rROcnHKNZhtK": {
+   "answer_text": "pre-replication complex",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recwW1A85nfyQpReG": {
+   "answer_text": "~ r^3",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Astrophysics"
+  },
+  "recwlwlcPvXVNPmvl": {
+   "answer_text": "Z= 2 e^(3J\\beta)+6e^(-J\\beta)",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recxTy0x7M6T9ikc0": {
+   "answer_text": "A = trimethyl 2-(p-tolyl)propane-1,1,3-tricarboxylate, B = 3-(2-oxocyclohexyl)butanenitrile, C = cyclohexane-1,3-dione",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recxsX66ktJ1Lwt4f": {
+   "answer_text": "4-chlorobenzoic acid",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "recyPffUDqC2k7ZZO": {
+   "answer_text": "\\hbar/\\sqrt{2}",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Quantum Mechanics"
+  },
+  "recyl3usDqb7ruXJx": {
+   "answer_text": "2 peaks in standard HPLC and 3 peaks in chiral HPLC",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": false,
+   "subdomain": "Organic Chemistry"
+  },
+  "recypVp2NmPlBKVTp": {
+   "answer_text": "First you identify the virus by performing cDNA sequencing.  You then develop a real time PCR kit for quick and accurate diagnosis.",
+   "domain": "Biology",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Molecular Biology"
+  },
+  "recyrk6XBVwugG5u8": {
+   "answer_text": "~ 33.5",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "recywRj5a8EEjj2Ib": {
+   "answer_text": "$v_{max}=c\\sqrt{1-\\frac{1}{(1+\\frac{kA^2}{2mc^2})^2}}$",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Physics (general)"
+  },
+  "recz3MfYHPRhsEQkW": {
+   "answer_text": "1-(sec-butyl)-4-methylbenzene",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Organic Chemistry"
+  },
+  "reczQ4I0VpENdMtIj": {
+   "answer_text": "protein aggregation and loss-of-function phenotype",
+   "domain": "Biology",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Genetics"
+  },
+  "reczUoM8JsxU6pYxr": {
+   "answer_text": "8 Gpc",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Astrophysics"
+  },
+  "reczjcMtrB1YGS2fO": {
+   "answer_text": "0.506 \\lambda / a",
+   "domain": "Physics",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Optics and Acoustics"
+  },
+  "reczkBiPPNrNN49Hp": {
+   "answer_text": "16.9%",
+   "domain": "Chemistry",
+   "rep1": true,
+   "rep2": true,
+   "subdomain": "Chemistry (general)"
+  },
+  "reczzzihL7btBH7RO": {
+   "answer_text": "\u03bb2 < \u03bb1",
+   "domain": "Physics",
+   "rep1": false,
+   "rep2": false,
+   "subdomain": "Relativistic Mechanics"
+  }
+ }
+}
