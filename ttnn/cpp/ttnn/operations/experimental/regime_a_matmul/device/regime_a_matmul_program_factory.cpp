@@ -253,6 +253,398 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
     }
 }
 
+// TEST-ONLY (diag bit9 RING_BALANCED): LINK-LOAD-BALANCED in0 ring ordering. Correctness-preserving and
+// host-only — same ring MEMBERSHIP as production (the 8 banks of a slice), only the visiting order changes.
+//
+// Why: `optimize_in0_ring_order` minimizes each ring's hop cost INDEPENDENTLY, so all Pk*Ns rings converge
+// on the same shortest corridors and pile up on the same links. An offline route model (validated exactly
+// against get_worker_noc_hop_distance, see tools/mm_sweep/picker_gen/ring_topology_probe.py) shows the wall
+// tracks the BUSIEST LINK, not total hops: a compact re-partitioning cut total hops 16% but raised the
+// busiest link 25% and measured 8.7% SLOWER, while re-ordering alone can cut the busiest link 25% at
+// unchanged hops. Every ring edge carries 7 shards, so peak link load is what the 7 serial steps pay for.
+//
+// Objective: process groups sequentially (two passes), and for each pick the cycle minimizing the peak
+// GLOBAL link load it contributes to (tie-break: total hops), given the loads already committed. Each
+// candidate's load counts all Sm mm-rings, since one permutation is shared by the whole group.
+//
+// Route model: a single coordinate frame reconstructed from the device (per-logical-step hop distances +
+// the wrap-around distance give the physical spacing and torus extent), NOC_0 travelling +x/+y and NOC_1
+// -x/-y. The dimension ORDER (x-first vs y-first) is not observable from hop counts, so each edge is
+// charged on BOTH candidate routes — the balancing then spreads load whichever order the hardware uses.
+class RingLinkModel {
+public:
+    RingLinkModel(IDevice* device, uint32_t gx, uint32_t gy) : px_(gx, 0), py_(gy, 0) {
+        namespace expd = tt::tt_metal::experimental::Device;
+        auto h = [&](CoreCoord a, CoreCoord b) {
+            return expd::get_worker_noc_hop_distance(device, a, b, NOC::NOC_0);  // NOC_0 == +x/+y
+        };
+        for (uint32_t i = 0; i + 1 < gx; ++i) {
+            px_[i + 1] = px_[i] + h(CoreCoord{i, 0}, CoreCoord{i + 1, 0});
+        }
+        for (uint32_t j = 0; j + 1 < gy; ++j) {
+            py_[j + 1] = py_[j] + h(CoreCoord{0, j}, CoreCoord{0, j + 1});
+        }
+        wx_ = px_[gx - 1] + h(CoreCoord{gx - 1, 0}, CoreCoord{0, 0});  // torus extents incl. non-worker rows/cols
+        wy_ = py_[gy - 1] + h(CoreCoord{0, gy - 1}, CoreCoord{0, 0});
+        nlinks_ = 4u * wx_ * wy_;  // (noc, axis) x position
+    }
+
+    uint32_t num_links() const { return nlinks_; }
+
+    // Distinct links traversed from `s` to `d` on `noc`, charging BOTH dimension orders.
+    void links(const plan::PlanXY& s, const plan::PlanXY& d, uint32_t noc, std::vector<uint32_t>& out) const {
+        out.clear();
+        for (uint32_t order = 0; order < 2u; ++order) {
+            uint32_t x = px_[s.x], y = py_[s.y];
+            const uint32_t tx = px_[d.x], ty = py_[d.y];
+            const uint32_t sx = (noc == 0u) ? 1u : (wx_ - 1u);  // +1 / -1 modulo the torus extent
+            const uint32_t sy = (noc == 0u) ? 1u : (wy_ - 1u);
+            auto walk_x = [&](uint32_t& x, uint32_t y) {
+                while (x != tx) {
+                    push_unique(out, id(noc, 0u, x, y));
+                    x = (x + sx) % wx_;
+                }
+            };
+            auto walk_y = [&](uint32_t x, uint32_t& y) {
+                while (y != ty) {
+                    push_unique(out, id(noc, 1u, x, y));
+                    y = (y + sy) % wy_;
+                }
+            };
+            if (order == 0u) {
+                walk_x(x, y);
+                walk_y(x, y);
+            } else {
+                walk_y(x, y);
+                walk_x(x, y);
+            }
+        }
+    }
+
+private:
+    static void push_unique(std::vector<uint32_t>& v, uint32_t e) {
+        if (std::find(v.begin(), v.end(), e) == v.end()) {
+            v.push_back(e);
+        }
+    }
+    uint32_t id(uint32_t noc, uint32_t axis, uint32_t x, uint32_t y) const {
+        return ((noc * 2u + axis) * wx_ + x) * wy_ + y;
+    }
+    uint32_t wx_{1}, wy_{1}, nlinks_{0};
+    std::vector<uint32_t> px_, py_;
+};
+
+// TEST-ONLY (diag bit8 RING_REGIONAL): REGION-LOCAL in0 ring re-partitioning. Correctness-preserving and
+// host-only — no kernel define, no extra runtime arg, output still valid.
+//
+// The in0 ring is purely an in0-DELIVERY construct: every core sharing a given (kk, mm) needs the SAME
+// k-slice, INCLUDING the Ns cores that differ only in n-slice index nn. Today a ring is hardcoded to "the 8
+// banks of one slice j", and on BH the 8 bank-adjacent workers sit in just two columns (x=0 for banks 0-3,
+// x=6 for banks 4-7), so EVERY ring straddles that ~6-hop bisection twice and each crossing edge carries 7
+// shards. D1 attribution measured ~70% of the ring-forward cost to be hop distance, so that geometry is the
+// dominant term. Here we instead partition the 8*Ns cores of each (kk, mm) group into Ns PHYSICALLY COMPACT
+// rings of 8 (for Ns=2 that is exactly 8 left / 8 right, i.e. zero bisection crossings).
+//
+// Unchanged by construction: placement, bank adjacency, in0 DRAM read VOLUME (each ring still reads the
+// whole slice once, so Ns copies as before), the in1 read, the reduction chain, CBs, semaphores and all
+// three kernels. Only ring_pos / ring_next_idx / ring_prev_idx move, and the ring protocol is correct for
+// ANY permutation of any 8 same-(kk,mm) cores.
+//
+// Rings become MIXED-NoC (nn selects the writer NoC), which is functionally fine — payload-then-semaphore
+// ordering only needs the two to share a sender+NoC — so every edge is costed on the SENDER's writer NoC.
+//
+// M-split: mm-siblings consume the in1 stream in the mm==0 reader's shard order, so all mm MUST share one
+// (bank,nn) -> ring_pos map. The partition and the cyclic order are therefore computed ONCE per kk on costs
+// aggregated over the Sm mm-rings, then mirrored to every mm.
+void regroup_in0_rings(
+    plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo, uint32_t Pk, uint32_t Ns, uint32_t Sm) {
+    namespace expd = tt::tt_metal::experimental::Device;
+    const uint32_t preaders = geo.num_cores / 8u;
+    const uint32_t mfac = geo.mfac;  // Ns*Sm
+    const uint32_t nitems = 8u * Ns;
+    // item k <-> (bank, nn); core index of item k for a given (kk, mm).
+    auto core_idx = [&](uint32_t kk, uint32_t k, uint32_t mm) {
+        return (k / Ns) * preaders + (kk * mfac + (k % Ns) * Sm + mm);
+    };
+
+    for (uint32_t kk = 0; kk < Pk; ++kk) {
+        // Directed per-mm hop matrices over the items, each edge on the SENDER's writer NoC.
+        std::vector<std::vector<std::vector<uint32_t>>> dm(
+            Sm, std::vector<std::vector<uint32_t>>(nitems, std::vector<uint32_t>(nitems, 0u)));
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            for (uint32_t a = 0; a < nitems; ++a) {
+                const auto& ca = P.cores[core_idx(kk, a, mm)];
+                const NOC wnoc = (ca.noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;  // sender's writer NoC
+                for (uint32_t b = 0; b < nitems; ++b) {
+                    if (a == b) {
+                        continue;
+                    }
+                    const auto& cb = P.cores[core_idx(kk, b, mm)];
+                    dm[mm][a][b] = expd::get_worker_noc_hop_distance(
+                        device, CoreCoord{ca.coord.x, ca.coord.y}, CoreCoord{cb.coord.x, cb.coord.y}, wnoc);
+                }
+            }
+        }
+        // Symmetric proximity summed over the mm-rings (clustering metric only).
+        auto sym = [&](uint32_t a, uint32_t b) {
+            uint32_t s = 0;
+            for (uint32_t mm = 0; mm < Sm; ++mm) {
+                s += dm[mm][a][b] + dm[mm][b][a];
+            }
+            return s;
+        };
+
+        // --- Partition into Ns compact groups of 8. Greedy: the most PERIPHERAL unassigned item seeds a
+        // group (so a group never starts in the middle and straddles), then the 7 nearest-to-the-group
+        // unassigned items join it. On the BH two-column geometry with Ns=2 this yields exactly the
+        // left-region and right-region groups.
+        constexpr uint32_t kUnset = 0xffffffffu;
+        std::vector<uint32_t> assigned(nitems, kUnset);
+        std::vector<std::array<uint32_t, 8>> groups;
+        for (uint32_t g = 0; g < Ns; ++g) {
+            uint32_t seed = 0;
+            uint64_t seed_score = 0;
+            bool have_seed = false;
+            for (uint32_t a = 0; a < nitems; ++a) {
+                if (assigned[a] != kUnset) {
+                    continue;
+                }
+                uint64_t s = 0;
+                for (uint32_t b = 0; b < nitems; ++b) {
+                    if (b != a && assigned[b] == kUnset) {
+                        s += sym(a, b);
+                    }
+                }
+                if (!have_seed || s > seed_score) {
+                    seed_score = s;
+                    seed = a;
+                    have_seed = true;
+                }
+            }
+            std::array<uint32_t, 8> grp{};
+            grp[0] = seed;
+            assigned[seed] = g;
+            for (uint32_t n = 1; n < 8u; ++n) {
+                uint32_t best = 0;
+                uint64_t bestd = 0;
+                bool found = false;
+                for (uint32_t a = 0; a < nitems; ++a) {
+                    if (assigned[a] != kUnset) {
+                        continue;
+                    }
+                    uint64_t d = ~0ull;  // nearest-to-group (single link) keeps the blob connected
+                    for (uint32_t m = 0; m < n; ++m) {
+                        d = std::min<uint64_t>(d, sym(a, grp[m]));
+                    }
+                    if (!found || d < bestd) {
+                        bestd = d;
+                        best = a;
+                        found = true;
+                    }
+                }
+                grp[n] = best;
+                assigned[best] = g;
+            }
+            groups.push_back(grp);
+        }
+
+        // --- Cyclic order per group: the SAME two-pass PARETO objective as optimize_in0_ring_order (pass 1
+        // scores the mm==0 ring to establish the aggtot budget and seed; pass 2 minimizes the worst directed
+        // edge over all mm-rings subject to that budget), so ordering quality is directly comparable.
+        struct Metrics {
+            uint32_t r0max, r0tot, aggmax, aggtot;
+        };
+        auto lt2 = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) { return a0 < b0 || (a0 == b0 && a1 < b1); };
+        for (uint32_t g = 0; g < Ns; ++g) {
+            const std::array<uint32_t, 8>& items = groups[g];
+            auto metrics = [&](const std::array<uint32_t, 8>& ord) -> Metrics {
+                Metrics m{0, 0, 0, 0};
+                for (uint32_t mm = 0; mm < Sm; ++mm) {
+                    uint32_t mx = 0, tot = 0;
+                    for (uint32_t p = 0; p < 8u; ++p) {
+                        const uint32_t e = dm[mm][ord[p]][ord[(p + 1u) % 8u]];
+                        tot += e;
+                        mx = std::max(mx, e);
+                    }
+                    if (mm == 0) {
+                        m.r0max = mx;
+                        m.r0tot = tot;
+                    }
+                    m.aggmax = std::max(m.aggmax, mx);
+                    m.aggtot += tot;
+                }
+                return m;
+            };
+            // fix items[0] at position 0 and permute the other 7 (5040 directed cycles).
+            auto cand_of = [&](const std::array<uint32_t, 7>& t) {
+                std::array<uint32_t, 8> c{};
+                c[0] = items[0];
+                for (uint32_t i = 0; i < 7u; ++i) {
+                    c[i + 1u] = t[i];
+                }
+                return c;
+            };
+            std::array<uint32_t, 7> tail{};
+            for (uint32_t i = 0; i < 7u; ++i) {
+                tail[i] = items[i + 1u];
+            }
+            std::sort(tail.begin(), tail.end());
+            std::array<uint32_t, 8> opt_mm0 = cand_of(tail);
+            Metrics b_mm0 = metrics(opt_mm0);
+            std::array<uint32_t, 7> t1 = tail;
+            do {
+                const std::array<uint32_t, 8> cand = cand_of(t1);
+                const Metrics m = metrics(cand);
+                if (lt2(m.r0max, m.r0tot, b_mm0.r0max, b_mm0.r0tot)) {
+                    b_mm0 = m;
+                    opt_mm0 = cand;
+                }
+            } while (std::next_permutation(t1.begin(), t1.end()));
+            std::array<uint32_t, 8> opt = opt_mm0;
+            Metrics b_pa = b_mm0;
+            const uint32_t budget = b_mm0.aggtot;
+            std::array<uint32_t, 7> t2 = tail;
+            do {
+                const std::array<uint32_t, 8> cand = cand_of(t2);
+                const Metrics m = metrics(cand);
+                if (m.aggtot <= budget && lt2(m.aggmax, m.aggtot, b_pa.aggmax, b_pa.aggtot)) {
+                    b_pa = m;
+                    opt = cand;
+                }
+            } while (std::next_permutation(t2.begin(), t2.end()));
+
+            // --- Apply the same (bank,nn) -> ring_pos map to every mm (M-split in1 pairing requirement).
+            for (uint32_t mm = 0; mm < Sm; ++mm) {
+                for (uint32_t pos = 0; pos < 8u; ++pos) {
+                    const uint32_t ci = core_idx(kk, opt[pos], mm);
+                    P.cores[ci].ring_pos = pos;
+                    P.cores[ci].ring_next_idx = core_idx(kk, opt[(pos + 1u) % 8u], mm);
+                    P.cores[ci].ring_prev_idx = core_idx(kk, opt[(pos + 7u) % 8u], mm);
+                }
+            }
+        }
+    }
+}
+
+// Link-load-balanced ring ordering (see RingLinkModel above for the objective + route model). Same ring
+// membership as production; only ring_pos / ring_next_idx / ring_prev_idx change, and the ring protocol is
+// correct for any permutation. One permutation per (kk,nn) group, shared by its Sm mm-rings, exactly as
+// optimize_in0_ring_order does (the M-split in1 pairing requires it).
+void balance_in0_ring_order(
+    plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo, uint32_t Sm, const CoreCoord& grid) {
+    namespace expd = tt::tt_metal::experimental::Device;
+    const uint32_t preaders = geo.num_cores / 8u;
+    const RingLinkModel lm(device, grid.x, grid.y);
+    std::vector<uint32_t> load(lm.num_links(), 0u);
+
+    const uint32_t ngroups = preaders / Sm;
+    // Per group + mm: the 8x8 edge -> link-list and hop-cost tables (bank indices).
+    struct GroupTables {
+        uint32_t base{};
+        NOC wnoc{};
+        std::vector<std::array<std::array<std::vector<uint32_t>, 8>, 8>> lk;  // [mm][a][b]
+        std::vector<std::array<std::array<uint32_t, 8>, 8>> hp;               // [mm][a][b]
+    };
+    std::vector<GroupTables> gt(ngroups);
+    for (uint32_t g = 0; g < ngroups; ++g) {
+        const uint32_t base = g * Sm;
+        gt[g].base = base;
+        gt[g].wnoc = (P.cores[base].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;  // shared writer NoC of the group
+        const uint32_t wnoc_idx = (gt[g].wnoc == NOC::NOC_0) ? 0u : 1u;
+        gt[g].lk.resize(Sm);
+        gt[g].hp.resize(Sm);
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            for (uint32_t a = 0; a < 8u; ++a) {
+                const auto& ca = P.cores[a * preaders + base + mm].coord;
+                for (uint32_t b = 0; b < 8u; ++b) {
+                    if (a == b) {
+                        gt[g].hp[mm][a][b] = 0u;
+                        continue;
+                    }
+                    const auto& cb = P.cores[b * preaders + base + mm].coord;
+                    lm.links(ca, cb, wnoc_idx, gt[g].lk[mm][a][b]);
+                    gt[g].hp[mm][a][b] = expd::get_worker_noc_hop_distance(
+                        device, CoreCoord{ca.x, ca.y}, CoreCoord{cb.x, cb.y}, gt[g].wnoc);
+                }
+            }
+        }
+    }
+
+    // Sequential greedy, two passes: re-choose each group's cycle against the loads committed by the others.
+    std::vector<std::array<uint32_t, 8>> chosen(ngroups);
+    std::vector<bool> placed(ngroups, false);
+    std::vector<uint32_t> touched;  // scratch: links of the candidate under evaluation
+    auto apply = [&](uint32_t g, const std::array<uint32_t, 8>& ord, int delta) {
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            for (uint32_t p = 0; p < 8u; ++p) {
+                for (const uint32_t l : gt[g].lk[mm][ord[p]][ord[(p + 1u) % 8u]]) {
+                    load[l] = static_cast<uint32_t>(static_cast<int>(load[l]) + delta);
+                }
+            }
+        }
+    };
+    for (uint32_t pass = 0; pass < 2u; ++pass) {
+        for (uint32_t g = 0; g < ngroups; ++g) {
+            if (placed[g]) {
+                apply(g, chosen[g], -1);
+            }
+            std::array<uint32_t, 8> best{0, 1, 2, 3, 4, 5, 6, 7};
+            uint32_t best_peak = ~0u, best_hops = ~0u;
+            std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
+            do {
+                std::array<uint32_t, 8> cand{};
+                cand[0] = 0u;
+                for (uint32_t i = 0; i < 7u; ++i) {
+                    cand[i + 1u] = tail[i];
+                }
+                // peak = highest load this candidate would leave on any link it touches (multiplicity
+                // included); tie-break on total hops over the group's mm-rings.
+                touched.clear();
+                uint32_t hops = 0;
+                for (uint32_t mm = 0; mm < Sm; ++mm) {
+                    for (uint32_t p = 0; p < 8u; ++p) {
+                        const uint32_t a = cand[p], b = cand[(p + 1u) % 8u];
+                        hops += gt[g].hp[mm][a][b];
+                        for (const uint32_t l : gt[g].lk[mm][a][b]) {
+                            touched.push_back(l);
+                        }
+                    }
+                }
+                std::sort(touched.begin(), touched.end());
+                uint32_t peak = 0, i = 0;
+                while (i < touched.size()) {
+                    uint32_t j = i;
+                    while (j < touched.size() && touched[j] == touched[i]) {
+                        ++j;
+                    }
+                    peak = std::max(peak, load[touched[i]] + (j - i));
+                    i = j;
+                }
+                if (peak < best_peak || (peak == best_peak && hops < best_hops)) {
+                    best_peak = peak;
+                    best_hops = hops;
+                    best = cand;
+                }
+            } while (std::next_permutation(tail.begin(), tail.end()));
+            chosen[g] = best;
+            placed[g] = true;
+            apply(g, best, +1);
+        }
+    }
+
+    for (uint32_t g = 0; g < ngroups; ++g) {
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            const uint32_t jj = gt[g].base + mm;
+            for (uint32_t pos = 0; pos < 8u; ++pos) {
+                const uint32_t ci = chosen[g][pos] * preaders + jj;
+                P.cores[ci].ring_pos = pos;
+                P.cores[ci].ring_next_idx = chosen[g][(pos + 1u) % 8u] * preaders + jj;
+                P.cores[ci].ring_prev_idx = chosen[g][(pos + 7u) % 8u] * preaders + jj;
+            }
+        }
+    }
+}
+
 }  // namespace
 
 RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::create(
@@ -304,18 +696,47 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // byte-identical no-fusion compile. ----
     std::map<std::string, std::string> wdefs;
 
-    // ---- TEST-ONLY in0-read ablation (operation_attributes.diag_in0_read_mask; 0 => production, no define,
-    // no extra arg => byte-identical). 1 => skip redundant (ns>0) reads; 2 => skip all in0 DRAM reads. Only
-    // the single-output, no-fusion path is supported (the diagnostic appends one writer arg at index 17,
-    // which must be free). ----
-    const uint32_t diag_in0 = operation_attributes.diag_in0_read_mask;
-    if (diag_in0 != 0u) {
+    // ---- TEST-ONLY critical-path ablation (operation_attributes.diag_mask; 0 => production, no define, no
+    // extra arg => byte-identical). 6 combinable bits -> writer/compute kernel defines. Only the unfused,
+    // single-output path is supported (the read-skip flag is appended at writer arg index 17, which must be
+    // free). Compute defines (SKIP_COMPUTE / SKIP_REDUCTION) are merged into cdefs at compute-kernel creation. ----
+    const uint32_t diag_mask = operation_attributes.diag_mask;
+    std::map<std::string, std::string> ddefs_compute;  // diagnostic compute defines
+    // Bits 0..7 alter kernel behaviour (and produce invalid output) => restricted to unfused/single-output.
+    // Bit8 (RING_REGIONAL) is host-only + correctness-preserving, so it is allowed everywhere.
+    if ((diag_mask & 0xFFu) != 0u) {
         TT_FATAL(
             !has_bias && !has_ternary && !has_activation && n_chunks == 1u,
-            "regime_a_matmul in0-read diagnostic (diag_in0_read_mask={}) is only supported unfused + single-output",
-            diag_in0);
-        wdefs[diag_in0 == 2u ? "SKIP_ALL_IN0_DRAM_READS" : "SKIP_REDUNDANT_IN0_DRAM_READS"] = "1";
+            "regime_a_matmul ablation diagnostic (diag_mask={}) is only supported unfused + single-output",
+            diag_mask);
+        if (diag_mask & 0x1u) {
+            wdefs["SKIP_ALL_IN0_READ"] = "1";
+        }
+        if (diag_mask & 0x2u) {
+            wdefs["SKIP_REDUNDANT_IN0_READ"] = "1";
+        }
+        if (diag_mask & 0x4u) {
+            wdefs["SKIP_IN0_RING_FORWARD"] = "1";
+        }
+        if (diag_mask & 0x8u) {
+            ddefs_compute["SKIP_COMPUTE"] = "1";
+        }
+        if (diag_mask & 0x10u) {
+            wdefs["SKIP_REDUCTION"] = "1";
+            ddefs_compute["SKIP_REDUCTION"] = "1";
+        }
+        if (diag_mask & 0x20u) {
+            wdefs["SKIP_OUTPUT_WRITE"] = "1";
+        }
+        if (diag_mask & 0x40u) {
+            wdefs["FWD_NEAR"] = "1";
+        }
+        if (diag_mask & 0x80u) {
+            wdefs["FWD_HALF"] = "1";
+        }
     }
+    const bool diag_read_skip_arg = (diag_mask & 0x3u) != 0u;  // bit0/bit1 => per-core read-skip flag at arg 17
+    const bool diag_near_arg = (diag_mask & 0x40u) != 0u;      // bit6 => per-core nearest-peer coords follow
 
     // ---- M-split worker PLACEMENT (Sm>1): IN1_NEAR. Overrides only P.cores[i].coord; MUST run BEFORE the ring
     // reorder so the ring order recomputes on the placed coords. No-op at Sm==1. ----
@@ -324,7 +745,16 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     }
 
     // ---- Physical-topology-aware in0 ring ordering (PARETO) over each (kk,nn) group's Sm mm-rings. ----
-    optimize_in0_ring_order(P, device, geo, Sm);
+    // diag bit8 (RING_REGIONAL) instead re-partitions the rings across nn for physical compactness (host-only,
+    // correctness-preserving); it subsumes the ordering step. mask 0 keeps the production path byte-identical.
+    const uint32_t Ns_cfg = cfg.n_slices ? cfg.n_slices : 1u;
+    if ((diag_mask & 0x100u) != 0u && Ns_cfg > 1u) {
+        regroup_in0_rings(P, device, geo, Pk, Ns_cfg, Sm);
+    } else if ((diag_mask & 0x200u) != 0u) {
+        balance_in0_ring_order(P, device, geo, Sm, device->compute_with_storage_grid_size());
+    } else {
+        optimize_in0_ring_order(P, device, geo, Sm);
+    }
 
     // ---- Fused-epilogue / output-split kernel defines (empty => byte-identical no-fusion compile). ----
     // Compute-only fusion defines are collected here and merged into cdefs at compute-kernel creation.
@@ -480,6 +910,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         sbw};                  // 7 subblock_w
     std::map<std::string, std::string> cdefs = {{"REDUCE_K", "1"}, {"IN0_KSLICE_RESIDENT", "1"}};
     cdefs.insert(fdefs_compute.begin(), fdefs_compute.end());  // fusion defines (empty for the no-fusion path)
+    cdefs.insert(ddefs_compute.begin(), ddefs_compute.end());  // diagnostic defines (empty for mask 0)
     KernelHandle compute = CreateKernel(
         program,
         kComputeKernel,
@@ -501,6 +932,33 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         const auto& c = P.cores[core_idx].coord;
         return device->worker_core_from_logical_core(CoreCoord{c.x, c.y});
     };
+
+    // TEST-ONLY (bit6 FWD_NEAR): per-core NEAREST other program core on that core's WRITER NoC, used as a
+    // stand-in ring-forward payload destination. Attributes the ring-forward cost between hop distance /
+    // link contention (this perturbation removes distance but not bytes) and per-core injection bandwidth.
+    // Only computed for the diagnostic build; production (mask 0) never enters here.
+    std::vector<CoreCoord> diag_near(diag_near_arg ? geo.num_cores : 0u);
+    if (diag_near_arg) {
+        namespace expd = tt::tt_metal::experimental::Device;
+        for (uint32_t i = 0; i < geo.num_cores; ++i) {
+            const CoreCoord src{P.cores[i].coord.x, P.cores[i].coord.y};
+            const NOC wnoc = (P.cores[i].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;  // writer NoC (opposite reader)
+            uint32_t bestd = 0xffffffffu;
+            CoreCoord best = src;
+            for (uint32_t j = 0; j < geo.num_cores; ++j) {
+                if (j == i) {
+                    continue;
+                }
+                const CoreCoord dst{P.cores[j].coord.x, P.cores[j].coord.y};
+                const uint32_t d = expd::get_worker_noc_hop_distance(device, src, dst, wnoc);
+                if (d < bestd) {
+                    bestd = d;
+                    best = dst;
+                }
+            }
+            diag_near[i] = device->worker_core_from_logical_core(best);
+        }
+    }
 
     for (uint32_t i = 0; i < geo.num_cores; ++i) {
         const plan::CorePlan& cp = P.cores[i];
@@ -577,11 +1035,17 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 wa.push_back(tensor_return_value[c].buffer()->address());
             }
         }
-        // TEST-ONLY in0-read ablation flag (appended at index 17 for the unfused/single-output diagnostic
-        // build; absent => production arg layout unchanged). 1 => this core skips its in0 DRAM read.
-        if (diag_in0 != 0u) {
-            const uint32_t skip = (diag_in0 == 2u) ? 1u : (cp.nn > 0u ? 1u : 0u);  // 2=all, 1=redundant(ns>0)
+        // TEST-ONLY in0-read-skip flag (appended at writer arg index 17 for the unfused/single-output
+        // diagnostic build; absent => production arg layout unchanged). 1 => this core skips its in0 DRAM
+        // read. bit0 (SKIP_ALL) dominates bit1 (SKIP_REDUNDANT, ns>0 only) => normalizes skip-all+redundant.
+        if (diag_read_skip_arg) {
+            const uint32_t skip = (diag_mask & 0x1u) ? 1u : (cp.nn > 0u ? 1u : 0u);
             wa.push_back(skip);
+        }
+        // TEST-ONLY (bit6): nearest-peer physical coords, appended AFTER the optional read-skip flag.
+        if (diag_near_arg) {
+            wa.push_back(diag_near[i].x);
+            wa.push_back(diag_near[i].y);
         }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
