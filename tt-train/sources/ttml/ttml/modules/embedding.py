@@ -18,7 +18,7 @@ from .parameter import Parameter
 
 
 class Embedding(AbstractModuleBase):
-    """Embedding layer implemented in Python using ttml operations."""
+    """Embedding layer."""
 
     def __init__(self, num_embeddings: int, embedding_dim: int, weight_init=None) -> None:
         """Initialize embedding layer.
@@ -55,11 +55,16 @@ class VocabParallelEmbedding(AbstractModuleBase):
     looks up the ids that fall in its slice, zeroes the rest, and an all-reduce
     then sums the per-device contributions — each token is owned by exactly one
     device, so the sum reconstructs the full, replicated embedding.
+    With ``sequence_parallel`` the all-reduce becomes a reduce-scatter along the
+    sequence, so the first block receives a sequence-sharded residual.
 
     Args:
         num_embeddings: Vocabulary size. Must be divisible by ``tp_size``.
         embedding_dim: Dimension of embeddings.
         weight_init: Initializer for the weight tensor. Defaults to normal(0, 0.02).
+        sequence_parallel: If ``True`` (Megatron sequence parallelism) the cross-TP sum
+            is a reduce-scatter along the sequence, so the output is
+            ``[batch, 1, seq/tp, embedding_dim]`` instead of a replicated full sequence.
         axis_name: Mesh axis used for tensor parallelism.
 
     Note:
@@ -173,14 +178,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         # Each token is nonzero on exactly one device. Sum across TP reconstructs
         # the full embedding for every token.
         if self.sequence_parallel:
-            # SP: fuse that sum with a shard along the sequence (dim 2), so the
-            # embedding enters the first block already sequence-sharded. Backward is
-            # all_gather(seq): the ids carry no grad, so it simply reconstructs the
-            # full-sequence output grad (replicated across TP) for the weight bw.
             return ttml.ops.distributed.reduce_scatter(emb, 2, self.cluster_axis)
-        # Classic TP: sum reconstructs the full embedding, replicated across TP.
-        # Input ids carry no grad, so backward passes the (already replicated)
-        # output grad through unchanged.
         return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
 
 
@@ -188,22 +186,20 @@ class FeatureParallelEmbedding(AbstractModuleBase):
     """Embedding whose table is sharded along the embedding (hidden) dimension.
 
     Each device holds the *entire* vocabulary but only an ``embedding_dim //
-    tp_size`` slice of every row. Versus :class:`VocabParallelEmbedding` this
-    makes the lookup fully local — no vocab offset, range mask, or out-of-range
-    handling — and replaces the full-hidden all-reduce with a single all-gather
-    over the embedding dim (roughly half the bandwidth), mirroring
-    ``ColumnParallelLinear(gather_output=True)``. The trade-off: its layout does
-    not match the vocab-parallel LM head, so weight tying is unavailable.
+    tp_size`` slice of every row. The lookup stays fully local.
+    The trade-off: its layout does not match the vocab-parallel LM head, so weight tying is unavailable.
+    With ``sequence_parallel`` the gathered embedding is then sliced along the sequence.
+    That slice is local, but its backward adds a sequence all-gather on top of the hidden
+    reduce-scatter, making :class:`VocabParallelEmbedding` cheaper under SP.
 
     Args:
-        num_embeddings: Vocabulary size (rows). Held in full on every device.
+        num_embeddings: Vocabulary size.
         embedding_dim: Embedding width. Sharded across ``tp_size``.
         weight_init: Initializer for the weight tensor. Defaults to normal(0, 0.02).
         sequence_parallel: If ``True`` (Megatron sequence parallelism) the gathered
             full-hidden embedding is additionally scattered along the sequence
-            across the TP axis, so the output is ``[batch, 1, seq/tp, embedding_dim]``
-            -- a sequence-sharded residual for the first block. Requires
-            ``gather_output=True`` (there is no hidden-sharded SP layout here).
+            across the TP axis, so the output is ``[batch, 1, seq/tp, embedding_dim]``.
+            Requires ``gather_output=True``.
         axis_name: Mesh axis used for tensor parallelism.
         gather_output: If ``True`` (default) an all-gather reconstructs the full
             TP-replicated embedding. If ``False`` the hidden-sharded slice
@@ -236,9 +232,6 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         self.sequence_parallel = sequence_parallel
 
         if sequence_parallel and not gather_output:
-            # SP scatters the full-hidden embedding along the sequence; there is no
-            # meaningful "hidden-sharded + sequence-sharded" output for a consumer,
-            # so the two options are mutually exclusive.
             raise ValueError("FeatureParallelEmbedding: sequence_parallel requires gather_output=True")
 
         if embedding_dim % self.tp_size != 0:
@@ -313,11 +306,6 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         )
 
         if self.sequence_parallel:
-            # SP: shard the now-replicated full embedding along the sequence (dim 2)
-            # so the first block receives a sequence-sharded residual. `scatter` is a
-            # local per-rank partition of the replicated tensor; its backward is
-            # all_gather(seq), which reconstructs the full-sequence grad (replicated
-            # across TP) that the hidden all_gather backward above then partitions.
             emb = ttml.ops.distributed.scatter(emb, 2, self.cluster_axis)
 
         return emb
