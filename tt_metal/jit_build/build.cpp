@@ -33,9 +33,9 @@
 #include <taskflow/core/async.hpp>
 
 #include <tt_stl/assert.hpp>
+#include <internal/disk_cache.hpp>
 #include "common/executor.hpp"
 #include "common/stable_hash.hpp"
-#include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "hostdevcommon/profiler_common.h"
@@ -88,16 +88,15 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     }
 }
 
-}  // namespace
-
-std::string get_default_root_path() {
-    const std::string emptyString;
-    const std::string home_path = parse_env<std::string>("HOME", emptyString);
-    if (!home_path.empty() && std::filesystem::exists(home_path)) {
-        return home_path + "/.cache/tt-metal-cache/";
-    }
-    return "/tmp/tt-metal-cache/";
+DiskCacheConfig make_disk_cache_config(const tt::llrt::RunTimeOptions& rtoptions, const std::string& cache_root) {
+    DiskCacheConfig config;
+    config.root = cache_root;
+    config.max_size_bytes = rtoptions.get_cache_max_size_bytes();
+    config.trim_enabled = rtoptions.get_cache_trim_enabled();
+    return config;
 }
+
+}  // namespace
 
 JitBuildEnv::JitBuildEnv() = default;
 
@@ -109,7 +108,8 @@ void JitBuildEnv::init(
     this->rtoptions_ = &rtoptions;
     // Paths
     this->root_ = rtoptions.get_root_dir();
-    this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+    this->out_root_ =
+        rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : default_kernel_cache_root().string();
 
     this->arch_ = config.arch;
     this->max_cbs_ = config.max_cbs;
@@ -351,9 +351,19 @@ void JitBuildEnv::init(
 
     build_key_ = hasher.digest();
 
-    this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
-    this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
+    const std::string entry_root = fmt::format("{}{}", this->out_root_, build_key_);
+    this->out_firmware_root_ = entry_root + "/firmware/";
+    this->out_kernel_root_ = entry_root + "/kernels/";
     this->firmware_binary_root_ = this->out_firmware_root_;
+
+    // Announce and bound this cache root. Claiming the tree is what makes it an eviction
+    // candidate at all -- an entry with no .inuse file is invisible to every trimmer -- and it
+    // must happen before we ask anyone to trim, so a trimmer in another process can never pick
+    // the tree we are about to compile into. See internal/disk_cache.hpp.
+    disk_cache_initialize_root(this->out_root_);
+    disk_cache_hold_entry_for_process(entry_root);
+    disk_cache_touch(entry_root);
+    disk_cache_trim_in_background(make_disk_cache_config(rtoptions, this->out_root_));
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal) :

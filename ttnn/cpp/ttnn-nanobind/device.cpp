@@ -450,9 +450,10 @@ void device_module(nb::module_& m_device) {
             1. Kernel hash is NOT in HashLookup (cleared by this function), AND
             2. Binaries do not exist on disk (or persistent cache is disabled)
 
-            To also clear disk-cached
-                kernel binaries, you must delete the files in:
-                ~/.cache/tt-metal-cache/<git_hash>/<build_id>/kernels/
+            To also clear disk-cached kernel binaries, run:
+                tt-metal-cache clear
+            That evicts every cache entry not in use by a live process. The cache
+            also bounds itself: see TT_METAL_CACHE_MAX_SIZE.
 
         Example:
             >>> import ttnn

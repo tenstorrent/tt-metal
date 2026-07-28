@@ -57,6 +57,10 @@ DeviceOperation
 DeviceStorage
 DeviceZoneScopedN
 DstMode
+filesystem
+GiB
+NFS
+nolock
 ReadDeviceProfilerResults
 ReadMeshDeviceProfilerResults
 ENDL
@@ -159,6 +163,7 @@ Theano
 TileSize
 TileSlice
 Tilizing
+uid
 UnaryOpType
 UpdateCircularBufferPageSize
 UpdateCircularBufferTotalSize

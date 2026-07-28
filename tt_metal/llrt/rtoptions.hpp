@@ -172,6 +172,11 @@ class RunTimeOptions {
     bool is_cache_dir_env_var_set = false;
     std::string cache_dir_;
 
+    // Bounds on the kernel cache root. 0 means no size cap, which is the default:
+    // automatic eviction stays off until an operator asks for it.
+    uint64_t cache_max_size_bytes_ = 0;
+    bool cache_trim_enabled_ = true;
+
     std::string logs_dir_ = (std::filesystem::current_path() / "").string();
 
     bool is_kernel_dir_env_var_set = false;
@@ -411,6 +416,12 @@ public:
 
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
     const std::string& get_cache_dir() const;
+
+    // Size cap on the kernel cache root, from TT_METAL_CACHE_MAX_SIZE. 0 means no cap, so
+    // no automatic eviction.
+    uint64_t get_cache_max_size_bytes() const { return this->cache_max_size_bytes_; }
+    // False when TT_METAL_CACHE_TRIM disables automatic trimming.
+    bool get_cache_trim_enabled() const { return this->cache_trim_enabled_; }
 
     // Returns the logs directory for generated output (dprint, watcher, profiler, etc.)
     // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to current working directory

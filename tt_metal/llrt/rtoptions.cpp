@@ -21,6 +21,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
+#include <internal/disk_cache.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <system_mesh.hpp>
 
@@ -50,6 +51,8 @@ enum class EnvVarID {
     // ========================================
 
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
+    TT_METAL_CACHE_MAX_SIZE,                  // Size cap on the kernel cache directory
+    TT_METAL_CACHE_TRIM,                      // Enable/disable automatic kernel cache trimming
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
@@ -427,8 +430,42 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_CACHE=/path/to/cache
         case EnvVarID::TT_METAL_CACHE:
             this->is_cache_dir_env_var_set = true;
-            this->cache_dir_ = normalize_path(value, "tt-metal-cache");
+            // The trailing slash is load bearing: callers append "<build_key>/..." directly, so
+            // without it TT_METAL_CACHE=/foo yields /foo/tt-metal-cache<build_key>/ -- sibling
+            // directories rather than one enumerable cache root. #31885 dropped the slash when it
+            // replaced the old string concatenation with normalize_path.
+            this->cache_dir_ = normalize_path(value, "tt-metal-cache") + "/";
             break;
+
+        // TT_METAL_CACHE_MAX_SIZE
+        // Size cap on the kernel cache root. Once the cache exceeds it, least recently used
+        // <build_key> trees are evicted in the background at startup. Binary suffixes: 50G,
+        // 512M, 1024K, or a bare byte count.
+        // Default: 0, meaning no cap and therefore no automatic eviction.
+        // Usage: export TT_METAL_CACHE_MAX_SIZE=50G
+        //
+        // Both cache variables delegate to disk_cache_apply_env so that one parser and
+        // one error policy (warn and keep the default -- never abort a process over a cache
+        // tuning knob) govern both the runtime and the tt-metal-cache CLI.
+        case EnvVarID::TT_METAL_CACHE_MAX_SIZE: {
+            tt::tt_metal::DiskCacheConfig parsed;
+            tt::tt_metal::disk_cache_apply_env(parsed, value, nullptr);
+            this->cache_max_size_bytes_ = parsed.max_size_bytes;
+            break;
+        }
+
+        // TT_METAL_CACHE_TRIM
+        // Set to 0 to never trim the kernel cache automatically. CI wants this, as does
+        // anything that deliberately runs against an isolated cache. `tt-metal-cache clear`
+        // still works. Accepts 0/1, true/false, yes/no, on/off.
+        // Default: true (trimming enabled, though a size cap is still required to evict)
+        // Usage: export TT_METAL_CACHE_TRIM=0
+        case EnvVarID::TT_METAL_CACHE_TRIM: {
+            tt::tt_metal::DiskCacheConfig parsed;
+            tt::tt_metal::disk_cache_apply_env(parsed, nullptr, value);
+            this->cache_trim_enabled_ = parsed.trim_enabled;
+            break;
+        }
 
         // TT_METAL_KERNEL_PATH
         // Path to kernel source files.

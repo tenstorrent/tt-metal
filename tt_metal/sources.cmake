@@ -1,4 +1,5 @@
 set(TT_METAL_PUBLIC_API
+    api/internal/disk_cache.hpp
     api/internal/service/inter_process_counter_channel.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp

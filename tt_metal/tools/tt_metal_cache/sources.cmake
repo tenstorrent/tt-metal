@@ -1,0 +1,1 @@
+set(TT_METAL_CACHE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal_cache.cpp)
