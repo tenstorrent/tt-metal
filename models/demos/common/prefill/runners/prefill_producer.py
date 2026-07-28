@@ -27,8 +27,9 @@ Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env
     transport: {sp, tp, h2d_service_id, connect_timeout_s}
     workload:  {num_users, chunks, max_requests, duration_s, interleave, p_gap, p_burst, gap_ms,
                 mid_end_prob, seed, check_pcc, trace_dir, slot_prompts}
-    migration: see runners/migration_driver.py — that module owns the whole block and its env vars
     env:       {ANY_PREFILL_KEY: value}   # escape hatch for anything unmodeled
+  Any other top-level block is ignored here and returned by _apply_manifest_env() for another entry point
+  to apply — that is how runners/migration_driver.py picks up ``migration:``.
 
 Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order run):
   PREFILL_NUM_USERS              concurrent cache slots (default 1)
@@ -50,8 +51,10 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
                                  schedule for all slots.
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
-Migration — opt-in, and entirely out of this module: see runners/migration_driver.py for its env vars,
-  manifest block and CLI flags. Off by default; this module just calls start()/finish() around prefill.
+Scope — this module drives the RUNNER and nothing else: push, ack-drain, optional golden PCC. It issues no
+  KV migration and imports nothing that does. To prefill AND migrate, run runners/migration_driver.py: it
+  reuses the helpers here and adds the migration steps. The dependency runs that way only, never back into
+  this module, so a runner-only run can never pull migration in.
 Env — transport (must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHUNK_SIZE /
   PREFILL_MAX_SEQ_LEN / PREFILL_NUM_LAYERS / PREFILL_H2D_SERVICE_ID / PREFILL_H2D_CONNECT_TIMEOUT.
 
@@ -83,16 +86,19 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.runners import migration_driver
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 
-def _apply_manifest_env(manifest_path: str) -> None:
-    """Populate the PREFILL_* env from a YAML producer manifest (setdefault => an explicitly exported
-    env var still wins). Mirrors the runner's _apply_manifest_env: a verbatim ``env:`` passthrough
-    (applied FIRST, so a raw PREFILL_* key wins over the typed mapping) plus typed ``model`` /
-    ``transport`` / ``workload`` blocks mapped to the same env vars _load_env_config() and
-    _config_from_env() read. The typed ``migration`` block is delegated to ``migration_driver``.
+def _apply_manifest_env(manifest_path: str) -> dict:
+    """Populate the PREFILL_* env from a YAML producer manifest and RETURN the parsed manifest (setdefault
+    => an explicitly exported env var still wins). Mirrors the runner's _apply_manifest_env: a verbatim
+    ``env:`` passthrough (applied FIRST, so a raw PREFILL_* key wins over the typed mapping) plus typed
+    ``model`` / ``transport`` / ``workload`` blocks mapped to the same env vars _load_env_config() and
+    _config_from_env() read.
+
+    Blocks this module does not model are left untouched and reachable via the return value, so another
+    entry point can apply its own. That is how the migration driver picks up ``migration:`` — this module
+    stays unaware of it.
 
     Called ONLY from main(), and necessarily before those two reads — see the call site. Deliberately not
     invoked at import: this is the one function here that mutates os.environ, and a plain
@@ -147,10 +153,8 @@ def _apply_manifest_env(manifest_path: str) -> None:
     if gap_ms is not None:
         sd("PREFILL_PRODUCER_GAP_MS", gap_ms if isinstance(gap_ms, str) else ",".join(str(x) for x in gap_ms))
 
-    # 3) the typed `migration:` block is owned by the migration driver, not this module.
-    migration_driver.apply_manifest_env(manifest)
-
     logger.info(f"[producer] applied manifest {manifest_path}")
+    return manifest
 
 
 # PrefillMetadata on the wire: 3 x uint32 = [slot_id, actual_start, actual_end].
@@ -899,7 +903,6 @@ def main() -> None:
         default=os.environ.get("PREFILL_PRODUCER_MANIFEST"),
         help="Path to the producer YAML manifest (applied at startup; exported env vars override it).",
     )
-    migration_driver.add_cli_arguments(parser)  # --migrate / --migrations
     args = parser.parse_args()
 
     # Apply the manifest HERE, not at import: importing this module must never mutate os.environ. Order
@@ -925,11 +928,6 @@ def main() -> None:
     # Read the KV table + attach the LayerAck channel BEFORE pushing (the runner publishes them at setup).
     kv_table = _read_kv_chunk_table(timeout_s)
     ack_channel = _connect_layer_ack_channel(timeout_s)
-
-    # Opt-in migration; None when off (see runners/migration_driver.py).
-    migrator = migration_driver.start(
-        args, chunk_size=CHUNK_SIZE, num_layers=NUM_LAYERS, default_dst_slot_offset=cfg.num_users
-    )
 
     # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no
     # PREFILL_PRODUCER_SLOT_TRACES every slot shares one trace (PREFILL_TRACE_DIR / the adapter default).
@@ -962,18 +960,7 @@ def main() -> None:
     # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed.
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
 
-    # Migrate now that the KV is fully resident (no-op when migration is off).
-    migration_driver.finish(
-        migrator,
-        stats,
-        num_slots=kv_table.config().num_slots if kv_table is not None else None,
-        slot_traces=slot_traces,
-        pools_by_trace=pools_by_trace,
-    )
-
-    # Producer-side golden PCC (PREFILL_PRODUCER_CHECK_PCC): reads each resident slot's KV back over UMD
-    # and compares it to that slot's golden. Independent of migration — migrated KV is validated by the
-    # RUNNER on-device, never here — so this covers standalone runs and the src slots of a migrating one.
+    # Golden PCC of every resident slot's KV, read back device-lessly over UMD (PREFILL_PRODUCER_CHECK_PCC).
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:

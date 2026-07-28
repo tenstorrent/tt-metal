@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Producer-side KV migration driver: issues real slot->slot migrations after prefill.
+"""KV-migration test driver: prefills slots over H2D, then migrates their KV. Run this as a script.
 
-The producer owns pushing chunks and draining LayerAcks; this module
-owns everything migration: env/manifest/CLI config, the MigrationLayerClient attach, the optional
-cross-endpoint pairing, resolving the src->dst mapping, issuing the migrate() calls, and writing the
-two sidecar files consumers wait on. The producer's only coupling is two calls behind one flag::
+This is the ENTRY POINT for a migration run — the whole terminal-C side in one process. It owns
+everything migration: env/manifest/CLI config, the MigrationLayerClient attach, the optional
+cross-endpoint pairing, resolving the src->dst mapping, issuing the migrate() calls, and writing the two
+sidecar files consumers wait on.
 
-    driver = migration_driver.create_driver(...)   # None unless migration is enabled
-    if driver: driver.attach()                     # before prefill (fail fast + pair early)
-    ...prefill + ack drain...
-    if driver: driver.run(stats, ...)              # after the KV is fully resident
+The H2D half is driven with ``prefill_producer``'s helpers — manifest, push schedule, ack drain, golden
+PCC — so the push path is defined in exactly one place. The dependency runs ONE way: ``prefill_producer``
+is the plain runner test and imports nothing from here, so a runner-only run can never pull migration in.
+Everything migration-specific lives in this file, including the optional src-KV dump for a decode-side
+consumer (``--dump-src-kv``).
 
 Contrast with ``runners.migration``, which is the RUNNER's passive setup half (publish the KV chunk
 table + device map to the migration worker and block on WORKER_READY). This module reuses that module's
@@ -27,12 +28,9 @@ Two topologies, selected by whether the destination endpoint id differs from our
     address space. Requires the pairing/connect handshake below, and the decode side has no way to know
     each slot's prompt length / last token, so we write a JSON handoff sidecar for it.
 
-Enabling it — ``--migrate`` on the producer CLI, ``migration.issue: true`` in the manifest, or
-``PREFILL_PRODUCER_ISSUE_MIGRATION=1``. Nothing here runs otherwise.
-
-Running it — migration is separate CODE but the SAME process as the producer (it needs the live H2D
-run's resident-slot state, and must migrate while the runner still holds the KV in device DRAM). So the
-three-terminal flow is unchanged; only terminal C's manifest selects whether migration happens::
+Running it — migration must share the producer's process: it needs that run's resident-slot state, and it
+must migrate while the runner still holds the KV in device DRAM. Hence one entry point covering both, and
+the same three-terminal flow as before — terminal C just runs THIS module instead of prefill_producer::
 
     export ENGINE=/path/to/tt-llm-engine TT_METAL_HOME=/path/to/tt-metal HOST=<this-host>
     source $TT_METAL_HOME/python_env/bin/activate
@@ -48,14 +46,13 @@ three-terminal flow is unchanged; only terminal C's manifest selects whether mig
       models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml \
       $HOST:1
 
-    # C) producer; migration runs iff the manifest sets migration.issue (or you pass --migrate)
-    python3 -m models.demos.common.prefill.runners.prefill_producer \
+    # C) prefill + migrate (this module). For a runner-only run, use prefill_producer instead.
+    python3 -m models.demos.common.prefill.runners.migration_driver \
       --manifest models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml
 
 Env (all also settable from the producer manifest's typed ``migration:`` block — see
-``apply_manifest_env``; an explicitly exported env var always wins):
-  PREFILL_PRODUCER_ISSUE_MIGRATION  "1" to attach a MigrationLayerClient and migrate slot KV after
-                                    prefill (default 0 = no migration). Manifest: ``issue``.
+``apply_manifest_env``; an explicitly exported env var always wins). Invoking this module IS the opt-in,
+so ``migration.issue`` is redundant here and a ``false`` is warned about rather than honoured:
   PREFILL_MIGRATION_DEST_ENDPOINT_ID  destination endpoint id for migrate() (default 1). Equal to our
                                     OWN id => loopback; a different id => cross-endpoint P->D.
   PREFILL_MIGRATION_SRC_ENDPOINT_ID  our OWN endpoint id, i.e. the prefill side (default 1). Only used
@@ -81,8 +78,13 @@ Env (all also settable from the producer manifest's typed ``migration:`` block �
 
 import json
 import os
+import struct
+import sys
+import time
 
 from loguru import logger
+
+import ttnn
 
 
 def apply_manifest_env(manifest: dict) -> None:
@@ -137,89 +139,10 @@ def apply_manifest_env(manifest: dict) -> None:
     sd("PREFILL_MIGRATION_DEVICE_MAP_PATH", migration.get("device_map_path"))
 
 
-def add_cli_arguments(parser) -> None:
-    """Register the producer's migration CLI flags on its ArgumentParser."""
-    parser.add_argument(
-        "--migrate",
-        action="store_true",
-        default=False,
-        help="Enable producer-issued KV migration after prefill (same as PREFILL_PRODUCER_ISSUE_MIGRATION=1 "
-        "or the manifest's migration.issue). Off by default.",
-    )
-    parser.add_argument(
-        "--migrations",
-        default=None,
-        help="Arbitrary src->dst migration mapping as 'src:dst,src:dst,...' (e.g. '0:5,1:2,3:7'). Overrides "
-        "PREFILL_MIGRATION_PAIRS / the manifest and the uniform PREFILL_MIGRATION_DST_SLOT_OFFSET fallback.",
-    )
-
-
-def apply_cli_args(args) -> None:
-    """Fold parsed migration CLI flags into the env (CLI wins over the manifest, which used setdefault).
-    Must run before ``create_driver``. ``--migrate`` only ever turns migration ON, so omitting it leaves an
-    env/manifest opt-in intact."""
-    if getattr(args, "migrate", False):
-        os.environ["PREFILL_PRODUCER_ISSUE_MIGRATION"] = "1"
-    if getattr(args, "migrations", None) is not None:
-        os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations
-
-
-def create_driver(*, chunk_size: int, num_layers: int, default_dst_slot_offset: int):
-    """Build a ``MigrationDriver`` from the env, or return ``None`` when migration is not enabled.
-
-    ``None`` is the whole opt-out: ``start``/``finish`` both accept it and do nothing, so with
-    PREFILL_PRODUCER_ISSUE_MIGRATION unset the producer runs its push/PCC path and never attaches a
-    client, opens a queue, or writes a sidecar.
-
-    ``chunk_size`` / ``num_layers`` are passed in rather than re-read from PREFILL_CHUNK_SIZE /
-    PREFILL_NUM_LAYERS so the driver can never disagree with the transport the producer actually used.
-    ``default_dst_slot_offset`` (the producer's num_users) is the fallback when neither
-    PREFILL_MIGRATION_DST_SLOT_OFFSET nor an explicit pair list is given.
-    """
-    if os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "0") != "1":
-        return None
-    return MigrationDriver(
-        chunk_size=chunk_size,
-        num_layers=num_layers,
-        default_dst_slot_offset=default_dst_slot_offset,
-    )
-
-
-# ---------------------------------------------------------------------------------------------------
-# Producer seam: `start` + `finish` are the ONLY two calls the producer makes at runtime. They exist so
-# the host stays a pure H2D push engine — no `if migrating:` guards, no migration locals, no knowledge
-# of attach-vs-run ordering. Both tolerate the disabled case (start returns None, finish no-ops on
-# None), so the producer never branches on migration at all.
-# ---------------------------------------------------------------------------------------------------
-
-
-def start(args=None, *, chunk_size: int, num_layers: int, default_dst_slot_offset: int):
-    """Fold in CLI overrides, build the driver, and attach it. Returns the driver, or ``None`` when
-    migration is not enabled (the caller passes that straight to ``finish``).
-
-    Call BEFORE prefill: attaching early makes a missing migration endpoint fail fast rather than after
-    a multi-minute prefill, and lets a cross-endpoint pairing rendezvous while the decode side's
-    blocking connect_to is still waiting. ``args`` is the producer's parsed argparse namespace (may be
-    omitted when there is no CLI)."""
-    if args is not None:
-        apply_cli_args(args)
-    driver = create_driver(
-        chunk_size=chunk_size, num_layers=num_layers, default_dst_slot_offset=default_dst_slot_offset
-    )
-    if driver is not None:
-        driver.attach()
-    return driver
-
-
-def finish(driver, stats, *, num_slots: int = None, slot_traces: dict = None, pools_by_trace: dict = None) -> list:
-    """Migrate + publish the sidecars, or do nothing when ``driver`` is None. Returns the migrated
-    triples (empty when disabled).
-
-    Call AFTER the ack drain, while the runner is still alive: the endpoint reads source KV from device
-    DRAM, so a SHUTDOWN sentinel must not have been sent yet."""
-    if driver is None:
-        return []
-    return driver.run(stats, num_slots=num_slots, slot_traces=slot_traces, pools_by_trace=pools_by_trace)
+def _parse_layers(spec: str):
+    """PREFILL_MIGRATION_LAYERS / manifest ``layers`` -> a list of layer ids, or None for "all"."""
+    spec = (spec or "").strip()
+    return [int(x) for x in spec.split(",") if x.strip()] if spec else None
 
 
 class MigrationDriver:
@@ -238,8 +161,7 @@ class MigrationDriver:
         self.dst_slot_offset = int(os.environ.get("PREFILL_MIGRATION_DST_SLOT_OFFSET", str(default_dst_slot_offset)))
         # PREFILL_MIGRATION_LAYERS="0,3" => extract only those layers (one migrate per layer) into a
         # layer-id-indexed decode table; unset => migrate the whole [0, num_layers) range in one shot.
-        spec = os.environ.get("PREFILL_MIGRATION_LAYERS", "").strip()
-        self.layers = [int(x) for x in spec.split(",") if x.strip()] if spec else None
+        self.layers = _parse_layers(os.environ.get("PREFILL_MIGRATION_LAYERS", ""))
         self.done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
         self.handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
         self.client = None
@@ -511,3 +433,211 @@ class MigrationDriver:
                 f.write(f"{s} {d}\n")
         logger.success(f"[migration_driver] wrote DONE sentinel {self.done_file} ({len(pairs)} pair(s)): {pairs}")
         return pairs
+
+
+def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None:
+    """Save each source slot's KV to ``<dump_dir>/src_slot<N>.pt`` as ``{"ref_kvpe_list": [...]}`` indexed
+    BY LAYER, for a decode-side consumer to PCC its received copy against (blaze's
+    ``--migration-validate-src-kv-pt``). That check tests the TRANSFER rather than the model: comparing
+    decode's destination to the exact bytes prefill held beats comparing it to a golden trace, which would
+    also fold in any model error.
+
+    Read device-lessly over UMD via the runner's published table -- the same path the producer's PCC uses,
+    reusing its table lookup and cache decode. Rows outside ``layers`` stay None: they are never read, and
+    a full 78-layer slot would be ~10 GB. Values are stored in the DEVICE rope frame exactly as read, with
+    no re-interleave, because that is the frame decode compares in.
+
+    MLA only -- the M3 triple cache has no single kvpe tensor to write.
+    """
+    import torch
+
+    from models.demos.common.prefill.runners import prefill_producer as producer
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+
+    if producer.ADAPTER.name == "minimax_m3":
+        logger.warning(
+            "[migration_driver] src-KV dump is not supported for minimax_m3 (its multi-config cache has no "
+            "single kvpe tensor); skipping the dump."
+        )
+        return
+
+    device_map = producer._read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
+    if not device_map:
+        logger.error("[migration_driver] no device map available; skipping the src-KV dump.")
+        return
+
+    head_dim = producer.ADAPTER.model_config.KV_LORA_RANK + producer.ADAPTER.model_config.QK_ROPE_HEAD_DIM
+    tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    wanted = set(layers) if layers else set(range(producer.NUM_LAYERS))
+    os.makedirs(dump_dir, exist_ok=True)
+
+    for slot_id, (chunks_pushed, actual_isl) in sorted(stats.resident.items()):
+        real_len = min(chunks_pushed * producer.CHUNK_SIZE, actual_isl)
+        if real_len <= 0:
+            continue
+        read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round to a block
+        ref_kvpe_list = [None] * producer.NUM_LAYERS
+        for layer in sorted(wanted):
+            decoded_rows = []
+            for pos in range(0, read_len, tokens_per_block):
+                loc = table.lookup(layer, pos, slot_id)
+                unique_id = producer._resolve_unique_id(
+                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                )
+                raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+                decoded_rows.append(producer._decode_kv_chunk(raw, head_dim))
+            device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (the table un-rotates)
+            ref_kvpe_list[layer] = device_kv.unsqueeze(0).unsqueeze(0)
+        out = os.path.join(dump_dir, f"src_slot{slot_id}.pt")
+        torch.save({"ref_kvpe_list": ref_kvpe_list}, out)
+        logger.success(
+            f"[migration_driver] slot {slot_id} src KV dumped -> {out} "
+            f"(layers {sorted(wanted)}, positions [0,{real_len}))"
+        )
+
+
+def main() -> None:
+    """Prefill a set of slots over H2D, then migrate their KV — the whole terminal-C side of a migration
+    run in one process.
+
+    The H2D half is driven with ``prefill_producer``'s helpers (manifest, schedule, ack drain, golden PCC);
+    the migration half is this module. The dependency runs THIS way on purpose: prefill_producer is the
+    plain runner test and knows nothing about migration, so a runner-only run can never drag migration in.
+    """
+    import argparse
+
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    parser = argparse.ArgumentParser(
+        prog="migration_driver",
+        description="Prefill over H2D and migrate the resulting KV. Config comes from the same producer "
+        "YAML manifest as prefill_producer (--manifest / PREFILL_PRODUCER_MANIFEST); this entry point "
+        "additionally applies the manifest's `migration:` block. Needs a live migration_endpoint that the "
+        "prefill runner has already driven to WORKER_READY.",
+    )
+    parser.add_argument(
+        "--manifest",
+        "-m",
+        default=os.environ.get("PREFILL_PRODUCER_MANIFEST"),
+        help="Path to the producer YAML manifest (applied at startup; exported env vars override it).",
+    )
+    parser.add_argument(
+        "--migrations",
+        default=None,
+        help="Arbitrary src->dst mapping as 'src:dst,src:dst,...' (e.g. '0:5,1:2,3:7'). Overrides the "
+        "manifest's migration.pairs and the uniform migration.dst_slot_offset fallback.",
+    )
+    parser.add_argument(
+        "--dump-src-kv",
+        default=os.environ.get("PREFILL_MIGRATION_DUMP_SRC_KV"),
+        help="Directory to save each source slot's KV into as src_slot<N>.pt, for a decode-side consumer "
+        "to PCC its received copy against. Honours the migrated layer subset. Off when unset.",
+    )
+    args = parser.parse_args()
+
+    # Manifest order matters: the producer applies `env:` first (so a raw PREFILL_* key wins) plus its own
+    # typed blocks, and hands back the parsed document; we then apply `migration:` from it. setdefault
+    # throughout, so an exported env var still beats both.
+    manifest = producer._apply_manifest_env(args.manifest) if args.manifest else {}
+    apply_manifest_env(manifest)
+    if args.migrations is not None:
+        os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations  # CLI beats manifest + env
+    producer._load_env_config()
+
+    cfg = producer._config_from_env()
+    # Invoking THIS module is the opt-in, so migration.issue is redundant here. Warn rather than silently
+    # honour a `false` that would turn the whole invocation into a no-op.
+    if os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "1") == "0":
+        logger.warning(
+            "[migration_driver] the manifest sets migration.issue: false, which is ignored when this module "
+            "is the entry point — invoking it IS the opt-in. Run prefill_producer for a no-migration run."
+        )
+    driver = MigrationDriver(
+        chunk_size=producer.CHUNK_SIZE,  # module attrs, read AFTER _load_env_config() rebinds them
+        num_layers=producer.NUM_LAYERS,
+        default_dst_slot_offset=cfg.num_users,
+    )
+
+    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+    timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
+    logger.info(
+        f"[migration_driver] service_id={service_id!r} users={cfg.num_users} "
+        f"chunks=[{cfg.chunks_min},{cfg.chunks_max}] max_requests={cfg.max_requests} verify={cfg.verify}"
+    )
+    service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
+    payload_bytes = service.payload_size_bytes()
+    logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
+
+    kv_table = producer._read_kv_chunk_table(timeout_s)
+    ack_channel = producer._connect_layer_ack_channel(timeout_s)
+
+    # Attach + pair BEFORE pushing: a missing endpoint fails in seconds instead of after a multi-minute
+    # prefill, and a cross-endpoint pairing rendezvous's while the decode side is still blocked on it.
+    driver.attach()
+
+    slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
+    cfg.slot_lengths = slot_lengths
+
+    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:
+        pool = pools_by_trace[slot_traces[slot_id]]
+        chunk_bytes = producer._chunk_to_host_array(pool[actual_start : actual_start + producer.CHUNK_SIZE])
+        assert (
+            chunk_bytes.nbytes == payload_bytes
+        ), f"payload {chunk_bytes.nbytes}B != service-expected {payload_bytes}B"
+        logger.info(f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
+        push_start = time.perf_counter()
+        service.forward_to_tensor_bytes(
+            chunk_bytes, metadata=producer._pack_metadata(slot_id, actual_start, actual_end)
+        )
+        return (time.perf_counter() - push_start) * 1000.0
+
+    stats = producer.run_schedule(cfg, push_fn=push_chunk)
+    service.barrier()
+    logger.info(
+        f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
+        f"requests={stats.completed}"
+    )
+    producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+
+    # Golden PCC + the src-KV dump run BEFORE migrating, so both land before the DONE sentinel a consumer
+    # may be waiting on. Migration only READS the source slots, so the order is equivalent.
+    verify_ok = True
+    if cfg.verify and kv_table is not None:
+        try:
+            verify_ok = producer._verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
+        except Exception as e:
+            logger.error(f"[migration_driver] KV read/PCC failed: {type(e).__name__}: {e}")
+            verify_ok = False
+    elif cfg.verify:
+        logger.error("[migration_driver] check_pcc requested but no KV chunk table available; skipping PCC.")
+        verify_ok = False
+
+    if args.dump_src_kv:
+        if kv_table is None:
+            logger.error("[migration_driver] --dump-src-kv needs the KV chunk table, which never appeared.")
+        else:
+            _dump_src_kv(args.dump_src_kv, kv_table, stats, slot_traces, driver.layers)
+
+    driver.run(
+        stats,
+        num_slots=kv_table.config().num_slots if kv_table is not None else None,
+        slot_traces=slot_traces,
+        pools_by_trace=pools_by_trace,
+    )
+
+    # Optional graceful shutdown: sent LAST, because the UMD read-backs above need the mesh/DRAM alive.
+    if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
+        sentinel = struct.pack("<iii", -1, -1, -1)
+        payload = producer._chunk_to_host_array([1] * producer.CHUNK_SIZE)
+        logger.info("[migration_driver] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
+        service.forward_to_tensor_bytes(payload, metadata=sentinel)
+        service.barrier()
+    else:
+        logger.info("[migration_driver] exiting (the runner keeps its sync-op loop running).")
+
+    if cfg.verify and not verify_ok:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
