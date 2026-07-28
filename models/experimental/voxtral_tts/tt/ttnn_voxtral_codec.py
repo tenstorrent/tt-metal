@@ -64,15 +64,16 @@ CURRENT PERFORMANCE (warm, N150, defaults): 43.6 ms for 5.1 s of audio (RTF 0.00
 real-time) up to 538 ms for 120 s (RTF 0.0045, 223x). For reference, upstream report RTF 0.103 for
 their WHOLE pipeline on an H200, so this block is a few percent of the total budget.
 
-MEMORY to be aware of: prepared conv weights are cached per (conv, length) and never evicted --
-60.8 MB per bucket, so ~730 MB if all 12 buckets are touched, plus 60.8 MB of host copies. That is
-~6.5% of an N150's DRAM and it grows monotonically. If memory gets tight (e.g. once the 3.4B
-backbone shares the device) this is the first thing to reclaim: cap the cache and re-prepare on
-miss, or drop the host copies once every bucket is warm.
+MEMORY: prepared conv weights are cached and DEDUPLICATED BY CONTENT (see _prepared). There are
+only 8 distinct layouts across all 5 convs and all 12 buckets, so the cache holds 98 MB rather
+than the 730 MB that keying by length alone produced -- 0.8% of an N150's DRAM instead of 6.5%.
+Plus 60.8 MB of host copies, kept so a new length can still be prepared.
 
 Validate against the reference (bit-exact goldens for all 8 stages):
     TT_METAL_HOME=<repo> PYTHONPATH=<repo> python models/experimental/voxtral_tts/tt/ttnn_voxtral_codec.py
 """
+
+import hashlib
 
 import torch
 import ttnn
@@ -178,7 +179,8 @@ class TtVoxtralCodecDecoder:
             **{f"up{i}": host(w[f"decoder_blocks.{i}.conv.weight"].unsqueeze(2))
                for i in DEC_CONV_BLOCKS[1:]},                               # [1024,1024,1,4]
         }
-        self._prep_cache = {}
+        self._prep_cache = {}   # (conv, length) -> prepared tensor (possibly SHARED)
+        self._layouts = {}      # (conv, content hash) -> the one tensor of that layout
 
         # --- transformer layers ---
         self.layers = {}
@@ -209,12 +211,48 @@ class TtVoxtralCodecDecoder:
     # Conv weight preparation (hoisted out of the per-call path)
     # ----------------------------------------------------------------------------------
     def _prepared(self, name, in_c, out_c, kernel, stride, L, transpose):
-        """Prepared weight for this conv AT THIS INPUT LENGTH, cached."""
+        """Prepared weight for this conv AT THIS INPUT LENGTH, DEDUPLICATED BY CONTENT.
+
+        Prepared layouts are length-specific, but they change at only ONE length threshold per
+        conv -- and for `up6` and `out` they never change at all. Measured across all 12 buckets:
+
+            conv   distinct layouts   lengths sharing one
+            in            2           {128} {256..1536}
+            up2           2           {128,256} {384..1536}
+            up4           2           {128} {256..1536}
+            up6           1           {128..1536}   all identical
+            out           1           {128..1536}   all identical
+
+        So keying only by length stored up to 12 BYTE-IDENTICAL copies: 8 distinct layouts held as
+        60 tensors, 730 MB instead of 98 MB. Hashing the prepared bytes and sharing the tensor is
+        pure deduplication -- the tensors are bit-identical, so there is no accuracy question.
+
+        Cost is one host readback per newly-seen (conv, length), on top of the 5-24 ms preparation.
+        Both are first-touch only, and the hot path is a plain dict hit."""
         key = (name, L)
-        if key not in self._prep_cache:
-            f = self._prep_conv_t if transpose else self._prep_conv
-            self._prep_cache[key] = f(self.conv_host[name], in_c, out_c, kernel, stride, L)
-        return self._prep_cache[key]
+        if key in self._prep_cache:
+            return self._prep_cache[key]
+        f = self._prep_conv_t if transpose else self._prep_conv
+        w = f(self.conv_host[name], in_c, out_c, kernel, stride, L)
+        digest = (name, hashlib.sha1(ttnn.to_torch(w).float().numpy().tobytes()).hexdigest())
+        shared = self._layouts.get(digest)
+        if shared is None:
+            self._layouts[digest] = w
+        else:
+            ttnn.deallocate(w)  # a duplicate: free it rather than keep a 17 MB twin
+            w = shared
+        self._prep_cache[key] = w
+        return w
+
+    def prepared_weight_stats(self):
+        """(entries, distinct layouts, MB held) -- for tests and for reporting the dedup win."""
+        mb = 0.0
+        for t in self._layouts.values():
+            n = 1
+            for d in t.shape:
+                n *= d
+            mb += n * (4 if t.get_dtype() == ttnn.float32 else 2) / 1e6
+        return len(self._prep_cache), len(self._layouts), mb
 
     def _prep_conv(self, w_host, in_c, out_c, kernel, stride, L):
         return ttnn.prepare_conv_weights(

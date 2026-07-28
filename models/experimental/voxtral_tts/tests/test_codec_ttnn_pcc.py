@@ -226,6 +226,24 @@ def test_real_speech_frames_decode_correctly(device):
     assert (got - exp).abs().max().item() < 0.02 * peak, "worst-sample error above 2% of peak"
 
 
+def test_prepared_weights_are_deduplicated(device):
+    """Prepared conv layouts change at only ONE length threshold per conv (and never for up6 or
+    out), so keying the cache by length alone stored up to 12 BYTE-IDENTICAL copies: 730 MB for 8
+    distinct layouts. Content dedup brings it to 98 MB with no accuracy question, since the
+    tensors are bit-identical.
+
+    Guards the memory ceiling, which matters once the 3.4B backbone shares the device."""
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    gen = TtVoxtralCodecDecoder(device)
+    for b in (128, 256, 512, 1024):  # four different buckets -> 20 (conv, length) pairs
+        gen(ref.make_synthetic_codes(b))
+    entries, distinct, mb = gen.prepared_weight_stats()
+    assert entries == 20, f"expected 20 (conv,length) entries, got {entries}"
+    assert distinct <= 8, f"distinct layouts grew to {distinct} (was 8); dedup may have broken"
+    assert mb < 150, f"prepared weights hold {mb:.0f} MB; dedup regressed (naive would be ~240 MB)"
+
+
 def test_slab_is_tile_aligned():
     """TILE_LAYOUT pads every dim to 32. A slab of 272 (= 256 chunk + 16 window) silently becomes
     288, wasting a row and a column of tiles — pick the SLAB aligned and derive the chunk from it."""
