@@ -154,61 +154,14 @@ class PipelineStageAdapter:
         ids = [int(x) for x in self._prompt]
         return {"input_ids": torch.tensor(ids, dtype=torch.long).reshape(self.batch, -1)}
 
-    def _self_prime_inputs(self, stage):
-        """Model-agnostic fallback inputs for a stage whose <stage>_trace_setup needs model-specific
-        tensors that generic prompt_ids can't supply (e.g. XTTS's (cond_mel, ref_wav, text, codes)).
-        Ask the PIPELINE (or its module) for its OWN reference-grounded inputs via a conventional
-        provider -- per-stage first, then pipeline-wide -- so the adapter never has to know the shape.
-        These are the same providers the model's own self-test uses (e.g. _default_selftest_inputs,
-        which replays the captured reference inputs), so they work whether the reference is HF or a
-        model-local loader. Returns None when the pipeline exposes no such provider."""
-        import sys as _sys
-
-        p = self._pipe
-        mod = _sys.modules.get(type(p).__module__)
-        names = [
-            n
-            for n in (
-                "%s_default_inputs" % stage if stage else "",
-                "default_selftest_inputs",
-                "_default_selftest_inputs",
-                "default_inputs",
-            )
-            if n
-        ]
-        for owner in (p, mod):
-            if owner is None:
-                continue
-            for nm in names:
-                fn = getattr(owner, nm, None)
-                if callable(fn):
-                    try:
-                        return fn()
-                    except Exception:  # noqa: BLE001
-                        continue
-        return None
-
-    def _call_with_inputs(self, fn, primary, stage=None):
+    def _call_with_inputs(self, fn, primary):
         try:
             return fn(primary)
-        except (AttributeError, TypeError, KeyError, IndexError, ValueError):
-            pass
-        _last = None
-        inp = self._inputs_dict()
-        if inp is not None:
-            try:
-                return fn(inp)
-            except (AttributeError, TypeError, KeyError, IndexError, ValueError) as _e:
-                _last = _e
-        primed = self._self_prime_inputs(stage)
-        if primed is not None:
-            try:
-                return fn(primed)
-            except (AttributeError, TypeError, KeyError, IndexError, ValueError) as _e:
-                _last = _e
-        if _last is not None:
-            raise _last
-        return fn(primary)
+        except (AttributeError, TypeError, KeyError, IndexError):
+            inp = self._inputs_dict()
+            if inp is None:
+                raise
+            return fn(inp)
 
     def setup(self, device) -> None:
         p = self._pipe = self._build(device)
@@ -225,7 +178,7 @@ class PipelineStageAdapter:
                 continue
             setup = getattr(p, "%s_trace_setup" % name, None)
             if callable(setup):
-                self._call_with_inputs(setup, None, stage=name)
+                self._call_with_inputs(setup, None)
             # Propagate self_traced: a pipeline that OWNS its capture must be timed natively, never
             # wrapped in a second begin_trace_capture. The decode fallback below already does this;
             # omitting it here meant declaring PIPELINE_STAGES turned a working self-traced pipeline
@@ -250,7 +203,7 @@ class PipelineStageAdapter:
                 "its decode is repeat-prefill — run the structural decode lever to add a cached step"
             )
         prefill = getattr(p, "decode_prefill", None)
-        box = {"state": self._call_with_inputs(prefill, self._prompt, stage="decode") if callable(prefill) else None}
+        box = {"state": self._call_with_inputs(prefill, self._prompt) if callable(prefill) else None}
 
         def _dstep():
             box["state"] = step(box["state"])
