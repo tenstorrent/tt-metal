@@ -134,7 +134,7 @@
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --rank-binding "generated/blitz_sc16/${RB}" \
-      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
+      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -186,7 +186,7 @@
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --rank-binding "generated/blitz_sc16/${RB}" \
-      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
+      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -237,7 +237,7 @@
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --rank-binding "generated/blitz_sc16/${RB}" \
-      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
+      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
