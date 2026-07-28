@@ -307,8 +307,29 @@ _L1_OVERFLOW_MSG = (
 
 _DRAM_TRACE_SIG_A = ("trace region", "trace_region", "trace buffer", "trace_buffer")
 _DRAM_TRACE_SIG_B = ("full", "exceed", "not enough", "out of space", "too small", "ran out", "grow the trace")
-_TRACE_REGION_DEFAULT = 23887872
-_TRACE_REGION_MAX = 512 * 1024 * 1024
+
+
+def _dram_capacity_per_chip() -> int:
+    """Per-chip DRAM the tool already detected (ARCH_FACTS -> manifest env: 12 GB wormhole, 32 GB
+    blackhole). 0 when the env probe was unavailable."""
+    try:
+        v = int(_ENV.get("dram_capacity_bytes") or 0)
+        return v if v > 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+# Derive the trace-region start/ceiling from the board's DRAM (the value the tool already reads at
+# Step 1), NOT a hardcoded byte count, via the SINGLE source of truth shared with the tracy-baseline
+# path (agent.environment.default_trace_region_bytes). Falls back to the legacy constants when the
+# manifest carries no capacity (e.g. env probe unavailable), so nothing regresses.
+try:
+    from agent.environment import default_trace_region_bytes as _default_trace_region_bytes
+
+    _TRACE_REGION_DEFAULT, _TRACE_REGION_MAX = _default_trace_region_bytes(_dram_capacity_per_chip())
+except Exception:  # noqa: BLE001
+    _TRACE_REGION_DEFAULT = 23887872
+    _TRACE_REGION_MAX = 512 * 1024 * 1024
 
 
 def _dram_trace_sig(text) -> bool:
@@ -1780,25 +1801,49 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
 
 
 def _grow_trace_region_and_retry(cmd, repo, env, out, r):
-    """Re-run with a bigger trace region while the device reports the capture does not fit.
+    """Re-run with a bigger trace region until the capture fits, growing up to the DRAM-derived
+    ceiling. Model- and hardware-agnostic. Fires on EITHER of the two ways a too-small region shows up:
 
-    Model- and hardware-agnostic: the required size comes from the device's own message, never a
-    guess. Returns the last (output, result).
+      EXPLICIT: the device prints "Creating trace buffers of size X B ... only Y B" -> grow to X.
+      SILENT:   the overflow HANGS the mesh (no message) and the run is killed with NO trace number --
+                reset the (wedged) device and grow by DOUBLING anyway. A hung overflow prints nothing,
+                so the byte-parse alone can't see it; this is why an earlier run wedged for 600s and was
+                killed instead of grown.
+
+    A run that produced a trace number, or that declared the pipeline genuinely un-traceable
+    (TRACE_NOT_TRACE_CAPABLE), is left alone. Returns the last (output, result).
     """
     try:
         from agent.perf_test_gen import _needed_trace_region, _TRACE_REGION_GROW_ROUNDS
     except Exception:  # noqa: BLE001
         return out, r
     for _ in range(int(_TRACE_REGION_GROW_ROUNDS or 0)):
-        need = _needed_trace_region(out)
-        if need is None:
-            break
-        cur = int(env.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or 0)
-        target = max(int(need), cur * 2)
+        text = out or ""
+        if "TRACE_PER_TOKEN_MS=" in text or "TRACE_NOT_TRACE_CAPABLE" in text:
+            break  # a real trace ran, or the pipeline genuinely cannot trace -- nothing to grow
+        cur = int(env.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or _TRACE_REGION_DEFAULT)
+        need = _needed_trace_region(text)
+        silent = need is None
+        target = min(max(int(need), cur * 2) if need is not None else cur * 2, _TRACE_REGION_MAX)
         if target <= cur:
-            break
+            break  # already at the DRAM ceiling -> the trace genuinely does not fit
         env["TT_PERF_TRACE_REGION"] = str(target)
-        sys.stderr.write("[perf-mcp] trace region too small; growing to %d B and re-running\n" % target)
+        sys.stderr.write(
+            "[perf-mcp] trace region too small (%s); growing to %d B%s and re-running\n"
+            % (
+                "silent overflow / mesh hang -- no size reported" if silent else "device reports %d B" % need,
+                target,
+                " + resetting the wedged device" if silent else "",
+            )
+        )
+        if silent:
+            # A silent overflow hangs the mesh; heal it before the retry or the re-run hangs too.
+            try:
+                from agent.probes import _device_reset
+
+                _device_reset(error_text=text)
+            except Exception:  # noqa: BLE001
+                pass
         try:
             r = _adaptive_run(cmd, repo, env, "full-pipeline")
         except Exception:  # noqa: BLE001
@@ -1844,6 +1889,12 @@ def _run_full_pipeline_ms():
     env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
     env.setdefault("TT_PERF_TRACE", "1")
     env["TT_PERF_PREFILL_TRACE"] = "1"
+    # Start the trace region at the DRAM-derived size, not the perf test's hardcoded default. This gate
+    # runs the whole pipeline at FULL depth (a much bigger capture than the coverage-depth default the
+    # builder baked in), so starting big avoids the overflow entirely; the grow below is the fallback.
+    _cur_reg = int(env.get("TT_PERF_TRACE_REGION") or 0)
+    if _TRACE_REGION_DEFAULT > _cur_reg:
+        env["TT_PERF_TRACE_REGION"] = str(_TRACE_REGION_DEFAULT)
     _prof = os.environ.get("PERF_MCP_PROFILE_ENV")
     if _prof:
         try:
@@ -1864,11 +1915,39 @@ def _run_full_pipeline_ms():
     batch = 1
     decode_path = prefill_path = "n/a"
     last_err = None
+    try:
+        from agent.perf_test_gen import _TRACE_REGION_GROW_ROUNDS as _STALL_GROW_ROUNDS
+    except Exception:  # noqa: BLE001
+        _STALL_GROW_ROUNDS = 6
     for _ in range(_FULLPIPE_SAMPLES):
-        try:
-            r = _adaptive_run(cmd, repo, env, "full-pipeline")
-        except Exception as exc:  # noqa: BLE001
-            last_err = f"run failed: {str(exc)[-400:]}"
+        # A stall with NO trace is the silent-overflow signature: a too-small region can HANG the mesh,
+        # and _adaptive_run then SIGKILLs it and RAISES -- so it never reaches the grow below. Handle it
+        # HERE: reset the wedged device, double the region up to the DRAM ceiling, and retry the SAME
+        # sample (without spending the measurement budget), so a hang that printed nothing self-corrects
+        # instead of just burning samples. Only a timeout-type stall triggers this; a clean crash still
+        # returns and takes the message-based grow path below.
+        r = None
+        for _stall_try in range(int(_STALL_GROW_ROUNDS) + 1):
+            try:
+                r = _adaptive_run(cmd, repo, env, "full-pipeline")
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_err = f"run failed: {str(exc)[-400:]}"
+                cur = int(env.get("TT_PERF_TRACE_REGION") or _TRACE_REGION_DEFAULT)
+                if not (isinstance(exc, _sp.TimeoutExpired) and cur < _TRACE_REGION_MAX):
+                    break
+                env["TT_PERF_TRACE_REGION"] = str(min(cur * 2, _TRACE_REGION_MAX))
+                sys.stderr.write(
+                    "[full-pipeline-gate] run stalled with no trace (silent overflow); resetting device "
+                    "and growing trace region to %s B, retrying\n" % env["TT_PERF_TRACE_REGION"]
+                )
+                try:
+                    from agent.probes import _device_reset
+
+                    _device_reset(error_text=str(exc))
+                except Exception:  # noqa: BLE001
+                    pass
+        if r is None:
             continue
         out = (r.stdout or "") + "\n" + (r.stderr or "")
         # GROW THE TRACE REGION, same as the builder does. The generated test carries a
@@ -2931,9 +3010,7 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
             status = (
                 "trusted"
                 if fname.startswith("GRADUATED_")
-                else "provisional"
-                if fname.startswith("LEARNED_")
-                else "baseline-guideline"
+                else "provisional" if fname.startswith("LEARNED_") else "baseline-guideline"
             )
             try:
                 text = router.read_section(h["id"], gdir)

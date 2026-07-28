@@ -558,6 +558,21 @@ def before_loop(
     }
     run.manifest.write(manifest)
 
+    # Size the trace region from the board's DRAM (the value discovery already probed into env) BEFORE
+    # the tracy baseline. Without this the profiled perf test opens at its own hardcoded 23 MB default,
+    # the whole-pipeline trace capture (~29 MB) overflows (mesh_trace.cpp:80), the trace is skipped, and
+    # tracy post-processing then floods ~180k "device data missing" warnings for the un-dumped trace ops
+    # -- minutes of grinding that the no-output watchdog kills as a false wedge. run_profiled inherits
+    # os.environ, so setting it here reaches the profiled subprocess. DRAM-derived, not hardcoded.
+    try:
+        from .environment import default_trace_region_bytes
+
+        _tr_start, _ = default_trace_region_bytes(env.get("dram_capacity_bytes"))
+        if _tr_start > int(os.environ.get("TT_PERF_TRACE_REGION") or 0):
+            os.environ["TT_PERF_TRACE_REGION"] = str(_tr_start)
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         from models.experimental.perf_automation.cc_optimize.run import (
             _bridge_depth_env,

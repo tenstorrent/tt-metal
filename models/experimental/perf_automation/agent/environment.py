@@ -57,6 +57,23 @@ BOX_COMPUTE_GRID: dict[str, tuple[int, int]] = {
 }
 
 
+def default_trace_region_bytes(dram_capacity_bytes) -> tuple[int, int]:
+    """(start, ceiling) trace-region sizes derived from per-chip DRAM -- the SINGLE source of truth for
+    every measurement path (tracy baseline via probes.run_profiled AND the whole-pipeline gate via
+    perf_mcp). The trace region is a one-time per-chip reservation, so a modest DRAM fraction (1/64) is
+    ample for a whole-pipeline capture while leaving the rest for weights; the ceiling (1/8) bounds the
+    adaptive grow. Falls back to the legacy 23887872 / 512 MB when capacity is unknown (env probe
+    unavailable), so nothing regresses. NOT a hardcoded byte count -- the input comes from the detected
+    arch's dram_capacity_bytes."""
+    try:
+        cap = int(dram_capacity_bytes or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    start = max(23887872, cap // 64) if cap > 0 else 23887872
+    ceiling = max(512 * 1024 * 1024, cap // 8) if cap > 0 else 512 * 1024 * 1024
+    return start, ceiling
+
+
 def box_facts(box_name: str, mesh: tuple[int, int] | None = None) -> dict[str, Any]:
     """Roofline facts for a DECLARED box+mesh (the --box/--mesh flag), REUSING
     tt-hw-planner's hardware registry (no duplicate board table). Returns the arch
