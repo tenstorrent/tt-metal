@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(7);
     constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(8);
     constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(9);           // unused - for future improvements
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(10));  // unused - for future improvements
+    // CT arg 10 unused - for future improvements
     constexpr bool is_32_bit_data = get_compile_time_arg_val(11) == 1;
     constexpr bool is_row_major = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t rm_value_output_dfb_index = get_compile_time_arg_val(13);
