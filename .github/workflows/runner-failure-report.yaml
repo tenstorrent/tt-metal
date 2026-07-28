@@ -83,13 +83,22 @@ jobs:
           TARGET_RUNNER_NAME: ${{ inputs.runner_name }}
           HOURS: ${{ inputs.hours || '24' }}
           RUNNER_FAILURE_API_BASE_URL: ${{ secrets.DATA_API_ROUTE_BASE }}
+          TRIGGERING_FAILURES_JSON: ${{ inputs.triggering_failures_json }}
         run: |
           mkdir -p out
-          python3 .github/scripts/runner_failure_report.py \
-            --hours "$HOURS" \
-            --runner-name "$TARGET_RUNNER_NAME" \
-            --report-json out/runner_failure_report.json \
+          args=(
+            --hours "$HOURS"
+            --runner-name "$TARGET_RUNNER_NAME"
+            --report-json out/runner_failure_report.json
             --report-md out/runner_failure_report.md
+          )
+          if [[ -n "$TRIGGERING_FAILURES_JSON" && "$TRIGGERING_FAILURES_JSON" != "[]" ]]; then
+            printf '%s' "$TRIGGERING_FAILURES_JSON" > out/triggering_failures.json
+            args+=(
+              --triggering-failures-json out/triggering_failures.json
+            )
+          fi
+          python3 .github/scripts/runner_failure_report.py "${args[@]}"
 
       - name: Post Slack notification
         if: always() && hashFiles('out/runner_failure_report.json') != ''
@@ -121,7 +130,9 @@ jobs:
             --slack-channel "$DEFAULT_SLACK_CHANNEL"
           )
           if [[ -n "$TRIGGERING_FAILURES_JSON" && "$TRIGGERING_FAILURES_JSON" != "[]" ]]; then
-            printf '%s' "$TRIGGERING_FAILURES_JSON" > out/triggering_failures.json
+            if [[ ! -f out/triggering_failures.json ]]; then
+              printf '%s' "$TRIGGERING_FAILURES_JSON" > out/triggering_failures.json
+            fi
             args+=(
               --triggering-failures-json out/triggering_failures.json
             )

@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
 
 class TtPrefillTransformer(LightweightModule):
@@ -136,6 +137,7 @@ class TtPrefillTransformer(LightweightModule):
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -223,6 +225,7 @@ class TtPrefillTransformer(LightweightModule):
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                sparse_kv_cache_format=sparse_kv_cache_format,
             )
             self.layers.append(layer)
 
@@ -302,12 +305,13 @@ class TtPrefillTransformer(LightweightModule):
     def forward(
         self,
         token_ids: ttnn.Tensor,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         actual_isl: int,
         return_intermediates: bool = False,
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
+        on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
@@ -401,6 +405,7 @@ class TtPrefillTransformer(LightweightModule):
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
                 on_layer_complete=on_layer_complete,
+                on_layer_hidden=on_layer_hidden,
                 actual_start=actual_start,
                 actual_end=actual_end,
                 cache_user_id=cache_user_id,

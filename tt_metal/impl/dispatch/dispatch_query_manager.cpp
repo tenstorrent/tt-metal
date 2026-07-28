@@ -10,10 +10,12 @@
 #include <unordered_set>
 #include <utility>
 
+#include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -58,11 +60,11 @@ tt_cxy_pair dispatch_core(
     return dispatch_core;
 }
 
-std::vector<CoreCoord> get_consistent_logical_cores(
+std::vector<tt::tt_metal::CoreCoord> get_consistent_logical_cores(
     tt::tt_metal::MetalEnv& env, uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     auto user_chips = tt::tt_metal::MetalEnvAccessor(env).impl().get_cluster().user_exposed_chip_ids();
-    std::vector<CoreCoord> first_core_set;
-    std::vector<CoreCoord> current_cores;
+    std::vector<tt::tt_metal::CoreCoord> first_core_set;
+    std::vector<tt::tt_metal::CoreCoord> current_cores;
 
     for (auto chip : user_chips) {
         current_cores = tt::get_logical_dispatch_cores(
@@ -76,7 +78,7 @@ std::vector<CoreCoord> get_consistent_logical_cores(
     return current_cores;
 }
 
-std::vector<CoreCoord> populate_all_logical_dispatch_cores(
+std::vector<tt::tt_metal::CoreCoord> populate_all_logical_dispatch_cores(
     tt::tt_metal::MetalEnv& env, uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     return get_consistent_logical_cores(env, num_hw_cqs, dispatch_core_config);
 }
@@ -102,15 +104,28 @@ NOC DispatchQueryManager::go_signal_noc() const { return go_signal_noc_; }
 void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
     num_hw_cqs_ = num_hw_cqs;
     dispatch_core_config_ = dispatch_core_config;
-    const tt::ARCH arch = MetalEnvAccessor(env_).impl().get_cluster().arch();
+
+    auto& env_impl = MetalEnvAccessor(env_).impl();
+    const auto& cluster = env_impl.get_cluster();
+    TT_FATAL(not cluster.all_chip_ids().empty(), "Cannot reset DispatchQueryManager with no devices");
+    const ChipId device_id = *cluster.all_chip_ids().begin();
+    resolved_dispatch_core_type_ = resolve_dispatch_core_type(env_impl, device_id, dispatch_core_config_);
+    const tt::ARCH arch = cluster.arch();
+    // WORKER (Tensix) and DISPATCH (Quasar DE) both co-locate dispatch_s on the same core as
+    // dispatch; ETH 2CQ does not. Quasar topology always includes DISPATCH_S for 1CQ/2CQ.
     dispatch_s_enabled_ =
-        (num_hw_cqs == 1 or dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::WORKER);
-    distributed_dispatcher_ =
-        (num_hw_cqs == 1 and dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH);
+        (num_hw_cqs == 1 or resolved_dispatch_core_type_ == CoreType::WORKER or
+         resolved_dispatch_core_type_ == CoreType::DISPATCH);
+    distributed_dispatcher_ = (num_hw_cqs == 1 and resolved_dispatch_core_type_ == CoreType::ETH);
     go_signal_noc_ = (dispatch_s_enabled_ and arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
-    const CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
-    worker_cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, CoreType::WORKER, dispatch_core_type, num_hw_cqs);
-    eth_cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, CoreType::ETH, dispatch_core_type, num_hw_cqs);
+    // Layout is keyed off the *resolved* dispatch core type (Quasar DE → DISPATCH, Tensix fallback → WORKER),
+    // not the config's WORKER/ETH axis. Config alone never yields CoreType::DISPATCH.
+    worker_cq_dispatch_layout_ =
+        generate_cq_dispatch_layout(arch, CoreType::WORKER, resolved_dispatch_core_type_, num_hw_cqs);
+    eth_cq_dispatch_layout_ =
+        generate_cq_dispatch_layout(arch, CoreType::ETH, resolved_dispatch_core_type_, num_hw_cqs);
+    dispatch_cq_dispatch_layout_ =
+        generate_cq_dispatch_layout(arch, CoreType::DISPATCH, resolved_dispatch_core_type_, num_hw_cqs);
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
     // Populate dispatch
@@ -118,11 +133,11 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
         populate_all_logical_dispatch_cores(env_, num_hw_cqs_, dispatch_core_config_);
 }
 
-const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
+const std::vector<tt::tt_metal::CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
     return tt::get_logical_dispatch_cores(MetalEnvAccessor(env_).impl(), device_id, num_hw_cqs_, dispatch_core_config_);
 }
 
-const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores_on_user_chips() const {
+const std::vector<tt::tt_metal::CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores_on_user_chips() const {
     return logical_dispatch_cores_on_user_chips_;
 }
 
@@ -136,7 +151,7 @@ tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
             // with ethernet dispatch.
             dispatch_cores_.push_back(dispatch_core(env_, core_manager_, cq));
         }
-        const CommandQueueDispatchLayout& layout = cq_dispatch_layout(get_core_type_from_config(dispatch_core_config_));
+        const CommandQueueDispatchLayout& layout = cq_dispatch_layout(resolved_dispatch_core_type_);
         if (layout.fd_kernels_on_same_core) {
             // The shared, non-offset L1 regions and the per-CQ zoning in DispatchMemMap are only valid if these CQs
             // really do land on one physical core.
@@ -159,7 +174,14 @@ tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
 }
 
 const CommandQueueDispatchLayout& DispatchQueryManager::cq_dispatch_layout(CoreType core_type) const {
-    return core_type == CoreType::WORKER ? worker_cq_dispatch_layout_ : eth_cq_dispatch_layout_;
+    switch (core_type) {
+        case CoreType::WORKER: return worker_cq_dispatch_layout_;
+        case CoreType::ETH: return eth_cq_dispatch_layout_;
+        case CoreType::DISPATCH: return dispatch_cq_dispatch_layout_;
+        default:
+            TT_THROW(
+                "Unsupported core type for cq_dispatch_layout: {}", enchantum::to_string(core_type));
+    }
 }
 
 DispatchQueryManager::DispatchQueryManager(

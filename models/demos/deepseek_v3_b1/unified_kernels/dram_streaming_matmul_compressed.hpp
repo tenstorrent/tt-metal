@@ -249,7 +249,7 @@ struct DRAMStreamingMatmulCompressed {
             constexpr bool split_acc = true;
             constexpr bool dense_packing = false;
 
-            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+            reconfig_data_format<SrcOrder::Reverse, true>(CTArgs::cb_in0, CTArgs::cb_in1);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
             compressed::custom_mm_compressed_block_init_short<true, 1, split_acc, dense_packing>(
                 CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);

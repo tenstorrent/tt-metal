@@ -39,6 +39,7 @@ set(UNIT_TESTS_API_SOURCES
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
+    test_tt_memory.cpp
     test_graph_tracking.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
@@ -94,6 +95,9 @@ set(UNIT_TESTS_API_TENSOR_SOURCES
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_host_tensor_to_layout.cpp
+    tensor/test_host_tensor_to_dtype.cpp
+    tensor/test_host_tensor_spec_preservation.cpp
+    tensor/test_host_tensor_to_tensor_spec.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_tensor_types.cpp
     tensor/test_tensor_layout.cpp
