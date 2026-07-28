@@ -175,9 +175,13 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
     std::optional<GlobalSemaphore> init_barrier_semaphore;
     std::optional<GlobalSemaphore> final_barrier_semaphore;
 
-    if (args.path == MoEComputePath::Full) {
+    // Only FullCcl needs cross-device barrier semaphores (and the host sync to publish them).
+    // FullLocal's writer compiles out all init/final barrier handling under LOCAL_COMBINE, so
+    // there is nothing to allocate; create_at passes a placeholder address of 0 to the combine
+    // builder for that path. ComputeOnly skips the combine stage entirely.
+    if (args.path == MoEComputePath::FullCcl) {
         // combine_params.has_value() is checked in validate_on_program_cache_miss.
-        // mux_core_range_set comes from combine_params when in Full mode.
+        // mux_core_range_set comes from combine_params (empty for FullLocal).
         const auto core_ret = get_cores(
             mesh_device,
             args.num_token_parallel_cores,
@@ -349,10 +353,10 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
     // a2a_cb_pages = IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores), even-rounded
-    // (formula-driven, replaces the pre-#43932 per-config table). WH always has matmul_num_cores=12.
-    // BH supports 8/12/16; the kernel's bank-run loop walks each ring core's slice across multiple
-    // banks when N != bank count.
-    const uint32_t expected_matmul_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? args.bh_ring_size : 12u;
+    // (formula-driven, replaces the pre-#43932 per-config table). The ring size is the live
+    // DRAM-bank count, so each ring core maps 1:1 to a DRAM bank and no cross-bank walk is needed.
+    const uint32_t expected_matmul_n =
+        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size();
     TT_FATAL(
         matmul_num_cores == expected_matmul_n,
         "moe_compute: expected matmul_num_cores={}, got {}",
@@ -1170,9 +1174,8 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     const uint32_t output_shard_width_tiles = hidden_size / tile_width / combine_data_parallel_cores;
     // num_banks: number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on.
-    // WH=12 (one bank per ring core, 1:1). BH=8 always; ring N may be 8/12/16, so on
-    // BH N=12/16 each ring core's slice may straddle one bank boundary → kernel walks via the
-    // bank-run loop in dm0.cpp.
+    // Ring size equals the live bank count: 12 on WH (no DRAM-bank harvesting), 7/8 on BH.
+    // Ring cores and banks are 1:1, so no cross-bank walk is needed.
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     // pages_per_ring_core_total / w2_pages_per_ring_core_total: number of tile-pages each
     // ring core "owns" in the FLAT layout of the HEIGHT_SHARDED weight tensor. The flat
@@ -1325,8 +1328,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // shard-index → bank-id correspondence. ttnn's `all_cores` list holds CoreCoords of
     // the form `(bank_id, 0)` for DRAM-sharded buffers; the i-th entry is the chip bank
     // holding shard `i`. Using the page mapping directly avoids depending on the C++
-    // `ring_pos2bank_id` ordering (which differs from the Python `sorted_dram_core_coords`
-    // when matmul_cores has padded extras for ring sizes > num_banks, e.g. BH N=12/16).
+    // `ring_pos2bank_id` ordering, which may differ from the Python `sorted_dram_core_coords`.
     {
         const auto& mapping = matmul_w0_w1_tensor.buffer()->get_buffer_page_mapping();
         TT_FATAL(
@@ -1357,8 +1359,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     //
     // The kernel's bank-run loop computes `shard_idx = gp / pages_per_bank_total`. To find
     // the actual chip bank, it needs `bank = shard_to_bank[shard_idx]`. We pass this table
-    // as runtime args (one entry per bank, after the 9 standard args). The same shape
-    // applies on WH (num_banks=12) and BH (num_banks=8); only the values differ.
+    // as runtime args (one entry per bank, after the 9 standard args). Ring size equals the
+    // live bank count, so shard_idx and ring_pos are the same (12 on WH, 7/8 on BH).
     //
     // Sanity-check the divisibility invariants the bank-run kernel relies on. The Python
     // helper `get_weight_mem_configs` enforces matching invariants when constructing the
@@ -1440,15 +1442,24 @@ MoEComputeMeshWorkloadFactory::create_at(
     std::vector<GlobalSemaphore> combine_global_semaphores;
     std::vector<CoreCoord> combine_cores_for_shared = combine_cores;
 
-    if (args.path == MoEComputePath::Full) {
+    if (args.path != MoEComputePath::ComputeOnly) {
         // combine_params validity, num_links, and axis range are all checked in
         // validate_on_program_cache_miss. Barrier semaphores are an internal contract
         // between create_mesh_workload (caller) and create_at (callee), so checked here.
-        TT_FATAL(init_barrier_semaphore.has_value(), "init_barrier_semaphore must be set when path is Full");
-        TT_FATAL(final_barrier_semaphore.has_value(), "final_barrier_semaphore must be set when path is Full");
+        // FullCcl owns real GlobalSemaphores; FullLocal has none (writer compiles them out).
+        if (args.path == MoEComputePath::FullCcl) {
+            TT_FATAL(init_barrier_semaphore.has_value(), "init_barrier_semaphore must be set when path is FullCcl");
+            TT_FATAL(final_barrier_semaphore.has_value(), "final_barrier_semaphore must be set when path is FullCcl");
+        } else {
+            TT_FATAL(args.path == MoEComputePath::FullLocal, "Unexpected path in combine branch");
+            TT_FATAL(!init_barrier_semaphore.has_value(), "init_barrier_semaphore must be nullopt for FullLocal");
+            TT_FATAL(!final_barrier_semaphore.has_value(), "final_barrier_semaphore must be nullopt for FullLocal");
+        }
 
         TT_FATAL(
-            tensor_return_value.size() == 6, "path=Full expects 6 output tensors, got {}", tensor_return_value.size());
+            tensor_return_value.size() == 6,
+            "path=FullCcl/FullLocal expects 6 output tensors, got {}",
+            tensor_return_value.size());
         ttnn::Tensor& output_tensor = tensor_return_value[5];
 
         auto combine_params = *args.combine_params;
@@ -1467,6 +1478,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         // compute_cores_per_combine_core = matmul_num_cores / combine_data_parallel_cores
         // is variable across shipped models (e.g., 3 for output_width_shard_dim=4 with
         // matmul_num_cores=12; 4 for output_width_shard_dim=3 with matmul_num_cores=12).
+        // With ring size = live bank count, matmul_num_cores is 12 on WH and 7/8 on BH.
         const uint32_t compute_cores_per_combine_core = matmul_core_range_set.num_cores() / combine_data_parallel_cores;
         auto selective_reduce_combine_artifacts = build_selective_reduce_combine_program_artifacts(
             program,
@@ -1475,8 +1487,8 @@ MoEComputeMeshWorkloadFactory::create_at(
             mesh_coordinates.coords(),
             combine_tensor_args,
             output_tensor,
-            *init_barrier_semaphore,
-            *final_barrier_semaphore,
+            init_barrier_semaphore,
+            final_barrier_semaphore,
             tilize_combine_sync_semaphore_id,
             matmul_combine_sync_semaphore_id,
             compute_cores_per_combine_core,
@@ -1485,7 +1497,11 @@ MoEComputeMeshWorkloadFactory::create_at(
         combine_kernel_handles = {
             selective_reduce_combine_artifacts.reader_kernel_id, selective_reduce_combine_artifacts.writer_kernel_id};
         combine_data_cb_handle = selective_reduce_combine_artifacts.data_cb_handle;
-        combine_global_semaphores = {*init_barrier_semaphore, *final_barrier_semaphore};
+        // FullCcl owns the barrier semaphores via shared_variables so addresses stay live for
+        // override_runtime_arguments. FullLocal has no semaphores; leave the vector empty.
+        if (args.path == MoEComputePath::FullCcl) {
+            combine_global_semaphores = {*init_barrier_semaphore, *final_barrier_semaphore};
+        }
     } else {
         // ComputeOnly: no combine kernels are built. The matmul/tilize kernels' increments to
         // combine semaphores are gated off via the compute_only CT arg.
@@ -1606,17 +1622,22 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         // Combine
         //-------------------------------------------------------------------------
 
-        if (shared_variables.path == MoEComputePath::Full) {
+        if (shared_variables.path != MoEComputePath::ComputeOnly) {
             // combine_params validity is checked in validate_on_program_cache_miss.
             TT_FATAL(
                 shared_variables.combine_kernel_handles.size() == 2,
-                "Expected 2 combine kernel handles when path=Full");
+                "Expected 2 combine kernel handles when path is not ComputeOnly");
+            // FullCcl owns 2 barrier semaphores; FullLocal owns none (writer compiles them out).
+            const uint32_t expected_semaphores = shared_variables.path == MoEComputePath::FullCcl ? 2 : 0;
             TT_FATAL(
-                shared_variables.combine_global_semaphores.size() == 2,
-                "Expected 2 combine global semaphores when path=Full");
+                shared_variables.combine_global_semaphores.size() == expected_semaphores,
+                "Expected {} combine global semaphores for path={}, got {}",
+                expected_semaphores,
+                static_cast<int>(shared_variables.path),
+                shared_variables.combine_global_semaphores.size());
             TT_FATAL(
                 tensor_return_value.size() == 6,
-                "path=Full expects 6 output tensors, got {}",
+                "path=FullCcl/FullLocal expects 6 output tensors, got {}",
                 tensor_return_value.size());
 
             ttnn::Tensor& output_tensor = tensor_return_value[5];
@@ -1625,8 +1646,13 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
             auto writer_kernel_id = shared_variables.combine_kernel_handles[1];
             auto combine_data_cb_handle = shared_variables.combine_data_cb_handle;
             auto cores = shared_variables.combine_cores;
-            auto init_semaphore = shared_variables.combine_global_semaphores[0];
-            auto cross_device_semaphore = shared_variables.combine_global_semaphores[1];
+            // 0 for FullLocal (no semaphores); real address for FullCcl.
+            const uint32_t init_semaphore_addr = shared_variables.path == MoEComputePath::FullCcl
+                                                     ? shared_variables.combine_global_semaphores[0].address()
+                                                     : 0;
+            const uint32_t cross_device_semaphore_addr = shared_variables.path == MoEComputePath::FullCcl
+                                                             ? shared_variables.combine_global_semaphores[1].address()
+                                                             : 0;
 
             // See create_at for the explanation of optional_output_tensor handling.
             ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
@@ -1643,8 +1669,8 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 cores,
                 combine_tensor_args,
                 output_tensor,
-                init_semaphore,
-                cross_device_semaphore,
+                init_semaphore_addr,
+                cross_device_semaphore_addr,
                 args.combine_params->optional_cross_device_semaphore);
         }
     }
