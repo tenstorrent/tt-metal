@@ -15,14 +15,19 @@ bounded tracer-handler fix now and then (Part A.3) — that's normal, not a bloc
 **A.1 Build the advisor env.** A tt-mlir checkout built with the OpModel + ttnn-jit stack
 (operator setup; do not build tt-mlir from inside a model experiment).
 
-**Required tt-mlir branch:** `ttnn-jit-shard-advisor` on `github.com/tenstorrent/tt-mlir`
-(validated at commit `dcb25113` or later). This branch carries the `ttnn-advise` CLI and the
+**Required tt-mlir branch:** `mvasiljevic/shard-advisor-dram-sharding` on
+`github.com/tenstorrent/tt-mlir`, pinned at commit `618cd4e75d`. It is
+`ttnn-jit-shard-advisor` (validated at `dcb25113` or later) plus the DRAM-sharded-matmul
+optimizer integration, without which DS advice is unreachable for ttnn-traced decoders and
+the advisor's only matmul lever is 1D-mcast. It also fixes `kNumDRAMBanks`, which was
+hardcoded to 12 (Wormhole); QB2 is Blackhole with 8, and at 12 the DS weight tensor cannot be
+allocated at all. Pin this exact commit so runs are comparable. This branch carries the `ttnn-advise` CLI and the
 ttnn-jit interception tracer with the decode-op handlers this skill relies on (paged cache +
 SDPA-decode, qkv split/concat, rope, etc. — see A.3); `main` does not have them. If the advisor
 blocks on an op it doesn't model yet, add a tracer handler per A.3 (and ideally upstream it to this
 branch).
 ```
-git clone -b ttnn-jit-shard-advisor https://github.com/tenstorrent/tt-mlir.git
+git clone -b mvasiljevic/shard-advisor-dram-sharding https://github.com/tenstorrent/tt-mlir.git
 cd tt-mlir
 cmake -G Ninja -B build -DTTMLIR_ENABLE_OPMODEL=ON -DTTMLIR_ENABLE_TTNN_JIT=ON \
   -DTTMLIR_ENABLE_RUNTIME=ON -DTTMLIR_ENABLE_STABLEHLO=ON
