@@ -70,6 +70,10 @@ def load_tt(target: Path, stage: str):
             "empty": not text.strip(),
             "answer_text": str(doc.get("Correct Answer", "")).strip(),
             "domain": doc.get("High-level domain"),
+            # Kept so the answer STAGE can be recomputed -- lm_eval's exact_match alone cannot tell
+            # a stated answer from a lucky last-paren guess.
+            "text": text,
+            "doc": doc,
         }
     return path, per_record
 
@@ -81,6 +85,38 @@ def rate(flags):
     c = sum(1 for f in flags if f)
     p = c / n
     return c, n, 100.0 * p, 100.0 * math.sqrt(p * (1 - p) / n)
+
+
+def answer_stages(rows):
+    """Which filter stage produced each answer, when lm_eval is importable; else None.
+
+    lm_eval's OWN ``exact_match`` credits stage 3 -- the last ``(A-D)`` paren anywhere in the text, or
+    a mention of a choice's text -- on responses that never stated an answer, and it is right about a
+    quarter of the time. That is not a symmetric error: measured 2026-07-28, the TT side ran 19.5%
+    stage 3 against this reference's 1.5%, so the official metric handed TT ~7 pp of chance and the
+    reference ~0.4 pp. Reporting the official number alone therefore overstates TT; reporting only a
+    stage-1/2 number understates both. Print both.
+    """
+    try:
+        from lm_eval.filters.extraction import BoxedChoiceFilter
+    except Exception:  # noqa: BLE001 - not available in every venv; degrade, do not fail
+        return None
+    f = BoxedChoiceFilter()
+    out = {}
+    for record, row in rows.items():
+        text, doc = row.get("text") or "", row.get("doc") or {}
+        if not text.strip():
+            out[record] = None
+            continue
+        stripped = f._strip_think(text)
+        if f._clean_boxed_letter(stripped):
+            out[record] = 1
+        elif f._marker_letter(stripped):
+            out[record] = 2
+        else:
+            got = str(f.apply([[text]], [doc])[0][0]).strip().upper().strip("()")
+            out[record] = 3 if got in ("A", "B", "C", "D") else None
+    return out
 
 
 def main() -> int:
@@ -104,7 +140,7 @@ def main() -> int:
         sys.exit(f"no reference at {args.reference}")
     ref_blob = json.loads(args.reference.read_text())
     ref = ref_blob["per_record"]
-    reps = sorted(k for k in next(iter(ref.values())) if k.startswith("rep"))
+    reps = sorted(k for k in next(iter(ref.values())) if k.startswith("rep") and not k.endswith("_stage"))
 
     path, tt = load_tt(args.target, args.stage)
     print(f"TT samples:  {path}")
@@ -142,9 +178,38 @@ def main() -> int:
     if len(answered) < 30:
         print(f"  (n={len(answered)} is small: one question is worth {100.0/max(1,len(answered)):.0f} pp)")
 
+    # Stage split first: it decides how to read every number below it.
+    stages = answer_stages({r: tt[r] for r in answered})
+    if stages is not None:
+        real = [r for r in answered if stages.get(r) in (1, 2)]
+        guessed = [r for r in answered if stages.get(r) == 3]
+        none = [r for r in answered if stages.get(r) is None]
+        print()
+        print(
+            f"  answer stages, TT:  stated {len(real)}/{len(answered)} = "
+            f"{100.0*len(real)/len(answered):.1f}%   guessed {len(guessed)}   nothing {len(none)}"
+        )
+        ref_stages = [ref[r].get(f"{reps[0]}_stage") for r in answered if f"{reps[0]}_stage" in ref[r]]
+        if ref_stages:
+            ref_real = sum(1 for s in ref_stages if s in (1, 2))
+            print(
+                f"  answer stages, ref: stated {ref_real}/{len(ref_stages)} = "
+                f"{100.0*ref_real/len(ref_stages):.1f}%   guessed "
+                f"{sum(1 for s in ref_stages if s == 3)}"
+            )
+        if len(real) < 0.95 * len(answered):
+            print("  !! a low stated-answer rate is usually a generation-BUDGET problem, not a")
+            print("     reasoning one: check how many responses used every canvas block available.")
+
     ct, nt, pt, et = rate([tt[r]["correct"] for r in answered])
     print()
-    print(f"  {'TT':<22} {ct:3d}/{nt:<3d} = {pt:6.2f}%  +/- {et:.2f} pp")
+    print(f"  {'TT (lm_eval metric)':<22} {ct:3d}/{nt:<3d} = {pt:6.2f}%  +/- {et:.2f} pp")
+    if stages is not None:
+        c1, n1, p1, _ = rate([tt[r]["correct"] and stages.get(r) in (1, 2) for r in answered])
+        print(f"  {'TT (guesses = wrong)':<22} {c1:3d}/{n1:<3d} = {p1:6.2f}%   <- chance credit removed")
+        if real:
+            c2, n2, p2, _ = rate([tt[r]["correct"] for r in real])
+            print(f"  {'TT (where it answered)':<22} {c2:3d}/{n2:<3d} = {p2:6.2f}%   <- reasoning quality")
     ref_scores = []
     for rep in reps:
         c, n, p, _ = rate([ref[r][rep] for r in answered])

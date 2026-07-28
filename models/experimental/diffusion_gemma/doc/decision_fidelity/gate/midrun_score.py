@@ -254,7 +254,7 @@ def main() -> int:
         print(f"  {'TT (only where it answered)':<30} {c3:3d}/{n3:<3d} = {p3:6.2f}%   <- reasoning quality")
     print()
     answered = scored
-    reps = sorted(k for k in next(iter(ref.values())) if k.startswith("rep"))
+    reps = sorted(k for k in next(iter(ref.values())) if k.startswith("rep") and not k.endswith("_stage"))
     scores = []
     for rep in reps:
         c, n, p, _ = rate([ref[r["record"]][rep] for r in answered])
