@@ -870,6 +870,19 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
         else:
             seq_len = hidden_states.shape[1]
             hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, -1))
+        # This DRAM ExpertChunkSlice path is 32x32-tile only. Its M-axis tile arithmetic below
+        # (m_tiles = seq_len // 32) and its fused concat_heads_matmul O-projection both assume a
+        # 32-row tile; concat_heads_matmul has no tiny-tile inputA support yet. Guard here so a
+        # tiny-tile activation fails with an actionable message instead of computing m_tiles == 0.
+        # The tiny-tile denoise implementation is the L1 decode_all path
+        # (tt_pipeline/denoise_block.py) -- see models/experimental/pi0_5/TINY_TILE_INTEGRATION_PLAN.md.
+        _tile_h = int(hidden_states.get_tile().tile_shape[0])
+        if _tile_h != 32:
+            raise NotImplementedError(
+                f"AdaRMSExpertAttentionTTNN (DRAM ExpertChunkSlice) requires a 32x32 activation tile; "
+                f"got tile height {_tile_h}. Route tiny-tile denoise through the L1 decode_all path "
+                f"(tt_pipeline/denoise_block.py)."
+            )
         # The fused concat_heads_matmul O-projection is only valid for a <=1-tile suffix (contiguous
         # head tiles). Fail loudly rather than silently mis-compute if used outside that regime.
         assert seq_len <= 32, (
@@ -928,7 +941,9 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
         # MQA shape: Sq == 1 tile (== 32, already asserted above) and a single KV head. compute_kernel_config
         # is passed so the flash accumulation runs at fp32_dest_acc (HiFi2) — kv_sdpa's own default is bf16
         # dest accumulation, which loses expert-attention precision.
-        assert int(q_rope.shape[-2]) == 32, f"kv_sdpa requires Sq == 32 (1 tile); got {int(q_rope.shape[-2])}"
+        assert int(q_rope.shape[-2]) == _tile_h, (
+            f"kv_sdpa requires Sq == exactly one tile ({_tile_h}); got {int(q_rope.shape[-2])}"
+        )
         assert int(self.num_kv_heads) == 1, f"kv_sdpa requires num_kv_heads == 1 (MQA); got {self.num_kv_heads}"
         if past_key_value is not None and not use_cache:
             # Fold path: kv_sdpa reads past_k/past_v + suffix k/v as two KV ranges — no pre-concat.

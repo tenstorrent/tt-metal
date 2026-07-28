@@ -155,10 +155,9 @@ def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, pref
     stage._prefix_kv = []
     for gi in range(_LO, _HI):
         pk, pv = prefix_kv[gi]
-        # Resident prefix-KV is uploaded at the model tile (tiny 16x32 bf8): kv_sdpa is tiny-tile aware
-        # and reads the prefix + suffix K/V as a single uniform-tile stream (no retile, mixed tiles).
-        # Resident prefix KV is uploaded at the FULL 32x32 tile (kv_sdpa two-source path handles a
-        # tile-32 prefix + tile-16 suffix); q/k/v stay at the model tiny (16x32) tile.
+        # Resident prefix KV is uploaded at the FULL 32x32 tile: kv_sdpa's two-source path handles a
+        # tile-32 prefix + tile-16 suffix in one flash pass (each K tile yields a [Sq_h x 32] score
+        # tile regardless of its own height), so no retile is needed. q/k/v stay at the tiny tile.
         pk_dev = from_torch_pi05(
             pk, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
         )
@@ -301,6 +300,18 @@ def _setup(mesh):
     return config, ah, suffix_len, bw, ref_blocks, adarms_cond, hidden, prefix_kv, mask, h_oracle
 
 
+_DRAM_PATH_NEEDS_TILE32 = pytest.mark.skipif(
+    TILE_HEIGHT != 32,
+    reason=(
+        "The DRAM ExpertChunkSlice denoise path (ttnn_gemma.AdaRMSExpertAttentionTTNN) is 32x32-tile "
+        "only: its m_tiles arithmetic and its fused concat_heads_matmul O-projection both assume a "
+        "32-row tile, and concat_heads_matmul has no tiny-tile inputA support yet. Tracked as stage 8 "
+        "in models/experimental/pi0_5/TINY_TILE_INTEGRATION_PLAN.md."
+    ),
+)
+
+
+@_DRAM_PATH_NEEDS_TILE32
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_dram_single_layer_pcc(mesh_device):
@@ -360,6 +371,7 @@ def test_l1_single_layer_pcc(mesh_device):
                 pass
 
 
+@_DRAM_PATH_NEEDS_TILE32
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_walltime_l1_vs_dram_single_layer(mesh_device):

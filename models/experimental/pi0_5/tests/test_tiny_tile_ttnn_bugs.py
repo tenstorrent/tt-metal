@@ -7,7 +7,9 @@ suffix rows), but several TTNN ops misbehave at a 16x32 tile. Each test below ru
 a 32x32 tile (passes) and a 16x32 tile (fails on the current build) so the regression is isolated
 to the tiny-tile geometry.
 
-Only bfloat16 is used -- blocked dtypes (bfloat8_b/bfloat4_b) are not supported at a tiny tile.
+Most tests use bfloat16. Blocked dtypes (bfloat8_b/bfloat4_b) ARE supported at a full-face tiny
+tile (height >= 16) after the DRAM-aligned block-float tile sizing landed -- see tile_config.ACT_DTYPE,
+which is bfloat8_b at 16x32. Heights < 16 (partial face) remain unsupported for blocked dtypes.
 
 Run:  pytest models/experimental/pi0_5/tests/test_tiny_tile_ttnn_bugs.py
 """
@@ -31,10 +33,10 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return (cov / (s1 * s2)).item()
 
 
-def _to_dev(t: torch.Tensor, dev, tile_h: int, mem=None):
+def _to_dev(t: torch.Tensor, dev, tile_h: int, mem=None, dtype=ttnn.bfloat16):
     return ttnn.from_torch(
         t,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
         memory_config=mem or ttnn.L1_MEMORY_CONFIG,
@@ -94,8 +96,9 @@ def test_addcmul_tiny_tile_promotes_tile(mesh_device, tile_h):
 
     The math is correct (PCC ~1.0), but the output tile geometry does not match the 16x32 inputs.
     This breaks the tiny-tile residual stream (the promoted 32-row tile makes a downstream
-    sharded op see a non-32-aligned M and crash). The pi0.5 block avoids addcmul on the tiny-tile
-    residual, using explicit multiply + add instead (denoise_block._gated_residual).
+    sharded op see a non-32-aligned M and crash). NOTE: denoise_block._gated_residual currently
+    still uses ttnn.addcmul -- if this test fails, that call site is the one to convert to an
+    explicit multiply + add.
     """
     torch.manual_seed(0)
     res = torch.randn(1, 16, 1024) * 0.5
