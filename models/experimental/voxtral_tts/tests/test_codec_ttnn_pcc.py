@@ -101,10 +101,9 @@ def test_final_stage_is_not_itself_lossy(pair):
     L = x.shape[2]
     xd = ttnn.from_torch(x.permute(0, 2, 1).reshape(1, L, 1024).contiguous(),
                          dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=gen.device)
-    bias = gen._attn_bias(L, 16)
     seq = xd
     for li in range(2):
-        seq = gen._block(seq, gen.layers[(7, li)], bias)
+        seq = gen._block(seq, gen.layers[(7, li)], 16)  # _block takes the WINDOW; it builds/chunks itself
     got = ttnn.to_torch(seq).float().reshape(1, L, 1024)
     assert pcc(got, exp) > 0.9999, "stage 7 is lossy in isolation — this IS a bug in stage 7"
 
@@ -140,6 +139,27 @@ def test_bf16_weights_alone_is_below_gate(device):
     codes = ref.make_synthetic_codes(469)
     p = pcc(gen(codes), ref.reference_decode(codes, w))
     assert p < 0.999, f"bf16 weights + fp32 attn now scores {p:.6f} (was 0.998757) — revisit the default"
+
+
+@pytest.mark.parametrize("n_frames", [64, 469])
+def test_chunked_matches_unchunked(device, n_frames):
+    """Chunking must be EXACT, not an approximation: attention is causal AND windowed, so a slab
+    starting `window` positions early has all the context its kept rows need. Compares the two
+    paths directly rather than both against the reference, so a shared error cannot hide."""
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    codes = ref.make_synthetic_codes(n_frames)
+    un = TtVoxtralCodecDecoder(device, chunk_min=None)(codes)
+    ch = TtVoxtralCodecDecoder(device, chunk_min=0, slab=512)(codes)
+    assert pcc(ch, un) > 0.9999, f"chunked diverges from unchunked at T={n_frames}"
+
+
+def test_slab_is_tile_aligned():
+    """TILE_LAYOUT pads every dim to 32. A slab of 272 (= 256 chunk + 16 window) silently becomes
+    288, wasting a row and a column of tiles — pick the SLAB aligned and derive the chunk from it."""
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import SLAB
+
+    assert SLAB % 32 == 0, f"slab {SLAB} is not tile-aligned"
 
 
 def test_causal_padding_matches_torch(pair):

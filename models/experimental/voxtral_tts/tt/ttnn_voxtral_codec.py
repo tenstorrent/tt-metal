@@ -19,9 +19,10 @@ LAYOUT / OP NOTES (what the reference's torch ops map to here):
   * conv_transpose1d does not exist; done via `ttnn.conv_transpose2d` with a singleton HEIGHT and
     length on the WIDTH axis, which the XTTS-v2 vocoder work showed is ~10x faster than mapping
     length to height (height slicing hits a circular-buffer/L1 clash).
-  * ALiBi + causal + sliding window collapse into ONE additive pre-softmax bias, passed as
-    sdpa's `attn_mask` with `is_causal=False` (the mask already encodes causality). The bias is
-    built on host once per (S, window) and cached — it does not depend on the weights.
+  * ALiBi + causal + sliding window collapse into ONE additive pre-softmax bias, built on host
+    and cached per (S, window, dtype) — it does not depend on the weights. Because it is a
+    function of (j - i) only, it is constant along diagonals, which is what makes chunking work:
+    one slab-sized bias serves every chunk of every utterance.
   * QK-norm is an RMSNorm over the FULL 1024-wide projection, BEFORE the head split.
   * LayerScale multiplies each residual branch by a learned [1024] vector.
   * `norm_eps` is 1e-2 here (not 1e-5) — from params.json, and load-bearing.
@@ -90,6 +91,15 @@ MASK_NEG = -1e9
 # bf16 for the attention interior + its bias: measured best-PCC AND faster, and halves the
 # largest tensor. See the sweep in the module docstring.
 ATTN_DTYPE = ttnn.bfloat16
+# Chunked attention. `slab` must be TILE-ALIGNED: TILE_LAYOUT pads every dim to 32, so a slab of
+# 272 would silently become 288 and waste a row and column of tiles. Chunking turns attention from
+# O(S^2) into O(S*slab) -- the window is only 2..16, so an unchunked q@kT computes 382M scores per
+# head at S=12000 of which ~17 per row survive the mask. Measured at S=12000: warm 892 -> 497 ms,
+# cold 10580 -> 1178 ms (all attention shapes become identical, so kernels compile once ever),
+# mask 2304 -> 4.2 MB. Below chunk_min the full mask is already cheap and chunking loses a few
+# percent to dispatch (T=64: 89 -> 97 ms), hence the threshold.
+SLAB = 512
+CHUNK_MIN = 512
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -98,12 +108,18 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 class TtVoxtralCodecDecoder:
     """On-device codec decoder. __call__(codes [1,37,T] int64) -> waveform torch [1,1,T*1920]."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, weight_dtype=DTYPE, attn_dtype=ATTN_DTYPE):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, weight_dtype=DTYPE, attn_dtype=ATTN_DTYPE,
+                 slab=SLAB, chunk_min=CHUNK_MIN):
         """`weight_dtype` / `attn_dtype` exist so the precision question can be MEASURED rather
         than inherited. Activations outside attention are always fp32."""
         self.device = device
         self.weight_dtype = weight_dtype
         self.attn_dtype = attn_dtype
+        # Chunked attention: process `slab` positions at a time, keeping the last (slab - window).
+        # `slab` is TILE-ALIGNED on purpose -- TILE_LAYOUT pads every dim to 32, so a slab of 272
+        # would silently become 288 and waste a row and column of tiles.
+        self.slab = slab
+        self.chunk_min = chunk_min  # chunk only when S exceeds this; None = never chunk
         w = load_codec_state(ckpt_path)  # weight_norm already folded by the reference loader
 
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -210,7 +226,7 @@ class TtVoxtralCodecDecoder:
         trim = kernel - stride
         return ttnn.slice(out, [0, 0, 0, 0], [1, 1, out.shape[2] - trim, channels])
 
-    def _attention(self, q, k, v, bias):
+    def _attention_slab(self, q, k, v, bias):
         """fp32 attention with an additive pre-softmax bias. [1,H,S,d] -> [1,H,S,d].
 
         NOT ttnn.transformer.scaled_dot_product_attention: that op is bf16/bfp8-only, and this is
@@ -228,10 +244,32 @@ class TtVoxtralCodecDecoder:
         out = ttnn.matmul(attn, v, compute_kernel_config=COMPUTE_CONFIG)
         return ttnn.typecast(out, DTYPE) if self.attn_dtype != DTYPE else out
 
+    def _attention(self, q, k, v, window):
+        """[1,H,S,d] -> [1,H,S,d]. Chunks when S > chunk_min, else one full-S pass.
+
+        EXACT, not an approximation: attention is causal AND windowed, so output[i] depends only
+        on input[i-window .. i]. A slab that starts `window` positions early therefore has all the
+        context its kept rows need; the leading `window` rows are discarded because THEIR context
+        is missing. Verified against full-S attention to fp32 rounding (~1e-7)."""
+        S = q.shape[2]
+        if self.chunk_min is None or S <= self.chunk_min:
+            return self._attention_slab(q, k, v, self._attn_bias(S, window))
+        H, d = q.shape[1], q.shape[3]
+        C = self.slab - window
+        outs, a = [], 0
+        while a < S:
+            lo, hi = max(0, a - window), min(S, a + C)
+            cut = a - lo
+            sl = lambda t: ttnn.slice(t, [0, 0, lo, 0], [1, H, hi, d])
+            o = self._attention_slab(sl(q), sl(k), sl(v), self._attn_bias(hi - lo, window))
+            outs.append(o if cut == 0 else ttnn.slice(o, [0, 0, cut, 0], [1, H, hi - lo, d]))
+            a = hi
+        return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+
     # ----------------------------------------------------------------------------------
     # Transformer block
     # ----------------------------------------------------------------------------------
-    def _block(self, x, w, bias):
+    def _block(self, x, w, window):
         """x [1,L,1024] -> [1,L,1024]. Pre-norm, QK-norm on the full projection, LayerScale."""
         L = x.shape[1]
         h = ttnn.rms_norm(x, weight=w["an"], epsilon=CODEC_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
@@ -242,7 +280,7 @@ class TtVoxtralCodecDecoder:
         q = ttnn.rms_norm(q, weight=w["qn"], epsilon=CODEC_QK_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
         k = ttnn.rms_norm(k, weight=w["kn"], epsilon=CODEC_QK_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
         heads = lambda t: ttnn.permute(ttnn.reshape(t, [1, L, CODEC_N_HEADS, CODEC_HEAD_DIM]), (0, 2, 1, 3))
-        attn = self._attention(heads(q), heads(k), heads(v), bias)
+        attn = self._attention(heads(q), heads(k), heads(v), window)
         attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), [1, L, CODEC_DIM])
         r = ttnn.linear(attn, w["wo"], compute_kernel_config=COMPUTE_CONFIG)
         x = ttnn.add(x, ttnn.multiply(r, w["as"]))  # LayerScale
@@ -287,9 +325,8 @@ class TtVoxtralCodecDecoder:
         for stage, (tf_i, n_layers) in enumerate(zip(DEC_TF_BLOCKS, DEC_TF_LENGTHS)):
             L = x.shape[2]
             seq = ttnn.reshape(x, [1, L, CODEC_DIM])
-            bias = self._attn_bias(L, self.windows[stage])
             for li in range(n_layers):
-                seq = self._block(seq, self.layers[(tf_i, li)], bias)
+                seq = self._block(seq, self.layers[(tf_i, li)], self.windows[stage])
             x = ttnn.reshape(seq, [1, 1, L, CODEC_DIM])
             if return_stages:
                 stages[f"after_tf{tf_i}"] = self._chw(x)
