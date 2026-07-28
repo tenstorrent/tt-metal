@@ -37,15 +37,15 @@ struct RingJointSDPAParams {
     uint32_t latent_v_head_dim = 0;
 
     // Sparse-frames extension (windowed / block-sparse attention). All three set together or
-    // all unset. `frame_seqlen` is in TOKENS (a multiple of TILE_HEIGHT); `num_frames_padded` is
-    // the (sp-aligned) frame count, must divide ring_size and be <= 32. The `frame_allow_packed`
+    // all unset. `tokens_per_frame` is in TOKENS (a multiple of TILE_HEIGHT); `num_frames_padded` is
+    // the (sp-aligned) frame count, must divide ring_size and be <= 32. The `sparse_frame_mask`
     // is a bitpacked row-major representation of the [nf_padded, nf_padded] allow-table: bit
     // `(q * nf_padded + k)` is 1 iff Q frame q attends K frame k. At most 32 uint32 words (max
     // nf_padded = 32 -> 1024 bits). Kept host-side and threaded to kernels as runtime args (see
     // build_ring_joint_program_factory).
-    std::optional<std::uint32_t> frame_seqlen = std::nullopt;
+    std::optional<std::uint32_t> tokens_per_frame = std::nullopt;
     std::optional<std::uint32_t> num_frames_padded = std::nullopt;
-    std::vector<std::uint32_t> frame_allow_packed;  // empty when sparse-frames disabled
+    std::vector<std::uint32_t> sparse_frame_mask;  // empty when sparse-frames disabled
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -65,9 +65,9 @@ struct RingJointSDPAParams {
         std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt,
         std::optional<std::uint32_t> kv_actual_isl = std::nullopt,
         uint32_t latent_v_head_dim = 0,
-        std::optional<std::uint32_t> frame_seqlen = std::nullopt,
+        std::optional<std::uint32_t> tokens_per_frame = std::nullopt,
         std::optional<std::uint32_t> num_frames_padded = std::nullopt,
-        std::vector<std::uint32_t> frame_allow_packed = {}) :
+        std::vector<std::uint32_t> sparse_frame_mask = {}) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -84,9 +84,9 @@ struct RingJointSDPAParams {
         kv_cache_batch_idx(kv_cache_batch_idx),
         kv_actual_isl(kv_actual_isl),
         latent_v_head_dim(latent_v_head_dim),
-        frame_seqlen(frame_seqlen),
+        tokens_per_frame(tokens_per_frame),
         num_frames_padded(num_frames_padded),
-        frame_allow_packed(std::move(frame_allow_packed)) {}
+        sparse_frame_mask(std::move(sparse_frame_mask)) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -96,7 +96,7 @@ struct RingJointSDPAParams {
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
 
-    bool has_sparse_frames() const { return frame_seqlen.has_value() && num_frames_padded.has_value(); }
+    bool has_sparse_frames() const { return tokens_per_frame.has_value() && num_frames_padded.has_value(); }
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
@@ -114,9 +114,9 @@ struct RingJointSDPAParams {
         "latent_v_head_dim",
         "all_gather_operation_attributes",
         "all_gather_tensor_args",
-        "frame_seqlen",
+        "tokens_per_frame",
         "num_frames_padded",
-        "frame_allow_packed");
+        "sparse_frame_mask");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(joint_strategy),
@@ -134,9 +134,9 @@ struct RingJointSDPAParams {
             std::cref(latent_v_head_dim),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args),
-            std::cref(frame_seqlen),
+            std::cref(tokens_per_frame),
             std::cref(num_frames_padded),
-            std::cref(frame_allow_packed));
+            std::cref(sparse_frame_mask));
     }
 };
 

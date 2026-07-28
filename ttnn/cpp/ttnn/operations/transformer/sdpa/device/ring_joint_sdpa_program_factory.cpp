@@ -280,9 +280,9 @@ std::vector<uint32_t> compute_q_work_bitmap(
     uint32_t backward_writes_expected,
     uint32_t forward_writes_expected,
     bool sparse_frames_enabled,
-    uint32_t sparse_frame_seqlen_tiles,
+    uint32_t tiles_per_frame,
     uint32_t sparse_num_frames_padded,
-    const std::vector<uint32_t>& frame_allow_packed) {
+    const std::vector<uint32_t>& sparse_frame_mask) {
     std::vector<uint32_t> bitmap(num_q_chunks, 0);
     if (!sparse_frames_enabled) {
         // Dense fallback: every mask-active iter is a work iter for every q_chunk.
@@ -292,8 +292,7 @@ std::vector<uint32_t> compute_q_work_bitmap(
         return bitmap;
     }
     // q_frame_offset for this device (matches the kernel-side computation).
-    const uint32_t q_frames_per_shard =
-        (sparse_frame_seqlen_tiles > 0) ? (q_local_padded_Nt / sparse_frame_seqlen_tiles) : 0u;
+    const uint32_t q_frames_per_shard = (tiles_per_frame > 0) ? (q_local_padded_Nt / tiles_per_frame) : 0u;
     const uint32_t q_frame_offset = device_index * q_frames_per_shard;
     // Simulate the ring_id sequencer for this device to get ring_id per iter.
     RingIdSequencer seq(device_index, ring_size, backward_writes_expected, forward_writes_expected);
@@ -314,13 +313,13 @@ std::vector<uint32_t> compute_q_work_bitmap(
                 continue;
             }
             // Spatial q_chunk: check if any k_frame in this iter's local shard is attended.
-            // Joint chunks are always attended (frame_allow doesn't gate joint) so mark the iter
+            // Joint chunks are always attended (sparse_frame_mask doesn't gate joint) so mark the iter
             // if joint contributes.
             if (do_joint_kv) {
                 bitmap[q_chunk] |= (1u << ring_iter);
                 continue;
             }
-            const uint32_t q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / sparse_frame_seqlen_tiles + q_frame_offset;
+            const uint32_t q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / tiles_per_frame + q_frame_offset;
             for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
                 const uint32_t k_local_start = k * Sk_chunk_t;
                 // Mirror the compute pre-scan / reader OOB skip (kv_chunk_starts_before_logical_end,
@@ -336,10 +335,10 @@ std::vector<uint32_t> compute_q_work_bitmap(
                     continue;
                 }
                 const uint32_t k_global = kv_local_padded_Nt * ring_id + k_local_start;
-                const uint32_t k_frame = k_global / sparse_frame_seqlen_tiles;
+                const uint32_t k_frame = k_global / tiles_per_frame;
                 const uint32_t bit_idx = q_frame_for_this_chunk * sparse_num_frames_padded + k_frame;
                 const uint32_t word_idx = bit_idx >> 5;
-                if (word_idx < frame_allow_packed.size() && ((frame_allow_packed[word_idx] >> (bit_idx & 31u)) & 1u)) {
+                if (word_idx < sparse_frame_mask.size() && ((sparse_frame_mask[word_idx] >> (bit_idx & 31u)) & 1u)) {
                     bitmap[q_chunk] |= (1u << ring_iter);
                     break;
                 }
@@ -1595,15 +1594,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
 
     // Sparse-frames extension (slots 72..74, after the CB block). Compile-time args reflect the
-    // pattern's shape (enable flag + frame_seqlen_tiles + nf_padded); the packed frame_allow bits
+    // pattern's shape (enable flag + tiles_per_frame + nf_padded); the packed sparse_frame_mask bits
     // ride as compute-kernel runtime args (see below). Zero when disabled — the compute kernel
     // gates on `sparse_frames_enabled` and skips the check entirely.
     const bool sparse_frames_enabled = args.has_sparse_frames();
-    const uint32_t sparse_frame_seqlen_tiles =
-        sparse_frames_enabled ? (args.frame_seqlen.value() / tt::constants::TILE_HEIGHT) : 0u;
+    const uint32_t tiles_per_frame =
+        sparse_frames_enabled ? (args.tokens_per_frame.value() / tt::constants::TILE_HEIGHT) : 0u;
     const uint32_t sparse_num_frames_padded = sparse_frames_enabled ? args.num_frames_padded.value() : 0u;
     compute_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
-    compute_compile_time_args.push_back(sparse_frame_seqlen_tiles);
+    compute_compile_time_args.push_back(tiles_per_frame);
     compute_compile_time_args.push_back(sparse_num_frames_padded);
     // Reader gets the same three: with them, the reader mirrors the compute-side sparse-frames
     // skip inside its per-k_chunk loop (skipping reserve/chain/push for disallowed chunks) so
@@ -1611,7 +1610,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // when compute takes different-latency paths per Q chunk under sparse. Slots are at the end
     // of reader compile args (after the 3 CB slots that were just appended above).
     reader_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
-    reader_compile_time_args.push_back(sparse_frame_seqlen_tiles);
+    reader_compile_time_args.push_back(tiles_per_frame);
     reader_compile_time_args.push_back(sparse_num_frames_padded);
     // Writer gets the same three: writer must mirror compute's zero-work fast-path decisions
     // per (q_chunk, ring_iter) so it can skip its per-iter save/restore protocol (complete_restore
@@ -1619,7 +1618,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Without this, compute's fast path leaves cb_prev_out unpopped (writer's restore push stalls
     // at reserve_back) and cb_out unpushed (writer's flush_deferred_save stalls at wait_front).
     writer_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
-    writer_compile_time_args.push_back(sparse_frame_seqlen_tiles);
+    writer_compile_time_args.push_back(tiles_per_frame);
     writer_compile_time_args.push_back(sparse_num_frames_padded);
 
     // Precompute per-q_chunk work bitmap for this device. Both compute and writer consume it to
@@ -1642,9 +1641,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         backward_writes_expected,
         forward_writes_expected,
         sparse_frames_enabled,
-        sparse_frame_seqlen_tiles,
+        tiles_per_frame,
         sparse_num_frames_padded,
-        args.frame_allow_packed);
+        args.sparse_frame_mask);
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -2499,14 +2498,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
 
-        // Sparse-frames extension: append the 32 uint32 packed frame_allow words. Reader reads
+        // Sparse-frames extension: append the 32 uint32 packed sparse_frame_mask words. Reader reads
         // them right after the fused-op signaler runtime args, gated at compile time on
         // `sparse_frames_enabled` (so zeros are harmless when disabled). Same bit layout the
         // compute kernel already uses — sender and receiver make identical skip decisions.
         constexpr uint32_t kReaderSparseFramesPackedWords = 32;
         for (uint32_t w = 0; w < kReaderSparseFramesPackedWords; ++w) {
             const uint32_t word =
-                (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
+                (sparse_frames_enabled && w < args.sparse_frame_mask.size()) ? args.sparse_frame_mask[w] : 0u;
             reader_args.push_back(word);
         }
 
@@ -2530,13 +2529,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
 
-        // Sparse-frames extension: append the same 32 uint32 packed frame_allow words that
+        // Sparse-frames extension: append the same 32 uint32 packed sparse_frame_mask words that
         // reader/compute already receive. The writer does not read them (it uses the precomputed
         // q_work_bitmap below), but must advance past them to reach the bitmap at the right offset.
         constexpr uint32_t kWriterSparseFramesPackedWords = 32;
         for (uint32_t w = 0; w < kWriterSparseFramesPackedWords; ++w) {
             const uint32_t word =
-                (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
+                (sparse_frames_enabled && w < args.sparse_frame_mask.size()) ? args.sparse_frame_mask[w] : 0u;
             writer_args.push_back(word);
         }
         // Per-q_chunk work bitmap (num_q_chunks uint32s). Bit `iter` set iff (q_chunk has any
@@ -2576,14 +2575,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
-        // Sparse-frames extension: append the 32 uint32 packed frame_allow words. Compute reads
+        // Sparse-frames extension: append the 32 uint32 packed sparse_frame_mask words. Compute reads
         // them right after `active_ring_iter_mask` (slot 11..42). Same values on every core (the
         // pattern is device-global). Passes zeros when the feature is disabled — the kernel gates
         // on `sparse_frames_enabled` at compile time so the reads have no effect.
         constexpr uint32_t kSparseFramesPackedWords = 32;
         for (uint32_t w = 0; w < kSparseFramesPackedWords; ++w) {
             const uint32_t word =
-                (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
+                (sparse_frames_enabled && w < args.sparse_frame_mask.size()) ? args.sparse_frame_mask[w] : 0u;
             compute_args.push_back(word);
         }
         // Per-q_chunk work bitmap (num_q_chunks uint32s) — mirrors what writer receives so both

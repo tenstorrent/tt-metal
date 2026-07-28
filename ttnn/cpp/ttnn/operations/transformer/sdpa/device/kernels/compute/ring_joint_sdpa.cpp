@@ -79,12 +79,12 @@ void kernel_main() {
     // Sparse-frames extension (windowed / block-sparse pattern). All three set together at the host or all
     // zero (feature disabled). Slots placed after the CB block (base = cb_arg_offset + 23 = 72).
     // With `sparse_frames_enabled=1`, the kernel maps each Q chunk to a single frame via integer
-    // division (host requires frame_seqlen_tiles % Sq_chunk_t == 0 and % Sk_chunk_t == 0, so no
+    // division (host requires tiles_per_frame % Sq_chunk_t == 0 and % Sk_chunk_t == 0, so no
     // chunk straddles a frame boundary; chunk sizes may be smaller than the frame to fit L1) and
-    // drains K/V chunks whose (q_frame, k_frame) pair is disallowed by the packed frame_allow
+    // drains K/V chunks whose (q_frame, k_frame) pair is disallowed by the packed sparse_frame_mask
     // bitmap in runtime args 11..(11+31).
     constexpr bool sparse_frames_enabled = get_compile_time_arg_val(72) == 1;
-    constexpr uint32_t frame_seqlen_tiles = get_compile_time_arg_val(73);
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(73);
     constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(74);
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -130,13 +130,13 @@ void kernel_main() {
     const uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
-    // Sparse-frames packed frame_allow bitmap (32 uint32 words). Runtime-arg slots so the same
+    // Sparse-frames packed sparse_frame_mask bitmap (32 uint32 words). Runtime-arg slots so the same
     // kernel binary handles any windowed pattern that fits (nf_padded <= 32 -> at most 32 * 32
     // = 1024 bits). Only read when sparse_frames_enabled; when disabled the host passes zeros.
-    uint32_t frame_allow_words[32];
+    uint32_t sparse_frame_mask_words[32];
 #pragma GCC unroll 32
     for (uint32_t w = 0; w < 32; ++w) {
-        frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
+        sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
     }
     // Per-q_chunk work bitmap: bit `ring_iter` set iff q_chunk has attended work in that (mask-
     // active) iter. Host-precomputed; compute and writer read the same. When sparse is disabled the
@@ -227,12 +227,12 @@ void kernel_main() {
     bool seen_active_iter = false;
 
     // Sparse-frames per-device q_frame offset — maps this device's local q_chunks to their GLOBAL
-    // q_frame indices for frame_allow lookup. Q is SP-sharded across `ring_size` devices, and
-    // frame_allow is a broadcast global table indexed by GLOBAL q_frame; without this offset, every
-    // device would look up frame_allow row 0. Used by sdpa_ring_v2's per-chunk try_skip decisions.
+    // q_frame indices for sparse_frame_mask lookup. Q is SP-sharded across `ring_size` devices, and
+    // sparse_frame_mask is a broadcast global table indexed by GLOBAL q_frame; without this offset, every
+    // device would look up sparse_frame_mask row 0. Used by sdpa_ring_v2's per-chunk try_skip decisions.
     uint32_t q_frame_offset = 0;
     if constexpr (sparse_frames_enabled) {
-        const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+        const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
         q_frame_offset = ring_index * q_frames_per_shard;
     }
 
@@ -358,7 +358,7 @@ void kernel_main() {
                 v_shares_k_buffer,
                 kt_inplace_v,
                 sparse_frames_enabled,
-                frame_seqlen_tiles,
+                tiles_per_frame,
                 num_frames_padded_compile>(
                 global_q_start,
                 global_q_end,
@@ -382,7 +382,7 @@ void kernel_main() {
                 use_zigzag_balancing,
                 chunked_context,
                 is_first_active_iter,
-                frame_allow_words,
+                sparse_frame_mask_words,
                 q_frame_offset,
                 q_work_bitmap);
         } else {

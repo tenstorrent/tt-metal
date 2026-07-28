@@ -263,13 +263,13 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
-    // Sparse-frames packed frame_allow bitmap. Host always pushes 32 uint32 words (zeros when
+    // Sparse-frames packed sparse_frame_mask bitmap. Host always pushes 32 uint32 words (zeros when
     // the feature is disabled), so the read is unconditional here. Later use is gated on the
     // sparse_frames_enabled compile-time flag. Same bit layout the compute kernel uses; must
     // match exactly so sender and receiver make identical skip decisions in the chain.
-    uint32_t frame_allow_words[32];
+    uint32_t sparse_frame_mask_words[32];
     for (uint32_t w = 0; w < 32; ++w) {
-        frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
+        sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
     }
 
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
@@ -342,7 +342,7 @@ void kernel_main() {
     // fire only for chunks that will actually be processed — otherwise sparse's variable-rate
     // compute path breaks chain lockstep at high work-items-per-core.
     constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 3);
-    constexpr uint32_t sparse_frame_seqlen_tiles = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 5);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
@@ -498,18 +498,18 @@ void kernel_main() {
     // 720p geometry, where sp=8/nf_padded=24 puts frames 21/22/23 all on the last shard). For such
     // a shard we disable the skip: it participates fully in data movement (push + forward every
     // chunk, exactly like dense — a known-good path) while compute still drains the pushed K/V via
-    // its per-q zero-work fast path (no matmul). This lets build_frame_allow_packed keep padded Q
+    // its per-q zero-work fast path (no matmul). This lets build_sparse_frame_mask keep padded Q
     // rows honestly all-zero instead of the force-all-1 workaround.
     bool shard_attends_nothing = false;
     if constexpr (sparse_frames_enabled == 1) {
-        const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;
+        const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
         const uint32_t q_frame_base = ring_index * q_frames_per_shard;
         shard_attends_nothing = true;
         for (uint32_t qf_local = 0; qf_local < q_frames_per_shard && shard_attends_nothing; ++qf_local) {
             const uint32_t qf = q_frame_base + qf_local;
             for (uint32_t kf = 0; kf < sparse_num_frames_padded; ++kf) {
                 const uint32_t bit_idx = qf * sparse_num_frames_padded + kf;
-                if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
+                if (((sparse_frame_mask_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
                     shard_attends_nothing = false;
                     break;
                 }
@@ -694,7 +694,7 @@ void kernel_main() {
 
                 // Sparse-frames skip based on the SHARD-AGGREGATE allow (union of allow rows across
                 // all q_frames this device holds). Different cores in the same head/batch/gqa
-                // chain handle different q_chunks with potentially different frame_allow rows —
+                // chain handle different q_chunks with potentially different sparse_frame_mask rows —
                 // if reader skipped per-q_chunk, chain participants would disagree per k_chunk
                 // and chain sync would break. Aggregate means "does ANY q_frame in the shard
                 // attend this k_frame?" — the answer is the same for all cores in the chain
@@ -706,14 +706,14 @@ void kernel_main() {
                     // drains without matmul. See shard_attends_nothing definition above.
                     if (!kv_chunk_is_joint && !shard_attends_nothing) {
                         const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-                        const uint32_t k_frame = k_global_start_tile / sparse_frame_seqlen_tiles;
-                        const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;
+                        const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
+                        const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
                         const uint32_t q_frame_base = ring_index * q_frames_per_shard;
                         bool any_q_attends = false;
                         for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
                             const uint32_t qf = q_frame_base + qf_local;
                             const uint32_t bit_idx = qf * sparse_num_frames_padded + k_frame;
-                            if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
+                            if (((sparse_frame_mask_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
                                 any_q_attends = true;
                                 break;
                             }

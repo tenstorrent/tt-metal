@@ -53,9 +53,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
     std::optional<uint32_t> kv_actual_isl,
-    std::optional<uint32_t> frame_seqlen,
+    std::optional<uint32_t> tokens_per_frame,
     std::optional<uint32_t> num_frames_padded,
-    std::vector<uint32_t> frame_allow_packed) {
+    std::vector<uint32_t> sparse_frame_mask) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -87,9 +87,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         strategy,
         kv_cache_batch_idx,
         kv_actual_isl,
-        frame_seqlen,
+        tokens_per_frame,
         num_frames_padded,
-        std::move(frame_allow_packed));
+        std::move(sparse_frame_mask));
     return outputs;
 }
 
@@ -659,12 +659,12 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl").noconvert() = nb::none(),
         // Sparse-frames extension (all three or none). Enables windowed block-sparse
         // attention pattern inside the ring op via a compact uint8 [1,1,nf_padded,nf_padded]
-        // frame_allow table + host-computed active_ring_iter_mask; no [N,N] mask required.
-        nb::arg("frame_seqlen") = nb::none(),
+        // sparse_frame_mask table + host-computed active_ring_iter_mask; no [N,N] mask required.
+        nb::arg("tokens_per_frame") = nb::none(),
         nb::arg("num_frames_padded") = nb::none(),
         // Packed bits, row-major: bit `q*nf_padded + k` = 1 iff Q frame q attends K frame k.
         // At most 32 uint32 words (nf_padded <= 32). Empty vector = sparse-frames disabled.
-        nb::arg("frame_allow_packed") = std::vector<uint32_t>{});
+        nb::arg("sparse_frame_mask") = std::vector<uint32_t>{});
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

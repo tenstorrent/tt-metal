@@ -458,11 +458,11 @@ void kernel_main() {
         argidx);
 
     // Sparse-frames runtime args (mirror reader/compute layout). The host always pushes the 32
-    // packed frame_allow words regardless of whether sparse is enabled. The writer does not consult
-    // frame_allow directly (it uses the precomputed q_work_bitmap below), so skip past the 32 words
+    // packed sparse_frame_mask words regardless of whether sparse is enabled. The writer does not consult
+    // sparse_frame_mask directly (it uses the precomputed q_work_bitmap below), so skip past the 32 words
     // rather than reading them into an unused array — but the index must still advance so
     // q_work_bitmap lands at the right offset.
-    argidx += 32;  // packed frame_allow words (unused by the writer)
+    argidx += 32;  // packed sparse_frame_mask words (unused by the writer)
 
     // Per-q_chunk work bitmap. bit iter set iff (q_chunk has attended k in ring_iter) AND (iter
     // is mask-active). Host-precomputed to match compute. Writer uses this to gate restore push,
@@ -501,7 +501,7 @@ void kernel_main() {
     // sparse flags at +15 (the old value) returned cb_qk_im's CB id (!= 1) as sparse_frames_enabled,
     // silently compiling the writer's dense path so it ignored q_work_bitmap and deadlocked.
     constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 23);
-    constexpr uint32_t sparse_frame_seqlen_tiles = get_compile_time_arg_val(cb_arg_offset + 24);
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 24);
     constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 25);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);

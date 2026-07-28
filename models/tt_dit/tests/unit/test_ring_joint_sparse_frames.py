@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the sparse-frames extension to `ring_joint_scaled_dot_product_attention`.
 
-The extension adds three optional kwargs (`frame_seqlen`, `num_frames_padded`, `frame_allow`) that
+The extension adds three optional kwargs (`tokens_per_frame`, `num_frames_padded`, `sparse_frame_mask`) that
 enable frame-block-sparse attention inside the ring op: each Q frame attends only to a chosen
 subset of K frames (e.g. a centered window + one reference frame).
 
@@ -11,7 +11,7 @@ at shapes representative of video-DiT sparse-attention workloads:
   * 720p-scale: fsl=3840 tokens/frame, nf=21 (padded to 24), N=92160 padded
   * Smaller synthetic shapes for correctness across mesh sizes
 
-Golden = pytorch SDPA with an additive `[N, N]` block-mask matching frame_allow. Ring output must
+Golden = pytorch SDPA with an additive `[N, N]` block-mask matching sparse_frame_mask. Ring output must
 PCC-match the golden.
 
 Meshes:
@@ -76,7 +76,7 @@ _MESH_TOPOLOGY = pytest.mark.parametrize(
 
 
 # ---------------------------------------------------------------------------
-# Helpers: build the windowed frame_allow pattern + torch reference.
+# Helpers: build the windowed sparse_frame_mask pattern + torch reference.
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +95,7 @@ def _window_plan(num_frames: int, window: int, add_last_frame: bool) -> List[Tup
     return plan
 
 
-def _frame_allow(num_frames: int, num_frames_padded: int, window: int, add_last_frame: bool) -> torch.Tensor:
+def _sparse_frame_mask(num_frames: int, num_frames_padded: int, window: int, add_last_frame: bool) -> torch.Tensor:
     """`[nf_padded, nf_padded]` uint8. 1 = Q attends K. Padded frames = all-zero rows/cols."""
     plan = _window_plan(num_frames, window, add_last_frame)
     allow = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
@@ -105,7 +105,7 @@ def _frame_allow(num_frames: int, num_frames_padded: int, window: int, add_last_
     return allow
 
 
-def _pack_frame_allow(allow: torch.Tensor) -> list:
+def _pack_sparse_frame_mask(allow: torch.Tensor) -> list:
     """Bitpack the [nf, nf] uint8 allow table into uint32 words, matching the packing convention
     used by the ring_joint SDPA sparse-frames extension."""
     nf = allow.shape[0]
@@ -124,15 +124,15 @@ def _pack_frame_allow(allow: torch.Tensor) -> list:
     return words
 
 
-def _additive_mask_from_allow(allow: torch.Tensor, frame_seqlen: int, n_pad: int) -> torch.Tensor:
-    """Expand `frame_allow` [nf, nf] to the additive `[n_pad, n_pad]` block-mask used for the
+def _additive_mask_from_allow(allow: torch.Tensor, tokens_per_frame: int, n_pad: int) -> torch.Tensor:
+    """Expand `sparse_frame_mask` [nf, nf] to the additive `[n_pad, n_pad]` block-mask used for the
     pytorch reference (0 = allowed, -inf = disallowed). Padded columns are all -inf; padded rows
     are all-zero so softmax doesn't NaN (their outputs are dropped after)."""
     nf = allow.shape[0]
-    real = nf * frame_seqlen
+    real = nf * tokens_per_frame
     assert real >= n_pad or n_pad >= real, "expected n_pad and real to match after padding"
     ff = torch.where(allow.bool(), 0.0, float("-inf")).to(torch.float32)
-    full = ff.repeat_interleave(frame_seqlen, 0).repeat_interleave(frame_seqlen, 1)[:n_pad, :n_pad]
+    full = ff.repeat_interleave(tokens_per_frame, 0).repeat_interleave(tokens_per_frame, 1)[:n_pad, :n_pad]
     if n_pad > full.shape[0]:
         padded = torch.full((n_pad, n_pad), float("-inf"), dtype=torch.float32)
         padded[: full.shape[0], : full.shape[1]] = full
@@ -147,11 +147,11 @@ def _torch_sdpa_ref(
     v: torch.Tensor,
     allow: torch.Tensor,
     num_frames_real: int,
-    frame_seqlen: int,
+    tokens_per_frame: int,
 ) -> torch.Tensor:
-    """pytorch reference: block-sparse SDPA using the additive mask expanded from frame_allow."""
+    """pytorch reference: block-sparse SDPA using the additive mask expanded from sparse_frame_mask."""
     n_pad = q.shape[2]
-    mask = _additive_mask_from_allow(allow, frame_seqlen, n_pad).to(q.device).to(q.dtype)
+    mask = _additive_mask_from_allow(allow, tokens_per_frame, n_pad).to(q.device).to(q.dtype)
     return torch.nn.functional.scaled_dot_product_attention(
         q,
         k,
@@ -176,7 +176,7 @@ def _run_sparse_frames_op(
     num_links,
     num_frames_real: int,
     num_frames_padded: int,
-    frame_seqlen: int,
+    tokens_per_frame: int,
     b: int,
     nh: int,
     d: int,
@@ -194,31 +194,31 @@ def _run_sparse_frames_op(
     """Build small Q/K/V, run the ring op with sparse-frames enabled, compare to a pytorch ref.
 
     q_chunk_size_tokens / k_chunk_size_tokens (in TOKENS — SDPAProgramConfig's chunk sizes are
-    tokens, see sdpa_device_operation.cpp's `% TILE_WIDTH == 0` check) default to `frame_seqlen`
-    so each SDPA chunk == one frame. Override with a divisor of frame_seqlen to exercise the
+    tokens, see sdpa_device_operation.cpp's `% TILE_WIDTH == 0` check) default to `tokens_per_frame`
+    so each SDPA chunk == one frame. Override with a divisor of tokens_per_frame to exercise the
     sub-frame chunk path (multiple chunks per frame — needed at large fsl to fit L1 CB budgets).
 
     sparse_frames_enabled=False disables the sparse-frames extension: the op runs plain dense
-    ring_joint SDPA (no frame_allow bitmask, no frame_seqlen), and the golden reference uses an
+    ring_joint SDPA (no sparse_frame_mask bitmask, no tokens_per_frame), and the golden reference uses an
     all-ones allow (every Q attends every K). Diagnostic: if a sub-frame chunk test hangs with
     sparse_frames_enabled=True but passes with False, the bug is in the sparse-frames overlay;
     if it hangs both ways, the bug is in the general ring_joint path at sub-frame chunks."""
     assert num_frames_padded % sp_factor == 0, "num_frames_padded must be a multiple of sp_factor"
-    assert frame_seqlen % ttnn.TILE_SIZE == 0, "frame_seqlen must be tile-aligned"
-    n_pad = num_frames_padded * frame_seqlen
-    fsl_tiles = frame_seqlen // ttnn.TILE_SIZE
-    q_chunk_size_tokens = q_chunk_size_tokens if q_chunk_size_tokens is not None else frame_seqlen
-    k_chunk_size_tokens = k_chunk_size_tokens if k_chunk_size_tokens is not None else frame_seqlen
+    assert tokens_per_frame % ttnn.TILE_SIZE == 0, "tokens_per_frame must be tile-aligned"
+    n_pad = num_frames_padded * tokens_per_frame
+    fsl_tiles = tokens_per_frame // ttnn.TILE_SIZE
+    q_chunk_size_tokens = q_chunk_size_tokens if q_chunk_size_tokens is not None else tokens_per_frame
+    k_chunk_size_tokens = k_chunk_size_tokens if k_chunk_size_tokens is not None else tokens_per_frame
     assert (
-        frame_seqlen % q_chunk_size_tokens == 0
-    ), f"q_chunk_size_tokens ({q_chunk_size_tokens}) must divide frame_seqlen ({frame_seqlen})"
+        tokens_per_frame % q_chunk_size_tokens == 0
+    ), f"q_chunk_size_tokens ({q_chunk_size_tokens}) must divide tokens_per_frame ({tokens_per_frame})"
     assert (
-        frame_seqlen % k_chunk_size_tokens == 0
-    ), f"k_chunk_size_tokens ({k_chunk_size_tokens}) must divide frame_seqlen ({frame_seqlen})"
+        tokens_per_frame % k_chunk_size_tokens == 0
+    ), f"k_chunk_size_tokens ({k_chunk_size_tokens}) must divide tokens_per_frame ({tokens_per_frame})"
 
     # Golden reference on host.
     torch.manual_seed(0)
-    real_n = num_frames_real * frame_seqlen
+    real_n = num_frames_real * tokens_per_frame
     Q = torch.randn(b, nh, real_n, d)
     K = torch.randn(b, nh, real_n, d)
     V = torch.randn(b, nh, real_n, d)
@@ -231,7 +231,7 @@ def _run_sparse_frames_op(
         assert allow_override.shape == (num_frames_padded, num_frames_padded)
         allow = allow_override.to(torch.uint8)
     elif sparse_frames_enabled and not force_allow_all:
-        allow = _frame_allow(num_frames_real, num_frames_padded, window, add_last_frame)
+        allow = _sparse_frame_mask(num_frames_real, num_frames_padded, window, add_last_frame)
     else:
         # Dense-equivalent allow (every real Q attends every real K), used for both
         # sparse_frames_enabled=False and force_allow_all=True. With force_allow_all the op still
@@ -244,7 +244,7 @@ def _run_sparse_frames_op(
         padded_V,
         allow,
         num_frames_real=num_frames_real,
-        frame_seqlen=frame_seqlen,
+        tokens_per_frame=tokens_per_frame,
     )[:, :, :real_n, :]
 
     # ------- Set up the ring op on device --------------------------------
@@ -316,11 +316,11 @@ def _run_sparse_frames_op(
     persistent_output_buffer_k = _make_persistent_output_buffer()
     persistent_output_buffer_v = _make_persistent_output_buffer()
 
-    # Bitpack frame_allow into up to 32 uint32 words — passed to the op as a plain host vector
-    # (frame_allow_packed kwarg). No device tensor / no DMA / no CB required.
+    # Bitpack sparse_frame_mask into up to 32 uint32 words — passed to the op as a plain host vector
+    # (sparse_frame_mask kwarg). No device tensor / no DMA / no CB required.
     # When sparse-frames is disabled, we pass an empty vector and None for the other extension
     # kwargs, which routes the op through the plain (non-sparse) ring_joint SDPA path.
-    frame_allow_packed = _pack_frame_allow(allow) if sparse_frames_enabled else []
+    sparse_frame_mask = _pack_sparse_frame_mask(allow) if sparse_frames_enabled else []
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
@@ -360,9 +360,9 @@ def _run_sparse_frames_op(
         is_causal=False,
         # The extension: enable frame-block-sparse pattern. sparse_frames_enabled=False routes
         # through the plain ring_joint path by passing None + empty vector.
-        frame_seqlen=frame_seqlen if sparse_frames_enabled else None,
+        tokens_per_frame=tokens_per_frame if sparse_frames_enabled else None,
         num_frames_padded=num_frames_padded if sparse_frames_enabled else None,
-        frame_allow_packed=frame_allow_packed,
+        sparse_frame_mask=sparse_frame_mask,
     )
 
     # Gather output back (sharded seq on sp, heads on tp). Detilize on device first — host-side
@@ -379,7 +379,7 @@ def _run_sparse_frames_op(
 
     # Degenerate pattern: if any REAL Q frame attends zero K frames, the torch reference is a
     # fully-masked softmax row (which PyTorch collapses to 0/undefined), while the kernel's
-    # `_pack_frame_allow` workaround forces those all-zero rows to attend-all so the reader chain
+    # `_pack_sparse_frame_mask` workaround forces those all-zero rows to attend-all so the reader chain
     # stays in sync — so the two diverge by construction and PCC is meaningless. Only the drain_all
     # pattern hits this; real windowed patterns always attend at least the diagonal. Just verify the
     # device didn't hang and produced finite output.
@@ -395,7 +395,7 @@ def _run_sparse_frames_op(
 
     passing, pcc = comp_pcc(gt, out, pcc_threshold)
     logger.info(
-        f"[sparse-frames ring] nf_real={num_frames_real} nf_pad={num_frames_padded} fsl={frame_seqlen} "
+        f"[sparse-frames ring] nf_real={num_frames_real} nf_pad={num_frames_padded} fsl={tokens_per_frame} "
         f"window={window} add_last={add_last_frame} sp={sp_factor} tp={tp_factor} pcc={pcc}"
     )
     assert passing, f"sparse-frames ring SDPA vs torch reference PCC {pcc} < {pcc_threshold}"
@@ -437,7 +437,7 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=nf_real,
             num_frames_padded=nf_padded,
-            frame_seqlen=32,
+            tokens_per_frame=32,
             b=1,
             nh=8,
             d=128,
@@ -469,7 +469,7 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=2,
             num_frames_padded=sp_factor,
-            frame_seqlen=64,
+            tokens_per_frame=64,
             b=1,
             nh=8,
             d=128,
@@ -502,7 +502,7 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=sp_factor,
             num_frames_padded=sp_factor,
-            frame_seqlen=64,
+            tokens_per_frame=64,
             b=1,
             nh=8,
             d=128,
@@ -555,7 +555,7 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=nf_real,
             num_frames_padded=nf_padded,
-            frame_seqlen=3840,
+            tokens_per_frame=3840,
             b=1,
             nh=40,  # production value; runner shards on tp_axis (nh must divide tp_factor)
             d=128,
@@ -614,7 +614,7 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=nf_real,
             num_frames_padded=nf_padded,
-            frame_seqlen=3840,
+            tokens_per_frame=3840,
             b=1,
             nh=40,
             d=128,
@@ -640,7 +640,7 @@ class TestSparseFramesRing:
     @pytest.mark.parametrize(
         ("q_chunk_div", "k_chunk_div"),
         [
-            pytest.param(1, 1, id="chunk_full_fsl"),  # baseline: chunk == frame_seqlen
+            pytest.param(1, 1, id="chunk_full_fsl"),  # baseline: chunk == tokens_per_frame
             pytest.param(2, 2, id="chunk_half_fsl"),
             pytest.param(4, 4, id="chunk_quarter_fsl"),
             pytest.param(1, 4, id="asym_qfull_kquarter"),
@@ -665,16 +665,16 @@ class TestSparseFramesRing:
     ):
         """Sub-frame chunks: q_chunk_size = fsl/N (and k likewise). The device op requires each
         chunk to sit inside one frame (never straddle a boundary), so chunk sizes must divide
-        frame_seqlen. Motivation: at large fsl (720p = 3840 tokens/frame) chunk=fsl blows L1
+        tokens_per_frame. Motivation: at large fsl (720p = 3840 tokens/frame) chunk=fsl blows L1
         CBs (~40 MB vs 1.5 MB budget); dropping to fsl/5..fsl/8 fits.
 
         Uses fsl=64 so both symmetric (fsl/2, fsl/4 = 32, 16 tokens... wait, chunks must be
         multiples of TILE_SIZE=32 too) — use fsl=128 so fsl/2=64, fsl/4=32 are both valid.
-        Asymmetric cases prove q and k chunk sizes are independent — the frame_allow indexing
+        Asymmetric cases prove q and k chunk sizes are independent — the sparse_frame_mask indexing
         walks each independently (compute_streaming.hpp:2417 for k, 2474 for q)."""
-        frame_seqlen = 128  # supports fsl/1 (128), fsl/2 (64), fsl/4 (32); all tile-aligned
-        assert frame_seqlen % q_chunk_div == 0 and (frame_seqlen // q_chunk_div) % ttnn.TILE_SIZE == 0
-        assert frame_seqlen % k_chunk_div == 0 and (frame_seqlen // k_chunk_div) % ttnn.TILE_SIZE == 0
+        tokens_per_frame = 128  # supports fsl/1 (128), fsl/2 (64), fsl/4 (32); all tile-aligned
+        assert tokens_per_frame % q_chunk_div == 0 and (tokens_per_frame // q_chunk_div) % ttnn.TILE_SIZE == 0
+        assert tokens_per_frame % k_chunk_div == 0 and (tokens_per_frame // k_chunk_div) % ttnn.TILE_SIZE == 0
         nf_real = 8 if sp_factor == 8 else 6
         nf_padded = 8
         _run_sparse_frames_op(
@@ -686,15 +686,15 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=nf_real,
             num_frames_padded=nf_padded,
-            frame_seqlen=frame_seqlen,
+            tokens_per_frame=tokens_per_frame,
             b=1,
             nh=8,
             d=128,
             window=5,
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
-            q_chunk_size_tokens=frame_seqlen // q_chunk_div,
-            k_chunk_size_tokens=frame_seqlen // k_chunk_div,
+            q_chunk_size_tokens=tokens_per_frame // q_chunk_div,
+            k_chunk_size_tokens=tokens_per_frame // k_chunk_div,
             sparse_frames_enabled=sparse_frames_enabled,
             force_allow_all=force_allow_all,
         )
@@ -721,7 +721,7 @@ class TestSparseFramesRing:
         mask): tail (trailing K frames drained), head (leading drained), middle (alternating),
         drain_all (everything drained — degenerate), and single-frame drops. Confirms the drain
         fires correctly before/after/interleaved with processing."""
-        frame_seqlen = 128  # 4 tiles/frame, small
+        tokens_per_frame = 128  # 4 tiles/frame, small
         nf_real = 8
         nf_padded = 8
         half = nf_real // 2
@@ -750,7 +750,7 @@ class TestSparseFramesRing:
             num_links=num_links,
             num_frames_real=nf_real,
             num_frames_padded=nf_padded,
-            frame_seqlen=frame_seqlen,
+            tokens_per_frame=tokens_per_frame,
             b=1,
             nh=8,
             d=128,

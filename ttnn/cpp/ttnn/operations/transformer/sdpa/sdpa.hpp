@@ -104,9 +104,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
     // Sparse-frames extension (windowed / block-sparse pattern). All three or none; see
     // ring_joint_sdpa_device_operation_types.hpp for the pattern.
-    std::optional<uint32_t> frame_seqlen = std::nullopt,
+    std::optional<uint32_t> tokens_per_frame = std::nullopt,
     std::optional<uint32_t> num_frames_padded = std::nullopt,
-    std::vector<uint32_t> frame_allow_packed = {});
+    std::vector<uint32_t> sparse_frame_mask = {});
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

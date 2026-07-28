@@ -27,7 +27,7 @@ struct RingSDPAOpReceiver {
         // The host (RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args) ALWAYS appends both
         // AllGather semaphore ids, regardless of whether this receiver waits on them. Consume both
         // unconditionally so the runtime-arg stream stays aligned for any args that follow the
-        // fused-op block (e.g. the writer's sparse frame_allow words + q_work_bitmap). Previously
+        // fused-op block (e.g. the writer's sparse sparse_frame_mask words + q_work_bitmap). Previously
         // the reads were gated on wait_for_op_signal, so a wait_for_op_signal=false receiver (the
         // writer) consumed 2 fewer args than the host pushed, shifting all following runtime args
         // by 2 words and corrupting its q_work_bitmap. The semaphores are only *honored* (waited on)
