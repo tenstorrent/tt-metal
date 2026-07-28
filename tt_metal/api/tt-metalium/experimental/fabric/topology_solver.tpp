@@ -1316,7 +1316,8 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
                 TopologySatGraphView(*graph_data_),
                 TopologySatConstraintView(*constraint_data_),
                 sat_enc_,
-                connection_validation_mode);
+                connection_validation_mode,
+                quiet_mode);
             if (!sat_session_) {
                 MappingResult<TargetNode, GlobalNode> failure;
                 failure.success = false;
@@ -1371,7 +1372,8 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
                 TopologySatGraphView(*graph_data_),
                 TopologySatConstraintView(*constraint_data_),
                 sat_enc_,
-                connection_validation_mode);
+                connection_validation_mode,
+                quiet_mode);
             if (!sat_session_) {
                 MappingResult<TargetNode, GlobalNode> failure;
                 failure.success = false;

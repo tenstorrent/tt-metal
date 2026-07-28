@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <vector>
 
@@ -28,6 +29,12 @@ struct TopologySatSolver {
 
     int declare_one_more_variable();
     void add(int lit);
+
+    // CNF size introspection (for profiling which constraints dominate the formula). num_variables is the count of
+    // declared SAT variables; num_clauses counts terminated clauses (add(0)); num_literals counts non-zero literals.
+    std::size_t num_variables() const { return static_cast<std::size_t>(next_var_ < 0 ? 0 : next_var_); }
+    std::size_t num_clauses() const { return num_clauses_; }
+    std::size_t num_literals() const { return num_literals_; }
     // Assume a literal for the next solve() only (retracted afterwards). Lets callers add a symmetry-breaking hint
     // that is sound for any instance: if the assumption makes it UNSAT, re-solve() without it.
     void assume(int lit);
@@ -52,16 +59,20 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     int next_var_ = 0;
+    std::size_t num_clauses_ = 0;
+    std::size_t num_literals_ = 0;
 };
 
 // Internal SAT function declarations — implemented in topology_solver_sat.cpp.
 
+// quiet_mode suppresses the per-phase [topo-sat-profile] timing lines (they are logged at debug level otherwise).
 bool topology_sat_encode_hard_constraints(
     TopologySatSolver& solver,
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED);
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false);
 
 bool topology_sat_decode_hard_solution(
     TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out);
@@ -76,13 +87,15 @@ bool topology_sat_encode_hard_constraints(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false) {
     return topology_sat_encode_hard_constraints(
         solver,
         TopologySatGraphView(graph_data),
         TopologySatConstraintView(constraint_data),
         enc,
-        validation_mode);
+        validation_mode,
+        quiet_mode);
 }
 
 }  // namespace tt::tt_fabric::detail

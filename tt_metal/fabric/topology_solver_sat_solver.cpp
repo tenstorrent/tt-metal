@@ -68,7 +68,14 @@ int TopologySatSolver::declare_one_more_variable() {
     return next_var_;
 }
 
-void TopologySatSolver::add(int lit) { impl_->add(lit); }
+void TopologySatSolver::add(int lit) {
+    if (lit == 0) {
+        ++num_clauses_;
+    } else {
+        ++num_literals_;
+    }
+    impl_->add(lit);
+}
 
 void TopologySatSolver::assume(int lit) { impl_->assume(lit); }
 
