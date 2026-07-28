@@ -1001,9 +1001,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // free). Compute defines (SKIP_COMPUTE / SKIP_REDUCTION) are merged into cdefs at compute-kernel creation. ----
     const uint32_t diag_mask = operation_attributes.diag_mask;
     std::map<std::string, std::string> ddefs_compute;  // diagnostic compute defines
-    // Bits 0..7 alter kernel behaviour (and produce invalid output) => restricted to unfused/single-output.
-    // Bit8 (RING_REGIONAL) is host-only + correctness-preserving, so it is allowed everywhere.
-    if ((diag_mask & 0xFFu) != 0u) {
+    // Bits 0..7 and bit11 alter kernel behaviour (and produce invalid output) => restricted to
+    // unfused/single-output. Bits 8..10 are host-only + correctness-preserving, so they are allowed everywhere.
+    constexpr uint32_t kDiagKernelBits = 0xFFu | 0x800u;
+    if ((diag_mask & kDiagKernelBits) != 0u) {
         TT_FATAL(
             !has_bias && !has_ternary && !has_activation && n_chunks == 1u,
             "regime_a_matmul ablation diagnostic (diag_mask={}) is only supported unfused + single-output",
@@ -1191,7 +1192,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // Split-NOC: reader on the core's in1 NoC, writer on the OTHER NoC.
     //   g0 (noc==0): reader RISCV_0/NOC0, writer RISCV_1/NOC1
     //   g1 (noc==1): reader RISCV_1/NOC1, writer RISCV_0/NOC0
-    const std::map<std::string, std::string> rdefs;  // in1 reader takes no compile defines
+    // in1 reader defines: none in production; bit11 compile-gates out its DRAM read payload.
+    std::map<std::string, std::string> rdefs;
+    if (diag_mask & 0x800u) {
+        rdefs["SKIP_IN1_READ"] = "1";
+    }
     KernelHandle readerA = mk(kIn1ReaderKernel, g0, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, rct, rdefs);
     KernelHandle readerB = mk(kIn1ReaderKernel, g1, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, rct, rdefs);
     KernelHandle writerA = mk(kWriterKernel, g0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, wct, wdefs);

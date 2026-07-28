@@ -156,8 +156,16 @@ void kernel_main() {
                                         ((n_local + ncol_base) == 0u) && ((kblk * K_block + K_block) <= valid_k);
                     if (contig) {
                         const uint32_t off = (k_start + kblk * K_block) * in1_shard_stride_n * tile_bytes;
+#if !defined(SKIP_IN1_READ)
                         noc_async_read(
                             get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, K_block * vcols * tile_bytes);
+#else
+                        // TEST-ONLY diagnostic: drop ONLY the in1 DRAM read payload. The CB reserve/push, the
+                        // rotated shard order, the barrier, M-split forwarding, semaphores and all downstream
+                        // compute/output work are preserved; the block keeps its stale L1 contents, so the
+                        // output is intentionally invalid (PCC asserted only for mask 0).
+                        (void)off;
+#endif
                         noc_async_read_barrier();
                     } else
 #endif
@@ -167,8 +175,12 @@ void kernel_main() {
                             if (l < valid_k) {
                                 const uint32_t gk = k_start + l;  // global logical K tile
                                 const uint32_t off = (gk * in1_shard_stride_n + n_local + ncol_base) * tile_bytes;
+#if !defined(SKIP_IN1_READ)
                                 noc_async_read(
                                     get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, vcols * tile_bytes);
+#else
+                                (void)off;  // diagnostic: drop the in1 DRAM read payload only (see above)
+#endif
                                 // cols [vcols, N_block) are pad-N (garbage): safe, those output cols aren't written.
                             } else {
                                 // K tail: summed into EVERY valid output col -> must be exactly 0.0 (both operands
