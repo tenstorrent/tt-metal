@@ -135,6 +135,7 @@ class DRAMStreamingMatmul:
         num_loop_iters: int = 1,  # Number of inner kernel loop iterations (for testing CB wrapping)
         working_buf_tensor: ttnn.Tensor = None,  # Tensor-backed working buffer for CB1 (required when num_loop_iters > 1)
         in0_tile: ttnn.Tile = None,  # Override in0's tile spec; CB0 views input_a's memory with this tile
+        out_tile: ttnn.Tile = None,  # Override output's tile spec; the out CB views its memory with this tile
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -350,6 +351,10 @@ class DRAMStreamingMatmul:
 
             # CB 4: output - matmul writes here
             cb_mm_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_mm_out, output_tensor)
+            if out_tile is not None and out_tile != output_tensor.get_tile():
+                out_tile_size = out_tile.get_tile_size(output_tensor.dtype)
+                cb_mm_out_descriptor.format_descriptors[0].tile = ttnn.TileDescriptor(out_tile)
+                cb_mm_out_descriptor.format_descriptors[0].page_size = out_tile_size
             cb_descriptors.append(cb_mm_out_descriptor)
 
         # Optional scalar tensor CB (for scalar multiply after mul)

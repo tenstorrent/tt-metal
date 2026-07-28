@@ -123,11 +123,60 @@ exactly a row-major row. Measured on device for `[1,1,8,3584]` bf16 height-shard
 Same bytes in the same order. Only the pagination metadata differs, which is why
 a CB can read one as the other.
 
-## Next step
+## Measured: forward bridge is nearly free, and wins
 
-Wire this into `tt_transformers` MLP decode for FF1/FF3 behind an env flag,
-PCC-check against the reference model, and measure the real end-to-end delta
-against the predicted +9.5%. Nothing external is blocking it.
+Device times under tracy at FF1/FF3 shapes, bfp4 weights, LoFi
+(`bench_bridged_ff.py`, medians over 52 iterations):
+
+| op | device time |
+| --- | --- |
+| `dram_streaming_matmul` | 63.15 us |
+| `repeat` (replicate per core) | 2.14 us |
+| `untilize_with_unpadding` (extract row 0) | 2.07 us |
+| `interleaved_to_sharded` (reshard) | 0.82 us |
+| **forward chain total** | **68.19 us** |
+| production `dram_sharded` baseline | 93.90 us |
+| **saved per matmul** | **+25.7 us (27% faster)** |
+
+The bridge costs 5.03 us to save 30.75 us, so the economics are decisively
+positive. PCC 0.993. FF1 and FF3 share an input, so one bridge serves both.
+
+## Still blocked: the reverse bridge
+
+The streaming matmul emits `[1,32]`-tiled output. Stock eltwise ops (the `mul`
+between FF1/FF3, the residual add) need standard `[32,32]` tiles, and nothing can
+convert back:
+
+| attempt | result |
+| --- | --- |
+| `to_layout(ROW_MAJOR)` on `[1,32]`-tiled output | `tensor_height % TILE_HEIGHT == 0` -- untilize hardcodes 32 |
+| allocate output ROW_MAJOR with `tile=[1,32]` | `Configuring a ROW MAJOR page config with a custom tile configuration is not supported` |
+| allocate output with height 32 so untilize's assert passes | assert passes, but `Cannot set circular buffer size to 3670016 ... bank size 114688` |
+| same at FF2's narrower N=3584 | same failure, `917504` vs `28672` |
+
+The last two are the same root cause: untilize sizes its circular buffer assuming
+32-row tiles, so it over-allocates by exactly 32x. Forward direction works
+because CB aliasing happens inside a `generic_op` we control; the reverse has to
+go through stock ops we do not.
+
+## What integration needs
+
+Two micro-ops, both modelled on existing ones:
+
+1. **Reverse retile** `[1,32]` -> `[32,32]`, to hand results back to stock ops.
+   `micro_ops/tilize_8x32` (159 lines plus a 23-line kernel) is the template.
+2. **Tiny-tile eltwise mul**, so FF1/FF3 -> mul -> FF2 can stay tiny-tile and need
+   only one reverse bridge per MLP instead of two. The op's own `mul_tensor` path
+   will not do: it aliases a single `[16,16]` tile, sized for DeepSeek's MoE, not
+   a 14336-wide FFN.
+
+### What it is worth
+
+Per layer, the three MLP matmuls cost roughly 282 us today. Streaming them with
+one shared forward bridge and one reverse bridge is about 195 us plus the reverse
+cost, so roughly 87 us saved per layer, 3.65 ms per token over 42 layers. Against
+a 26.7 ms token that is about **+15% (37.5 -> ~43 t/s/u)** from the MLP alone,
+before touching QKV and WO.
 
 ## Caveats
 
