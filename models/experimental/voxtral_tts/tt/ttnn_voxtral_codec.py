@@ -157,6 +157,7 @@ class TtVoxtralCodecDecoder:
                     "fs": vec(w[p + "ffn_scale"]),
                 }
         self._bias_cache = {}
+        self._zero_cache = {}
         self._slopes = alibi_slopes(CODEC_N_HEADS)
         self.windows = decoder_window_sizes()
 
@@ -244,25 +245,51 @@ class TtVoxtralCodecDecoder:
         out = ttnn.matmul(attn, v, compute_kernel_config=COMPUTE_CONFIG)
         return ttnn.typecast(out, DTYPE) if self.attn_dtype != DTYPE else out
 
+    def _zeros(self, H, pad, d):
+        key = (H, pad, d)
+        if key not in self._zero_cache:
+            self._zero_cache[key] = ttnn.from_torch(
+                torch.zeros(1, H, pad, d), dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        return self._zero_cache[key]
+
     def _attention(self, q, k, v, window):
         """[1,H,S,d] -> [1,H,S,d]. Chunks when S > chunk_min, else one full-S pass.
 
         EXACT, not an approximation: attention is causal AND windowed, so output[i] depends only
-        on input[i-window .. i]. A slab that starts `window` positions early therefore has all the
-        context its kept rows need; the leading `window` rows are discarded because THEIR context
-        is missing. Verified against full-S attention to fp32 rounding (~1e-7)."""
+        on input[i-window .. i]. A slab starting `window` positions early therefore has all the
+        context its kept rows need; the leading `window` rows are dropped because THEIR context is
+        missing. Verified against full-S attention (max abs diff ~1e-7) and against the unchunked
+        device path.
+
+        EVERY CHUNK IS EXACTLY `slab` LONG, so there is ONE cached bias per window and attention
+        sees one shape for the process lifetime. Two details buy that:
+          * chunk 0 starts at lo=0, so it needs NO left context -- all `slab` rows are valid
+            outputs (cut=0) and local index == absolute index, so the ordinary slab bias is
+            already correct. No left padding, no special-case bias.
+          * the final chunk is padded on the RIGHT to `slab`. Safe with the same bias because
+            causal masking already forbids any real row from looking forward into the padding;
+            the padding rows are computed and discarded.
+        Without this, first/last chunk lengths varied (the last with S mod C), which meant a new
+        bias AND a new kernel compilation for every distinct utterance length."""
         S = q.shape[2]
         if self.chunk_min is None or S <= self.chunk_min:
             return self._attention_slab(q, k, v, self._attn_bias(S, window))
         H, d = q.shape[1], q.shape[3]
-        C = self.slab - window
+        slab = self.slab
+        C = slab - window
+        bias = self._attn_bias(slab, window)  # the ONE tensor, reused by every chunk
         outs, a = [], 0
         while a < S:
-            lo, hi = max(0, a - window), min(S, a + C)
-            cut = a - lo
+            lo, cut = (0, 0) if a == 0 else (a - window, window)
+            hi = min(S, lo + slab)
             sl = lambda t: ttnn.slice(t, [0, 0, lo, 0], [1, H, hi, d])
-            o = self._attention_slab(sl(q), sl(k), sl(v), self._attn_bias(hi - lo, window))
-            outs.append(o if cut == 0 else ttnn.slice(o, [0, 0, cut, 0], [1, H, hi - lo, d]))
+            qs, ks, vs = sl(q), sl(k), sl(v)
+            if hi - lo < slab:  # final chunk: pad right so the shape stays slab-sized
+                z = self._zeros(H, slab - (hi - lo), d)
+                qs, ks, vs = (ttnn.concat([t, z], dim=2) for t in (qs, ks, vs))
+            o = self._attention_slab(qs, ks, vs, bias)
+            outs.append(ttnn.slice(o, [0, 0, cut, 0], [1, H, cut + (hi - a), d]))
             a = hi
         return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
 
