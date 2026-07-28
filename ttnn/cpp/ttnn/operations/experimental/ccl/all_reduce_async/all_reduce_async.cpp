@@ -32,13 +32,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace detail {
 uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_workers) {
     // iterate until we find a dimension that is divisible by num_workers
-    //
-    // Divisibility is judged on the padded shape (in tile units for TILE), but the returned dim is an
-    // index into the LOGICAL shape -- that is the coordinate system every caller indexes with. The two
-    // ranks are not always equal: padded_shape has max(logical_rank, alignment_size) dims, so a logical
-    // [256] TILE tensor (alignment {32, 32}) has padded shape [32, 256]. compute_padded_shape aligns
-    // from the back, so only the trailing logical_rank dims of padded_shape map onto logical dims --
-    // restrict the search to those, or the returned dim can land outside the logical shape.
+
     const auto& padded_shape = input_tensor.padded_shape();
     const auto layout = input_tensor.layout();
     const auto logical_rank = input_tensor.logical_shape().rank();
@@ -55,10 +49,6 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
     if (layout == Layout::TILE) {
         const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
         auto tile_shape_it = tile_shape.crbegin();
-        // Judge divisibility in tiles, not elements: a tiled dim can only be split on tile boundaries.
-        // Both reverse iterators walk in lockstep, so the last dim is divided by the tile width and the
-        // second to last by the tile height. shape_vec now holds only the logical dims, so a rank-1
-        // tensor has just the width one and the previous hardcoded rbegin() + 2 would run past rend().
         const auto num_tiled_dims = static_cast<std::ptrdiff_t>(std::min<size_t>(2, shape_vec.size()));
         std::for_each(shape_vec.rbegin(), shape_vec.rbegin() + num_tiled_dims, [&tile_shape_it](auto& x) {
             x /= *(tile_shape_it++);
@@ -68,8 +58,6 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
         shape_vec.crbegin(), shape_vec.crend(), [num_workers](const auto& x) { return x % num_workers == 0; });
 
     auto end_it = shape_vec.crend();
-    // logical_rank is the "no divisible dim found" sentinel; callers read it as "fall back to the
-    // composite all-gather + local reduce path". It must be compared against the LOGICAL rank.
     return static_cast<uint32_t>((dim_it == end_it) ? static_cast<std::ptrdiff_t>(logical_rank) : end_it - dim_it - 1);
 }
 }  // namespace detail
@@ -178,11 +166,7 @@ ttnn::Tensor all_reduce_async(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
-    // A rank < 2 input has no dim the CCL kernels can map onto the (B, C, H, W) layout they work in:
-    // reduce_scatter validates rank > 1, and the ND->4D mapping helpers peel the last two dims off the
-    // shape. An all-reduce over [N] is identical to one over [1, N], and that view is free: a TILE [N]
-    // tensor is already stored as a padded [tile_h, N] buffer, so the unsqueeze resolves to a
-    // metadata-only reshape. The recursion re-checks the rank, so a rank-0 input reaches [1, 1] in two.
+    // Run rank < 2 inputs as [1, N] and restore the shape on the way out
     if (input_tensor.logical_shape().rank() < 2) {
         const auto logical_shape = input_tensor.logical_shape();
         auto output_tensor = all_reduce_async(
@@ -210,8 +194,6 @@ ttnn::Tensor all_reduce_async(
         input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
 
     const auto& initial_shape = input_tensor.logical_shape();
-    // finding_scatter_dim returns the logical rank when no dim is evenly divisible, so the sentinel has
-    // to be compared against the logical rank too -- padded_shape().size() can be larger (see above).
     auto composite_dim = (dim == initial_shape.rank()) ? 0 : dim;
     bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =
@@ -329,7 +311,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
-    // Run rank < 2 inputs as [1, N] and restore the shape on the way out, as in the overload above.
+    // Run rank < 2 inputs as [1, N] and restore the shape on the way out
     if (input_tensor.logical_shape().rank() < 2) {
         const auto logical_shape = input_tensor.logical_shape();
         auto output_tensor = all_reduce_async(
@@ -370,8 +352,6 @@ ttnn::Tensor all_reduce_async(
         interleaved_input_tensor.has_value() ? interleaved_input_tensor.value() : input_tensor;
 
     // Logic for taking the AG+local reduce code path
-    // finding_scatter_dim returns the logical rank when no dim is evenly divisible, so the sentinel has
-    // to be compared against the logical rank too -- padded_shape().size() can be larger (see above).
     auto composite_dim = (dim == initial_shape.rank()) ? 0 : dim;
     bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =

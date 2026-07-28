@@ -192,10 +192,6 @@ NUM_ITERS = 2
         [8, 128, 128],
         [8, 8, 8, 8, 128, 128],
         [8, 8, 8, 16, 16],
-        # rank 1: the logical rank is 1 but the TILE padded rank is 2 (the alignment is 2D), so a dim
-        # derived from the padded shape does not index the logical shape. 256 has 8 tiles -> divisible
-        # by the 4 devices on cluster_axis 1, so this takes reduce-scatter + all-gather; 96 has 3, which
-        # is not, so it falls back to composite all-gather + local reduce.
         [256],
         [96],
     ],
@@ -225,15 +221,8 @@ def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topolo
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8), (2, 4)], indirect=True, ids=["1x8", "2x4"])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
-# 256 is 8 tiles, divisible by the devices on cluster_axis 1 -> reduce-scatter + all-gather. 96 is 3 and
-# 32 is 1, neither divisible -> composite all-gather + local reduce. Both paths must keep the rank.
 @pytest.mark.parametrize("N", [32, 96, 256])
 def test_rank1(mesh_device, layout, N):
-    """A 1D all_reduce must produce a rank-1 result, on the native and the composite path alike.
-
-    Regression for #40107: the scatter dim was derived from the padded shape, whose rank is 2 for a
-    logical [N] TILE tensor (the tile alignment is 2D), and then used to index the logical shape.
-    """
     torch.manual_seed(0)
     num_devices = tuple(mesh_device.shape)[1]  # cluster_axis 1
     torch_input = torch.rand([N]).bfloat16()
@@ -257,7 +246,6 @@ def test_rank1(mesh_device, layout, N):
 
     assert list(tt_output.shape) == [N], f"expected a rank-1 output of shape [{N}], got {tt_output.shape}"
 
-    # The input is replicated, so every device should end up with the sum of num_devices copies.
     torch_reference = torch_input.float() * num_devices
     for i, device_tensor in enumerate(ttnn.get_device_tensors(tt_output)):
         eq, mess = comp_pcc(torch_reference, ttnn.to_torch(device_tensor).float())
