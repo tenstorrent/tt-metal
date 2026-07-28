@@ -86,15 +86,18 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
 
 namespace {
 
-// Apply many-to-many pinning groups as a single required constraint per group. When
-// `validate_logical_nodes` is true (map_mesh_to_physical), missing logical nodes or ASIC positions fail;
-// otherwise absent physical positions are skipped (multi-mesh solve path).
+// Apply many-to-many pinning groups as a single required constraint per group. Each group is applied
+// independently, filtered down to what exists here: fabric nodes belonging to another logical mesh are
+// dropped, as are ASIC positions absent from this physical mesh. A group left with nothing to say is
+// skipped, so a group naming positions that only exist on some meshes constrains just those meshes. When
+// `require_present_positions` is true (map_mesh_to_physical), a group whose positions are ALL absent is an
+// error rather than a silent skip.
 std::optional<std::string> apply_pinning_groups(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::vector<PinningConstraint>& pinning_groups,
     MeshId logical_mesh_id,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
-    bool validate_logical_nodes) {
+    bool require_present_positions) {
     for (const auto& group : pinning_groups) {
         std::set<FabricNodeId> fabric_nodes;
         for (const auto& fabric_node : group.fabric_nodes) {
@@ -111,14 +114,6 @@ std::optional<std::string> apply_pinning_groups(
         for (const auto& position : group.asic_positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
-                if (validate_logical_nodes) {
-                    return fmt::format(
-                        "Pinned ASIC position (tray {}, loc {}) not found among physical ASICs participating in mesh "
-                        "{}",
-                        *position.first,
-                        *position.second,
-                        logical_mesh_id.get());
-                }
                 log_trace(
                     tt::LogFabric,
                     "Pinned ASIC position (tray_id: {}, asic_location: {}) not found in physical topology; skipping",
@@ -130,6 +125,12 @@ std::optional<std::string> apply_pinning_groups(
         }
 
         if (asic_ids.empty()) {
+            if (require_present_positions) {
+                return fmt::format(
+                    "Pinned ASIC positions of a pinning group were not found among physical ASICs participating in "
+                    "mesh {}",
+                    logical_mesh_id.get());
+            }
             continue;
         }
 

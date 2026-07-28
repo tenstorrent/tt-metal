@@ -2011,8 +2011,10 @@ TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexExpands) {
     }
 }
 
-TEST(MeshGraphDescriptorTests, PinningsDuplicateError) {
-    // Test that duplicate pinnings for the same fabric node are detected
+TEST(MeshGraphDescriptorTests, PinningsRepeatedNodeKeptAsSeparateGroups) {
+    // The same fabric node may appear in several entries. Each entry is carried through as its own group;
+    // consumers filter to the positions present on the mesh being solved, so whether the entries can be
+    // satisfied together is decided there, not at parse time.
     const std::string text_proto = R"proto(
         mesh_descriptors: {
           name: "M0"
@@ -2035,11 +2037,20 @@ TEST(MeshGraphDescriptorTests, PinningsDuplicateError) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    EXPECT_THAT(
-        ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-            ::testing::HasSubstr("Duplicate pinning"))));
+    MeshGraphDescriptor desc(text_proto);
+    const auto& pinnings = desc.get_pinnings();
+
+    ASSERT_EQ(pinnings.size(), 2u);
+    const FabricNodeId node(MeshId{0}, 0);
+    for (const auto& group : pinnings) {
+        ASSERT_EQ(group.fabric_nodes.size(), 1u);
+        EXPECT_EQ(group.fabric_nodes[0], node);
+        ASSERT_EQ(group.asic_positions.size(), 1u);
+    }
+    EXPECT_EQ(*pinnings[0].asic_positions[0].first, 1u);
+    EXPECT_EQ(*pinnings[0].asic_positions[0].second, 1u);
+    EXPECT_EQ(*pinnings[1].asic_positions[0].first, 2u);
+    EXPECT_EQ(*pinnings[1].asic_positions[0].second, 2u);
 }
 
 TEST(MeshGraphDescriptorTests, PinningsEmpty) {
@@ -2225,8 +2236,9 @@ TEST(MeshGraphDescriptorTests, PinningsRegexInvalidRegexError) {
             ::testing::HasSubstr("invalid regex"))));
 }
 
-TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsDuplicateError) {
-    // mesh_id_regex "0-2" and "2-3" both match mesh 2 -> duplicate after expansion.
+TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsExpandPerMesh) {
+    // mesh_id_regex "0-2" and "2-3" both match mesh 2, so mesh 2's chip 0 lands in a group from each entry.
+    // Overlap is legal: expansion yields one group per matched mesh per entry.
     const std::string text_proto = R"proto(
         mesh_descriptors: {
           name: "M0"
@@ -2254,9 +2266,21 @@ TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsDuplicateError) {
         top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
     )proto";
 
-    EXPECT_THAT(
-        [&]() { MeshGraphDescriptor desc(text_proto); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate pinning for fabric node")));
+    MeshGraphDescriptor desc(text_proto);
+    const auto& pinnings = desc.get_pinnings();
+
+    // Meshes 0, 1, 2 from the first entry plus meshes 2, 3 from the second.
+    ASSERT_EQ(pinnings.size(), 5u);
+    std::map<uint32_t, uint32_t> groups_per_mesh;
+    for (const auto& group : pinnings) {
+        ASSERT_EQ(group.fabric_nodes.size(), 1u);
+        EXPECT_EQ(group.fabric_nodes[0].chip_id, 0u);
+        groups_per_mesh[*group.fabric_nodes[0].mesh_id]++;
+    }
+    EXPECT_EQ(groups_per_mesh[0], 1u);
+    EXPECT_EQ(groups_per_mesh[1], 1u);
+    EXPECT_EQ(groups_per_mesh[2], 2u);
+    EXPECT_EQ(groups_per_mesh[3], 1u);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

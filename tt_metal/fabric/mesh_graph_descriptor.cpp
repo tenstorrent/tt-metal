@@ -1886,28 +1886,13 @@ void MeshGraphDescriptor::populate_pinnings() {
         }
     }
 
-    // A logical fabric node may appear in at most one pinning group after regex expansion.
-    std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
-    for (const auto& group : pinnings_) {
-        for (const auto& node : group.fabric_nodes) {
-            const auto key = std::make_pair(*node.mesh_id, node.chip_id);
-            fabric_node_pinning_count[key]++;
-            TT_FATAL(
-                fabric_node_pinning_count[key] <= 1,
-                "Duplicate pinning for fabric node (mesh_id: {}, chip_id: {}) after regex expansion",
-                key.first,
-                key.second);
-        }
-    }
+    // A logical fabric node may appear in several pinning groups. Each group is carried through as its own
+    // constraint; the consumer filters out whatever is not present on the physical mesh being solved and
+    // applies the rest, so a node listed in a wide group and in a 1:1 anchor is narrowed by the anchor.
 }
 
 void MeshGraphDescriptor::validate_pinnings(
     const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
-    // Track how many pinning entries reference the same logical_fabric_node_id. A logical node may be
-    // paired with many positions within a single (all-to-all) entry, but appearing in more than one
-    // entry is ambiguous and treated as a duplicate.
-    std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
-
     for (const auto& pinning : proto.pinnings()) {
         // All-to-all entries must list at least one logical node and at least one physical position.
         if (pinning.logical_fabric_node_id().empty()) {
@@ -1985,29 +1970,6 @@ void MeshGraphDescriptor::validate_pinnings(
                 error_messages.push_back(
                     "physical_asic_position sets both asic_location_regex and asic_location; use one or the other");
             }
-        }
-
-        for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
-            // Regex entries are expanded later against the instantiated domain; their numeric
-            // mesh_id/chip_id are unused, so skip exact-duplicate tracking for them.
-            if (!logical_node_id.mesh_id_regex().empty() || !logical_node_id.chip_id_regex().empty()) {
-                continue;
-            }
-            uint32_t mesh_id = logical_node_id.mesh_id();
-            uint32_t chip_id = logical_node_id.chip_id();
-
-            // Check for the same logical node pinned across multiple entries.
-            auto key = std::make_pair(mesh_id, chip_id);
-            fabric_node_pinning_count[key]++;
-            if (fabric_node_pinning_count[key] > 1) {
-                error_messages.push_back(
-                    fmt::format("Duplicate pinning for fabric node (mesh_id: {}, chip_id: {})", mesh_id, chip_id));
-            }
-
-            // Validate that mesh_id exists in the mesh instances
-            // Note: We can't fully validate chip_id range without knowing which mesh descriptor
-            // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
-            // More precise validation would require checking the top_level_instance structure
         }
     }
 }
