@@ -58,6 +58,10 @@ if os.environ.get("PERF_MCP_PERF_TEST") and _MANIFEST:
 if os.environ.get("PERF_MCP_PCC_TEST") and _MANIFEST:
     _MANIFEST.setdefault("pathmap", {}).setdefault("pcc", {}).setdefault("end_to_end", {})
     _MANIFEST["pathmap"]["pcc"]["end_to_end"]["path"] = os.environ["PERF_MCP_PCC_TEST"]
+_MODEL_ROOT_CONFIGURED = bool(
+    (os.environ.get("PERF_MCP_MODEL_ROOT") or "").strip()
+    or str(_MANIFEST.get("config", {}).get("model_root") or "").strip()
+)
 _MODEL_ROOT = Path(os.environ.get("PERF_MCP_MODEL_ROOT") or _MANIFEST.get("config", {}).get("model_root", "."))
 # PUBLISH the key every per-run artifact is named after. perf_mcp derived it from _MODEL_ROOT while
 # run.py and the ledger read PERF_MCP_MODEL_NAME -- which nothing ever set, so those fell back to the
@@ -792,6 +796,18 @@ def _rebuild_optimize_report(model_root=None) -> None:
             )
         else:
             _block = mod.optimize_block(root, len(attempts), text, when)
+        if not _MODEL_ROOT_CONFIGURED:
+            # NEVER write a report into whatever directory we happen to be started from. The model
+            # root falls back to "." when nothing configured one, so an unconfigured import wrote
+            # RUN_REPORT.md into the working tree -- once into the repo itself, where a broad
+            # `git add` committed a generated artifact as if it were tool code. The report belongs to
+            # a model; with no model there is nothing to report and nowhere it belongs.
+            print(
+                "  [perf-report] skipped: no model root configured "
+                "(set PERF_MCP_MODEL_ROOT or manifest config.model_root)",
+                file=sys.stderr,
+            )
+            return
         mod.upsert_report_section(root, _key, _block)
     except Exception as exc:  # noqa: BLE001
         print(f"  [perf-report] render failed: {type(exc).__name__}: {exc}", file=sys.stderr)

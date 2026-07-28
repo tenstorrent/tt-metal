@@ -148,3 +148,35 @@ def test_the_writers_guard_is_gone(tmp_path):
     src = (_P(__file__).resolve().parents[1] / "cc_optimize" / "perf_mcp.py").read_text()
     assert "_baseline_trace_ms_from" not in src
     assert "led.trace_ms_from_profile(prof)" in src
+
+
+def test_no_report_is_written_when_no_model_root_was_configured(tmp_path, monkeypatch, capsys):
+    """A report belongs to a MODEL. The model root falls back to "." when nothing configured one, so
+    an unconfigured import wrote RUN_REPORT.md into whatever directory the process started in -- once
+    into the repo, where a broad `git add` committed a generated artifact as tool code. The tool
+    refuses, rather than every caller and every test having to remember to point it somewhere safe.
+    """
+    import importlib.util
+    import sys as _s
+    from pathlib import Path as _P
+
+    monkeypatch.setenv("PERF_MCP_MANIFEST", str(tmp_path / "m.json"))
+    (tmp_path / "m.json").write_text('{"config": {}, "perf_test_resolved": {"path": "t.py"}}')
+    monkeypatch.delenv("PERF_MCP_MODEL_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    root = _P(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("pm_unrooted_ut", root / "cc_optimize" / "perf_mcp.py")
+    pm = importlib.util.module_from_spec(spec)
+    _s.modules["pm_unrooted_ut"] = pm
+    spec.loader.exec_module(pm)
+
+    assert pm._MODEL_ROOT_CONFIGURED is False
+    assert not (tmp_path / "RUN_REPORT.md").exists()
+
+    monkeypatch.setenv("PERF_MCP_MODEL_ROOT", str(tmp_path / "mymodel"))
+    spec2 = importlib.util.spec_from_file_location("pm_rooted_ut", root / "cc_optimize" / "perf_mcp.py")
+    pm2 = importlib.util.module_from_spec(spec2)
+    _s.modules["pm_rooted_ut"] = pm2
+    spec2.loader.exec_module(pm2)
+    assert pm2._MODEL_ROOT_CONFIGURED is True
