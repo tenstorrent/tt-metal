@@ -7,6 +7,42 @@ changed. Winter's own headline (a ~0.15 s warm traced denoise step) has **no com
 artifact** in that tree — it is a README assertion plus a code path capable of producing it — so
 nothing here rests on it. Every number below is ours.
 
+---
+
+## Where we ended up, normalized against winter's operating point
+
+Everything in §§1–12 was measured with `host` Gumbel at `reveal_pmax = 4096`. Two follow-up sweeps
+(§13) re-measured on the **shipped `device` Gumbel** and swept the prefix span, which is what makes
+a like-for-like comparison to winter possible at all.
+
+| configuration (30L, canvas 256, device Gumbel) | ms/step |
+|---|---|
+| production path this morning (derived, see §13.3) | ~371 |
+| + SDPA grid + concat MoE | 238.3 |
+| + `DG_NORM_FULLCANVAS` | 195.7 |
+| + prefix span at winter's geometry (`reveal_pmax` 384–576) | **~181** |
+
+Throughput on winter's own accounting — 256 tokens per canvas, prefix processing **excluded**:
+
+| denoise steps | winter (its README's 0.15 s/step) | **us, today** |
+|---|---|---|
+| 8 | 213 tok/s | **177** |
+| 10 (winter's demo) | 171 | 141 |
+| 16 | 107 | **110** |
+
+So after this work we are at **0.83× winter's documented step time at 8 steps and slightly ahead of
+it at 16** — and we get there at bf16, where winter runs bf4 experts and bf8 attention. The earlier
+impression of a 4–10× gap was an artefact of comparing our *served* number (which includes a 2.02 s
+commit per block) against winter's *denoise-only* arithmetic.
+
+Two things this does **not** say. The "200–350 tok/s" figure in circulation is not supported by
+winter's own README: 0.15 s/step gives 107–213 tok/s at 8–16 steps, and 350 tok/s at 8 steps would
+need 91 ms/step. And none of this touches the **2.02 s/block commit**, which is 26–38% of a served
+block and where no lever has been applied yet — winter avoids it only by re-encoding the whole
+prefix every canvas, which is O(P²) and worse for us.
+
+---
+
 ## Summary of what changed
 
 | # | change | status | evidence |
@@ -354,3 +390,79 @@ arm has to beat before a difference means anything.
   ~1–2 pp.
 * Concat-experts MoE measurement (§5), after the trace region is right-sized (§8).
 * `DG_SDPA_EXP_APPROX` has never been swept.
+
+---
+
+## 13. Follow-up on the shipped Gumbel mode: component breakdown, two more levers, and the span axis
+
+All of §13 is 30L, canvas 256, 48 forced steps, **`--gumbel-mode device`** (the shipped mode),
+`DG_MOE_CONCAT=1`, `TRACE_REGION_SIZE=4 GiB`, 2 interleaved reps.
+
+### 13.1 Where the step actually goes (`DG_SKIP`)
+
+Reproducibility here was unusually tight — the `nomoe` arm produced 7.805 s on both reps.
+
+| arm | steady s/block | ms/step | component cost | share |
+|---|---|---|---|---|
+| `full` | 11.429 | 238.1 | — | — |
+| `DG_SKIP=moe` | 7.805 | 162.6 | **75.5 ms** | 31.7% |
+| `DG_SKIP=attn` | 10.006 | 208.5 | 29.6 ms | 12.4% |
+| `DG_SKIP=shared` | 10.993 | 229.0 | 9.1 ms | 3.8% |
+| *(residual — not in any seam)* | | | **124.0 ms** | **52.1%** |
+
+**More than half the step is outside the three seams.** That residual is the per-layer norms and
+residual adds (the seams remove only the attention / shared-MLP / MoE *compute*), plus embed,
+self-conditioning, lm_head, the terminal sampler and CCL. This is the single most useful number in
+the document: it says layer-level matmul work is no longer where the time is.
+
+### 13.2 Two levers aimed at that residual
+
+**`DG_NORM_FULLCANVAS=1` — 238.3 → 195.7 ms/step, −17.9%.** The second-largest lever found, and it
+was already implemented and already measured (+15.8% in `l1_residency.md`); it is off because the
+bit-identity flip gate rejected it. The denoise step runs 7 `rms_norm` calls per layer × 30 layers,
+each chunked into 32-row pieces for a 256-row canvas — on the order of 1,700 norm ops per step.
+Decision-changing, so it needs the same absolute quality gate as concat.
+
+**`DG_TERMINAL_SHARDED=1` — −0.3%, i.e. nothing, and the reason matters.** This is winter's
+reduce-sharding (compute the terminal on the pre-all-gather `[256, V/tp]` shard) and V-sharded
+self-conditioning, which is exactly the right shape for the 124 ms residual. It does nothing here
+because **`prepare_sharded_terminal` has zero callers**: the consumers
+(`sharded_terminal_context()` in `traced_denoise.py:530`, `denoise_loop.py:543,686`) are wired, but
+nothing ever builds `_vocab_offsets`, so the context is always `None` and `self.sharded_terminal`
+is never set to `True`. The flag is a **silent no-op** — the third one found today, after the
+`C == DEFAULT_CAPACITY` MoE gate and the unconditional `tt-smi` requirement. Wiring the producer is
+the obvious next lever and is not done here.
+
+### 13.3 The prefix-span axis is worth 8%, not a factor
+
+`NUM_BLOCKS=2`, `DG_NORM_FULLCANVAS=1`, sweeping `DG_DENOISE_REVEAL_PMAX`. All four arms produced
+**identical committed tokens**, which is the expected sanity check: the span only extends the
+masked-out region.
+
+| `reveal_pmax` | steady s/block | ms/step | vs 576 |
+|---|---|---|---|
+| 576 | 8.724 | 181.8 | — |
+| 1024 | 8.819 | 183.7 | +1.1% |
+| 2048 | 9.043 | 188.4 | +3.7% |
+| 4096 | 9.446 | 196.8 | +8.3% |
+
+Winter's demo sits at a 128 bucket (384 key rows) against our 4096 (4352 rows) — an 11× difference
+in key rows that turns out to be worth **8.3% of the step**, not a factor. Attention is only 12.4%
+of the step (§13.1) and only part of it scales with span, so this is the expected magnitude; the
+report's speculation that the span explained a large share of the gap is refuted.
+
+Extrapolating the curve to winter's 384 gives ~181 ms/step, which is the number used in the
+normalized table at the top of this document.
+
+Also note the `host`→`device` Gumbel ratio measured directly here: the same concat configuration is
+22.234 s/block on host and 11.436 s/block on device, **1.94×**. That ratio is what converts the
+§§1–12 numbers into shipped ones, and it is how the ~371 ms/step "production this morning" figure in
+the top table was derived (34.642 s/block host ÷ 1.94).
+
+### 13.4 What is left
+
+1. **Wire `prepare_sharded_terminal`** — the 124 ms residual is now the dominant bucket and this is
+   the lever built for it.
+2. **The 2.02 s/block commit** — 26–38% of a served block, untouched.
+3. **Quality gate for the two decision-changing defaults** (`DG_MOE_CONCAT`, `DG_NORM_FULLCANVAS`,
+   together ~1.9×) against the CUDA bar of 70.71% / 70.20% GPQA-Diamond.
