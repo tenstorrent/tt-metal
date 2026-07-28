@@ -2675,6 +2675,87 @@ def _decide_parallelism_route(
         print(f"  [optimize/cc] parallelism route decision skipped ({exc})")
 
 
+def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
+    """The weight-bytes-per-token facts the DECODE roofline needs, or None when they cannot be known.
+
+    perf_target.compute_target implements the standard decode bound -- peak DRAM bandwidth divided by
+    the bytes that must be streamed per token, with 60-80% of peak as the achievable band. For
+    Llama-3.1-8B on a 512 GB/s part: 512/8 = 64 tok/s/u ceiling, 38-51 tok/s/u achievable.
+
+    It reads those facts from perf_target_inputs.json, and NOTHING in the tool wrote that file, so
+    active_bytes was always 0 and every report fell back to the Sigma-per-op ms floor -- a far weaker
+    statement, and one that moves whenever the op mix changes. This produces it, from the same
+    checkpoint size and HF config the parallelism route already reads.
+
+    MoE is deliberately excluded: the reachable read set is shared + top_k x per-expert bytes, and the
+    per-expert split cannot be taken from config alone without guessing the FFN shapes. A guessed
+    ceiling is worse than the floor fallback, so those models keep the floor.
+    """
+    wb = _model_weight_bytes(demo_dir, model_id_hint)
+    if not wb:
+        return None
+    cfg = dict(manifest.get("model_config") or {})
+    mid = _resolve_model_id(demo_dir, model_id_hint)
+    if mid:
+        cfg = {**_hf_cache_dims(mid), **cfg}
+    if not cfg:
+        return None
+    experts = cfg.get("num_local_experts") or cfg.get("num_experts") or cfg.get("n_routed_experts")
+    if experts:
+        return None
+    src = "checkpoint bytes + HF config"
+    override = (os.environ.get("TT_PERF_WEIGHT_BYTES") or "").strip()
+    if override:
+        # THE BYTES THAT ACTUALLY STREAM, when they are known to differ from the checkpoint. The
+        # ceiling is peak_BW / bytes-per-token, and the bytes are the ones the DEVICE reads: a bf16
+        # checkpoint served as bf8_b weights halves them, which doubles the ceiling. Llama-3.1-8B is
+        # exactly this case -- 16.06 GB on disk, 8 GB resident, 512/8 = 64 tok/s/u rather than 31.9 --
+        # so a run that quantises weights must be able to say so instead of being judged against the
+        # dtype its checkpoint happens to be stored in.
+        try:
+            _ov = float(override)
+            if _ov > 0:
+                wb, src = _ov, "TT_PERF_WEIGHT_BYTES (on-device weight bytes)"
+        except (TypeError, ValueError):
+            pass
+    facts = {
+        "weight_bytes": int(wb),
+        "dominant_dtype": str(cfg.get("torch_dtype") or "bfloat16"),
+        "source": src,
+    }
+    layers = cfg.get("num_hidden_layers") or cfg.get("n_layer") or cfg.get("num_layers")
+    kv_heads = cfg.get("num_key_value_heads") or cfg.get("num_attention_heads") or cfg.get("num_heads")
+    hidden = cfg.get("hidden_size") or cfg.get("d_model")
+    heads = cfg.get("num_attention_heads") or cfg.get("num_heads")
+    head_dim = cfg.get("head_dim") or ((int(hidden) // int(heads)) if (hidden and heads) else None)
+    for key, val in (("layers", layers), ("kv_heads", kv_heads), ("head_dim", head_dim)):
+        if val:
+            facts[key] = int(val)
+    return facts
+
+
+def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> None:
+    """Write perf_target_inputs.json into the model root so the decode ceiling can be computed.
+
+    Never raises and never overwrites: a file already there may have been hand-tuned with real
+    per-tensor dtypes, which is strictly better than what can be derived here.
+    """
+    try:
+        out = Path(model_root) / "perf_target_inputs.json"
+        if out.exists():
+            return
+        facts = _perf_target_inputs(demo_dir, model_id_hint, manifest)
+        if not facts:
+            return
+        out.write_text(json.dumps(facts, indent=2) + "\n")
+        print(
+            "  [optimize/cc] decode roofline inputs: %.2f GB of weights @ %s -> perf_target_inputs.json"
+            % (facts["weight_bytes"] / 1e9, facts["dominant_dtype"])
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [optimize/cc] decode roofline inputs skipped ({exc})")
+
+
 def _tt_lang_available() -> bool:
     try:
         import importlib.util
@@ -2764,6 +2845,7 @@ def run_cc_optimize(
             os.environ["TT_PERF_SEQ_LEN"] = _seq
             print(f"  [optimize/cc] perf workload seq pinned to {_seq} (baseline shape-retry); propagated to loop")
     _decide_parallelism_route(demo_dir, manifest, repo_root, metric, devices, model_id_hint)
+    _emit_perf_target_inputs(demo_dir, demo_dir, model_id_hint, manifest)
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
     os.environ.setdefault("PERF_MCP_MODEL_NAME", model_name or "model")

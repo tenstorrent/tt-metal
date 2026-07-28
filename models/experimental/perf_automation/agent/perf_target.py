@@ -140,6 +140,12 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0)
         tensors = mf.get("weight_tensors")
         if tensors:
             wb = sum(float(t.get("numel", 0)) * _bytes_per_elem(t.get("dtype")) for t in tensors)
+        elif mf.get("weight_bytes"):
+            # The checkpoint's own byte count, when the producer measured it instead of inferring it
+            # from params x dtype. This is the "model size" term of the decode bound -- 8 GB / 512 GB/s
+            # = 64 tok/s/u for Llama-3.1-8B -- and reading it off disk avoids the params-times-dtype
+            # round trip, which is wrong for any mixed- or quantised-dtype checkpoint.
+            wb = float(mf["weight_bytes"])
         else:
             dt = mf.get("dominant_dtype") or mf.get("torch_dtype") or "bfloat16"
             wb = float(mf.get("total_params", 0)) * _bytes_per_elem(dt)
