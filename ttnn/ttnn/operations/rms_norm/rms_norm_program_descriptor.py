@@ -76,31 +76,37 @@ TILE_DIM = 32
 # ---------------------------------------------------------------------------
 
 # Block factor budget: bytes of L1 a single compute block may occupy across all
-# block-scaled CBs. Halved automatically if the final CB total misses
-# L1_CB_BUDGET_BYTES (documented fallback, same single source).
+# block-scaled CBs. Halved automatically if the final CB total misses the L1
+# wall below (documented fallback, same single source).
 L1_BLOCK_BUDGET_BYTES = 512 * 1024
 
-# Total per-core budget for PROGRAM-ALLOCATED CBs. Worker L1 is 1.5 MB; the
-# remainder is firmware/stack/kernel-args headroom.
+# Conservative FALLBACK for the per-core L1 wall, used only when the live device
+# cannot be queried (see _l1_total_budget). Worker L1 is 1.5 MB; the remainder is
+# firmware/stack/kernel-args headroom.
 L1_CB_BUDGET_BYTES = 1_100_000
 
-# ...and the second, physical wall (Refinement 4). A zero-copy sharded CB is
-# ALIASED onto the tensor's own buffer, which the *buffer* allocator already
-# reserved out of the same per-core L1 bank — it is not part of the program's CB
-# region. Charging it against L1_CB_BUDGET_BYTES therefore double-counts it, and
-# the halve-and-re-derive loop below pays for the shard by shrinking the block:
-# measured, a HEIGHT_SHARDED (1,1,32,8192) bf16 collapsed WT_CHUNK from 32 to 1,
-# and fp32 W=4096 was refused outright by 10 KB — with 361 KB of the bank still
-# free. So the two quantities are budgeted separately:
+# The real, physical wall: everything this program commits to one core's L1 bank.
 #
-#     program CBs                  <= L1_CB_BUDGET_BYTES      (unchanged)
-#     program CBs + resident shard <= bank size - headroom     (the real wall)
+# Refinement 4 established that a zero-copy sharded CB is ALIASED onto the
+# tensor's own buffer, which the *buffer* allocator already reserved out of the
+# same per-core L1 bank, and that the bank size must be read from the live device
+# (1_461_504 B on blackhole_p150b) rather than guessed — charging the shard
+# against a guessed budget collapsed a HEIGHT_SHARDED (1,1,32,8192) bf16 from
+# WT_CHUNK 32 to 1 with 361 KB of the bank still free. It kept the old guessed
+# constant as a SECOND wall on program-allocated CBs alone.
 #
-# The bank size is read from the live device (see _l1_total_budget), never
-# hardcoded — it is arch- and dispatch-config-specific (1_461_504 B on
-# blackhole_p150b). On an interleaved tensor the shard term is 0, so the first
-# condition is the binding one and every interleaved cell is byte-identical to
-# before this refinement.
+# Refinement 5 retires that second wall. It was a proxy for the bank, measured
+# from nothing, and strictly more conservative than the quantity it proxied — so
+# it could only ever cost block size, never buy safety the real wall does not
+# already give. There is one condition:
+#
+#     program CBs + resident shards <= bank size - L1_ALLOC_HEADROOM_BYTES
+#
+# It is load-bearing on the interleaved prefill column, where gamma is the SAME
+# bytes for every core and is re-read once per row-block when it is not resident.
+# Measured on (1,1,8192,7168) bf16: gamma resident needs 1_195_648 B, which the
+# guessed 1_100_000 wall refused and the real 1_330_432 one accepts. That is
+# 2 of 3 gamma passes deleted — 100 MB of the shape's 386 MB of DRAM traffic.
 L1_ALLOC_HEADROOM_BYTES = 128 * 1024
 
 # ---------------------------------------------------------------------------
@@ -184,7 +190,7 @@ GAMMA_DEPTH = 2
 # hb+1 until compute has drained hb — read and compute serialize across
 # row-blocks. Depth 2 overlaps them. Predicate-guarded: the derivation walks
 # down from this value to 1 and then to the streaming path, taking the deepest
-# strip that fits L1_CB_BUDGET_BYTES.
+# strip that fits the L1 wall.
 X_RESIDENT_DEPTH = 2
 
 # The tilize LLK always consumes a whole 32-row block from its row-page CB, so
@@ -565,9 +571,15 @@ class _Blocking:
         return prog + shard
 
     def _fits(self, x_res_depth, gamma_resident):
-        """Both walls: the program's CB region, and the whole L1 bank."""
+        """The one physical wall: everything this program puts in the L1 bank.
+
+        Program-allocated CBs and zero-copy resident shards are both real bytes
+        in the same bank, so they are summed against the same live-device budget
+        (see L1_ALLOC_HEADROOM_BYTES). The shard term is 0 on an interleaved
+        tensor, so there the condition is purely "do the CBs fit".
+        """
         prog, shard = self._cb_bytes(x_res_depth, gamma_resident)
-        return prog <= L1_CB_BUDGET_BYTES and prog + shard <= self.l1_total_budget
+        return prog + shard <= self.l1_total_budget
 
 
 def _tile_geometry(input_tensor):
@@ -586,17 +598,18 @@ def _l1_total_budget(device):
 
     Read from the live device's L1 bank size — arch- and dispatch-config
     specific — minus ``L1_ALLOC_HEADROOM_BYTES`` for allocator fragmentation.
-    Falls back to the CB budget alone (the pre-Refinement-4 single-budget model)
-    if the memory view is unavailable, which is always safe: it can only make
-    the derivation more conservative.
+    Falls back to ``L1_CB_BUDGET_BYTES`` if the memory view is unavailable,
+    which is always safe: that constant is strictly more conservative than any
+    bank this op runs on.
     """
     try:
         bank = int(ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank)
     except Exception:
         return L1_CB_BUDGET_BYTES
     # A/B hook, same style as RMS_NORM_W_SPLIT: a headroom wider than the bank
-    # clamps back to L1_CB_BUDGET_BYTES, i.e. the pre-Refinement-4 model where
-    # the resident shard was charged against the CB budget.
+    # clamps back to L1_CB_BUDGET_BYTES, i.e. the pre-Refinement-5 wall, so the
+    # "guessed budget vs live bank" comparison stays re-runnable without editing
+    # the op. Combined with L1_CB_BUDGET_BYTES = 0 it forces the streaming path.
     headroom = os.environ.get("RMS_NORM_L1_HEADROOM_KB")
     headroom = int(headroom) * 1024 if headroom else L1_ALLOC_HEADROOM_BYTES
     return max(L1_CB_BUDGET_BYTES, bank - headroom)
@@ -607,11 +620,8 @@ def _derive_blocking(
 ):
     """Derive the blocking, halving the block budget until the CBs fit.
 
-    Two walls, per ``_Blocking._fits``: the program's own CB region
-    (``L1_CB_BUDGET_BYTES``) and the whole L1 bank once any zero-copy shard is
-    counted (``l1_total_budget``). On an interleaved tensor the shard term is 0
-    and only the first can bind, so this is byte-identical to the single-budget
-    loop it replaces.
+    One wall, per ``_Blocking._fits``: program-allocated CBs plus any zero-copy
+    resident shard, against the live L1 bank (``l1_total_budget``).
 
     The halving loop also absorbs the ROOT core's gather buffer
     (``HT_BLOCK * CW`` fp32 tiles): it is charged into ``program_cb_bytes`` for
@@ -635,9 +645,8 @@ def _derive_blocking(
         blk = _Blocking(input_tensor, gamma, budget, grid_cores, **kwargs)
     assert blk.fits, (
         f"rms_norm: per-core L1 does not fit even at the minimum block size — "
-        f"program CBs {blk.program_cb_bytes} B (budget {L1_CB_BUDGET_BYTES}) + "
-        f"resident shards {blk.resident_shard_bytes} B "
-        f"(total budget {blk.l1_total_budget})"
+        f"program CBs {blk.program_cb_bytes} B + resident shards "
+        f"{blk.resident_shard_bytes} B against an L1 budget of {blk.l1_total_budget} B"
     )
     return blk
 

@@ -287,14 +287,25 @@ def test_resident_shard_is_not_charged_against_the_cb_budget(device, shape, dtyp
         sharded_out=True,
         l1_total_budget=pd._l1_total_budget(device),
     )
-    # Premise: this is the regime where the two budgets differ.
+    # Premise: this is the tight corner — the shard alone exceeds the guessed
+    # pre-Refinement-4 wall, so where the shard is charged actually matters.
     assert blk.resident_shard_bytes > 0
     assert blk.cb_total_bytes > pd.L1_CB_BUDGET_BYTES, "shape no longer exercises the tight corner"
-    # Both walls hold...
-    assert blk.program_cb_bytes <= pd.L1_CB_BUDGET_BYTES
+    # The real wall holds...
     assert blk.cb_total_bytes <= blk.l1_total_budget
     # ...and the block knob did NOT collapse to its minimum to pay for the shard.
     assert blk.wt_chunk > 1, f"WT_CHUNK collapsed to {blk.wt_chunk} (NW={blk.nw})"
+
+    # ...whereas budgeting the same program against the GUESSED constant — the
+    # pre-Refinement-4 model — does collapse it. This is the A/B that makes the
+    # assertion above a result rather than a tautology.
+    guessed = pd._derive_blocking(
+        tt_x, tt_g, 110, p, sharded_in=True, sharded_out=True, l1_total_budget=pd.L1_CB_BUDGET_BYTES
+    )
+    assert guessed.wt_chunk < blk.wt_chunk, (
+        f"the guessed {pd.L1_CB_BUDGET_BYTES} B wall no longer costs block size "
+        f"(WT_CHUNK {guessed.wt_chunk} vs {blk.wt_chunk}) — re-pick the shape"
+    )
     ttnn.deallocate(tt_x)
     ttnn.deallocate(tt_g)
 
@@ -304,11 +315,15 @@ def test_resident_shard_is_not_charged_against_the_cb_budget(device, shape, dtyp
     [(1, 1, 32, 7168), (1, 1, 8192, 5120), (1, 1, 64, 128)],
     ids=lambda s: "x".join(map(str, s)),
 )
-def test_interleaved_blocking_is_unchanged_by_the_two_budget_split(device, shape):
-    """An interleaved tensor has no resident shard, so the second wall can never
-    bind and every interleaved cell must derive byte-identically to the
-    single-budget model. Pinned because that is the whole no-regression argument
-    for Refinement 4's budget change."""
+def test_interleaved_blocking_charges_no_shard(device, shape):
+    """An interleaved tensor has no resident shard, so the L1 wall is purely
+    "do the program's own CBs fit" — ``cb_total_bytes == program_cb_bytes``.
+
+    Refinement 4 pinned this as "the two budgets agree here"; Refinement 5
+    retired the second budget, so the invariant is now stated directly on the
+    shard term. It is still the whole no-regression argument: an interleaved
+    cell can only ever be moved by the value of the ONE budget, never by where
+    a shard is charged."""
     tt_x = ttnn.from_torch(
         torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
@@ -322,11 +337,44 @@ def test_interleaved_blocking_is_unchanged_by_the_two_budget_split(device, shape
     ht_total, wt_global = pd._tile_geometry(tt_x)
     p = pd._select_placement(device, grid, tt_x, ht_total, wt_global, False)
 
-    def derive(budget):
-        b = pd._derive_blocking(tt_x, tt_g, grid.x * grid.y, p, l1_total_budget=budget)
-        return (b.wt_chunk, b.nw, b.ht_block, b.x_res_depth, b.gamma_resident, b.cb_total_bytes)
+    blk = pd._derive_blocking(tt_x, tt_g, grid.x * grid.y, p, l1_total_budget=pd._l1_total_budget(device))
+    assert blk.resident_shard_bytes == 0
+    assert blk.cb_total_bytes == blk.program_cb_bytes
+    assert blk.cb_total_bytes <= blk.l1_total_budget
+    ttnn.deallocate(tt_x)
+    ttnn.deallocate(tt_g)
 
-    assert derive(pd._l1_total_budget(device)) == derive(pd.L1_CB_BUDGET_BYTES)
+
+@pytest.mark.parametrize("shape", [(1, 1, 8192, 7168)], ids=lambda s: "x".join(map(str, s)))
+def test_live_bank_budget_buys_gamma_residency(device, shape):
+    """Refinement 5's L1-wall change, pinned where it is load-bearing.
+
+    ``gamma`` is the SAME bytes on every core and is re-read once per row-block
+    when it is not resident. On (1,1,8192,7168) bf16 a resident gamma needs
+    1_195_648 B of CBs: the guessed 1_100_000 wall refuses it (3 gamma passes),
+    the live bank accepts it (1 pass). That is ~100 MB of the shape's ~386 MB of
+    DRAM traffic, and it is the only reason the constant was retired."""
+    tt_x = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_g = ttnn.from_torch(
+        torch.zeros(1, 1, 1, shape[-1], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    grid = device.compute_with_storage_grid_size()
+    ht_total, wt_global = pd._tile_geometry(tt_x)
+    p = pd._select_placement(device, grid, tt_x, ht_total, wt_global, False)
+
+    live = pd._derive_blocking(tt_x, tt_g, grid.x * grid.y, p, l1_total_budget=pd._l1_total_budget(device))
+    guessed = pd._derive_blocking(tt_x, tt_g, grid.x * grid.y, p, l1_total_budget=pd.L1_CB_BUDGET_BYTES)
+
+    assert live.gamma_resident, "the live-bank wall must fit the resident gamma strip"
+    assert not guessed.gamma_resident, "premise gone: the guessed wall now fits it too — re-pick the shape"
+    # The block factor itself must NOT move; only the residency decision does.
+    assert (live.wt_chunk, live.nw, live.ht_block) == (guessed.wt_chunk, guessed.nw, guessed.ht_block)
+    assert live.cb_total_bytes <= live.l1_total_budget
     ttnn.deallocate(tt_x)
     ttnn.deallocate(tt_g)
 

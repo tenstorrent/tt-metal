@@ -171,6 +171,16 @@ DECODE_REFERENCE_NS = {
 }
 REFERENCE_AICLK_MHZ = 1350
 
+# ...and the four perf-flagged PREFILL profiles. Refinement 5 owns these; none
+# pins a minimum_expected_speedup, so the ceiling is the clock-scaled
+# achievable_ns itself.
+PREFILL_REFERENCE_NS = {
+    (1, 1, 8192, 1024): 96744,
+    (1, 1, 8192, 2304): 211345,
+    (1, 1, 8192, 5120): 738307,
+    (1, 1, 8192, 7168): 1032281,
+}
+
 
 def perf_compute_kernel_config():
     """feature_spec._PERF_BASE's fixed precision: HiFi2 + bf16 DEST.
@@ -202,10 +212,15 @@ def _knob_overrides():
     depth = os.environ.get("RMS_NORM_X_RES_DEPTH")
     if depth:
         pd.X_RESIDENT_DEPTH = int(depth)
+    saved_headroom = os.environ.get("RMS_NORM_L1_HEADROOM_KB")
     if os.environ.get("RMS_NORM_FORCE_STREAMING") == "1":
-        # A CB budget of 0 makes both residency predicates false, selecting the
+        # An L1 budget of 0 makes both residency predicates false, selecting the
         # bounded streaming fallback (2 reader passes) without touching the op.
+        # _l1_total_budget clamps `bank - headroom` up to L1_CB_BUDGET_BYTES, so
+        # zeroing the budget takes both: a headroom wider than the bank, and the
+        # fallback constant itself.
         pd.L1_CB_BUDGET_BYTES = 0
+        os.environ["RMS_NORM_L1_HEADROOM_KB"] = "999999"
     # Refinement 3: the combine's own two knobs. The gather budget caps the group
     # width CW (cap = budget // fp32_tile_bytes), so sweeping it sweeps how many
     # cores share one reduce group; the flat-fan-in cap selects the combine
@@ -225,6 +240,10 @@ def _knob_overrides():
         pd.L1_GATHER_BUDGET_BYTES,
         pd.COMBINE_MAX_FLAT_FANIN,
     ) = saved
+    if saved_headroom is None:
+        os.environ.pop("RMS_NORM_L1_HEADROOM_KB", None)
+    else:
+        os.environ["RMS_NORM_L1_HEADROOM_KB"] = saved_headroom
 
 
 @pytest.mark.parametrize("shape", PERF_SHAPES, ids=lambda s: "x".join(map(str, s)))
@@ -301,15 +320,8 @@ def test_rms_norm_ablate(device, shape, monkeypatch):
     rms_norm(tt_x, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=perf_compute_kernel_config())
 
 
-@pytest.mark.parametrize("shape", list(DECODE_REFERENCE_NS), ids=lambda s: "x".join(map(str, s)))
-def test_rms_norm_perf_decode_pinned(device, shape):
-    """Decode column at the PINNED perf config (bf16 / TILE / HiFi2 / fp32-off).
-
-    Refinement 3's measurement surface. Same single dispatch per shape as
-    test_rms_norm_perf, but with the compute config feature_spec's perf loose
-    cases actually run at, and the tighter pcc_threshold = 0.9995 soft gate
-    those cases carry.
-    """
+def _run_interleaved_pinned(device, shape):
+    """One fresh dispatch of `shape`, interleaved, at the pinned perf config."""
     torch.manual_seed(42)
     torch_x = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape[-1], dtype=torch.bfloat16)
@@ -333,6 +345,30 @@ def test_rms_norm_perf_decode_pinned(device, shape):
     assert passed, message
 
 
+@pytest.mark.parametrize("shape", list(DECODE_REFERENCE_NS), ids=lambda s: "x".join(map(str, s)))
+def test_rms_norm_perf_decode_pinned(device, shape):
+    """Decode column at the PINNED perf config (bf16 / TILE / HiFi2 / fp32-off).
+
+    Refinement 3's measurement surface. Same single dispatch per shape as
+    test_rms_norm_perf, but with the compute config feature_spec's perf loose
+    cases actually run at, and the tighter pcc_threshold = 0.9995 soft gate
+    those cases carry.
+    """
+    _run_interleaved_pinned(device, shape)
+
+
+@pytest.mark.parametrize("shape", list(PREFILL_REFERENCE_NS), ids=lambda s: "x".join(map(str, s)))
+def test_rms_norm_perf_prefill_pinned(device, shape):
+    """Prefill column at the PINNED perf config — Refinement 5's interleaved surface.
+
+    The Phase-0/R2 prefill numbers were all taken at the op's DEFAULT config
+    (HiFi4 / fp32_dest_acc_en=True), which is not the datapath the
+    ``achievable_ns`` references were measured at. Same single dispatch and the
+    same 0.9995 soft gate as the decode twin.
+    """
+    _run_interleaved_pinned(device, shape)
+
+
 # The five measured-fastest SHARDED geometries feature_spec pins (shard_shape +
 # core_grid come straight from its extras, so the geometry is reproduced exactly
 # rather than left to auto_shard_config). Refinement 5 owns optimizing these;
@@ -349,14 +385,8 @@ SHARDED_REFERENCE_NS = {
 }
 
 
-@pytest.mark.parametrize("case", list(SHARDED_REFERENCE_NS), ids=lambda c: f"{'x'.join(map(str, c[0]))}-{c[1].lower()}")
-def test_rms_norm_perf_sharded_pinned(device, case):
-    """The pinned sharded geometries at the PINNED perf config, one dispatch each.
-
-    Same shape as test_rms_norm_perf_decode_pinned: no timing assertion here (the
-    number comes from `--profile`'s CSV), just the 0.9995 soft gate those loose
-    cases carry, so an A/B can never be taken on a wrong-but-fast kernel.
-    """
+def _run_sharded_pinned(device, case, *, check=True, gamma=True):
+    """One fresh dispatch of a pinned sharded geometry at the pinned perf config."""
     from eval.sharding import shard_config
 
     shape, kind, shard_shape, core_grid = case
@@ -370,21 +400,66 @@ def test_rms_norm_perf_sharded_pinned(device, case):
     torch_gamma = torch.randn(shape[-1], dtype=torch.bfloat16)
 
     tt_x = ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
-    tt_gamma = ttnn.from_torch(
-        torch_gamma.reshape(1, 1, 1, shape[-1]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-    )
+    tt_gamma = None
+    if gamma:
+        tt_gamma = ttnn.from_torch(
+            torch_gamma.reshape(1, 1, 1, shape[-1]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
     tt_out = rms_norm(
         tt_x, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=perf_compute_kernel_config(), memory_config=mc
     )
+    if not check:
+        return
 
     xf = torch_x.to(torch.float32)
     expected = xf / torch.sqrt(torch.mean(xf**2, dim=-1, keepdim=True) + 1e-6)
-    expected = expected * torch_gamma.to(torch.float32).reshape(-1)
+    if gamma:
+        expected = expected * torch_gamma.to(torch.float32).reshape(-1)
 
     actual = ttnn.to_torch(tt_out).to(torch.float32)
     passed, message = check_with_pcc(expected, actual, 0.9995)
     assert passed, message
+
+
+@pytest.mark.parametrize("case", list(SHARDED_REFERENCE_NS), ids=lambda c: f"{'x'.join(map(str, c[0]))}-{c[1].lower()}")
+def test_rms_norm_perf_sharded_pinned(device, case):
+    """The pinned sharded geometries at the PINNED perf config, one dispatch each.
+
+    Same shape as test_rms_norm_perf_decode_pinned: no timing assertion here (the
+    number comes from `--profile`'s CSV), just the 0.9995 soft gate those loose
+    cases carry, so an A/B can never be taken on a wrong-but-fast kernel.
+    """
+    _run_sharded_pinned(device, case)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("RMS_NORM_ABLATE"),
+    reason="ablation variant — opt in with RMS_NORM_ABLATE=<stage[,stage]> (output is WRONG by design)",
+)
+@pytest.mark.parametrize("case", list(SHARDED_REFERENCE_NS), ids=lambda c: f"{'x'.join(map(str, c[0]))}-{c[1].lower()}")
+def test_rms_norm_ablate_sharded(device, case, monkeypatch):
+    """ABLATION on the pinned SHARDED geometries — the twin of test_rms_norm_ablate.
+
+    Same stage vocabulary (``combine`` / ``gamma``). ``combine`` keeps the shard
+    placement, the core count and the per-core slice byte-for-byte and removes
+    only the gather + root fold + multicast, so the delta is the combine's real
+    cost on the critical path. Asserts nothing by design.
+    """
+    stages = set(os.environ.get("RMS_NORM_ABLATE", "").split(","))
+
+    if "combine" in stages:
+        real_select = pd._select_placement
+
+        def _no_combine(*args, **kwargs):
+            p = real_select(*args, **kwargs)
+            p.cw = p.cw1 = p.cw2 = 1  # kernels compile with W_SPLIT == 0; slices unchanged
+            p.groups = []
+            return p
+
+        monkeypatch.setattr(pd, "_select_placement", _no_combine)
+
+    _run_sharded_pinned(device, case, check=False, gamma="gamma" not in stages)
 
 
 def test_report_blocking(device):
