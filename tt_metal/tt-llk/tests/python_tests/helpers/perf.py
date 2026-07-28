@@ -766,3 +766,23 @@ class PerfConfig(TestConfig):
             )
             counter_combined = sweep.merge(counter_run_results, how="cross")
             PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)
+
+
+def create_test_or_perf_config(
+    *, is_perf: bool, run_types: list[PerfRunType], test_config_kwargs: dict
+) -> TestConfig:
+    """Create the common functional or performance configuration.
+
+    The configuration is returned without running it so callers can apply
+    operation-specific format adjustments before execution.
+    """
+    if is_perf:
+        return PerfConfig(run_types=list(run_types), **test_config_kwargs)
+
+    return TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        }
+    )

@@ -118,6 +118,16 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
     }
 }
 
+#ifdef ARCH_QUASAR
+inline void _perf_clear_dest_dvalid_wait_mask(std::uint32_t wait_mask_addr)
+{
+    // Isolated perf modes do not run every client from the L1_TO_L1 dvalid
+    // chain, so they must not inherit waits for inactive clients.
+    volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
+    cfg[wait_mask_addr]         = 0;
+}
+#endif
+
 inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim)
 {
     // fixme: add quasar support

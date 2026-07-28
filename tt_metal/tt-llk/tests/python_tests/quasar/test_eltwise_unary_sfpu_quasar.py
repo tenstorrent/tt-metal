@@ -26,7 +26,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf import PerfConfig
+from helpers.perf import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -35,7 +35,6 @@ from helpers.stimuli_generator import (
     format_elem_max,
     generate_stimuli,
 )
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DATA_COPY_TYPE,
@@ -45,7 +44,6 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -668,15 +666,15 @@ def _typecast_pack_src_format(
 
 def generate_sfpu_unary_combinations(*, is_perf=False):
     """
-    Build the full unary-SFPU sweep across all ops: per op, a
-    formats × dest_acc × dest-sync × implied-math × {[32, 32], [64, 64]} matrix.
+    Build the unary-SFPU sweep across all operations and their format matrices.
 
-    Every op runs the same matrix over its own format set (from formats_for_op).
-    32-bit inputs always pair with dest_acc=Yes; 16-bit inputs sweep both dest_acc
-    modes. Invalid format/dest_acc combinations are dropped via the shared filter.
+    Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
+    dimensions. Performance mode intentionally keeps the complete op, format,
+    dest_acc, and approximation coverage while pinning those three axes to
+    DestSync.Half, ImpliedMathFormat.Yes, and [32, 32].
 
     Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
-    input_dimensions) tuples.
+    approx_mode, input_dimensions) tuples.
     """
     combinations = []
     for cfg in OP_CONFIGS:
@@ -795,25 +793,28 @@ def test_eltwise_unary_sfpu_quasar(
 
     num_faces = MAX_NUM_FACES
 
-    if format_dict[formats.input_format].is_floating_point:
-        generate_golden = get_golden_generator(UnarySFPUGolden)
-        golden_tensor = generate_golden(
-            mathop,
-            src_A,
-            formats.output_format,
-            dest_acc,
-            formats.input_format,
-            input_dimensions,
-        )
-    else:
-        # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
-        # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
-        # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
-        # the op per element keeps integers intact, and for an element-wise op row-major order
-        # already matches the packed result. A non-element-wise integer op would need its own path.
-        ops = UnarySFPUGolden().ops
-        op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
-        golden_tensor = torch.tensor(op_res, dtype=format_dict[formats.output_format])
+    if not is_perf:
+        if format_dict[formats.input_format].is_floating_point:
+            generate_golden = get_golden_generator(UnarySFPUGolden)
+            golden_tensor = generate_golden(
+                mathop,
+                src_A,
+                formats.output_format,
+                dest_acc,
+                formats.input_format,
+                input_dimensions,
+            )
+        else:
+            # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
+            # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
+            # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
+            # the op per element keeps integers intact, and for an element-wise op row-major order
+            # already matches the packed result. A non-element-wise integer op would need its own path.
+            ops = UnarySFPUGolden().ops
+            op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
+            golden_tensor = torch.tensor(
+                op_res, dtype=format_dict[formats.output_format]
+            )
 
     unpack_to_dest = quasar_unpack_to_dest(formats, dest_acc, is_typecast)
     if is_perf and perf_report is None:
@@ -866,16 +867,11 @@ def test_eltwise_unary_sfpu_quasar(
         "dest_acc": dest_acc,
     }
 
-    if is_perf:
-        configuration = PerfConfig(run_types=list(run_types), **test_config_kwargs)
-    else:
-        configuration = TestConfig(
-            **{
-                **test_config_kwargs,
-                "templates": test_config_kwargs["templates"]
-                + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-            }
-        )
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
 
     if is_typecast:
         pack_src_for_output = _typecast_pack_src_format(formats.output_format, dest_acc)

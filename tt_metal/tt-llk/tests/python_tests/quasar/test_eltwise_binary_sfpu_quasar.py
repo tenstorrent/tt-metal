@@ -28,7 +28,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf import PerfConfig
+from helpers.perf import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -37,7 +37,6 @@ from helpers.stimuli_generator import (
     format_elem_max,
     generate_stimuli,
 )
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
@@ -45,7 +44,6 @@ from helpers.test_variant_parameters import (
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_FACES,
-    PERF_RUN_TYPE,
     SFPU_BINARY_OP,
     SFPU_TILE_INDICES,
     TEST_FACE_DIMS,
@@ -68,6 +66,7 @@ _CPP_SOURCE = "sources/quasar/eltwise_binary_sfpu_quasar_test.cpp"
 # Shared (src0_idx, src1_idx, dst_idx) tile-index variants exercised by every
 # binary SFPU family
 _TILE_INDEX_VARIANTS = [(0, 1, 0), (2, 3, 0)]
+DEFAULT_SFPU_BINARY_TILE_INDICES = _TILE_INDEX_VARIANTS[0]
 
 
 def _get_valid_implied_math_formats(fmt: FormatConfig):
@@ -166,17 +165,15 @@ def _run_sfpu_binary_llk_golden(
         "dest_acc": dest_acc,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        PerfConfig(run_types=list(run_types), **test_config_kwargs).run(perf_report)
+        configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        }
-    )
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
@@ -409,6 +406,18 @@ SFPU_BINARY_MAX_MIN_FLOAT_FORMATS = input_output_formats(
 SFPU_BINARY_MAX_MIN_INT32_FORMATS = input_output_formats([DataFormat.Int32], same=True)
 
 
+def max_min_float_dest_acc_for_format(fmt):
+    return (
+        (DestAccumulation.Yes,)
+        if fmt.input_format.is_32_bit()
+        else (DestAccumulation.No,)
+    )
+
+
+def max_min_int32_dest_acc_for_format(_fmt):
+    return (DestAccumulation.Yes,)
+
+
 def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
     """Two safe-range inputs for max/min (result == one operand verbatim)."""
     torch_fmt = format_dict[input_format]
@@ -616,17 +625,15 @@ def _run_max_min(
         "disable_format_inference": disable_format_inference,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        PerfConfig(run_types=list(run_types), **test_config_kwargs).run(perf_report)
+        configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        }
-    )
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=output_torch_fmt)
@@ -640,11 +647,7 @@ def _run_max_min(
 @parametrize(
     formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
         SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-        dest_acc_for_format=lambda fmt: (
-            (DestAccumulation.Yes,)
-            if fmt.input_format.is_32_bit()
-            else (DestAccumulation.No,)
-        ),
+        dest_acc_for_format=max_min_float_dest_acc_for_format,
     ),
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
@@ -682,7 +685,7 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 @parametrize(
     formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
         SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-        dest_acc_for_format=lambda fmt: (DestAccumulation.Yes,),
+        dest_acc_for_format=max_min_int32_dest_acc_for_format,
         implied_math_formats=(ImpliedMathFormat.No,),
     ),
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
