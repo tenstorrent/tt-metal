@@ -81,12 +81,12 @@ void kernel_main() {
     constexpr uint32_t updated_cos_cb = retilized_cos_cb;
     constexpr uint32_t updated_sin_cb = retilized_sin_cb;
     constexpr auto trig_bcast = BroadcastDim::Row;
-    constexpr auto trig_lifecycle = WaitPolicy::PerTile, PopPolicy::None;
+    constexpr auto trig_pop = PopPolicy::None;
 #else
     constexpr uint32_t updated_cos_cb = cos_cb;
     constexpr uint32_t updated_sin_cb = sin_cb;
     constexpr auto trig_bcast = BroadcastDim::None;
-    constexpr auto trig_lifecycle = WaitPolicy::PerTile, PopPolicy::PerTile;
+    constexpr auto trig_pop = PopPolicy::PerTile;
 #endif
 
     cb_trans_mat.wait_front(onetile);
@@ -111,12 +111,14 @@ void kernel_main() {
         cb_rotated_in_interm.push_back(onetile);
 
         // sin_interim = rotated * sin  (chain waits+pops rotated_in_interm_cb; sin held/streamed per mode)
-        mul<input(rotated_in_interm_cb), input(updated_sin_cb, trig_lifecycle), output(sin_interm_cb), trig_bcast>(
-            EltwiseShape::tiles(onetile));
+        mul<input(rotated_in_interm_cb),
+            input(updated_sin_cb, WaitPolicy::PerTile, trig_pop),
+            output(sin_interm_cb),
+            trig_bcast>(EltwiseShape::tiles(onetile));
 
         // cos_interim = in * cos
         mul<input(in_cb, WaitPolicy::None, PopPolicy::PerTile),
-            input(updated_cos_cb, trig_lifecycle),
+            input(updated_cos_cb, WaitPolicy::PerTile, trig_pop),
             output(cos_interm_cb),
             trig_bcast>(EltwiseShape::tiles(onetile));
 

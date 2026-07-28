@@ -102,10 +102,8 @@ void kernel_main() {
     constexpr bool numeric_stable = false;
 #endif
     constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
-    constexpr auto mask_lifecycle = (causal_mask && sharded_causal_mask) ? ckl::WaitPolicy::None,
-                   ckl::PopPolicy::AtEnd : causal_mask ? ckl::WaitPolicy::Upfront,
-                   ckl::PopPolicy::AtEnd : !sharded_causal_mask ? ckl::WaitPolicy::Upfront,
-                   ckl::PopPolicy::None                         : ckl::WaitPolicy::None, ckl::PopPolicy::None;
+    constexpr auto mask_wait = sharded_causal_mask ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront;
+    constexpr auto mask_pop = causal_mask ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
 #endif
 
     for (uint32_t i = 0; i < block_h; i++) {
@@ -120,7 +118,7 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(block_w, subblock_w),
             ckl::BinaryFpu<
                 ckl::input(cb_scale_mask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(cb_fused_attn, mask_lifecycle, ckl::OperandKind::Block),
+                ckl::input(cb_fused_attn, mask_wait, mask_pop, ckl::OperandKind::Block),
                 ckl::BinaryFpuOp::Add,
                 mask_bcast>{},
             // Exp dropped when NUMERIC_STABLE (it is fused into calc_numeric_stable below).

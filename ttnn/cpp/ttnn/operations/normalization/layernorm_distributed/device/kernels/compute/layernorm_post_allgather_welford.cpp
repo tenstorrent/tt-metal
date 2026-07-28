@@ -53,8 +53,8 @@ constexpr uint32_t cb_beta = tt::CBIndex::c_3;
 
 ALWI void normalize_chunk(const uint32_t num_tiles) {
     const auto shape = ckl::EltwiseShape::tiles(num_tiles, ckl::DEST_AUTO_LIMIT);
-    constexpr auto gamma_beta_lifecycle = Wt == cb_length ? ckl::WaitPolicy::Cumulative,
-                   ckl::PopPolicy::None                   : ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk;
+    constexpr auto gamma_beta_wait = Wt == cb_length ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::PerChunk;
+    constexpr auto gamma_beta_pop = Wt == cb_length ? ckl::PopPolicy::None : ckl::PopPolicy::PerChunk;
 
     ckl::sub<
         ckl::input(cb_inp, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
@@ -71,7 +71,7 @@ ALWI void normalize_chunk(const uint32_t num_tiles) {
     if constexpr (do_gamma) {
         ckl::mul<
             ckl::input(cb_x_normed, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-            ckl::input(cb_gamma, gamma_beta_lifecycle, ckl::OperandKind::Block),
+            ckl::input(cb_gamma, gamma_beta_wait, gamma_beta_pop, ckl::OperandKind::Block),
             ckl::output(cb_times_gamma_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
             ckl::BroadcastDim::Row>(shape);
     }
@@ -79,7 +79,7 @@ ALWI void normalize_chunk(const uint32_t num_tiles) {
         constexpr uint32_t cb_beta_input = do_gamma ? cb_times_gamma_out : normed_output_cb;
         ckl::add<
             ckl::input(cb_beta_input, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-            ckl::input(cb_beta, gamma_beta_lifecycle, ckl::OperandKind::Block),
+            ckl::input(cb_beta, gamma_beta_wait, gamma_beta_pop, ckl::OperandKind::Block),
             ckl::output(cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
             ckl::BroadcastDim::Row>(shape);
     }

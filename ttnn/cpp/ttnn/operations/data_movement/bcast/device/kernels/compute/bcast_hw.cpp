@@ -20,16 +20,16 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_lhs, cb_rhs, cb_out);
 
 #ifdef BCAST_SCALAR
-    constexpr auto rhs_lifecycle = ckl::WaitPolicy::PerTile, ckl::PopPolicy::None;
+    constexpr auto rhs_pop = ckl::PopPolicy::None;
 #else
-    constexpr auto rhs_lifecycle = ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile;
+    constexpr auto rhs_pop = ckl::PopPolicy::PerTile;
 #endif
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(B * Ht * Wt),
         ckl::BinaryFpu<
             ckl::input(cb_lhs, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::input(cb_rhs, rhs_lifecycle, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_rhs, ckl::WaitPolicy::PerTile, rhs_pop, ckl::DataFormatReconfig::Disabled),
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM>{},
         ckl::PackTile<ckl::output(
