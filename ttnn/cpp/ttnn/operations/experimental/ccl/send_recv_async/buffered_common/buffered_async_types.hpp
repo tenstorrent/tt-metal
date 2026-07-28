@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 #define MAX_OUTPUT_TENSORS 3
 #define UINT32_ALIGNED_COUNT 4
 struct alignas(32) OutputTensorInfo {
