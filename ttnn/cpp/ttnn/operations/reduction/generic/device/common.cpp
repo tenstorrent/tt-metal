@@ -25,8 +25,7 @@ RmPlan make_rm_plan(
     uint32_t tile_width,
     tt::DataFormat src_cb_data_format,
     tt::DataFormat dst_cb_data_format,
-    tt::tt_metal::ReduceOpMath math_op,
-    tt::tt_metal::ReduceOpDim dim) {
+    tt::tt_metal::ReduceOpMath math_op) {
     RmPlan plan{};
     plan.H_logical = logical_shape[2];
     plan.W_logical = logical_shape[3];
@@ -34,21 +33,22 @@ RmPlan make_rm_plan(
     plan.Wt = tt::div_up(padded_shape[3], tile_width);
     plan.Ht_rm = tt::div_up(plan.H_logical, plan.rm_rows_per_tile);
 
-    // Only supports ReduceOpDim::W or ReduceOpDim::H.
+    // Only supports ReduceOpDim::W or ReduceOpDim::H, and both chunk by the W (tile) count:
+    //   - W reduce: wt_tiles_per_chunk tiles of the reduction axis are staged and reduced per chunk.
+    //   - H reduce: wt_tiles_per_chunk *output* columns are staged per chunk so the reader pulls each
+    //     logical row's full chunk-width span (wt_tiles_per_chunk × TILE_WIDTH) in a single NoC
+    //     transaction instead of one 1-tile-wide read per column. Each (n,c) is split into
+    //     ceil(Wt / wt_tiles_per_chunk) width-chunks ("units"); cores are handed whole units (see the
+    //     H program factory). The reduction axis (H) is walked one tile-row at a time and accumulated.
+    // Either way ht_tiles_per_chunk stays 1 and the src0 staging CB only needs wt_tiles_per_chunk tiles.
     //
-    // k_rm_max_tiles_per_chunk caps the reduction-axis chunk size (wt_tiles_per_chunk for W
-    // reduce, ht_tiles_per_chunk for H reduce). It's an L1 staging-buffer budget on the reduction
-    // axis. 8 was picked experimentally — the staging CB page lands at ~32 KB for bf16 and
-    // ~64 KB for fp32 at chunk=8, which fits L1 comfortably alongside the other CBs. Tune later
-    // if a different perf / L1-utilization trade-off is needed.
+    // k_rm_max_tiles_per_chunk is the L1 staging-buffer budget on wt_tiles_per_chunk. 8 was picked
+    // experimentally — the staging CB page lands at ~32 KB for bf16 and ~64 KB for fp32 at chunk=8,
+    // which fits L1 comfortably alongside the other CBs. Tune later if a different perf /
+    // L1-utilization trade-off is needed.
     constexpr uint32_t k_rm_max_tiles_per_chunk = 8;
-    if (dim == tt::tt_metal::ReduceOpDim::W) {
-        plan.wt_tiles_per_chunk = std::clamp(plan.Wt, 1u, k_rm_max_tiles_per_chunk);
-        plan.ht_tiles_per_chunk = 1;
-    } else {
-        plan.wt_tiles_per_chunk = 1;
-        plan.ht_tiles_per_chunk = std::clamp(plan.Ht_rm, 1u, k_rm_max_tiles_per_chunk);
-    }
+    plan.wt_tiles_per_chunk = std::clamp(plan.Wt, 1u, k_rm_max_tiles_per_chunk);
+    plan.ht_tiles_per_chunk = 1;
 
     // The RM dense path is gated to BF16/FP32 at validate_rm_preconditions;
     // so the unpacked-format byte sizes are always well-defined here.

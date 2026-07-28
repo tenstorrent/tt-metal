@@ -88,8 +88,15 @@ void reduce_rm_reader() {
     // SUM) from the fill, contributing nothing to the running sum.
     auto stage_slab = [&](uint32_t slab_first_global_row, uint32_t real_rows, const RmWChunkBytes& w_range) {
         cb_rm.reserve_back(rm_rows_per_tile);
-        rm_fill_page_with_clear_template(
-            noc, cb_rm, rm_rows_per_tile * page_bytes, clear_template_src, clear_template_bytes);
+        // Skip the identity pre-fill when every byte of the slab is about to be overwritten by real
+        // data: all TILE_HEIGHT rows are real (no partial-last-h-tile padding) and the chunk is full
+        // width (no padded columns past W_logical). This is the common case for tile-aligned interior
+        // slabs and avoids a per-slab template memset (rm_rows_per_tile * page_bytes of NoC traffic).
+        const bool slab_fully_overwritten = (real_rows == rm_rows_per_tile) && (w_range.valid_bytes == page_bytes);
+        if (!slab_fully_overwritten) {
+            rm_fill_page_with_clear_template(
+                noc, cb_rm, rm_rows_per_tile * page_bytes, clear_template_src, clear_template_bytes);
+        }
         if (w_range.valid_bytes > 0) {
             for (uint32_t r = 0; r < real_rows; ++r) {
                 noc.async_read(
@@ -133,14 +140,22 @@ void reduce_rm_reader() {
         constexpr uint32_t H_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 8 : 0);
         constexpr uint32_t Ht_total = (H_logical + rm_rows_per_tile - 1) / rm_rows_per_tile;
 
-        // Each owned output tile is one work unit (wt_tiles_per_chunk == 1). Decompose its global id
-        // into (nc, wt_in_nc) and re-read the NC's full H slab per output.
-        for (uint32_t out_idx = 0; out_idx < rt_count; ++out_idx) {
-            const uint32_t global_tile_id = rt_start + out_idx;
-            const uint32_t nc = global_tile_id / Wt;
-            const uint32_t wt_in_nc = global_tile_id % Wt;
+        // Work is handed out in width-chunk "units": each (n,c) is split into units_per_nc chunks of
+        // up to wt_tiles_per_chunk contiguous output columns. rt_start / rt_count are in unit space.
+        // Decompose each global unit into (nc, wchunk); a chunk never straddles an NC boundary, so the
+        // last chunk of an NC may be narrower than wt_tiles_per_chunk — rm_compute_w_chunk_bytes clamps
+        // valid_bytes at W_logical and the missing columns stay identity-padded. The key win over the
+        // 1-tile-wide scheme: one async_read per row now pulls the whole chunk span (wt_tiles_per_chunk
+        // × TILE_WIDTH × elem_bytes) instead of a single 64-byte tile slice.
+        constexpr uint32_t units_per_nc = (Wt + wt_tiles_per_chunk - 1) / wt_tiles_per_chunk;
+
+        for (uint32_t unit = 0; unit < rt_count; ++unit) {
+            const uint32_t global_unit = rt_start + unit;
+            const uint32_t nc = global_unit / units_per_nc;
+            const uint32_t wchunk = global_unit % units_per_nc;
+            const uint32_t wt_base = wchunk * wt_tiles_per_chunk;
             const RmWChunkBytes w_range =
-                rm_compute_w_chunk_bytes(wt_in_nc, wt_tiles_per_chunk, valid_row_bytes, elem_bytes);
+                rm_compute_w_chunk_bytes(wt_base, wt_tiles_per_chunk, valid_row_bytes, elem_bytes);
             const uint32_t nc_base_page = nc * H_logical;
 
             for (uint32_t h_chunk_base = 0; h_chunk_base < Ht_total; h_chunk_base += ht_tiles_per_chunk) {
