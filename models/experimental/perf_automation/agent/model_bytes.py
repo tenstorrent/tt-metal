@@ -128,6 +128,60 @@ _UNIT_LABEL = {"token": "tok/s/u", "step": "steps/s", "inference": "inferences/s
 _LOOKUP_ONLY = re.compile(r"(^|\.)(embed_tokens|wte|word_embeddings|token_embedding|embeddings?\.weight$)", re.I)
 
 
+# HF class-name suffixes -> unit. config.json carries `architectures` for every model but usually NOT
+# a pipeline_tag (that lives on the model card), so keying only on the tag meant the analytic path
+# never fired for a local checkpoint and silently fell back to the file size -- a 2.4x wrong ceiling.
+# Longest suffix first: ForConditionalGeneration must beat ForCausalLM-style generic matching.
+_UNIT_BY_ARCH_SUFFIX = (
+    ("forconditionalgeneration", "token"),
+    ("forcausallm", "token"),
+    ("lmheadmodel", "token"),
+    ("forspeechseq2seq", "token"),
+    ("forvision2seq", "token"),
+    ("fortexttospeech", "token"),
+    ("forsequenceclassification", "inference"),
+    ("fortokenclassification", "inference"),
+    ("forquestionanswering", "inference"),
+    ("forimageclassification", "inference"),
+    ("forobjectdetection", "inference"),
+    ("forsemanticsegmentation", "inference"),
+    ("forimagesegmentation", "inference"),
+    ("fordepthestimation", "inference"),
+    ("formaskedlm", "inference"),
+    ("formaskedimagemodeling", "inference"),
+    ("unet2dconditionmodel", "step"),
+    ("unet2dmodel", "step"),
+    ("transformer2dmodel", "step"),
+    ("dittransformer2dmodel", "step"),
+    ("fluxtransformer2dmodel", "step"),
+)
+
+
+def unit_for_architectures(architectures, model_type: str = "") -> str:
+    """The unit of work implied by an HF `architectures` entry, or "".
+
+    A class name states the head, and the head states what one unit of work is: a CausalLM emits a
+    token, a UNet takes a denoise step, a SequenceClassification does one forward pass. Unrecognised
+    heads return "" so the caller publishes no ceiling rather than assuming decode.
+    """
+    for arch in list(architectures or []) + ([model_type] if model_type else []):
+        a = str(arch or "").strip().lower()
+        if not a:
+            continue
+        for suffix, unit in _UNIT_BY_ARCH_SUFFIX:
+            if a.endswith(suffix) or suffix in a:
+                return unit
+    return ""
+
+
+def unit_from_config(cfg: dict) -> str:
+    """The unit for an HF config: its pipeline_tag when present, else its architecture head."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    return unit_for_tag(cfg.get("pipeline_tag") or "") or unit_for_architectures(
+        cfg.get("architectures"), cfg.get("model_type") or ""
+    )
+
+
 def unit_for_tag(pipeline_tag: str) -> str:
     """The unit of work for an HF pipeline tag, or "" when there is no single well-defined one."""
     return _UNIT_BY_TAG.get(str(pipeline_tag or "").strip().lower(), "")

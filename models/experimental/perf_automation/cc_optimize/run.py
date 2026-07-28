@@ -2751,7 +2751,7 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     try:
         from agent import model_bytes as _mb2
 
-        _u = _mb2.unit_for_tag(cfg.get("pipeline_tag") or "")
+        _u = _mb2.unit_from_config(cfg)
         if _u:
             facts["unit"] = _u
     except Exception:  # noqa: BLE001

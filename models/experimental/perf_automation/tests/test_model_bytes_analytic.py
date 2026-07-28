@@ -191,3 +191,57 @@ def test_unit_labels_are_what_the_report_prints():
 )
 def test_override_parsing_refuses_what_it_cannot_verify(spec, expect):
     assert len(_mb().parse_overrides(spec)) == expect
+
+
+# --- the unit must come from the CONFIG, since config.json has no pipeline_tag -----------------------
+
+
+def test_the_unit_comes_from_the_architecture_when_there_is_no_pipeline_tag():
+    """THE GAP: HF config.json carries `architectures` for every model but usually NOT a pipeline_tag
+    (that lives on the model card). Keying only on the tag meant the analytic path never fired for a
+    local checkpoint and silently fell back to the file size -- a 2.4x wrong ceiling for Llama."""
+    mb = _mb()
+    cfg = {"architectures": ["LlamaForCausalLM"], "model_type": "llama"}
+    assert cfg.get("pipeline_tag") is None
+    assert mb.unit_from_config(cfg) == "token"
+
+
+@pytest.mark.parametrize(
+    "arch,unit",
+    [
+        ("LlamaForCausalLM", "token"),
+        ("MistralForCausalLM", "token"),
+        ("T5ForConditionalGeneration", "token"),
+        ("WhisperForConditionalGeneration", "token"),
+        ("GPT2LMHeadModel", "token"),
+        ("BertForSequenceClassification", "inference"),
+        ("BertForMaskedLM", "inference"),
+        ("ViTForImageClassification", "inference"),
+        ("DetrForObjectDetection", "inference"),
+        ("SegformerForSemanticSegmentation", "inference"),
+        ("UNet2DConditionModel", "step"),
+        ("Transformer2DModel", "step"),
+        ("FluxTransformer2DModel", "step"),
+    ],
+)
+def test_architecture_heads_imply_the_unit(arch, unit):
+    """A class name states the head, and the head states what one unit of work is."""
+    assert _mb().unit_for_architectures([arch]) == unit
+
+
+@pytest.mark.parametrize("arch", ["SomeNewThing", "MysteryModel", "", "ForSomethingElse"])
+def test_an_unrecognised_head_publishes_no_unit(arch):
+    assert _mb().unit_for_architectures([arch]) == ""
+
+
+def test_a_pipeline_tag_still_wins_when_present():
+    """The tag is the more specific signal, so it is consulted first."""
+    mb = _mb()
+    cfg = {"pipeline_tag": "text-to-image", "architectures": ["SomethingForCausalLM"]}
+    assert mb.unit_from_config(cfg) == "step"
+
+
+def test_an_empty_config_yields_no_unit():
+    mb = _mb()
+    for cfg in ({}, None, {"architectures": []}, {"architectures": None}):
+        assert mb.unit_from_config(cfg) == ""
