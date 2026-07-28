@@ -10,7 +10,7 @@ Stage 02 completion requirements:
 - The fused decoder preserves the context contract from functional decoder. If fusing optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
 - The fused decoder preserves support for valid non-aligned logical sequence lengths; internal padding/chunking is fine, public `seq_len % chunk_size == 0` restrictions are not.
 - Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
-- Warmed prefill and traced warmed decode latency are reported before and after fusing optimization.
+- Warmed prefill and traced warmed decode latency are reported before and after fusing optimization, at BOTH batch 1 and the serving decode batch DECODE_BATCH.
 - Final code must beat the best correct traced-decode baseline/candidates; fewer ops or cleaner topology is not enough.
 - tt-perf-report tables/CSV exist for prefill and decode.
 - All possible fusing patterns from the graph-fusing skill are exhausted.
