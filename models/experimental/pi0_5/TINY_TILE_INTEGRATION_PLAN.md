@@ -204,6 +204,57 @@ removes most of the unfused/generic-matmul call sites generating these gaps.
   submodules (it moved `tt-cluster-descriptors` in the main tree, which governs Galaxy cluster
   descriptors). Re-check `git submodule status --recursive` afterwards; plain `git status` hid it.
 
+### Stage 8 — re-fusion onto our ops: DONE, and tiny tile is a win
+
+`test_l1_single_layer_pcc` **PCC 0.9999 at both tile heights** with everything fused.
+
+Most of the expected work was already done: **our `matmul_decode` family was already tiny-tile
+aware** — all three factories derive inputA/inputB/output tile heights from the tensors, compute
+`M_tiles = div_up(M, inputA_tile_height)`, and require only that inputB stays 32. So re-fusion was
+mostly Python rewiring.
+
+L1 single-layer traced replay, median of 3 paired runs (`test_walltime_l1_single_layer`):
+
+| configuration | tile-32 | tile-16 |
+|---|---|---|
+| unfused (their block) | 0.2130 ms | 0.2010 ms |
+| fused matmuls, unfused rope | 0.1530 ms | 0.1690 ms |
+| **fully fused (incl. rope)** | **0.1510 ms** | **0.1380 ms** |
+
+Two conclusions, in order of size:
+1. **Fusion is the big win: 0.213 → 0.151 ms at tile-32 (−29%).**
+2. **Tiny tile is a genuine −8.6% on top of that** (0.1380 vs 0.1510; ranges 0.132–0.139 vs
+   0.149–0.152 do not overlap) — **but only once everything is fused.** On the fused-matmul/unfused-rope
+   path tile-16 was *slower*, purely because it paid 3 rope dispatches to tile-32's 1.
+
+Beware two earlier mis-measurements in this file's history: a "0.1825 ms baseline" that was really
+tile-32 with fused rope + UNFUSED matmuls (not the pre-merge config), and a "tile-16 is 5.6% faster"
+result measured on the fully-unfused path, which does not carry to the fused path. **Any tile-height
+A/B must hold the fusion state identical on both sides.**
+
+#### Changes
+
+- `_matmul_decode_pws` prefers `ttnn.matmul_decode(reshard_input=True, compute_kernel_config=_LOFI,
+  residual=, gate=)`; the explicit `to_memory_config` pre-reshard of `hidden_states` is skipped on that
+  path (that materialized L1 copy is the 16-chip L1 pressure).
+- `gate_up_matmul_decode` fusion (also drops a `sharded_to_interleaved`),
+  `concat_heads_matmul_decode` free-view concat, and `_fuse_mlp_residual`/`_fuse_attn_residual`
+  re-enabled — all gated on `_FUSED_MD` so the experimental-op fallback still works.
+- `concat_heads_matmul{,_decode}`: validate `seq` against the operand's own tile height (and round the
+  output spec to it). This also clears one of the two DRAM-leg blockers.
+- `nlp_create_qkv_heads_rope`: full tiny-tile checklist — tile-aware `Ht == 1` validation, CBs sized
+  from each tensor's own tile plus `set_tile_dims`, tile dims added to `compute_program_hash`, and
+  **`PageConfig(qkv.layout())` → `qkv.tensor_spec().page_config()`** (the bare form drops the tile and
+  undersizes the outputs against the CBs — their doc's checklist item 2).
+
+#### New ttnn gaps found
+
+- **`ttnn.repeat` does not preserve a tiny tile**: a `(16,32)` input yields a `(32,32)` output
+  (verified directly). Not in the tiny-tile op list; same class as the addcmul promotion. Worked
+  around in `_build_fused_gate_ws` with a precompute-time retile (zero per-replay cost).
+  **Report upstream** with the `QK_COL_VECTOR_MODE` and bf8-mask bugs.
+- `_build_fused_gate_ws` itself hardcoded a 32-row replicate; now uses `TILE_HEIGHT`.
+
 ## Conflict resolution notes
 
 All 18 resolved as follows.

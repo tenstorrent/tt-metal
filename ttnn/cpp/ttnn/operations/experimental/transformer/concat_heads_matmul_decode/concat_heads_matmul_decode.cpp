@@ -35,9 +35,15 @@ ttnn::Tensor concat_heads_matmul_decode(
     TT_FATAL(weight.storage_type() == StorageType::DEVICE, "weight must be on device");
     TT_FATAL(attn.layout() == Layout::TILE, "attn must be tilized");
     TT_FATAL(attn.padded_shape().rank() == 4, "attn must be rank-4 [1, nh, seq, hd]");
+    // Exactly ONE tile row of the operand's OWN tile: the free concat-heads view below is only
+    // valid when the head tiles are contiguous, which holds for a single tile row at any tile
+    // height. Compare against attn's tile, not the global 32, so a 16x32 activation is accepted
+    // (its weight stays 32x32 -- see the tile design rule).
+    const uint32_t attn_tile_h = attn.tensor_spec().tile().get_height();
     TT_FATAL(
-        attn.padded_shape()[2] == TILE_HEIGHT,
-        "concat_heads_matmul_decode requires seq <= one tile (Mt==1); got seq {}",
+        attn.padded_shape()[2] == attn_tile_h,
+        "concat_heads_matmul_decode requires seq == exactly one tile row ({}); got seq {}",
+        attn_tile_h,
         attn.padded_shape()[2]);
     TT_FATAL(reshard_cores >= 1, "reshard_cores must be >= 1");
 

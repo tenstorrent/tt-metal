@@ -51,16 +51,23 @@ NlpCreateQkvHeadsRopeProgramFactory::cached_program_t NlpCreateQkvHeadsRopeProgr
 
     Program program{};
 
+    // Size every CB from its own tensor's tile, not the global 32x32: with a tiny tile,
+    // tt::tile_size(df) over-sizes the pages and the JIT's get_tile_size(cb) / unpack strides
+    // disagree with the actual layout.
+    const auto& qkv_tile_d = qkv.tensor_spec().tile();
+    const auto& cos_tile_d = cos.tensor_spec().tile();
+    const auto& sin_tile_d = sin.tensor_spec().tile();
+    const auto& out_tile_d = q_out.tensor_spec().tile();
     tt::DataFormat in_df = datatype_to_dataformat_converter(qkv.dtype());
-    uint32_t in_tile = tt::tile_size(in_df);
+    uint32_t in_tile = qkv_tile_d.get_tile_size(in_df);
     tt::DataFormat cos_df = datatype_to_dataformat_converter(cos.dtype());
-    uint32_t cos_tile = tt::tile_size(cos_df);
+    uint32_t cos_tile = cos_tile_d.get_tile_size(cos_df);
     tt::DataFormat sin_df = datatype_to_dataformat_converter(sin.dtype());
-    uint32_t sin_tile = tt::tile_size(sin_df);
+    uint32_t sin_tile = sin_tile_d.get_tile_size(sin_df);
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    uint32_t scalar_tile = tt::tile_size(scalar_df);
+    uint32_t scalar_tile = qkv_tile_d.get_tile_size(scalar_df);
     tt::DataFormat out_df = datatype_to_dataformat_converter(q_out.dtype());
-    uint32_t out_tile = tt::tile_size(out_df);
+    uint32_t out_tile = out_tile_d.get_tile_size(out_df);
 
     uint32_t hd = operation_attributes.head_dim;
     uint32_t Wt = hd / TILE_WIDTH;
@@ -97,8 +104,11 @@ NlpCreateQkvHeadsRopeProgramFactory::cached_program_t NlpCreateQkvHeadsRopeProgr
     CoreRangeSet v_cores(v_ranges);
 
     // ---- Circular buffers (on all cores) ----
-    auto cb = [&](uint32_t idx, uint32_t n, tt::DataFormat df, uint32_t ts) {
-        CreateCircularBuffer(program, all_cores, CircularBufferConfig(n * ts, {{idx, df}}).set_page_size(idx, ts));
+    auto cb = [&](uint32_t idx, uint32_t n, tt::DataFormat df, uint32_t ts, const tt::tt_metal::Tile& tile) {
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(n * ts, {{idx, df}}).set_page_size(idx, ts).set_tile_dims(idx, tile));
     };
     uint32_t c_in = tt::CBIndex::c_0;
     uint32_t c_rot = tt::CBIndex::c_1;
@@ -109,15 +119,15 @@ NlpCreateQkvHeadsRopeProgramFactory::cached_program_t NlpCreateQkvHeadsRopeProgr
     uint32_t c_cos_interm = tt::CBIndex::c_25;
     uint32_t c_sin_interm = tt::CBIndex::c_26;
     uint32_t c_out = tt::CBIndex::c_16;
-    cb(c_in, 2 * Wt, in_df, in_tile);
-    cb(c_rot, 2 * Wt, in_df, in_tile);
-    cb(c_cos, 2 * Wt, cos_df, cos_tile);
-    cb(c_sin, 2 * Wt, sin_df, sin_tile);
-    cb(c_scalar, 1, scalar_df, scalar_tile);
-    cb(c_rot_interm, 1, in_df, in_tile);
-    cb(c_cos_interm, 1, cos_df, cos_tile);
-    cb(c_sin_interm, 1, sin_df, sin_tile);
-    cb(c_out, 2 * Wt, out_df, out_tile);
+    cb(c_in, 2 * Wt, in_df, in_tile, qkv_tile_d);
+    cb(c_rot, 2 * Wt, in_df, in_tile, qkv_tile_d);
+    cb(c_cos, 2 * Wt, cos_df, cos_tile, cos_tile_d);
+    cb(c_sin, 2 * Wt, sin_df, sin_tile, sin_tile_d);
+    cb(c_scalar, 1, scalar_df, scalar_tile, qkv_tile_d);
+    cb(c_rot_interm, 1, in_df, in_tile, qkv_tile_d);
+    cb(c_cos_interm, 1, cos_df, cos_tile, cos_tile_d);
+    cb(c_sin_interm, 1, sin_df, sin_tile, sin_tile_d);
+    cb(c_out, 2 * Wt, out_df, out_tile, out_tile_d);
 
     const uint16_t neg_one = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 

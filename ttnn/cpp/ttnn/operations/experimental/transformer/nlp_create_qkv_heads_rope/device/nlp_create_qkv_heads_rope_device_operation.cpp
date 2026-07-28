@@ -38,9 +38,13 @@ void NlpCreateQkvHeadsRopeDeviceOperation::validate_on_program_cache_miss(
 
     uint32_t hd = args.head_dim;
     TT_FATAL(hd % (TILE_WIDTH * 2) == 0, "head_dim ({}) must be divisible by {}", hd, TILE_WIDTH * 2);
+    // Exactly ONE tile row of qkv's OWN tile. Compare against the operand tile, not the global 32,
+    // so a 16x32 activation is accepted (the tile design rule puts only activations on the tiny tile).
+    const uint32_t qkv_tile_h = qkv.tensor_spec().tile().get_height();
     TT_FATAL(
-        qkv.padded_shape()[-2] == TILE_HEIGHT,
-        "this op requires Ht == 1 (seq one tile row); got seq {}",
+        qkv.padded_shape()[-2] == qkv_tile_h,
+        "this op requires Ht == 1 (seq == one tile row = {}); got seq {}",
+        qkv_tile_h,
         qkv.padded_shape()[-2]);
     uint32_t expected_w = (args.num_q_heads + 2 * args.num_kv_heads) * hd;
     TT_FATAL(
@@ -63,9 +67,9 @@ void NlpCreateQkvHeadsRopeDeviceOperation::validate_on_program_cache_miss(
 NlpCreateQkvHeadsRopeDeviceOperation::spec_return_value_t NlpCreateQkvHeadsRopeDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& qkv = tensor_args.qkv;
-    uint32_t seq = tt::round_up(args.seq_len, TILE_HEIGHT);
+    uint32_t seq = tt::round_up(args.seq_len, qkv.tensor_spec().tile().get_height());
     auto layout =
-        tt::tt_metal::TensorLayout(qkv.dtype(), tt::tt_metal::PageConfig(qkv.layout()), args.output_mem_config);
+        tt::tt_metal::TensorLayout(qkv.dtype(), qkv.tensor_spec().page_config(), args.output_mem_config);
     auto make = [&](uint32_t heads) { return TensorSpec(ttnn::Shape({1, heads, seq, args.head_dim}), layout); };
     return {make(args.num_q_heads), make(args.num_kv_heads), make(args.num_kv_heads)};
 }
@@ -88,6 +92,10 @@ ttsl::hash::hash_t NlpCreateQkvHeadsRopeDeviceOperation::compute_program_hash(
         args.head_dim,
         args.seq_len,
         args.output_mem_config,
+        // tile dims are part of the program (CB page sizes / unpack strides), so they must be hashed
+        // or a 16x32 program would collide with a cached 32x32 one.
+        tensor_args.qkv.tensor_spec().tile().get_height(),
+        tensor_args.qkv.tensor_spec().tile().get_width(),
         tensor_args.qkv,
         tensor_args.cos,
         tensor_args.sin);

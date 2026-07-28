@@ -24,9 +24,12 @@ void ConcatHeadsMatmulDeviceOperation::validate_on_program_cache_miss(
             weight.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "inputs must be INTERLEAVED");
     TT_FATAL(attn.padded_shape().rank() == 4, "attn must be rank-4 [1, nh, seq, hd]");
+    // One tile row of attn's OWN tile (see concat_heads_matmul_decode for the rationale).
+    const uint32_t attn_tile_h = attn.tensor_spec().tile().get_height();
     TT_FATAL(
-        attn.padded_shape()[2] == TILE_HEIGHT,
-        "concat_heads_matmul requires seq <= one tile (Mt==1); got seq {}",
+        attn.padded_shape()[2] == attn_tile_h,
+        "concat_heads_matmul requires seq == exactly one tile row ({}); got seq {}",
+        attn_tile_h,
         attn.padded_shape()[2]);
     uint32_t K = attn.padded_shape()[1] * attn.padded_shape()[3];  // nh * hd
     TT_FATAL(
@@ -39,7 +42,8 @@ void ConcatHeadsMatmulDeviceOperation::validate_on_program_cache_miss(
 
 ConcatHeadsMatmulDeviceOperation::spec_return_value_t ConcatHeadsMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    uint32_t seq = tt::round_up(args.seq_len, TILE_HEIGHT);
+    // Round to the operand's tile height so a tiny-tile activation is not over-padded to 32 rows.
+    uint32_t seq = tt::round_up(args.seq_len, tensor_args.attn.tensor_spec().tile().get_height());
     uint32_t N = tensor_args.weight.padded_shape()[-1];
     return TensorSpec(
         ttnn::Shape({1, 1, seq, N}),

@@ -166,12 +166,40 @@ def _ws_in_mc(device, m, k):
     )
 
 
-def _matmul_decode_pws(a, b_pws, n_blocks, device, out_dtype=ttnn.bfloat16, interleaved_output=False):
-    """partial-width-sharded matmul_decode against a ``_pws_B`` weight (the only decode op this build
-    exposes: ``ttnn.experimental.matmul_decode(a, b, partial_width_sharded, dtype, output_mem_config)``).
-    Reshards A to WIDTH-SHARDED L1 over ``_RESHARD_CORES`` (matmul_decode hard-requires width-sharded
-    in0), emits a WIDTH-SHARDED ``[padded_m, N/n_blocks]`` output over ``n_blocks`` base cores, and
-    optionally converts the result back to interleaved L1."""
+# Our fused matmul_decode family (reshard-in-reader, LoFi, fused gelu, fused residual+gate
+# epilogue). Its program factories are already tiny-tile aware: each derives inputA/inputB/output
+# tile heights from the tensors, computes M_tiles = div_up(M, inputA_tile_height), and requires only
+# that inputB stays 32 -- exactly the tile design rule. Preferred over the leaner experimental op
+# because (a) folding the reshard into the reader and the residual/gate into the epilogue avoids
+# ~5 materialized L1 intermediates per layer, which is what the 16-chip path needs to fit in L1,
+# and (b) it recovers the ~17% the unfused decomposition costs.
+_FUSED_MD = hasattr(ttnn, "matmul_decode") and hasattr(ttnn, "gate_up_matmul_decode")
+
+
+def _matmul_decode_pws(
+    a, b_pws, n_blocks, device, out_dtype=ttnn.bfloat16, interleaved_output=False, residual=None, gate=None
+):
+    """partial-width-sharded matmul_decode against a ``_pws_B`` weight.
+
+    With the fused op: A is resharded inside the reader (no materialized width-sharded copy) and,
+    when ``residual``/``gate`` are given, the gated residual is folded into the epilogue
+    (``out = residual + gate * (A @ W)``) so no separate addcmul is needed.
+    Fallback: reshard A explicitly, call the experimental op, optionally convert back to interleaved.
+    """
+    if _FUSED_MD:
+        return ttnn.matmul_decode(
+            a,
+            b_pws,
+            partial_width_sharded=True,
+            dtype=out_dtype,
+            compute_kernel_config=_LOFI,
+            reshard_input=True,
+            reshard_cores=_RESHARD_CORES,
+            interleaved_output=interleaved_output,
+            residual=residual,
+            gate=gate,
+        )
+    assert residual is None and gate is None, "the experimental matmul_decode has no residual/gate epilogue"
     m, k = a.shape[-2], a.shape[-1]
     a_ws = ttnn.to_memory_config(a, width_sharded_l1_config(m, k, device, _RESHARD_CORES))
     n = b_pws.shape[-1] // _K_BLOCKS
@@ -220,17 +248,26 @@ def _to_tile16_bf8(x, seq):
 
 def _build_fused_gate_ws(device, gate, w, n_blocks=_MLP_N_BLOCKS):
     """Build the resident WIDTH-SHARDED per-channel gate for a matmul_decode fused-residual epilogue.
-    The gate [1,1,W] (per-channel over W) is replicated down all 32 tile rows (so mul_tiles needs no
-    broadcast) and width-sharded [32, W/n_blocks] across the n_blocks output base cores (ordering ==
-    num_cores_to_corerangeset(n_blocks) -- the first n_blocks of the matmul's B grid). Built ONCE at
-    precompute time and held RESIDENT on the block (NOT routed through _to_dram), so it adds ZERO
-    per-replay dispatch. Used for both the MLP down (n_blocks=_MLP_N_BLOCKS) and the attention o-proj
-    (n_blocks=_O_N_BLOCKS)."""
+    The gate [1,1,W] (per-channel over W) is replicated down all TILE_HEIGHT tile rows (so mul_tiles
+    needs no broadcast) and width-sharded [TILE_HEIGHT, W/n_blocks] across the n_blocks output base
+    cores (ordering == num_cores_to_corerangeset(n_blocks) -- the first n_blocks of the matmul's B
+    grid). The row count must be the MODEL tile height, not 32: the epilogue multiplies this against
+    the matmul output, which carries inputA's tile. Built ONCE at precompute time and held RESIDENT on
+    the block (NOT routed through _to_dram), so it adds ZERO per-replay dispatch. Used for both the
+    MLP down (n_blocks=_MLP_N_BLOCKS) and the attention o-proj (n_blocks=_O_N_BLOCKS)."""
     g2d = ttnn.reshape(gate, (1, w))
-    g_rep = ttnn.repeat(g2d, ttnn.Shape([32, 1]))  # [32, W], gate replicated down the rows
+    g_rep = ttnn.repeat(g2d, ttnn.Shape([TILE_HEIGHT, 1]))  # [TILE_HEIGHT, W], replicated down rows
     ttnn.deallocate(g2d)
+    # ttnn.repeat does NOT preserve a tiny tile -- it promotes the output to 32x32 (verified: a
+    # (16,32) input yields a (32,32) output). Retile back so the shard spec below and the epilogue's
+    # mul against the matmul output (which carries inputA's tile) agree. Precompute-time only, so the
+    # extra retile costs nothing per replay.
+    if int(g_rep.get_tile().tile_shape[0]) != TILE_HEIGHT:
+        g_rt = ttnn.tilize(g_rep, tile=ttnn.Tile((TILE_HEIGHT, TILE_WIDTH)), dtype=g_rep.dtype, memory_config=_L1)
+        ttnn.deallocate(g_rep)
+        g_rep = g_rt
     mc = ttnn.create_sharded_memory_config(
-        (32, w // n_blocks),
+        (TILE_HEIGHT, w // n_blocks),
         core_grid=_crs(device, n_blocks),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -279,31 +316,21 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
             # its reader. QKV output stays WIDTH-SHARDED (no interleaved scatter) so
             # nlp_create_qkv_heads_rope reads it directly via TensorAccessor. hidden_states
             # (== the block's `normed`) is owned + freed by the block forward.
-            hidden_states = ttnn.to_memory_config(
-                hidden_states,
-                width_sharded_l1_config(hidden_states.shape[-2], hidden_states.shape[-1], self.device, _RESHARD_CORES),
-            )
+            if not _FUSED_MD:
+                # Only the experimental op needs an explicit width-sharded copy of A; the fused op
+                # reshards inside its reader, and skipping this materialized L1 intermediate is
+                # precisely what keeps the 16-chip denoise inside its L1 budget.
+                hidden_states = ttnn.to_memory_config(
+                    hidden_states,
+                    width_sharded_l1_config(
+                        hidden_states.shape[-2], hidden_states.shape[-1], self.device, _RESHARD_CORES
+                    ),
+                )
             # partial_width_sharded matmul_decode reduces the K-partials onto _QKV_N_BLOCKS output
-            # base cores; give it the WIDTH-SHARDED [padded_m, N/_QKV_N_BLOCKS] output config so the
-            # result is laid out exactly like nlp_create_qkv_heads_rope expects to read it.
-            _qkv_n = self.wqkv_b.shape[-1] // _K_BLOCKS
-            _qkv_m = ((hidden_states.shape[-2] + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
-            _qkv_out_mc = ttnn.create_sharded_memory_config(
-                (_qkv_m, _qkv_n // _QKV_N_BLOCKS),
-                core_grid=_crs(self.device, _QKV_N_BLOCKS),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            qkv = ttnn.experimental.matmul_decode(
-                hidden_states,
-                self.wqkv_b,
-                partial_width_sharded=True,
-                # reshard_input=True,
-                # reshard_cores=_RESHARD_CORES,
-                # compute_kernel_config=_LOFI,
-                dtype=ACT_DTYPE,
-                output_mem_config=_qkv_out_mc,
+            # base cores; the WIDTH-SHARDED [padded_m, N/_QKV_N_BLOCKS] result is laid out exactly
+            # like nlp_create_qkv_heads_rope expects to read it.
+            qkv = _matmul_decode_pws(
+                hidden_states, self.wqkv_b, _QKV_N_BLOCKS, self.device, out_dtype=ACT_DTYPE
             )
         else:
             qkv = self._proj(hidden_states, self.tt_wqkv, ACT_DTYPE, m_t, _g, _expert_ck)
@@ -385,11 +412,24 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         # [.,32,K] view is build-time-only so it is trace-replay-safe. 2 launches -> 1. Pass the
         # SAME tuned program config _proj uses for the O-matmul so the matmul stays as fast.
         if _decode_all_active():
-            # concat-heads + partial-width-sharded matmul_decode o-proj (bf16 out). The gated
-            # residual is applied by the caller's explicit addcmul (fuse disabled on this build).
-            heads = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=_L1)
-            out = _matmul_decode_pws(heads, self.wo_b, _O_N_BLOCKS, self.device, interleaved_output=True)
-            ttnn.deallocate(heads)
+            if hasattr(ttnn.experimental, "concat_heads_matmul_decode") and _FUSED_MD:
+                # FREE-view concat-heads + matmul_decode o-proj, bf16 out. The concat is a
+                # build-time view (contiguous head tiles for seq <= 1 tile), so no `heads` tensor is
+                # materialized in L1. When residual/gate_ws are given the gated residual folds into
+                # the epilogue (out = residual + ga * (attn @ Wo)) -- no separate addcmul.
+                out = ttnn.experimental.concat_heads_matmul_decode(
+                    attn_out,
+                    self.wo_b,
+                    output_dtype=ttnn.bfloat16,
+                    compute_kernel_config=_LOFI,
+                    reshard_cores=_RESHARD_CORES,
+                    residual=residual,
+                    gate=gate_ws,
+                )
+            else:
+                heads = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=_L1)
+                out = _matmul_decode_pws(heads, self.wo_b, _O_N_BLOCKS, self.device, interleaved_output=True)
+                ttnn.deallocate(heads)
         else:
             _o_k, _o_n = self.tt_o.shape[-2] // 32, self.tt_o.shape[-1] // 32
             _o_pc = _denoise_tuned_pcfg(m_t, _o_k, _o_n, _g.x, _g.y) or matmul_pcfg(
@@ -412,19 +452,28 @@ class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
             return super().forward(x)
         # adaRMS emits block-sharded (fast 8-core norm, no S2I); matmul_decode reshards in0 in its reader.
         # x (== the block's `normed`) is owned + freed by the block forward.
-        # Fused gate+up+GeGLU: ONE A-gather, two resident weights, one output hid = gelu(x@gate)*(x@up)
-        # (gate gets the tanh-approx gelu, the multiply is folded into the op). Shares the x-gather
-        # across both projections and emits the GeGLU activation directly -- no separate multiply.
-        # GeGLU via two partial-width-sharded matmul_decodes (gate + up) sharing the input, the
-        # tanh-approx gelu on the gate branch, then the down projection. This build's matmul_decode
-        # has no fused gate/up or gelu epilogue, so the activation + multiply are explicit.
-        gate = _matmul_decode_pws(x, self.gate_b, _MLP_N_BLOCKS, self.device)
-        up = _matmul_decode_pws(x, self.up_b, _MLP_N_BLOCKS, self.device)
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
-        hid = ttnn.multiply(gate, up)
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
-        hid = ttnn.sharded_to_interleaved(hid, _L1)
+        # Fused gate+up+GeGLU: ONE A-gather, two resident weights, one output
+        # hid = gelu(x@gate)*(x@up) -- the tanh-approx gelu and the GeGLU multiply are folded into
+        # the op, and the down projection's reshard-in-reader removes the sharded_to_interleaved the
+        # unfused path needs. Falls back to the explicit decomposition without our op.
+        if _FUSED_MD:
+            hid = ttnn.gate_up_matmul_decode(
+                x,
+                self.gate_b,
+                self.up_b,
+                compute_kernel_config=_LOFI,
+                fused_gelu_approx=True,
+                reshard_input=True,
+                reshard_cores=_RESHARD_CORES,
+            )
+        else:
+            gate = _matmul_decode_pws(x, self.gate_b, _MLP_N_BLOCKS, self.device)
+            up = _matmul_decode_pws(x, self.up_b, _MLP_N_BLOCKS, self.device)
+            gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
+            hid = ttnn.multiply(gate, up)
+            ttnn.deallocate(gate)
+            ttnn.deallocate(up)
+            hid = ttnn.sharded_to_interleaved(hid, _L1)
         out = _matmul_decode_pws(hid, self.down_b, _MLP_N_BLOCKS, self.device, interleaved_output=True)
         ttnn.deallocate(hid)
         return out
@@ -477,12 +526,12 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
     # epilogues (out = residual + gate * (A @ W)), eliminating the separate ttnn.addcmul. The linear
     # (DECODE_ALL=False) path keeps the explicit addcmul.
     def _fuse_mlp_residual(self) -> bool:
-        # This build's matmul_decode has no fused residual/gate epilogue, so keep the explicit
-        # addcmul path (numerically identical) instead of folding into the projection.
-        return False
+        # Fold only when our matmul_decode (which HAS the residual/gate epilogue) is present; the
+        # leaner experimental op does not, and then the explicit addcmul path is used instead.
+        return _decode_all_active() and _FUSED_MD
 
     def _fuse_attn_residual(self) -> bool:
-        return False
+        return _decode_all_active() and _FUSED_MD
 
     def precompute_mods(self, adarms_cond: ttnn.Tensor) -> Tuple[ttnn.Tensor, ...]:
         # When folding a gated residual into its projection matmul, additionally precompute the

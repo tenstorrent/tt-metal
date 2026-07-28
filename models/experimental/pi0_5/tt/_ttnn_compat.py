@@ -18,14 +18,10 @@ def nlp_create_qkv_heads_rope(
     memory_config=None,
 ):
     mem = memory_config or ttnn.L1_MEMORY_CONFIG
-    # The fused op is 32x32-tile only: its device op asserts padded_shape()[-2] == TILE_HEIGHT (the
-    # global 32) and sizes its CBs with tt::tile_size(df) rather than the operand tile, so a 16x32
-    # qkv fails validation with "requires Ht == 1 (seq one tile row); got seq 16". Take the unfused
-    # fallback below at a tiny tile -- nlp_create_qkv_heads and rotary_embedding both gained
-    # tiny-tile support, and that is the path the tiny-tile branch itself ran (the fused op does not
-    # exist on main). Threading the operand tile through the fused op is stage 8; see
-    # models/experimental/pi0_5/TINY_TILE_INTEGRATION_PLAN.md.
-    if hasattr(ttnn.experimental, "nlp_create_qkv_heads_rope") and int(xqkv.get_tile().tile_shape[0]) == 32:
+    # The fused op is now tile-aware (it validates Ht == 1 against the operand's own tile height,
+    # sizes every CB from its tensor's tile, preserves the input page config on its outputs, and
+    # hashes the tile dims), so it is used at ANY tile height. One dispatch instead of three.
+    if hasattr(ttnn.experimental, "nlp_create_qkv_heads_rope"):
         return ttnn.experimental.nlp_create_qkv_heads_rope(xqkv, cos, sin, num_heads, num_kv_heads, memory_config=mem)
     # Fallback: nlp_create_qkv_heads requires a sharded (non-width-sharded) output when its input is
     # sharded. The DECODE_ALL path feeds a WIDTH-SHARDED qkv; convert it to interleaved first so the
