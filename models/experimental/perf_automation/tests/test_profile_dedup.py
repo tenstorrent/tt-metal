@@ -61,38 +61,26 @@ def test_cache_roundtrip(tmp_path, monkeypatch):
 
 
 def test_profile_once_dedups_unchanged_model(tmp_path, monkeypatch):
-    """An unchanged model at the SAME cq is profiled once; the second call is served from cache.
+    """An unchanged model is profiled once; the second call is served from cache.
 
-    optimize is trace+1cq end to end (`cq` is fixed at 1), so this is the production path and the
-    dedup is what stops the tool re-profiling the device for nothing.
+    optimize is trace+1cq end to end, so this is the production path and the dedup is what stops
+    the tool re-profiling the device for nothing.
     """
     root = _mk_model(tmp_path)
     calls = _wire(monkeypatch, tmp_path, root)
-    p1 = m._profile_once(cq=1)
-    p2 = m._profile_once(cq=1)
+    p1 = m._profile_once()
+    p2 = m._profile_once()
     assert calls["n"] == 1
     assert p1["device_ms"] == p2["device_ms"] == 1.0
-
-
-def test_profile_cache_does_not_serve_across_cq(tmp_path, monkeypatch):
-    """A 1-CQ and a 2-CQ profile are DIFFERENT measurements, so one must never be served for the
-    other. `cq` is therefore part of the cache key -- it used to be absent, and because _profile_once
-    writes TT_PERF_NUM_CQ only AFTER the key is computed, reading it from the environment would not
-    have captured it either."""
-    root = _mk_model(tmp_path)
-    calls = _wire(monkeypatch, tmp_path, root)
-    m._profile_once(cq=1)
-    m._profile_once(cq=2)
-    assert calls["n"] == 2, "a 2-CQ request was served a cached 1-CQ profile"
 
 
 def test_profile_once_reprofiles_after_source_change(tmp_path, monkeypatch):
     root = _mk_model(tmp_path)
     calls = _wire(monkeypatch, tmp_path, root)
-    m._profile_once(cq=1)
+    m._profile_once()
     assert calls["n"] == 1
     (root / "_stubs" / "a.py").write_text("import ttnn\nx = 99\n")
-    m._profile_once(cq=1)
+    m._profile_once()
     assert calls["n"] == 2
 
 
@@ -100,6 +88,6 @@ def test_profile_once_no_cache_when_disabled(tmp_path, monkeypatch):
     root = _mk_model(tmp_path)
     calls = _wire(monkeypatch, tmp_path, root)
     monkeypatch.setenv("PERF_MCP_NO_PROFILE_CACHE", "1")
-    m._profile_once(cq=1)
-    m._profile_once(cq=1)
+    m._profile_once()
+    m._profile_once()
     assert calls["n"] == 2

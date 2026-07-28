@@ -20,6 +20,7 @@ Config via env (set in the --mcp-config):
   E2E_MCP_PCC        required e2e PCC threshold (default 0.99)
   E2E_MCP_TIMEOUT    per-gate pytest timeout seconds (default 1800)
 """
+
 from __future__ import annotations
 
 import json
@@ -71,7 +72,7 @@ def termination_check() -> dict:
     e2e PCC>=threshold via the SAME `_run_deterministic_gates` (tool-run, not agent-reported — the agent
     cannot self-declare done, fake PCC, or xfail/skip past it), AND (2) HOST-FREE — everything-on-device
     / trace-capturable (no weight streaming, no host token loop, real begin_trace_capture succeeds) so
-    trace + 2CQ can run. Checked in order: correctness first, host-free only once correct. next_target
+    trace can run. Checked in order: correctness first, host-free only once correct. next_target
     names the single next failing thing (a correctness gate OR a host op). Host-free required unless
     E2E_SKIP_HOST_FREE=1. The agent may NOT declare done — this gate is the authority."""
     if not _DEMO_DIR:

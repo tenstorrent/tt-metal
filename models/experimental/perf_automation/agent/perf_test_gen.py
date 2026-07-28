@@ -56,10 +56,9 @@ if _MESH_SHAPE[0] * _MESH_SHAPE[1] > 1:
     _DEV_PARAMS["fabric_config"] = True   # only if the SOURCE sets it
 if _PERF_TRACE:
     # Reserve the trace region at device-open, ONCE, for baseline and every candidate. The tool
-    # measures trace+1cq end to end, so the device opens with 1 command queue by default (no 2-CQ
-    # reservation to OOM under). TT_PERF_NUM_CQ stays a knob for the rare 2-CQ experiment.
+    # measures trace+1cq end to end, so the device opens with a single command queue.
     _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
-    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
+    _DEV_PARAMS["num_command_queues"] = 1
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
@@ -105,9 +104,8 @@ def test_<task>_perf(device_params, device):
             return build_pipeline(dev)                        # + the same build args the demo uses
         _prompt_ids = ...
         # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets
-        # traced (+2CQ where the stage stages its inputs). Falls back to the single decode
-        # contract for pipelines that expose only decode_step.
-        measure_adapter(PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1), device, mode="auto")
+        # traced. Falls back to the single decode contract for pipelines that expose only decode_step.
+        measure_adapter(PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1), device)
 
     def _try_traced():
         try:
@@ -162,7 +160,7 @@ if _MESH_SHAPE[0] * _MESH_SHAPE[1] > 1:
     _DEV_PARAMS["fabric_config"] = True   # only if the SOURCE sets it
 if _PERF_TRACE:
     _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
-    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
+    _DEV_PARAMS["num_command_queues"] = 1
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
@@ -465,7 +463,6 @@ def _extract_error(out: str) -> str:
             or "TRACE_REPLAY_SKIPPED" in ln
             or "TRACE_NOT_TRACE_CAPABLE" in ln
             or "TRACE_REPLAY_PATH" in ln
-            or "TRACE_2CQ_FALLBACK" in ln
         ):
             picked.append(s)
     tail = "\n".join(picked[-25:]) if picked else ""
@@ -516,8 +513,8 @@ def skeleton_for(root: Path) -> str:
         )
         .replace(
             "            # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets\n"
-            "            # traced (+2CQ where the stage stages its inputs). Falls back to the single decode\n"
-            "            # contract for pipelines that expose only decode_step.\n",
+            "            # traced. Falls back to the single decode contract for pipelines that expose only\n"
+            "            # decode_step.\n",
             "            # This model exposes NO PIPELINE_STAGES (it was not assembled by emit-e2e), so profile\n"
             "            # the single decode contract it does expose: decode_prefill(ids) then decode_step(state).\n",
         )
@@ -591,12 +588,12 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
                 terminal, ship it on FORWARD_WALL_MS rather than loop forever chasing a trace it can't do
       invalid   ran but produced no full-pipeline marker, or could not trace at all -> NOT shipped; the
                 caller keeps correcting.
-    Measurement is trace+1CQ only — there is no separate 2-CQ pass (the tool is trace+1cq end to end).
+    Measurement is trace+1cq end to end.
     Records what it saw in the trace_caps sidecar either way. Second return value is the failure detail."""
     node_abs = f"{out_path}::test_{task}_perf"
     vt = int(os.environ.get("PERF_MCP_VALIDATE_TIMEOUT", "900") or "900")
     if component:
-        rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_TRACE": "1", "TT_PERF_NUM_CQ": "1"}, timeout_s=vt)
+        rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_TRACE": "1"}, timeout_s=vt)
         if rc1 is None:
             return "skip", out1
         low = out1.lower()
@@ -610,8 +607,6 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
                 {
                     "trace_1cq": True,
                     "trace_1cq_path": _parse_trace_path(out1),
-                    "trace_2cq": False,
-                    "trace_2cq_path": None,
                     "eager_terminal": False,
                 },
             )
@@ -622,8 +617,6 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
                 {
                     "trace_1cq": False,
                     "trace_1cq_path": None,
-                    "trace_2cq": False,
-                    "trace_2cq_path": None,
                     "eager_terminal": True,
                 },
             )
@@ -634,7 +627,7 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
             _extract_error(out1)
             or "module perf test produced no TRACE_PER_TOKEN_MS (trace required; eager only via TT_PERF_TRACE=0)"
         )
-    rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "1"}, timeout_s=vt)
+    rc1, out1 = _run_perf_node(node_abs, {}, timeout_s=vt)
     if rc1 is None:
         return "skip", out1
     low = out1.lower()
@@ -652,8 +645,6 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
             {
                 "trace_1cq": False,
                 "trace_1cq_path": None,
-                "trace_2cq": False,
-                "trace_2cq_path": None,
                 "eager_terminal": True,
             },
         )
@@ -662,14 +653,12 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
     caps = {
         "trace_1cq": "TRACE_PER_TOKEN_MS=" in out1,
         "trace_1cq_path": _parse_trace_path(out1),
-        "trace_2cq": False,
-        "trace_2cq_path": None,
         "eager_terminal": eager,
     }
     if eager:
         _write_trace_caps(out_path, caps)
         return "ok_marker", ""
-    # trace+1CQ only: a trace-capable pipeline that traces at 1 CQ ships now (no 2-CQ pass to hold).
+    # A trace-capable pipeline that traces at 1 CQ ships now.
     _write_trace_caps(out_path, caps)
     if caps["trace_1cq"]:
         return "ok_1cq", ""
@@ -709,7 +698,7 @@ def _self_traced_prompt(
         "Requirements:\n"
         f"- a pytest function named `test_{task}_perf`.\n"
         "- DEVICE OPEN: open the device the SAME way the demo/source does (lift its open, or use the "
-        "device_params fixture) with trace_region_size + num_command_queues=1 (default via TT_PERF_NUM_CQ) "
+        "device_params fixture) with trace_region_size + num_command_queues=1 "
         "when TT_PERF_TRACE is set, so the model's own capture + replay have the trace budget. Pass that "
         "device to the build + the function.\n"
         "- Run the device work IN-PROCESS (never subprocess/os.system/python -m pytest).\n"
@@ -1119,14 +1108,14 @@ def generate_perf_test(
         "device-param gate near the top AND the `_traced_forward()` measure_adapter body. This is a "
         "MODEL-AGNOSTIC, GPU-comparable latency (TRACE_PER_TOKEN_MS + per-stage TRACE_STAGE_MS). Do NOT "
         "write a per-model adapter class — the tool ships the generic PipelineStageAdapter, which profiles "
-        "WHATEVER emit-e2e emitted: every `PIPELINE_STAGES` entry is traced (+2CQ where the stage exposes "
-        "`<stage>_write_inputs`), falling back to the single decode contract for decode-only pipelines. Your "
+        "WHATEVER emit-e2e emitted: every `PIPELINE_STAGES` entry is traced, "
+        "falling back to the single decode contract for decode-only pipelines. Your "
         "ONLY job in that block is to fill `_build_for_perf(dev)` so it RETURNS THE RESIDENT, STAGE-EXPOSING "
         "PIPELINE OBJECT — the one carrying PIPELINE_STAGES + the per-stage trace hooks (or a trace-capturable "
         "`decode_step(state)`). Call the model's module-level `build_pipeline(device, ...)` factory that "
         "emit-e2e emits (import it from the demo's tt/pipeline module, pass `dev` + the same build args). Do "
         "NOT return the demo's run_tts()/generate() RESULT or a closure that runs the pipeline — that object "
-        "has no stage hooks, so the adapter raises and trace+2CQ silently falls back to FORWARD_WALL_MS. Set "
+        "has no stage hooks, so the adapter raises and the trace silently falls back to FORWARD_WALL_MS. Set "
         "`_prompt_ids` to a SMALL prompt. Leave everything else in the block verbatim. The clean numbers are "
         "emitted automatically once `_build_for_perf` returns that object; a genuine repeat-prefill pipeline "
         "with no stage hooks and no decode_step legitimately falls back to FORWARD_WALL_MS, which is fine. "
@@ -1197,7 +1186,7 @@ def generate_perf_test(
             )
             if build_component_perf_test(root, task, out_rel, _body):
                 _verdict, _ = validate_generated_perf_test(out_path, task, component=_component)
-                if _verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
+                if _verdict in ("ok_1cq", "ok_marker", "skip"):
                     print(f"      auto-gen perf from pcc (agentic) -> {node}", file=sys.stderr, flush=True)
                     return node
             print(
@@ -1286,7 +1275,7 @@ def generate_perf_test(
         if not validate:
             return node
         verdict, failure = validate_generated_perf_test(out_path, task, component=_component)
-        if verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
+        if verdict in ("ok_1cq", "ok_marker", "skip"):
             return node
         if _component and "WEDGE" in failure:
             trace_wedges += 1

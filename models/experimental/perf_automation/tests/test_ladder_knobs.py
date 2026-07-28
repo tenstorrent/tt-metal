@@ -177,7 +177,7 @@ def test_host_bucket_is_still_exempt_from_device_knobs():
     """A host_fallback entry is NOT a device op — grid/fidelity/dtype on it are meaningless. That
     exclusion is by KIND, not by a roofline estimate, so the sweep must not reach it."""
     _, rung, _ = ladder({"bound_by": "host", "bucket": "host_fallback"}, "host_overhead", [])
-    assert rung == "trace-2cq", rung
+    assert rung == "trace-capture", rung
     host_att = [{"op_signature": "host_overhead", "kernel_kind": "structural"}]
     done, rung, _ = ladder({"bound_by": "host", "bucket": "host_fallback"}, "host_overhead", host_att)
     assert done and rung == "done"

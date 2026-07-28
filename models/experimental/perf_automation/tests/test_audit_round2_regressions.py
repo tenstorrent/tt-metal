@@ -199,7 +199,7 @@ def test_eager_is_not_banked_as_a_trace_measurement():
         assert f(eager) is None, f"{eager} still counts as a trace measurement"
     assert f("TRACE_REPLAY_PATH=trace") is None, "a bare 'trace' is not a real trace+Ncq path"
     assert f("TRACE_REPLAY_PATH=trace 1cq") == "trace+1cq"
-    assert f("TRACE_REPLAY_PATH=trace+2cq") == "trace+2cq"
+    assert f("TRACE_REPLAY_PATH=trace+1cq") == "trace+1cq"
 
 
 def test_degenerate_device_output_scores_zero_pcc_not_one():

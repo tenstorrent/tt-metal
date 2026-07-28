@@ -26,59 +26,16 @@ def _stub_profile_env(monkeypatch):
     return seen
 
 
-def test_profile_once_steering_uses_1cq_and_restores(monkeypatch):
-    seen = _stub_profile_env(monkeypatch)
-    saved = os.environ.get("TT_PERF_NUM_CQ")
-    try:
-        os.environ.pop("TT_PERF_NUM_CQ", None)
-        m._profile_once(cq=1)
-        assert seen["cq"] == "1"
-        assert "TT_PERF_NUM_CQ" not in os.environ
-    finally:
-        if saved is None:
-            os.environ.pop("TT_PERF_NUM_CQ", None)
-        else:
-            os.environ["TT_PERF_NUM_CQ"] = saved
-
-
-def test_profile_once_passes_through_requested_cq(monkeypatch):
-    # _profile_once(cq=N) is a generic passthrough: it sets TT_PERF_NUM_CQ to whatever cq is asked.
-    # The tool is trace+1cq end to end (callers pass cq=1), but the mechanism honors any value.
-    seen = _stub_profile_env(monkeypatch)
-    saved = os.environ.get("TT_PERF_NUM_CQ")
-    try:
-        os.environ.pop("TT_PERF_NUM_CQ", None)
-        m._profile_once(cq=2)
-        assert seen["cq"] == "2"
-    finally:
-        if saved is None:
-            os.environ.pop("TT_PERF_NUM_CQ", None)
-        else:
-            os.environ["TT_PERF_NUM_CQ"] = saved
-
-
-def test_profile_once_restores_prior_value(monkeypatch):
-    seen = _stub_profile_env(monkeypatch)
-    saved = os.environ.get("TT_PERF_NUM_CQ")
-    try:
-        os.environ["TT_PERF_NUM_CQ"] = "2"
-        m._profile_once(cq=1)
-        assert seen["cq"] == "1"
-        assert os.environ["TT_PERF_NUM_CQ"] == "2"
-    finally:
-        if saved is None:
-            os.environ.pop("TT_PERF_NUM_CQ", None)
-        else:
-            os.environ["TT_PERF_NUM_CQ"] = saved
-
-
-def test_profile_once_none_leaves_env_untouched(monkeypatch):
+def test_profile_once_leaves_cq_env_untouched(monkeypatch):
+    # The tool is trace+1cq end to end: _profile_once never sets TT_PERF_NUM_CQ (the device opens
+    # with a single command queue via the perf-test fixture), so the profiling env is left as-is.
     seen = _stub_profile_env(monkeypatch)
     saved = os.environ.get("TT_PERF_NUM_CQ")
     try:
         os.environ.pop("TT_PERF_NUM_CQ", None)
         m._profile_once()
         assert seen["cq"] is None
+        assert "TT_PERF_NUM_CQ" not in os.environ
     finally:
         if saved is None:
             os.environ.pop("TT_PERF_NUM_CQ", None)

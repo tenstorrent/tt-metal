@@ -25,9 +25,9 @@ def test_trace_policy_empty():
 
 
 def test_trace_engaged():
-    assert tg.trace_engaged({"trace_2cq": True, "trace_1cq": False}) is True
-    assert tg.trace_engaged({"trace_2cq": False, "trace_1cq": True}) is True
-    assert tg.trace_engaged({"trace_2cq": False, "trace_1cq": False}) is False
+    assert tg.trace_engaged({"trace_1cq": True}) is True
+    assert tg.trace_engaged({"trace_1cq": False}) is False
+    assert tg.trace_engaged({}) is False
     assert tg.trace_engaged(None) is False
 
 
@@ -40,13 +40,13 @@ def test_valid_overflow_proof():
 
 def test_verdict_pass_when_trace_engaged():
     pol = tg.trace_policy({"a": "sharded"})
-    v, _ = tg.classify_trace_verdict({"trace_2cq": True}, pol)
+    v, _ = tg.classify_trace_verdict({"trace_1cq": True}, pol)
     assert v == "PASS"
 
 
 def test_verdict_fail_all_graduated_no_trace_no_proof():
     pol = tg.trace_policy({"a": "sharded", "b": "native"})
-    v, r = tg.classify_trace_verdict({"trace_2cq": False, "trace_1cq": False}, pol)
+    v, r = tg.classify_trace_verdict({"trace_1cq": False}, pol)
     assert v == "FAIL"
     assert "eager not permitted" in r
 
@@ -54,7 +54,7 @@ def test_verdict_fail_all_graduated_no_trace_no_proof():
 def test_verdict_eager_waived_with_valid_proof():
     pol = tg.trace_policy({"a": "sharded"})
     v, r = tg.classify_trace_verdict(
-        {"trace_2cq": False},
+        {"trace_1cq": False},
         pol,
         allow_no_trace=True,
         overflow_proof={"required_bytes": 999, "budget_bytes": 10},
@@ -66,7 +66,7 @@ def test_verdict_eager_waived_with_valid_proof():
 def test_verdict_fail_when_proof_flag_but_no_real_overflow():
     pol = tg.trace_policy({"a": "sharded"})
     v, _ = tg.classify_trace_verdict(
-        {"trace_2cq": False},
+        {"trace_1cq": False},
         pol,
         allow_no_trace=True,
         overflow_proof={"required_bytes": 10, "budget_bytes": 999},
@@ -76,7 +76,7 @@ def test_verdict_fail_when_proof_flag_but_no_real_overflow():
 
 def test_verdict_eager_ok_when_ungraduated_present():
     pol = tg.trace_policy({"a": "sharded", "b": None})
-    v, r = tg.classify_trace_verdict({"trace_2cq": False}, pol)
+    v, r = tg.classify_trace_verdict({"trace_1cq": False}, pol)
     assert v == "EAGER_WAIVED"
     assert "b" in r
 
@@ -127,18 +127,14 @@ def test_glue_docstring_mentioning_from_torch_is_not_flagged():
 def test_glue_ignores_setup_functions():
     src = (
         "class P:\n"
-        "    def decode_write_inputs(self, ids):\n"
+        "    def decode_trace_setup(self, ids):\n"
         "        return ttnn.from_torch(torch.full((1, 32), 0))\n"
     )
     assert tg.glue_trace_violations(src) == []
 
 
 def test_decode_repin_violation_detected():
-    src = (
-        "class P:\n"
-        "    def decode_write_inputs(self, ids):\n"
-        "        return self._pin_hidden(ids, self._decode_C)\n"
-    )
+    src = "class P:\n" "    def decode_step(self, ids):\n" "        return self._pin_hidden(ids, self._decode_C)\n"
     assert tg.decode_repin_violation(src) is not None
 
 
@@ -174,7 +170,7 @@ def test_read_graduation_and_evaluate_all_graduated_fail(tmp_path, monkeypatch):
     )
     grad = tg.read_graduation(demo)
     assert grad == {"a": "sharded", "b": "native"}
-    res = tg.evaluate_trace_gate(demo, {"trace_2cq": False, "trace_1cq": False})
+    res = tg.evaluate_trace_gate(demo, {"trace_1cq": False})
     assert res["verdict"] == "FAIL"
     assert res["policy"]["required"] is True
 
@@ -194,7 +190,7 @@ def test_evaluate_ungraduated_allows_eager(tmp_path, monkeypatch):
         {"a": "sharded", "b": None},
         "class P:\n    def _forward_from_hidden(self, h):\n        return ttnn.matmul(h, self.w)\n",
     )
-    res = tg.evaluate_trace_gate(demo, {"trace_2cq": False, "trace_1cq": False})
+    res = tg.evaluate_trace_gate(demo, {"trace_1cq": False})
     assert res["verdict"] == "EAGER_WAIVED"
     assert res["reasons"] == []
 
@@ -212,7 +208,7 @@ def _make_caps_demo(tmp_path):
     (demo / "tt").mkdir(parents=True)
     (demo / "tt" / "pipeline.py").write_text("x = 1\n")
     caps = e2e / "test_gen_text_perf.py.trace_caps.json"
-    caps.write_text(json.dumps({"trace_1cq": False, "trace_2cq": False}))
+    caps.write_text(json.dumps({"trace_1cq": False}))
     return demo, caps
 
 
@@ -259,13 +255,13 @@ def test_run_fresh_capture_full_body_runs(tmp_path, monkeypatch):
 
     def _fake_validate(out_path, task, component=False):
         assert task == "gen_text"
-        caps_file.write_text(json.dumps({"trace_1cq": False, "trace_2cq": False, "eager_terminal": False}))
+        caps_file.write_text(json.dumps({"trace_1cq": False, "eager_terminal": False}))
         return "invalid", "pipeline could not trace at all"
 
     fake.validate_generated_perf_test = _fake_validate
     monkeypatch.setitem(sys.modules, "models.experimental.perf_automation.agent.perf_test_gen", fake)
     caps, detail = tg.run_fresh_trace_capture(demo)
-    assert caps == {"trace_1cq": False, "trace_2cq": False, "eager_terminal": False}
+    assert caps == {"trace_1cq": False, "eager_terminal": False}
     assert "could not trace" in detail
 
 
@@ -280,7 +276,7 @@ def test_explicit_caps_skips_fresh_capture(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tg, "run_fresh_trace_capture", _boom)
     demo = _make_demo(tmp_path, ["a"], {"a": None}, "class P:\n    pass\n")
-    res = tg.evaluate_trace_gate(demo, {"trace_2cq": True})
+    res = tg.evaluate_trace_gate(demo, {"trace_1cq": True})
     assert res["verdict"] == "PASS"
     assert res["capture_detail"] is None
 
@@ -308,17 +304,17 @@ def test_overflow_fix_loop_resolves_after_growing():
     def _cap(demo):
         calls["n"] += 1
         if calls["n"] < 2:
-            return {"trace_2cq": False, "trace_1cq": False}, "trace region overflow"
-        return {"trace_2cq": True, "trace_1cq": False}, "ok"
+            return {"trace_1cq": False}, "trace region overflow"
+        return {"trace_1cq": True}, "ok"
 
     res = tg.overflow_fix_loop("x", capture_fn=_cap, max_rounds=4)
     assert res["resolved"] is True
-    assert res["caps"]["trace_2cq"] is True
+    assert res["caps"]["trace_1cq"] is True
 
 
 def test_overflow_fix_loop_blocker_with_proof():
     def _cap(demo):
-        return {"trace_2cq": False, "trace_1cq": False}, "trace region overflow persists"
+        return {"trace_1cq": False}, "trace region overflow persists"
 
     res = tg.overflow_fix_loop("x", capture_fn=_cap, max_rounds=3, base_region=1000)
     assert res["resolved"] is False
@@ -331,7 +327,7 @@ def test_overflow_fix_loop_non_overflow_stops_early():
 
     def _cap(demo):
         calls["n"] += 1
-        return {"trace_2cq": False, "trace_1cq": False}, "could not trace at all (path=None)"
+        return {"trace_1cq": False}, "could not trace at all (path=None)"
 
     res = tg.overflow_fix_loop("x", capture_fn=_cap, max_rounds=5)
     assert res["resolved"] is False
@@ -409,7 +405,7 @@ def test_evaluate_l1_overflow_resets_and_flags(tmp_path, monkeypatch):
         tg,
         "run_fresh_trace_capture",
         lambda d, timeout_s=900: (
-            {"trace_1cq": False, "trace_2cq": False},
+            {"trace_1cq": False},
             "invalid circular buffer grow to beyond max L1",
         ),
     )

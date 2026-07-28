@@ -945,10 +945,10 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # 2-CQ). Routed via recall_knobs(op_class=host_fallback). Cleared once a measured 'structural'
     # attempt is on file — a trace that doesn't help still counts as tried (bounded, can't hang).
     if bound == "host" or (open_op.get("bucket") or "").lower() == "host_fallback":
-        if not (kinds & {"structural", "trace", "2cq", "trace-2cq", "trace-capture"}):
+        if not (kinds & {"structural", "trace", "trace-capture"}):
             return (
                 False,
-                "trace-2cq",
+                "trace-capture",
                 "host/dispatch-bound: recall_knobs(op_class='host_fallback') and apply the "
                 "TRACE-CAPTURE lever to the generation loop; record_kernel_attempt(...,'trace-capture',...). "
                 "This tool measures trace+1CQ end to end (cq is fixed at 1, there is no 2-CQ track), so do NOT "
@@ -1234,7 +1234,7 @@ def _authored_source_files(root: Path) -> list:
     return [f for d in ("_stubs", "tt") for f in (root / d).glob("*.py") if f.is_file()]
 
 
-def _model_source_fingerprint(cq=None) -> str:
+def _model_source_fingerprint() -> str:
     """Cache key for a profiling run: hashes the model's stub/tt source AND the identity
     of the module + perf-test being profiled.
 
@@ -1267,7 +1267,6 @@ def _model_source_fingerprint(cq=None) -> str:
     _env_keys = (
         "PERF_MCP_TASK",
         "TT_PERF_TRACE",
-        "TT_PERF_NUM_CQ",
         "TT_PERF_LAYERS",
         "TT_PERF_SEQ_LEN",
         "PERF_MCP_DEVICES",
@@ -1276,7 +1275,6 @@ def _model_source_fingerprint(cq=None) -> str:
     for part in [os.environ.get(k, "") for k in _env_keys] + [
         ptr.get("path", ""),
         ptr.get("case", ""),
-        ("cq=%s" % cq) if cq is not None else "",
     ]:
         h.update(b"\x00")
         h.update(str(part).encode())
@@ -1411,7 +1409,7 @@ def _measurement_failed_result(msg) -> dict:
     return {"verdict": "MEASUREMENT_FAILED", "measured": False, "retryable": True, "reason": reason}
 
 
-def _profile_with_zero_row_retry(cq=None, retries: int = None) -> dict:
+def _profile_with_zero_row_retry(retries: int = None) -> dict:
     """Profile, retrying when the run yields no readable op rows.
 
     A zero-row profile is transient far more often than not; one retry would have saved
@@ -1422,7 +1420,7 @@ def _profile_with_zero_row_retry(cq=None, retries: int = None) -> dict:
     last = None
     for attempt in range(n + 1):
         try:
-            return _profile_once(cq=cq)
+            return _profile_once()
         except Exception as exc:  # noqa: BLE001
             last = exc
             if attempt >= n or not _is_measurement_failure(exc):
@@ -1436,18 +1434,15 @@ def _profile_with_zero_row_retry(cq=None, retries: int = None) -> dict:
     raise last
 
 
-def _profile_once(cq=None) -> dict:
+def _profile_once() -> dict:
     _cache_on = os.environ.get("PERF_MCP_NO_PROFILE_CACHE") != "1"
-    _fp = _model_source_fingerprint(cq) if _cache_on else ""
+    _fp = _model_source_fingerprint() if _cache_on else ""
     if _fp:
         _hit = _profile_cache_get(_fp)
         if _hit is not None:
             return _hit
     ctx = _Ctx()
     tmpdir = ctx.run.dir
-    _saved_cq = os.environ.get("TT_PERF_NUM_CQ")
-    if cq is not None:
-        os.environ["TT_PERF_NUM_CQ"] = str(cq)
     try:
         profiles = measure_runs(ctx)
         prof = profiles[0]
@@ -1463,11 +1458,6 @@ def _profile_once(cq=None) -> dict:
             _profile_cache_put(_fp, prof)
         return prof
     finally:
-        if cq is not None:
-            if _saved_cq is None:
-                os.environ.pop("TT_PERF_NUM_CQ", None)
-            else:
-                os.environ["TT_PERF_NUM_CQ"] = _saved_cq
         _reap_measurement_dir(tmpdir)
 
 
@@ -1508,7 +1498,7 @@ def profile_model() -> dict:
     roofline target (the achievable floor). Records this as the baseline for measure_candidate.
     Call this first, and again whenever you want a fresh picture."""
     try:
-        prof = _profile_with_zero_row_retry(cq=1)
+        prof = _profile_with_zero_row_retry()
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
         if _is_dram_trace_overflow(_msg):
@@ -1572,7 +1562,7 @@ def measure_candidate() -> dict:
     A REJECTED measurement is NEVER a win no matter how fast it looks — do not keep it. Call this
     after every edit; only a 'valid' result that is faster than baseline is a real gain."""
     try:
-        prof = _profile_with_zero_row_retry(cq=1)
+        prof = _profile_with_zero_row_retry()
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
         if _is_dram_trace_overflow(_msg):
@@ -1983,7 +1973,7 @@ def _emit_fullpipe(result: dict) -> dict:
     return result
 
 
-_FULLPIPE_MODE_RANK = {"eager": 0, "trace": 1, "trace+1cq": 1, "trace+2cq": 2}
+_FULLPIPE_MODE_RANK = {"eager": 0, "trace": 1, "trace+1cq": 1}
 
 
 def _fullpipe_pending_path() -> Path:
@@ -2112,24 +2102,11 @@ def _fullpipe_mode(method: str, path: str | None) -> str:
     if method != "trace":
         return "eager"
     p = (path or "").strip()
-    return p if p in ("trace+2cq", "trace+1cq") else "trace"
+    return p if p == "trace+1cq" else "trace"
 
 
 def _mode_rank(mode: str) -> int:
     return _FULLPIPE_MODE_RANK.get(mode, 1)
-
-
-def _track_mode(mode: str, cq: int) -> str:
-    """Collapse a trace+2cq reading down to trace+1cq inside the 1-CQ track (cq<2).
-
-    In the 1-CQ track a 2-CQ replay is not extra fidelity, so recording it as
-    trace+2cq would pin the baseline one rank above the level the track can ever
-    re-reach — a one-off 2-CQ reading would then lock the gate into a permanent
-    'degraded' veto that skips the baseline-rewrite branch and never clears. A real
-    eager fallback (rank 0) is left untouched so genuine trace loss still degrades."""
-    if cq < 2 and mode == "trace+2cq":
-        return "trace+1cq"
-    return mode
 
 
 _SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
@@ -2324,7 +2301,7 @@ def check_full_pipeline_latency() -> dict:
     if ms is None:
         return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
-    mode = _track_mode(_fullpipe_mode(method, path), cq)
+    mode = _fullpipe_mode(method, path)
     base_path = _FULLPIPE_BASELINE_1CQ_PATH
     cq_note = (
         "trace+1cq (the production metric): validate/bank EVERY win here — it always engages (no 2-CQ "
@@ -2349,7 +2326,7 @@ def check_full_pipeline_latency() -> dict:
         except Exception:  # noqa: BLE001
             base = {}
     best = float(base.get("full_pipeline_ms", 0.0) or 0.0)
-    base_mode = _track_mode(base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None), cq)
+    base_mode = base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None)
     if best > 0 and _mode_rank(mode) < _mode_rank(base_mode):
         return _emit_fullpipe(
             {
@@ -2650,7 +2627,6 @@ def record_kernel_attempt(
         "cache",
         "kv-cache",
         "trace",
-        "2cq",
     }
     is_knob = (kernel_kind or "").lower() in _KNOB_KINDS
     is_tp = (kernel_kind or "").lower() == "tp-fracture"
@@ -2697,30 +2673,6 @@ def record_kernel_attempt(
                     "attempt is UNSUPPORTED and will NOT clear the op in termination_check. Author a real kernel first."
                 )
             )
-        ),
-    }
-
-
-def _trace_budget_facts():
-    if os.environ.get("TT_PERF_TRACE", "1") != "1":
-        return None
-    try:
-        ncq = int(os.environ.get("TT_PERF_NUM_CQ", "1") or "1")
-    except ValueError:
-        ncq = 1
-    if ncq < 2:
-        return None
-    try:
-        tr = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872") or "23887872")
-    except ValueError:
-        tr = 23887872
-    return {
-        "num_command_queues": ncq,
-        "trace_region_size": tr,
-        "note": (
-            "2-CQ + trace region are reserved at device-open. Size L1 shards/grids to leave headroom so "
-            "the candidate fits 2 command queues; filling all of L1 OOMs under 2 CQs and forces a "
-            "trace+1cq fallback — a fidelity downgrade check_full_pipeline_latency flags (delta not banked)."
         ),
     }
 
@@ -2831,7 +2783,6 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
             "narrowed_by": {k: v for k, v in q.items() if k != "op_class"},
             "known_knobs": out,
             "count": len(out),
-            "budget": _trace_budget_facts(),
         }
     except Exception as exc:  # noqa: BLE001 — advisory tool: never raise into the loop
         return {"op_class": op_class, "known_knobs": [], "count": 0, "error": str(exc)[-200:]}
@@ -2967,14 +2918,14 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     if kv_won or (len(kv_clean) + kv_wedged) >= max_kv:
         return None
     reason = (
-        "MANDATORY kv-cache — a lever SEPARATE from trace/2CQ. decode is repeat_prefill: it re-runs the "
-        "full prefill every token (no cached decode_step / KV-cache). Trace/2CQ removes DISPATCH gaps ONLY "
+        "MANDATORY kv-cache — a lever SEPARATE from trace. decode is repeat_prefill: it re-runs the "
+        "full prefill every token (no cached decode_step / KV-cache). Trace removes DISPATCH gaps ONLY "
         "and does NOT remove this REDUNDANT RECOMPUTE, so 'trace already applied' / 'irreducible' does NOT "
         "resolve this and will NOT clear the gate. You MUST add a KV-cache + single-token decode_step "
         "(recall_knobs(op_class='decode')). Then record_kernel_attempt(op='generation_loop','kv-cache',"
         "measured_ms,beat_baseline) — this gate clears ONLY on a MEASURED per-token reduction from the cache."
         if repeat
-        else "MANDATORY kv-cache — SEPARATE from trace/2CQ. per-token cost scales with capacity "
+        else "MANDATORY kv-cache — SEPARATE from trace. per-token cost scales with capacity "
         "(use_cache=False, no KV-cache write) -> O(capacity) recompute every token EVEN THOUGH it traces. "
         "Trace does NOT remove recompute; 'irreducible' is NOT accepted. Add a KV-cache + single-token "
         "decode_step (recall_knobs(op_class='decode')); record_kernel_attempt(op='generation_loop','kv-cache',"
@@ -3142,7 +3093,7 @@ def termination_check() -> dict:
     stop' shortcut; NO OR-with-at_floor escape. can_stop is true iff no material op has a reachable
     rung left. Obey can_stop; for each blocking_op do the rung named in its 'next_rung'."""
     try:
-        prof = _profile_with_zero_row_retry(cq=1)
+        prof = _profile_with_zero_row_retry()
     except Exception as exc:  # noqa: BLE001
         _note_device_crash("termination_check", str(exc))
         if _recovery_exhausted():

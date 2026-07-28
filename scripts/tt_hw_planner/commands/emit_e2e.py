@@ -22,10 +22,10 @@ def _pipeline_self_opens_device(demo_dir: Path):
     "__main__"` guard (fixes-plan Point 10).
 
     The pipeline must run on the single device passed into build_pipeline; the
-    test fixture is the sole opener (with num_command_queues=2 + trace_region_size
-    for the trace+2CQ lever). A second, ad-hoc open in the importable/callable path
+    test fixture is the sole opener (with num_command_queues=1 + trace_region_size
+    for the trace lever). A second, ad-hoc open in the importable/callable path
     creates a competing device with a different command-queue count — the exact
-    cause of the trace+2CQ `id < mesh_command_queues_.size()` fatal. A standalone
+    cause of the `id < mesh_command_queues_.size()` fatal. A standalone
     `__main__` self-test opening its own device is fine and not flagged.
     """
     tt_pkg = demo_dir / "tt"
@@ -303,7 +303,7 @@ def _repoint_canonical_demo(demo_dir, demo_files) -> Optional[list]:
 
 def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
     """Consolidated end-of-emit-e2e report: the on-device vs CPU-fallback split, and
-    per task/demo the real-input demo + full-model e2e PCC test + trace+2CQ perf test
+    per task/demo the real-input demo + full-model e2e PCC test + trace perf test
     (with reproduce commands). Prints a terminal table AND writes <demo>/E2E_REPORT.md.
     Multimodal: one row per demo/task. Non-fatal — never raises."""
     import time as _time
@@ -389,7 +389,7 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
             print(ln)
         print(f"    CPU-fallback modules: {', '.join(fallback) if fallback else '(none — fully on device)'}")
         print("  " + "-" * 74)
-        print(f"    {'task':<12} {'e2e PCC':<9} {'demo (real I/O)':<26} trace+2CQ perf test")
+        print(f"    {'task':<12} {'e2e PCC':<9} {'demo (real I/O)':<26} trace perf test")
         for task, dfp, pcc, pcc_test, perf_test in rows:
             pcc_s = f"{pcc:.4f}" if isinstance(pcc, float) else "n/a"
             demo_s = (f"demo/{dfp.name}" if dfp else "(none)")[:26]
@@ -427,7 +427,7 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
             "",
             "## Per task / demo",
             "",
-            "| task | e2e PCC | demo (real input→output) | e2e PCC test | trace+2CQ perf test |",
+            "| task | e2e PCC | demo (real input→output) | e2e PCC test | trace perf test |",
             "|---|---|---|---|---|",
         ]
         for task, dfp, pcc, pcc_test, perf_test in rows:
@@ -636,7 +636,7 @@ _G1B_HOT_FN_NAME = re.compile(
     r"^(run_[a-z0-9]+|__call__|forward|_forward|_apply_[a-z0-9_]+|decode_step|decode_prefill)$" r"|_trace_step$|_step$"
 )
 _G1B_SETUP_FN_NAME = re.compile(
-    r"_trace_setup$|_write_inputs$|_reference_for_stage$|^_hf_reference_|"
+    r"_trace_setup$|_reference_for_stage$|^_hf_reference_|"
     r"^_make_stage_inputs$|^_hf_capacities$|^load_hf_model$|^build_tt_stubs$|"
     r"^_make_arg_for$|^_captured_output_of$|^_shape_hidden$"
 )
@@ -811,8 +811,8 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             "G5 device-ownership: the pipeline opens its own device "
             f"(ttnn.open_device/open_mesh_device at {_where}). The pipeline MUST run on the `device` passed "
             "into build_pipeline — the test fixture is the SOLE device opener (it opens once with "
-            "num_command_queues=2 + trace_region_size for the trace+2CQ lever). A second ad-hoc open creates a "
-            "competing device with a different command-queue count, which is what breaks trace+2CQ with "
+            "num_command_queues=1 + trace_region_size for the trace lever). A second ad-hoc open creates a "
+            "competing device with a different command-queue count, which is what breaks trace with "
             "`id < mesh_command_queues_.size()`. Remove these open_device calls and thread the passed-in device through."
         )
 
@@ -983,15 +983,15 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     _ack = os.environ.get("E2E_I_KNOW_TRACE_IS_BROKEN") == "1"
     if _rt_off and not _ack:
         reasons.append(
-            "G6 trace+2CQ: E2E_REQUIRE_TRACE=0 requires paired E2E_I_KNOW_TRACE_IS_BROKEN=1 "
+            "G6 trace: E2E_REQUIRE_TRACE=0 requires paired E2E_I_KNOW_TRACE_IS_BROKEN=1 "
             "acknowledgement — refusing to silently skip the trace-capture gate. Without this "
             "gate, a stub with host-side torch ops or mid-forward host->device writes can pass "
-            "emit-e2e and then fail every trace+2CQ measurement downstream (scorecard N/A). "
+            "emit-e2e and then fail every trace measurement downstream (scorecard N/A). "
             "Set BOTH env vars if you truly want to waive."
         )
     elif _rt_off and _ack:
-        print("[emit-e2e] WARNING: G6 trace+2CQ gate DISABLED via E2E_I_KNOW_TRACE_IS_BROKEN=1")
-        print("[emit-e2e]          emitted pipeline may not run trace+2CQ in optimize.")
+        print("[emit-e2e] WARNING: G6 trace gate DISABLED via E2E_I_KNOW_TRACE_IS_BROKEN=1")
+        print("[emit-e2e]          emitted pipeline may not run trace in optimize.")
 
     if not _rt_off and not _anno and not reasons:
         probe_py = Path(__file__).resolve().parent.parent / "_trace_capture_probe.py"
@@ -1036,7 +1036,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             if timed_out:
                 _rst = _reset_device()
                 reasons.append(
-                    f"G6 trace+2CQ: trace-capture probe hung >{g6_hang}s "
+                    f"G6 trace: trace-capture probe hung >{g6_hang}s "
                     f"(subprocess group killed, {_rst}); fix-loop should treat as failure and iterate"
                 )
             else:
@@ -1048,12 +1048,12 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                         except Exception:  # noqa: BLE001
                             tr = None
                 if tr is None:
-                    reasons.append("G6 trace+2CQ: trace-capture probe produced no verdict (could not run)")
+                    reasons.append("G6 trace: trace-capture probe produced no verdict (could not run)")
                 elif not tr.get("trace_ready"):
                     _b = "; ".join(x.get("guidance", x.get("rung", "")) for x in (tr.get("static_blockers") or []))
                     _cap = (tr.get("device_capture") or {}).get("reason", "")
                     reasons.append(
-                        "G6 trace+2CQ: pipeline not trace+2CQ-validated per stage — "
+                        "G6 trace: pipeline not trace-validated per stage — "
                         + (_b or _cap or "capture failed")
                         + " (set E2E_ALLOW_NO_TRACE=1 to waive for a genuinely non-traceable model)"
                     )
@@ -1172,7 +1172,7 @@ DECODE HORIZON (autoregressive models — how long to decode; the `N` above):
   they are compared over the SAME, model-grounded length (never force the golden
   to a count the TT side invented). The reference IS available in the golden
   helper — use its stop condition. This applies to the PCC/correctness test only;
-  trace+2CQ capture still runs at a FIXED max capacity C (variable-length decode
+  trace capture still runs at a FIXED max capacity C (variable-length decode
   must not make the traced shapes dynamic).
 
 ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
@@ -1182,7 +1182,7 @@ ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
      output for PCC comparison against your TT pipeline. This is separate
      from the TT pipeline.
   4. HF calls inside <stage>_trace_setup(inputs) — seeding fixed-value
-     persistent buffers BEFORE trace capture begins, so trace+2CQ has stable
+     persistent buffers BEFORE trace capture begins, so trace has stable
      inputs. The trace_step itself must be pure TT.
 ============================================================================================
 """
@@ -1203,7 +1203,7 @@ def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
         "when can_stop=true; if it is already true, do nothing.\n"
         "The gate is COMBINED: beyond G1-G4 it ALSO requires the pipeline be everything-on-device / "
         "trace-capturable (no per-layer weight streaming, no host token loop, a real device trace "
-        "captures) so trace + 2CQ can run. next_target may name a host op (residency / token-feed / KV / "
+        "captures) so trace can run. next_target may name a host op (residency / token-feed / KV / "
         "fixed-shape decode step) — fix it ON DEVICE the same way, WITHOUT regressing PCC (correctness is "
         "re-checked first every round, so a host-free edit that breaks PCC is rejected immediately).\n"
         + _TT_ONLY_CONTRACT
@@ -1675,14 +1675,14 @@ data-parallel replicas). Place the pipeline on the mesh accordingly:
 
 
 _TRACE_PROMPT_BLOCK = """
-================ COMMAND 3 — TRACE+2CQ CONTRACT (host-free full pipeline) ================
-AFTER Gates 1-3 pass (correct + on-device), make the pipeline trace+2CQ-capturable per
+================ COMMAND 3 — TRACE CONTRACT (host-free full pipeline) ================
+AFTER Gates 1-3 pass (correct + on-device), make the pipeline trace-capturable per
 STAGE. Derive the stages from the HF reference config (Source A) — architectures /
 is_encoder_decoder / sub-configs give the phases (ForCausalLM -> [prefill, decode];
 encoder-decoder -> [encode, prefill, decode]; add [vocode] for speech output). Record them
 as `PIPELINE_STAGES = [...]` in tt/pipeline.py.
 
-For EACH stage expose, ON THE PIPELINE object, the generic contract the perf/2CQ engine binds:
+For EACH stage expose, ON THE PIPELINE object, the generic contract the perf engine binds:
   <stage>_trace_setup(inputs): pin the stage's VARIABLE dim (the sequence axis; bound =
     config max_position_embeddings) to a fixed capacity C, and PRE-UPLOAD the padded input +
     every shape-dependent constant (causal mask, RoPE sin/cos, KV / cross-attn pad) into
@@ -1691,15 +1691,13 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf/2CQ
     the golden exactly. Mask the padded positions so output on [0:real_len] is unchanged.
   <stage>_trace_step(): ONE host-op-free forward at the fixed shape reading ONLY those persistent
     buffers (NO from_torch / NO per-call ttnn.zeros/arange INSIDE the trace).
-  <stage>_write_inputs(): stage the next input on command-queue 1 (per-token for an AR decode
-    stage; the prompt / next chunk for a one-shot stage) -> flips on the 2CQ path.
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 
 Expose a MODULE-LEVEL factory `build_pipeline(device, model=None, **kwargs)` in tt/pipeline.py that
 CONSTRUCTS AND RETURNS the resident pipeline OBJECT — the one carrying PIPELINE_STAGES and the
-per-stage <stage>_trace_setup/_trace_step/_write_inputs hooks (+ the AR decode contract). This is the
-SINGLE entry the perf/2CQ harness (optimize's generated test) calls to OBTAIN that object for
+per-stage <stage>_trace_setup/_trace_step hooks (+ the AR decode contract). This is the
+SINGLE entry the perf harness (optimize's generated test) calls to OBTAIN that object for
 measurement. It MUST return the object, NOT run it — no generate()/run_tts()/one-shot result, which
 exposes none of the hooks and makes the trace engine skip. Accept and ignore any demo kwargs (text,
 prompt, language, …) for call-signature compatibility; the resident build derives its shapes from the
@@ -1710,8 +1708,8 @@ Expose trace_capture_selftest(device): for EACH stage in PIPELINE_STAGES, captur
 ttnn.begin_trace_capture / end_trace_capture, execute_trace it, then RELEASE the trace before the
 next stage (stage traces must NOT co-reside). Return True only if every stage captured host-free
 AND its trace output matches the reference (PCC). Size trace_region_size from the LARGEST stage
-(pinned C x layers); if a capture overflows the region, shrink C or degrade that stage to
-single-CQ and PRINT the fallback (never silently drop). This recipe is identical for every model
+(pinned C x layers); if a capture overflows the region, shrink C and PRINT the fallback
+(never silently drop). This recipe is identical for every model
 — derive the specifics from the config; do NOT hardcode a per-model map.
 
 Also expose host_op_selftest() — the AUTHORITATIVE fully-on-device check. Run the model's forward

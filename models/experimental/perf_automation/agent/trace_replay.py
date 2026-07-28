@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Model-agnostic trace-replay latency measurement for optimize/perf.
 
-`measure_adapter(adapter, device, mode="auto")` drives a PipelineStageAdapter (see perf_adapter.py):
-for EACH stage emit-e2e emitted (adapter.stages, from the pipeline's PIPELINE_STAGES) it captures one
-steady-state, host-op-free step as a device trace and replays it under trace — optionally with a
-second command queue overlapping host<->device I/O with compute for stages that stage their inputs
-(`<stage>_write_inputs`). It prints, per stage:
+`measure_adapter(adapter, device)` drives a PipelineStageAdapter (see perf_adapter.py): for EACH stage
+emit-e2e emitted (adapter.stages, from the pipeline's PIPELINE_STAGES) it captures one steady-state,
+host-op-free step as a device trace and replays it under trace on a single command queue. It prints,
+per stage:
 
-    TRACE_STAGE_MS[<stage>]=<float> path=trace+2cq|trace+1cq
+    TRACE_STAGE_MS[<stage>]=<float> path=trace+1cq
 
 plus the headline clean, GPU-comparable wall the harness parses:
 
@@ -15,23 +14,17 @@ plus the headline clean, GPU-comparable wall the harness parses:
 
 which the harness (agent/tracy_tool.py + cc_optimize/perf_mcp.py) reads as the `trace` metric source
 (vs the `eager` fallback FORWARD_WALL_MS). This is the companion of perf_adapter.py: the adapter is
-the shell (setup + per-stage step/write), this module is the engine (warmup -> capture -> timed
-replay -> emit the numbers). A legacy single-step adapter (PipelineDecodeAdapter, no .stages) is
-wrapped as one "decode" stage, so the old path is unchanged.
+the shell (setup + per-stage step), this module is the engine (warmup -> capture -> timed replay ->
+emit the numbers). A legacy single-step adapter (PipelineDecodeAdapter, no .stages) is wrapped as one
+"decode" stage, so the old path is unchanged.
 
-Modes:
-    "auto"  (default) : 2-CQ path IFF the pipeline exposes decode_write_inputs (adapter.write_inputs is
-                        set in setup) AND the device was opened with >=2 command queues; else single-CQ.
-    "trace" / "1cq"   : force single-CQ trace replay.
-    "2cq"             : force the 2-CQ path (I/O on cq1 overlapping compute on cq0); auto-degrades to
-                        single-CQ if the device has <2 command queues or the 2-CQ path errors.
-
-Caller contract (the generated perf test): call inside the `if _PERF_TRACE:` block, on the SAME
-device the test opened WITH `trace_region_size` (and `num_command_queues=2` for the 2-CQ path). Any
-failure here (notably a repeat-prefill pipeline with no `decode_step`, which raises in
-`adapter.setup`) propagates out; the perf test's guard catches it, prints `TRACE_REPLAY_SKIPPED=...`,
-and falls back to FORWARD_WALL_MS.
+Measurement is trace+1cq end to end. Caller contract (the generated perf test): call inside the
+`if _PERF_TRACE:` block, on the SAME device the test opened WITH `trace_region_size`. Any failure here
+(notably a repeat-prefill pipeline with no `decode_step`, which raises in `adapter.setup`) propagates
+out; the perf test's guard catches it, prints `TRACE_REPLAY_SKIPPED=...`, and falls back to
+FORWARD_WALL_MS.
 """
+
 from __future__ import annotations
 
 import os
@@ -43,20 +36,6 @@ import ttnn
 # upload from host); replay iters are averaged for a stable per-token number. Both env-tunable.
 _WARMUP_ITERS = max(1, int(os.environ.get("TT_TRACE_WARMUP_ITERS", "3")))
 _REPLAY_ITERS = max(1, int(os.environ.get("TT_TRACE_REPLAY_ITERS", "16")))
-
-
-def _num_command_queues(device) -> int | None:
-    """Best-effort read of how many CQs the device was opened with. None = unknown."""
-    for attr in ("num_command_queues", "num_hw_cqs"):
-        fn = getattr(device, attr, None)
-        try:
-            if callable(fn):
-                return int(fn())
-            if isinstance(fn, int):
-                return int(fn)
-        except Exception:
-            pass
-    return None
 
 
 def _capture_step_trace(device, step):
@@ -79,36 +58,13 @@ def _replay_1cq(device, tid, iters):
     return (time.perf_counter() - t0) / iters
 
 
-def _replay_2cq(device, tid, write, iters):
-    """Overlap the next step's input upload (staged on cq1 by <stage>_write_inputs) with the traced
-    compute on cq0, synchronized with events — the canonical trace + 2-CQ loop."""
-    t0 = time.perf_counter()
-    for _ in range(iters):
-        if callable(write):
-            write()  # host->device staged on cq1 (pipeline's <stage>_write_inputs)
-            ev = ttnn.record_event(device, 1)  # signal once the cq1 write is enqueued
-            ttnn.wait_for_event(0, ev)  # cq0 waits for inputs before running the traced step
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    return (time.perf_counter() - t0) / iters
-
-
-def _want_2cq(mode, has_write, ncq):
-    if mode in ("trace", "1cq"):
-        return False
-    want = True if mode == "2cq" else bool(has_write)  # auto: 2CQ iff the stage stages inputs
-    if want and ncq is not None and ncq < 2:
-        return False  # device opened single-CQ -> can't overlap
-    return want
-
-
-def _measure_native(device, stage, ncq):
-    """Time a SELF-TRACED stage: the pipeline owns its trace capture + CQ1 input-staging (persistent-
-    buffer / vLLM-style decode, e.g. GLM's decode(enable_trace=True)), so we must NOT begin_trace_capture
-    around it -- doing so raises "Writes/Reads are not supported during trace capture" because the step
-    does host<->device I/O + execute_trace internally. Instead warm it (the pipeline lazily captures its
-    own trace on the first call) and time steady-state replays. The pipeline reports its real path via an
-    optional trace_path(); default by CQ count."""
+def _measure_native(device, stage):
+    """Time a SELF-TRACED stage: the pipeline owns its trace capture (persistent-buffer / vLLM-style
+    decode, e.g. GLM's decode(enable_trace=True)), so we must NOT begin_trace_capture around it --
+    doing so raises "Writes/Reads are not supported during trace capture" because the step does
+    host<->device I/O + execute_trace internally. Instead warm it (the pipeline lazily captures its own
+    trace on the first call) and time steady-state replays. The pipeline reports its real path via an
+    optional trace_path(); default trace+1cq."""
     for _ in range(_WARMUP_ITERS):
         stage.step()
     ttnn.synchronize_device(device)
@@ -122,29 +78,20 @@ def _measure_native(device, stage, ncq):
         try:
             path = str(tp())
         except Exception:
-            path = "trace+2cq" if (ncq is None or ncq >= 2) else "trace+1cq"
+            path = "trace+1cq"
     else:
-        path = "trace+2cq" if (ncq is None or ncq >= 2) else "trace+1cq"
+        path = "trace+1cq"
     return per_s * 1000.0, path
 
 
-def _measure_stage(device, stage, mode, ncq):
-    """Capture stage.step as a trace, replay it (2CQ if it stages inputs), return (ms, path)."""
+def _measure_stage(device, stage):
+    """Capture stage.step as a trace, replay it on a single command queue, return (ms, path)."""
     if getattr(stage, "self_traced", False):
-        return _measure_native(device, stage, ncq)
+        return _measure_native(device, stage)
     tid = _capture_step_trace(device, stage.step)
     try:
-        if _want_2cq(mode, stage.write is not None, ncq):
-            try:
-                per_s = _replay_2cq(device, tid, stage.write, _REPLAY_ITERS)
-                path = "trace+2cq"
-            except Exception as exc:  # any 2-CQ / event issue -> degrade, never fail the measurement
-                print("TRACE_2CQ_FALLBACK[%s]=%r" % (stage.name, exc), flush=True)
-                per_s = _replay_1cq(device, tid, _REPLAY_ITERS)
-                path = "trace+1cq"
-        else:
-            per_s = _replay_1cq(device, tid, _REPLAY_ITERS)
-            path = "trace+1cq"
+        per_s = _replay_1cq(device, tid, _REPLAY_ITERS)
+        path = "trace+1cq"
     finally:
         try:
             ttnn.release_trace(device, tid)
@@ -154,19 +101,17 @@ def _measure_stage(device, stage, mode, ncq):
 
 
 class _LegacyStage:
-    """Wrap a legacy single-step adapter (PipelineDecodeAdapter: .step()/.write_inputs) as a stage."""
+    """Wrap a legacy single-step adapter (PipelineDecodeAdapter: .step()) as a stage."""
 
     def __init__(self, adapter):
         self.name = "decode"
         self.step = adapter.step
-        w = getattr(adapter, "write_inputs", None)
-        self.write = w if callable(w) else None
         self.self_traced = bool(getattr(adapter, "self_traced", False))
         self.trace_path = getattr(adapter, "trace_path", None)
 
 
-def measure_adapter(adapter, device, mode: str = "auto") -> float:
-    """Trace-replay per-stage latency for WHATEVER the pipeline emitted. Traces (+2CQ) every stage in
+def measure_adapter(adapter, device) -> float:
+    """Trace-replay per-stage latency for WHATEVER the pipeline emitted. Traces every stage in
     adapter.stages; prints TRACE_STAGE_MS[<stage>] per stage and TRACE_PER_TOKEN_MS (the AR/decode
     stage if present, else the whole-pipeline sum). Returns that headline ms.
 
@@ -188,15 +133,14 @@ def measure_adapter(adapter, device, mode: str = "auto") -> float:
 
     stages = list(getattr(adapter, "stages", None) or [])
     if not stages:
-        # Legacy PipelineDecodeAdapter (exposes .step()/.write_inputs, no .stages): one decode stage.
+        # Legacy PipelineDecodeAdapter (exposes .step(), no .stages): one decode stage.
         if not callable(getattr(adapter, "step", None)):
             raise AttributeError("adapter exposes neither .stages nor a callable .step()")
         stages = [_LegacyStage(adapter)]
 
-    ncq = _num_command_queues(device)
     results = []
     for st in stages:
-        ms, path = _measure_stage(device, st, mode, ncq)
+        ms, path = _measure_stage(device, st)
         results.append((st.name, ms, path))
         print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
 

@@ -28,7 +28,7 @@ def test_two_errors_clearly(monkeypatch):
     err = invalid_trace_flag_error()
     assert err is not None
     assert "TT_PERF_TRACE" in err
-    assert "TT_PERF_NUM_CQ" in err
+    assert "0 or 1" in err
 
 
 def test_garbage_errors(monkeypatch):

@@ -375,7 +375,7 @@ inert and `no_gain` are still discarded — there's nothing to iterate toward.)
 ### 10.4 Two optimization axes — `--metric`
 `device_ms` optimizes the device floor (sharding/grid/fidelity/fusion). `wall_ms` adds a
 routable `host_overhead` bucket (`wall = device + host`), so the slowest-bucket router
-also targets generation-loop wins — `gen-trace-capture`, `gen-2cq`, `gen-bucketed-decode`
+also targets generation-loop wins — `gen-trace-capture`, `gen-bucketed-decode`
 (GUIDELINES §08). Under a wall metric, `edit_inert` is *not* treated as failure (a trace
 edit legitimately keeps the device op graph identical while improving wall time).
 

@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """One GENERIC PerfAdapter for trace-replay per-token measurement — valid for ANY model.
 
-`measure_adapter` (agent/trace_replay.py) needs a PerfAdapter (setup/step/refresh_inputs, + optional
-write_inputs). Rather than a hand-written adapter per model, this module ships a SINGLE adapter that
-wraps any pipeline conforming to a tiny standard DECODE CONTRACT — so the only per-model artifact is
-the pipeline's own `decode_step`, which the structural decode lever (or emit-e2e) produces; the
-adapter itself is model-agnostic and lives here once.
+`measure_adapter` (agent/trace_replay.py) needs a PerfAdapter (setup/step/refresh_inputs). Rather than
+a hand-written adapter per model, this module ships a SINGLE adapter that wraps any pipeline conforming
+to a tiny standard DECODE CONTRACT — so the only per-model artifact is the pipeline's own `decode_step`,
+which the structural decode lever (or emit-e2e) produces; the adapter itself is model-agnostic and
+lives here once.
 
 DECODE CONTRACT (duck-typed on the built pipeline object):
     decode_step(state) -> state          REQUIRED. Exactly one steady-state decode token: reads
@@ -13,28 +13,15 @@ DECODE CONTRACT (duck-typed on the built pipeline object):
                                           next id back into `state`. NO host reads (to_torch/.item()).
     decode_prefill(input_ids) -> state    OPTIONAL. Process the prompt once, return the initial cache/
                                           state. If absent, `state` starts as None (fixed-input loop).
-    decode_input_buffer(state) -> Tensor  OPTIONAL (preferred, model+hardware agnostic). Return the
-                                          PERSISTENT on-device input tensor that decode_step reads. The
-                                          adapter pins it and stages every step's write in-place into
-                                          THAT tensor on CQ1 (copy_host_to_device_tensor), so the address
-                                          the captured trace baked in never goes stale across candidates.
-                                          The pipeline owns the buffer (it alone knows the correct
-                                          shape/dtype/layout/sharding for this model on this device); the
-                                          adapter only pins + writes it, so one code path covers every
-                                          model and board. Its presence flips auto mode into 2CQ.
-    decode_write_inputs(state) -> None    OPTIONAL (fallback). Model-authored staging of the next step's
-                                          inputs on CQ1. Used only when decode_input_buffer is absent.
-                                          Also flips auto mode into 2CQ.
     self_traced = True                    OPTIONAL (class/instance attr). Declares that the pipeline OWNS
-                                          its trace capture + CQ1 input-staging internally (persistent-
-                                          buffer / vLLM-style decode -- e.g. GLM's decode(enable_trace=True)).
-                                          Such a decode_step does host<->device I/O + execute_trace inside
+                                          its trace capture internally (persistent-buffer / vLLM-style
+                                          decode -- e.g. GLM's decode(enable_trace=True)). Such a
+                                          decode_step does host<->device I/O + execute_trace inside
                                           itself, so measure_adapter must NOT begin_trace_capture around it;
                                           it TIMES the native step instead (see trace_replay._measure_native).
-                                          The purity rule above is waived and the tool does no CQ1 staging.
+                                          The purity rule above is waived.
     trace_path() -> str                   OPTIONAL, only meaningful with self_traced. Returns the real replay
-                                          path ("trace+2cq"/"trace+1cq") the pipeline actually took, so the
-                                          headline honestly reflects whether CQ1 overlap engaged.
+                                          path ("trace+1cq") the pipeline actually took.
 
 A pipeline WITHOUT decode_step (repeat-prefill / host-argmax decode) raises AttributeError in setup;
 the perf test's guard then falls back to FORWARD_WALL_MS and the detector reports 'repeat_prefill'.
@@ -114,32 +101,6 @@ class PipelineDecodeAdapter:
         if bool(getattr(self._pipe, "self_traced", False)):
             self.self_traced = True
             self.trace_path = getattr(self._pipe, "trace_path", None)
-            return
-        if self._bind_persistent_write(self._state):
-            return
-        wi = getattr(self._pipe, "decode_write_inputs", None)
-        if callable(wi):
-            self.write_inputs = lambda: wi(self._state)
-
-    def _bind_persistent_write(self, state) -> bool:
-        buf_fn = getattr(self._pipe, "decode_input_buffer", None)
-        if not callable(buf_fn):
-            return False
-        try:
-            import ttnn
-
-            buf = buf_fn(state)
-            if buf is None:
-                return False
-            host_seed = ttnn.from_device(buf)
-
-            def _write():
-                ttnn.copy_host_to_device_tensor(host_seed, buf, cq_id=1)
-
-            self.write_inputs = _write
-            return True
-        except Exception:  # noqa: BLE001
-            return False
 
     def step(self):
         self._state = self._pipe.decode_step(self._state)
@@ -150,15 +111,13 @@ class PipelineDecodeAdapter:
 
 
 class _Stage:
-    """One profilable unit emit-e2e emitted: a name, a host-op-free traceable step, and an
-    optional CQ1 input-staging hook (its presence flips that stage into the 2CQ path)."""
+    """One profilable unit emit-e2e emitted: a name and a host-op-free traceable step."""
 
-    __slots__ = ("name", "step", "write", "self_traced", "trace_path")
+    __slots__ = ("name", "step", "self_traced", "trace_path")
 
-    def __init__(self, name, step, write=None, self_traced=False, trace_path=None):
+    def __init__(self, name, step, self_traced=False, trace_path=None):
         self.name = name
         self.step = step
-        self.write = write
         self.self_traced = bool(self_traced)
         self.trace_path = trace_path
 
@@ -172,11 +131,10 @@ class PipelineStageAdapter:
                                       the trace (pin the variable axis, upload mask/RoPE/KV).
         <stage>_trace_step()          ONE fixed-shape, host-op-free step reading only resident
                                       buffers — this is what gets captured as a trace.
-        <stage>_write_inputs()        stage the next input on CQ1 — presence flips 2CQ for the stage.
 
-    This adapter binds every such stage so `measure_adapter` traces (+2CQ) each one. For a pipeline
-    that exposes ONLY the older single-stage decode contract (decode_step / decode_prefill /
-    decode_write_inputs) it synthesizes a single "decode" stage, so the legacy path is unchanged.
+    This adapter binds every such stage so `measure_adapter` traces each one. For a pipeline
+    that exposes ONLY the older single-stage decode contract (decode_step / decode_prefill)
+    it synthesizes a single "decode" stage, so the legacy path is unchanged.
     A repeat-prefill pipeline (no stages, no decode_step) raises AttributeError in setup, exactly as
     before — the perf test's guard then falls back to FORWARD_WALL_MS.
     """
@@ -221,7 +179,6 @@ class PipelineStageAdapter:
             setup = getattr(p, "%s_trace_setup" % name, None)
             if callable(setup):
                 self._call_with_inputs(setup, None)
-            write = getattr(p, "%s_write_inputs" % name, None)
             # Propagate self_traced: a pipeline that OWNS its capture must be timed natively, never
             # wrapped in a second begin_trace_capture. The decode fallback below already does this;
             # omitting it here meant declaring PIPELINE_STAGES turned a working self-traced pipeline
@@ -231,7 +188,6 @@ class PipelineStageAdapter:
                 _Stage(
                     name,
                     step,
-                    write if callable(write) else None,
                     _selft,
                     getattr(p, "trace_path", None) if _selft else None,
                 )
@@ -253,8 +209,6 @@ class PipelineStageAdapter:
             box["state"] = step(box["state"])
 
         if bool(getattr(p, "self_traced", False)):
-            self.stages = [_Stage("decode", _dstep, None, True, getattr(p, "trace_path", None))]
+            self.stages = [_Stage("decode", _dstep, True, getattr(p, "trace_path", None))]
             return
-        wi = getattr(p, "decode_write_inputs", None)
-        _dwrite = (lambda: wi(box["state"])) if callable(wi) else None
-        self.stages = [_Stage("decode", _dstep, _dwrite)]
+        self.stages = [_Stage("decode", _dstep)]

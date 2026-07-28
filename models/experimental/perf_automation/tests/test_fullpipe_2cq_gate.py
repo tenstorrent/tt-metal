@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Full-pipeline gate: trace+1CQ end to end (single track, single baseline).
 
-The tool is trace+1cq end to end — there is no trace+2cq bookend and no second CQ track. One 1cq
-baseline file holds the best-so-far; a faster candidate banks (ratchets the best down), a slower one
-is flagged 'diverged' and not banked, and a genuine fidelity UPGRADE (eager -> trace+1cq) re-baselines.
+The tool is trace+1cq end to end — there is no second-command-queue bookend and no second track. One
+1cq baseline file holds the best-so-far; a faster candidate banks (ratchets the best down), a slower
+one is flagged 'diverged' and not banked, and a genuine fidelity UPGRADE (eager -> trace+1cq)
+re-baselines.
 """
+
 import importlib.util
 import json
 from pathlib import Path
@@ -25,11 +27,12 @@ def _drive(monkeypatch, ms, method, path):
 
 
 def test_mode_helpers():
-    assert perf_mcp._fullpipe_mode("trace", "trace+2cq") == "trace+2cq"
+    # trace+1cq is the only trace path; any other declared path collapses to bare "trace".
     assert perf_mcp._fullpipe_mode("trace", "trace+1cq") == "trace+1cq"
     assert perf_mcp._fullpipe_mode("trace", None) == "trace"
     assert perf_mcp._fullpipe_mode("eager", None) == "eager"
-    assert perf_mcp._mode_rank("trace+2cq") > perf_mcp._mode_rank("trace+1cq") > perf_mcp._mode_rank("eager")
+    # ranks: eager (0) is below trace, and trace == trace+1cq (same fidelity, one track).
+    assert perf_mcp._mode_rank("trace+1cq") == perf_mcp._mode_rank("trace") > perf_mcp._mode_rank("eager")
 
 
 def test_records_and_ratchets_best(tmp_path, monkeypatch):
@@ -76,28 +79,6 @@ def test_eager_to_trace_upgrade_rebaselines(tmp_path, monkeypatch):
     assert json.loads(p.read_text())["full_pipeline_ms"] == 90.0
 
 
-def test_track_mode_collapses_2cq_in_1cq_track():
-    # In the 1-CQ track a 2cq reading is not extra fidelity -> collapse to 1cq (the only track now).
-    assert perf_mcp._track_mode("trace+2cq", 1) == "trace+1cq"
-    assert perf_mcp._track_mode("trace+1cq", 1) == "trace+1cq"
-    assert perf_mcp._track_mode("trace", 1) == "trace"
-    assert perf_mcp._track_mode("eager", 1) == "eager"
-
-
-def test_stale_2cq_entry_in_1cq_file_does_not_veto(tmp_path, monkeypatch):
-    # THE BUG: a leftover baseline pinned at trace+2cq (rank 2) used to veto every live trace reading
-    # (rank 1) forever. _track_mode collapses the stale 2cq entry to 1cq so the live reading banks.
-    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", tmp_path / "base_1cq.json")
-    monkeypatch.setattr(perf_mcp, "_FULLPIPE_TARGET_MS", 0.0)
-    (tmp_path / "base_1cq.json").write_text(
-        json.dumps({"full_pipeline_ms": 80.0, "method": "trace", "mode": "trace+2cq"})
-    )
-    r1 = _drive(monkeypatch, 3.5392, "trace", "trace")
-    assert r1["status"] == "ok"
-    r2 = _drive(monkeypatch, 3.3784, "trace", "trace")
-    assert r2["status"] == "ok" and r2["delta_pct"] is not None and r2["delta_pct"] < 0
-
-
 def test_reset_clears_1cq_baseline(tmp_path, monkeypatch):
     import importlib.util as _u
 
@@ -131,16 +112,3 @@ def test_read_fullpipe_best_1cq(tmp_path, monkeypatch):
         json.dumps({"full_pipeline_ms": 42.5, "method": "trace", "mode": "trace+1cq"})
     )
     assert run._read_fullpipe_best_1cq() == (42.5, "trace+1cq")
-
-
-def test_budget_guidance_present_only_when_2cq(monkeypatch):
-    # TT_PERF_NUM_CQ stays a knob: budget guidance fires only when the operator explicitly asks for 2 CQs.
-    monkeypatch.setenv("TT_PERF_TRACE", "1")
-    monkeypatch.setenv("TT_PERF_NUM_CQ", "2")
-    b = perf_mcp._trace_budget_facts()
-    assert b and b["num_command_queues"] == 2 and "trace_region_size" in b
-    monkeypatch.setenv("TT_PERF_NUM_CQ", "1")
-    assert perf_mcp._trace_budget_facts() is None
-    monkeypatch.setenv("TT_PERF_NUM_CQ", "2")
-    rk = getattr(perf_mcp.recall_knobs, "fn", perf_mcp.recall_knobs)("matmul")
-    assert rk.get("budget") is not None

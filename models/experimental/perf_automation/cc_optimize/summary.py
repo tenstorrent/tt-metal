@@ -20,7 +20,7 @@ from pathlib import Path
 
 _LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "host", "tt-lang", "cpp")
 _ALL_COLS = _LEVEL_COLS + ("other",)  # "other" holds unclassifiable levers; rendered only when used
-_HOST_KINDS = {"trace", "2cq", "structural", "fusion", "fuse", "gather", "sparse", "cache", "kv-cache"}
+_HOST_KINDS = {"trace", "structural", "fusion", "fuse", "gather", "sparse", "cache", "kv-cache"}
 
 _REPORT_NAME = "RUN_REPORT.md"
 

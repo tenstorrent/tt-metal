@@ -88,7 +88,7 @@ def _run_and_format(node_abs: str, state: dict | None = None) -> str:
 
     if state is None:
         state = {"wedges": 0, "passed": False}
-    env = {"TT_PERF_NUM_CQ": "1", "TT_PERF_TRACE": "0" if _eager_flag() else "1"}
+    env = {"TT_PERF_TRACE": "0" if _eager_flag() else "1"}
     rc, out = _run_perf_node(node_abs, env, timeout_s=_component_run_timeout())
     verdict = _judge_output(rc, out)
     if verdict == "WEDGE":

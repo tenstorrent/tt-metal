@@ -54,7 +54,7 @@ def trace_policy(graduation):
 def trace_engaged(trace_caps):
     if not isinstance(trace_caps, dict):
         return False
-    return bool(trace_caps.get("trace_2cq") or trace_caps.get("trace_1cq"))
+    return bool(trace_caps.get("trace_1cq"))
 
 
 def valid_overflow_proof(proof):
@@ -69,7 +69,7 @@ def valid_overflow_proof(proof):
 
 def classify_trace_verdict(trace_caps, policy, allow_no_trace=False, overflow_proof=None):
     if trace_engaged(trace_caps):
-        return "PASS", "trace+2CQ engaged"
+        return "PASS", "trace engaged"
     if policy.get("required"):
         if allow_no_trace and valid_overflow_proof(overflow_proof):
             return "EAGER_WAIVED", (
@@ -77,7 +77,7 @@ def classify_trace_verdict(trace_caps, policy, allow_no_trace=False, overflow_pr
                 % (overflow_proof.get("required_bytes"), overflow_proof.get("budget_bytes"))
             )
         return "FAIL", (
-            "trace+2CQ did not engage but ALL modules graduated on-device -> eager not permitted; "
+            "trace did not engage but ALL modules graduated on-device -> eager not permitted; "
             "fix pipeline/glue to trace (or supply a verified overflow proof)"
         )
     return "EAGER_WAIVED", (
@@ -150,7 +150,7 @@ def decode_repin_violation(pipeline_src):
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if node.name not in ("decode_write_inputs", "decode_step"):
+        if node.name != "decode_step":
             continue
         for n in ast.walk(node):
             if not isinstance(n, ast.Call):
@@ -392,7 +392,7 @@ def overflow_fix_loop(demo_dir, capture_fn=None, max_rounds=3, base_region=_DEFA
     for _ in range(max_rounds):
         os.environ["TT_PERF_TRACE_REGION"] = str(region)
         caps, detail = capture_fn(demo_dir)
-        if caps and (caps.get("trace_2cq") or caps.get("trace_1cq")):
+        if caps and caps.get("trace_1cq"):
             return {"resolved": True, "caps": caps, "detail": "traced at region=%d" % region, "proof": None}
         if not _is_overflow(detail):
             return {"resolved": False, "caps": caps, "detail": detail, "proof": None}
@@ -412,17 +412,17 @@ def build_fix_directive(result):
     if result.get("l1_overflow"):
         parts.append(
             "Reduce the L1 footprint (smaller in0_block_w / per_core_N, or spread the op over more cores) "
-            "so the circular buffers fit per-core L1 with trace+2CQ headroom."
+            "so the circular buffers fit per-core L1 with trace headroom."
         )
     if result.get("repin_violation"):
         parts.append(
             "Add a KV-cache single-token decode_step and remove the O(capacity) host re-pin "
-            "(torch.full/ttnn.from_torch) in decode_write_inputs."
+            "(torch.full/ttnn.from_torch) in decode_step."
         )
     for g in result.get("glue_violations") or []:
         parts.append("Port to on-device ttnn (remove from traced step): " + g)
     if not parts:
-        parts.append(result.get("reason", "trace+2CQ did not engage"))
+        parts.append(result.get("reason", "trace did not engage"))
     return " ".join(parts)
 
 
@@ -433,7 +433,7 @@ def record_trace_verdict(demo_dir, result):
         return None
     pol = result.get("policy") or {}
     lines = [
-        "# Trace+2CQ gate",
+        "# Trace gate",
         "",
         "verdict: **%s**" % result.get("verdict"),
         "",

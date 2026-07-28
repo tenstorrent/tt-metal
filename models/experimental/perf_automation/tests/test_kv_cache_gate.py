@@ -1,8 +1,8 @@
-"""KV-cache decode gate — measurement-gated, un-conflated from trace/2CQ (no hardware).
+"""KV-cache decode gate — measurement-gated, un-conflated from the trace-capture lever (no hardware).
 
 Covers the fix that stops the optimize agent from dismissing a repeat_prefill decode as
-'irreducible' after applying trace/2CQ: the kv-cache lever is a SEPARATE gate that clears
-only on a measured per-token reduction (bounded retries), and the host/dispatch ladder no
+'irreducible' after applying the trace-capture lever: the kv-cache lever is a SEPARATE gate that
+clears only on a measured per-token reduction (bounded retries), and the host/dispatch ladder no
 longer declares the residual blanket-irreducible.
 """
 
@@ -68,12 +68,12 @@ def test_no_gate_when_decode_is_not_recompute():
 def test_host_ladder_asks_for_trace_not_structural_and_avoids_irreducible():
     host_op = {"bound_by": "host", "bucket": "host_fallback", "grid": "", "weight_dtype": ""}
     done, rung, reason = perf_mcp._op_ladder_status(host_op, "host_overhead", [])
-    assert not done and rung == "trace-2cq"
+    assert not done and rung == "trace-capture"
     # tried state must NOT blanket-declare irreducible (that was the word the agent parroted)
     done2, _, reason2 = perf_mcp._op_ladder_status(
         host_op,
         "host_overhead",
-        [{"kernel_kind": "trace-2cq", "op_signature": "host_overhead", "beat_baseline": False}],
+        [{"kernel_kind": "trace-capture", "op_signature": "host_overhead", "beat_baseline": False}],
     )
     assert done2
     assert "kv-cache" in reason2.lower()

@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """PipelineStageAdapter + measure_adapter profile WHATEVER emit-e2e emits.
 
-Every PIPELINE_STAGES entry is traced (+2CQ where the stage stages its inputs via
-`<stage>_write_inputs`); a decode-only pipeline still works via the single-stage fallback; a
+Every PIPELINE_STAGES entry is traced and replayed on a single command queue (the tool measures
+trace+1cq end to end); a decode-only pipeline still works via the single-stage fallback; a
 repeat-prefill pipeline (no stage hooks, no decode_step) raises so the perf test falls back to
 FORWARD_WALL_MS. Runs with a fake ttnn (no hardware).
 """
+
 import sys
 import types
 
@@ -42,16 +43,13 @@ def trace_replay(monkeypatch):
 
 
 class _Dev:
-    def __init__(self, ncq=2):
-        self._ncq = ncq
-
     def num_command_queues(self):
-        return self._ncq
+        return 1
 
 
 class _StagePipe:
-    """A multi-stage pipeline as emit-e2e emits it: encode is one-shot (no CQ1 staging), decode
-    stages its next input (so it takes the 2CQ path)."""
+    """A multi-stage pipeline as emit-e2e emits it: encode and decode each expose a host-op-free
+    trace_step that is captured and replayed on a single command queue."""
 
     PIPELINE_STAGES = ["encode", "decode"]
 
@@ -70,36 +68,25 @@ class _StagePipe:
     def decode_trace_step(self):
         self.calls.append("decode_step")
 
-    def decode_write_inputs(self):
-        self.calls.append("decode_write")
-
 
 def test_stage_adapter_profiles_every_stage(trace_replay, capsys):
     pipe = _StagePipe()
     adapter = PipelineStageAdapter(lambda dev: pipe, batch=1)
-    headline = trace_replay.measure_adapter(adapter, _Dev(ncq=2), mode="auto")
+    headline = trace_replay.measure_adapter(adapter, _Dev())
     out = capsys.readouterr().out
 
     assert "TRACE_STAGE_MS[encode]=" in out
     assert "TRACE_STAGE_MS[decode]=" in out
     assert "TRACE_STAGES=2" in out
     assert "TRACE_PER_TOKEN_MS=" in out
-    # decode stages inputs -> 2CQ; encode does not -> single-CQ
+    # every stage is captured and replayed on a single command queue
     dec_line = [ln for ln in out.splitlines() if ln.startswith("TRACE_STAGE_MS[decode]")][0]
     enc_line = [ln for ln in out.splitlines() if ln.startswith("TRACE_STAGE_MS[encode]")][0]
-    assert "trace+2cq" in dec_line
+    assert "trace+1cq" in dec_line
     assert "trace+1cq" in enc_line
     # host prep (trace_setup) ran for both stages, OUTSIDE the trace
     assert "encode_setup" in pipe.calls and "decode_setup" in pipe.calls
     assert isinstance(headline, float)
-
-
-def test_single_cq_device_degrades_decode_to_1cq(trace_replay, capsys):
-    pipe = _StagePipe()
-    adapter = PipelineStageAdapter(lambda dev: pipe, batch=1)
-    trace_replay.measure_adapter(adapter, _Dev(ncq=1), mode="auto")
-    dec_line = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("TRACE_STAGE_MS[decode]")][0]
-    assert "trace+1cq" in dec_line  # device opened single-CQ -> no overlap
 
 
 class _DecodeOnlyPipe:
@@ -109,27 +96,24 @@ class _DecodeOnlyPipe:
     def decode_step(self, state):
         return {"t": state["t"] + 1}
 
-    def decode_write_inputs(self, state):
-        pass
-
 
 def test_decode_only_fallback_still_works(trace_replay, capsys):
     adapter = PipelineStageAdapter(lambda dev: _DecodeOnlyPipe(), prompt_ids=[1, 2], batch=1)
-    trace_replay.measure_adapter(adapter, _Dev(ncq=2), mode="auto")
+    trace_replay.measure_adapter(adapter, _Dev())
     out = capsys.readouterr().out
     assert "TRACE_STAGE_MS[decode]=" in out
     assert "TRACE_STAGES=1" in out
-    assert "trace+2cq" in out  # decode_write_inputs present -> 2CQ
+    assert "trace+1cq" in out
 
 
 def test_repeat_prefill_raises(trace_replay):
     adapter = PipelineStageAdapter(lambda dev: object(), batch=1)
-    with pytest.raises(AttributeError):
-        trace_replay.measure_adapter(adapter, _Dev(ncq=2), mode="auto")
+    with pytest.raises(AttributeError):  # allow-pytest.raises: no expect_error fixture
+        trace_replay.measure_adapter(adapter, _Dev())
 
 
 class _LegacyAdapter:
-    """Old PipelineDecodeAdapter shape: setup/step/write_inputs, NO .stages."""
+    """Old PipelineDecodeAdapter shape: setup/step, NO .stages."""
 
     def __init__(self):
         self.batch = 1
@@ -140,12 +124,9 @@ class _LegacyAdapter:
     def step(self):
         pass
 
-    def write_inputs(self):
-        pass
-
 
 def test_legacy_adapter_wrapped_as_decode_stage(trace_replay, capsys):
-    trace_replay.measure_adapter(_LegacyAdapter(), _Dev(ncq=2), mode="auto")
+    trace_replay.measure_adapter(_LegacyAdapter(), _Dev())
     out = capsys.readouterr().out
     assert "TRACE_STAGE_MS[decode]=" in out
-    assert "trace+2cq" in out  # write_inputs present -> 2CQ
+    assert "trace+1cq" in out

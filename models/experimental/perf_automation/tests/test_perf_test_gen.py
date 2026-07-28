@@ -87,12 +87,12 @@ def test_validation_accepts_and_records_1cq(tmp_path, monkeypatch):
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True, validate=True)
     assert node is not None
     caps = _caps(tmp_path)
-    assert caps["trace_1cq"] is True and caps["trace_2cq"] is False
+    assert caps["trace_1cq"] is True
 
 
 def test_trace_capable_1cq_is_shipped(tmp_path, monkeypatch):
-    """1CQ-only: a trace-capable pipeline that traces at 1 CQ is SHIPPED. Previously a 1cq-only pipeline
-    was rejected until it reached trace+2cq; that 2-CQ pass is gone (the tool is trace+1cq end to end)."""
+    """1CQ-only: a trace-capable pipeline that traces at 1 CQ is SHIPPED. The old second-command-queue
+    pass is gone (the tool is trace+1cq end to end), so tracing at one CQ is sufficient to ship."""
     demo_rel = _demo(tmp_path)
     monkeypatch.setattr(
         "agent.perf_test_gen._run_perf_node",
@@ -101,13 +101,13 @@ def test_trace_capable_1cq_is_shipped(tmp_path, monkeypatch):
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True, validate=True)
     assert node is not None
     caps = _caps(tmp_path)
-    assert caps["trace_1cq"] is True and caps["trace_2cq"] is False
+    assert caps["trace_1cq"] is True
 
 
 def test_eager_terminal_pipeline_is_accepted(tmp_path, monkeypatch):
     """A pipeline that GENUINELY cannot trace (repeat-prefill / no decode_step) is the one legitimate
     eager terminal — the authoritative TRACE_NOT_TRACE_CAPABLE=1 marker makes it accepted, not looped
-    forever chasing a trace+2cq it can never produce."""
+    forever chasing a trace path it can never produce."""
     demo_rel = _demo(tmp_path)
     monkeypatch.setattr(
         "agent.perf_test_gen._run_perf_node",
@@ -162,13 +162,13 @@ def test_run_perf_node_grows_trace_region_until_it_fits(monkeypatch):
                 f"Creating trace buffers of size {need}B on MeshDevice 1, but only {region}B is allocated for trace region."
             )
             return 1
-        log_path.write_text("TRACE_STAGE_MS[vocode]=1.0 path=trace+2cq")
+        log_path.write_text("TRACE_STAGE_MS[vocode]=1.0 path=trace+1cq")
         return 0
 
     monkeypatch.setattr(probes, "_execute", fake_execute)
     monkeypatch.delenv("TT_PERF_TRACE_REGION", raising=False)
-    rc, out = m._run_perf_node("some_node::t", {"TT_PERF_NUM_CQ": "2"})
-    assert rc == 0 and "path=trace+2cq" in out
+    rc, out = m._run_perf_node("some_node::t", {})
+    assert rc == 0 and "path=trace+1cq" in out
     assert sizes_used[0] == 23887872 and sizes_used[-1] >= 40_000_000
 
 
@@ -186,8 +186,8 @@ def test_run_perf_node_wedge_is_caught_reset_and_reported(monkeypatch):
         raise probes.TracyHangError("made no forward progress; process group killed")
 
     monkeypatch.setattr(probes, "_execute", hang_execute)
-    monkeypatch.setattr(probes, "_device_reset", lambda: reset_calls.append(True) or True)
-    rc, out = m._run_perf_node("some_node::t", {"TT_PERF_NUM_CQ": "2"})
+    monkeypatch.setattr(probes, "_device_reset", lambda error_text="": reset_calls.append(True) or True)
+    rc, out = m._run_perf_node("some_node::t", {})
     assert rc == 124
     assert "Event Synchronization" in out and "tt-smi -r" in out
     assert reset_calls == [True]
@@ -232,14 +232,14 @@ def test_self_recording_pipeline_detected_and_rerecording_rejected(tmp_path):
     time_it = (
         "import ttnn\ndef test_fast_perf(device):\n"
         "    run_fast(p)\n"
-        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+2cq')\n"
+        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+1cq')\n"
     )
     assert generate_perf_test(tmp_path, "fast", "demo/demo_fast.py", runner=lambda p: time_it, force=True) is not None
 
 
 def test_eager_mislabelled_as_trace_is_rejected(tmp_path):
     """AGNOSTIC GUARD (the kokoro `tts` failure): a task whose pipeline function does NOT self-record must
-    NOT ship a test that times it directly and stamps TRACE_REPLAY_PATH=trace+2cq with no measure_adapter —
+    NOT ship a test that times it directly and stamps TRACE_REPLAY_PATH=trace+1cq with no measure_adapter —
     that times the EAGER path and lies. Validated against the generated test, so no demo/launcher shape can
     smuggle it through. A test that actually captures via measure_adapter is accepted."""
     from agent.perf_test_gen import generate_perf_test
@@ -257,14 +257,14 @@ def test_eager_mislabelled_as_trace_is_rejected(tmp_path):
     eager_lie = (
         "import ttnn\ndef test_slow_perf(device):\n"
         "    run_slow(p)\n"
-        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+2cq')\n"
+        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+1cq')\n"
     )
     assert generate_perf_test(tmp_path, "slow", "demo/demo_slow.py", runner=lambda p: eager_lie, force=True) is None
 
     proper = (
         "import ttnn\ndef test_slow_perf(device):\n"
         "    measure_adapter(lambda: run_slow(p), device)\n"
-        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+2cq')\n"
+        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+1cq')\n"
     )
     assert generate_perf_test(tmp_path, "slow", "demo/demo_slow.py", runner=lambda p: proper, force=True) is not None
 

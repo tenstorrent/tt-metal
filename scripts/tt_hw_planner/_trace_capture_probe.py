@@ -5,7 +5,6 @@ import re
 import sys
 from pathlib import Path
 
-
 _LADDER = [
     (
         "residency",
@@ -34,14 +33,13 @@ _LADDER = [
     (
         "decode_step",
         None,
-        "Expose the GENERIC decode contract the perf/2CQ engine binds to (perf_adapter), and trace it: "
+        "Expose the GENERIC decode contract the perf engine binds to (perf_adapter), and trace it: "
         "(1) decode_prefill(input_ids)->state seeds the resident KV/SSM once (and any cross-attention KV "
         "for a seq2seq decoder); (2) decode_step(state)->state runs exactly ONE fixed-shape, host-op-free "
-        "token (on-device argmax feed, constant [1,1] shapes every step) and returns the advanced state; "
-        "(3) decode_write_inputs(state)->None stages the NEXT token on command-queue 1 -- this hook is what "
-        "flips the engine into the trace+2CQ path. Then trace_capture_selftest(device) must wrap a "
+        "token (on-device argmax feed, constant [1,1] shapes every step) and returns the advanced state. "
+        "Then trace_capture_selftest(device) must wrap a "
         "decode_step in ttnn.begin_trace_capture / end_trace_capture and replay it. Use these EXACT public "
-        "names: they are the model-agnostic seam the optimize/2CQ tool reads; the BODY is yours to write "
+        "names: they are the model-agnostic seam the optimize tool reads; the BODY is yours to write "
         "for this architecture.",
     ),
 ]
@@ -75,12 +73,9 @@ def _stage_names(src: str) -> list:
 
 def _stage_contract_ok(src: str, stage: str) -> bool:
     if stage == "decode":
-        return bool(re.search(r"def\s+decode_step\s*\(", src)) and bool(
-            re.search(r"def\s+decode_write_inputs\s*\(", src)
-        )
+        return bool(re.search(r"def\s+decode_step\s*\(", src))
     return all(
-        bool(re.search(r"def\s+%s_%s\s*\(" % (re.escape(stage), suf), src))
-        for suf in ("trace_setup", "trace_step", "write_inputs")
+        bool(re.search(r"def\s+%s_%s\s*\(" % (re.escape(stage), suf), src)) for suf in ("trace_setup", "trace_step")
     )
 
 
@@ -104,9 +99,7 @@ def probe(demo_dir: Path) -> dict:
 
     has_trace_hook = ("begin_trace_capture" in src) and bool(re.search(r"def\s+trace_capture_selftest", src))
     if is_ar:
-        has_contract = bool(re.search(r"def\s+decode_step\s*\(", src)) and bool(
-            re.search(r"def\s+decode_write_inputs\s*\(", src)
-        )
+        has_contract = bool(re.search(r"def\s+decode_step\s*\(", src))
         if not (has_trace_hook and has_contract):
             blockers.append({"rung": "trace_entry", "guidance": lad["decode_step"][1]})
     elif not has_trace_hook:
@@ -114,9 +107,8 @@ def probe(demo_dir: Path) -> dict:
             "No trace-capturable entry for this feed-forward model. The trace UNIT is the steady-state "
             "FORWARD pass (not a decode step): make its input shapes FIXED and its forward host-op-free, "
             "then expose trace_capture_selftest(device) that wraps ONE forward in "
-            "ttnn.begin_trace_capture / end_trace_capture, and (forward-2CQ) a forward_step(inputs) + "
-            "write_inputs(inputs) CQ1 staging hook so the generic engine can overlap the next input "
-            "upload with compute. For a multi-stage pipeline (encoder / decoder / vocoder, e.g. Seamless) "
+            "ttnn.begin_trace_capture / end_trace_capture. "
+            "For a multi-stage pipeline (encoder / decoder / vocoder, e.g. Seamless) "
             "do this PER STAGE — an AR decoder stage additionally needs the decode-step / KV rungs, a "
             "conv / vocoder stage only needs residency + fixed-shape forward."
         )
@@ -125,11 +117,11 @@ def probe(demo_dir: Path) -> dict:
     missing_stage = [s for s in stages if not _stage_contract_ok(src, s)]
     if stages and missing_stage:
         g = (
-            "PIPELINE_STAGES declares %s but these stages lack the trace+2CQ contract: %s. "
+            "PIPELINE_STAGES declares %s but these stages lack the trace contract: %s. "
             "Emit per stage (COMMAND 3): a one-shot stage needs <stage>_trace_setup / "
-            "<stage>_trace_step / <stage>_write_inputs (pin the variable dim to a fixed C, hoist "
+            "<stage>_trace_step (pin the variable dim to a fixed C, hoist "
             "the shape-dependent constants from the HF reference OUTSIDE the trace); an AR decode "
-            "stage needs decode_step + decode_write_inputs (resident self-/cross-attn KV)." % (stages, missing_stage)
+            "stage needs decode_step (resident self-/cross-attn KV)." % (stages, missing_stage)
         )
         blockers.append({"rung": "trace_stage", "guidance": g})
 
