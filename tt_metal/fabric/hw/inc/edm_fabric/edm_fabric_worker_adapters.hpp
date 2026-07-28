@@ -536,40 +536,40 @@ struct WorkerToFabricEdmSenderBase {
     // for the ack from the fabric before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) close_finish().
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+    template <bool posted = false>
     void close_start() {
         const auto dest_noc_addr_coord_only =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, WORKER_HANDSHAKE_NOC) & ~(uint64_t)NOC_COORDINATE_MASK;
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, this->send_noc) & ~(uint64_t)NOC_COORDINATE_MASK;
 
         // buffer index stored at location after handshake addr
         if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
-                remote_buffer_index_addr, this->buffer_slot_write_counter.counter, 0xF, WORKER_HANDSHAKE_NOC);
+                remote_buffer_index_addr, this->buffer_slot_write_counter.counter, 0xF, this->send_noc);
         } else {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
-                remote_buffer_index_addr, this->get_buffer_slot_index(), 0xF, WORKER_HANDSHAKE_NOC);
+                remote_buffer_index_addr, this->get_buffer_slot_index(), 0xF, this->send_noc);
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write<InlineWriteDst::L1, posted>(
             dest_edm_connection_state_addr,
             tt::tt_fabric::connection_interface::close_connection_request_value,
             0xF,
-            WORKER_HANDSHAKE_NOC);
+            this->send_noc);
     }
 
     // Advanced usage API:
     // Completes the connection closing process. Induces a write barrier
     // !!! IMPORTANT !!!
     // Must be called alongside (after) close_start().
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+    template <bool posted = false>
     void close_finish() {
         WAYPOINT("FCFW");
         if constexpr (posted) {
-            noc_async_posted_writes_flushed(WORKER_HANDSHAKE_NOC);
+            noc_async_posted_writes_flushed(this->send_noc);
         }
-        noc_async_write_barrier(WORKER_HANDSHAKE_NOC);
+        noc_async_write_barrier(this->send_noc);
 
         // Need to wait for the ack to teardown notice, from edm
         while (*this->worker_teardown_addr != 1) {
@@ -579,10 +579,10 @@ struct WorkerToFabricEdmSenderBase {
         *(this->worker_teardown_addr) = 0;
     }
 
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+    template <bool posted = false>
     void close() {
-        close_start<posted, WORKER_HANDSHAKE_NOC>();
-        close_finish<posted, WORKER_HANDSHAKE_NOC>();
+        close_start<posted>();
+        close_finish<posted>();
     }
 
     uint32_t edm_buffer_addr;
