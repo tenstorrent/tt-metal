@@ -8,34 +8,19 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 
 def load_issue(number: int) -> str:
     snapshot = os.environ.get("CODEGEN_ISSUE_SNAPSHOT")
-    if snapshot:
-        payload = Path(snapshot).read_text()
-        issue = json.loads(payload)
-        if not isinstance(issue, dict) or issue.get("number") != number:
-            raise ValueError(f"snapshot issue number does not match {number}")
-        return payload
-
-    result = subprocess.run(
-        [
-            "gh",
-            "issue",
-            "view",
-            str(number),
-            "--json",
-            "number,title,body,labels,comments",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout
+    if not snapshot:
+        raise ValueError("CODEGEN_ISSUE_SNAPSHOT is not set")
+    payload = Path(snapshot).read_text()
+    issue = json.loads(payload)
+    if not isinstance(issue, dict) or issue.get("number") != number:
+        raise ValueError(f"snapshot issue number does not match {number}")
+    return payload
 
 
 def main() -> int:
@@ -44,12 +29,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         payload = load_issue(args.number)
-    except (
-        OSError,
-        ValueError,
-        json.JSONDecodeError,
-        subprocess.CalledProcessError,
-    ) as exc:
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"failed to load issue {args.number}: {exc}", file=sys.stderr)
         return 1
     sys.stdout.write(payload)
