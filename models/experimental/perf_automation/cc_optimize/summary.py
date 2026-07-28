@@ -366,12 +366,11 @@ def _ledger_line(kind: str, title: str, model: str = "", task: str = ""):
                 a.get("value_ms"),
             )
         if b and not a:
-            _d = str(b.get("depth") or "unknown")
-            return "%s (%s):  (before not measured)  ->  %.2f ms" % (
-                title,
-                "all layers" if _d == "all" else "%s layers" % _d,
-                b.get("value_ms"),
-            )
+            # This line's whole content is before -> after. With no baseline there is no comparison to
+            # make, and printing the current value alone on a delta line is noise in a report that
+            # goes out for confirmation -- the value already appears where it means something (the
+            # roofline "measured"). Omit the line entirely rather than announce a missing anchor.
+            return None
         av, bv = a.get("value_ms"), b.get("value_ms")
         depth = a.get("depth") or "unknown"
         dl = "all layers" if str(depth) == "all" else "%s layers" % depth
@@ -388,7 +387,9 @@ def _ledger_line(kind: str, title: str, model: str = "", task: str = ""):
             )
         pct = led.delta_pct(a, b)
         spd = (av / bv) if bv else 1.0
-        return "%s (%s):  %.2f ms  ->  %.2f ms   (%+.1f%%, %.2fx)" % (title, dl, av, bv, pct, spd)
+        _der = " ".join(t for t, r in (("before", a), ("after", b)) if isinstance(r, dict) and r.get("derived"))
+        _mark = "   [%s DERIVED, not measured]" % _der if _der else ""
+        return "%s (%s):  %.2f ms  ->  %.2f ms   (%+.1f%%, %.2fx)%s" % (title, dl, av, bv, pct, spd, _mark)
     except Exception:  # noqa: BLE001
         return None
 
@@ -485,6 +486,7 @@ def _roofline_lines(
     model: str = "",
     task: str = "",
     per_token_ms: float | None = None,
+    measured_depth: str = "",
 ) -> list:
     """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
     at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
@@ -512,18 +514,49 @@ def _roofline_lines(
                 _pt_ms = _ledger().trace_ms_from_profile(profile)
             except Exception:  # noqa: BLE001
                 _pt_ms = None
-        if isinstance(_pt_ms, (int, float)) and _pt_ms > 0:
+        # THE MEASUREMENT AND THE CEILING MUST DESCRIBE THE SAME MODEL. The ceiling is peak_BW over
+        # the bytes of the WHOLE model; a per-token reading taken on a truncated profiling window
+        # streams a fraction of those bytes, so pairing them reports roughly depth_total/depth_window
+        # times the real throughput -- 107.1 tok/s/u from a 16-layer window against a 32-layer
+        # ceiling, when the model does 43.9. Depths disagreeing is not a detail to annotate, it makes
+        # the ratio meaningless, so the value is withheld and the reason given.
+        _ceil_depth = str((throughput or {}).get("perf_layers") or "").strip().lower()
+        _meas_depth = str(measured_depth or "").strip().lower()
+        _mismatch = bool(_ceil_depth and _meas_depth and _ceil_depth != _meas_depth)
+        if isinstance(_pt_ms, (int, float)) and _pt_ms > 0 and not _mismatch:
             fm = float(_pt_ms)
         measured = (1000.0 / fm) if fm else None
         util = (measured / theo) if measured else None
         bw_gbps = ((per_dev_bytes / (fm / 1000.0)) / 1e9) if (per_dev_bytes and fm) else None
-        out.append(f"  theoretical ceiling : {theo:.1f} tok/s/u")
+        # SAY WHAT DEPTH THIS IS. tok/s/u is an absolute, user-facing throughput, and a truncated
+        # profiling window makes it wrong as a statement about the model: a 16-layer window on a
+        # 32-layer model reads ~2x the real throughput. The ratios below (GB/s, utilisation) are
+        # depth-invariant and stay valid; the rates are not, so they carry the depth.
+        # THE UNIT IS PART OF THE NUMBER. The same formula gives tok/s/u for a decoded token, steps/s
+        # for a denoise step and inferences/s for one forward pass -- printing "tok/s/u" for a
+        # diffusion model would be a category error, not a label slip.
+        _unit = str((throughput or {}).get("unit") or "token").strip().lower()
+        try:
+            from agent.model_bytes import unit_label as _ul
+
+            _u = _ul(_unit) or "tok/s/u"
+        except Exception:  # noqa: BLE001
+            _u = {"step": "steps/s", "inference": "inferences/s"}.get(_unit, "tok/s/u")
+        _depth = str((throughput or {}).get("perf_layers") or "").strip()
+        _partial = _depth and _depth.lower() not in ("all", "0", "none")
+        _tag = "   [%s-layer window, NOT the full model]" % _depth if _partial else ""
+        out.append(f"  theoretical ceiling : {theo:.1f} {_u}{_tag}")
         if band[0] is not None:
-            out.append(f"  achievable (60-80%) : {band[0]:.1f} - {band[1]:.1f} tok/s/u")
+            out.append(f"  achievable (60-80%) : {band[0]:.1f} - {band[1]:.1f} {_u}")
         out.append(
-            f"  measured            : {measured:.1f} tok/s/u   (1000 / {fm:.2f} ms)"
+            f"  measured            : {measured:.1f} {_u}   (1000 / {fm:.2f} ms){_tag}"
             if measured
-            else "  measured            : n/a (no valid forward ms)"
+            else (
+                "  measured            : n/a — the per-token reading is from a %s-layer window, the "
+                "ceiling is for %s layers (re-profile at full depth)" % (_meas_depth, _ceil_depth)
+                if _mismatch
+                else "  measured            : n/a (no valid forward ms)"
+            )
         )
         if bw_gbps is not None:
             out.append(f"  measured mem BW     : {bw_gbps:.0f} GB/s   ({per_dev_bytes / 1e9:.2f} GB / {fm:.2f} ms)")
@@ -599,9 +632,9 @@ def _roofline_lines(
         # input by inventing a property of the model.
         _ab = throughput.get("active_bytes") if isinstance(throughput, dict) else None
         if not _ab:
-            out.append("  (tok/s/u — n/a: no weight-bytes input for this pipeline)")
+            out.append("  (rate ceiling — n/a: no weight-bytes input for this pipeline)")
         else:
-            out.append("  (tok/s/u — n/a: not an LLM decode pipeline)")
+            out.append("  (rate ceiling — n/a: no single unit of work for this pipeline)")
     out.append("")
     return out
 
@@ -736,14 +769,18 @@ def render_summary(
     # The decode ceiling is per TOKEN, so hand the renderer the per-token reading EXPLICITLY rather
     # than letting it divide the headline per-profile device_ms: 1000/534 ms reads 1.9 tok/s/u against
     # a 64 tok/s/u ceiling, i.e. 3% utilisation for a model running at 84%.
-    _tok_ms = None
+    _tok_ms, _tok_depth = None, ""
     try:
         _tok_ms = _ledger().trace_ms_from_profile(baseline_profile)
+        if _tok_ms is not None and isinstance(baseline_profile, dict):
+            _tok_depth = str(baseline_profile.get("perf_layers") or "")
         if _tok_ms is None:
             _row = _ledger_pair(_ledger().KIND_TRACE_PASS, model, task)[1]
-            _tok_ms = float(_row["value_ms"]) if _row else None
+            if _row:
+                _tok_ms = float(_row["value_ms"])
+                _tok_depth = str(_row.get("depth") or "")
     except Exception:  # noqa: BLE001
-        _tok_ms = None
+        _tok_ms, _tok_depth = None, ""
     # For a per-token ceiling the per-profile sum is not a fallback, it is a WRONG ANSWER, so it is
     # never offered: with no per-token reading the line reads n/a instead of "3% utilisation".
     _is_decode = bool(throughput.get("is_llm_decode")) if isinstance(throughput, dict) else False
@@ -759,6 +796,7 @@ def render_summary(
             model,
             task,
             per_token_ms=_tok_ms,
+            measured_depth=_tok_depth,
         )
     )
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))

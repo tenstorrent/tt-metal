@@ -315,3 +315,52 @@ def test_the_report_never_hands_a_per_profile_sum_to_a_per_token_ceiling(tmp_pat
     out = sm.render_summary(kl, model="m", task="main", finalized=True, throughput=_snap(), baseline_profile={})
     assert "3%" not in out and "1.9 tok/s/u" not in out, out
     assert "measured            : n/a" in out, out
+
+
+def test_rates_carry_the_profiling_depth_when_the_window_is_truncated(tmp_path, monkeypatch):
+    """tok/s/u is an ABSOLUTE throughput, so a 16-layer window on a 32-layer model reads ~2x the real
+    figure. The ratios (GB/s, utilisation) are depth-invariant and stay unqualified; the rates say
+    which depth they describe so nobody quotes them as the model's throughput."""
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    snap = dict(_snap(), perf_layers="16")
+    out = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 9.34}, "m", "main"))
+    assert "[16-layer window, NOT the full model]" in out, out
+    assert out.count("[16-layer window") == 2, out  # ceiling AND measured
+    assert "GB/s" in out and "utilization" in out
+
+
+def test_a_full_depth_profile_needs_no_qualifier(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    out = "\n".join(sm._roofline_lines(_snap(), None, {"per_token_ms": 19.4}, "m", "main"))
+    assert "NOT the full model" not in out
+
+
+def test_a_truncated_measurement_is_refused_against_a_full_model_ceiling(tmp_path, monkeypatch):
+    """THE DEFECT: a 16-layer per-token reading against a 32-layer ceiling reported 107.1 tok/s/u for a
+    model that does 43.9 -- the window streams a fraction of the bytes the ceiling assumes, so the
+    ratio is meaningless, not merely optimistic. Withheld with the reason, never annotated and shown.
+    """
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    snap = dict(_snap(), perf_layers="all")
+    out = "\n".join(sm._roofline_lines(snap, None, None, "m", "main", per_token_ms=9.34, measured_depth="16"))
+    assert "107.1" not in out and "357 GB/s" not in out, out
+    assert "measured            : n/a" in out and "16-layer window" in out and "full depth" in out
+
+
+def test_matching_depths_are_reported_normally(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    snap = dict(_snap(), perf_layers="all")
+    out = "\n".join(sm._roofline_lines(snap, None, None, "m", "main", per_token_ms=19.4, measured_depth="all"))
+    assert "51.5 tok/s/u" in out and "412 GB/s" in out
+
+
+def test_an_unknown_depth_on_either_side_does_not_block_the_report(tmp_path, monkeypatch):
+    """Only a KNOWN disagreement is refused; missing depth information is not evidence of mismatch."""
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    sm = _sm()
+    out = "\n".join(sm._roofline_lines(_snap(), None, None, "m", "main", per_token_ms=19.4, measured_depth=""))
+    assert "51.5 tok/s/u" in out

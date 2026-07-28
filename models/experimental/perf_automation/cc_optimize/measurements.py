@@ -54,6 +54,12 @@ KIND_FULLPIPE = "fullpipe_e2e"
 
 KIND_FLOOR = "modeled_floor"
 
+# Bytes streamed per unit of work -- the ceiling's numerator. Anchored here for the same reason the
+# floor is: it must be the BASELINE figure, and it must survive. Kept in perf_target_inputs.json it
+# was rolled back twice by the optimize loop's directory restore, which put a 16-layer ceiling next to
+# a full-model measurement in the report.
+KIND_ACTIVE_BYTES = "active_bytes"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 
@@ -171,6 +177,7 @@ def record(
     source: str = "",
     model: str = "",
     task: str = "",
+    derived: bool = False,
 ) -> bool:
     """Append one measurement. Returns False when it is not worth recording.
 
@@ -193,6 +200,13 @@ def record(
         "kind": str(kind),
         "phase": str(phase),
         "value_ms": round(v, 4),
+        # DERIVED IS NOT MEASURED. A value computed from other readings can be the only figure
+        # available -- the baseline per-token latency was never recorded, so it could only be scaled
+        # out of the baseline device_ms -- but the report renders value_ms and not source, so a
+        # hand-written row was indistinguishable from a profiler reading. Flagged here so the
+        # renderer can say which it is; a report that goes out for confirmation must not present
+        # arithmetic as a measurement.
+        "derived": bool(derived),
         "depth": str(depth).strip(),
         "mode": str(mode).strip(),
         "stage": str(stage or "").strip(),

@@ -2704,6 +2704,31 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     if experts:
         return None
     src = "checkpoint bytes + HF config"
+    # ANALYTIC FIRST: every tensor's shape and dtype from the safetensors header, with the on-device
+    # widths applied per name pattern. The checkpoint's FILE SIZE counts the stored dtype -- 15.0 GB of
+    # bf16 for Llama-3.1-8B, where the device streams 6.09 GB as bfp4/bfp8 -- so it understates the
+    # ceiling by 2.4x. Falls through to the file size only when the headers cannot be read.
+    try:
+        from agent import model_bytes as _mb
+
+        _unit = _mb.unit_for_tag(
+            cfg.get("pipeline_tag") or (manifest.get("model_meta") or {}).get("pipeline_tag") or ""
+        )
+        _snap = _hf_snapshots(mid)[0] if mid and _hf_snapshots(mid) else None
+        if _snap and _unit:
+            _an = _mb.weight_bytes(
+                _snap,
+                unit=_unit,
+                overrides=_mb.overrides_from_env(),
+                default_device_dtype=os.environ.get("TT_PERF_DEFAULT_WEIGHT_DTYPE", ""),
+            )
+            if _an.get("bytes"):
+                wb, src = _an["bytes"], "analytic: %d tensors from safetensors headers, unit=%s" % (
+                    _an["tensors"],
+                    _unit,
+                )
+    except Exception:  # noqa: BLE001
+        pass
     override = (os.environ.get("TT_PERF_WEIGHT_BYTES") or "").strip()
     if override:
         # THE BYTES THAT ACTUALLY STREAM, when they are known to differ from the checkpoint. The
@@ -2723,6 +2748,14 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
         "dominant_dtype": str(cfg.get("torch_dtype") or "bfloat16"),
         "source": src,
     }
+    try:
+        from agent import model_bytes as _mb2
+
+        _u = _mb2.unit_for_tag(cfg.get("pipeline_tag") or "")
+        if _u:
+            facts["unit"] = _u
+    except Exception:  # noqa: BLE001
+        pass
     layers = cfg.get("num_hidden_layers") or cfg.get("n_layer") or cfg.get("num_layers")
     kv_heads = cfg.get("num_key_value_heads") or cfg.get("num_attention_heads") or cfg.get("num_heads")
     hidden = cfg.get("hidden_size") or cfg.get("d_model")
@@ -2748,6 +2781,22 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
         if not facts:
             return
         out.write_text(json.dumps(facts, indent=2) + "\n")
+        # ANCHOR IT IN THE LEDGER TOO. The file lives in the model directory, which the optimize loop
+        # reverts between attempts -- it was rolled back twice in one run, each time restoring a
+        # different vintage. The ledger is keyed, append-only and outside that directory, so the
+        # ceiling the report divides by cannot change underneath it.
+        try:
+            led = _ledger()
+            led.anchor(
+                led.KIND_ACTIVE_BYTES,
+                float(facts["weight_bytes"]) / 1e6,
+                depth=str(facts.get("unit") or "unit"),
+                mode="bytes_mb",
+                source=facts["source"][:120],
+                model=Path(model_root).name,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         print(
             "  [optimize/cc] decode roofline inputs: %.2f GB of weights @ %s -> perf_target_inputs.json"
             % (facts["weight_bytes"] / 1e9, facts["dominant_dtype"])

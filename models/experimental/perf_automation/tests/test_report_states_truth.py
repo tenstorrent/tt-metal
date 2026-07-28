@@ -44,7 +44,7 @@ def test_it_does_not_claim_a_decode_model_is_not_a_decode_model():
     m = _sm()
     out = m._roofline_lines({"modeled_floor_ms": 341.47, "active_bytes": 0, "peak_bw_gbps": 512.0}, 615.69)
     txt = "\n".join(out)
-    assert "not an LLM decode pipeline" not in txt, txt
+    assert "no single unit of work for this pipeline" not in txt, txt
     assert "no weight-bytes input" in txt, txt
 
 
@@ -53,7 +53,7 @@ def test_it_still_says_not_decode_when_that_is_actually_why():
     out = m._roofline_lines(
         {"modeled_floor_ms": 341.47, "active_bytes": 12345, "peak_bw_gbps": 512.0, "is_llm_decode": False}, 615.69
     )
-    assert "not an LLM decode pipeline" in "\n".join(out)
+    assert "no single unit of work for this pipeline" in "\n".join(out)
 
 
 def test_the_floor_states_the_physics_and_its_coverage():
@@ -180,3 +180,55 @@ def test_no_report_is_written_when_no_model_root_was_configured(tmp_path, monkey
     _s.modules["pm_rooted_ut"] = pm2
     spec2.loader.exec_module(pm2)
     assert pm2._MODEL_ROOT_CONFIGURED is True
+
+
+def test_a_derived_row_is_marked_as_derived_in_the_report(tmp_path, monkeypatch):
+    """The baseline per-token latency was never recorded -- the writer's branch was dead -- so the only
+    figure available is one scaled out of the baseline device_ms. That may be shown, but the report
+    renders value_ms and not source, so a hand-written row was indistinguishable from a profiler
+    reading. It now says which it is."""
+    sm, led = _sm_and_led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    led.record(
+        led.KIND_TRACE_PASS,
+        led.PHASE_BEFORE,
+        43.06,
+        depth="16",
+        mode="tracy-trace",
+        source="derived: baseline device_ms / 51 iters",
+        derived=True,
+    )
+    led.record(led.KIND_TRACE_PASS, led.PHASE_AFTER, 9.34, depth="16", mode="tracy-trace")
+    line = sm._ledger_line(led.KIND_TRACE_PASS, "tracy trace pass", "", "")
+    assert "43.06" in line and "9.34" in line
+    assert "[before DERIVED, not measured]" in line, line
+
+
+def test_measured_rows_carry_no_marker(tmp_path, monkeypatch):
+    sm, led = _sm_and_led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    led.record(led.KIND_EAGER, led.PHASE_BEFORE, 2464.18, depth="16", mode="eager")
+    led.record(led.KIND_EAGER, led.PHASE_AFTER, 534.44, depth="16", mode="eager")
+    assert "DERIVED" not in sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "", "")
+
+
+def test_a_line_with_no_baseline_is_omitted_entirely(tmp_path, monkeypatch):
+    """A before -> after line has nothing to say with only an after, and "(before not measured)" is
+    noise in a confirmation report -- the current value already appears in the roofline. Omit it."""
+    sm, led = _sm_and_led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    led.record(led.KIND_TRACE_PASS, led.PHASE_AFTER, 9.34, depth="16", mode="tracy-trace")
+    assert sm._ledger_line(led.KIND_TRACE_PASS, "tracy trace pass", "", "") is None
+
+    led.record(led.KIND_TRACE_PASS, led.PHASE_BEFORE, 43.0, depth="16", mode="tracy-trace")
+    # once a real baseline exists the line returns
+    assert "43.00 ms" in (sm._ledger_line(led.KIND_TRACE_PASS, "tracy trace pass", "", "") or "")
+
+
+def test_a_baseline_with_no_after_yet_still_shows(tmp_path, monkeypatch):
+    """The opposite case stays: mid-run there is a baseline and no after, and hiding it hid the anchor."""
+    sm, led = _sm_and_led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    led.record(led.KIND_EAGER, led.PHASE_BEFORE, 2464.18, depth="16", mode="eager")
+    line = sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "", "")
+    assert line and "2464.18" in line

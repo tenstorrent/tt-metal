@@ -1,0 +1,250 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Bytes streamed per unit of work, computed ANALYTICALLY from the checkpoint.
+
+The roofline ceiling is peak_DRAM_bandwidth / bytes-per-unit-of-work. Getting the numerator right is
+the whole problem, and two earlier attempts were both wrong:
+
+    checkpoint file size    counts the dtype the weights are STORED in. Llama-3.1-8B is 16.06 GB of
+                            bf16 on disk but streams 6.09 GB as bfp4/bfp8 on device -- a ceiling of
+                            31.9 instead of 84.0 tok/s/u.
+
+    profile per-op bytes    measured, but there is no reliable per-unit divisor: the call counts in
+                            one window implied 51 tokens from the FFN matmuls, 25 from QKV and 376
+                            from the LM head. Dividing by a guessed iteration count produced a figure
+                            that happened to look right once, which is worse than being obviously
+                            wrong.
+
+Here every tensor's shape and dtype is read from the safetensors header -- exact, no architecture
+formulas, no per-family shape arithmetic, works for any checkpoint -- and the on-device width is
+applied per tensor by name pattern. Nothing is inferred from the model's identity.
+
+THE UNIT MATTERS AS MUCH AS THE BYTES. `peak_BW / weight_bytes` is only a rate if the whole weight
+set is read once per unit and the work is memory-bound. That holds for an autoregressive token, a
+diffusion step and a single forward pass -- three different units, one formula. It does NOT hold for
+prefill or large-batch work (compute-bound), for long-sequence encoders (activations dominate), or
+for a mixed multimodal pipeline (each stage has its own bound). Those get no ceiling from here, and
+the caller falls back to the per-op roofline floor, which picks the binding term per op.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import struct
+from pathlib import Path
+
+# Bytes per element as STORED in a checkpoint. TT block formats are not checkpoint dtypes -- they are
+# what the device reads -- so they live in _DEVICE_WIDTHS below.
+_STORED_WIDTHS = {
+    "F64": 8.0,
+    "I64": 8.0,
+    "F32": 4.0,
+    "I32": 4.0,
+    "U32": 4.0,
+    "BF16": 2.0,
+    "F16": 2.0,
+    "I16": 2.0,
+    "U16": 2.0,
+    "F8_E4M3": 1.0,
+    "F8_E5M2": 1.0,
+    "I8": 1.0,
+    "U8": 1.0,
+    "BOOL": 1.0,
+}
+
+# TT block float widths: one shared exponent per 16 elements, so 8 -> 8.5 bits, 4 -> 4.5 bits.
+_DEVICE_WIDTHS = {
+    "bfloat16": 2.0,
+    "bf16": 2.0,
+    "float32": 4.0,
+    "bfloat8_b": (8 + 8 / 16) / 8,
+    "bfp8": (8 + 8 / 16) / 8,
+    "bfloat4_b": (4 + 8 / 16) / 8,
+    "bfp4": (4 + 8 / 16) / 8,
+}
+
+# HF pipeline_tag -> the unit of work whose cost the ceiling describes. Keyed on the unit rather than
+# on a model-type taxonomy: HF publishes 47 tags and adds more, so a category list goes stale (the
+# planner's map is missing 19 of them today). A tag absent here yields no unit, and no ceiling, which
+# is the safe direction -- a wrong ceiling reads as a target and can stop a run early.
+_UNIT_BY_TAG = {
+    # autoregressive decode: one token reads every weight
+    "text-generation": "token",
+    "text2text-generation": "token",
+    "summarization": "token",
+    "translation": "token",
+    "conversational": "token",
+    "image-text-to-text": "token",
+    "video-text-to-text": "token",
+    "audio-text-to-text": "token",
+    "visual-question-answering": "token",
+    "document-question-answering": "token",
+    "image-to-text": "token",
+    "any-to-any": "token",
+    "text-to-speech": "token",
+    "text-to-audio": "token",
+    "text-to-music": "token",
+    "music-generation": "token",
+    "automatic-speech-recognition": "token",
+    # iterative denoising: one step reads every weight
+    "text-to-image": "step",
+    "image-to-image": "step",
+    "image-text-to-image": "step",
+    "unconditional-image-generation": "step",
+    "text-to-video": "step",
+    "image-to-video": "step",
+    "image-text-to-video": "step",
+    "video-to-video": "step",
+    "text-to-3d": "step",
+    "image-to-3d": "step",
+    # single forward pass
+    "feature-extraction": "inference",
+    "image-feature-extraction": "inference",
+    "sentence-similarity": "inference",
+    "text-classification": "inference",
+    "token-classification": "inference",
+    "text-ranking": "inference",
+    "zero-shot-classification": "inference",
+    "fill-mask": "inference",
+    "question-answering": "inference",
+    "image-classification": "inference",
+    "object-detection": "inference",
+    "image-segmentation": "inference",
+    "depth-estimation": "inference",
+    "keypoint-detection": "inference",
+    "mask-generation": "inference",
+    "zero-shot-image-classification": "inference",
+    "zero-shot-object-detection": "inference",
+    "video-classification": "inference",
+    "visual-document-retrieval": "inference",
+    "audio-classification": "inference",
+}
+
+_UNIT_LABEL = {"token": "tok/s/u", "step": "steps/s", "inference": "inferences/s"}
+
+# Tensors an autoregressive step does NOT stream in full: a token reads ONE embedding row (a few KB),
+# not the table. The output projection is read in full and is deliberately absent from this list.
+_LOOKUP_ONLY = re.compile(r"(^|\.)(embed_tokens|wte|word_embeddings|token_embedding|embeddings?\.weight$)", re.I)
+
+
+def unit_for_tag(pipeline_tag: str) -> str:
+    """The unit of work for an HF pipeline tag, or "" when there is no single well-defined one."""
+    return _UNIT_BY_TAG.get(str(pipeline_tag or "").strip().lower(), "")
+
+
+def unit_label(unit: str) -> str:
+    """How the rate reads in the report: tok/s/u, steps/s, inferences/s."""
+    return _UNIT_LABEL.get(str(unit or "").strip().lower(), "")
+
+
+def _headers(path: Path):
+    """{tensor_name: {dtype, shape}} from a safetensors file, reading only its header."""
+    with path.open("rb") as fh:
+        n = struct.unpack("<Q", fh.read(8))[0]
+        if n <= 0 or n > 200_000_000:
+            return {}
+        hdr = json.loads(fh.read(n))
+    return {k: v for k, v in hdr.items() if k != "__metadata__" and isinstance(v, dict)}
+
+
+def _numel(shape) -> int:
+    total = 1
+    for d in shape or []:
+        total *= int(d)
+    return total if shape else 0
+
+
+def device_width(dtype_name) -> float | None:
+    """Bytes per element for a TT dtype name, or None when unrecognised."""
+    return _DEVICE_WIDTHS.get(str(dtype_name or "").strip().lower())
+
+
+def weight_bytes(
+    snapshot_dir,
+    *,
+    unit: str = "token",
+    overrides=(),
+    default_device_dtype: str = "",
+) -> dict:
+    """Bytes streamed per unit of work, per tensor, from the checkpoint's own headers.
+
+    ``overrides`` is a sequence of (name_regex, tt_dtype) applied in order -- how a build states that
+    it serves a tensor group narrower than the checkpoint stores it, e.g. FF1/FF3 at bfloat4_b. Any
+    tensor no pattern matches keeps its stored width (or ``default_device_dtype`` when given), so the
+    result is never better than what is actually known.
+
+    Returns {bytes, tensors, skipped_lookup_bytes, by_pattern, shards} or {} when nothing was read.
+    """
+    d = Path(snapshot_dir or "")
+    files = sorted(d.glob("*.safetensors")) if d.is_dir() else []
+    if not files:
+        return {}
+    compiled = [(re.compile(pat), dt) for pat, dt in (overrides or ())]
+    dflt = device_width(default_device_dtype)
+
+    total, skipped, count = 0.0, 0.0, 0
+    by_pattern: dict = {}
+    for f in files:
+        try:
+            hdr = _headers(f)
+        except Exception:  # noqa: BLE001
+            continue
+        for name, meta in hdr.items():
+            n = _numel(meta.get("shape"))
+            if n <= 0:
+                continue
+            width = None
+            key = "stored:%s" % meta.get("dtype")
+            for rx, dt in compiled:
+                if rx.search(name):
+                    w = device_width(dt)
+                    if w is not None:
+                        width, key = w, "%s:%s" % (rx.pattern, dt)
+                    break
+            if width is None:
+                width = dflt if dflt is not None else _STORED_WIDTHS.get(str(meta.get("dtype")), 2.0)
+            b = n * width
+            count += 1
+            if unit == "token" and _LOOKUP_ONLY.search(name):
+                skipped += b
+                continue
+            total += b
+            e = by_pattern.setdefault(key, {"bytes": 0.0, "tensors": 0})
+            e["bytes"] += b
+            e["tensors"] += 1
+    if total <= 0:
+        return {}
+    return {
+        "bytes": int(round(total)),
+        "tensors": count,
+        "skipped_lookup_bytes": int(round(skipped)),
+        "by_pattern": by_pattern,
+        "shards": len(files),
+        "unit": unit,
+    }
+
+
+def parse_overrides(spec: str):
+    """``"pattern=dtype,pattern=dtype"`` -> the overrides sequence. Malformed entries are skipped
+    rather than guessed at: a wrong width silently moves the ceiling."""
+    out = []
+    for part in str(spec or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        pat, _, dt = part.partition("=")
+        pat, dt = pat.strip(), dt.strip()
+        if not pat or device_width(dt) is None:
+            continue
+        try:
+            re.compile(pat)
+        except re.error:
+            continue
+        out.append((pat, dt))
+    return out
+
+
+def overrides_from_env() -> list:
+    """TT_PERF_WEIGHT_DTYPES, e.g. "gate_proj|up_proj=bfloat4_b,down_proj=bfloat4_b"."""
+    return parse_overrides(os.environ.get("TT_PERF_WEIGHT_DTYPES", ""))

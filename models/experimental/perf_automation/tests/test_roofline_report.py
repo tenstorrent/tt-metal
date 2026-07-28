@@ -40,7 +40,7 @@ def test_module_floor_form_when_not_llm():
     # No tok/s figure in the ms form. The reason line used to assert "not an LLM decode pipeline"
     # unconditionally, which was false for Llama-3.1-8B; with no active_bytes it now says the
     # numerator is missing instead of inventing a property of the model.
-    assert "tok/s/u" in out and "tok/s/u   (1000 /" not in out
+    assert "rate ceiling" in out and "tok/s/u   (1000 /" not in out
     assert "no weight-bytes input" in out
 
 
