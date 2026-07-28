@@ -583,7 +583,12 @@ def _roofline_lines(
             # (the target and the measured ms are from different states); do NOT print a >100% util.
             out.append(f"  utilization         : measured EXCEEDS ceiling — target stale/suspect (re-profile)")
         else:
-            out.append(f"  utilization         : {util * 100:.0f}%   (measured / ceiling)")
+            # NAME THE DENOMINATOR. The ceiling is pinned at the BASELINE, so this is
+            # progress-against-target, not headroom-remaining: on llama3_1_8b_p150 it read 70% of the
+            # 84.0 baseline ceiling while the build's own bound had moved to 121.3 (every weight group
+            # reached bf4), i.e. 49% of what the hardware now allows. Both are true; unlabelled, the
+            # figure gets quoted as the second one.
+            out.append(f"  utilization         : {util * 100:.0f}%   (measured / BASELINE ceiling)")
     else:
         _current = throughput.get("modeled_floor_ms")
         floor = _floor_anchor(_current, throughput.get("perf_layers"), model, task) or _current
@@ -848,7 +853,21 @@ def render_summary(
             if _st
             else "op-class breakdown (same profile as the table above)"
         )
-        lines.append(f"Block-level timing (per-stage trace) — {_lbl}:")
+        # STATE THE VINTAGE AND WHOSE WORDS THESE ARE. The per-stage names are free text the agent
+        # wrote when it recorded the stage snapshot, so they freeze at capture time: this table has
+        # carried "QKV, still HiFi2 -- same lever untried" and "wo, still HiFi2 x bf8_b" long after
+        # both levers were tried, committed and won. The numbers are equally frozen -- this table
+        # summed to 529.43 ms while the op breakdown above it summed to 556.80 and the headline said
+        # 534.44, three profiles in adjacent sections. Neither can be refreshed here (the snapshot is
+        # all there is), so say so rather than let it read as current.
+        _stot = 0.0
+        for _s in _stages or []:
+            try:
+                _stot += float((_s or {}).get("ms") or 0.0)
+            except (TypeError, ValueError):
+                pass
+        _vint = " · totals %.2f ms; per-stage notes are the agent's words AT CAPTURE TIME" % _stot if _stot > 0 else ""
+        lines.append(f"Block-level timing (per-stage trace) — {_lbl}{_vint}:")
         lines.extend(_stage_table_lines(_stages))
         lines.append("")
 

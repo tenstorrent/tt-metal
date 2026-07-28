@@ -15,6 +15,8 @@ Two false statements were being printed for llama3_1_8b_p150:
 """
 from __future__ import annotations
 
+import json
+
 import importlib.util
 import sys
 from pathlib import Path
@@ -232,3 +234,53 @@ def test_a_baseline_with_no_after_yet_still_shows(tmp_path, monkeypatch):
     led.record(led.KIND_EAGER, led.PHASE_BEFORE, 2464.18, depth="16", mode="eager")
     line = sm._ledger_line(led.KIND_EAGER, "eager per-op device time", "", "")
     assert line and "2464.18" in line
+
+
+def test_the_block_level_table_declares_its_vintage(tmp_path, monkeypatch):
+    """The per-stage names are the agent's free text, frozen when the snapshot was recorded, and the
+    numbers freeze with them. This table carried "QKV, still HiFi2 -- same lever untried" long after
+    that lever was tried, committed and won, and summed to 529.43 ms beside an op breakdown of 556.80
+    and a headline of 534.44. It cannot be refreshed here, so it must say so."""
+    sm, _ = _sm_and_led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    kl = tmp_path / "kl.json"
+    kl.write_text(
+        json.dumps(
+            [
+                {
+                    "op_signature": "Matmul 32x14336x4096",
+                    "kernel_kind": "fidelity",
+                    "measured_ms": 567.94,
+                    "beat_baseline": True,
+                    "stages": [
+                        {"name": "ff2 (NOW LoFi)", "ms": 103.30, "dominant": True},
+                        {"name": "QKV (still HiFi2 - same lever untried)", "ms": 69.18},
+                    ],
+                }
+            ]
+        )
+    )
+    out = sm.render_summary(kl, model="m", task="main", finalized=True)
+    hdr = next(l for l in out.splitlines() if l.startswith("Block-level timing"))
+    assert "totals 172.48 ms" in hdr, hdr
+    assert "AT CAPTURE TIME" in hdr, hdr
+
+
+def test_utilisation_names_the_ceiling_it_is_measured_against(tmp_path, monkeypatch):
+    """70% of a BASELINE ceiling is progress-against-target, not headroom: the same run was at 49% of
+    the bound its own build had reached. Unlabelled, the figure gets quoted as the second one."""
+    sm, _ = _sm_and_led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    snap = {
+        "is_llm_decode": True,
+        "theoretical_tok_s": 84.0,
+        "band": [50.4, 67.2],
+        "active_bytes": 6094651392,
+        "peak_bw_gbps": 512.0,
+        "tp_degree": 1,
+        "perf_layers": "all",
+        "unit": "token",
+    }
+    out = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 16.99}, "m", "main"))
+    line = next(l for l in out.splitlines() if l.startswith("  utilization"))
+    assert "BASELINE ceiling" in line, line
