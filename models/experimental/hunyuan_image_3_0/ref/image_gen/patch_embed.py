@@ -31,10 +31,14 @@
 # Downsample classes are included for completeness / faithfulness to upstream
 # but are not exercised at patch_size==1.
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+
+from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR, load_prefixed_state_dict
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +384,34 @@ class UNetUp(nn.Module):
             else:
                 x = module(x)
         return x
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint loader (real HunyuanImage-3.0 weights)
+# ---------------------------------------------------------------------------
+def _patch_embed_dims(state_dict: dict[str, torch.Tensor]) -> tuple[int, int, int, int, int]:
+    in_channels = int(state_dict["model.0.weight"].shape[1])
+    hidden_channels = int(state_dict["model.1.in_layers.2.weight"].shape[1])
+    out_channels = int(state_dict["model.1.in_layers.2.weight"].shape[0])
+    emb_channels = int(state_dict["model.1.emb_layers.1.weight"].shape[1])
+    return 1, in_channels, emb_channels, hidden_channels, out_channels
+
+
+def load_patch_embed(model_dir: Path = MODEL_DIR, *, dtype: torch.dtype = torch.float32) -> UNetDown:
+    """Build UNetDown and load `patch_embed.*` weights."""
+    state = load_prefixed_state_dict(model_dir, "patch_embed.", dtype=dtype)
+    patch_size, in_channels, emb_channels, hidden_channels, out_channels = _patch_embed_dims(state)
+    module = UNetDown(
+        patch_size=patch_size,
+        in_channels=in_channels,
+        emb_channels=emb_channels,
+        hidden_channels=hidden_channels,
+        out_channels=out_channels,
+    )
+    module.load_state_dict(state)
+    module.to(dtype=dtype)
+    module.eval()
+    return module
 
 
 # ---------------------------------------------------------------------------

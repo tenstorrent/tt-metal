@@ -129,7 +129,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtSchedu
 
 # Host ref TimestepEmbedder for the gen-timestep / guidance / timestep_r continuous tokens
 # scattered each denoise step (instruct/distil variants only).
-from models.experimental.hunyuan_image_3_0.ref.image_gen.model_loaders import load_timestep_embedder
+from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import load_timestep_embedder
 
 B = 1
 GRID = int(os.environ.get("HY_GRID", str(PRODUCTION_LATENT_GRID)))

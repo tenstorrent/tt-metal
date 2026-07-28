@@ -12,9 +12,6 @@
 # Fast only (skip S>=4096 mask / max-context):
 #   python_env/bin/python -m pytest \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_attention_modules.py -m "not slow" -v
-# ISL sweep CSV:
-#   HY_PCC_CSV=/tmp/hunyuan_isl.csv python_env/bin/python -m pytest \
-#     models/experimental/hunyuan_image_3_0/tests/pcc/test_attention_modules.py -k isl_sweep -v -s
 
 import os
 import sys
@@ -67,13 +64,11 @@ from pcc_common import (
     PCC_BLOCK,
     PCC_STRICT,
     ROPE_ATTN_PCC_CASES,
-    isl_csv_path,
     load_config,
     max_seq_tile_aligned,
     model_dims,
     pcc_metrics,
     rope_image_infos,
-    write_isl_csv,
 )
 
 INPUT_NORM_KEY = "model.layers.0.input_layernorm.weight"
@@ -376,46 +371,3 @@ def test_mask_max_context_causal_bitwise(device):
     max_seq = max_seq_tile_aligned()
     r = _mask_run(device, max_seq, [[]], label=f"max context causal S={max_seq}")
     assert r["pass"]
-
-
-# ---------------------------------------------------------------------------
-# ISL sweep + CSV (RMSNorm + mask)
-# ---------------------------------------------------------------------------
-@pytest.mark.slow
-def test_isl_sweep_table(device, tmp_path):
-    rows = []
-    for batch, seq_len, label in LEAN_ISL_CASES + [BATCH_CASE]:
-        p, d = _rms_norm_run(device, batch, seq_len)
-        rows.append(
-            {
-                "module": "rms_norm",
-                "batch": batch,
-                "seq_len": seq_len,
-                "label": label,
-                "pcc": f"{p:.8f}",
-                "max_abs_diff": f"{d:.6f}",
-                "threshold": PCC_STRICT,
-                "pass": p >= PCC_STRICT,
-            }
-        )
-        print(f"  RMSNorm ISL {label:40s}  S={seq_len:5d}  PCC={p:.8f}")
-
-    for seq_len, label in CAUSAL_MASK_FAST + CAUSAL_MASK_SLOW:
-        r = _mask_run(device, seq_len, [[]], label=f"mask causal — {label}")
-        rows.append(
-            {
-                "module": "attention_mask",
-                "batch": 1,
-                "seq_len": seq_len,
-                "label": label,
-                "pcc": "",
-                "max_abs_diff": r["diff_elems"],
-                "threshold": "bitwise",
-                "pass": r["pass"],
-            }
-        )
-
-    out = isl_csv_path() or tmp_path / "hunyuan_attention_isl_sweep.csv"
-    write_isl_csv(rows, out)
-    print(f"\nISL sweep CSV: {out}")
-    assert all(r["pass"] for r in rows)
