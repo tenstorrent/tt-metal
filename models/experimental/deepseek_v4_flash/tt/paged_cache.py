@@ -62,6 +62,12 @@ class PagedGroup:
     ``max_seq`` is the per-session context capacity (the longest absolute position
     plus one any session may decode), which fixes the page-table row width and
     hence the shapes baked into the captured traces.
+
+    ``block_size`` counts *rows of the layer's KV axis*, not tokens: a compressor
+    group's row is one pooled entry per ``compress_rate`` tokens, so a block of the
+    same row count spans ``compress_rate`` times more context. Sizing it as
+    ``tokens_per_block / compress_rate`` (see :func:`rows_per_block`) is what makes
+    every group consume one block per ``tokens_per_block`` tokens.
     """
 
     layer_type: str
@@ -71,36 +77,59 @@ class PagedGroup:
     compress_rate: int | None  # None for sliding-only layers
 
     def __post_init__(self) -> None:
-        if self.sliding_window % self.block_size:
-            raise ValueError(f"sliding_window {self.sliding_window} must be a multiple of block_size {self.block_size}")
-        if self.compress_rate is not None:
-            entries = self.max_seq // self.compress_rate
-            if self.max_seq % self.compress_rate or entries % self.block_size:
+        if self.block_size <= 0 or self.block_size % ttnn.TILE_SIZE:
+            # Both paged ops derive their per-block stride in tiles.
+            raise ValueError(f"block_size {self.block_size} must be a positive multiple of {ttnn.TILE_SIZE}")
+        if self.compress_rate is None:
+            # The bounded ring wraps positions with ``cache_position_modulo ==
+            # sliding_window``, which the ops require to be a whole number of blocks.
+            if self.sliding_window % self.block_size:
                 raise ValueError(
-                    f"max_seq {self.max_seq} must be a multiple of compress_rate {self.compress_rate} "
-                    f"* block_size {self.block_size} for layer type {self.layer_type}"
+                    f"sliding_window {self.sliding_window} must be a multiple of block_size {self.block_size}"
                 )
+        elif self.max_seq % self.compress_rate:
+            raise ValueError(
+                f"max_seq {self.max_seq} must be a multiple of compress_rate {self.compress_rate} "
+                f"for layer type {self.layer_type}"
+            )
+
+    @property
+    def axis_rows(self) -> int:
+        """Rows of the logical KV axis actually used: the ring, plus one row per
+        compressed entry for the compressor groups."""
+        entries = 0 if self.compress_rate is None else self.max_seq // self.compress_rate
+        return self.sliding_window + entries
 
     @property
     def ring_blocks(self) -> int:
-        """Blocks holding the sliding ring, at logical block indices ``[0, ring_blocks)``."""
-        return self.sliding_window // self.block_size
+        """Blocks covering the sliding ring, at logical block indices ``[0,
+        ring_blocks)``. Allocated when a session opens.
+
+        The ring is a *prefix* of the axis rather than a block-aligned region: when a
+        block is wider than the window (a CSA block spans 1024 rows against a 128-row
+        ring) the first block holds the ring and the earliest compressed entries both.
+        """
+        return math.ceil(self.sliding_window / self.block_size)
 
     @property
     def compressed_blocks(self) -> int:
-        """Blocks holding the compressed entries (0 for sliding-only layers)."""
-        if self.compress_rate is None:
-            return 0
-        return self.max_seq // self.compress_rate // self.block_size
+        """Blocks past the ring's, handed out as windows close (0 for sliding-only)."""
+        return self.logical_blocks - self.ring_blocks
 
     @property
     def logical_blocks(self) -> int:
         """Page-table row width == the layer's logical KV axis in blocks."""
-        return self.ring_blocks + self.compressed_blocks
+        return math.ceil(self.axis_rows / self.block_size)
 
     @property
     def kv_len(self) -> int:
-        """Logical KV axis length in tokens (the width the additive mask must have)."""
+        """Addressable length of the logical KV axis in rows -- the width the additive
+        mask must have.
+
+        This is :attr:`axis_rows` rounded up to whole blocks. The tail rows past
+        ``axis_rows`` are unmapped (they resolve through the zero block) and every
+        mask marks them invalid, so they are never read as data.
+        """
         return self.logical_blocks * self.block_size
 
     @property
@@ -110,16 +139,41 @@ class PagedGroup:
         return self.sliding_window if self.compress_rate is None else None
 
     def compressed_blocks_for(self, pos: int) -> int:
-        """Compressed blocks a session needs once it has decoded through ``pos``.
+        """Blocks past the ring's a session needs once it has decoded through ``pos``.
 
         A window closes every ``compress_rate`` tokens, so ``pos`` has produced
-        ``(pos + 1) // compress_rate`` entries; they occupy that many rows of the
-        compressed region, rounded up to whole blocks.
+        ``(pos + 1) // compress_rate`` entries, which sit at axis rows
+        ``[sliding_window, sliding_window + entries)``. The count is taken over the
+        whole axis and the ring's blocks subtracted, because the block holding the
+        ring's tail may already cover the first entries.
         """
         if self.compress_rate is None:
             return 0
-        entries = (pos + 1) // self.compress_rate
-        return min(math.ceil(entries / self.block_size), self.compressed_blocks)
+        rows = self.sliding_window + (pos + 1) // self.compress_rate
+        blocks = min(math.ceil(rows / self.block_size), self.logical_blocks)
+        return blocks - self.ring_blocks
+
+
+def rows_per_block(tokens_per_block: int, compress_rate: int | None, sliding_window: int) -> int:
+    """Rows one block of ``tokens_per_block`` tokens of context needs for a group.
+
+    A compressor group stores one row per ``compress_rate`` tokens, so scaling the row
+    count down by the rate makes every group grow by exactly one block per
+    ``tokens_per_block`` tokens -- with rates 4 (CSA) and 128 (HCA), the HCA block is
+    1/32 the size of the CSA one. The sliding ring is bounded by the window and
+    modulo-addressed, so it takes the whole window as one block instead.
+    """
+    if compress_rate is None:
+        return min(tokens_per_block, sliding_window)
+    return tokens_per_block // compress_rate
+
+
+def min_tokens_per_block(compress_rates) -> int:
+    """Smallest context-per-block for which every group's rows-per-block is a legal
+    (tile-multiple) block: the paged ops floor a block at one tile of rows, and the
+    most-compressed group is the one that hits that floor first."""
+    rates = [int(cr) for cr in compress_rates] or [1]
+    return ttnn.TILE_SIZE * max(rates)
 
 
 def build_groups(
@@ -127,13 +181,29 @@ def build_groups(
     compress_rates: dict,
     sliding_window: int,
     max_seq: int,
-    block_size: int,
+    block_size: int | None = None,
+    tokens_per_block: int | None = None,
 ) -> dict[str, PagedGroup]:
-    """One :class:`PagedGroup` per distinct layer type present in ``layer_types``."""
+    """One :class:`PagedGroup` per distinct layer type present in ``layer_types``.
+
+    Give either ``block_size`` (the same row count for every group, the model's own
+    layout) or ``tokens_per_block`` (per-group row counts covering the same span of
+    context, which is what lets one block index space address every layer type).
+    """
+    if (block_size is None) == (tokens_per_block is None):
+        raise ValueError("pass exactly one of block_size (rows) or tokens_per_block (context)")
     return {
         lt: PagedGroup(
             layer_type=lt,
-            block_size=block_size,
+            block_size=(
+                block_size
+                if block_size is not None
+                else rows_per_block(
+                    tokens_per_block,
+                    None if lt == "sliding_attention" else compress_rates[lt],
+                    sliding_window,
+                )
+            ),
             sliding_window=sliding_window,
             max_seq=max_seq,
             compress_rate=None if lt == "sliding_attention" else compress_rates[lt],
