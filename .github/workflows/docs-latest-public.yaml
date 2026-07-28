@@ -10,9 +10,16 @@ on:
       docker-image:
         required: true
         type: string
+      # Provide exactly one: wheel-artifact-name (install a wheel) or
+      # ttnn-import-artifact-id (import in-place from a precompiled tree).
       wheel-artifact-name:
-        required: true
+        required: false
         type: string
+        default: ''
+      ttnn-import-artifact-id:
+        required: false
+        type: string
+        default: ''
       build-type:
         description: 'Build type (Release or ASan). ASan builds require LD_PRELOAD of the ASan runtime.'
         required: false
@@ -51,15 +58,33 @@ jobs:
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      # --- ttnn install: wheel mode (release/main docs) OR precompiled-tree mode (PR gate) ---
       - name: ⬇️ Download Wheel
+        if: ${{ inputs.wheel-artifact-name != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.wheel-artifact-name }}
           path: /work
       - name: Install Wheel
+        if: ${{ inputs.wheel-artifact-name != '' }}
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
-          uv pip install $WHEEL_FILENAME
+          uv pip install "$WHEEL_FILENAME"
+      - name: ⬇️ Download precompiled ttnn libs
+        if: ${{ inputs.ttnn-import-artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.ttnn-import-artifact-id }}
+          # merge-multiple keeps contents flat at /work (else artifact-ids nests in a subdir).
+          merge-multiple: true
+          path: /work
+      - name: Install ttnn from precompiled tree
+        # Reuse setup.py's TT_FROM_PRECOMPILED_DIR path: no recompile, no manylinux wheel.
+        # Runtime .so deps (libtt_metal, libtracy, ...) resolve via LD_LIBRARY_PATH=/work/build/lib.
+        if: ${{ inputs.ttnn-import-artifact-id != '' }}
+        env:
+          TT_FROM_PRECOMPILED_DIR: /work
+        run: uv pip install .
       - name: Check TTNN ops are documented
         # Verifies every registered ttnn op has an entry in docs/source/ttnn/ttnn/api.rst.
         # Runs here (no hardware needed) rather than in nightly — catches missing docs on the PR that adds the op.
@@ -181,6 +206,28 @@ jobs:
             -f message="Update versions.json after ${DEPLOYED_VERSION} deploy" \
             -f content="$(echo "$payload" | base64 -w0)" \
             -f branch=gh-pages "${extra_args[@]}"
+      - name: Index docs into OpenSearch
+        # The indexer reads the built HTML from the artifact downloaded above.
+        # Non-critical post-deploy enhancement: a transient ingest failure must
+        # not mark an otherwise-successful docs deploy as failed.
+        if: ${{ steps.deployment.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          # Scoped to this step only (not job-level) so the OpenSearch write
+          # credential is never exposed to the other actions in this job.
+          DOCS_SEARCH_INGEST_API_KEY: ${{ secrets.DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT }}
+          SEARCH_API_BASE: https://csl860x2oj.execute-api.us-east-2.amazonaws.com/prod
+          DOC_CATALOG_SOURCE_ID: docs-tenstorrent
+          DOCS_ID_NAMESPACE: tt-metal
+          DOCS_INDEX_VERSION: ${{ inputs.version }}
+          DOCS_OUTPUT_DIR: gh_pages/${{ inputs.version }}
+          DOC_SITE_BASE_URL: https://docs.tenstorrent.com/tt-metal/${{ inputs.version }}
+        run: |
+          if [ -z "${DOCS_SEARCH_INGEST_API_KEY}" ]; then
+            echo "::warning::Skipping OpenSearch indexing because DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT is not set."
+            exit 0
+          fi
+          python3 scripts/index_remote_search.py
       - name: Check the docs deployment is up
         if: ${{ github.ref == 'refs/heads/main' }}
         run: |

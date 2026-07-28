@@ -10,14 +10,18 @@ show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Run fabric tests on 4x8, 4x32, or 8x16 cluster configuration.
+Run fabric tests on 4x8, 4x8wh, 4x32, or 8x16 cluster configuration.
 
 Required Options:
-    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8)
+    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8/4x8wh)
     --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
-    --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|8x4x4z>  Mesh configuration (default: 4x32)
+    --config <4x8|4x8wh|4x32|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|8x4x4z>  Mesh configuration (default: 4x32)
+                                        4x8   = single BlackHole galaxy as one 8x4 2D torus (single host).
+                                        4x8wh = single Wormhole (WORMHOLE_B0) galaxy as one 8x4 2D torus
+                                                (single host); same single-mesh launch as 4x8 but with the
+                                                Wormhole galaxy descriptor and the WH neighbor-exchange config.
                                         <N>x32x4 (N in 2..9) is a multi-mesh config of N fully-connected
                                         32x4 torus meshes. Each 32x4 mesh is built from 4 BH galaxies
                                         (host_topology 4x1), one galaxy per host, so it needs 4*N hosts
@@ -35,6 +39,7 @@ Optional:
     --output <directory>                Output directory for log files (default: fabric_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file (overrides --config)
                                         4x8 default:   tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+                                        4x8wh default: tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto
                                         4x32 default:  tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         8x16 default:  tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         4x8z default:  tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto
@@ -51,6 +56,7 @@ Optional:
                                         (default: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml)
+                                        (4x8wh default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml)
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
@@ -65,6 +71,13 @@ Optional:
                                         (auto-detected if not specified)
     --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
                                         e.g. --mpi-args "--tag-output"
+    --cabling-descriptor-path <path>    Path to cabling descriptor (.textproto). When provided with
+                                        --deployment-descriptor-path, the descriptor-based ring resolver
+                                        is used instead of the hostname heuristic for multi-host configs.
+    --deployment-descriptor-path <path> Path to deployment descriptor (.textproto). Required with
+                                        --cabling-descriptor-path.
+    --fsd <path>                        Path to Factory System Descriptor (.textproto). Alternative to
+                                        cabling+deployment for ring order resolution.
     --skip-reorder                      Use --hosts exactly as given; skip the canonical ring
                                         reordering for the multi-host quad configs (8x4x4z, 4x32z,
                                         <N>x32x4). Use this when the serpentine r<rack>u<unit>
@@ -83,6 +96,8 @@ HOSTS=""
 DOCKER_IMAGE=""
 OUTPUT_DIR="fabric_test_logs"
 MESH_GRAPH_DESC_PATH_4x8="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+# 4x8wh: single Wormhole (WORMHOLE_B0) galaxy as one 8x4 2D torus, single host.
+MESH_GRAPH_DESC_PATH_4x8wh="tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32="tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_8x16="tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x8z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto"
@@ -107,11 +122,18 @@ TEST_CONFIG_EXPLICIT=false
 # with an inter-mesh Z fabric (its Linear/Ring/Torus setups trip the tensix
 # datamover buffer-index assert), so it must not be the default here.
 TEST_CONFIG_Z="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
+# 4x8wh uses the neighbor-exchange sanity config by default (single 8x4
+# torus mesh), unless the user explicitly passes --test-config. The config uses
+# num_links: all, which resolves to the platform's max usable links at runtime.
+TEST_CONFIG_4x8wh="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml"
 FILTER=""
 NUM_PACKETS=""
 MPI_IF=""
 MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
+CABLING_DESCRIPTOR_PATH=""
+DEPLOYMENT_DESCRIPTOR_PATH=""
+FSD_PATH=""
 SKIP_REORDER=false
 
 while [[ $# -gt 0 ]]; do
@@ -139,8 +161,8 @@ while [[ $# -gt 0 ]]; do
             fi
             CONFIG="$2"
             # The Nx32x4 family (2x32x4 .. 9x32x4) is matched by regex; everything else is an exact match.
-            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" && ! "$CONFIG" =~ ^[2-9]x32x4$ ]]; then
-                echo "Error: --config must be one of '4x8', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', '8x4x4z', or '<N>x32x4' (N in 2..9)"
+            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x8wh" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" && ! "$CONFIG" =~ ^[2-9]x32x4$ ]]; then
+                echo "Error: --config must be one of '4x8', '4x8wh', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', '8x4x4z', or '<N>x32x4' (N in 2..9)"
                 echo ""
                 show_help
                 exit 1
@@ -219,6 +241,30 @@ while [[ $# -gt 0 ]]; do
             MPI_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
+        --cabling-descriptor-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cabling-descriptor-path requires a non-empty value"
+                exit 1
+            fi
+            CABLING_DESCRIPTOR_PATH="$2"
+            shift 2
+            ;;
+        --deployment-descriptor-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --deployment-descriptor-path requires a non-empty value"
+                exit 1
+            fi
+            DEPLOYMENT_DESCRIPTOR_PATH="$2"
+            shift 2
+            ;;
+        --fsd)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --fsd requires a non-empty value"
+                exit 1
+            fi
+            FSD_PATH="$2"
+            shift 2
+            ;;
         --skip-reorder)
             SKIP_REORDER=true
             shift
@@ -276,6 +322,8 @@ fi
 if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
     if [[ "$CONFIG" == "4x8" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8"
+    elif [[ "$CONFIG" == "4x8wh" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8wh"
     elif [[ "$CONFIG" == "4x32" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32"
     elif [[ "$CONFIG" == "8x16" ]]; then
@@ -297,6 +345,12 @@ fi
 # multi-mesh sanity config unless the user explicitly passed --test-config.
 if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n "$NX32X4_NUM_MESHES" || "$CONFIG" == "8x4x4z" ) ]]; then
     TEST_CONFIG="$TEST_CONFIG_Z"
+fi
+
+# 4x8wh is a single Wormhole galaxy torus; default it to the WH neighbor-exchange
+# sanity config unless the user explicitly passed --test-config.
+if [[ "$TEST_CONFIG_EXPLICIT" == false && "$CONFIG" == "4x8wh" ]]; then
+    TEST_CONFIG="$TEST_CONFIG_4x8wh"
 fi
 
 # ---------------------------------------------------------------------------
@@ -381,16 +435,86 @@ sort_hosts_canonical_per_quad() {
     echo "${joined%,}"
 }
 
+# Descriptor-based ring resolver: calls resolve_host_ring_order.py with
+# --cabling/--deployment or --fsd to produce the physically correct order.
+# Returns the ordered CSV via stdout. Exits the script on failure.
+resolve_hosts_from_descriptors() {
+    local hosts_csv="$1"
+    local resolver="${SCRIPT_DIR}/resolve_host_ring_order.py"
+    local resolver_args=(--hosts "$hosts_csv")
+
+    if [[ -n "$FSD_PATH" ]]; then
+        resolver_args+=(--fsd "$FSD_PATH")
+    else
+        resolver_args+=(--cabling "$CABLING_DESCRIPTOR_PATH" --deployment "$DEPLOYMENT_DESCRIPTOR_PATH")
+    fi
+
+    local output
+    output="$(python3 "$resolver" "${resolver_args[@]}" 2>&1)"
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "Error: resolve_host_ring_order.py failed (rc=$rc):"
+        echo "$output"
+        exit 1
+    fi
+    local ordered
+    ordered="$(echo "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)["ordered_hosts"])')"
+    if [[ -z "$ordered" ]]; then
+        echo "Error: resolve_host_ring_order.py returned empty ordered_hosts"
+        echo "$output"
+        exit 1
+    fi
+    echo "$ordered"
+}
+
+HAS_DESCRIPTORS=false
+if [[ -n "$FSD_PATH" ]]; then
+    HAS_DESCRIPTORS=true
+elif [[ -n "$CABLING_DESCRIPTOR_PATH" && -n "$DEPLOYMENT_DESCRIPTOR_PATH" ]]; then
+    HAS_DESCRIPTORS=true
+fi
+
 # Only the multi-host quad configs need deterministic ring order; smaller and
 # single-host configs keep the user's --hosts order untouched. 8x4x4z/4x32z are
 # a single quad (one Z-ring) so they canonicalize the whole list; <N>x32x4 has
 # one quad per mesh, so it canonicalizes each group of 4 independently.
-# --skip-reorder bypasses this entirely: the serpentine r<rack>u<unit> heuristic
-# only matches the standard 2-racks-x-2-units galaxy layout, so for hosts cabled
-# differently the operator can pass their own ring order and keep it verbatim.
+#
+# When descriptor paths are provided, the resolver is used instead of the
+# hostname heuristic.  --skip-reorder bypasses both.
 if [[ "$SKIP_REORDER" == true ]]; then
     if [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" || -n "$NX32X4_NUM_MESHES" ]]; then
         echo "Skipping canonical host reordering (--skip-reorder); using --hosts as given."
+    fi
+elif [[ "$HAS_DESCRIPTORS" == true ]] && [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
+    HOSTS_ORIG="$HOSTS"
+    HOSTS="$(resolve_hosts_from_descriptors "$HOSTS")"
+    if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
+        echo "Reordered hosts via descriptor-based ring resolver for $CONFIG:"
+        echo "  before: $HOSTS_ORIG"
+        echo "  after:  $HOSTS"
+    fi
+elif [[ "$HAS_DESCRIPTORS" == true ]] && [[ -n "$NX32X4_NUM_MESHES" ]]; then
+    HOSTS_ORIG="$HOSTS"
+    IFS=',' read -ra _all_hosts <<< "$HOSTS"
+    _total=${#_all_hosts[@]}
+    _out=()
+    for ((_i = 0; _i < _total; _i += 4)); do
+        _quad=()
+        for ((_j = _i; _j < _i + 4 && _j < _total; _j++)); do
+            _quad+=("${_all_hosts[$_j]}")
+        done
+        _quad_csv=$(printf '%s,' "${_quad[@]}")
+        _quad_csv="${_quad_csv%,}"
+        _sorted="$(resolve_hosts_from_descriptors "$_quad_csv")"
+        IFS=',' read -ra _quad <<< "$_sorted"
+        _out+=("${_quad[@]}")
+    done
+    printf -v _joined '%s,' "${_out[@]}"
+    HOSTS="${_joined%,}"
+    if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
+        echo "Reordered each 4-host quad via descriptor-based ring resolver for $CONFIG:"
+        echo "  before: $HOSTS_ORIG"
+        echo "  after:  $HOSTS"
     fi
 elif [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
     HOSTS_ORIG="$HOSTS"
@@ -489,12 +613,15 @@ fi
 # Assemble the ":"-separated MPMD segments for the non-Z multi-host launch,
 # shared by the docker and no-docker paths. Every rank drives the same single
 # mesh (TT_MESH_ID=0) and descriptor; OpenMPI places one rank per --host entry.
+# TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS matches the Z-config / full_rank_binding
+# path so slow ethernet handshakes after reset don't trip the default 10s sync.
 NONZ_SEGMENTS=()
 for ((i = 0; i < NONZ_NUM_RANKS; i++)); do
     [[ $i -gt 0 ]] && NONZ_SEGMENTS+=(":")
     NONZ_SEGMENTS+=(-np 1)
     NONZ_SEGMENTS+=(-x TT_MESH_ID=0)
     NONZ_SEGMENTS+=(-x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH")
+    NONZ_SEGMENTS+=(-x TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=1000000)
     NONZ_SEGMENTS+=("$TEST_BINARY" --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}")
 done
 
@@ -1003,9 +1130,9 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
     fi
 elif [[ "$DOCKER_IMAGE" == "none" ]]; then
     # No-docker path: invoke mpirun-ulfm directly against the local build.
-    if [[ "$CONFIG" == "4x8" ]]; then
+    if [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
         SINGLE_HOST="${HOSTS%%,*}"
-        echo "Running single-host 4x8 on: $SINGLE_HOST (no docker)"
+        echo "Running single-host $CONFIG on: $SINGLE_HOST (no docker)"
         echo ""
 
         mpirun-ulfm \
@@ -1033,9 +1160,9 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             --host "$HOSTS" \
             "${NONZ_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     fi
-elif [[ "$CONFIG" == "4x8" ]]; then
+elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
     SINGLE_HOST="${HOSTS%%,*}"
-    echo "Running single-host 4x8 on: $SINGLE_HOST"
+    echo "Running single-host $CONFIG on: $SINGLE_HOST"
     echo ""
 
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
@@ -1047,6 +1174,7 @@ elif [[ "$CONFIG" == "4x8" ]]; then
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        -x TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=1000000 \
         "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
 else

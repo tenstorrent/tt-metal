@@ -8,6 +8,7 @@
 #include "device/reduce_scatter_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -68,6 +69,10 @@ ttnn::Tensor reduce_scatter(
     // when not all devices are mmio capable. Manually doing it requires the use of "is_mmio_capable" counting, but as
     // the one link that's subtracted out is only along one cluster axis, we will be using less links we would like
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
+
+    auto resolved_compute_kernel_config =
+        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());
+
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         return composite_common::composite_reduce_scatter(
             input_tensor,
@@ -80,7 +85,7 @@ ttnn::Tensor reduce_scatter(
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel,
-            compute_kernel_config,
+            resolved_compute_kernel_config,
             use_l1_small_for_semaphores);
     }
     return ttnn::prim::reduce_scatter(
@@ -96,7 +101,7 @@ ttnn::Tensor reduce_scatter(
                chunks_per_sync,
                num_workers_per_link,
                num_buffers_per_channel,
-               compute_kernel_config,
+               resolved_compute_kernel_config,
                use_l1_small_for_semaphores)
         .at(1);  // first is the intermediate tensor
 }

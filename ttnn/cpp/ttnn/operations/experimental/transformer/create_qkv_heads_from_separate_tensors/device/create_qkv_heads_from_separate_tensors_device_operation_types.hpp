@@ -24,6 +24,7 @@ struct CreateQKVHeadsFromSeparateTensorsInputs {
 };
 
 using CreateQKVHeadsFromSeparateTensorsResult = std::tuple<Tensor, Tensor, Tensor>;
-using CreateQKVHeadsFromSeparateTensorsResultSpec = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
+using CreateQKVHeadsFromSeparateTensorsResultSpec =
+    std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::experimental::prim

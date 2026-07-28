@@ -21,6 +21,7 @@ struct OutboundSocketServiceSyncParams {
     uint32_t num_pages = 0;
     uint32_t scratch_cb_index = 0;
     uint32_t metadata_size_bytes = 0;  // 0 disables the metadata path
+    bool metadata_only = false;        // true skip tensor copy
     tt::tt_metal::CoreRange worker_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
 
     // Per-mesh-coordinate state, indexed row-major as (row * mesh_num_cols + col).

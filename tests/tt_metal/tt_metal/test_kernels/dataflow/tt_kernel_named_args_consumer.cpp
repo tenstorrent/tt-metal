@@ -16,19 +16,23 @@
 // Paired with tt_kernel_named_args_producer.cpp; the host verifies input == output.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"  // provides TT_KERNEL, get_arg, the args:: / dfb:: accessors
 
 template <uint32_t bank_id, uint32_t entry_size>  // CTAs (compile-time)
 TT_KERNEL void loopback_consumer(
     uint32_t dst_addr,       // RTA (per-node)
     uint32_t num_entries) {  // CRTA (broadcast)
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_dst;
     DataflowBuffer buf(dfb::loopback_dfb);
 
     for (uint32_t i = 0; i < num_entries; i++) {
         buf.wait_front(1);
-        uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
-        noc_async_write(buf.get_read_ptr(), dst_noc_addr, entry_size);
-        noc_async_write_barrier();
+        noc.async_write(buf, dram_dst, entry_size, {}, {.bank_id = bank_id, .addr = dst_addr});
+        noc.async_write_barrier();
         buf.pop_front(1);
         dst_addr += entry_size;  // by-value function param; mutating the local copy is fine
     }

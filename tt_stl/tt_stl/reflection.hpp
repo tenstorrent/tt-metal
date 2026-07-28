@@ -1552,12 +1552,12 @@ inline void append_canonical(std::string& out, const T& object) {
             append_canonical(out, it->first);
             append_canonical(out, it->second);
         }
-    } else if constexpr (ttsl::concepts::Reflectable<T>) {
-        reflect::for_each([&out, &object](auto I) { append_canonical(out, reflect::get<I>(object)); }, object);
     } else if constexpr (ttsl::reflection::detail::supports_to_hash_v<T>) {
         const hash_t h = object.to_hash();  // lossy leaf (see note above)
         append_bytes(out, &h, sizeof(h));
-    } else if constexpr (detail::is_std_hashable_v<T>) {
+    } else if constexpr (ttsl::concepts::Reflectable<T>) {
+        reflect::for_each([&out, &object](auto I) { append_canonical(out, reflect::get<I>(object)); }, object);
+    } else if constexpr (detail::is_std_hashable_v<T>) {  // order matters, is_std_hashable_v must be after Reflectable
         const std::size_t h = std::hash<T>{}(object);  // lossy fallback
         append_bytes(out, &h, sizeof(h));
     } else {

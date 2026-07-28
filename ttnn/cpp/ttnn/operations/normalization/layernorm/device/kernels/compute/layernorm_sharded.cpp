@@ -13,6 +13,9 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#ifdef DO_COL_MASK
+#include "ttnn/operations/normalization/kernel_util/compute/col_mask.h"
+#endif
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -84,6 +87,27 @@ void kernel_main() {
     constexpr uint32_t cb_fusion_id =
         get_named_compile_time_arg_val("cb_xmm");  // stream gamma/beta (alias of cb_xmm_id)
     constexpr uint32_t cb_out_id = get_named_compile_time_arg_val("cb_out");
+#ifdef DO_COL_MASK
+#ifndef RMSNORM
+    // Scratch buffer holding the input with any padding columns zeroed, so those
+    // columns contribute 0 to the E[x] sum. cb_in stays intact for the (x - E[x]) pass;
+    // the masking itself uses the column mask (cb_col_mask_packed) below.
+    // RMSNorm needs no such copy: it masks the squared input in place (a fresh intermediate,
+    // not cb_in), so cb_in is never overwritten in the first place.
+    constexpr uint32_t cb_mask_scratch_id = get_named_compile_time_arg_val("cb_mask_scratch");
+    CircularBuffer cb_mask_scratch(cb_mask_scratch_id);
+#endif
+    // Multiplicative mask that keeps tile padding out of the statistics. Each row of the input is
+    // normalized only over its real elements (logical width). Input is stored in 32-column-wide tiles,
+    // and this core's block is block_w tiles wide, so it has block_w * 32 columns. When the
+    // logical width is not a multiple of 32, the columns beyond the logical width hold padding
+    // that needs to be ignored. This buffer holds the mask: block_w tiles, one for each input data tile.
+    // The writer fills this buffer; this kernel waits for it once below, reads tiles by index during the
+    // body (the same mask is reused at every masking site), and pops it once at the end so the CB is
+    // left balanced.
+    constexpr uint32_t cb_col_mask_packed_id = get_named_compile_time_arg_val("cb_col_mask_packed");
+    CircularBuffer cb_col_mask_packed(cb_col_mask_packed_id);
+#endif
 
     CircularBuffer cb_scaler(cb_scaler_id);
     CircularBuffer cb_scaler_global(cb_scaler_global_id);
@@ -103,6 +127,14 @@ void kernel_main() {
     CircularBuffer cb_out(cb_out_id);
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
+
+#ifdef DO_COL_MASK
+    // The column mask has block_w tiles, one per tile across the shard width.
+    // Wait once for it here; the masking sites below read it by tile index without
+    // re-waiting (it is reused across all rows and masking sites).
+    // It is popped once at the end of the kernel so the CB is left balanced.
+    cb_col_mask_packed.wait_front(block_w);
+#endif
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -164,17 +196,48 @@ void kernel_main() {
 #endif  // FUSE_PRE_ADD
 
 #ifndef RMSNORM
+#ifdef DO_COL_MASK
+    // Zero any padding columns of the input into cb_mask_scratch so they do not contribute
+    // to E[x]; the reduce below consumes the masked copy instead of cb_in.
+    // cb_in itself is left intact for the (x - E[x]) pass that follows. cb_col_mask_packed is the
+    // writer-generated mask (1.0 valid / 0.0 padding), already waited on above and read by
+    // tile index.
+    reconfig_data_format(cb_in_id, cb_col_mask_packed_id);
+    mul_tiles_init(cb_in_id, cb_col_mask_packed_id);
+    cb_mask_scratch.reserve_back(num_tiles_per_block);
+    index_h_offset = 0;
+    for (uint32_t i = 0; i < block_h; i++) {
+        for (uint32_t wt = 0; wt < block_w; wt++) {
+            tile_regs_acquire();
+            mul_tiles(cb_in_id, cb_col_mask_packed_id, wt + index_h_offset, wt, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_mask_scratch_id);
+            tile_regs_release();
+        }
+        index_h_offset += block_w;
+    }
+    cb_mask_scratch.push_back(num_tiles_per_block);
+    cb_mask_scratch.wait_front(num_tiles_per_block);
+    reconfig_data_format_srcb(cb_col_mask_packed_id, cb_scaler_id);
+    constexpr uint32_t cb_ex_reduce_input = cb_mask_scratch_id;
+#else
+    constexpr uint32_t cb_ex_reduce_input = cb_in_id;
+#endif
     // E[x],
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
-        cb_in_id,
+        cb_ex_reduce_input,
         cb_scaler_id,
         cb_ex_partial_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+#ifdef DO_COL_MASK
+    cb_mask_scratch.pop_front(num_tiles_per_block);
+#endif
     reconfig_data_format(cb_ex_external_id, cb_scaler_id);
 
     // global reduce, cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
@@ -242,6 +305,23 @@ void kernel_main() {
     cb_xmm.wait_front(num_tiles_per_block);
 #endif
 
+#if defined(DO_COL_MASK) && !defined(RMSNORM)
+    // Zero the padding columns of (x - E[x]) so the variance excludes them, using the writer-generated
+    // mask (cb_col_mask_packed - 1.0 in valid columns, 0.0 in padding).
+    // Applied in place by re-circulating cb_xmm (which also zeroes the padding for the final
+    // (x - E[x]) * 1/sqrt(var+eps); that padding output is discarded). Mask tile index tracks wt
+    // (the tile's position across the width). cb_col_mask_packed was waited on once near the top of
+    // the kernel and is read by tile index here (never popped).
+    // SrcA already holds the (x - E[x]) tiles' format; only SrcB changes for this multiply, to read the
+    // mask in its own data format (the mask format need not match the compute tiles).
+    reconfig_data_format_srcb(cb_col_mask_packed_id);
+    norm::kernel_util::compute::mask_block_in_place(cb_xmm, cb_col_mask_packed_id, num_tiles_per_block, block_w);
+    cb_xmm.wait_front(num_tiles_per_block);
+    // The masking above reads the column mask on SrcB, leaving SrcB configured for the mask's data format,
+    // which need not match the (x - E[x]) tiles. Restore SrcB to their format for the squaring below.
+    reconfig_data_format_srcb(cb_xmm_id);
+#endif
+
     // (x - E[x])^2, cb_mm2 <-- cb_xmm_id
     mul_tiles_init(cb_xmm_id, cb_xmm_id);
     index_h_offset = 0;
@@ -265,6 +345,18 @@ void kernel_main() {
         index_h_offset += block_w;
     }
     cb_xmm2.push_back(num_tiles_per_block);
+
+#if defined(RMSNORM) && defined(DO_COL_MASK)
+    // RMSNorm has no mean-subtraction stage, so its statistic is the mean of squares of the input
+    // (the raw input, or the fused residual sum a + b). Squaring it leaves the padding columns holding
+    // (pad_value)^2; zero them in place before the reduce so they do not enter the mean of squares.
+    // The writer-generated mask (cb_col_mask_packed) carries each block's own validity (full, partial,
+    // or all-padding tiles). It was waited on once near the top of the kernel and is read by tile index
+    // here (never popped).
+    reconfig_data_format(cb_xmm2_id, cb_col_mask_packed_id);
+    norm::kernel_util::compute::mask_block_in_place(cb_xmm2, cb_col_mask_packed_id, num_tiles_per_block, block_w);
+    cb_xmm2.wait_front(num_tiles_per_block);
+#endif
 
 #if defined RMSNORM and not defined FUSED_PRE_ADD
     reconfig_data_format(cb_xmm_id, cb_xmm2_id, cb_xmm_id, cb_scaler_id);
@@ -471,4 +563,15 @@ void kernel_main() {
     // The single scaler tile is waited by both reductions (E[x] and Var[x]) but never popped;
     // pop it once at the end so the CB is left balanced.
     cb_scaler.pop_front(1);
+    if constexpr (is_allgather_worker) {
+        // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
+        // tile index across the E[x] and Var[x] global reductions without being popped. Pop it once
+        // here, under the same guard that gated the waits, so the CB is left balanced on every core.
+        cb_scaler_global.pop_front(1);
+    }
+#ifdef DO_COL_MASK
+    // The column mask is waited once near the top of the kernel and read by tile index at every masking
+    // site; pop its block_w tiles once here so the CB is left balanced.
+    cb_col_mask_packed.pop_front(block_w);
+#endif
 }

@@ -199,30 +199,30 @@ NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation
             operation_attributes.output_mem_config.buffer_type(),
             kv_shard_spec);
         return {
-            TensorSpec(
+            tt::tt_metal::TensorSpec(
                 q_output_shape,
                 tt::tt_metal::TensorLayout(
                     input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-            TensorSpec(
+            tt::tt_metal::TensorSpec(
                 k_output_shape,
                 tt::tt_metal::TensorLayout(
                     input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), kv_mem_config)),
-            TensorSpec(
+            tt::tt_metal::TensorSpec(
                 v_output_shape,
                 tt::tt_metal::TensorLayout(
                     input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), kv_mem_config))};
     }
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config))};

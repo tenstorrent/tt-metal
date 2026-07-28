@@ -17,6 +17,7 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal::experimental::dfb {
 
@@ -142,9 +143,10 @@ uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
 std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
+    // IDs are drawn from [1, 31]; id 0 is implicitly reserved (NOC_V2_TRID_STATIC).
     TT_FATAL(
         next_id_ + count <= 32,
-        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only 32 are available",
+        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only [1, 31] are available",
         count,
         next_id_);
     std::vector<uint8_t> ids;
@@ -420,6 +422,13 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     init.producer_txn_descriptor = this->producer_txn_descriptor;
     init.consumer_txn_descriptor = this->consumer_txn_descriptor;
     init.implicit_sync_configured = 0;
+    TT_FATAL(
+        this->config.num_entries <= std::numeric_limits<uint16_t>::max(),
+        "DFB {}: num_entries ({}) exceeds the maximum {} representable on device",
+        this->id,
+        this->config.num_entries,
+        std::numeric_limits<uint16_t>::max());
+    init.num_entries = static_cast<uint16_t>(this->config.num_entries);
 
     log_debug(
         tt::LogMetal,
@@ -502,6 +511,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         }
     }
 
+    // Mirrors the device's per-side tile-counter staging, which sums num_tcs_to_rr across that
+    // side's riscs in risc_mask order before copying the ids into a TxnDFBDescriptor.
+    uint32_t total_producer_tcs = 0;
+    uint32_t total_consumer_tcs = 0;
     // Write one dfb_initializer_per_risc_t per risc, in risc_mask order
     for (int bit = 0; bit < 16; bit++) {
         if (!(this->risc_mask & (1 << bit))) {
@@ -520,6 +533,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         dfb_initializer_per_risc_t per_risc = {};
 
         per_risc.num_tcs_and_init.num_tcs_to_rr = rc->config.num_tcs_to_rr;
+        (rc->is_producer ? total_producer_tcs : total_consumer_tcs) += rc->config.num_tcs_to_rr;
         per_risc.num_tcs_and_init.tc_init_done = 0;  // set by device when this producer finishes TC init
         per_risc.num_tcs_and_init.broadcast_tc = rc->config.broadcast_tc;
         log_debug(tt::LogMetal, "Num tcs to rr: {}", rc->config.num_tcs_to_rr);
@@ -553,6 +567,28 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
     }
+
+    // A side only programs a TxnDFBDescriptor when it has transaction ids (implicit sync, and not
+    // Tensix-only). Such a side must fit the descriptor, otherwise the device would have to drop
+    // counter ids and the ISR would never credit them. Sides with no descriptor collect ids that
+    // are never read, so they are exempt.
+    TT_FATAL(
+        producer_txn_descriptor.num_txn_ids == 0 || total_producer_tcs <= ::dfb::MAX_TILE_COUNTERS_PER_SIDE,
+        "DFB {}: producer side needs {} tile counters ({} producers) but a transaction descriptor holds at "
+        "most {}.",
+        this->id,
+        total_producer_tcs,
+        this->config.num_producers,
+        static_cast<uint32_t>(::dfb::MAX_TILE_COUNTERS_PER_SIDE));
+    TT_FATAL(
+        consumer_txn_descriptor.num_txn_ids == 0 || total_consumer_tcs <= ::dfb::MAX_TILE_COUNTERS_PER_SIDE,
+        "DFB {}: consumer side needs {} tile counters ({} consumers x {} producers) but a transaction "
+        "descriptor holds at most {}.",
+        this->id,
+        total_consumer_tcs,
+        this->config.num_consumers,
+        this->config.num_producers,
+        static_cast<uint32_t>(::dfb::MAX_TILE_COUNTERS_PER_SIDE));
 
     log_debug(tt::LogMetal, "Serialized DFB {} for core ({},{}) size: {}", this->id, core.x, core.y, data.size());
 
@@ -605,8 +641,6 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
     const uint16_t capacity = dfb.capacity;
     const uint32_t stride_in_entries = dfb.stride_in_entries;
     const uint32_t id = dfb.id;
-    // TRISC pack/unpack store the ring extent in uint16_t L1-aligned units; only Quasar (tile-counter
-    // hardware) has this constraint, and only when a Tensix RISC participates in the DFB.
     if (!MetalContext::instance().hal().has_tile_counter_registers()) {
         return;
     }
@@ -615,13 +649,36 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
         return;
     }
     const uint64_t ring_bytes = static_cast<uint64_t>(config.entry_size) * (stride_in_entries * (capacity - 1U) + 1U);
-    const uint32_t l1_align = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
+    const uint32_t unreserved_l1_size =
+        hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     TT_FATAL(
         ring_bytes % l1_align == 0,
         "DFB {}: ring size in bytes ({}) must be a multiple of L1 alignment ({})",
         id,
         ring_bytes,
         l1_align);
+    const uint64_t entry_size_trisc_units = static_cast<uint64_t>(config.entry_size) / l1_align;
+    TT_FATAL(
+        entry_size_trisc_units <= std::numeric_limits<uint16_t>::max(),
+        "DFB {}: TRISC entry_size ({} L1 units of {} bytes) exceeds uint16_t; reduce entry_size",
+        id,
+        entry_size_trisc_units,
+        l1_align);
+    const uint64_t stride_size_trisc_units = entry_size_trisc_units * stride_in_entries;
+    TT_FATAL(
+        stride_size_trisc_units <= std::numeric_limits<uint16_t>::max(),
+        "DFB {}: TRISC stride_size ({} L1 units of {} bytes) exceeds uint16_t; reduce entry_size or stride",
+        id,
+        stride_size_trisc_units,
+        l1_align);
+    TT_FATAL(
+        stride_in_entries <= std::numeric_limits<uint8_t>::max(),
+        "DFB {}: stride_in_entries ({}) exceeds uint8_t (TRISC stride_size_tiles); reduce producers/consumers",
+        id,
+        stride_in_entries);
+
     const uint64_t ring_trisc_units = ring_bytes / l1_align;
     TT_FATAL(
         ring_trisc_units > 0U,
@@ -630,12 +687,19 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
         ring_bytes,
         l1_align);
     TT_FATAL(
-        ring_trisc_units < 65536U,
-        "DFB {}: TRISC ring extent ({} L1 units of {} bytes) exceeds uint16_t; reduce capacity, stride, or "
+        ring_trisc_units <= std::numeric_limits<uint32_t>::max(),
+        "DFB {}: TRISC ring extent ({} L1 units of {} bytes) exceeds uint32_t; reduce capacity, stride, or "
         "entry_size",
         id,
         ring_trisc_units,
         l1_align);
+    TT_FATAL(
+        ring_bytes <= unreserved_l1_size,
+        "DFB {}: ring size ({} bytes) exceeds Tensix unreserved L1 size ({} bytes); reduce capacity, stride, or "
+        "entry_size",
+        id,
+        ring_bytes,
+        unreserved_l1_size);
 }
 
 static dfb_txn_id_descriptor_t make_txn_descriptor(
@@ -1074,7 +1138,7 @@ void ProgramImpl::finalize_single_dfb_config(
             "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
     }
 
-    // TRISC pack/unpack store ring extent in uint16_t L1-aligned units; host must reject oversized rings.
+    // TRISC pack/unpack store ring extent in uint32_t L1-aligned units; host rejects rings > L1 / uint32.
     validate_ring_extent(*dfb);
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
@@ -1752,13 +1816,19 @@ std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
 }
 
 void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     // Match detail::ProgramImpl::set_cb_data_fmt_and_tile: DFB logical ids map to CBIndex slots for HLK unpack/pack.
     for (const auto& logical_cr : crs) {
         const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
         for (const auto& dfb : dfbs_on_core) {
             const CBIndex cb_index = static_cast<CBIndex>(dfb->id);
             const DataFormat data_format = dfb->config.data_format;
+            // Populate this DFB's CB-indexed JIT metadata only when a format was specified.
+            // A format-less DFB has no compute consumer, so its JIT slot is intentionally left
+            // at the defaults instead of deriving a tile size from DataFormat::Invalid.
+            if (data_format == DataFormat::Invalid) {
+                continue;
+            }
             const auto& tile_opt = dfb->config.tile;
             const auto& unpack_geom = dfb->config.unpack_face_geometry;
             build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);

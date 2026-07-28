@@ -13,11 +13,13 @@
 namespace {
 
 // Converts a float32 value to an FP8 E4M3 bit pattern.
-// E4M3: bias=7, exponent range [1,14] normal, [0] subnormal, [15] NaN.
-// Overflow (|val| > max representable ~240) clamps to max finite.
+// E4M3FN: bias=7, exponent range [1,15] normal, [0] subnormal. Only E=15,
+// M=7 is NaN; E=15, M=[0,6] extends the finite range through 448.
+// Overflow clamps to max finite.
 uint8_t fp32_to_fp8_e4m3_bits(float val) {
     constexpr int FP8_BIAS = 7;
-    constexpr int FP8_EXP_MAX = 14;  // E=15 is reserved for NaN
+    constexpr int FP8_EXP_MAX = 15;
+    constexpr uint8_t FP8_MAX_FINITE = 0x7E;
 
     if (std::isnan(val)) {
         return 0x7F;  // canonical NaN: S=0, E=1111, M=111
@@ -27,8 +29,8 @@ uint8_t fp32_to_fp8_e4m3_bits(float val) {
     uint8_t sign = static_cast<uint8_t>((u >> 31) & 1);
 
     if (std::isinf(val)) {
-        // No infinity in FP8 E4M3 — clamp to max finite: E=1110, M=111
-        return (sign << 7) | 0x77;
+        // No infinity in E4M3FN — clamp to max finite: E=1111, M=110
+        return (sign << 7) | FP8_MAX_FINITE;
     }
 
     int32_t fp32_biased_exp = static_cast<int32_t>((u >> 23) & 0xFF);
@@ -47,7 +49,7 @@ uint8_t fp32_to_fp8_e4m3_bits(float val) {
     int32_t fp8_biased_exp = exp_unbiased + FP8_BIAS;
 
     if (fp8_biased_exp > FP8_EXP_MAX) {
-        return (sign << 7) | 0x77;  // overflow → max finite
+        return (sign << 7) | FP8_MAX_FINITE;  // overflow → max finite
     }
 
     uint8_t fp8_exp;
@@ -66,11 +68,17 @@ uint8_t fp32_to_fp8_e4m3_bits(float val) {
             if (++fp8_man >= 8) {
                 fp8_man = 0;
                 if (++fp8_biased_exp > FP8_EXP_MAX) {
-                    return (sign << 7) | 0x77;  // overflow → max finite
+                    return (sign << 7) | FP8_MAX_FINITE;  // overflow → max finite
                 }
             }
         }
         fp8_exp = static_cast<uint8_t>(fp8_biased_exp);
+    }
+
+    // E=15, M=7 is the sole NaN encoding in E4M3FN. A finite value that
+    // rounds there saturates to the adjacent maximum finite value instead.
+    if (fp8_exp == FP8_EXP_MAX && fp8_man == 7) {
+        return (sign << 7) | FP8_MAX_FINITE;
     }
 
     return (sign << 7) | (fp8_exp << 3) | fp8_man;
@@ -86,7 +94,7 @@ float8_e4m3::operator float() const {
     uint8_t exp = (uint8_data >> 3) & 0xF;
     uint8_t man = uint8_data & 0x7;
 
-    if (exp == 15) {
+    if (exp == 15 && man == 7) {
         return std::numeric_limits<float>::quiet_NaN();
     }
 

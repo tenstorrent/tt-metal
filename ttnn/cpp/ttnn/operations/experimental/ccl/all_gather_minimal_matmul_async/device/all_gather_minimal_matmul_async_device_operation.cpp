@@ -99,6 +99,19 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     TT_FATAL(K == K_w, "all_gather_minimal_matmul_async inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0 && N > 0, "all_gather_minimal_matmul_async dimensions must be positive");
 
+    if (attributes.fuse_swiglu) {
+        TT_FATAL(
+            !attributes.fused_activation.has_value() && !attributes.fused_ternary_scalar.has_value(),
+            "all_gather_minimal_matmul_async fuse_swiglu is mutually exclusive with fused_activation / ternary");
+        TT_FATAL(attributes.chunks == 1, "all_gather_minimal_matmul_async fuse_swiglu does not yet support chunks > 1");
+        TT_FATAL(
+            N % (2 * tt::constants::TILE_WIDTH) == 0,
+            "all_gather_minimal_matmul_async fuse_swiglu requires weight width N={} to be a multiple of "
+            "2*TILE_WIDTH={}",
+            N,
+            2 * tt::constants::TILE_WIDTH);
+    }
+
     // FSDP fusion validation
     if (attributes.fsdp_cluster_axis.has_value()) {
         TT_FATAL(
@@ -322,7 +335,8 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
-    const uint32_t N = in1_input_tensor_shape[-1];
+    // SwiGLU halves the output along N (weight is the packed [gate|up] of width 2N).
+    const uint32_t N = attributes.fuse_swiglu ? (in1_input_tensor_shape[-1] / 2) : in1_input_tensor_shape[-1];
     const int32_t chunks = attributes.chunks;
     const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
 
@@ -334,18 +348,18 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
 
     // Create specs for output tensors
     // Layout: [activation_gather_intermediate, (optional: weight_gather_intermediate), chunks...]
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(chunks + 1 + (fsdp_fused ? 1 : 0));
 
     output_specs.push_back(
-        TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        tt::tt_metal::TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
 
     if (fsdp_fused) {
         // Gathered weight intermediate: [K_full, N_local] = [K_local * fsdp_ring_size, N_local].
         // Derive from in1_input_tensor_shape so we don't depend on persistent_weight_buffer being provided.
         ttnn::Shape weight_intermediate_shape(in1_input_tensor_shape);
         weight_intermediate_shape[-2] = weight_intermediate_shape[-2] * attributes.fsdp_ring_size;
-        output_specs.push_back(TensorSpec(
+        output_specs.push_back(tt::tt_metal::TensorSpec(
             weight_intermediate_shape,
             TensorLayout(in1_input_tensor.dtype(), PageConfig(Layout::TILE), in1_input_tensor.memory_config())));
     }
@@ -354,7 +368,8 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
-        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        output_specs.push_back(
+            tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 
     return output_specs;
@@ -424,7 +439,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<uint32_t> fsdp_cluster_axis,
     const std::vector<GlobalSemaphore>& fsdp_multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_weight_buffer,
-    std::optional<ttnn::ccl::Topology> fsdp_topology) {
+    std::optional<ttnn::ccl::Topology> fsdp_topology,
+    bool fuse_swiglu) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -470,7 +486,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fsdp_num_devices,
         fsdp_multi_device_global_semaphore,
         using_persistent_weight_buffer,
-        fsdp_topology_};
+        fsdp_topology_,
+        fuse_swiglu};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,

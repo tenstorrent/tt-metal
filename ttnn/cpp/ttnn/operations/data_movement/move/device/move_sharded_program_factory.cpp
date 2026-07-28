@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "move_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
@@ -97,22 +98,46 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
 
-    // Runtime args derive from the address arithmetic (output_addr - input_addr) and
-    // therefore must be recomputed every call.  We deliberately emit them as plain
-    // scalars (no Buffer* / BufferBinding) so the adapter's resolved bindings stay
-    // empty and the slow cache-hit path runs create_descriptor() again — which
-    // recomputes move_chunk_size_bytes, num_chunks, remainder_chunk_size_bytes
-    // from the freshly-allocated buffer addresses.  CB addresses are still patched
-    // via desc.cbs[*].buffer in apply_descriptor_runtime_args().
+    // Reader args derive from the address arithmetic (output_addr - input_addr) and are recomputed
+    // every dispatch by override_runtime_arguments re-running create_descriptor (#48928). CB
+    // addresses are re-patched via desc.cbs[*].buffer in apply_descriptor_runtime_args().
     const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
     for (const auto& core : cores) {
         reader_desc.emplace_runtime_args(
-            core, {total_size_bytes, num_chunks, move_chunk_size_bytes, remainder_chunk_size_bytes});
+            core,
+            {total_size_bytes,
+             num_chunks,
+             move_chunk_size_bytes,  // re-applied on cache hit via override_runtime_arguments (#48928)
+             remainder_chunk_size_bytes});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
 
     return desc;
+}
+
+// Re-derive ALL per-dispatch state from the same create_descriptor the miss path uses (mirror
+// select_program_factory) and re-apply to the cached program. Supersedes get_dynamic + resolve_bindings.
+void MoveDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    ProgramDescriptor desc;
+    switch (operation_attributes.move_op_parallelization_strategy) {
+        case MoveOpParallelizationStrategy::MULTI_CORE_SHARDED:
+            desc = MoveShardedProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+            break;
+        case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP:
+            desc = MoveOverlapProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+            break;
+        case MoveOpParallelizationStrategy::MULTI_CORE:
+            desc = MoveProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+            break;
+        default: TT_THROW("Invalid move operation parallelization strategy");
+    }
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::prim

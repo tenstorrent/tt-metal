@@ -13,3 +13,10 @@ set(TTNN_OP_EXPERIMENTAL_PAGED_CACHE_SRCS
     device/fill_cache/paged_fill_cache_program_factory.cpp
     paged_cache.cpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/experimental/paged_cache/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_EXPERIMENTAL_PAGED_CACHE_NANOBIND_SRCS paged_cache_nanobind.cpp)

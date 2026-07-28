@@ -408,6 +408,12 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
     CompareKernelVsComposite({1U, 1U, 1U, 4096U});
 }
 
+// Regression: Qwen3-32B hidden size. C = 5120 (Wt = 160) previously tripped the backward's
+// under-counted L1 fit-check into the "everything fits in L1" path and then OOM'd on CB allocation.
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden) {
+    CompareKernelVsComposite({1U, 1U, 32U, 5120U});
+}
+
 // Test aligned dimensions (C % 32 == 0) that fit in L1 except for gamma
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_L1ExceptGamma) {
     // C = 8192 (1 << 13), fits in L1 except gamma parameter

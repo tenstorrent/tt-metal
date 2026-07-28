@@ -517,6 +517,55 @@ class Gemma4Model:
         # Generator/vLLM entry points gate on this flag (and sampling != None).
         self._supports_on_device_sampling = self.sampling is not None
 
+        # Trace-safe bounded-fill cap: one persistent 1-element int32 device
+        # tensor shared by every sliding layer. Traced prefill runs with
+        # get_last_token=-1 (lm_head deferred), so the host-side valid_seq_len
+        # slice is skipped; the generator refreshes this tensor out-of-trace
+        # and paged_fill_cache's writer reads it at runtime to skip padding
+        # tiles that would otherwise wrap the circular KV window.
+        self.prefill_valid_len_dev = None
+        if bounded_sliding_kv_cache:
+            self._init_prefill_valid_len_dev()
+
+    def _init_prefill_valid_len_dev(self):
+        """Allocate the persistent valid_seq_len tensor and stash it on every
+        bounded sliding layer's attention config (``prefill_valid_len_dev``).
+        """
+        is_mesh = hasattr(self.mesh_device, "shape")
+        self.prefill_valid_len_dev = ttnn.from_torch(
+            torch.tensor([0], dtype=torch.int32),
+            device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+        )
+        for layer in self.layers:
+            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            if cfg is not None and getattr(cfg, "cache_position_modulo", None) is not None:
+                cfg.prefill_valid_len_dev = self.prefill_valid_len_dev
+
+    def update_prefill_valid_seq_len(self, valid_seq_len: int):
+        """Refresh the persistent valid_seq_len device tensor (out of trace).
+
+        ``valid_seq_len`` is the real (unpadded) token count for the current
+        prefill chunk. The writer kernel block-aligns it; callers pass the raw
+        length (``last_token_idx - num_cached_tokens + 1``).
+        """
+        if self.prefill_valid_len_dev is None:
+            return
+        if valid_seq_len is None or int(valid_seq_len) <= 0:
+            return
+        is_mesh = hasattr(self.mesh_device, "shape")
+        host = ttnn.from_torch(
+            torch.tensor([int(valid_seq_len)], dtype=torch.int32),
+            device=None,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+        )
+        ttnn.copy_host_to_device_tensor(host, self.prefill_valid_len_dev)
+
     @staticmethod
     def _make_sampling_args(hf_config, mesh_device, tp):
         """Create minimal args object for SamplingGenerator/TTSampling."""
@@ -588,20 +637,25 @@ class Gemma4Model:
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
 
-    def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False):
+    def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False, start_pos=0):
         """Get (cos, sin) for a given layer.
 
         Args:
             seq_len: If set, slice 4D cache to this length (prefill).
             for_decode: If True, return 2D caches [max_seq_len, head_dim] for embedding lookup.
+            start_pos: Absolute position of the first token in this prefill call.
+                Non-zero only for generator-level multi-chunk prefill (chunk N starts
+                at ``N*chunk_size``); the RoPE slice must cover
+                ``[start_pos, start_pos+seq_len)`` so chunk tokens get their true
+                positions instead of restarting at 0.
         """
         layer_type = self.hf_config.layer_types[layer_idx]
         if for_decode:
             return self.rope_caches_2d[layer_type]
         cos, sin = self.rope_caches[layer_type]
         if seq_len is not None:
-            cos = cos[:, :, :seq_len, :]
-            sin = sin[:, :, :seq_len, :]
+            cos = cos[:, :, start_pos : start_pos + seq_len, :]
+            sin = sin[:, :, start_pos : start_pos + seq_len, :]
         return (cos, sin)
 
     def __call__(
@@ -625,6 +679,8 @@ class Gemma4Model:
         return_hidden=False,
         sequential_kv_write=False,
         packed=None,
+        chunk_start_idx=None,
+        chunk_page_table=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -743,7 +799,11 @@ class Gemma4Model:
                 # Decode fallback: return 2D caches for on-device embedding lookup
                 layer_rope = self._get_rope_mats(i, for_decode=True)
             else:
-                layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len)
+                # Generator-level multi-chunk prefill: chunk N's tokens occupy
+                # absolute positions [chunk_start_idx, chunk_start_idx+seq_len);
+                # offset the RoPE slice so they aren't re-encoded from 0.
+                rope_start_pos = int(chunk_start_idx) if chunk_start_idx is not None else 0
+                layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
 
             # Convert per-layer input to device tensor if available
             pli_tt = None
@@ -816,6 +876,8 @@ class Gemma4Model:
                 sequential_kv_write=sequential_kv_write,
                 rope_presliced=rope_presliced,
                 packed=layer_packed,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -835,9 +897,22 @@ class Gemma4Model:
                 kv_pair[1].deallocate(True)
 
         # Batched prefill (batch_size > 1) returns hidden states; Generator applies
-        # norm + lm_head per user. Single-user prefill runs norm + lm_head here.
+        # norm + lm_head per user. Single-user intermediate generator-level chunks
+        # (get_last_token=-1 with a chunk_page_table, not in prefill-trace mode)
+        # only need the KV fill from the layer loop above — their logits are
+        # discarded by the chunk loop, so skip the expensive full-sequence lm_head.
+        # Gate on chunk_page_table: get_last_token defaults to -1 for all direct
+        # ttnn_prefill_forward callers (unit tests, demos), which still need logits.
         if not is_decode and get_last_token == -1 and batch_size > 1:
             return hidden_states
+        if (
+            not is_decode
+            and get_last_token == -1
+            and batch_size == 1
+            and chunk_page_table is not None
+            and not getattr(self, "_prefill_trace_mode", False)
+        ):
+            return None
 
         # Final norm
         hidden_states = self.norm.forward(hidden_states)
@@ -1433,7 +1508,7 @@ class Gemma4Model:
         *before* lm_head — slicing after would still allocate full-seq
         logits first.
         """
-        del rot_mats_global, rot_mats_local, chunk_page_table, chunk_start_idx, kwargs
+        del rot_mats_global, rot_mats_local, kwargs
         if input_ids_torch is None:
             input_ids_torch = self._prefill_input_ids_torch
         if embeds_torch is None:
@@ -1454,6 +1529,8 @@ class Gemma4Model:
             page_tables_per_layer=page_tables_per_layer,
             batch_size=batch_size,
             user_id=user_id,
+            chunk_start_idx=chunk_start_idx,
+            chunk_page_table=chunk_page_table,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):

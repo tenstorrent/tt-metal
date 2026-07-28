@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -42,14 +42,14 @@ void kernel_main() {
         tile_id_per_tensor[i] = arg_ptr[tile_id_per_tensor_offset + i];
     }
 
-    CircularBuffer cb_in(cb_id_in);
+    DataflowBuffer dfb_in(cb_id_in);
     Noc noc;
 
     uint32_t curr_tensor = start_tensor;
     uint32_t curr_tensor_id = start_tensor_id;
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.reserve_back(ublock_size_tiles);
-        uint32_t l1_write_addr = cb_in.get_write_ptr();
+        dfb_in.reserve_back(ublock_size_tiles);
+        uint32_t l1_write_addr = dfb_in.get_write_ptr();
         noc.async_read(
             abstract_tensor_accessor_wrappers[curr_tensor],
             CoreLocalMem<uint8_t>(l1_write_addr),
@@ -57,7 +57,7 @@ void kernel_main() {
             {.page_id = tile_id_per_tensor[curr_tensor]},
             {});
         noc.async_read_barrier();
-        cb_in.push_back(ublock_size_tiles);
+        dfb_in.push_back(ublock_size_tiles);
 
         tile_id_per_tensor[curr_tensor]++;
         curr_tensor_id++;

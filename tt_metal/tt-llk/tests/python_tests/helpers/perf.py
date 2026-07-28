@@ -37,6 +37,17 @@ def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     return ["INIT", "TILE_LOOP"]  # Counter zone 0 = INIT, zone 1 = TILE_LOOP
 
 
+# All perf run types in canonical order. Tests that exercise the full pipeline
+# pass this; a test may still pass a subset (e.g. [MATH_ISOLATE]) when that is
+# all it can measure.
+ALL_PERF_RUN_TYPES = [
+    PerfRunType.L1_TO_L1,
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
+]
+
 # Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
 _CODE_SIZE_COMPONENTS = {
     PerfRunType.L1_TO_L1: ["unpack", "math", "pack"],
@@ -703,7 +714,13 @@ class PerfConfig(TestConfig):
 
         # Setting header fields that are always there
         names = (
-            ["formats.input_A", "formats.input_B", "formats.output"]
+            [
+                "formats.input_A",
+                "formats.input_B",
+                "formats.register_A",
+                "formats.register_B",
+                "formats.output",
+            ]
             if self.formats_config
             else []
         )
@@ -711,6 +728,8 @@ class PerfConfig(TestConfig):
             [
                 self.formats_config[0].unpack_A_src,
                 self.formats_config[0].unpack_B_src,
+                self.formats_config[0].unpack_A_dst,
+                self.formats_config[0].unpack_B_dst,
                 self.formats_config[0].output_format,
             ]
             if self.formats_config[0]

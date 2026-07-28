@@ -10,8 +10,10 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
+#include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in get_dynamic_runtime_args()
 
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -30,7 +32,8 @@ struct NlpCreateHeadsBoltzDeviceOperation {
         std::vector<std::optional<Tensor>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::TensorSpec>;
+    using spec_return_value_t =
+        std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
     struct Interleaved {
@@ -65,6 +68,19 @@ struct NlpCreateHeadsBoltzDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Re-apply the Sharded factory's computed input-buffer addresses on every cache hit.
+    // The Sharded reader/writer bake raw base addresses AND per-core `base + head_offset` start
+    // addresses as uint32 runtime args; a plain Buffer* binding can only express the bare base, so
+    // these address-derived slots are refreshed here instead (the output CBs are patched via their
+    // `.buffer` bindings).  Defined in nlp_create_qkv_heads_boltz_program_factory.cpp so it can reuse
+    // the shared per-core arg builder that create_descriptor() uses. Interleaved returns no dynamic
+    // args.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::transformer

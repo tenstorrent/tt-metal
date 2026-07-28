@@ -15,6 +15,8 @@ void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
+    // Accurate fp32 mean: host sets CT arg 4 to route Float32 SUM through the SFPU (full fp32) vs the FPU (tf32).
+    constexpr auto fp32_mode = get_compile_time_arg_val(4) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
@@ -25,7 +27,8 @@ void kernel_main() {
         tt::CBIndex::c_2,
         tt::CBIndex::c_3,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT,
+        fp32_mode>(
         compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},

@@ -11,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_sum_backward {
 struct MorehSumBackwardOperation {
     struct operation_attributes_t {
-        const ttnn::SmallVector<int64_t> dims;
+        const ttsl::SmallVector<int64_t> dims;
         const bool keepdim;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
@@ -23,7 +23,7 @@ struct MorehSumBackwardOperation {
         const std::optional<Tensor>& input_grad;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(

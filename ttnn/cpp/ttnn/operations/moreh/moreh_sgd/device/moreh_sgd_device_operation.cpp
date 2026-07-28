@@ -43,19 +43,19 @@ MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
     auto dtype = tensor_args.param_in.dtype();
     Layout layout{Layout::TILE};
 
-    std::vector<std::optional<TensorSpec>> ret;
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> ret;
 
     if (tensor_args.param_out.has_value()) {
         ret.push_back(tensor_args.param_out->tensor_spec());
     } else {
-        ret.push_back(TensorSpec(
+        ret.push_back(tt::tt_metal::TensorSpec(
             input_tensor_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.param_out_memory_config)));
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
         ret.push_back(tensor_args.momentum_buffer_out->tensor_spec());
     } else if (operation_attributes.momentum != 0.0f) {
-        ret.push_back(TensorSpec(
+        ret.push_back(tt::tt_metal::TensorSpec(
             input_tensor_shape,
             TensorLayout(dtype, PageConfig(layout), operation_attributes.momentum_buffer_out_memory_config)));
     } else {

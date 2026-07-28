@@ -271,6 +271,34 @@ def pytest_addoption(parser):
         help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
     )
 
+    parser.addoption(
+        "--disable-sfploadmacro",
+        action="store_true",
+        default=False,
+        help="Compile kernels with -DDISABLE_SFPLOADMACRO so SFPLOADMACRO-based SFPU "
+        "kernels fall back to their plain sfpi/TTI calculate path (equivalent to "
+        "setting TT_METAL_DISABLE_SFPLOADMACRO=1).",
+    )
+
+    parser.addoption(
+        "--op",
+        action="append",
+        default=[],
+        metavar="OP",
+        help="Run only tests for the given SFPU op(s), by MathOperation name "
+        "(case-insensitive, exact). Repeatable: --op=exp --op=log.",
+    )
+
+    parser.addoption(
+        "--mode",
+        action="store",
+        default="accuracy",
+        choices=["accuracy", "perf", "both"],
+        help="SFPU sweep selector (accuracy | perf | both): keeps only that sweep "
+        "test and deselects the other two. Defaults to 'accuracy'. "
+        "Exact-match shorthand for -k.",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -287,6 +315,11 @@ def pytest_configure(config):
     if log_level is not None:
         config.option.log_cli_level = log_level
         config.option.log_cli = True
+
+    # Let the CLI flag drive the compile define; test_config reads the env var
+    # when assembling per-variant compile options.
+    if config.getoption("--disable-sfploadmacro", default=False):
+        os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
     TestConfig.DUMP_RAW_COUNTERS = config.getoption(
@@ -453,8 +486,66 @@ def _collapse_runtime_only_variants(config, items):
         items[:] = keep
 
 
+def _item_op_names(item) -> set:
+    """Return the op name(s) a test covers, lowercased.
+
+    Reads the MathOperation from the test's parameters, falling back to the op name in the test id.
+    """
+    from helpers.llk_params import MathOperation
+
+    names = set()
+    callspec = getattr(item, "callspec", None)
+    if callspec is not None:
+        for val in callspec.params.values():
+            if isinstance(val, MathOperation):
+                names.add(val.name.lower())
+    if not names:
+        names.update(
+            m.lower() for m in re.findall(r"MathOperation\.(\w+)", item.nodeid)
+        )
+    return names
+
+
+def _select_tests_by_op(config, items):
+    """Run only the tests for the op(s) passed with --op.
+
+    Each op is a MathOperation name, matched case-insensitively and exactly. An
+    unknown name raises an error; a valid op with no matching test selects
+    nothing. Does nothing without --op.
+    """
+    requested = config.getoption("--op") or []
+    if not requested:
+        return
+
+    from helpers.llk_params import MathOperation
+
+    valid = {op.name.lower() for op in MathOperation}
+    wanted = set()
+    for raw in requested:
+        key = raw.lower()
+        if key not in valid:
+            raise pytest.UsageError(
+                f"--op {raw!r}: not a known SFPU op. Expected a MathOperation "
+                f"name (case-insensitive), e.g. Exp, Reciprocal, Gelu."
+            )
+        wanted.add(key)
+
+    selected, deselected = [], []
+    for item in items:
+        (selected if _item_op_names(item) & wanted else deselected).append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+    logger.info(
+        f"--op kept {len(selected)} test(s) for op(s): {', '.join(sorted(wanted))}"
+    )
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    _select_tests_by_op(config, items)
+
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
         _collapse_runtime_only_variants(config, items)
 

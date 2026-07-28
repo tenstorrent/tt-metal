@@ -155,7 +155,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   # Centralized logic to determine what should run
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-sanity: ${{ steps.logic.outputs.run-sanity }}
       run-unit: ${{ steps.logic.outputs.run-unit }}

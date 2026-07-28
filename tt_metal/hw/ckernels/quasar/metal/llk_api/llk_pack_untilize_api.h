@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "chlkc_list.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -34,6 +35,16 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
+
+    if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS) {
+        const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
+            tensor_shape,
+            get_local_dfb_interface(output_id).tc_slots[0].base_addr,
+            pack_dst_format[output_id],
+            output_id,
+            pack_src_format[output_id]);
+        ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+    }
 
     _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(output_id, tensor_shape);
 }

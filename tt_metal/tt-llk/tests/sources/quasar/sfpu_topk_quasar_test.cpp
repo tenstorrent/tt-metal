@@ -219,20 +219,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int stage_index        = static_cast<int>(stage);
                     const DataFormat math_format = static_cast<DataFormat>(math_data_types[stage_index]);
 
-                    _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format, false /*en_int32_dest_format*/);
+                    _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
+                        math_format, math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
 
                     const int first_tile_in_pair_idx  = stage_index * NUM_TILES_PER_STAGE;
                     const int second_tile_in_pair_idx = first_tile_in_pair_idx + 1;
 
-                    _llk_math_eltwise_unary_datacopy_(num_rows, first_tile_in_pair_idx);
-                    _llk_math_eltwise_unary_datacopy_(num_rows, second_tile_in_pair_idx);
+                    _llk_math_eltwise_unary_datacopy_(first_tile_in_pair_idx);
+                    _llk_math_eltwise_unary_datacopy_(second_tile_in_pair_idx);
                 }
 
                 // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
                 _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
-                    value_math_format, value_math_format, false /*en_int32_dest_format*/);
+                    value_math_format, value_math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
 
                 // Run the topk stages. RC_custom issues one SFPU call per tile (no per-face walk).
                 if (first_iter)
@@ -387,7 +388,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     tdma_desc.reg_data_format = static_cast<std::uint8_t>(pack_src_format);
                     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
-                    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
+                    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
                     _llk_pack_(tile_dest_offset, 0, ckernel::DEFAULT_TENSOR_SHAPE);
 
                 } // Stage loop.
