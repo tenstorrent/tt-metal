@@ -103,14 +103,9 @@ def run_distributed_rms_norm_decode_impl(
     # Create semaphore handles for each iteration
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0) for _ in range(num_iters)]
 
-    # Stats buffer configuration. The op gathers one E(x^2) tile per device on the cluster axis and
-    # averages them, so the buffer must be exactly (num_devices on cluster_axis) tiles wide and
-    # REPLICATED across the mesh (every device holds the full width). Sharding dim 3 across devices
-    # (the old, buggy form here) gave each device a single 1-tile shard -> the op inferred
-    # num_distributed_devices == 1 and skipped cross-device averaging (silently wrong on
-    # heterogeneous data). The op now derives the device count from ring_size and rejects a buffer
-    # whose tile width != ring_size, so build it the production way.
-    # (Alternatively, omit `stats` entirely and the op allocates this scratch itself.)
+    # Stats buffer configuration. The op gathers one E(x^2) tile per device on the cluster axis, so
+    # the buffer must be num_devices tiles wide and replicated across the mesh. Passing stats=None
+    # instead lets the op allocate this scratch itself.
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(32, num_devices * 32),
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -119,7 +114,7 @@ def run_distributed_rms_norm_decode_impl(
         use_height_and_width_as_shard_shape=True,
     )
 
-    # Create persistent stats tensor (replicated -> each device holds the full num_devices*32 width)
+    # Create persistent stats tensor
     ag_shape = [1, 1, 32, num_devices * 32]
     stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
