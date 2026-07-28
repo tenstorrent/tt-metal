@@ -99,6 +99,7 @@ jobs:
               ".github/workflows/tt-metal-l2-nightly.yaml",
               ".github/workflows/ttnn-run-sweeps.yaml",
               ".github/workflows/vllm-nightly-tests.yaml",
+              ".github/workflows/vllm-tt-plugin-nightly-tests.yaml",
               ".github/workflows/metal-run-microbenchmarks.yaml",
               ".github/workflows/sanity-tests-debug.yaml",
               ".github/workflows/merge-gate.yaml",

@@ -149,4 +149,6 @@ Captures device timing for a single layer of each target model, used to track pe
 | Merge Gate | [`Merge Gate`](../.github/workflows/merge-gate.yaml) |
 | vLLM nightly tests | [`vLLM nightly tests`](../.github/workflows/vllm-nightly-tests.yaml) |
 | vLLM nightly impl | [`[internal] vLLM nightly tests impl`](../.github/workflows/vllm-nightly-tests-impl.yaml) |
+| vLLM TT plugin nightly tests | [`vLLM TT plugin nightly tests`](../.github/workflows/vllm-tt-plugin-nightly-tests.yaml) |
+| vLLM TT plugin nightly impl | [`[internal] vLLM TT plugin nightly tests impl`](../.github/workflows/vllm-tt-plugin-nightly-tests-impl.yaml) |
 | Galaxy stress tests | [`(Galaxy) Stress`](../.github/workflows/galaxy-stress-tests.yaml) |
