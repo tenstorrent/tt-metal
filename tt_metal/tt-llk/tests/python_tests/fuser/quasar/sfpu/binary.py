@@ -25,6 +25,7 @@ class BinarySfpu(Sfpu):
         self,
         operation: MathOperation,
         approx_mode: ApproximationMode = ApproximationMode.No,
+        round_nearest: bool = False,
         iterations: int = 8,
         dst_index_in0: int = 0,
         dst_index_in1: int = 1,
@@ -36,6 +37,7 @@ class BinarySfpu(Sfpu):
             )
         self.operation = operation
         self.approx_mode = approx_mode
+        self.round_nearest = round_nearest
         self.iterations = iterations
         self.dst_index_in0 = dst_index_in0
         self.dst_index_in1 = dst_index_in1
@@ -105,10 +107,11 @@ class BinarySfpu(Sfpu):
         src2 = self.dst_index_in1
         dst = self.dst_index_out
         data_format = config.sentinel._math_format.cpp_enum_value
+        round_nearest = "true" if self.round_nearest else "false"
 
         return (
             f"test_utils::call_binary_sfpu_operation_quasar<"
-            f"{op}, {dest_sync}, {en_32bit_dest}, {quasar_iterations}"
+            f"{op}, {dest_sync}, {en_32bit_dest}, {round_nearest}, {quasar_iterations}"
             f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, {data_format});\n"
         )
 
