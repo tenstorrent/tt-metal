@@ -312,8 +312,7 @@ uint32_t telemetry_addr(ttnn::MeshDevice* mesh) {
            TELEMETRY_OFF;
 }
 
-L1Layout compute_l1_layout(
-    ttnn::MeshDevice* mesh, uint32_t num_slots, uint32_t chunk_size_bytes, uint32_t sem_floor, uint32_t variant) {
+L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t num_slots, uint32_t chunk_size_bytes, uint32_t sem_floor) {
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
@@ -321,12 +320,8 @@ L1Layout compute_l1_layout(
     l.pkt_hdr_credit = base + PKT_HDR_CREDIT_OFF;
     l.telemetry = base + TELEMETRY_OFF;
     l.prod_buf = base + PROD_BUF_OFF;
-    // SINGLE_SRC needs only one source chunk, which is what makes a receiver ring deeper than ~50 slots
-    // fit at all (both rings at num_slots would need 2 x num_slots x 14 kB).
-    const uint32_t prod_slots = (variant & 16u) != 0 ? 1u : num_slots;
-    l.recv_buf = l.prod_buf + prod_slots * chunk_size_bytes;
-    // One prebuilt header per ring slot, past the rings. Only the SLOT_HEADERS variant reads it, but it
-    // is always reserved so the L1 fatal check does not depend on the variant.
+    l.recv_buf = l.prod_buf + num_slots * chunk_size_bytes;
+    // One prebuilt header per ring slot, past the rings.
     l.pkt_hdr_ring = l.recv_buf + num_slots * chunk_size_bytes;
     const uint32_t hdr_ring_bytes =
         num_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
@@ -334,7 +329,7 @@ L1Layout compute_l1_layout(
     TT_FATAL(
         end + L1_SLACK <= sem_floor,
         "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at 0x{:x}. "
-        "Reduce num_slots ({}) or chunk_size_bytes ({}) (or set the SINGLE_SRC variant bit).",
+        "Reduce num_slots ({}) or chunk_size_bytes ({}).",
         end - base,
         end,
         sem_floor,
@@ -600,11 +595,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     const uint32_t credits_addr = static_cast<uint32_t>(credits_to_return_sem.address());
     const uint32_t sem_floor = std::min({write_up_to_addr, data_ready_addr, credits_addr});
     const auto l1 = compute_l1_layout(
-        mesh_device,
-        operation_attributes.num_slots,
-        operation_attributes.chunk_size_bytes,
-        sem_floor,
-        operation_attributes.variant);
+        mesh_device, operation_attributes.num_slots, operation_attributes.chunk_size_bytes, sem_floor);
     log_info(
         tt::LogOp,
         "combine_fabric2d L1: prod_buf 0x{:x} recv_buf 0x{:x} hdr_ring 0x{:x} ({} slots x {} B), variant {}, sems "

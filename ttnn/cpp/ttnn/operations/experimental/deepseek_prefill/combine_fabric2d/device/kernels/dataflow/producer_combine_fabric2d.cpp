@@ -10,10 +10,16 @@
 //   2. forward the co-located receiver's credit returns, since the receiver has no connection of its
 //      own (being a fabric DESTINATION needs none — the peer's eth RISC writes into our L1 unasked).
 //
-// Credits go first, unconditionally, every iteration. That is what keeps the ring deadlock-free: a
-// producer blocked on its own `write_up_to` still forwards the credits the peer producer is waiting
-// for. The loop also cannot exit at sent == num_tokens — it must have forwarded all num_tokens
-// credits too, or the peer hangs.
+// Credits are considered first every iteration. That is what keeps the ring deadlock-free: a producer
+// blocked on its own `write_up_to` still forwards the credits the peer producer is waiting for. The
+// loop also cannot exit at sent == num_tokens — it must have forwarded all num_tokens credits too, or
+// the peer hangs.
+//
+// Credits do NOT get a packet each. They accumulate into a quarter-ring batch carried by a single
+// atomic-inc packet, and are flushed early only when this producer has no payload to send anyway
+// (done, or blocked on its own credits) — which is exactly when the peer is the one waiting. Liveness
+// therefore does not depend on the batch size, while the link stops carrying one header-only packet
+// per token: that alone was 36% of the producer's send window.
 //
 // All three counters are single-writer monotonic, so no atomics are needed on the read side: each
 // reader keeps its own local count and works on the difference.
@@ -80,7 +86,9 @@ void kernel_main() {
     constexpr uint32_t peer_noc_y = get_compile_time_arg_val(6);
     constexpr uint32_t prod_buf_addr = get_compile_time_arg_val(7);
     constexpr uint32_t recv_buf_addr = get_compile_time_arg_val(8);  // same address on every chip
-    constexpr uint32_t pkt_hdr_payload_addr = get_compile_time_arg_val(9);
+    // Unused since the payload headers moved into the per-slot ring below; the L1 slot stays reserved
+    // so the layout (and every other compile-time arg index) is untouched.
+    [[maybe_unused]] constexpr uint32_t pkt_hdr_payload_addr = get_compile_time_arg_val(9);
     constexpr uint32_t pkt_hdr_credit_addr = get_compile_time_arg_val(10);
     constexpr uint32_t write_up_to_addr = get_compile_time_arg_val(11);
     constexpr uint32_t data_ready_addr = get_compile_time_arg_val(12);
@@ -92,13 +100,9 @@ void kernel_main() {
     constexpr uint32_t variant = get_compile_time_arg_val(16);
     constexpr uint32_t pkt_hdr_ring_addr = get_compile_time_arg_val(17);
 
-    // Variant bits (see CombineFabric2dParams::variant). Each is an independent experiment against the
-    // baseline loop; the diagnostics deliberately break a guarantee to price it.
-    constexpr bool BATCH_CREDITS = (variant & 1u) != 0;
-    constexpr bool SLOT_HEADERS = (variant & 2u) != 0;
+    // Diagnostics only (see CombineFabric2dParams::variant); both break a guarantee to price it.
     constexpr bool RELAXED_READY = (variant & 4u) != 0;
     constexpr bool NO_FLOW_CONTROL = (variant & 8u) != 0;
-    constexpr bool SINGLE_SRC = (variant & 16u) != 0;
     // Credit batch threshold: a quarter ring. Small enough that the peer never runs dry (it can be up to
     // a quarter ring ahead of the credits it has been told about, and the ring is num_slots deep), large
     // enough to cut the credit packet count ~4x. Liveness does not depend on it: credits are flushed
@@ -119,7 +123,6 @@ void kernel_main() {
         rt_args_idx, num_connections);
     auto& sender = fabric_connections.get(0).sender;
 
-    volatile PACKET_HEADER_TYPE* pkt_hdr_payload = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_payload_addr);
     volatile PACKET_HEADER_TYPE* pkt_hdr_credit = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_credit_addr);
     // Written only by the remote eth RISC (credit packets); we just read it.
     volatile tt_l1_ptr uint32_t* write_up_to = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_up_to_addr);
@@ -132,12 +135,13 @@ void kernel_main() {
     const uint64_t peer_data_ready_noc = get_noc_addr(peer_noc_x, peer_noc_y, data_ready_addr);
     const uint64_t peer_write_up_to_noc = get_noc_addr(peer_noc_x, peer_noc_y, write_up_to_addr);
 
-    // SLOT_HEADERS: build every ring slot's header once, up front. The only per-token variation is the
-    // destination slot address, so nothing in the loop has to touch a header again.
+    // Build every ring slot's header once, up front. The only per-token variation is the destination
+    // slot address, so nothing in the loop has to touch a header again — and because a slot's header is
+    // not reused until the ring wraps, the send does not have to flush-block on it either.
     auto slot_hdr = [](uint32_t slot) -> volatile PACKET_HEADER_TYPE* {
         return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_ring_addr + slot * sizeof(PACKET_HEADER_TYPE));
     };
-    if constexpr (SLOT_HEADERS) {
+    {
         for (uint32_t slot = 0; slot < num_slots; slot++) {
             volatile PACKET_HEADER_TYPE* h = slot_hdr(slot);
             const uint64_t dst_noc = get_noc_addr(peer_noc_x, peer_noc_y, recv_buf_addr + slot * chunk_size_bytes);
@@ -182,17 +186,15 @@ void kernel_main() {
             // ---- stall its peer. One packet carries the whole pending batch as its inc value.
             invalidate_l1_cache();
             const uint32_t returnable = *credits_to_return;
-            // With BATCH_CREDITS the packet is held back until a batch has accumulated — unless we have
-            // no payload to send anyway (either done sending, or blocked on our own credits), in which
-            // case sending it now is free and is what keeps the ring live.
+            // The packet is held back until a batch has accumulated — unless we have no payload to send
+            // anyway (either done sending, or blocked on our own credits), in which case sending it now
+            // is free and is what keeps the ring live. One packet per token cost 36% of the send window.
             // NO_FLOW_CONTROL also suppresses the credit packets themselves: with nobody gated on
             // credits, forwarding them would only steal link bandwidth from the payload, and the point
             // of that diagnostic is the payload-only ceiling.
             const bool have_credits = !NO_FLOW_CONTROL && returnable > credits_sent;
-            const bool send_credits_now = !BATCH_CREDITS
-                                              ? have_credits
-                                              : have_credits && ((returnable - credits_sent) >= credit_batch ||
-                                                                 sent >= num_tokens || sent >= observed_write_up_to);
+            const bool send_credits_now = have_credits && ((returnable - credits_sent) >= credit_batch ||
+                                                           sent >= num_tokens || sent >= observed_write_up_to);
             if (send_credits_now) {
                 const uint64_t c0 = stall_telemetry ? wall_clock() : 0;
                 const uint32_t batch = returnable - credits_sent;
@@ -238,21 +240,7 @@ void kernel_main() {
                     // Header first, THEN wait for the slot — building it while the EDM may still be
                     // busy is free overlap, and reversing the two costs ~8% of the bandwidth.
                     const uint32_t slot = sent % num_slots;
-                    volatile PACKET_HEADER_TYPE* hdr = pkt_hdr_payload;
-                    if constexpr (SLOT_HEADERS) {
-                        // Prebuilt at startup, one per ring slot: nothing to construct in the loop, and
-                        // no reuse hazard within a ring wrap, so the send need not flush-block.
-                        hdr = slot_hdr(slot);
-                    } else {
-                        const uint64_t dst_noc =
-                            get_noc_addr(peer_noc_x, peer_noc_y, recv_buf_addr + slot * chunk_size_bytes);
-                        fabric_set_unicast_route(
-                            (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr, peer_chip_id, peer_mesh_id);
-                        hdr->to_noc_fused_unicast_write_atomic_inc(
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                                dst_noc, peer_data_ready_noc, /*val=*/1, /*flush=*/!RELAXED_READY},
-                            chunk_size_bytes);
-                    }
+                    volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
                     // Waiting for an EDM slot is the one stall that means "the eth side cannot drain
                     // us", so it gets its own bucket; the header build above counts as issue cost.
                     const uint64_t wh = stall_telemetry ? wall_clock() : 0;
@@ -264,26 +252,19 @@ void kernel_main() {
                         issue_cy += wh - w0;
                     }
                     sender.send_payload_without_header_non_blocking_from_address(
-                        prod_buf_addr + (SINGLE_SRC ? 0u : slot) * chunk_size_bytes, chunk_size_bytes);
-                    if constexpr (SLOT_HEADERS) {
-                        // No flush: this slot's header is not touched again until the ring wraps, and
-                        // the source payload is never written by us at all. Letting the NoC queue hold
-                        // the writes is what allows token N+1 to be issued while N is still draining.
-                        //
-                        // CAVEAT: the production idiom (moe_utils.hpp) flush-blocks here, which also
-                        // orders our payload write ahead of the EDM slot-credit write that
-                        // post_send_payload_increment_pointers issues on the sync cmd buf. Dropping the
-                        // flush leans on the NoC keeping those in order to the same destination. It has
-                        // not misbehaved over 128 producers x 10k tokens (every token acked, no hang),
-                        // but this harness never checks payload CONTENT, so a torn packet would be
-                        // invisible here. Validate content (Phase 3's DRAM drain) before relying on it
-                        // in a real op.
-                        sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
-                    } else {
-                        // Blocking flush: the header is reused next iteration, so the send must have
-                        // drained out of L1 before we overwrite it.
-                        sender.send_payload_flush_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
-                    }
+                        prod_buf_addr + slot * chunk_size_bytes, chunk_size_bytes);
+                    // No flush: this slot's header is not touched again until the ring wraps, and the
+                    // source payload is never written by us at all. Letting the NoC queue hold the
+                    // writes is what allows token N+1 to be issued while N is still draining.
+                    //
+                    // CAVEAT: the production idiom (moe_utils.hpp) flush-blocks here, which also orders
+                    // our payload write ahead of the EDM slot-credit write that
+                    // post_send_payload_increment_pointers issues on the sync cmd buf. Dropping the
+                    // flush leans on the NoC keeping those in order to the same destination. It has not
+                    // misbehaved over 128 producers x 10k tokens (every token acked, no hang), but this
+                    // harness never checks payload CONTENT, so a torn packet would be invisible here.
+                    // Validate content (Phase 3's DRAM drain) before relying on it in a real op.
+                    sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
                     sent++;
                     t_last_send = wall_clock();
                     if constexpr (stall_telemetry) {
