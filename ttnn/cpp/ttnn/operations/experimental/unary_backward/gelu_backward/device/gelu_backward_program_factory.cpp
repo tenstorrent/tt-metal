@@ -108,12 +108,14 @@ tt::tt_metal::ProgramDescriptor GeluBackwardProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     // --- Compute Kernel ---
-    bool fp32_dest_acc_en = (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
-                            (dst_cb_data_format == DataFormat::UInt32);
+    bool fp32_dest_acc_en = (src0_cb_data_format == DataFormat::Float32) ||
+                            (src1_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Float32);
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[src0_cb_index] =
+        (grad_output.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+    unpack_to_dest_mode[src1_cb_index] =
+        (input.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
 
     std::string compute_kernel_path;
     if (args.approximate == "tanh") {
@@ -151,7 +153,19 @@ tt::tt_metal::ProgramDescriptor GeluBackwardProgramFactory::create_descriptor(
         reader_desc.emplace_runtime_args(
             core, {src0_buffer, src1_buffer, num_tiles_per_core, num_tiles_written, 0u, 0u, num_cores_y});
 
-        compute_desc.emplace_runtime_args(core, {num_tiles_per_core});
+        if (args.approximate == "tanh") {
+            compute_desc.emplace_runtime_args(core, {num_tiles_per_core});
+        } else {
+            // Pick block_size = largest power-of-2 divisor of num_tiles_per_core (<= 8).
+            uint32_t per_core_block_size = 1;
+            for (uint32_t b : {8u, 4u, 2u}) {
+                if (num_tiles_per_core % b == 0) {
+                    per_core_block_size = b;
+                    break;
+                }
+            }
+            compute_desc.emplace_runtime_args(core, {num_tiles_per_core, per_core_block_size});
+        }
 
         writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
 

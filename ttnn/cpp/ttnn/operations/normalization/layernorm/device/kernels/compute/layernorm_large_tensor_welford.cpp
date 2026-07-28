@@ -19,6 +19,12 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_bcast.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 namespace generic = norm::kernel_util::generic;
 
@@ -87,29 +93,13 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     for (auto block : generic::blocks(Wt, blk)) {
-        // Fused pre-add
-        reconfig_data_format(cb_in, cb_inb);
-        add_tiles_init(cb_in, cb_inb);
-        cb_in_obj.wait_front(block.full_block_size());
-        cb_inb_obj.wait_front(block.full_block_size());
-        tile_regs_acquire();
-        for (auto i : block.local()) {
-            add_tiles(cb_in, cb_inb, i, i, i);
-        }
-        tile_regs_commit();
-        cb_in_obj.pop_front(block.full_block_size());
-        cb_inb_obj.pop_front(block.full_block_size());
-
-        // Pack to intermediate CB (needed
-        // to workaround transpose_dest bug)
-        pack_reconfig_data_format(cb_interm_pre_add);
-        cb_interm_pre_add_obj.reserve_back(block.full_block_size());
-        tile_regs_wait();
-        for (auto i : block.local()) {
-            pack_tile(i, cb_interm_pre_add);
-        }
-        tile_regs_release();
-        cb_interm_pre_add_obj.push_back(block.full_block_size());
+        const auto block_shape = ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
+        // Keep pre-add in a separate CB to avoid the transpose_dest aliasing issue.
+        ckl::add<
+            ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_inb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::output(cb_interm_pre_add, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+            ckl::BroadcastDim::None>(block_shape);
 
         // Now run Welfords in these blk number of tiles
         cb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -191,8 +181,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         cb_ex2_welford_obj.wait_front(1);
     }
     tile_regs_acquire();
-    // Final reload before welford_finalize_to_row: same fp32-via-Dst rationale as the
-    // per-block reload above.
+    // Reload through the FP32 alias before finalizing.
     copy_tile_init(cb_ex_welford);
     copy_tile(cb_ex_welford, 0, mean_dst);
     copy_tile_to_dst_init_short_with_dt(cb_ex_welford, cb_ex2_welford);
@@ -350,7 +339,8 @@ void kernel_main() {
     constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
-    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                   // x - E[x]
+    constexpr auto cb_xmm_id = get_named_compile_time_arg_val("cb_xmm");  // x - E[x]
+    uint32_t cb_xmm = cb_xmm_id;
     constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");                    // E[x]
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");                  // Var[x] = E[(x-E[x])^2]
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // Var[x]+ε
@@ -361,9 +351,6 @@ void kernel_main() {
     CircularBuffer cb_eps_obj(cb_eps);
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_inb_obj(cb_inb);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
     CircularBuffer cb_ex_obj(cb_ex);
     CircularBuffer cb_ex2_obj(cb_ex2);
     CircularBuffer cb_ex2pe_obj(cb_ex2pe);
@@ -466,37 +453,19 @@ void kernel_main() {
         // =====================================
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
-        reconfig_data_format(cb_ex2, cb_eps);
-        add_tiles_init(cb_ex2, cb_eps);
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
+                ckl::input(cb_ex2),
+                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(
+                cb_ex2pe, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 
-        cb_ex2_obj.wait_front(onetile);
-        tile_regs_acquire();
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-        cb_ex2_obj.pop_front(onetile);
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
-
-        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
-        cb_ex2pe_obj.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_ex2pe);
-        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
-        unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
-        cb_ex2pe_obj.pop_front(onetile);
-        tile_regs_commit();
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(cb_ex2pe), ckl::output(cb_ex2pe)>(
+            ckl::EltwiseShape::tiles(onetile));
 
         // =====================================
         // Second pass over the input.
@@ -516,6 +485,8 @@ void kernel_main() {
         CircularBuffer cb_x_welford_obj_eltwise(cb_x_welford);
 
         for (auto block : generic::blocks(Wt, blk)) {
+            const auto block_shape =
+                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks
@@ -576,65 +547,26 @@ void kernel_main() {
             tile_regs_release();
 
             if constexpr (do_gamma == 1) {
-                // Multiply by gamma
-                reconfig_data_format(cb_xmm, cb_gamma);
-                tile_regs_acquire();
-                cb_gamma_obj.wait_front(block.full_block_size());
-                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
-                mul_bcast_rows_init_short(cb_xmm, cb_gamma);
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
-                }
-                tile_regs_commit();
-                cb_gamma_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
-
-                if constexpr (!do_beta) {
-                    pack_reconfig_data_format(cb_out);
-                }
-                tile_regs_wait();
-                if constexpr (!do_beta) {
-                    cb_out_obj.reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_out);
-                    }
-                    cb_out_obj.push_back(block.full_block_size());
-                } else {
-                    CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_xmm);
-                    }
-                    CircularBuffer(cb_xmm).push_back(block.full_block_size());
-                }
-                tile_regs_release();
+                constexpr auto cb_gamma_out = do_beta ? cb_fusion : cb_out;
+                ckl::mul<
+                    ckl::input(cb_xmm_id, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::input(cb_gamma, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::output(cb_gamma_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+                    ckl::BroadcastDim::Row>(block_shape);
             }
 
             if constexpr (do_beta == 1) {
-                // Add beta
-                tile_regs_acquire();
-                reconfig_data_format(cb_xmm, cb_beta);
-                add_bcast_rows_init_short(cb_xmm, cb_beta);
-                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
-                cb_beta_obj.wait_front(block.full_block_size());
-                for (auto i : block.local()) {
-                    add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
-                }
-                tile_regs_commit();
-                cb_beta_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
-
-                pack_reconfig_data_format(cb_out);
-                cb_out_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_out);
-                }
-                tile_regs_release();
-                cb_out_obj.push_back(block.full_block_size());
+                constexpr auto cb_beta_input = do_gamma ? cb_fusion : cb_xmm_id;
+                ckl::add<
+                    ckl::input(
+                        cb_beta_input, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::input(cb_beta, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::output(cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
+                    ckl::BroadcastDim::Row>(block_shape);
             }
         }
 
-        cb_xmm = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
+        cb_xmm = cb_xmm_id;
         cb_ex2pe_obj.pop_front(onetile);
         cb_ex_obj.pop_front(onetile);
     }  // NCHt loop

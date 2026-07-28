@@ -3,31 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
 void kernel_main() {
-    uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto cb_out = tt::CBIndex::c_16;
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_init(tt::CBIndex::c_0);
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        tile_regs_acquire();
+    compute_kernel_hw_startup(cb_in, cb_out);
 
-        // Pop tile after tile, copy to DST and pack
-        cb_wait_front(tt::CBIndex::c_0, 1);
-        cb_reserve_back(tt::CBIndex::c_16, 1);
-        copy_tile(tt::CBIndex::c_0, 0, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, tt::CBIndex::c_16);
-
-        cb_pop_front(tt::CBIndex::c_0, 1);
-        cb_push_back(tt::CBIndex::c_16, 1);
-
-        tile_regs_release();
-    }
+    compute_kernel_lib::copy<
+        compute_kernel_lib::input(
+            cb_in,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
+        compute_kernel_lib::output(
+            cb_out,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(
+        compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt));
 }

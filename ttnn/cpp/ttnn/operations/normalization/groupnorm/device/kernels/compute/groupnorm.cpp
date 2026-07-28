@@ -17,7 +17,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     // clang-format off
@@ -172,7 +177,6 @@ void kernel_main() {
 
     // tile offset
     uint32_t index_subblock_w_offset = 0;
-    uint32_t index_h_offset = 0;
     uint32_t index_w_offset = 0;
     uint32_t index_b_offset = 0;
     uint32_t index_g_offset = 0;
@@ -181,10 +185,8 @@ void kernel_main() {
     uint32_t num_datum_per_row_offeset = 0;
     // inplace out cbs
     bool copy_or_add = true;
-    bool reset_index = false;
     uint32_t group_reset_index = 0;
     uint32_t index_block_w = 0;
-    uint32_t output_tile_index = 0;
     bool apply_gamma_beta[block_w];
     constexpr uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
 
@@ -206,6 +208,36 @@ void kernel_main() {
     constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_reread_write_out_id;
     constexpr int cb_outbeta_id = cb_out0_id;
 #endif
+
+    constexpr auto strided_col_input = [](uint32_t cb) {
+        return ckl::input(
+            cb,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
+            ckl::OperandKind::Col,
+            ckl::DataFormatReconfig::Disabled,
+            ckl::TileOffset::Strided);
+    };
+    constexpr auto offset_scalar_input = [](uint32_t cb) {
+        return ckl::input(
+            cb,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
+            ckl::OperandKind::Scalar,
+            ckl::DataFormatReconfig::Disabled,
+            ckl::TileOffset::Set);
+    };
+    constexpr auto strided_output = [](uint32_t cb) {
+        return ckl::output(
+            cb,
+            ckl::ReservePolicy::None,
+            ckl::PushPolicy::None,
+            ckl::DataFormatReconfig::Disabled,
+            ckl::PackRelu::Disabled,
+            ckl::L1Accumulation::Disabled,
+            ckl::DestAccumulation::Disabled,
+            ckl::TileOffset::Strided);
+    };
 
     CircularBuffer cb_beta(cb_beta_id);
     CircularBuffer cb_eps(cb_eps_id);
@@ -233,52 +265,45 @@ void kernel_main() {
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_in0_id, cb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm_id = cb_repack_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         cb_in_rm_id,
         cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::WaitBlock,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm_id = cb_in0_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         cb_in_rm_id,
         cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::NoWait,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     cb_in.wait_front(per_core_MN);
 #else
-    binary_op_init_common(cb_in0_id, cb_input_mask_id, cb_x_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_input_mask_id, cb_x_id);
 #endif
 
     index_b_offset = 0;
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    uint32_t out_block_hw_normal = out_block_h_normal * block_w;
-    uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
-    uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
-    if constexpr (block_h % num_out_blocks != 0) {
-        extra_out_block = true;
-        uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
-        num_out_blocks_padded += (residual / out_block_h_normal + 1);
-        out_block_h_last = residual % out_block_h_normal;
-        out_block_hw_last = out_block_h_last * block_w;
-    }
-    uint32_t cb_ex_external_tiles_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes / single_tile_size_bytes;
-    if ((num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes) %
-        single_tile_size_bytes) {
-        cb_ex_external_tiles_required++;
-    }
+    constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
+    constexpr uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+    constexpr bool extra_out_block = residual != 0;
+    constexpr uint32_t num_out_blocks_padded =
+        num_out_blocks + (extra_out_block ? (residual / out_block_h_normal + 1) : 0);
+    constexpr uint32_t out_block_h_last = extra_out_block ? residual % out_block_h_normal : out_block_h_normal;
+    constexpr uint32_t out_block_hw_last = out_block_h_last * block_w;
+    constexpr uint32_t cb_ex_external_bytes_required =
+        num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes;
+    constexpr uint32_t cb_ex_external_tiles_required =
+        (cb_ex_external_bytes_required + single_tile_size_bytes - 1) / single_tile_size_bytes;
 
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
@@ -286,10 +311,8 @@ void kernel_main() {
 
         row_offset = num_cols_per_group;
         copy_or_add = true;
-        reset_index = false;
         group_reset_index = 0;
         index_block_w = 0;
-        output_tile_index = 0;
 
         // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {
@@ -297,63 +320,50 @@ void kernel_main() {
             // Start Local Reduce
             cb_input_mask.wait_front(block_w);
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
-                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
-                } else {
-                    out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
+                uint32_t out_block_h_actual = out_block_h_normal;
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        out_block_h_actual = out_block_h_last;
+                    }
                 }
                 cb_in0.wait_front(out_block_hw_normal);
 
-                index_h_offset = 0;
                 reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
-                // mask input
-                mul_tiles_init(cb_in0_id, cb_input_mask_id);
-                cb_x.reserve_back(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            uint32_t index_mask = w + index_subblock_w_offset;
+                ckl::mul<
 #ifdef TILIZE_IN
-                            mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
+                    ckl::input(cb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
 #else
-                            mul_tiles(cb_in0_id, cb_input_mask_id, index, index_mask, w);
+                    ckl::input(cb_in0_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
 #endif
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; ++i) {
-                            pack_tile(i, cb_x_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
+                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::output(
+                        cb_x_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+#ifndef TILIZE_IN
+                        cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+#endif
+                        cb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
+                        cb_x.push_back(out_block_hw_normal - out_block_hw_last);
                     }
-                    index_h_offset += block_w;
                 }
-#ifdef TILIZE_IN
-                cb_in.pop_front(out_block_hw_actual);
-#else
-                cb_in0.pop_front(out_block_hw_normal);
-#endif
-                cb_x.push_back(out_block_hw_normal);
                 reconfig_data_format_srcb(cb_input_mask_id, cb_scaler_id);
 
                 // Partial/E[x]
                 cb_x.wait_front(out_block_hw_normal);
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     cb_x_id,
                     cb_scaler_id,
                     cb_ex_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                    ckl::ReduceInputPolicy::NoWaitNoPop,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(
+                    ckl::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_x.pop_front(out_block_hw_normal);
 
                 cb_ex_partial.wait_front(1);
@@ -361,16 +371,16 @@ void kernel_main() {
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     cb_ex_external_id,
                     cb_scaler_global_id,
                     cb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
-                if (num_cores_per_mcast_group > 1) {
+                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(
+                    ckl::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
+                if constexpr (num_cores_per_mcast_group > 1) {
                     cb_ex.reserve_back(1);
                     cb_ex.push_back(1);
                 }
@@ -381,126 +391,93 @@ void kernel_main() {
             // Start Variance Calc
             // Start Local Reduce
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
-                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
-                } else {
-                    out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
+                uint32_t out_block_h_actual = out_block_h_normal;
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        out_block_h_actual = out_block_h_last;
+                    }
                 }
 
                 cb_in0.wait_front(out_block_hw_normal);
-                // x - E[x]
-                sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-
-                cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; i++) {
-                            pack_tile(i, cb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
+                ckl::sub<
+                    ckl::input(cb_in0_id),
+                    ckl::input(cb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(
+                        cb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+                        cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                        cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                     }
-                    cb_in0.pop_front(block_w);
                 }
-                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
-                }
-                cb_xmm.push_back(out_block_hw_normal);
 
-                // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-                mul_tiles_init(cb_xmm_id, cb_input_mask_id);
-                cb_x.reserve_back(out_block_hw_normal);
-                cb_xmm.wait_front(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            uint32_t index_mask = index;
-                            mul_tiles(cb_xmm_id, cb_input_mask_id, index, index_mask, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; ++i) {
-                            pack_tile(i, cb_x_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
+                ckl::mul<
+                    ckl::input(cb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::output(
+                        cb_x_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        cb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
+                        cb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
+                        cb_x.push_back(out_block_hw_normal - out_block_hw_last);
                     }
-                    cb_xmm.pop_front(block_w);
                 }
-                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    cb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
-                }
-                cb_x.push_back(out_block_hw_normal);
 
                 reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
-                // (x - E[x])^2
-                index_h_offset = 0;
-                mul_tiles_init(cb_x_id, cb_x_id);
-                cb_xmm.reserve_back(out_block_hw_normal);
-                cb_x.wait_front(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            mul_tiles(cb_x_id, cb_x_id, index, index, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; i++) {
-                            pack_tile(i, cb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
+                ckl::square<
+                    ckl::input(cb_x_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::output(
+                        cb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        cb_x.pop_front(out_block_hw_normal - out_block_hw_last);
+                        cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                        cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                     }
-                    index_h_offset += block_w;
                 }
-                cb_x.pop_front(out_block_hw_normal);
-                cb_xmm.push_back(out_block_hw_normal);
 
                 // Partial-Var(x)
                 cb_xmm.wait_front(out_block_hw_normal);
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     cb_xmm_id,
                     cb_scaler_id,
                     cb_ex2_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                    ckl::ReduceInputPolicy::NoWaitNoPop,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(
+                    ckl::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_xmm.pop_front(out_block_hw_normal);
             }
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     cb_ex_external_id,
                     cb_scaler_global_id,
                     cb_ex2_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
-                if (num_cores_per_mcast_group > 1) {
+                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(
+                    ckl::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
+                if constexpr (num_cores_per_mcast_group > 1) {
                     cb_ex2.reserve_back(1);
                     cb_ex2.push_back(1);
                 }
@@ -510,22 +487,19 @@ void kernel_main() {
             // Start Variance Calc
             //  global reduce results
             cb_eps.wait_front(1);
-            cb_ex2_global.wait_front(1);
-            cb_ex2pe.reserve_back(1);
-            // (Var + eps)
-            tile_regs_acquire();
-            add_tiles_init(cb_ex2_global_id, cb_eps_id);
-            add_tiles(cb_ex2_global_id, cb_eps_id, 0, 0, dst0);
-            tile_regs_wait();
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
-            cb_ex2pe.push_back(1);
-            cb_ex2_global.pop_front(1);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<
+                    ckl::input(cb_ex2_global_id),
+                    ckl::input(cb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::BinaryFpuOp::Add,
+                    ckl::BroadcastDim::None>{},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::PackTile<ckl::output(
+                    cb_ex2pe_id,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
             // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;
@@ -535,99 +509,67 @@ void kernel_main() {
             uint32_t out_block_h_offset = 0;
             // Start Final Val Calc
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
-                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
-                } else {
-                    out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
+                uint32_t out_block_h_actual = out_block_h_normal;
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        out_block_h_actual = out_block_h_last;
+                    }
                 }
 
                 cb_in0.wait_front(out_block_hw_normal);
-                // x - E[x]
-                sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-                cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; i++) {
-                            pack_tile(i, cb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
+                ckl::sub<
+                    ckl::input(cb_in0_id),
+                    ckl::input(cb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(
+                        cb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+                        cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                        cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                     }
-                    cb_in0.pop_front(block_w);
                 }
-                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
-                }
-                cb_xmm.push_back(out_block_hw_normal);
 
-                // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-                mul_tiles_init(cb_xmm_id, cb_input_mask_id);
-                cb_x.reserve_back(out_block_hw_normal);
-                cb_xmm.wait_front(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            uint32_t index_mask = index;
-                            mul_tiles(cb_xmm_id, cb_input_mask_id, index, index_mask, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; ++i) {
-                            pack_tile(i, cb_x_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
+                ckl::mul<
+                    ckl::input(cb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::output(
+                        cb_x_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        cb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
+                        cb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
+                        cb_x.push_back(out_block_hw_normal - out_block_hw_last);
                     }
-                    cb_xmm.pop_front(block_w);
                 }
-                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    cb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
-                }
-                cb_x.push_back(out_block_hw_normal);
-                reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
-                // (x - Ex) * 1/[sqrt(Var + eps)]
-                index_h_offset = 0;
-                mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
-                cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex2pe.wait_front(1);
-                cb_x.wait_front(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            mul_tiles_bcast_scalar(cb_x_id, cb_ex2pe_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; i++) {
-                            pack_tile(i, cb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
+                ckl::mul<
+                    ckl::input(cb_x_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(cb_ex2pe_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(
+                        cb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                if constexpr (extra_out_block) {
+                    if (out_block_index == (num_out_blocks_padded - 1)) {
+                        cb_x.pop_front(out_block_hw_normal - out_block_hw_last);
+                        cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                        cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                     }
-                    index_h_offset += block_w;
                 }
-                cb_x.pop_front(out_block_hw_normal);
-                cb_xmm.push_back(out_block_hw_normal);
                 cb_xmm.wait_front(out_block_hw_normal);
 
                 copy_or_add = start_copy_or_add;
@@ -640,32 +582,22 @@ void kernel_main() {
                 cb_reread_out.wait_front(out_block_hw_normal);
                 cb_reread_write_out.reserve_back(out_block_hw_normal);
                 for (uint32_t w = 0; w < block_w_curr; ++w) {
-                    uint32_t index_h_offset = 0;
-                    uint32_t index_h1_offset = 0;
-
-                    if (copy_or_add == true) {
-                        copy_tile_init(cb_xmm_id);
+                    const ckl::StridedTileRange input_range{w, block_w};
+                    const ckl::StridedTileRange output_range{w, block_w_curr};
+                    if (copy_or_add) {
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::col(out_block_h_actual),
+                            ckl::CopyTile<strided_col_input(cb_xmm_id)>{input_range},
+                            ckl::PackTile<strided_output(cb_reread_write_out_id)>{output_range});
                     } else {
-                        add_tiles_init(cb_reread_out_id, cb_xmm_id);
-                    }
-
-                    for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                        tile_regs_acquire();
-                        uint32_t index_reread_out = w + index_h_offset;
-                        uint32_t index_xmm = w + index_h1_offset;
-
-                        if (copy_or_add == true) {
-                            copy_tile(cb_xmm_id, index_xmm, dst0);
-                        } else {
-                            add_tiles(cb_reread_out_id, cb_xmm_id, index_reread_out, index_xmm, dst0);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile<true>(dst0, cb_reread_write_out_id, index_reread_out);
-                        tile_regs_release();
-
-                        index_h_offset += block_w_curr;
-                        index_h1_offset += block_w;
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::col(out_block_h_actual),
+                            ckl::BinaryFpu<
+                                strided_col_input(cb_reread_out_id),
+                                strided_col_input(cb_xmm_id),
+                                ckl::BinaryFpuOp::Add,
+                                ckl::BroadcastDim::None>{output_range, input_range},
+                            ckl::PackTile<strided_output(cb_reread_write_out_id)>{output_range});
                     }
 
                     // update group tile offset
@@ -696,31 +628,26 @@ void kernel_main() {
 
                 // Start Optional Gamma:
                 if constexpr (do_gamma) {
-                    index_h_offset = 0;
                     cb_outgamma.reserve_back(out_block_hw_normal);
                     cb_gamma.wait_front(per_core_N);
                     cb_reread_write_out.wait_front(out_block_hw_normal);
-                    for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                        for (uint32_t j = 0; j < block_w_curr; ++j) {
-                            if (apply_gamma_beta[j]) {
-                                mul_bcast_rows_init_short(cb_reread_write_out_id, cb_gamma_id);
-                            } else {
-                                copy_tile_init(cb_reread_write_out_id);
-                            }
-                            tile_regs_acquire();
-                            uint32_t index = j + index_h_offset;
-                            uint32_t index_gamma = j + index_g_offset;
-                            if (apply_gamma_beta[j]) {
-                                mul_tiles_bcast_rows(cb_reread_write_out_id, cb_gamma_id, index, index_gamma, dst0);
-                            } else {
-                                copy_tile(cb_reread_write_out_id, index, dst0);
-                            }
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            pack_tile(dst0, cb_outgamma_id);
-                            tile_regs_release();
+                    for (uint32_t j = 0; j < block_w_curr; ++j) {
+                        if (apply_gamma_beta[j]) {
+                            ckl::eltwise_chain(
+                                ckl::EltwiseShape::col(out_block_h_actual),
+                                ckl::BinaryFpu<
+                                    strided_col_input(cb_reread_write_out_id),
+                                    offset_scalar_input(cb_gamma_id),
+                                    ckl::BinaryFpuOp::Mul,
+                                    ckl::BroadcastDim::Row>{ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
+                                ckl::PackTile<strided_output(cb_outgamma_id)>{ckl::StridedTileRange{j, block_w_curr}});
+                        } else {
+                            ckl::eltwise_chain(
+                                ckl::EltwiseShape::col(out_block_h_actual),
+                                ckl::CopyTile<strided_col_input(cb_reread_write_out_id)>{
+                                    ckl::StridedTileRange{j, block_w_curr}},
+                                ckl::PackTile<strided_output(cb_outgamma_id)>{ckl::StridedTileRange{j, block_w_curr}});
                         }
-                        index_h_offset += block_w_curr;
                     }
                     cb_outgamma.push_back(out_block_hw_normal);
                     cb_reread_write_out.pop_front(out_block_hw_normal);
@@ -730,30 +657,24 @@ void kernel_main() {
                 //
                 // Start Optional Beta
                 if constexpr (do_beta) {
-                    index_h_offset = 0;
                     cb_outbeta.reserve_back(out_block_hw_normal);
                     cb_beta.wait_front(per_core_N);
-                    for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                        for (uint32_t j = 0; j < block_w_curr; ++j) {
-                            if (apply_gamma_beta[j]) {
-                                add_bcast_rows_init_short(cb_inbeta_id, cb_beta_id);
-                            } else {
-                                copy_tile_init(cb_inbeta_id);
-                            }
-                            tile_regs_acquire();
-                            uint32_t index = j + index_h_offset;
-                            uint32_t index_beta = j + index_g_offset;
-                            if (apply_gamma_beta[j]) {
-                                add_tiles_bcast_rows(cb_inbeta_id, cb_beta_id, index, index_beta, dst0);
-                            } else {
-                                copy_tile(cb_inbeta_id, index, dst0);
-                            }
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            pack_tile(dst0, cb_outbeta_id);
-                            tile_regs_release();
+                    for (uint32_t j = 0; j < block_w_curr; ++j) {
+                        if (apply_gamma_beta[j]) {
+                            ckl::eltwise_chain(
+                                ckl::EltwiseShape::col(out_block_h_actual),
+                                ckl::BinaryFpu<
+                                    strided_col_input(cb_inbeta_id),
+                                    offset_scalar_input(cb_beta_id),
+                                    ckl::BinaryFpuOp::Add,
+                                    ckl::BroadcastDim::Row>{ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
+                                ckl::PackTile<strided_output(cb_outbeta_id)>{ckl::StridedTileRange{j, block_w_curr}});
+                        } else {
+                            ckl::eltwise_chain(
+                                ckl::EltwiseShape::col(out_block_h_actual),
+                                ckl::CopyTile<strided_col_input(cb_inbeta_id)>{ckl::StridedTileRange{j, block_w_curr}},
+                                ckl::PackTile<strided_output(cb_outbeta_id)>{ckl::StridedTileRange{j, block_w_curr}});
                         }
-                        index_h_offset += block_w_curr;
                     }
                     cb_outbeta.push_back(out_block_hw_normal);
                     cb_inbeta.pop_front(out_block_hw_normal);
@@ -763,13 +684,13 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
                 // untilize - DEST capacity auto-detected
-                compute_kernel_lib::untilize<
+                ckl::untilize<
                     per_core_N,
                     cb_untilize_in_id,
                     cb_untilize_out_id,
-                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+                    ckl::untilize_config::InitUninitMode::InitAndUninit,
+                    ckl::untilize_config::WaitMode::WaitUpfront,
+                    ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
             }
             // End Final Val Calc
