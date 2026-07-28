@@ -56,39 +56,10 @@ jobs:
       - name: Capture proxy env for the buildx builder
         id: proxy-env
         run: |
-          # This runner sits behind a restricted-egress cluster proxy (see
-          # `docker info` -> HTTP Proxy/HTTPS Proxy) - the outer dockerd/CLI
-          # already has it, which is why docker login/pull/download-artifact
-          # all work fine here. docker/setup-buildx-action's docker-container
-          # driver spins up a SEPARATE, isolated buildkitd container that does
-          # NOT inherit it, so buildkitd dials registries directly and the
-          # cluster firewall silently blackholes it - a hard ~30s dial-timeout
-          # on every attempt (docker.io, mirror.gcr.io, ghcr.io all hit this
-          # identically), not flakiness and not fixed by retrying. This repo
-          # already forwards proxy env into other containers the same way
-          # (see docker-run/action.yml's forward_civ2_proxy_env_vars) - this
-          # is the same fix applied to the buildx builder.
-          #
-          # Rebuilt rather than forwarded verbatim, for two reasons:
-          # 1. The runner's own NO_PROXY includes `harbor.*.tenstorrent.net`, a
-          #    mid-string wildcard that Go's NO_PROXY parsing
-          #    (net/http.ProxyFromEnvironment) does not support and silently
-          #    drops - a bare `tenstorrent.net` matches the same hosts (and
-          #    every other subdomain) correctly.
-          # 2. `docker buildx create --driver-opt` has its own unrelated,
-          #    unresolved parsing bug: a comma INSIDE a driver-opt's value is
-          #    indistinguishable from the comma that separates multiple
-          #    driver-opts, so a multi-entry NO_PROXY like
-          #    "localhost,127.0.0.1,tenstorrent.net" gets torn apart into
-          #    separate (invalid) driver-opts - confirmed via
-          #    github.com/docker/buildx/discussions/1133, and no quoting or
-          #    escaping works around it. So this is deliberately a SINGLE
-          #    entry, no comma: this job's own bake contexts only need to
-          #    bypass the proxy for harbor.ci.tenstorrent.net (Harbor - see
-          #    HARBOR_PREFIX below); nothing here talks to any other internal
-          #    cluster-only service. If a future caller needs more NO_PROXY
-          #    entries, this will need a different mechanism (e.g. a
-          #    buildkitd config file instead of --driver-opt).
+          # This runner's proxy isn't inherited by the isolated buildx builder
+          # (see docker-run/action.yml's forward_civ2_proxy_env_vars).
+          # NO_PROXY is one entry, no comma - docker buildx create --driver-opt
+          # can't handle commas in a value (docker/buildx#1133).
           echo "PROXY_HTTP=${HTTP_PROXY:-${http_proxy:-}}" >> "$GITHUB_ENV"
           echo "PROXY_HTTPS=${HTTPS_PROXY:-${https_proxy:-}}" >> "$GITHUB_ENV"
           echo "PROXY_NO_PROXY=tenstorrent.net" >> "$GITHUB_ENV"
@@ -165,12 +136,9 @@ jobs:
           SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
           SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
           SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
-          # RUN steps inside the Dockerfile (apt-get, curl, uv pip install) need
-          # the proxy too - BuildKit treats these as implicit build-args (no ARG
-          # declaration needed) and excludes them from the cache key. This is
-          # separate from the buildx builder's own driver-opts env above: that
-          # fixes buildkitd's registry pulls, this fixes what runs INSIDE the
-          # image being built.
+          # RUN steps (apt-get, curl, uv pip) need the proxy too - BuildKit
+          # auto-propagates these build-arg names into every RUN with no ARG
+          # declaration needed.
           if [ -n "$PROXY_HTTP" ]; then
             SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
             SET+="${TARGET}.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
@@ -181,10 +149,8 @@ jobs:
             echo "$SET"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          # Not wired as a build-stage context (unlike the TOOLS above) - these
-          # two are consumed directly by manual-docker-bake.sh itself (SBOM
-          # attest generator, oras binary for SBOM enrichment), so they're
-          # passed through as their own action inputs instead of set-lines.
+          # Consumed directly by manual-docker-bake.sh (SBOM generator, oras
+          # binary for enrichment), not as a build-stage context.
           echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> "$GITHUB_OUTPUT"
           echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> "$GITHUB_OUTPUT"
       - name: Build and push (skipped for dry run)
@@ -195,12 +161,8 @@ jobs:
           set-lines: ${{ steps.bake.outputs.set }}
           syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
           oras-image: ${{ steps.bake.outputs.oras-image }}
-          # Default retries=1 is effectively zero retries (the loop runs once and
-          # stops). We've now seen transient "dial tcp ... i/o timeout" failures
-          # against three different hosts here (docker.io, mirror.gcr.io, ghcr.io)
-          # with no retry attempted - that points at occasional runner-side
-          # network blips rather than any one registry being unreliable, so retry
-          # instead of continuing to chase a "safer" host.
+          # Cheap insurance against transient blips - the actual fix for the
+          # timeouts we hit is the proxy env forwarded above.
           retries: "2"
           retry-delay-seconds: "15"
           harbor-prefix: ${{ inputs.harbor-prefix }}
