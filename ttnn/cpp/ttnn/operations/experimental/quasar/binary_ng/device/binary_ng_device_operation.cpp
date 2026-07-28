@@ -530,10 +530,8 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
             return false;  // derived scalar RHS format != a (e.g. an fp32 FPU-only op) -> descriptor
         }
         const auto& a_tile = tensor_args.input_tensor_a.tensor_spec().tile();
-        if (a_tile.get_height() != tt::constants::TILE_HEIGHT || a_tile.get_width() != tt::constants::TILE_WIDTH) {
-            return false;  // 32x32 tiles only, as in the tensor-tensor path
-        }
-        return true;
+        // 32x32 tiles only, as in the tensor-tensor path; anything else routes to the descriptor.
+        return a_tile.get_height() == tt::constants::TILE_HEIGHT && a_tile.get_width() == tt::constants::TILE_WIDTH;
     }
     // No b and no scalar -> descriptor (validation should already preclude this).
     if (!tensor_args.input_tensor_b.has_value()) {
