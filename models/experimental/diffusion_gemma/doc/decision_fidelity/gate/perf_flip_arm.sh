@@ -9,17 +9,23 @@
 # that has gated them until now cannot answer the question: it compares a candidate against a
 # baseline our own #48291 record calls degenerate, so a lever can only pass by changing nothing.
 #
-# WHICH METRIC — this file said the wrong thing before 2026-07-28. run_upfront_gpqa runs
-# `r1_gpqa_diamond`, which emits only `exact_match,none`, a strict \boxed{} extraction. The 07-28
-# baseline scored 6.57% because only **4 of 198** responses contain a boxed answer at all. A metric
-# with four positives cannot separate two arms. (The reference 70.71%/70.20% figures are
-# `gpqa_diamond_cot_zeroshot` with `flexible-extract` — a different task AND filter, so they are not
-# a bar this harness can be scored against either.)
+# WHICH METRIC. `run_upfront_gpqa.sh` now runs **gpqa_diamond_cot_zeroshot** with
+# `exact_match,flexible-extract` — the same task and filter the A100 reference used, so arm scores
+# are directly comparable to its **70.71% / 70.20%** bar (two reps, thinking, 262k), whose 0.5 pp
+# spread is the resolution.
 #
-# What DOES have power is the collapse rate: the baseline fired the degeneracy guard on 146 of 198
-# requests, clustered at blocks 0-3, and left 26 responses empty. Those are per-request binaries at
-# n=198, so SE is ~3 pp and a regression of the magnitude that matters (#51080 moved 56 of 64) is
-# detectable. The scorer reports all four signals and decides on the ones that can.
+# It used to run `r1_gpqa_diamond` / `exact_match,none`, and that produced a meaningless gate: the
+# strict filter extracts a bare \boxed{} value, the r1 prompt never asks for one, and on the 07-28
+# full run only **4 of 198** responses contained a boxed answer, scoring 6.57%. A metric with four
+# positives cannot separate two arms. The CoT task fixes both halves — its prompt instructs "put your
+# final answer (only the letter A, B, C, or D) within \boxed{}" and its flexible-extract filter reads
+# the boxed value first, then explicit answer markers, and only accepts A-D.
+#
+# The collapse rate is still reported and still decides when the scores are close: the 07-28 baseline
+# fired the degeneracy guard on 146 of 198 requests (clustered at blocks 0-3) and left 26 responses
+# empty. Those are per-request binaries at n=198, so SE is ~3 pp and a regression of the magnitude
+# that matters (#51080 moved 56 of 64) is detectable. NOTE that the 146/26 baseline was recorded on
+# the r1 task; the first CoT `base` arm re-establishes it, which is why `base` should be run.
 #
 # THREE ARMS, one variable each vs the shipped defaults, so any delta is attributable:
 #   base    shipped defaults (SDPA grid already flipped; both levers off)

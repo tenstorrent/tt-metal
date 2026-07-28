@@ -19,15 +19,16 @@ Useful overrides:
   MODEL_VENV=/home/zni/venvs/tt-diffusion-gemma
   DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it
   HOST=127.0.0.1 PORT=8010
-  MAX_MODEL_LEN=4096 MAX_GEN_TOKS=1536
+  MAX_MODEL_LEN=4096 MAX_GEN_TOKS=8192
   THINKING_MODE=1                 # enable the checkpoint's server-side thinking template
   OUTPUT_ROOT=/home/zni/dg_runs/diffusion_gemma/upfront_gpqa/<timestamp>
   RESET_BEFORE=1 RESET_AFTER=1
 
 The default prefill whitelist is exact for the current 198-sample
-r1_gpqa_diamond task + DiffusionGemma chat template in thinking mode.
-Recompute it if the checkpoint, tokenizer, chat template, system prompt,
-thinking mode, or task prompt changes.
+gpqa_diamond_cot_zeroshot task + DiffusionGemma chat template in thinking mode.
+Recompute it with doc/optimize_perf/compute_prefill_whitelist.py if the
+checkpoint, tokenizer, chat template, system prompt, thinking mode, or task
+prompt changes -- do not edit it by hand.
 EOF
 }
 
@@ -55,7 +56,11 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8010}"
 MODEL_NAME="${MODEL_NAME:-google/diffusiongemma-26B-A4B-it}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
-MAX_GEN_TOKS="${MAX_GEN_TOKS:-1536}"
+# 1536 tokens is 6 canvases. A CoT answer that is still reasoning when the budget runs out cannot
+# emit its boxed conclusion, so the budget itself would cap the score. The A100 reference used
+# 126976; 8192 (32 canvases) is the compromise that fits MAX_MODEL_LEN=4096-class runs without
+# making a truncated chain the thing being measured.
+MAX_GEN_TOKS="${MAX_GEN_TOKS:-8192}"
 THINKING_MODE="${THINKING_MODE:-1}"
 TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB. Measured 2026-07-27: the 48 up-front traces need 3.04 GiB at reveal_pmax=4096 (3 GiB fails, 4 GiB is the floor), so the historical 12 GiB reserved ~8 GiB of DRAM that nothing could allocate. Scale this WITH reveal_pmax - it is not a universal constant. See doc/optimize_perf/bisect_trace_region.sh
 RESET_BEFORE="${RESET_BEFORE:-1}"
@@ -65,14 +70,24 @@ READY_TIMEOUT_S="${READY_TIMEOUT_S:-900}"
 case "${THINKING_MODE}" in
     1)
         # Exact aligned lengths with server-side enable_thinking=true.
-        DEFAULT_PREFILL_WARMUP_LENS="128,160,192,224,256,288,320,352,384,416,448,480,512,544,608,672,832,2432"
+        # gpqa_diamond_cot_zeroshot, thinking=1. COMPUTED, not guessed:
+        #   compute_prefill_whitelist.py --task gpqa_diamond_cot_zeroshot --thinking 1
+        # 19 distinct padded lengths, raw min/median/max 103/236/2432. The CoT prompt adds a
+        # 576 that the old r1_gpqa_diamond list did not have -- without it that request is
+        # rejected at admission and the run aborts mid-eval.
+        DEFAULT_PREFILL_WARMUP_LENS="128,160,192,224,256,288,320,352,384,416,448,480,512,544,576,608,672,832,2432"
         SERVER_CHAT_ARGS=(
             --default-chat-template-kwargs '{"enable_thinking":true}'
             --reasoning-parser diffusion_gemma
         )
         ;;
     0)
-        DEFAULT_PREFILL_WARMUP_LENS="96,128,160,192,224,256,288,320,352,384,416,448,480,512,544,608,640,832,2432"
+        # gpqa_diamond_cot_zeroshot, thinking=0. COMPUTED:
+        #   compute_prefill_whitelist.py --task gpqa_diamond_cot_zeroshot --thinking 0
+        # 18 distinct padded lengths, raw min/median/max 100/233/2429. Differs from the old
+        # r1 list in both directions (no 96, no 640), which is why it must be recomputed and
+        # not edited by hand.
+        DEFAULT_PREFILL_WARMUP_LENS="128,160,192,224,256,288,320,352,384,416,448,480,512,544,608,672,832,2432"
         SERVER_CHAT_ARGS=()
         ;;
     *)
@@ -259,8 +274,18 @@ MODEL_ARGS="model=${MODEL_NAME},base_url=http://${HOST}:${PORT}/v1/chat/completi
 # sampler and are not wired into its model-owned denoise loop. Keep only transport
 # and output-length settings; sampling comes from the checkpoint configuration.
 GEN_KWARGS="stream=false,max_gen_toks=${MAX_GEN_TOKS},until=[]"
+# TASK: gpqa_diamond_cot_zeroshot, NOT r1_gpqa_diamond. Changed 2026-07-28 after the strict task
+# produced a meaningless gate. r1_gpqa_diamond scores exact_match,none -- a bare \boxed{} extraction
+# -- and its prompt does not ask for one, so on the 07-28 full run only 4 of 198 responses contained
+# a boxed answer and the score was 6.57%: a number about output FORMAT, not reasoning, and useless
+# for separating two configurations. The CoT task fixes both halves: its prompt instructs "put your
+# final answer (only the letter A, B, C, or D) within \boxed{}", and its flexible-extract filter
+# reads the boxed value first, then explicit answer markers, and only accepts A-D. It is also the
+# task the A100 reference used, so the numbers are directly comparable to that 70.71% / 70.20% bar.
+# The gated Idavidrein/gpqa diamond split is already in the local HF cache, so HF_HUB_OFFLINE=1 is
+# fine; scoring reads exact_match,flexible-extract.
 COMMON_EVAL_ARGS=(
-    --tasks r1_gpqa_diamond
+    --tasks gpqa_diamond_cot_zeroshot
     --model local-chat-completions
     --model_args "${MODEL_ARGS}"
     --gen_kwargs "${GEN_KWARGS}"
