@@ -3,6 +3,8 @@
 
 """Host-only tests for Gemma4 CCL topology / async / L1 env knobs."""
 
+from pathlib import Path
+
 import pytest
 
 import ttnn
@@ -164,3 +166,39 @@ def test_weight_cache_path_mesh_only_ignores_legacy(tmp_path, monkeypatch):
     p = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 4))
     assert "mesh1x4" in str(p)
     assert p != legacy
+
+
+def test_weight_cache_path_ro_mount_falls_back_writable(tmp_path, monkeypatch):
+    """CI MLPerf :ro — mkdir(tensor_cache_*) must not raise Errno 30; mirror under TT_METAL_HOME."""
+    import errno
+
+    import ttnn
+    from models.demos.gemma4.tt import model_config as mc
+    from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+
+    monkeypatch.delenv("GEMMA4_WEIGHT_CACHE_MESH_ONLY", raising=False)
+    monkeypatch.setenv("TT_METAL_HOME", str(tmp_path / "metal_home"))
+    ro_root = tmp_path / "mlperf_ro" / "google--gemma-4-12B-it"
+    ro_root.mkdir(parents=True)
+
+    real_mkdir = Path.mkdir
+
+    def _ro_mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        if "mlperf_ro" in self.parts:
+            raise OSError(errno.EROFS, "Read-only file system", str(self))
+        return real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", _ro_mkdir)
+    args = Gemma4ModelArgs()
+    args.model_cache_path = ro_root
+    p = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 1))
+    assert p.is_dir()
+    assert "gemma4_tt_cache" in p.parts
+    assert p.name == "tensor_cache_bf16"
+    # Multi-device cold path on RO also mirrors (no warm legacy).
+    p4 = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 4))
+    assert p4.is_dir()
+    assert "mesh1x4" in p4.name
+    assert "gemma4_tt_cache" in p4.parts
+    # Sanity: helper used by resolve path.
+    assert mc._ensure_cache_dir(ro_root / "nested").is_dir()
