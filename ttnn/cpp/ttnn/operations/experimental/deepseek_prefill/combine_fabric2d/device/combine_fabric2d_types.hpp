@@ -35,19 +35,14 @@ struct CombineFabric2dParams {
     // buckets). Off by default: it costs ~3 wall-clock register reads per token, which is a few percent
     // of the very number being measured. Turn it on to explain a result, off to quote one.
     uint32_t stall_telemetry = 0;
-    // Producer loop variant bitmask, so alternatives can be A/B'd without re-plumbing the op:
-    //   bit0 (1)  BATCH_CREDITS   forward credits only once a batch has built up (or when blocked)
-    //   bit1 (2)  SLOT_HEADERS    one prebuilt packet header per ring slot, non-blocking header send
-    //   bit2 (4)  RELAXED_READY   data-ready atomic-inc without the flush ordering (DIAGNOSTIC: the
-    //                             receiver may observe the flag before the payload has landed)
-    //   bit3 (8)  NO_FLOW_CONTROL producer ignores the credit gate (DIAGNOSTIC: prices the gate; the
-    //                             receiver ring is overwritten in flight)
-    //   bit4 (16) SINGLE_SRC      producer sends the same source chunk every token instead of rotating
-    //                             through num_slots of them. The payload is garbage either way, and it
-    //                             frees the L1 that a deep receiver ring needs.
-    // Default = BATCH_CREDITS | SLOT_HEADERS: the two changes that are not harness-specific, worth
-    // +62% together (13.2 -> 21.3 GB/s per direction). 0 restores the original loop for A/B runs.
-    uint32_t variant = 3;
+    // Diagnostic overrides for the producer loop. Both deliberately break a guarantee, to price it;
+    // neither belongs in a real run.
+    //   bit2 (4) RELAXED_READY    data-ready atomic-inc without the flush ordering, so the receiver may
+    //                             observe the flag before the payload has landed (worth ~1%)
+    //   bit3 (8) NO_FLOW_CONTROL  ignore the credit gate and send no credit packets at all, which
+    //                             overwrites the receiver ring in flight but measures the payload-only
+    //                             ceiling of the link (23.8 GB/s per direction on 8x4 BH)
+    uint32_t variant = 0;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
 
     static constexpr auto attribute_names = std::forward_as_tuple(

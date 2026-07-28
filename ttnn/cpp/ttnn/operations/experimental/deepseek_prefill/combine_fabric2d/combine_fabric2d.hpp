@@ -21,7 +21,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t num_slots = 32,
     uint32_t axis = 0,
     uint32_t stall_telemetry = 0,
-    uint32_t variant = 3,
+    uint32_t variant = 0,
     std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d

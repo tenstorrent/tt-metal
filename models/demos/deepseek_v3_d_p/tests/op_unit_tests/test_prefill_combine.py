@@ -629,8 +629,8 @@ CMBF2D_TAG = os.environ.get("CMBF2D_TAG", "")
 # 1 => producer records the fine-grained stall buckets (costs a few percent of the bandwidth
 # it is measuring). Off for headline numbers, on to explain them.
 CMBF2D_STALL = int(os.environ.get("CMBF2D_STALL", "0"))
-# Producer loop variant bitmask; see CombineFabric2dParams::variant for the bit meanings.
-CMBF2D_VARIANT = int(os.environ.get("CMBF2D_VARIANT", "3"))
+# Diagnostic overrides for the producer loop; see CombineFabric2dParams::variant.
+CMBF2D_VARIANT = int(os.environ.get("CMBF2D_VARIANT", "0"))
 
 
 def _cmbf2d_bwinfo_path():
