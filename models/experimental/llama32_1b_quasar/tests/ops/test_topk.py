@@ -46,7 +46,13 @@ def test_topk(ttnn_mesh_device, reset_seeds, batch, k, width):
     x_torch = U.torch_rand(shape)
     x = U.to_tt(x_torch, mesh)
 
-    values, indices = ttnn.topk(x, k=k, dim=-1)
+    # Match the model's call: pass a persistent uint16 local-index tensor (TILE layout),
+    # exercising the indices_tensor overload used at sampling_1d.py:530-536 / 568-574.
+    # With arange indices the returned idxs are positional, so the torch.topk reference holds.
+    idx_torch = torch.arange(width, dtype=torch.int32).view(1, 1, 1, width).expand(1, 1, batch, width).contiguous()
+    indices_tensor = U.to_tt(idx_torch, mesh, dtype=ttnn.uint16)
+
+    values, indices = ttnn.topk(x, k=k, dim=-1, indices_tensor=indices_tensor)
 
     # torch reference on the same bfloat16 values the device saw.
     ref_vals, ref_idxs = torch.topk(x_torch.float(), k=k, dim=-1)  # [1,1,batch,k]

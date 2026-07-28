@@ -100,8 +100,8 @@ def test_sampling(ttnn_mesh_device, reset_seeds, batch, k_val, p_val, temp_val):
         return ttnn.sampling(topk_values, topk_global_indices, k=k, p=p, temp=temp)
 
     out1 = _sample()
-    # No closed-form reference for a stochastic op: check the token-id output is sane.
-    U.assert_shape_dtype(out1, finite=True, mesh_device=mesh)
+    # No closed-form reference for a stochastic op: verify one token id per user is produced.
+    U.assert_shape_dtype(out1, shape=(1, 1, 1, batch), finite=True, mesh_device=mesh)
 
     # Determinism: same seed -> same tokens.
     out2 = _sample()

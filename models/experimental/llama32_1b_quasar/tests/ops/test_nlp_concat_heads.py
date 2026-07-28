@@ -46,3 +46,6 @@ def test_nlp_concat_heads(ttnn_mesh_device, reset_seeds, seq):
         dtype=ttnn.bfloat16,
         mesh_device=mesh,
     )
+    # Values: heads concatenated along the last dim -> [1, 1, seq, n_heads*head_dim].
+    ref = attn_torch.permute(0, 2, 1, 3).reshape(1, 1, seq, U.N_HEADS * U.HEAD_DIM)
+    U.assert_pcc(ref, attn_output_concat, pcc=0.999, mesh_device=mesh)

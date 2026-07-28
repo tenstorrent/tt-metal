@@ -27,12 +27,10 @@ from models.experimental.llama32_1b_quasar.modules.tt_ccl import (
 )
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 
-# CCL collective — multi-device Ring topology only (T3K/Galaxy). NOT called by the
-# model on a single-device N150 or the 2-node emulator (use_fused requires
-# topology == Ring; single device binds the plain ttnn.linear WO path instead).
-# Skipped so it drops cleanly out of an emulator run.
-# Remove this mark to exercise it on a real multi-device Ring mesh.
-pytestmark = pytest.mark.skip(reason="CCL op: multi-device Ring only; not used on single-device N150/emulator")
+# CCL + matmul fused op — needs a multi-device mesh. The (1, 2) parametrization below
+# is skipped automatically by the ttnn_mesh_device fixture on single-device systems
+# (N150 / 2-node emulator present as one device), so it stays out of the emulator run
+# while still exercising the op on real multi-device systems (N300 / T3K).
 
 
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 2)], indirect=True)

@@ -52,3 +52,12 @@ def test_nlp_create_qkv_heads(ttnn_mesh_device, reset_seeds, seq):
     U.assert_shape_dtype(q_heads, shape=(1, U.N_HEADS, seq, U.HEAD_DIM), dtype=ttnn.bfloat16, mesh_device=mesh)
     U.assert_shape_dtype(k_heads, shape=(1, U.N_KV_HEADS, seq, U.HEAD_DIM), dtype=ttnn.bfloat16, mesh_device=mesh)
     U.assert_shape_dtype(v_heads, shape=(1, U.N_KV_HEADS, seq, U.HEAD_DIM), dtype=ttnn.bfloat16, mesh_device=mesh)
+
+    # Values: split the fused QKV on -1 and reshape each into [1, heads, seq, head_dim]
+    # (transpose_k_heads=False, so K keeps the same [1, n_kv, seq, hd] layout as Q/V).
+    q_ref = xqkv_torch[..., : U.Q_DIM].reshape(1, seq, U.N_HEADS, U.HEAD_DIM).permute(0, 2, 1, 3)
+    k_ref = xqkv_torch[..., U.Q_DIM : U.Q_DIM + U.KV_DIM].reshape(1, seq, U.N_KV_HEADS, U.HEAD_DIM).permute(0, 2, 1, 3)
+    v_ref = xqkv_torch[..., U.Q_DIM + U.KV_DIM :].reshape(1, seq, U.N_KV_HEADS, U.HEAD_DIM).permute(0, 2, 1, 3)
+    U.assert_pcc(q_ref, q_heads, pcc=0.999, mesh_device=mesh)
+    U.assert_pcc(k_ref, k_heads, pcc=0.999, mesh_device=mesh)
+    U.assert_pcc(v_ref, v_heads, pcc=0.999, mesh_device=mesh)
