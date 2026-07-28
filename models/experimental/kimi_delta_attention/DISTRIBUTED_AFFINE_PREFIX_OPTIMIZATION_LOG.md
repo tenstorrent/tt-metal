@@ -127,6 +127,10 @@ The generic P2P suite reports 28 passed and one deterministic BF16 row-major fai
 
 Decision 2: reduce broadcast hop-work next. The current final-state loop sends rank 3 independently to ranks 0, 1, and 2 for each TP lane (twelve total fabric hops). A chained rank 3 -> 2 -> 1 -> 0 broadcast preserves six P2P calls but halves fabric hop-work to six and reuses the already received final-state tensor. Validate the dependency chain before accepting it.
 
+## Experiment 3: chained final-state broadcast
+
+Verdict: reject and revert. The chain `3 -> 2 -> 1 -> 0` halved nominal broadcast fabric hops from twelve to six and passed both TP-axis correctness cases, repeat, and trace with unchanged PCC/error. It did not improve performance: raw CSV `generated/profiler/reports/2026_07_28_15_27_33/ops_perf_results_2026_07_28_15_27_33.csv` measured a 2,540.412 us exact median versus 2,539.813 us for independent sends (0.02% slower, noise). Evidence rejects hop count as the limiting variable here: independent routed sends overlap, whereas the chain introduces data dependencies between one-hop transfers. No source change retained.
+
 ## Backlog
 
 - Test BF16 affine summaries/state transport. Hypothesis: halving each per-device tensor from 3.146 MB to 1.573 MB reduces both fabric and DRAM traffic and may improve matmul throughput. Required evidence: remove or specialize the current FP32 invariant only in the local fast path, validate serial/all-gather PCC and max absolute error over repeat and trace replay, then profile exact SP4xTP2. Reject if recurrent error is materially worse even when performance improves.
