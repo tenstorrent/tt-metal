@@ -59,7 +59,30 @@ MARKERS = [
 ]
 
 
+def _real_filter():
+    """lm_eval's own boxed_choice filter, when it is importable.
+
+    The mirror below is NOT equivalent, and the difference is measurable: on 61 non-empty responses
+    it agreed with lm_eval on 54 (88.5%), because it lacks the filter's third stage (delegation to an
+    ``[A-D]``-constrained ``multi_choice_regex``, which catches a trailing "(A)" in prose) and its
+    ``<think>`` stripping. Under-counting extractable answers by ~11 pp would make a healthy run look
+    like a degenerate one. So prefer the real thing and keep the mirror only for the venvs that do
+    not have lm_eval.
+    """
+    try:
+        from lm_eval.filters.extraction import BoxedChoiceFilter
+    except Exception:  # noqa: BLE001 - any import failure means "fall back"
+        return None
+    return BoxedChoiceFilter()
+
+
+FILTER = _real_filter()
+
+
 def extract_choice(text: str):
+    if FILTER is not None:
+        got = str(FILTER.apply([[text]], [{}])[0][0]).strip().upper().strip("()")
+        return got if len(got) == 1 and got in "ABCD" else None
     m = BOXED.search(text)
     if m:
         return m.group(1)
@@ -218,6 +241,10 @@ def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: P
                 correct += 1
 
     L = [f"run: {run_dir}", f"requests seen: {n}   (guard-truncated: {truncated})"]
+    if FILTER is None:
+        L.append("  (approximate extractor: lm_eval is not importable here, so the built-in mirror is")
+        L.append("   in use -- it agreed with lm_eval on 54/61 non-empty responses, undercounting.")
+        L.append("   Run from the evals venv, or use midrun_score.py, for the exact filter.)")
     if unmatched or ambiguous:
         L.append(f"  !! {unmatched} unmatched prompt length(s), {ambiguous} ambiguous — those are")
         L.append("     excluded from the accuracy numerator, so the score below is a LOWER bound.")
