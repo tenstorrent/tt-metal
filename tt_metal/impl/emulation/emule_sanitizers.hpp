@@ -24,7 +24,7 @@ class IDevice;
 }
 
 // Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
-static constexpr uint32_t EMULE_NUM_CBS = 32;
+static constexpr uint32_t EMULE_NUM_CBS = 64;
 
 // The per-launch sanitizer range/counter state used to live in `extern
 // thread_local`s here; it now lives in the per-fiber context
