@@ -1041,3 +1041,403 @@ gates. Breadcrumbs: `agent_logs/blocking-perf-coordinator_breadcrumbs.jsonl`.
    `cb_rms_sum` entirely.
 4. **C `row_rotate`** as B's fallback if re-measurement inverts the ranking.
 5. **F combine/compute overlap**, against whatever the critical path is after (1).
+
+---
+
+## Perf 2 — fan-out perf tournament, round 2 (5 ideas measured, 2 graduated as one fusion)
+
+- **Date**: 2026-07-28
+- **Device**: blackhole_p150b, 11 × 10 = 110-core compute grid, measured AICLK **1349.98 MHz** — the
+  references' `reference_aiclk_mhz`, so `scaled_ns == achievable_ns` and nothing below is scaled.
+- **`SUPPORTED` is byte-identical** to Perf 1 (`git diff` on `rms_norm.py` is empty). A perf
+  tournament moves nothing in the registry; the signal is device-ns.
+- **Headline: the focus shape went 54 377 → 27 091 ns, 2.007×**, closing its gap to the
+  perf-flagged reference from **2.12× over to 1.06× over**. Every other perf case moved inside the
+  noise band or improved 1.03–1.10×; nothing regressed.
+
+### Round shift — why the round-1 queue could not just be graduated
+
+Perf 1 ended with a five-item queue. It could not be cashed in as written, because Perf 1's own
+graduations moved the critical path underneath it: idea **B** (`colpack`) had measured 1.320× against
+a **75 490 ns** program that was now **54 377 ns**, with a different combine share. Round 2 therefore
+re-ran the measured breakdown first, on the now-instrumented, partly-optimized op, and re-measured
+every carried-over idea against the current baseline. Two of the round-1 queue items turned out to be
+worth *more* than queued, one turned out to be **self-defeating** on top of the other, and one was
+killed by its own sensitivity study. None of that was visible from round 1's numbers.
+
+### Focus shape
+
+`feature_spec.LOOSE_CASES` carries no literal `attention:` note, so — as in Perf 1 — the perf-flagged
+entries are the thirteen `_perf_case` rows with `extras.achievable_ns`, and the mandatory primary
+target is the one **furthest from its reference**: **`(1,1,8192,1024)` `BLOCK_SHARDED`, shard
+`[1024,128]`, grid `(8,8)`** at 54 377 ns against a 25 640 ns reference — **2.12× over**, the largest
+gap in the set by a wide margin (the next worst is `WIDTH 32×7168` at 1.17×).
+
+Its **full** config was re-checked against `SUPPORTED` before any measurement: bf16 / TILE /
+`fp32_dest_acc_en=False` / `math_fidelity=HiFi2` / `math_approx_mode=False` / bf16 TILE gamma /
+`BLOCK_SHARDED` — **every knob supported, no generality gap**, so it was optimized exactly, never via
+a proxy. Derived geometry (read from the live device, not assumed): 64 cores, `cw=8 cw1=8 cw2=1`
+(flat fold), per core 32 tile-rows × `Wt=4`, `nw=1`, `ht_block=8`, `nh_core=4` row-blocks,
+`fuse_sq=1`, `x_resident=1`, `gamma_resident=1`.
+
+Secondary column: the four `WIDTH_SHARDED` decode geometries, the only other cases over their
+references (1.06–1.17×).
+
+### Measured breakdown, and the ranked bottleneck
+
+Cumulative ablation (`RMS_NORM_ABLATE=combine[,gamma]`, `test_rms_norm_ablate_sharded`), one
+fresh-cache profiled run per variant — peeled **cumulatively**, not one stage at a time:
+
+| variant | ns | Δ | share |
+|---|---|---|---|
+| full | **54 377** | — | — |
+| `−combine` | 35 026 | **19 351** | **35.6 %** |
+| `−combine −gamma` | 28 403 | 6 623 | 12.2 % |
+
+**The ablation is not a pure peel, and reading it as one would have understated the prize.** With
+`cw = 1` every core must do its own local reduce, which *adds* 11 793 ns of `cmp_rowsum` MATH that
+the real program does only on the root, inside `cmp_combine`. So the combine round trip actually
+costs **~27 300 ns of member wait** — visible as the gap between `cmp_rsqrt`'s 35 112 ns MATH zone
+and the 7 839 ns of real work the same 32 tiles take in the ablated run — and the ablation nets only
+19 351 because it re-adds the rowsum. Per-stage real work, measured in the combine-ablated run so it
+is work and not waiting:
+
+| stage | MATH | UNPACK | PACK | note |
+|---|---|---|---|---|
+| `cmp_rsqrt` | 7 839 | 9 594 | 8 366 | 32 tiles, 245 ns/tile |
+| `cmp_square` | 5 714 | 3 540 | 4 942 | 128 tiles, 49 ns/tile |
+| `cmp_gamma_mul` | 3 952 | 4 175 | 4 004 | 128 tiles, 31 ns/tile — FPU floor |
+| `cmp_scale` | 3 772 | 7 074 | 5 119 | 128 tiles, UNPACK-bound |
+| reader/writer DM | — | — | — | `rdr_shard_publish` 77, `wtr_write` 54 |
+
+**Roofline gate.** The focus shape's own data movement is **zero** — input and output are both
+zero-copy L1 shards, so there is no DRAM traffic to optimize and the reader/writer are saturated at
+zero. The only DM is the combine's *self-inflicted* traffic, and its volume is a design choice, not a
+floor: the necessary payload is 8 cores × 256 row-sums × 4 B = **8 KB per group** against ~1 MB
+actually moved, **128× more**. The interleaved prefill column was left alone for the opposite reason —
+Refinement 5 measured it moving bytes 4–6 % *more* efficiently than a plain `ttnn.clone` of the same
+tensor, a genuine roofline.
+
+**The decisive observation.** Summing the three TRISCs' real work gives a compute floor of
+**~22–24 µs** for the current decomposition — i.e. **below the 25 640 ns reference**. So the combine
+round trip was not *a* bottleneck, it was **the entire gap to the goal**, and the round's portfolio
+was aimed there almost exclusively.
+
+**Ranked headroom:** (1) the combine round trip, ~27 300 ns of wait, 35.6 % net — nowhere near any
+roofline; (2) `cmp_rsqrt` real work 7 839 ns MATH, ablation-bounded below by a measured 81 ns/tile
+scaffolding floor, so ~5 200 ns reachable; (3) `cmp_square` at 49 ns/tile; (4) `cmp_scale`, already
+measured at its TRISC-throughput floor in Perf 1 (a phases-5+6 fusion was 0.67×), so **excluded**;
+(5) gamma's 6 623 ns, which is required math at the FPU floor; (6) reader/writer, saturated at zero.
+The same combine lever also reaches the secondary column, where it is 38–52 % of each kernel
+(`WIDTH 32×1024` 4 498→2 645, `32×2304` 5 157→3 197, `32×5120` 5 586→2 783, `32×7168` 6 410→3 090).
+
+### Portfolio floated (5 ideas, deliberately overlapping and mutually exclusive)
+
+`examples/master.md`'s `tensix_all_reduce` (T3) supplied the prior that made the overlap deliberate:
+for an **isolated 1-D group with several tiles per core**, a tile-index reducer beats a flat root by
+~2×; at **1 tile/core** it degenerates and the low-fan-in scheme wins instead. The focus shape is
+exactly an 8-core 1-D group with `ht = 8` tiles/core — so *shrinking the payload* (fewer tiles/core)
+and *parallelising the fold* (more owners per tile) pull in opposite directions. Both were floated.
+
+| # | idea | target | verdict |
+|---|---|---|---|
+| 1 | `colpack_regraduate` — column-pack the `ht` row-sums into ONE tile; bf16 wire datum | combine payload | **WIN 1.507×** → graduated |
+| 2 | `combine_parallel_fold` — sweep the pack factor `K` from pure-rotate to pure-pack | combine fold | **WIN but superseded** (K=1 *is* idea 1) |
+| 3 | `combine_allgather_no_root` — one hop, no root: broadcast + fold everywhere | combine topology | **REGRESSION 0.42×** |
+| 4 | `combine_latency_hiding` — software-pipeline the row-block loop | combine latency | **WIN 1.096× but superseded** |
+| 5 | `phase4_packed_rsqrt_and_bf16_stats` — one SFPU pass on a packed statistic; bf16 stat CBs | stage 2 | **WIN 1.622–2.351×** → graduated **as a fusion with 1** |
+
+Reader/writer levers came as pairs by construction here: the gather is the writer leg and the
+multicast the reader leg, and ideas 1–3 all move both.
+
+### Per-idea results
+
+Every subagent's fork was gated for faithfulness first — its `baseline` variant had to reproduce
+54 377 ns before any ratio it reported was allowed to mean anything. All five passed that gate
+(54 270 / 54 355 / 54 344 / 54 381 / n-a), which is what makes the numbers below comparable.
+
+**1 — `colpack_regraduate`: WIN 1.507×. GRADUATED.**
+Each worker shipped `ht` RAW 4 KB fp32 tiles per row-block in which all 32 columns still held live
+x² partial sums — 128 B of information in 4096. Folding within-tile and landing the `ht` results in
+`ht` **distinct columns of ONE tile** cuts the payload `ht`-fold *and* turns the root's fold from
+`ht·CW1` tile-reduces into `CW1 + ht` ops, because the pack moves the fold off the root as a side
+effect.
+
+| option | ns | vs base | PCC | precision |
+|---|---|---|---|---|
+| baseline | 54 270 | 1.000× | 0.99998402 | — |
+| `bf16` | 46 533 | 1.166× | 0.99998402 | **bit-identical** |
+| `colpack` | 36 581 | 1.483× | 0.99998256 | within contract |
+| **`colpack_bf16`** | **36 014** | **1.507×** | 0.99998256 | within contract |
+
+36 014 lands **988 ns above the combine-fully-ablated floor of 35 026 — 94.9 % of the whole 19 351 ns
+combine cost recovered.** Zones: root `cmp_combine` 25.4 µs → 6.7 µs, `wtr_gather_hop` 43.2 → 23.8,
+`rdr_mcast` 42.7 → 25.7. The bf16 payload is **free, not a trade** — re-verified on the current op,
+not inherited: at `fp32_dest_acc_en=False` DEST is already 16-bit, so the fp32 container never held a
+keepable bit. Predicates: `colpack` needs `w_split and cw2 == 1 and nw == 1 and 2 ≤ ht_block ≤ 16`
+(monotone in `ht_block`, which **is** the pack factor: 1.507× / 1.343× / 1.141× / **0.967×** at
+8 / 4 / 2 / 1 — hence the ≥ 2 guard; ≤ 16 is a hard mechanism limit, a reduce scaler can only address
+face-rows 0..15); the bf16 payload needs only `w_split and not fp32_dest_acc_en` and won on **11 of
+11** geometries (1.020–1.195×), which is why it is the wider guard and covers everything `colpack`
+refuses.
+
+**2 — `combine_parallel_fold`: WIN 1.403×, but SUPERSEDED. NOT GRADUATED.**
+The bake-off swept the pack factor `K` — how many tiles a worker ships per row-block — from `K = ht`
+(pure tile-index rotation, round 1's `row_rotate`) to `K = 1` (pure column-pack): 54 367 baseline →
+43 029 (`row_rotate`, 1.264×) → **38 759 (`K=1`, 1.403×)** → 39 186 (`K=2`) → 41 392 (`K=4`) → 46 470
+(`K=8`). **No interior `K` ever strictly beat both pure ends**, and the gap between them *widens* as
+`ht_block` grows (at a 1 MB budget, `K=1` improves to 37 065 while `row_rotate` only reaches 40 167).
+So the answer to master.md's payload-vs-parallelism tension is measured and one-sided here: `K = 1`
+wins, and `K = 1` **is** idea 1's `colpack`. The idea's one unique offering — `row_rotate` winning
+back the `ht_block ∈ [2,4]` regime by 1.05–1.11× on a smaller BLOCK shape — sits **at the 2–3 % noise
+band** and would have cost a second mechanism with a *larger* CB footprint (412 vs 324 KB at
+`ht_block=8`), so it was not graduated. Both schemes are bit-exact (they fold the same tiles in the
+same order).
+
+**3 — `combine_allgather_no_root`: REGRESSION on every geometry. NOT GRADUATED.**
+Replacing the two-hop gather→root-fold→multicast with a single all-broadcast plus a local fold on
+every core loses **1.11× to 6.93×**, monotonically worse in `cw · ht_block`: focus 54 344 → 129 426
+(0.42×), and 61 166 against 8 832 at `cw = 56`. The mechanism is diagnosed, not guessed: the reader's
+all-gather zone costs ~28 082 ns per row-block per core for `cw · ht_block = 64` individual 4 KB
+`noc_async_read`s at **~439 ns each** — it is **transaction-count bound, not bandwidth bound**,
+because the h-major landing layout the existing fold needs forces one transaction per (peer, tile-row)
+pair. At 3.70× the combine-ablated bound versus the two-hop tree's 1.55×, **fewer logical hops did not
+mean less overhead once each hop is many small point-to-point transactions instead of one
+converge-then-broadcast tree.** A smaller payload would not rescue it (the floor is per-transaction,
+not per-byte). Bit-exact throughout — correctness was never the problem. Recorded because the negative
+result is load-bearing: it is the measured reason the op keeps its root-gather topology.
+
+**4 — `combine_latency_hiding`: WIN 1.096× standalone, SUPERSEDED by its own sensitivity study. NOT GRADUATED.**
+Prefetching the next row-block's pass A across the combine stall gives 54 381 → 49 636 (1.096×,
+bit-exact), and the zones prove the mechanism rather than the wall clock: `rdr_gather_wait` drops
+3 503→918 avg and 27 764→7 162 max (−74 %). It was asked for a **sensitivity curve**, and that is what
+retired it:
+
+| stall_wait (of CW1 = 8) | baseline | prefetch_a | ratio |
+|---|---|---|---|
+| unablated | 54 381 | 49 636 | **1.096×** |
+| 6 | 48 385 | 49 023 | **0.987× — already a regression** |
+| 4 | 45 111 | 48 322 | 0.933× |
+| 1 | 44 124 | 47 679 | 0.925× |
+
+Its fixed overhead (a doubled `cb_group_partials` = +262 144 B, a second semaphore, a parity branch,
+and the `HT_BLOCK` 8→4 halving that the extra L1 forces) is only worth paying against the *current,
+un-shrunk* stall. Idea 1 shrinks the stall by 94.9 %, i.e. far past the ~25 % point at which this
+idea inverts — so it must be **superseded, not stacked**. That verdict is now confirmed twice over:
+by its own ablation, and by the delivered stall (27 300 → 11 349 ns, −58 %). Two real bugs found on
+the way, both worth keeping: the literal prefetch schedule has a **write-after-read race** on the
+root's landing zone (a fast core remote-writes hb+1 into the slot the root is still reading for hb;
+PCC 0.99982, and the all-ones gate did *not* catch it because uniform input hides a row mismatch),
+and `Semaphore::wait(n)` is an **exact-match** wait, not a threshold, so it hangs forever if the
+counter races past `n` — `wait_min` is the safe swap. `split_passA_all` is **BLOCKED**, not slow:
+batching all four row-blocks needs 1 MB for `cb_group_partials` alone, which with the 524 288 B of
+shard-resident CBs exceeds the entire 1 461 504 B L1 bank. Genuinely infeasible, not a tunable.
+
+**5 — `phase4_packed_rsqrt_and_bf16_stats`: WIN on both sub-levers. (b) GRADUATED as a fusion with idea 1.**
+The statistic for a tile-row is 32 scalars living in column 0 of its own tile, so the measured
+81 ns/tile of per-tile copy+pack scaffolding was being paid `ht` times over for 32 live datums each.
+Packing the row-block's statistics into ONE tile pays it once:
+
+| option | ns | ns/tile | vs base | col-0 PCC |
+|---|---|---|---|---|
+| baseline | 8 679 | 271.2 | 1.000× | 0.9999898 |
+| `baseline_bf16` (sub-lever a) | 8 461 | 264.4 | 1.026× | 0.9999898 |
+| `pack_here_c` | 5 350 | 167.2 | 1.622× | 0.9999797 |
+| `pack_here_cskip` | 4 610 | 144.1 | 1.883× | 0.9999797 |
+| **`pack_given_c`** | **4 497** | **140.5** | **1.930×** | 0.9999862 |
+| `pack_given_cskip` | 3 692 | 115.4 | 2.351× | 0.9999862 |
+
+Predicate `ht_block ≥ 4`, **sharper than the ≥ 2 the round guessed**: monotone
+0.422 / 0.682 / 1.090 / 1.622 / 2.150× at `ht_block` 1 / 2 / 4 / 8 / 16, so `ht_block = 2` is a clear
+regression, not a wash. Confirmed by reading the header rather than trusting the brief:
+`mul_tiles_bcast<COL>` takes a CB and a tile **index**, never a column offset, so the extract back to
+col-0 form is structurally required, not an implementation choice. **Sub-lever (a)** — narrowing
+`cb_rms_sum`/`cb_rms_recip` to bf16 — is **bit-exact at `fp32_dest_acc_en=False` (max |diff| 0.0) and
+measurably different at `True` (5.1e-2)**, confirming its own guard is load-bearing; at 1.026× on the
+stage it is **inside the whole-op noise band**, so it was measured and **not graduated** rather than
+claimed (its 32 KB/core of freed L1 is recorded as available headroom for a future round). Four
+silent bugs found and documented, all of the believable-but-wrong kind: a zero-copy sharded CB needs
+an explicit publish before any `cb_wait_front` (hung the device); a selector keyed on the loop
+variable instead of a fixed row (`h = 0` accidentally worked); `compute_kernel_hw_startup` referencing
+an undeclared CB corrupts *other* CBs' format tracking (PCC 0.889, no crash);
+`copy_tile_to_dst_init_short` does **not** reconfigure the unpacker dtype (PCC 0.59 on a stale fp32
+config).
+
+### What graduated — and why it is one fusion, not two changes
+
+Aggregation resolved the overlaps: **1 supersedes 2** (its `K=1` point *is* `colpack`, and no interior
+`K` beat it), **1 supersedes 4** (measured, by 4's own sensitivity curve), **3 is discarded**, and
+**5(b) composes with 1 — but only in its `pack_given` form.**
+
+That last point is the round's sharpest aggregation finding. 5(b)'s *standalone* form (`pack_here`,
+1.622×) would have been **self-defeating** on top of the graduated `colpack`: the root was
+column-select-extracting `ht` col-0 tiles only for every receiving core to re-pack them. Graduating
+the two as a fusion deletes that extract instead:
+
+- the **root** elementwise-sums the `CW1` packed tiles straight into `cb_rms_mean` (one page) and
+  **stops** — no extract;
+- the **multicast** ships **1 page instead of `HT_BLOCK`** (and a single-page CB has a constant write
+  pointer, so the fixed-offset contract no longer needs its reserve-then-pop-the-tail dance);
+- **phase 4** does ONE SFPU pass over the packed tile (`RsqrtMeanColPacked`, `VectorMode::C` with
+  `NVEC=8/STRIDE=1` — the stock full-face walk, covering packed columns 0..15 for all 32 tile rows),
+  then `ht` cheap FPU column-selects to produce the col-0 tiles `BroadcastDim::Col` consumes.
+
+**The `1/N` had to move, and that is the load-bearing correctness detail.** The extract now runs
+*after* the rsqrt, and rsqrt is non-linear, so the mean can no longer ride the column-select scaler.
+It folded into the rsqrt body as one fp32 SFPU multiply ahead of the `+eps` — which removes a bf16
+DEST round trip the old column-select pack had, so the fused result is marginally **more** accurate,
+not less. `cb_colsel`'s content goes 1/W → 1.0, and the body's `scale` is 1.0f on the unchanged
+per-tile-row path.
+
+Predicate, routed through **one** CT flag word (`_payload_flags`, bit0 colpack / bit1 bf16) read
+verbatim by reader, writer and compute so the CB plan and every kernel's trip count can never
+disagree — never duplicated literals:
+
+```
+colpack       : w_split and not two_stage and nw == 1 and 2 <= ht_block <= 16
+partial_bf16  : w_split and not fp32_dest_acc_en
+```
+
+Everything outside them keeps the byte-identical fallback, so those cases provably cannot regress.
+
+### Whole-op result
+
+`DEVICE KERNEL DURATION [ns]`, pinned perf config, one fresh-cache profiled run per column. The final
+column was re-measured **after** the pre-commit `clang-format` pass rewrote the kernels, so the number
+is of the committed source (round 1 recorded this exact trap):
+
+| case | Perf-2 base | +colpack | +fusion (final) | round × | ref | vs ref |
+|---|---|---|---|---|---|---|
+| **BLOCK 8192×1024** (focus) | **54 377** | 35 973 | **27 091** | **2.007×** | 25 640 | **1.06×** (was 2.12×) |
+| WIDTH 32×1024 | 4 498 | 4 195 | 4 190 | 1.074× | 4 110 | 1.02× |
+| WIDTH 32×2304 | 5 157 | 4 802 | 4 776 | 1.080× | 4 617 | 1.03× |
+| WIDTH 32×5120 | 5 586 | 5 095 | 5 097 | 1.096× | 5 267 | **0.97× — now beats its ref** |
+| WIDTH 32×7168 | 6 410 | 6 113 | 6 051 | 1.059× | 5 481 | 1.10× |
+| decode 32×1024 | 5 274 | 4 818 | 4 904 | 1.075× | 9 149 | 0.54× |
+| decode 32×2304 | 5 896 | 5 633 | 5 563 | 1.060× | 17 003 | 0.33× |
+| decode 32×5120 | 7 804 | 7 505 | 7 561 | 1.032× | 75 825 | 0.10× |
+| decode 32×7168 | 8 774 | 8 533 | 8 415 | 1.043× | 14 894 | 0.56× — **12.4× against the 7.0× requirement** |
+| prefill 8192×1024 | 86 538 | 86 951 | 86 533 | 1.000× | 96 744 | 0.89× |
+| prefill 8192×2304 | 180 641 | 182 100 | 182 350 | 0.991× | 211 345 | 0.86× |
+| prefill 8192×5120 | 398 196 | 395 169 | 395 142 | 1.008× | 738 307 | 0.54× |
+| prefill 8192×7168 | 555 021 | 553 021 | 560 487 | 0.990× | 1 032 281 | 0.54× |
+
+- **The focus shape is essentially at its reference** — 27 091 against 25 640, from 2.12× over. The
+  isolated bench predicted 36 014 for the colpack step and the real op landed 35 973 (0.1 %), so the
+  measurements transferred exactly rather than by luck.
+- **All four prefill cases are unchanged within noise**, which is the correct outcome: `cw == 1` there,
+  so neither guard engages and the emitted program is byte-identical. Their 0.990–1.008× spread is the
+  noise band, not the change.
+- **9 of 13 perf cases improved; none regressed** outside the 2–3 % band.
+- Final focus zones: `cmp_rsqrt` 10 052 MATH (from 35 112 at round start), `cmp_combine` 1 600 and
+  **only on the 8 root cores** (from 6 054 → and 25 668 MAX before round 2), `cmp_colpack` 477,
+  `cmp_square` 6 332, `cmp_scale` 4 595, `cmp_gamma_mul` 3 957. MATH is saturated at 25 413 of a
+  26 461 ns TRISC kernel: **the op is now compute-bound at its own decomposition's floor.**
+
+### Liveness proven, not assumed
+
+A deliberate `static_assert(false)` inside the new phase-4 branch failed the build on **trisc0, trisc1
+and trisc2** at the focus geometry's exact CT args
+(`...,4,4,4,1,8,1,32,1024,1,8,8,1,1,3` — `WT=4 HT_BLOCK=8 CW=8 CW1=8 CW2=1 NW=1`, payload flag word
+**3** = colpack|bf16), then was reverted and the case reconfirmed green. So the 1.332× cannot be a
+measurement of dead code behind a stale cache.
+
+### Raw LLK admitted
+
+Three bypasses, each with its measured authorization at the use site so a later helper-usage pass
+cannot "fix" it back and undo the win:
+
+1. **A per-output-column reduce scaler.** Blackhole's REDUCE_ROW SUM is an MVMUL with the scaler in
+   SrcA, so `dest[i,j] = Σ_k data[i,k]·scaler[j,k]` and the scaler's **face-row index picks the output
+   column**. `ckl::reduce` / `ckl::reduce_mean` take ONE canonical scaler tile with no per-output
+   index and cannot express a non-canonical scaler at all — a per-output-column scaler *is* the whole
+   mechanism.
+2. **`reduce_uninit()` between `tile_regs_commit` and `pack_tile`.** `reduce_init` programs a packer
+   **edge mask** that zeroes every datum outside column 0, which would erase a column-packed tile.
+   The pack needs the mask defeated; the extract needs it left ON (column-0-only output is exactly
+   what `BroadcastDim::Col` reads) and cleared once afterwards. No helper exposes that seam.
+3. **A raw L1 scaler-bank fill on the IDLE WRITER.** The two non-canonical banks are built with a NoC
+   memset (`async_write_zeros`) plus ~528 word stores, on BRISC — because a naive RISC-V store loop
+   cost **+20.5 µs** and made the whole idea read as 0.786×, and because on the reader it would sit in
+   front of the shard publish compute's first pass waits on. Measured as fully hidden in the final
+   profile: `wtr_selectors` 4 206 ns against a saturated MATH thread, so removing it would only
+   lengthen `wtr_gather_hop`'s wait.
+
+The SFPU body remains the stock accurate rsqrt (`_calculate_sqrt_body_<APPROX, RECIPROCAL, !FAST>`)
+verbatim, one multiply wider. **The precision contract (`fp32_dest_acc_en`, `math_fidelity`,
+`math_approx_mode`, dtypes) is untouched throughout** — no idea in this round was allowed to tune it,
+and the one option that would have traded precision (sub-lever 5a at `fp32_dest_acc_en=True`) is
+recorded above with its cost and explicitly guarded out.
+
+### Instrumentation
+
+Extended, never removed: **`cmp_colpack`** (compute) and **`wtr_selectors`** (writer) join the
+permanent `MaybeDeviceZoneScope` set, and both new predicate-guarded paths report through the existing
+`cmp_combine` / `cmp_rsqrt` zones, so per-stage observability covers every branch.
+
+### Guard-set no-regression
+
+One representative per distinct kernel path × layout × placement, plus slices on both sides of each
+new predicate:
+
+- `eval/golden_tests/rms_norm/` — run as four `memory_layout` slices (the full directory exceeds the
+  10-minute foreground budget): INTERLEAVED **1500 passed / 420 xfailed**, HEIGHT_SHARDED **1167 /
+  315**, WIDTH_SHARDED **870 / 630**, BLOCK_SHARDED **870 / 630** → **4407 passed, 0 failed,
+  0 errors, 1995 xfailed, no XPASS drift**, counts **identical** to the pre-change run. Plus
+  `test_op_loose` **19/19** (all five pinned sharded geometries) and `test_regression.py` **15/15**.
+  Coverage spans TILE/RM × gamma/no-gamma × every dtype × **both `fp32_dest_acc_en`** (the axis
+  `partial_bf16` guards on) × all four memory layouts.
+- `tests/ttnn/unit_tests/operations/rms_norm/` — `test_rms_norm_fused_reduce.py` **14/14** including
+  the **absolute all-ones checks** and `test_rms_norm_wsplit.py` **33/33** including the
+  topology-agreement checks. The absolute gate is not ceremony here: this round's most dangerous
+  failure mode is a per-row **rescale** from a mis-placed `1/N`, and PCC scores exactly that class
+  ≥ 0.9998 (round 1 shipped a cut that scored 0.9998 while corrupting 12.5 % of tile-rows).
+- Both W-split suites also green under **`--dev`** (watcher, NoC sanitizer, CB sanitization, LLK
+  asserts) — non-optional for this scheme per Refinement 2's changelog, and doubly so for a round that
+  changed a multicast payload size and a semaphore-gated landing window.
+
+### Issues encountered
+
+- **The remote JIT compile server ran out of disk** mid-round (`No space left on device` on
+  `/tmp/tt-metal-cache` at `bgdepyc01:54778`), failing the precompile warm pass. Worked around with
+  `--no-jit-server` (local compiles); recorded as an environment finding, not an op problem.
+- **The golden directory no longer fits one foreground run** (> 10 min). Split by `memory_layout`
+  into four `-k` slices, which is also a cleaner attribution boundary.
+- The pre-commit `clang-format` hook again rewrote the kernels *after* a measurement run, so the
+  committed source differed from what had been measured. Both graduations were **re-measured after
+  the reformat** (focus 27 003 → 27 091, 0.3 %) rather than assumed equivalent.
+
+### Perf 3 queue (measured, not speculative)
+
+1. **The residual combine latency**, now ~5 µs of wait inside `cmp_rsqrt` (down from 27 300). The
+   remaining transport is a `cw`-into-1 gather plus a 1-page broadcast; `combine_allgather_no_root`'s
+   measured diagnosis says any further attack must cut **transaction count**, not bytes — its own
+   untested follow-up (peer-major landing + `Accumulate::at` across peers, or a true HW multicast
+   push via `mcast_pipe`'s `SenderPipe`) is the concrete next experiment.
+2. **`pack_given_cskip`** — 2.351× on the stage against the graduated `pack_given_c`'s 1.930×, needing
+   only the pack to place its values at EVEN columns (`ht_block ≤ 8`) so the parity-stride body covers
+   the packed tile in 8 vectors instead of 16.
+3. **Sub-lever 5a**, the bf16 statistic CBs: bit-exact at `fp32_dest_acc_en=False`, 1.026× on the
+   stage (inside whole-op noise today) and **32 KB/core of freed L1** — worth revisiting when a lever
+   exists that can spend that L1.
+4. **`cmp_scale`'s UNPACK** (4 264–4 595 ns, still UNPACK-heavy) and **`cmp_square`'s 49 ns/tile**
+   against the plain muls' 31 — the only two compute items now above their apparent floors.
+5. **`row_rotate`** stays on the shelf as the `ht_block ∈ [2,4]` fallback if a future geometry makes
+   that regime matter; its integration notes are preserved in
+   `perf_experiments/combine_parallel_fold/`.
+
+### Artifacts
+
+`tests/ttnn/unit_tests/operations/rms_norm/perf_experiments/` — five idea dirs with their benches,
+forked descriptors + kernels, measured tables and correctness gates:
+`gather_payload_shrink/` (refreshed against the current op, ROUND 2 section appended to
+`bench.py` + `measurements/results.tsv` + raw zone dumps), `combine_parallel_fold/`,
+`combine_allgather_no_root/`, `combine_latency_hiding/`,
+`phase4_packed_rsqrt_and_bf16_stats/` (incl. `graduation_snippet.cpp`, the design + raw-LLK
+justification the fusion was built from). `probes/probe_p2_plan.py` — the host-side predicate
+resolution table (which geometry gets which guard, at both `fp32_dest_acc_en` values). Breadcrumbs:
+`agent_logs/blocking-perf-coordinator_breadcrumbs.jsonl`.
+
+**Summary: all 5 ideas measured; 2 graduated (as one fusion), 2 superseded with measured reasons,
+1 measured regression; focus shape 2.007× faster and now within 1.06× of its reference; no regression
+on any cell.**
