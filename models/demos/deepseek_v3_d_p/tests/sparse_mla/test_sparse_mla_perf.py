@@ -58,8 +58,8 @@ Single test (was a two-test tracy driver+impl split):
 Three scenarios (the test sweeps all three):
   * warm — production step: one `chunk`-token forward at start=cache over a `cache`-length prefix. Both
     block-cyclic caches (indexer index_kv_cache + KVPE) are left at init — no warm-up forwards; for a perf
-    proxy only op shapes/timing matter, and those are set by the full `total` prefix width the gather+score
-    span, not the cache contents. Measures a single steady-state chunk.
+    proxy only op shapes/timing matter, and those are set by the full `total` prefix width the fused ring
+    indexer spans, not the cache contents. Measures a single steady-state chunk.
   * cold — full cold prefill: forward chunks start=0,chunk,…,cache with real forwards that grow both
     caches (both by per-chunk block-cyclic slab writes). The measured region spans ALL chunks = the
     total cold-start prefill cost; the final chunk (start=cache) is exactly the `warm` step. Besides the
@@ -472,12 +472,14 @@ def _op_label(kernel_sources) -> str:
 # existing per-call graph attribution (parse_percall + its alias sets) consumes this dump unchanged.
 # Verified against the tracy op-code counts/durations for deepseek_v32 warm/sparse.
 _OP_CODE_RULES = (
+    # The fused ring indexer includes ring-attention all-gather helper kernels. Match its defining
+    # indexer kernels first so the whole program remains attributable to IndexerScore.
+    ("/experimental/indexer_score/", "IndexerScore"),
     # ring_mla (dense) fuses a ring all-gather with the joint-SDPA compute; its compute kernel lives under
     # transformer/sdpa/ (ring_joint_sdpa.cpp), so it must be matched BEFORE the generic sparse-SDPA rule.
     ("/ring_joint_sdpa", "RingJointSDPA"),
     ("/ring_attention_all_gather", "RingJointSDPA"),
     ("/transformer/sdpa/", "SDPA"),
-    ("/indexer_score/", "IndexerScore"),
     ("/topk_large_indices/", "TopkLargeIndices"),
     ("/ccl/all_gather_async/", "AllGatherAsync"),
     ("/ccl/reduce_scatter_minimal_async/", "ReduceScatterMinimalAsync"),
@@ -696,7 +698,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
 
     # Block-cyclic indexer key cache (SPARSE only): allocated externally (same ownership as the KVPE cache)
     # and passed into forward. warm/long leave it (and the KVPE cache) at zero init — for a profiling proxy
-    # the cache CONTENTS don't affect op shapes/timing (the gather + score always cover the full
+    # the cache CONTENTS don't affect op shapes/timing (the fused ring indexer always covers the full
     # `total`-length prefix), so representing the `cache` already-processed tokens needs no warm-up write.
     # cold fills both caches for real via its own per-chunk block-cyclic slab writes (start=0,chunk,…,cache).
     # DENSE has no indexer (NullIndexer) — ring MLA reads the prefix by logical_n (= total), not by cached

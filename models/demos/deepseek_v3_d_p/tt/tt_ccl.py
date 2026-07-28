@@ -131,6 +131,10 @@ class TT_CCL:
         # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
         self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Persistent ring-indexer gathered-K scratch buffers shared by every layer's DSA indexer,
+        # keyed by shape signature. See get_indexer_ring_k_buffer.
+        self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
     def get_mla_ring_attention_buffers(
         self,
         *,
@@ -216,6 +220,30 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
+        """Return the persistent full-K output buffer for the fused ring indexer.
+
+        ``local_k`` is the active batch-1 cache shard [1,1,T/sp,D]. The fused op gathers it over
+        ``sp_axis`` into [1,1,T,D] while scoring arriving bands. All MLA layers execute serially and
+        share the same index-cache geometry, so one stable-address scratch buffer per shape/dtype is
+        sufficient for the whole model instead of allocating a full gathered cache per layer.
+        """
+        import torch
+
+        local_shape = tuple(local_k.shape)
+        global_seq_len = local_shape[2] * self.mesh_device.shape[sp_axis]
+        key = (global_seq_len, local_shape[3], local_k.dtype, sp_axis)
+        if key not in self.indexer_ring_k_buffers:
+            self.indexer_ring_k_buffers[key] = ttnn.from_torch(
+                torch.zeros(1, 1, global_seq_len, local_shape[3]),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=local_k.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.indexer_ring_k_buffers[key]
 
     def get_shared_rs_intermediate(self, input_tensor, topology):
         """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate

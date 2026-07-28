@@ -715,13 +715,13 @@ def test_sparse_mla_accuracy(
     ds_repo,
     monkeypatch,
 ):
-    original = ttnn.experimental.indexer_score_dsa
+    original = ttnn.experimental.ring_indexer_score_dsa
 
     def check_indexer_q_format(q, *args, **kwargs):
         assert q.dtype == ttnn.bfloat8_b
         return original(q, *args, **kwargs)
 
-    monkeypatch.setattr(ttnn.experimental, "indexer_score_dsa", check_indexer_q_format)
+    monkeypatch.setattr(ttnn.experimental, "ring_indexer_score_dsa", check_indexer_q_format)
     topology = _topology_from_device_params(device_params)
     run_sparse_mla_accuracy_case(
         variant,
