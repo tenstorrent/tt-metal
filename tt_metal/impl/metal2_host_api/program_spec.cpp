@@ -106,12 +106,12 @@ struct CollectedSpecData {
         };
         std::vector<BinderRecord> writers;  // INCREMENT + CONSUME + SET bindings
         std::vector<BinderRecord> readers;  // OBSERVE bindings
-        // Derived in Pass 2, over ALL binders (writers + readers). Used to validate a forced
-        // DM_LOCAL_CACHED semaphore: the cached-only pool is a per-core, DM-cache-domain region, so
-        // every binder must be a data-movement kernel confined to the semaphore's single node --
-        // otherwise the semaphore silently splits (a compute/TRISC binder reads the ring while DM
-        // reads the pool; a binder on another node addresses THAT node's pool).
-        bool all_binders_are_dm = true;
+        // Union of ALL binders' node sets (writers + readers), derived in Pass 2. Used to validate a
+        // forced DM_LOCAL_CACHED semaphore: the cached-only pool is a PER-CORE region, so a binder
+        // running on another node would address THAT node's pool copy and the semaphore would
+        // silently split. (No "is every binder a DM kernel?" check is needed: hw_config is a
+        // two-alternative variant (DataMovement | Compute) and ValidateProgramSpec already forbids
+        // semaphore bindings on compute kernels outright, so every binder is necessarily DM.)
         NodeRangeSet binder_node_set;
         // Derived in Pass 2 (needs kernel_node_set): sum over writers of
         // num_cores(kernel_node_set) * num_threads = the count of concurrent writer instances.
@@ -250,15 +250,10 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 "semaphore must live on exactly one node (it must never be reachable via the NoC).",
                 sem.unique_id,
                 num_nodes);
-            // A compute/TRISC binder would address the kernel_config ring (the compute Semaphore class
-            // is scope-agnostic) while DM binders use the pool -> two different words, silent split.
-            TT_FATAL(
-                binders.all_binders_are_dm,
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by a compute kernel; the "
-                "cached-only pool is in the data-movement cache domain, so a compute binder would read a "
-                "different word (the kernel_config ring) and the semaphore would silently split. Bind it "
-                "only from data-movement kernels, or use SemaphoreScope::EXTERNAL.",
-                sem.unique_id);
+            // NOTE: no "binders must be DM kernels" check is needed -- ValidateProgramSpec already
+            // forbids semaphore bindings on compute kernels outright, and hw_config has no third
+            // alternative, so every binder is necessarily data-movement.
+            //
             // A binder on another node would address ITS OWN node's pool at the same offset.
             // merge() then compare counts: if the union grew, some binder sits outside the sem's node.
             TT_FATAL(
@@ -774,13 +769,10 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 sem_info.setting_instance_count += instances;
             }
         }
-        // Cached-pool eligibility facts, over EVERY binder (a reader matters too: a compute reader
-        // would read the ring while DM writers use the pool).
+        // Cached-pool eligibility: where do ALL binders run? Readers count too -- a reader on another
+        // node would read that node's pool copy, not the one the writers update.
         for (const auto* recs : {&sem_info.writers, &sem_info.readers}) {
             for (const auto& rec : *recs) {
-                if (!rec.kernel->is_data_movement_kernel()) {
-                    sem_info.all_binders_are_dm = false;
-                }
                 sem_info.binder_node_set =
                     sem_info.binder_node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
             }
