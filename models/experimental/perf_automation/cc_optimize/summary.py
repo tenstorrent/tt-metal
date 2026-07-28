@@ -769,11 +769,34 @@ def render_summary(
     # The decode ceiling is per TOKEN, so hand the renderer the per-token reading EXPLICITLY rather
     # than letting it divide the headline per-profile device_ms: 1000/534 ms reads 1.9 tok/s/u against
     # a 64 tok/s/u ceiling, i.e. 3% utilisation for a model running at 84%.
+    # THE WIN GATE'S OWN NUMBER IS THE MEASURED ONE. check_full_pipeline_latency confirms every win by
+    # comparing trace_replay end-to-end against trace_replay end-to-end, ratcheting best-so-far into
+    # this file -- "validate/bank EVERY win here". So the report must divide the ceiling by THAT, not by
+    # a per-profile per_token_ms (a 16-layer window) or the e2e bookend taken at the run's start. Using
+    # the stale bookend reported 43.9 tok/s/u for a model the gate had already measured at 58.6.
+    # Layer cap is OFF for this measurement, so it is full-model and comparable to a full-model ceiling.
     _tok_ms, _tok_depth = None, ""
     try:
-        _tok_ms = _ledger().trace_ms_from_profile(baseline_profile)
-        if _tok_ms is not None and isinstance(baseline_profile, dict):
-            _tok_depth = str(baseline_profile.get("perf_layers") or "")
+        import json as _j
+        import tempfile as _tf
+
+        _gp = Path(_tf.gettempdir()) / (
+            "perf_mcp_full_pipeline_baseline_1cq_%s_%s.json" % (model or "model", task or "main")
+        )
+        _g = _j.loads(_gp.read_text())
+        if str(_g.get("method")) == "trace" and float(_g.get("full_pipeline_ms") or 0) > 0:
+            _tok_ms, _tok_depth = float(_g["full_pipeline_ms"]), "all"
+    except Exception:  # noqa: BLE001
+        _tok_ms, _tok_depth = None, ""
+    try:
+        if _tok_ms is None:
+            # Only the reading's OWN producer may label its depth. This stamped the profile's depth
+            # onto whatever _tok_ms held, so the gate's full-model 17.05 ms was relabelled as a
+            # 16-layer window and the scope guard then refused it -- reporting n/a for a number that
+            # was correct and comparable.
+            _tok_ms = _ledger().trace_ms_from_profile(baseline_profile)
+            if _tok_ms is not None and isinstance(baseline_profile, dict):
+                _tok_depth = str(baseline_profile.get("perf_layers") or "")
         if _tok_ms is None:
             _row = _ledger_pair(_ledger().KIND_TRACE_PASS, model, task)[1]
             if _row:

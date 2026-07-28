@@ -1668,13 +1668,16 @@ def check_pcc() -> dict:
         if _is_measurement_failure(_msg):
             out = _measurement_failed_result(_msg)
             out["status"] = "measurement_failed"
+            record_gate_verdict("pcc", "measurement_failed")
             return out
         _note_device_crash("check_pcc", _msg)
+        record_gate_verdict("pcc", "crash")
         return {"status": "crash", "error": _msg}
     if res.get("status") == "crash":
         _note_device_crash("check_pcc", str(res.get("error") or ""))
     else:
         _note_device_ok()
+    record_gate_verdict("pcc", res.get("status"), pcc=res.get("pcc"))
     return res
 
 
@@ -1961,7 +1964,98 @@ def _run_full_pipeline_ms():
 _FULLPIPE_GATE_LOG = Path(tempfile.gettempdir()) / "perf_mcp_fullpipe_gate.log"
 
 
+def _gate_verdict_path():
+    """Where every gate's LAST verdict is recorded, keyed like every other per-run artifact."""
+    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return Path(tempfile.gettempdir()) / ("perf_mcp_gate_verdicts_%s_%s.json" % (model, task))
+
+
+def record_gate_verdict(gate: str, status: str, **extra) -> None:
+    """Persist a gate's verdict so the WRITE PATH can enforce it.
+
+    Every gate returned its verdict to the agent and nothing else. git_commit's docstring says "valid
+    measure + ok pcc + faster + full-pipeline NOT regressed ... never commit" and its body committed
+    unconditionally; record_kernel_attempt took `beat_baseline` as a PARAMETER. So a regressed
+    end-to-end reading and a banked win could coexist -- d54438bb4b and 7fac4ae685 were committed as
+    wins at 13:24 and 13:34 while the gate's best had not moved since 13:14.
+
+    A verdict that is only returned is advice. Recorded, it becomes a precondition.
+    """
+    try:
+        p = _gate_verdict_path()
+        doc = {}
+        if p.is_file():
+            try:
+                doc = json.loads(p.read_text()) or {}
+            except Exception:  # noqa: BLE001
+                doc = {}
+        row = {"status": str(status)}
+        row.update({k: v for k, v in extra.items() if v is not None})
+        row["sha"] = _git_head_sha() if "_git_head_sha" in globals() else ""
+        doc[str(gate)] = row
+        p.write_text(json.dumps(doc, indent=2))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def gate_verdicts() -> dict:
+    try:
+        return json.loads(_gate_verdict_path().read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def gates_allow_banking() -> tuple:
+    """(allowed, reason). THE one precondition for banking a win, read from recorded verdicts.
+
+    A win is trace_replay end-to-end lower than before, with correctness intact -- so both gates must
+    have run and both must be ok. Absent verdicts are refused, not assumed: an unrun gate is not a
+    passed gate.
+    """
+    v = gate_verdicts()
+    pcc, fp = v.get("pcc") or {}, v.get("full_pipeline") or {}
+    if not pcc:
+        return False, "check_pcc has not run since the last commit"
+    if str(pcc.get("status")) != "ok":
+        return False, "check_pcc status=%s" % pcc.get("status")
+    if not fp:
+        return False, "check_full_pipeline_latency has not run since the last commit"
+    if str(fp.get("status")) != "ok":
+        return False, "full-pipeline status=%s (%s ms vs best %s)" % (
+            fp.get("status"),
+            fp.get("full_pipeline_ms"),
+            fp.get("best_ms"),
+        )
+    return True, "pcc ok + full-pipeline ok"
+
+
+def gate_set_new_best() -> bool:
+    """Did the last full-pipeline verdict actually RATCHET the end-to-end best down?
+
+    This is what a win means. 'ok' alone includes holding steady, which is acceptable for keeping an
+    edit but is not a win -- crediting it is how 29 device_ms new-bests became 29 ticks while the
+    end-to-end best moved far fewer times.
+    """
+    fp = gate_verdicts().get("full_pipeline") or {}
+    if str(fp.get("status")) != "ok":
+        return False
+    try:
+        ms = float(fp.get("full_pipeline_ms"))
+        prev = fp.get("best_ms")
+        return ms > 0 and (prev is None or ms < float(prev))
+    except (TypeError, ValueError):
+        return False
+
+
 def _emit_fullpipe(result: dict) -> dict:
+    record_gate_verdict(
+        "full_pipeline",
+        result.get("status"),
+        full_pipeline_ms=result.get("full_pipeline_ms"),
+        best_ms=result.get("best_ms"),
+        method=result.get("method"),
+    )
     m = result.get("method")
     src = "trace_replay" if m == "trace" else ("eager_wall" if m == "eager" else "n/a")
     parts = [
@@ -2047,6 +2141,33 @@ def _promote_fullpipe_pending() -> bool:
         if not src.exists():
             return False
         _FULLPIPE_BASELINE_1CQ_PATH.write_text(src.read_text())
+        # RECORD THE RATCHET. This is the reading a win is confirmed against -- trace_replay
+        # end-to-end vs trace_replay end-to-end -- and it was written only to the gate's own baseline
+        # file. The ledger's fullpipe rows therefore only ever held the run's START and END bookends,
+        # so the report's e2e line sat at the starting 22.79 ms while the gate had ratcheted to 17.05,
+        # and the same section quoted both numbers as the current end-to-end.
+        try:
+            _doc = json.loads(src.read_text()) if src.exists() else json.loads(_FULLPIPE_BASELINE_1CQ_PATH.read_text())
+            _ms = float(_doc.get("full_pipeline_ms") or 0.0)
+            if _ms > 0:
+                led = _ledger()
+                _mname = _MODEL_ROOT.name if _MODEL_ROOT else ""
+                _phase = (
+                    led.PHASE_AFTER
+                    if led.first(led.KIND_FULLPIPE, led.PHASE_BEFORE, model=_mname)
+                    else led.PHASE_BEFORE
+                )
+                led.record(
+                    led.KIND_FULLPIPE,
+                    _phase,
+                    _ms,
+                    depth="all",
+                    mode=str(_doc.get("mode") or "trace+1cq"),
+                    source="fullpipe-gate:committed-best",
+                    model=_mname,
+                )
+        except Exception:  # noqa: BLE001
+            pass
         src.unlink()
         return True
     except Exception:  # noqa: BLE001
@@ -2552,6 +2673,12 @@ def git_commit(message: str) -> dict:
     are left untouched). Use this to BANK a verified win: valid measure + ok pcc (check_pcc) + faster
     + full-pipeline NOT regressed (check_full_pipeline_latency status == 'ok'). If check_pcc OR
     check_full_pipeline_latency is not ok, revert — never commit. Returns the new sha."""
+    # ENFORCE, do not merely instruct. The rule above was prose for the agent and the body committed
+    # unconditionally: d54438bb4b and 7fac4ae685 were banked as wins at 13:24 and 13:34 while the
+    # end-to-end best had not moved since 13:14, because nothing here asked the gates.
+    _allowed, _why = gates_allow_banking()
+    if not _allowed and os.environ.get("PERF_MCP_ALLOW_UNGATED_COMMIT") != "1":
+        return {"committed": False, "refused": _why, "sha": ""}
     repo = gitio.repo_root(_MODEL_ROOT)
     try:
         pathspec = _MODEL_ROOT.relative_to(repo)
@@ -2685,7 +2812,13 @@ def record_kernel_attempt(
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
         "measured_ms": _ms,
-        "beat_baseline": _ledger().is_win({"beat_baseline": bool(beat_baseline), "measured_ms": _ms}),
+        # THE GATE DECIDES, NOT THE CALLER. beat_baseline arrived as a parameter, so a caller could
+        # pass True from measure_candidate's device_ms verdict while the end-to-end gate had returned
+        # `regressed` -- which is exactly how two ticks appeared for commits that did not move the
+        # end-to-end best. A win is trace_replay end-to-end lower than before, so it is read from the
+        # gate's own recorded verdict; the parameter is kept only as the caller's CLAIM, for the note.
+        "beat_baseline": bool(gate_set_new_best()) and _ledger().is_win({"beat_baseline": True, "measured_ms": _ms}),
+        "claimed_beat_baseline": bool(beat_baseline),
         "note": note,
         "stages": stages,
         "kernel_detected_in_source": detected,

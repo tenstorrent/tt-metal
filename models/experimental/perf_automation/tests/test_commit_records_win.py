@@ -40,14 +40,68 @@ def test_record_committed_win_marks_current_target(monkeypatch):
     assert r["note"].startswith("committed:")
 
 
-def test_git_commit_records_win_on_success(monkeypatch):
+def _gates_ok(monkeypatch, tmp_path, *, ms=17.0, best=18.0, pcc="ok"):
+    """Record the two gate verdicts a banked win now REQUIRES."""
+    monkeypatch.setattr(perf_mcp, "_gate_verdict_path", lambda: tmp_path / "verdicts.json")
+    perf_mcp.record_gate_verdict("pcc", pcc, pcc=0.99)
+    perf_mcp.record_gate_verdict("full_pipeline", "ok", full_pipeline_ms=ms, best_ms=best, method="trace")
+
+
+def test_git_commit_records_win_on_success(monkeypatch, tmp_path):
+    """A win is now banked only when BOTH gates recorded ok and the end-to-end best actually moved."""
     recs = _capture_appends(monkeypatch)
+    _gates_ok(monkeypatch, tmp_path)
     monkeypatch.setattr(perf_mcp, "_LAST_TARGET", {"op": "MatmulDeviceOperation", "rung": "grid", "measured_ms": 12.34})
     monkeypatch.setattr(perf_mcp.gitio, "commit", lambda *a, **k: "sha1234")
     monkeypatch.setattr(perf_mcp.gitio, "repo_root", lambda p: perf_mcp._MODEL_ROOT)
     out = _git_commit("perf: full grid")
     assert out["committed"] is True and out["sha"] == "sha1234"
     assert len(recs) == 1 and recs[0]["beat_baseline"] is True
+
+
+def test_git_commit_is_REFUSED_when_no_gate_has_run(monkeypatch, tmp_path):
+    """The rule was prose in the docstring and the body committed unconditionally, so a regressed
+    end-to-end and a banked win could coexist: d54438bb4b and 7fac4ae685 landed as wins while the
+    gate's best had not moved for 20 minutes. An unrun gate is not a passed gate."""
+    recs = _capture_appends(monkeypatch)
+    monkeypatch.setattr(perf_mcp, "_gate_verdict_path", lambda: tmp_path / "none.json")
+    monkeypatch.setattr(perf_mcp.gitio, "commit", lambda *a, **k: "shaXXXX")
+    monkeypatch.setattr(perf_mcp.gitio, "repo_root", lambda p: perf_mcp._MODEL_ROOT)
+    out = _git_commit("perf: ungated")
+    assert out["committed"] is False and "has not run" in out["refused"]
+    assert recs == []
+
+
+def test_git_commit_is_REFUSED_when_the_end_to_end_regressed(monkeypatch, tmp_path):
+    recs = _capture_appends(monkeypatch)
+    monkeypatch.setattr(perf_mcp, "_gate_verdict_path", lambda: tmp_path / "v.json")
+    perf_mcp.record_gate_verdict("pcc", "ok", pcc=0.99)
+    perf_mcp.record_gate_verdict("full_pipeline", "regressed", full_pipeline_ms=17.07, best_ms=17.05, method="trace")
+    monkeypatch.setattr(perf_mcp.gitio, "commit", lambda *a, **k: "shaYYYY")
+    monkeypatch.setattr(perf_mcp.gitio, "repo_root", lambda p: perf_mcp._MODEL_ROOT)
+    out = _git_commit("perf: slower end to end")
+    assert out["committed"] is False and "regressed" in out["refused"]
+    assert recs == []
+
+
+def test_git_commit_is_REFUSED_when_pcc_failed(monkeypatch, tmp_path):
+    monkeypatch.setattr(perf_mcp, "_gate_verdict_path", lambda: tmp_path / "v.json")
+    perf_mcp.record_gate_verdict("pcc", "pcc_low", pcc=0.61)
+    perf_mcp.record_gate_verdict("full_pipeline", "ok", full_pipeline_ms=17.0, best_ms=18.0, method="trace")
+    monkeypatch.setattr(perf_mcp.gitio, "commit", lambda *a, **k: "shaZZZZ")
+    monkeypatch.setattr(perf_mcp.gitio, "repo_root", lambda p: perf_mcp._MODEL_ROOT)
+    out = _git_commit("perf: broke correctness")
+    assert out["committed"] is False and "pcc_low" in out["refused"]
+
+
+def test_holding_steady_is_acceptable_but_is_NOT_a_win(monkeypatch, tmp_path):
+    """status ok includes 'no worse'. Keeping such an edit is fine; crediting it as a win is how 29
+    device_ms new-bests became 29 ticks while the end-to-end best moved far fewer times."""
+    monkeypatch.setattr(perf_mcp, "_gate_verdict_path", lambda: tmp_path / "v.json")
+    perf_mcp.record_gate_verdict("pcc", "ok", pcc=0.99)
+    perf_mcp.record_gate_verdict("full_pipeline", "ok", full_pipeline_ms=17.05, best_ms=17.05, method="trace")
+    assert perf_mcp.gates_allow_banking()[0] is True
+    assert perf_mcp.gate_set_new_best() is False
 
 
 def test_git_commit_no_win_when_commit_fails(monkeypatch):
