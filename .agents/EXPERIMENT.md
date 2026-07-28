@@ -57,11 +57,19 @@ is inherent to shipping the advisor as a gated tool and is part of what is being
 Applied on `base`:
 
 - **`DECODE_BATCH`** — traced decode is validated and measured at both batch 1 and the serving decode
-  batch, and stage 02 runs its layout/matmul candidate search at `DECODE_BATCH`. Candidate legality
-  is batch-shaped: several decode matmul families (DRAM-sharded weights in particular) are only legal
-  at a decode-shaped `M`, so a batch-1-only decode contract would delete them from the search space
-  and make the advise arms indistinguishable from the no-advise arms for reasons that have nothing to
-  do with the advisor.
+  batch, and stage 02 sweeps layout/matmul candidates at both. Primary target stays batch-1 traced
+  decode, matching `$optimize`. The reason to pin both is that advised and measured shard params
+  differ by batch (a sub-tile activation yields `per_core_M = 1`, a full-tile one does not), so a
+  config tuned at one batch is not evidence for the other — and an arm that reported only one batch
+  would not be comparable with an arm that reported the other.
+
+  Note for anyone reading an older version of this file: DRAM-sharded decode matmuls are **not**
+  batch-32-only. tt-metal's constraint is `TT_FATAL(M == 1, "currently only support in0 tensor height
+  of tile height")` in `matmul_device_operation.cpp`, where `M` is in tiles off the padded shape — so
+  batch 1 pads to one tile row and passes, and batch 64 is what gets refused. The advisor used to
+  carry a hardcoded `M % 32 == 0 && M / 32 == 1` that admitted exactly batch 32; tt-mlir
+  `28bc859f9e` removed it, and the pinned `618cd4e75d` has no M gate at all. Batch 1 measured DS as
+  the *fastest* option on QB2 (Qwen2.5-Coder DS-40c, 2.1503 ms).
 - **functional-decoder stays untuned** — no hand-picked shard specs, matmul program configs, or
   per-core grids in the runtime forward, and framework-default compute-kernel config unless a
   recorded PCC failure forced otherwise. Only ops that need an L1-sharded input to run at all (paged

@@ -135,7 +135,8 @@ git -C ~/tt-mlir rev-parse HEAD   # machine A only
 `<model_dir>` is the HF id lowercased with every non-alphanumeric replaced by `_`. Downstream gates
 resolve the autoport directory from it — do not add hardware or experiment qualifiers.
 
-`DECODE_BATCH=32` for every model and every stage. If a model cannot run batch 32, the stage records
+`DECODE_BATCH=32` for every model and every stage; batch 1 is measured alongside it and is the
+primary optimization target. If a model cannot run batch 32, the stage records
 the byte calculation / failed capacity probe and the largest feasible batch, and **that number is
 then used for every arm of that model** — write it into `~/skillexp-logs/ENV.md` and tell the other
 machine before phase 2.
@@ -300,8 +301,10 @@ Under `models/autoports/<model_dir>/doc/`:
   `final_ir.mlir`, and a work_log line per advisor recommendation: applied, or rejected with
   before/after numbers.
 
-The single number the ablation turns on: **warmed traced decode latency at `DECODE_BATCH`, before
-and after the stage, from the same harness.** Everything else is supporting evidence.
+The numbers the ablation turns on: **warmed traced decode latency at batch 1 and at
+`DECODE_BATCH`, before and after the stage, from the same harness.** Batch 1 is the primary target
+(per `$optimize`); `DECODE_BATCH` must not regress. Report both for every arm — they are not
+substitutable, because shard params differ between a sub-tile and a full-tile activation.
 
 ---
 
