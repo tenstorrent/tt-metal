@@ -14,6 +14,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
@@ -95,9 +96,21 @@ _ACCURACY_ROWS_PER_DEVICE = 1024
 _MEDIUM_BF16_ROWS_PER_DEVICE = 1200  # 5.5296 MB/link on the 8-device, 2-link qualification mesh.
 _NUM_LINKS = 2
 
+# CI performance targets are global sequence lengths. Both divide exactly by
+# the four-rank QuietBox ring and eight-rank Blackhole Galaxy line.
+_CI_PERF_GLOBAL_ROWS = (55_000, 512 * 1024)
+_CI_PERF_TEST_CASES = [
+    ("bf16_row_major", ttnn.bfloat16, 576, ttnn.ROW_MAJOR_LAYOUT, 1152),
+    ("fp8_row_major", ttnn.fp8_e4m3, 656, ttnn.ROW_MAJOR_LAYOUT, 704),
+    ("bf16_tiled", ttnn.bfloat16, 576, ttnn.TILE_LAYOUT, 2048),
+    # fp8_e4m3 tile tensors are unsupported. bfloat8_b is the supported FP8
+    # tile representation and has a 64-byte tile exponent header.
+    ("bfloat8_tiled", ttnn.bfloat8_b, 576, ttnn.TILE_LAYOUT, 1088),
+]
+
 
 def _rank_line_mesh(mesh_device):
-    """Return the physical four-rank line used by QuietBox and LoudBox.
+    """Return a four-rank Blackhole line, preferring an eight-rank line when available.
 
     QuietBox exposes its four Blackhole devices as a 4x1 mesh. LoudBox exposes
     eight devices as 2x4, so the corresponding physical rank line is a 1x4
@@ -543,6 +556,92 @@ def _run_high_bw_all_gather_test_cases(mesh_device, min_bandwidth_gbps, cluster_
             min_bandwidth_gbps,
             cluster_axis,
         )
+
+
+def _run_high_bw_all_gather_ci_perf(mesh_device, cluster_axis, min_bandwidth_gbps):
+    """Run the compact CI matrix and pair every bandwidth measurement with correctness."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("high_bw_all_gather CI performance coverage requires the realtime device profiler")
+
+    axis_size = mesh_device.shape[cluster_axis]
+    for global_rows in _CI_PERF_GLOBAL_ROWS:
+        assert global_rows % axis_size == 0
+        rows_per_device = global_rows // axis_size
+        required_bandwidth_gbps = (
+            min_bandwidth_gbps[global_rows] if isinstance(min_bandwidth_gbps, dict) else min_bandwidth_gbps
+        )
+        for case_name, dtype, width, layout, expected_page_size in _CI_PERF_TEST_CASES:
+            print(f"HIGH_BW_ALL_GATHER_CI_PERF global_rows={global_rows} case={case_name}")
+            _run_high_bw_all_gather_perf(
+                mesh_device,
+                dtype,
+                width,
+                layout,
+                expected_page_size,
+                required_bandwidth_gbps,
+                cluster_axis,
+                rows_per_device=rows_per_device,
+            )
+            # Use a compact reference run after the full-size measurement. This
+            # validates the same dtype/layout/route without doubling CI memory
+            # pressure for the 512K target.
+            _run_high_bw_all_gather_accuracy(
+                mesh_device,
+                dtype,
+                width,
+                layout,
+                expected_page_size,
+                cluster_axis,
+                rows_per_device=min(rows_per_device, _ACCURACY_ROWS_PER_DEVICE),
+            )
+
+
+@run_for_blackhole("Blackhole Galaxy perf gate requires Blackhole")
+@pytest.mark.skipif(os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy perf gate requires MESH_DEVICE=TG")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
+def test_high_bw_all_gather_galaxy_ci_perf(mesh_device):
+    """Blackhole Galaxy perf gate: 8x1 Fabric2D torus at 55K and 512K targets."""
+    _run_high_bw_all_gather_ci_perf(
+        mesh_device,
+        cluster_axis=0,
+        min_bandwidth_gbps={55_000: 65.0, 512 * 1024: 90.0},
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                **_device_params(ttnn.FabricConfig.FABRIC_1D_RING),
+                # A 4-device logical ring cannot safely be opened as a subset
+                # of an 8-device LoudBox. This is intentionally a QuietBox-only
+                # gate and must use its physical 4-device ring.
+                "require_exact_physical_num_devices": True,
+            },
+            id="fabric_1d_ring",
+        ),
+        pytest.param(
+            {
+                **_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
+                # As above, exercise the actual four-device QuietBox topology
+                # rather than an unsupported subset of a LoudBox.
+                "require_exact_physical_num_devices": True,
+            },
+            id="fabric_2d_torus_xy",
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
+def test_high_bw_all_gather_quietbox_ci_perf(mesh_device):
+    """QuietBox perf gate: 4x1 ring and 2D torus at 55K and 512K targets."""
+    _run_high_bw_all_gather_ci_perf(
+        mesh_device,
+        cluster_axis=0,
+        min_bandwidth_gbps={55_000: 65.0, 512 * 1024: 90.0},
+    )
 
 
 @pytest.mark.parametrize(

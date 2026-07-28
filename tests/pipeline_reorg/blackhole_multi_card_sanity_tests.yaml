@@ -40,6 +40,14 @@
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
 
+- name: high_bw_all_gather CCL perf and accuracy tests
+  cmd: pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_quietbox_ci_perf -q
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
 - name: Host IO fast unit test (viommu only)
   cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
   skus:
