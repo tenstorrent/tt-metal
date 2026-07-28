@@ -17,21 +17,18 @@ void bind_experimental_plusone_operation(nb::module_& mod) {
             Returns input tensor elements increased by 1.
             Input tensor must have INT32 or UINT32 data type, ROW_MAJOR layout, and 1 to 4 dimensions.
             This op only gives decent performance for small tensors (up to 100 elements).
-            This op allows you to skip the addition on negative entries using the skip_negative_entries flag. If enabled, only entries in [0, INT32_MAX) are incremented -- negative entries (and INT32_MAX, which would overflow) are left unchanged. This is used to preserve negative sentinels, e.g. -1 marking an inactive user slot in a decode position tensor.
+
+            Elementwise behaviour:
+
+            * ``skip_negative_entries = False`` (default): every element is incremented, ``output[i] = input[i] + 1``.
+            * ``skip_negative_entries = True``: only elements in ``[0, INT32_MAX)`` are incremented; negative
+              elements, and ``INT32_MAX`` (which would overflow to a negative value), are returned unchanged.
+              This preserves negative sentinel values, e.g. ``-1`` marking an inactive user slot in a decode
+              position tensor.
+
             This op also allows you to specify the core to use in the sub_core_grids argument.
             If the input tensor is L1 sharded on the sub core grid, each individual shard will be incremented with output residing in L1 of same sub core grid.
             If the input tensor is DRAM interleaved, only 1 core should be used as the sub core grid (uses 1 core by default).
-            Equivalent pytorch code:
-
-            .. code-block:: python
-
-                # skip_negative_entries=False (default)
-                return torch.add(input_tensor, 1)
-
-                # skip_negative_entries=True
-                return torch.where(
-                    (input_tensor >= 0) & (input_tensor < 2**31 - 1), input_tensor + 1, input_tensor
-                )
 
             Args:
                 * :attr:`input_tensor`: Input Tensor for plusone.
