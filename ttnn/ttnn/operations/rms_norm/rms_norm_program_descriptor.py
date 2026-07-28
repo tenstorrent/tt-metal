@@ -733,7 +733,13 @@ class _Blocking:
                 self.gather_tile_bytes,
                 (self.gather_ht * self.cw2) if self.two_stage else 0,
             ),
-            ("cb_rms_mean", CB_RMS_MEAN, self.fp32_tile_bytes, H if self.w_split else 0),
+            # Perf 2: under colpack the statistic that crosses the NoC is ONE
+            # column-packed tile per row-block, so both the broadcast source and
+            # its landing CB are single-page. A single-page CB also has a constant
+            # write pointer, which is what the fixed-offset multicast contract
+            # needs (the `ht`-page spelling had to reserve HT_BLOCK and pop the
+            # tail to get the same property).
+            ("cb_rms_mean", CB_RMS_MEAN, self.fp32_tile_bytes, (1 if self.colpack else H) if self.w_split else 0),
             ("cb_partial_out", CB_PARTIAL_OUT, self.gather_tile_bytes, self.gather_ht if self.w_split else 0),
             ("cb_partials", CB_PARTIALS, self.fp32_tile_bytes, 2 * H),
             # Perf 2 — the column-pack's two non-canonical scaler banks (one tile
@@ -747,7 +753,7 @@ class _Blocking:
             ("cb_packsel", CB_PACKSEL, self.fp32_tile_bytes, H if self.colpack else 0),
             ("cb_colsel", CB_COLSEL, self.fp32_tile_bytes, H if self.colpack else 0),
             ("cb_rootsum", CB_ROOTSUM, self.gather_tile_bytes, 2 if self.colpack else 0),
-            ("cb_rms_sum", CB_RMS_SUM, self.fp32_tile_bytes, H),
+            ("cb_rms_sum", CB_RMS_SUM, self.fp32_tile_bytes, 1 if self.colpack else H),
             ("cb_rms_recip", CB_RMS_RECIP, self.fp32_tile_bytes, H),
             ("cb_scaled", CB_SCALED, self.tile_bytes, B if self.has_gamma else 0),
         ]
@@ -1586,6 +1592,7 @@ def create_program_descriptor(
     gamma_addr = gamma.buffer_address() if gamma is not None else 0
     dst_addr = output_tensor.buffer_address()
     eps_bits = struct.unpack("<I", struct.pack("<f", float(epsilon)))[0]
+    inv_n_bits = struct.unpack("<I", struct.pack("<f", 1.0 / float(blk.W)))[0]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
@@ -1664,7 +1671,16 @@ def create_program_descriptor(
             # RISC until its first gather hop — see the kernel's justification.
             blk.W,
         ]
-        compute_rt[core.x][core.y] = [w.num_rows, eps_bits, is_root, is_last_w, 1 if w.is_leader else 0]
+        compute_rt[core.x][core.y] = [
+            w.num_rows,
+            eps_bits,
+            is_root,
+            is_last_w,
+            1 if w.is_leader else 0,
+            # Perf 2: 1/N as float bits. Under colpack the broadcast tile carries a
+            # raw cross-core SUM, so the mean moves into phase 4's rsqrt body.
+            inv_n_bits,
+        ]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),

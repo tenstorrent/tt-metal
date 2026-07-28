@@ -191,11 +191,18 @@ namespace {
 // `VectorMode::C`'s face-0 -> face-2 stepping composes unchanged and column 0 is
 // covered for all 32 rows in 4 vector ops per face instead of 8.
 template <int NVEC, int STRIDE>
-sfpi_inline void rms_norm_rsqrt_add_col0_body(uint32_t eps_bits) {
+sfpi_inline void rms_norm_rsqrt_add_col0_body(uint32_t eps_bits, uint32_t scale_bits) {
     const sfpi::vFloat eps = ckernel::sfpu::Converter::as_float(eps_bits);
+    const sfpi::vFloat scale = ckernel::sfpu::Converter::as_float(scale_bits);
     for (int d = 0; d < NVEC; d++) {
+        // `scale` is 1.0f on the per-tile-row path (the mean was already applied
+        // by the producing reduce) and 1/N on the PACKED path, where the tile
+        // carries a raw cross-core SUM and the mean has to be applied here. It
+        // costs one fp32 SFPU multiply on the same vectors, ahead of the +eps —
+        // strictly BEFORE any narrowing, so it cannot lose a bit the old path
+        // kept.
         sfpi::vFloat t = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false /*FAST_APPROX*/>(
-            sfpi::dst_reg[0] + eps);
+            sfpi::dst_reg[0] * scale + eps);
         if constexpr (!DST_ACCUM_MODE) {
             t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
         }
@@ -216,7 +223,40 @@ struct RsqrtAddUnaryColZero : ckl::UnaryOp<RsqrtAddUnaryColZero<Slot>, Slot> {
         const uint32_t idst = ckl::to_u32(Slot) + slot_offset;
         const uint32_t eps = eps_bits;
         MATH((_llk_math_eltwise_unary_sfpu_params_(
-            [eps]() { rms_norm_rsqrt_add_col0_body<4, 2>(eps); }, idst, ckernel::VectorMode::C)));
+            [eps]() { rms_norm_rsqrt_add_col0_body<4, 2>(eps, 0x3f800000u /*1.0f*/); }, idst, ckernel::VectorMode::C)));
+    }
+};
+
+/// Perf 2 — `rsqrt(x * (1/N) + eps)` in ONE SFPU pass over a COLUMN-PACKED
+/// statistic tile, i.e. one whose column h holds tile-row h's raw cross-core
+/// SUM(x^2) (see COLPACK). Same body, same precision; the scope widens from
+/// "column 0 only" to "columns 0..15" because that is where the packed columns
+/// are, and HT_BLOCK <= 16 is already a hard precondition of the pack.
+///
+/// MEASURED MOTIVE. Phase 4 was the op's #2 real-compute item after the combine
+/// collapsed: 245 ns/tile x `ht` tiles per row-block, against a measured 81
+/// ns/tile floor for the per-tile copy+pack scaffolding alone — i.e. most of the
+/// cost was paying that per-tile scaffolding `ht` times over for 32 live datums
+/// each. One pass over the packed tile pays it ONCE: the isolated bench measured
+/// the stage at 8_679 -> 4_497 ns (1.930x) in exactly this `pack_given` form.
+///
+/// `NVEC = 8, STRIDE = 1` is the stock full-face walk (the shipped ITERATIONS=8),
+/// so under `VectorMode::C` this covers all 16 rows x 16 columns of faces 0 and 2
+/// — every packed column, for all 32 tile rows. The column-0-only variant above
+/// can skip the odd-parity vectors; a packed tile cannot, because its live data
+/// is spread across columns.
+template <ckl::Dst Slot = ckl::Dst::D0>
+struct RsqrtMeanColPacked : ckl::UnaryOp<RsqrtMeanColPacked<Slot>, Slot> {
+    uint32_t eps_bits;
+    uint32_t inv_n_bits;
+    constexpr RsqrtMeanColPacked(uint32_t e, uint32_t inv_n) noexcept : eps_bits(e), inv_n_bits(inv_n) {}
+    static ALWI void init() { rsqrt_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        const uint32_t idst = ckl::to_u32(Slot) + slot_offset;
+        const uint32_t eps = eps_bits;
+        const uint32_t inv_n = inv_n_bits;
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            [eps, inv_n]() { rms_norm_rsqrt_add_col0_body<8, 1>(eps, inv_n); }, idst, ckernel::VectorMode::C)));
     }
 };
 }  // namespace
@@ -280,6 +320,10 @@ void kernel_main() {
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     const uint32_t eps_bits = get_arg_val<uint32_t>(1);
+    // Perf 2: 1/N as float bits, for the COLPACK phase-4 path — the packed
+    // broadcast tile carries a raw cross-core SUM, so the mean is applied inside
+    // the rsqrt body instead of by the root's (now deleted) column-select.
+    [[maybe_unused]] const uint32_t inv_n_bits = get_arg_val<uint32_t>(5);
     const uint32_t is_root = get_arg_val<uint32_t>(2);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(3);
     const uint32_t is_leader = get_arg_val<uint32_t>(4);
@@ -672,12 +716,23 @@ void kernel_main() {
             //      double-count them. That is the Refinement-2 trap, and here it
             //      would be a silent per-row RESCALE that PCC scores >= 0.9998;
             //      only an ABSOLUTE all-ones check catches it).
-            //  (2) COLUMN-SELECT: `cb_colsel[h]` is a one-hot 1/W at reduce-axis
-            //      position h, so ONE reduce_tile pulls column h into column 0 AND
-            //      applies the 1/N in the same op. The packer edge mask is
-            //      deliberately LEFT ON here — its zeroing of everything outside
-            //      column 0 is exactly the shape phase 4 wants — and cleared once
-            //      at the end, before phases 5/6 pack full tiles again.
+            //  (2) COLUMN-SELECT, in PHASE 4 rather than here: `cb_colsel[h]` is a
+            //      one-hot 1.0 at reduce-axis position h, so ONE reduce_tile pulls
+            //      column h into column 0. The packer edge mask is deliberately
+            //      LEFT ON for it — its zeroing of everything outside column 0 is
+            //      exactly the shape phase 5 wants — and cleared once afterwards,
+            //      before phases 5/6 pack full tiles again.
+            //
+            // The root stops HERE: it publishes the ONE packed tile as the
+            // broadcast payload and does NOT extract. Extraction is deferred to
+            // every receiving core, where it fuses with phase 4 (see the
+            // RsqrtMeanColPacked element and phase 4 below). That deferral is what
+            // makes phase 4 ONE SFPU pass instead of `ht`, and it shrinks the
+            // multicast payload from `ht` tiles to 1 at the same time — the root
+            // was extracting `ht` tiles only for every core to re-pack them. The
+            // 1/N moves with it: cb_colsel carries a plain 1.0 now and the mean is
+            // applied inside the rsqrt body, which is where the packed sum first
+            // meets an fp32 SFPU datapath.
             if (is_root) {
                 MaybeDeviceZoneScope("cmp_combine");
                 ckl::reduce<
@@ -685,34 +740,15 @@ void kernel_main() {
                     ckernel::ReduceDim::REDUCE_ROW,
                     cb_group_partials,
                     cb_ones,
-                    cb_rootsum,
+                    cb_rms_mean,
                     ckl::ReduceInputPolicy::BulkWaitBulkPop,
                     ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                     ckl::ReduceAlgorithm::AccumulateViaAdd>(
                     ckl::ReduceInputBlockShape::of(1, CW1, 1),
                     ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(cb_rootsum, 0),
+                    ckl::Accumulate::at(cb_rms_mean, 0),
                     ckl::NoOp{},
                     ckl::ReducePartialScaler::none());
-
-                cb_wait_front(cb_rootsum, 1);
-                cb_wait_front(cb_colsel, HT_BLOCK);
-                cb_reserve_back(cb_rms_mean, ht);
-                reconfig_data_format(cb_colsel, cb_rootsum);
-                pack_reconfig_data_format(cb_rms_mean);
-                reduce_init<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(cb_rootsum, cb_colsel, cb_rms_mean);
-                for (uint32_t h = 0; h < ht; ++h) {
-                    tile_regs_acquire();
-                    reduce_tile<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-                        cb_rootsum, cb_colsel, /*itile=*/0, /*itile_scaler=*/h, /*idst=*/0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, cb_rms_mean);
-                    tile_regs_release();
-                }
-                reduce_uninit();  // AFTER the packs: phases 5/6 pack full tiles.
-                cb_push_back(cb_rms_mean, ht);
-                cb_pop_front(cb_rootsum, 1);
             }
         } else if constexpr (W_SPLIT) {
             MaybeDeviceZoneScope("cmp_combine");
@@ -788,13 +824,59 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("cmp_rsqrt");
 #if RMS_NORM_COL0_RSQRT
-            // Perf 1 fast path: one SFPU pass over the 8 vectors that hold
-            // column 0 (see the justification above the element). 3.53x measured.
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(ht),
-                ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
-                RsqrtAddUnaryColZero<ckl::Dst::D0>{eps_bits},
-                ckl::PackTile<cb_rms_recip, ckl::OutputLifecycle::Streaming>{});
+            if constexpr (COLPACK) {
+                // Perf 2 fast path — ONE SFPU pass for the whole row-block.
+                //
+                // cb_rms_sum holds the broadcast COLUMN-PACKED raw sum: column h is
+                // tile-row h's cross-core Sum(x^2). So `rsqrt(x/N + eps)` for all
+                // `ht` tile-rows is one pass over one tile (the element folds the
+                // 1/N in), and the per-tile-row col-0 tiles phase 5 consumes are
+                // then produced by `ht` cheap FPU COLUMN-SELECTS instead of `ht`
+                // SFPU passes. Measured on the stage: 8_679 -> 4_497 ns, 1.930x,
+                // against a per-tile scaffolding floor of 81 ns/tile that the old
+                // spelling paid `ht` times over for 32 live datums each.
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(1),
+                    ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
+                    RsqrtMeanColPacked<ckl::Dst::D0>{eps_bits, inv_n_bits},
+                    ckl::PackTile<cb_rootsum, ckl::OutputLifecycle::Streaming>{});
+
+                // EXTRACT: cb_colsel[h] is a one-hot 1.0 at reduce-axis position h,
+                // so one reduce_tile moves column h of the packed 1/rms into column
+                // 0 of its own tile. The packer edge mask stays ON (column-0-only
+                // output is exactly what BroadcastDim::Col reads) and is cleared
+                // once afterwards, before phases 5/6 pack full tiles again. Same
+                // raw-LLK justification as the pack: no reduce helper takes a
+                // per-output-column scaler INDEX, and none exposes the mask seam.
+                cb_wait_front(cb_rootsum, 1);
+                cb_wait_front(cb_colsel, HT_BLOCK);
+                cb_reserve_back(cb_rms_recip, ht);
+                reconfig_data_format(cb_colsel, cb_rootsum);
+                pack_reconfig_data_format(cb_rms_recip);
+                reduce_init<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                    cb_rootsum, cb_colsel, cb_rms_recip);
+                for (uint32_t h = 0; h < ht; ++h) {
+                    tile_regs_acquire();
+                    reduce_tile<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                        cb_rootsum, cb_colsel, /*itile=*/0, /*itile_scaler=*/h, /*idst=*/0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_rms_recip);
+                    tile_regs_release();
+                }
+                reduce_uninit();
+                cb_push_back(cb_rms_recip, ht);
+                cb_pop_front(cb_rootsum, 1);
+            } else {
+                // Perf 1 fast path: one SFPU pass over the 8 vectors that hold
+                // column 0 (see the justification above the element). 3.53x
+                // measured.
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(ht),
+                    ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
+                    RsqrtAddUnaryColZero<ckl::Dst::D0>{eps_bits},
+                    ckl::PackTile<cb_rms_recip, ckl::OutputLifecycle::Streaming>{});
+            }
 #else
             // Fallback (Quasar): byte-identical to the pre-Perf-1 spelling.
             ckl::eltwise_chain(
@@ -805,9 +887,12 @@ void kernel_main() {
                 ckl::PackTile<cb_rms_recip, ckl::OutputLifecycle::Streaming>{});
 #endif
         }
-        if constexpr (W_SPLIT) {
+        if constexpr (W_SPLIT && !COLPACK) {
             // Same fixed-block contract as the gather: the reader publishes
             // HT_BLOCK pages so the multicast lands at a constant L1 offset.
+            // Under COLPACK the payload is exactly ONE page per row-block and the
+            // CB is declared with one page, so the offset is constant already and
+            // there is no tail to drop.
             if (ht < HT_BLOCK) {
                 cb_pop_front(cb_rms_sum, HT_BLOCK - ht);
             }

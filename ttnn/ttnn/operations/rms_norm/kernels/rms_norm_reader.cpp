@@ -438,12 +438,18 @@ void kernel_main() {
             }
             {
                 MaybeDeviceZoneScope("rdr_mcast");
-                cb_reserve_back(cb_rms_sum, HT_BLOCK);
+                // Perf 2: under COLPACK the payload is ONE column-packed tile that
+                // carries every tile-row's statistic, so the broadcast ships 1 page
+                // instead of `ht` — and the CB is declared with exactly one page, so
+                // its landing offset is constant without a tail pop.
+                constexpr uint32_t MCAST_PAGES = COLPACK ? 1u : HT_BLOCK;
+                cb_reserve_back(cb_rms_sum, MCAST_PAGES);
                 const uint32_t dst = get_write_ptr(cb_rms_sum);
                 if (is_root) {
-                    cb_wait_front(cb_rms_mean, ht);
+                    const uint32_t n_stat = COLPACK ? 1u : ht;
+                    cb_wait_front(cb_rms_mean, n_stat);
                     const uint32_t src = get_read_ptr(cb_rms_mean);
-                    const uint32_t bytes = ht * fp32_tile_bytes;
+                    const uint32_t bytes = n_stat * fp32_tile_bytes;
                     // The root is inside exactly one family's rectangle, so that
                     // send() loops the data back into its OWN cb_rms_sum; the other
                     // family reaches the cores across the virtual seam.
@@ -455,7 +461,7 @@ void kernel_main() {
                         auto pipe = mc_b.sender(noc);
                         pipe.send(src, dst, bytes);
                     }
-                    cb_pop_front(cb_rms_mean, ht);
+                    cb_pop_front(cb_rms_mean, n_stat);
                 } else if (mcast_family == 0) {
                     auto pipe = mc_a.receiver(noc);
                     pipe.receive();
@@ -463,7 +469,7 @@ void kernel_main() {
                     auto pipe = mc_b.receiver(noc);
                     pipe.receive();
                 }
-                cb_push_back(cb_rms_sum, HT_BLOCK);
+                cb_push_back(cb_rms_sum, MCAST_PAGES);
             }
         }
 

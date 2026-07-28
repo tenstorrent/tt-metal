@@ -192,10 +192,14 @@ void kernel_main() {
         const uint32_t csel_bytes = get_tile_size(cb_colsel);
         zero_noc.async_write_zeros(csel, HT_BLOCK * csel_bytes);
         zero_noc.write_zeros_l1_barrier();
-        const float inv_n = 1.0f / static_cast<float>(n_reduced);
+        // Perf 2: the column-SELECT scaler carries a plain 1.0, NOT 1/N. The
+        // extract now runs in phase 4, AFTER the rsqrt, and rsqrt is non-linear —
+        // so the mean must be applied before it, which is why the 1/N moved into
+        // the rsqrt body (RsqrtMeanColPacked) and this bank is a pure selector.
+        (void)n_reduced;
         for (uint32_t h = 0; h < HT_BLOCK; ++h) {
-            put(ca + h * csel_bytes, 0, 0, h, inv_n);
-            put(ca + h * csel_bytes, 2, 0, h, inv_n);
+            put(ca + h * csel_bytes, 0, 0, h, 1.0f);
+            put(ca + h * csel_bytes, 2, 0, h, 1.0f);
         }
         csel.push_back(HT_BLOCK);
     }
