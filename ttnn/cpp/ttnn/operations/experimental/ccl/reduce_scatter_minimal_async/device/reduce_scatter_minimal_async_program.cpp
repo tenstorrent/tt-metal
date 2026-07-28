@@ -1030,8 +1030,23 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
+    const bool use_fabric_2d_chained_barrier =
+        topology == ccl::Topology::Linear && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // A logical line embedded in a 2D fabric can turn at an intermediate device. A single Fabric
+    // multicast range follows the physical direction selected by its first hop, so it cannot
+    // represent such a turn. Use one-hop routes as the transport for a chained arrival/release
+    // protocol on Fabric2D; the protocol still provides a global barrier.
+    const uint32_t barrier_targets_forward =
+        use_fabric_2d_chained_barrier ? std::min(num_targets_forward, 1u) : num_targets_forward;
+    const uint32_t barrier_targets_backward =
+        use_fabric_2d_chained_barrier ? std::min(num_targets_backward, 1u) : num_targets_backward;
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        sender_device_coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        barrier_targets_forward,
+        barrier_targets_backward,
+        mesh_device);
 
     uint32_t num_cores_per_link = ttnn::experimental::ccl::reduce_scatter_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
@@ -1171,7 +1186,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
-
     // KERNEL CREATION
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
@@ -1291,6 +1305,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         mux_kernel_config,
         num_workers_per_direction,
         sender_writer_compile_args);
+
+    sender_writer_compile_args.push_back(ring_size - 1);  // barrier_target_count
+    sender_writer_compile_args.push_back(use_fabric_2d_chained_barrier);
 
     sender_writer_compile_args.insert(
         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
