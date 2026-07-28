@@ -56,6 +56,8 @@ struct RegimeAMatmulParams {
     //   bit11 (2048) SKIP_IN1_READ         - drop the in1 DRAM read payload; keep CB reserve/push, rotated
     //                                       shard order, barriers, M-split forwarding, semaphores, compute
     // And one more HOST-ONLY, correctness-preserving bit (valid output, allowed on every path):
+    //   bit13 (8192) PLACE_MESH            - 2D (bank x slice) mesh: banks along x, slices along y, so a ring
+    //                                       step and a reduction step are each ONE hop in different dims
     //   bit12 (4096) PLACE_IN1_OPT         - CROSS placement: put each (bank, noc) reader group in the region
     //                                       downstream of THAT endpoint on THAT NoC instead of one spiral
     //                                       around the NOC_0-optimal core (also supersedes IN1_NEAR pass 1)
