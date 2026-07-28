@@ -24,17 +24,25 @@ _EXAMPLE_ROOT = os.path.dirname(_THIS_DIR)
 if _EXAMPLE_ROOT not in sys.path:
     sys.path.insert(0, _EXAMPLE_ROOT)
 
-import ttnn  # noqa: E402
-from loguru import logger  # noqa: E402
-from transformers import AutoTokenizer  # noqa: E402
-from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
+import ttml
+import ttnn
+from datasets import load_dataset
+from loguru import logger
+from transformers import AutoTokenizer
+from ttml.common.config import DeviceConfig, get_model_config, load_config
+from ttml.trainers import GRPOTrainer, get_grpo_config
+from utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
+from utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
+from utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
+from utils.ttt_generation_worker import TttGenerationWorker
+from utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
 
 CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 
-# Pin FABRIC_2D on both ranks before any device opens; otherwise TTT's
-# open_mesh_device auto-escalates to FABRIC_1D and the mismatch deadlocks the
+# Pin fabric config before either _ttml_main or _ttt_main opens a device.
+# Otherwise TTT's open_mesh_device auto-escalates to FABRIC_1D and the mismatch deadlocks the
 # cross-rank fabric init.
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
@@ -128,15 +136,11 @@ class GRPOMonitor:
 
 
 def _load_device_config():
-    from ttml.common.config import DeviceConfig, load_config
-
     raw = load_config(os.path.join(str(REPO_ROOT), CONFIG_REL))
     return DeviceConfig(raw), raw
 
 
 def _open_ttml_device(device_config) -> Any:
-    import ttml
-
     # Do NOT call enable_fabric() here: fabric is already pinned FABRIC_2D at
     # import. A repeat SetFabricConfig re-runs a control-plane reinit collective
     # with no peer (TTT never re-sets) and deadlocks device bring-up.
@@ -146,23 +150,10 @@ def _open_ttml_device(device_config) -> Any:
 
 
 def _close_ttml_device() -> None:
-    import ttml
-
     ttml.autograd.AutoContext.get_instance().close_device()
 
 
 def _ttml_main() -> None:
-    import ttml
-    from datasets import load_dataset
-    from ttml.common.config import get_model_config
-    from ttml.trainers import GRPOTrainer, get_grpo_config
-    from utils.llama_grpo_completer import (
-        LlamaCompletionCtx,
-        LlamaCompleterRemoteRollout,
-    )
-    from utils.mpi_rollout import MPIRolloutClient
-    from utils.weight_bridge import HostWeightBridge
-
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
@@ -243,15 +234,6 @@ def _ttml_main() -> None:
 
 
 def _ttt_main() -> None:
-    from ttml.common.config import load_config
-    from utils.llama_ttt_presets import (
-        bf16_attn_bfp8_mlp_optimizations,
-        llama_stop_and_pad,
-    )
-    from utils.mpi_rollout import MPIRolloutServer
-    from utils.ttt_generation_worker import TttGenerationWorker
-    from utils.weight_bridge import HostWeightBridge
-
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
 
