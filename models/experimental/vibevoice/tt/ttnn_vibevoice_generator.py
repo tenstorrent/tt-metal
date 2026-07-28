@@ -362,12 +362,8 @@ class TTVibeVoiceGenerator:
         self._sf_warm = 0
         self._sf_hidden_buf: Optional[ttnn.Tensor] = None  # loop-carried cond_pos source
         self._sf_hidden_seed: Optional[ttnn.Tensor] = None  # segment-start hidden ([1,1,1,H], last pos)
-        # Loop-carried dither (VV_DITHER=<relative std>, default 0=off) — see _apply_hidden_dither.
-        self._dither_std = float(os.environ.get("VV_DITHER", "0"))
-        self._sf_dither_buf: Optional[ttnn.Tensor] = None
-        self._sf_neg_embed: Optional[ttnn.Tensor] = None  # per-frame neg embed input buffer
+        self._sf_neg_embed: Optional[ttnn.Tensor] = None  # neg-LM input = prev frame's inputs_embeds
         self._sf_neg_start: Optional[ttnn.Tensor] = None  # const embed(speech_start_id)
-        self._sf_neg_diff: Optional[ttnn.Tensor] = None  # const embed(speech_diffusion_id)
         self._sf_pos_pos: Optional[ttnn.Tensor] = None
         self._sf_neg_pos: Optional[ttnn.Tensor] = None
         self._sf_noise: Optional[ttnn.Tensor] = None
@@ -418,14 +414,28 @@ class TTVibeVoiceGenerator:
         # clean (it exonerates the graph ops), but slower (no replay).  Used to isolate the bug above.
         self._sf_nocapture = os.environ.get("VV_TRACE_NOCAPTURE", "0") == "1"
         self._sf_nocap_started = False
-        # Long-form energy stabilizer (VV_AUDIO_LIMIT=<R>, default 0=off): the bf16 AR feedback lets the
-        # positive diffusion condition drift while the negative stays anchored; CFG amplifies the growing
-        # divergence, so the acoustic-decode gain (== audio loudness) runs away into over-drive/clipping
-        # once the (prefill-sized) stability window is exceeded.  When set, each EMITTED audio frame is
-        # soft-limited to RMS <= R and peak <= VV_AUDIO_PEAK (see _emit_limit); the token/latent
-        # trajectory is untouched, so content is preserved and only the audible energy is bounded.
-        self._audio_limit_T = float(os.environ.get("VV_AUDIO_LIMIT", "0"))  # per-frame RMS ceiling
-        self._AUDIO_PEAK = float(os.environ.get("VV_AUDIO_PEAK", "0.95"))  # per-frame peak ceiling (anti-clip)
+        # Diagnostic (VV_LOG_TRAJ=<csv path>, default off): per-frame loop-state trace — the
+        # loop-carried hidden's rms/absmax alongside the emitted audio's rms/peak, keyed by both
+        # frame index and absolute position.  Used to tell an absolute-position degradation apart
+        # from cumulative AR-feedback drift; the frame audio is already synced here, so this adds
+        # only one small [1,1,1,H] D2H read per frame.
+        self._traj_path = os.environ.get("VV_LOG_TRAJ", "")
+        self._traj_fh = None
+        # Silence-latch escape (VV_STALL_FRAMES=<n>, 0 disables).  ``_LoopBreaker`` cannot see this
+        # failure: its ``_RMS_FLOOR`` excludes near-silent frames from repeat detection, so a
+        # trajectory that latches into the zero basin is invisible to it and it never fires.
+        # Measured on the 4p_climate_100min render: natural pauses reach 24 frames (3.2 s) over
+        # 33k frames, while the latch runs thousands and never recovers on its own — so a
+        # threshold at 4x the longest natural pause separates them with a wide margin.
+        # Escape re-seeds the loop-carried hidden from the most recent frame that produced
+        # speech (kept in _sf_hidden_ok), which is a state known to decode to audio; the KV
+        # cache and script position are untouched, so this is not a re-prefill.
+        self._stall_frames = int(os.environ.get("VV_STALL_FRAMES", "96"))
+        self._stall_rms = float(os.environ.get("VV_STALL_RMS", "0.005"))
+        self._stall_run = 0
+        self._stall_cooldown = 0
+        self._stall_escapes = 0
+        self._sf_hidden_ok: Optional[ttnn.Tensor] = None  # last known-speaking hidden snapshot
 
     _SF_WARMUP = 2
 
@@ -747,10 +757,11 @@ class TTVibeVoiceGenerator:
         """Per-frame non-allocating writes into the persistent trace buffers.  A segment's first
         frame (seg_frame_idx==0) rewinds the device positions, re-seeds the loop-carried hidden from
         the (already-sliced) segment-start hidden, and selects embed(speech_start) — so its neg-LM at
-        neg_pos 0 IS the negative prefill; later frames select embed(speech_diffusion) and let the
-        positions self-advance (ttnn.plus_one) on device.  All writes here are host->device or
-        device->device copies into fixed-address buffers (no allocation), so they are safe to run
-        while the fused trace is live."""
+        neg_pos 0 IS the negative prefill; later frames read the PREVIOUS frame's fused embed, which
+        the frame graph itself wrote into _sf_neg_embed (see _dptrace/_frame), and let the positions
+        self-advance (ttnn.plus_one) on device.  All writes here are host->device or device->device
+        copies into fixed-address buffers (no allocation), so they are safe to run while the fused
+        trace is live."""
         if seg_frame_idx == 0:
             self._sf_write_int(self._sf_pos_pos, start_pos)
             self._sf_write_int(self._sf_neg_pos, 0)
@@ -761,7 +772,6 @@ class TTVibeVoiceGenerator:
         else:
             self._sf_pos_pos_host += 1  # mirror the on-device plus_one from the prior frame
             self._sf_neg_pos_host += 1
-            ttnn.copy(input_a=self._sf_neg_diff, input_b=self._sf_neg_embed)
         if self._sf_fp32_rope:
             # fp32 rope rows for the current positions (device positions self-advance for KV/sdpa).
             self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
@@ -771,34 +781,63 @@ class TTVibeVoiceGenerator:
             self._sf_noise,
         )
 
-    def _apply_hidden_dither(self, frame_idx: int) -> None:
-        """Multiply the loop-carried hidden by (1 + eps), eps ~ N(0, VV_DITHER^2) per element.
+    def _stall_escape(self, frame_idx: int, audio_1d: torch.Tensor) -> bool:
+        """Track consecutive near-silent frames; on a latch, re-seed the loop-carried hidden.
 
-        #50250 removed two things from every matmul: a -0.61% systematic bias and a 1.145%
-        per-element rounding NOISE (new build: 0.192%).  ``mm_damp`` restores the bias, but a static
-        weight scale only sets a fixed loop gain, and over the ~42k-step feedback loop a fixed gain
-        either runs away (undamped: clipping by min 7) or decays into the zero basin (damped: energy
-        ratio vs the old build falls 1.05 -> 0.36 and dies at min 72).  The old build sustained gain
-        ~1 for 94 min; the noise is the component that is missing.
-
-        Injected here because ``_sf_hidden_buf`` is the only loop-carried state the host can touch —
-        everything else lives inside the fused-frame trace.  The write lands on cq 0 after the
-        frame's traces and before the next frame reads the buffer, so no host sync is needed.
-
-        NOTE: ``_LoopBreaker``'s docstring records that perturbing this hidden was tried and was
-        worse.  That was a large one-off KICK during a detected loop episode; this is a small
-        continuous zero-mean dither at the magnitude the old build always had.  Different thing,
-        but the warning is why the default is OFF and the magnitude is an env knob.
-        Frame-local RNG -> deterministic, and the global draw order is untouched.
+        Snapshots the hidden every 16th speaking frame so an escape restores a *recent*
+        speaking state rather than the segment start.  Returns True when an escape fired.
         """
-        g = torch.Generator().manual_seed(0x0D17 ^ frame_idx)
-        eps = torch.randn([1, 1, 1, self.lm.cfg.hidden_size], generator=g, dtype=torch.float32)
-        eps = eps * self._dither_std + 1.0
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(eps, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT),
-            self._sf_dither_buf,
+        if self._sf_hidden_buf is None:
+            return False
+        if self._stall_cooldown > 0:
+            self._stall_cooldown -= 1
+        if float(audio_1d.pow(2).mean().sqrt()) >= self._stall_rms:
+            self._stall_run = 0
+            if frame_idx % 16 == 0:
+                if self._sf_hidden_ok is None:
+                    self._sf_hidden_ok = ttnn.clone(self._sf_hidden_buf, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                else:
+                    ttnn.copy(input_a=self._sf_hidden_buf, input_b=self._sf_hidden_ok)
+            return False
+        self._stall_run += 1
+        if self._stall_run < self._stall_frames or self._stall_cooldown > 0 or self._sf_hidden_ok is None:
+            return False
+        ttnn.copy(input_a=self._sf_hidden_ok, input_b=self._sf_hidden_buf)
+        self._stall_run = 0
+        self._stall_cooldown = self._stall_frames
+        self._stall_escapes += 1
+        _vv_debug(f"stall escape #{self._stall_escapes} at frame {frame_idx}: re-seeded loop-carried hidden")
+        return True
+
+    def _log_traj(self, frame_idx: int, abs_pos: int, audio_1d: torch.Tensor) -> None:
+        """Append one row of loop-state diagnostics to VV_LOG_TRAJ (see __init__).
+
+        Also records the CFG contrast cos(cond_pos, cond_neg).  The diffusion samples
+        ``neg + cfg*(pos - neg)``, so if the loop-fed positive condition drifts onto the
+        feedback-free negative one the guidance term vanishes and the head emits the
+        negative's prediction (silence) — logged to test that against the measured latch.
+        """
+        if self._traj_fh is None:
+            self._traj_fh = open(self._traj_path, "w")
+            self._traj_fh.write(
+                "frame,abs_pos,hidden_rms,hidden_absmax,audio_rms,audio_peak,neg_rms,cos_pos_neg,posneg_dist\n"
+            )
+        h = ttnn.to_torch(self._sf_hidden_buf).to(torch.float32).reshape(-1)
+        if self._sf_neg_hidden is not None:
+            n = ttnn.to_torch(self._sf_neg_hidden).to(torch.float32).reshape(-1)
+            n = n[-h.numel() :] if n.numel() >= h.numel() else n
+            cos = float(torch.nn.functional.cosine_similarity(h, n, dim=0))
+            neg_rms, dist = float(n.pow(2).mean().sqrt()), float((h - n).pow(2).mean().sqrt())
+        else:
+            cos = neg_rms = dist = float("nan")
+        self._traj_fh.write(
+            f"{frame_idx},{abs_pos},"
+            f"{float(h.pow(2).mean().sqrt()):.6e},{float(h.abs().max()):.6e},"
+            f"{float(audio_1d.pow(2).mean().sqrt()):.6e},{float(audio_1d.abs().max()):.6e},"
+            f"{neg_rms:.6e},{cos:.6f},{dist:.6e}\n"
         )
-        ttnn.multiply(self._sf_hidden_buf, self._sf_dither_buf, output_tensor=self._sf_hidden_buf)
+        if frame_idx % 64 == 0:
+            self._traj_fh.flush()
 
     def _sf_set_inputs_b2(self, seg_frame_idx: int, start_pos: int, noise_2x) -> None:
         """Per-frame input writes for the CFG batch-2 path.  Sets ONLY the lm2/dp2 inputs — the
@@ -855,7 +894,6 @@ class TTVibeVoiceGenerator:
             ttnn.plus_one(self._sf_neg_pos)  # device neg_pos → 1
             self._sf_neg_pos_host = 1
             self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
-            ttnn.copy(input_a=self._sf_neg_diff, input_b=self._sf_neg_embed)  # steady embed for lm2
 
         def _dp2trace():
             cond_pos = _condition_from_hidden(self._sf_hidden_buf)
@@ -884,7 +922,13 @@ class TTVibeVoiceGenerator:
             pos_in = self._sf_fused_out
             if pos_in.dtype != self._sf_neg_embed.dtype:
                 pos_in = ttnn.typecast(pos_in, self._sf_neg_embed.dtype)
-            emb_b2 = ttnn.concat([pos_in, self._sf_neg_embed], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # BOTH CFG rows consume the SAME inputs_embeds (this frame's fused acoustic+semantic
+            # embed) — the reference's negative branch overrides input_ids with the positive
+            # branch's inputs_embeds and differs only in attention context (no text prefill) and
+            # position.  Feeding the neg row a constant embed(speech_diffusion) instead leaves it
+            # blind to the audio feedback, so CFG stops cancelling the shared state component and
+            # extrapolates it by cfg_scale (loop gain > 1 → long-form energy runaway / latch).
+            emb_b2 = ttnn.concat([pos_in, pos_in], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             logits0, hidden_b2 = lm.forward_decode_traced_embeds_b2(
                 emb_b2,
                 [(self._sf_cos_pos, self._sf_sin_pos), (self._sf_cos_neg, self._sf_sin_neg)],
@@ -966,10 +1010,7 @@ class TTVibeVoiceGenerator:
 
             self._sf_hidden_buf = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_hidden_seed = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
-            if self._dither_std > 0.0:
-                self._sf_dither_buf = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_neg_start = lm._embed(torch.tensor([[self.speech_start_id]], dtype=torch.long))
-            self._sf_neg_diff = lm._embed(torch.tensor([[self.speech_diffusion_id]], dtype=torch.long))
             self._sf_neg_embed = _z([1, 1, 1, H], self._sf_neg_start.dtype, ttnn.TILE_LAYOUT)
             self._sf_pos_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self._sf_neg_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
@@ -1037,6 +1078,8 @@ class TTVibeVoiceGenerator:
                     fused, self._sf_pos_pos, kv_pos, return_last_hidden=True
                 )
             ttnn.copy(input_a=new_hidden, input_b=self._sf_hidden_buf)  # loop-carry on device
+            # Same inputs_embeds for the next frame's neg-LM as for the pos-LM (see _dptrace).
+            ttnn.copy(input_a=fused, input_b=self._sf_neg_embed)
             ttnn.plus_one(self._sf_pos_pos)
             ttnn.plus_one(self._sf_neg_pos)
             return audio, logits
@@ -1083,6 +1126,11 @@ class TTVibeVoiceGenerator:
                     )  # persistent alloc (eager warmup)
                 else:
                     ttnn.copy(input_a=fu, input_b=self._sf_fused_out)
+                # Hand this frame's fused embed to the NEXT frame's neg-LM: the reference feeds the
+                # negative branch the same inputs_embeds as the positive one (it only differs in
+                # attention context + position), and _negtrace runs before _dptrace, so the buffer
+                # still holds frame k-1's embed when the neg-LM reads it.
+                ttnn.copy(input_a=fu, input_b=self._sf_neg_embed)
                 return au
 
             def _postrace():
@@ -1238,24 +1286,6 @@ class TTVibeVoiceGenerator:
         fused = ttnn.add(acoustic_embed, semantic_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return fused, audio_chunk
 
-    def _emit_limit(self, audio_1d: torch.Tensor) -> torch.Tensor:
-        """Long-form energy stabilizer (VV_AUDIO_LIMIT=<R>, default 0=off): soft-limit ONE emitted
-        audio frame so RMS <= R (healthy loudness) AND peak <= VV_AUDIO_PEAK (no clipping), via a
-        single per-frame gain = min(1, R/rms, P/peak).  Applied to the EMITTED audio ONLY — the
-        semantic-encode feedback runs on the un-limited frame, so the token/latent trajectory is
-        byte-identical to the un-limited render (content preserved); only the audio the listener hears
-        is bounded.  (Limiting the feedback instead starves the LM and collapses the content early.)
-        Frames already inside the band get gain 1 and pass through untouched, so natural loud/quiet
-        dynamics are preserved; only the bf16-drift over-drive/clipping is pulled back."""
-        rms = float(audio_1d.pow(2).mean().sqrt())
-        peak = float(audio_1d.abs().max())
-        gain = min(
-            1.0,
-            self._audio_limit_T / rms if rms > 1e-9 else 1.0,
-            self._AUDIO_PEAK / peak if peak > 1e-9 else 1.0,
-        )
-        return audio_1d * gain if gain < 1.0 else audio_1d
-
     def _reset_neg_cache(self, kv_cache_neg: KVCache):
         """Negative prefill: single speech_start token."""
         if self._ref_lm is not None:
@@ -1303,11 +1333,19 @@ class TTVibeVoiceGenerator:
         token_ids = torch.tensor([[token_id]], dtype=torch.long)
         return self.lm.decode_step(token_ids, start_pos, kv_cache, return_last_hidden=True)
 
-    def _neg_lm_step(self, token_id: int, neg_pos: int, kv_cache_neg: KVCache) -> ttnn.Tensor:
+    def _neg_lm_step(self, inputs_embeds: ttnn.Tensor, neg_pos: int, kv_cache_neg: KVCache) -> ttnn.Tensor:
+        """One negative-CFG decode step on the SAME inputs_embeds the positive branch consumed.
+
+        The reference's negative branch overrides ``input_ids`` with the positive branch's
+        ``inputs_embeds`` (the previous frame's fused acoustic+semantic embed) and differs only in
+        attention context (no text prefill) and position.
+        """
         if self._ref_lm is not None:
-            return self._ref_lm.neg_step_token(token_id)
-        neg_ids = torch.tensor([[token_id]], dtype=torch.long)
-        _, neg_hidden = self.lm.decode_step(neg_ids, neg_pos, kv_cache_neg, return_last_hidden=True)
+            cpu = ttnn.to_torch(inputs_embeds).to(torch.float32).squeeze(1)
+            return self._ref_lm.neg_step_embeds(cpu)
+        _, neg_hidden = self.lm.forward(
+            inputs_embeds, start_pos=neg_pos, kv_cache=kv_cache_neg, return_last_hidden=True
+        )
         return neg_hidden
 
     def generate(
@@ -1427,7 +1465,9 @@ class TTVibeVoiceGenerator:
             )
 
         neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
-        neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
+        neg_prev_diffusion_token: Optional[int] = None  # segment-first-frame flag (traced path)
+        # Previous frame's inputs_embeds — what the reference's negative branch consumes (eager path).
+        neg_prev_embeds: Optional[ttnn.Tensor] = None
 
         # Generated token ids collected as a host list (O(1) append) and concatenated to input_ids
         # once after the loop — avoids the per-frame torch.cat that reallocated an O(seq_len) tensor
@@ -1518,16 +1558,16 @@ class TTVibeVoiceGenerator:
                     audio_chunk, _tok_or_logits = self._run_segment_frame_traced(
                         seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg
                     )
-                if self._dither_std > 0.0:
-                    self._apply_hidden_dither(diffusion_frames)
                 neg_prev_diffusion_token = current_token
                 _frame_audio = ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)  # syncs frame
                 if loopbreaker is not None:
                     loopbreaker.update(_frame_audio)  # detect on the raw (unclamped) audio
                     if loopbreaker.clamp_now():
                         _frame_audio = _frame_audio.clamp(-1.0, 1.0)
-                if self._audio_limit_T > 0.0:
-                    _frame_audio = self._emit_limit(_frame_audio)  # emit-only energy stabilizer
+                if self._stall_frames > 0:
+                    self._stall_escape(diffusion_frames, _frame_audio)
+                if self._traj_path:
+                    self._log_traj(diffusion_frames, start_pos, _frame_audio)
                 _emit_audio(_frame_audio)
                 if self._sf_cap_split:
                     # Split-capture folds the constrained argmax into the trace → LOCAL index.
@@ -1557,18 +1597,18 @@ class TTVibeVoiceGenerator:
                     tracy.signpost("start")
                     _vv_debug(f"Tracy signpost start: eager speech frame {diffusion_frames}")
                 cond_pos = _condition_from_hidden(step_hidden)
-                # Negative CFG: reference processes the PREVIOUS speech_diffusion_id
-                # at each step (the current one is appended to negative_input_ids
-                # AFTER the negative forward).  For the first diffusion step in a
-                # segment, the reference runs the negative model on speech_start_id
-                # alone — we captured that hidden in neg_start_hidden.
+                # Negative CFG: the reference feeds the negative branch the SAME inputs_embeds as
+                # the positive branch — the PREVIOUS frame's fused acoustic+semantic embed — and
+                # differs from it only in attention context (no text prefill) and position; the
+                # token ids in negative_input_ids are never embedded (input_ids is overridden with
+                # inputs_embeds).  For a segment's first diffusion step that embed is
+                # embed(speech_start), whose negative hidden we captured in neg_start_hidden.
                 with prof.section("neg_lm_step"):
-                    if neg_prev_diffusion_token is None:
+                    if neg_prev_embeds is None:
                         neg_hidden = neg_start_hidden
                     else:
-                        neg_hidden = self._neg_lm_step(neg_prev_diffusion_token, neg_pos, kv_cache_neg)
+                        neg_hidden = self._neg_lm_step(neg_prev_embeds, neg_pos, kv_cache_neg)
                         neg_pos += 1
-                    neg_prev_diffusion_token = current_token
                     cond_neg = _condition_from_hidden(neg_hidden)
 
                 with prof.section("diffusion (CFG x num_steps)"):
@@ -1597,6 +1637,8 @@ class TTVibeVoiceGenerator:
                 # On-device streaming: fused next-step embed + this frame's audio chunk.
                 with prof.section("post_diffusion (decode+sem_enc+conn)"):
                     pending_embeds, audio_chunk = self._post_diffusion_embeds(speech_latent)
+                    # Both CFG branches consume this embed next frame (pos now, neg one frame later).
+                    neg_prev_embeds = pending_embeds
                 with prof.section("audio_chunk -> host"):
                     _chunk = (
                         audio_chunk.to(torch.float32).reshape(-1)
@@ -1607,8 +1649,6 @@ class TTVibeVoiceGenerator:
                         loopbreaker.update(_chunk)  # detect on the raw (unclamped) audio
                         if loopbreaker.clamp_now():
                             _chunk = _chunk.clamp(-1.0, 1.0)
-                    if self._audio_limit_T > 0.0:
-                        _chunk = self._emit_limit(_chunk)  # emit-only energy stabilizer
                     _emit_audio(_chunk)
                 chunk_samples = _chunk.numel()
                 _vv_debug(
@@ -1641,7 +1681,7 @@ class TTVibeVoiceGenerator:
                 else:
                     _vv_debug("  new speech segment: reset neg-CFG cache + acoustic/semantic streaming caches")
                     neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
-                    neg_prev_diffusion_token = None
+                    neg_prev_embeds = None
                     self.acoustic_tok.reset_decode_cache()
                     self.semantic_tok.reset_cache()
                     if self.ref_inference is not None:
