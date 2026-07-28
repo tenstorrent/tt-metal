@@ -1350,33 +1350,78 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
         }
     };
 
+    // Actual (tray_id, asic_location) for every chip of a mesh, indexed by chip_id.
+    auto actual_mesh_layout = [&](MeshId mesh_id) {
+        std::array<std::pair<std::uint32_t, std::uint32_t>, 16> layout{};
+        for (std::uint32_t chip_id = 0; chip_id < layout.size(); ++chip_id) {
+            const FabricNodeId fabric_node_id(mesh_id, chip_id);
+            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+            layout[chip_id] = {*psd.get_tray_id(asic_id), *psd.get_asic_location(asic_id)};
+        }
+        return layout;
+    };
+
+    auto count_profile_mismatches = [](const auto& layout, const auto& pins) {
+        std::size_t mismatches = 0;
+        for (const auto& pin : pins) {
+            const auto& [actual_tray, actual_loc] = layout[pin.chip_id];
+            if (actual_tray != pin.tray_id || actual_loc != pin.asic_location) {
+                ++mismatches;
+            }
+        }
+        return mismatches;
+    };
+
     for (const MeshId mesh_id : mesh_ids) {
         ASSERT_EQ(mesh_graph.get_mesh_shape(mesh_id).mesh_size(), 16u)
             << "mesh " << mesh_id.get() << " must be 4x4 (16 ASICs)";
 
-        bool even_profile_matches = true;
-        for (const auto& pin : even_mesh_pins) {
-            const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
-            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
-            if (*psd.get_tray_id(asic_id) != pin.tray_id || *psd.get_asic_location(asic_id) != pin.asic_location) {
-                even_profile_matches = false;
-                break;
-            }
-        }
-
-        bool odd_profile_matches = true;
-        for (const auto& pin : odd_mesh_pins) {
-            const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
-            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
-            if (*psd.get_tray_id(asic_id) != pin.tray_id || *psd.get_asic_location(asic_id) != pin.asic_location) {
-                odd_profile_matches = false;
-                break;
-            }
-        }
+        const auto layout = actual_mesh_layout(mesh_id);
+        const std::size_t even_mismatches = count_profile_mismatches(layout, even_mesh_pins);
+        const std::size_t odd_mismatches = count_profile_mismatches(layout, odd_mesh_pins);
+        const bool even_profile_matches = even_mismatches == 0;
+        const bool odd_profile_matches = odd_mismatches == 0;
 
         const bool matches_either_profile = even_profile_matches || odd_profile_matches;
+        if (!matches_either_profile) {
+            // Dump the full actual layout next to both expected profiles so the closest profile and the
+            // exact deviating chips are visible without re-running under a debugger.
+            const auto& closest_pins = (even_mismatches <= odd_mismatches) ? even_mesh_pins : odd_mesh_pins;
+            const char* closest_name = (even_mismatches <= odd_mismatches) ? "even-mesh" : "odd-mesh";
+            log_error(
+                tt::LogTest,
+                "Mesh {} ({}) matches neither profile: {}/{} chips differ from even-mesh, {}/{} from odd-mesh "
+                "(closest: {})",
+                mesh_id.get(),
+                rev_label,
+                even_mismatches,
+                even_mesh_pins.size(),
+                odd_mismatches,
+                odd_mesh_pins.size(),
+                closest_name);
+            for (std::uint32_t chip_id = 0; chip_id < layout.size(); ++chip_id) {
+                const auto& [actual_tray, actual_loc] = layout[chip_id];
+                const auto& even_pin = even_mesh_pins[chip_id];
+                const auto& odd_pin = odd_mesh_pins[chip_id];
+                const auto& closest_pin = closest_pins[chip_id];
+                const bool differs = actual_tray != closest_pin.tray_id || actual_loc != closest_pin.asic_location;
+                log_error(
+                    tt::LogTest,
+                    "  M{} chip {:>2} -> tray {} loc {} | even expects tray {} loc {} | odd expects tray {} loc {}{}",
+                    mesh_id.get(),
+                    chip_id,
+                    actual_tray,
+                    actual_loc,
+                    even_pin.tray_id,
+                    even_pin.asic_location,
+                    odd_pin.tray_id,
+                    odd_pin.asic_location,
+                    differs ? "  <== MISMATCH vs closest" : "");
+            }
+        }
         EXPECT_TRUE(matches_either_profile)
-            << "mesh " << mesh_id.get() << " must match the even-mesh or odd-mesh pin profile";
+            << "mesh " << mesh_id.get() << " must match the even-mesh or odd-mesh pin profile (" << even_mismatches
+            << " chips differ from even-mesh, " << odd_mismatches << " from odd-mesh)";
 
         if (even_profile_matches) {
             verify_all_pins(mesh_id, even_mesh_pins, "even-mesh");
