@@ -1,7 +1,7 @@
 ---
 name: sage-blackhole
 description: Blackhole architecture specialist. Searches tt_llk_blackhole/ for LLK implementations, instruction usage, and architecture-specific behavior.
-tools: Read, Glob, Grep
+tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__glean_default__search, mcp__glean_default__chat, mcp__glean_default__read_document, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Read, Glob, Grep
 ---
 
 # Sage of Blackhole — Architecture Specialist

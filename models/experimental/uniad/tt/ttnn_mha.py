@@ -4,6 +4,7 @@
 
 import ttnn
 import math
+from models.experimental.uniad.tt.matmul_helpers import linear_flatten_batch
 
 
 class TtMultiheadAttention:
@@ -29,6 +30,18 @@ class TtMultiheadAttention:
         self.attn_in_proj__bias = ttnn.to_layout(self.attn_in_proj__bias, layout=ttnn.TILE_LAYOUT)
         self.attn_in_proj__weight_permute = self.attn_in_proj__weight
         self.attn_in_proj__bias_squeeze = ttnn.squeeze(self.attn_in_proj__bias, 0)
+        # The q/k/v weight slice+transpose and bias slice are pure functions of
+        # these static weights — precompute once instead of redoing 3 slices +
+        # 3 permutes (6 extra device programs) on every forward.
+        _w = self.attn_in_proj__weight_permute
+        _b = self.attn_in_proj__bias_squeeze
+        _e = self.embed_dims
+        self._q_weight = ttnn.permute(_w[:_e, :], (1, 0))
+        self._k_weight = ttnn.permute(_w[_e : 2 * _e, :], (1, 0))
+        self._v_weight = ttnn.permute(_w[2 * _e :, :], (1, 0))
+        self._q_bias = _b[:_e]
+        self._k_bias = _b[_e : 2 * _e]
+        self._v_bias = _b[2 * _e :]
         self.attn_out_proj_weight = params.out_proj.weight
         self.attn_out_proj_weight = ttnn.to_layout(self.attn_out_proj_weight, layout=ttnn.TILE_LAYOUT)
         self.attn_out_proj_bias = params.out_proj.bias
@@ -76,20 +89,16 @@ class TtMultiheadAttention:
             key = ttnn.permute(key, (1, 0))
             value = ttnn.permute(value, (1, 0))
 
-        in_proj_bias = self.attn_in_proj__bias_squeeze
-
-        in_proj_weight = self.attn_in_proj__weight_permute
-
         tgt_len, bsz, embed_dim = query.shape
         src_len, _, _ = key.shape
 
-        q_weight = in_proj_weight[: self.embed_dims, :]
-        k_weight = in_proj_weight[self.embed_dims : 2 * self.embed_dims, :]
-        v_weight = in_proj_weight[2 * self.embed_dims :, :]
+        q_weight = self._q_weight
+        k_weight = self._k_weight
+        v_weight = self._v_weight
 
-        q_bias = in_proj_bias[: self.embed_dims]
-        k_bias = in_proj_bias[self.embed_dims : 2 * self.embed_dims]
-        v_bias = in_proj_bias[2 * self.embed_dims :]
+        q_bias = self._q_bias
+        k_bias = self._k_bias
+        v_bias = self._v_bias
 
         q_batch_size, q_sequence_size, q_hidden_size = query.shape
         q_head_size = q_hidden_size // self.num_heads
@@ -100,16 +109,15 @@ class TtMultiheadAttention:
         v_batch_size, v_sequence_size, v_hidden_size = value.shape
         v_head_size = v_hidden_size // self.num_heads
 
-        q_weight = ttnn.permute(q_weight, (1, 0))
-        k_weight = ttnn.permute(k_weight, (1, 0))
-        v_weight = ttnn.permute(v_weight, (1, 0))
-        query = ttnn.linear(query, q_weight, bias=q_bias)
+        # Flatten leading dims into M (e.g. (901, 1, 256) -> (1, 1, 901, 256))
+        # so the matmul heuristic sees the full row count instead of bsz=1.
+        query = linear_flatten_batch(query, q_weight, bias=q_bias)
 
-        key = ttnn.linear(key, k_weight, bias=k_bias)
+        key = linear_flatten_batch(key, k_weight, bias=k_bias)
 
         if value.get_layout() != ttnn.TILE_LAYOUT:
             value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, v_weight, bias=v_bias)
+        value = linear_flatten_batch(value, v_weight, bias=v_bias)
 
         query = ttnn.reshape(query, (tgt_len, bsz * self.num_heads, q_head_size))
         query = ttnn.permute(query, (1, 0, 2))

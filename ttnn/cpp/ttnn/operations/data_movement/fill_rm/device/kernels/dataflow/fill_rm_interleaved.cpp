@@ -4,9 +4,9 @@
 
 #include <cstdlib>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Kernel args
@@ -30,13 +30,11 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, W << 1);
 
-    // DPRINT << "fill_rm_8bank: NC=" << NC << " H=" << H << " W=" << W << " fillH=" << fillH << " fillW=" << fillW <<
-    // ENDL();
-    // DEVICE_PRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
+    // DPRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
     constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    constexpr uint32_t dfb_id_in1 = 1;
+    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
     // How many bytes along a row in the original tensor
     uint32_t num_bytes_per_tile = get_tile_size(cb_id_in0);
     uint32_t num_bytes_per_tile_row = 64;
@@ -46,10 +44,10 @@ void kernel_main() {
     uint64_t replicate_dest_addr;
     uint32_t start_dram_addr_offset_for_tensor_row = 0;
 
-    cb_in0.reserve_back(16);
-    cb_in1.reserve_back(16);
-    uint32_t l1_w_addr = cb_in0.get_write_ptr();
-    uint32_t l1_zeros_addr = cb_in1.get_write_ptr();
+    dfb_in0.reserve_back(16);
+    dfb_in1.reserve_back(16);
+    uint32_t l1_w_addr = dfb_in0.get_write_ptr();
+    uint32_t l1_zeros_addr = dfb_in1.get_write_ptr();
     uint32_t w;
     for (w = 0; w < fillW; w++) {
         reinterpret_cast<uint16_t*>(l1_w_addr)[w] = val_hi;
@@ -60,20 +58,20 @@ void kernel_main() {
     for (w = 0; w < W; w++) {
         reinterpret_cast<uint16_t*>(l1_zeros_addr)[w] = val_lo;
     }
-    cb_in0.push_back(16);
-    cb_in1.push_back(16);
+    dfb_in0.push_back(16);
+    dfb_in1.push_back(16);
 
-    experimental::Noc noc;
+    Noc noc;
     uint32_t nch_dst = 0;
     // input is NCH(Wt*32) unpadded RM
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t h = 0; h < H; h++) {
             if (h < fillH) {
                 noc.async_write(
-                    cb_in0, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
+                    dfb_in0, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
             } else {
                 noc.async_write(
-                    cb_in1, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
+                    dfb_in1, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
             }
             noc.async_write_barrier();
             nch_dst++;

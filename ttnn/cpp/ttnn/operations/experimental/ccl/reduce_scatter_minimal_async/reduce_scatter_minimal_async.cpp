@@ -48,6 +48,9 @@ ttnn::Tensor reduce_scatter_minimal_async(
         num_devices,
         usable_topology);
 
+    auto resolved_compute_kernel_config =
+        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());
+
     // Use composite reduce scatter for edge cases (e.g., tile dimensions not evenly divisible)
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         log_debug(tt::LogOp, "reduce_scatter_minimal_async: using composite_reduce_scatter");
@@ -61,7 +64,8 @@ ttnn::Tensor reduce_scatter_minimal_async(
             cluster_axis,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            resolved_compute_kernel_config);
     }
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
@@ -98,7 +102,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel,
-        compute_kernel_config);
+        resolved_compute_kernel_config);
 
     // Return the output tensor (index 1, intermediate is at index 0)
     return result.at(1);

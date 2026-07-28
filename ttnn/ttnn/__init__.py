@@ -16,7 +16,6 @@ from loguru import logger
 
 import ttnn._ttnn
 
-
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
@@ -124,11 +123,20 @@ from ttnn._ttnn.multi_device import (
     using_distributed_env,
     Rank,
     Size,
+    SubcontextId,
     init_distributed_context,
     is_initialized as distributed_context_is_initialized,
     get_rank as distributed_context_get_rank,
     get_size as distributed_context_get_size,
     barrier as distributed_context_barrier,
+    allgather_int as distributed_context_allgather_int,
+    subcontext_id as distributed_context_subcontext_id,
+    subcontext_count as distributed_context_subcontext_count,
+    subcontext_sizes as distributed_context_subcontext_sizes,
+    subcontext_size as distributed_context_subcontext_size,
+    local_to_world_rank as distributed_context_local_to_world_rank,
+    world_rank as distributed_context_world_rank,
+    world_size as distributed_context_world_size,
 )
 
 from ttnn._ttnn.events import (
@@ -165,10 +173,16 @@ from ttnn._ttnn.fabric import (
     get_fabric_config,
     get_tt_fabric_packet_header_size_bytes,
     get_tt_fabric_max_payload_size_bytes,
+    get_physical_mesh_shapes,
+    get_eth_forwarding_direction,
+    get_all_fabric_mesh_ids,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
     setup_routing_plane_connection,
+    get_fabric_kernel_defines,
+    fabric_connection_rt_args,
+    compute_fabric_connection_rt_args,
 )
 
 # Import cluster functions and types
@@ -196,6 +210,24 @@ from ttnn._ttnn.hd_socket import (
     H2DMode,
 )
 
+from ttnn._ttnn.h2d_stream_service import (
+    H2DStreamService,
+)
+
+from ttnn._ttnn.d2h_stream_service import (
+    D2HStreamService,
+)
+
+from ttnn._ttnn.d2d_stream_service import (
+    D2DStreamService,
+    D2DStreamServiceSender,
+    D2DStreamServiceReceiver,
+)
+
+from ttnn._ttnn.counter_channel import (
+    InterProcessCounterChannel,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
@@ -207,6 +239,7 @@ from ttnn.types import (
     bfloat8_b,
     bfloat4_b,
     bfloat16,
+    fp8_e4m3,
     float32,
     MathFidelity,
     MemoryConfig,
@@ -274,6 +307,7 @@ from ttnn.types import (
     cb_descriptor_from_sharded_tensor,
     get_cb_address,
     UnpackToDestMode,
+    FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
 )
@@ -290,7 +324,10 @@ from ttnn.device import (
     synchronize_device,
     dump_device_memory_state,
     get_memory_view,
+    get_allocator_base_address,
     get_max_worker_l1_unreserved_size,
+    get_dram_alignment,
+    get_l1_alignment,
     get_optimal_dram_bank_to_logical_worker_assignment,
     enable_asynchronous_slow_dispatch,
     disable_asynchronous_slow_dispatch,
@@ -304,7 +341,6 @@ from ttnn.device import (
     ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
-    pad_to_tile_shape,
     SubDevice,
     SubDeviceId,
     SubDeviceManagerId,
@@ -340,11 +376,14 @@ from ttnn.core import (
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
     split_work_to_cores,
+    grid_to_cores,
     get_current_command_queue_id_for_thread,
 )
 
+tile_size = ttnn._ttnn.tensor.tile_size
+element_size = ttnn._ttnn.tensor.element_size
+
 import ttnn.reflection
-import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,
@@ -404,7 +443,7 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-from ttnn.operations.unary import SigmoidMode
+from ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div
 sub = ttnn.subtract
@@ -441,6 +480,7 @@ from ttnn.operations.matmul import (
     MatmulDeviceOperation,
     MatmulMultiCoreReuseOptimizedProgramFactory,
     create_matmul_attributes,
+    matmul_select_program_factory,
 )
 
 from ttnn.operations.normalization import (
@@ -482,10 +522,11 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
+from ttnn.operations.ccl import Topology, get_usable_topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
+    PaddingMode,
     get_conv_output_dim,
     Conv2dSliceConfig,
     Conv2dDRAMSliceHeight,
@@ -511,13 +552,18 @@ from ttnn.operations.pool import (
 from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
+from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig
+from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
+
+transformer.SparseKVFormat = SparseKVFormat
+
+IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
 import ttnn.graph
 

@@ -6,11 +6,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_nearest_float_program_factory.hpp"
-#include "upsample/device/upsample_device_operation_types.hpp"
 
 #include <cmath>
 
@@ -47,7 +42,7 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
 
 void UpsampleOperation::validate_on_program_cache_miss(const operation_attributes_t& args, const Tensor& input) {
     // Basic tensor validation
-    TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Input tensor must be on device");
+    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input.buffer() != nullptr, "Input tensor must have allocated buffer");
 
     // Scale factor validation

@@ -6,6 +6,12 @@
 
 #ifdef ENABLE_LLK_ASSERT
 
+#define LLK_ASSERT_BLOCK(block_call) \
+    do                               \
+    {                                \
+        (void)(block_call);          \
+    } while (0)
+
 #if defined(ENV_LLK_INFRA) || defined(ENABLE_LLK_ASSERT_ONLY)
 
 #define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
@@ -34,4 +40,15 @@
 // (type-checked, name-resolved) but never executed at runtime.
 #define LLK_ASSERT(condition, message) ((void)sizeof((condition)))
 
+// Comma with 0: block_call is type-checked (incl. void returns); void is
+// not a valid sizeof operand, so (void) cast then discard via comma.
+#define LLK_ASSERT_BLOCK(block_call)                     \
+    do                                                   \
+    {                                                    \
+        (void)sizeof(decltype(((void)(block_call), 0))); \
+    } while (0)
+
 #endif // ENABLE_LLK_ASSERT
+
+// Inverse of LLK_ASSERT: Triggers when the condition is true (failure condition)
+#define LLK_PANIC(condition, message) LLK_ASSERT(!(condition), message)

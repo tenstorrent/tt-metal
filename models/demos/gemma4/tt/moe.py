@@ -24,6 +24,7 @@ class MoEBlock:
         ccl_manager,
         mesh_config,
         dtype=ttnn.bfloat8_b,
+        router_dtype=ttnn.bfloat16,
         tensor_cache_path=None,
     ):
         self.mesh_device = mesh_device
@@ -35,6 +36,7 @@ class MoEBlock:
             hf_config=hf_config,
             state_dict=substate(state_dict, "router") if state_dict else {},
             tensor_cache_path=f"{tensor_cache_path}/router" if tensor_cache_path else None,
+            dtype=router_dtype,
         )
 
         expert_config = Gemma4ExpertConfig(hf_config)

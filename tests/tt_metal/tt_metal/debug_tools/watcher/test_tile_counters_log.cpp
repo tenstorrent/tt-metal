@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -12,8 +13,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "impl/context/metal_context.hpp"
@@ -43,11 +43,10 @@ void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, {});
-    auto& program = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
+    const experimental::NodeCoord node{static_cast<uint32_t>(logical_core.x), static_cast<uint32_t>(logical_core.y)};
 
     // Allocate L1 buffer for sync flag
     tt_metal::InterleavedBufferConfig sync_buffer_config{
@@ -60,48 +59,68 @@ void RunTest(
     std::vector<uint32_t> zero_data = {0};
     tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, tensix_sync_addr, zero_data);
 
-    CoreRangeSet core_range_set(CoreRange(logical_core, logical_core));
-
     // DFB config: 1 DM producer -> 4 NEO unpacker consumers
-    // use_remapper: true -> blocked (remapper enabled), false -> strided (bypass mode)
-    dfb::AccessPattern cap = use_remapper ? dfb::AccessPattern::BLOCKED : dfb::AccessPattern::STRIDED;
-    experimental::dfb::DataflowBufferConfig dfb_config{
+    // use_remapper: true -> all (remapper enabled), false -> strided (bypass mode)
+    const auto cap = use_remapper ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED;
+
+    const experimental::DFBSpecName TILE_COUNTER_DFB{"tile_counter_dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+
+    experimental::DataflowBufferSpec dfb_spec{
+        .unique_id = TILE_COUNTER_DFB,
         .entry_size = TILE_SIZE,
         .num_entries = NUM_ENTRIES_PER_DFB,
-        .num_producers = NUM_PRODUCERS,
-        .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = NUM_CONSUMERS,
-        .cap = cap,
-        .enable_implicit_sync = false,
-        .data_format = tt::DataFormat::Float16_b};
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
-    auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range_set, dfb_config);
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_tile_counters.cpp";
 
-    // DM producer kernel
-    std::vector<uint32_t> producer_cta = {dfb_id, NUM_ENTRIES_PER_PRODUCER};
-    auto producer_kernel = experimental::quasar::CreateKernel(
-        program,
-        kernel_path,
-        core_range_set,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = NUM_PRODUCERS,
-            .compile_args = producer_cta,
-            .defines = {{"DFB_PRODUCER", "1"}}});
+    experimental::KernelSpec producer_spec{
+        .unique_id = PRODUCER,
+        .source = kernel_path,
+        .num_threads = NUM_PRODUCERS,
+        .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
+        .dfb_bindings = {experimental::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
+        .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
+    };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)
     // blocked: each consumer sees all entries; strided: entries distributed among consumers
     uint32_t entries_per_consumer = use_remapper ? NUM_ENTRIES_PER_DFB : NUM_ENTRIES_PER_CONSUMER;
-    // Compile args: dfb_id, num_entries, num_consumers_to_run, sync_flag_addr
-    std::vector<uint32_t> consumer_cta = {dfb_id, entries_per_consumer, NUM_CONSUMERS_TO_RUN, tensix_sync_addr};
-    auto consumer_kernel = experimental::quasar::CreateKernel(
-        program,
-        kernel_path,
-        core_range_set,
-        experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = NUM_CONSUMERS, .compile_args = consumer_cta});
+    experimental::KernelSpec consumer_spec{
+        .unique_id = CONSUMER,
+        .source = kernel_path,
+        .num_threads = NUM_CONSUMERS,
+        .dfb_bindings = {{
+            .dfb_spec_name = TILE_COUNTER_DFB,
+            .accessor_name = "tile_counter_dfb",
+            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+            .access_pattern = cap,
+        }},
+        .compile_time_args =
+            {{"num_entries", entries_per_consumer},
+             {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
+             {"sync_flag_addr", tensix_sync_addr}},
+        .hw_config = experimental::ComputeGen2Config{},
+    };
 
-    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dfb_id, producer_kernel, consumer_kernel);
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {PRODUCER, CONSUMER},
+        .target_nodes = node,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "tile_counter_log",
+        .kernels = {producer_spec, consumer_spec},
+        .dataflow_buffers = {dfb_spec},
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
@@ -114,15 +133,20 @@ void RunTest(
         logical_core,
         virtual_core);
 
-    // Build expected patterns: early exiting consumers (2, 3) don't ack, creating mismatches
+    // Build expected patterns: early exiting consumers (2, 3) don't ack, creating mismatches.
     // tiles_to_consume = posted - acked; since acked = 0 for early-exit consumers, tiles_to_consume =
-    // entries_per_consumer
+    // entries_per_consumer. The per-consumer tc slot depends on producer placement (the kernel lands
+    // on DM2 -- the first user DM -- now that DM0/DM1 are reserved). In bypass mode every consumer
+    // tracks its own pending tiles in its local tc slot 0; in remapper mode the slot allocator packs
+    // entries differently, leaving NEO_2 at slot 1 (other consumers at slot 0).
+    static constexpr std::array<uint32_t, NUM_CONSUMERS> kRemapperConsumerTcSlot{0, 0, 1, 0};
     std::vector<std::string> expected_mismatch_patterns;
     for (uint32_t consumer = NUM_CONSUMERS_TO_RUN; consumer < NUM_CONSUMERS; consumer++) {
         if (use_remapper) {
             // Remapper: tiles_to_consume shows unprocessed tiles per consumer
+            uint32_t tc_slot = kRemapperConsumerTcSlot[consumer];
             expected_mismatch_patterns.push_back(
-                fmt::format("-> NEO_{} tc_id:0 tiles_to_consume:{}", consumer, entries_per_consumer));
+                fmt::format("-> NEO_{} tc_id:{} tiles_to_consume:{}", consumer, tc_slot, entries_per_consumer));
         } else {
             // Bypass: each consumer TC shows tiles_to_consume
             expected_mismatch_patterns.push_back(
@@ -157,11 +181,7 @@ void RunTest(
 }
 
 // Test bypass mode (strided consumer access pattern)
-TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogBypass) {
-    const auto& hal = MetalContext::instance().hal();
-    if (!hal.has_tile_counter_registers()) {
-        GTEST_SKIP() << "Tile counters are only used on Quasar";
-    }
+TEST_F(MeshWatcherTileCounterFixture, TestWatcherTileCounterLogBypass) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -172,11 +192,7 @@ TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogBypass) {
 }
 
 // Test remapper mode (blocked consumer access pattern)
-TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogRemapper) {
-    const auto& hal = MetalContext::instance().hal();
-    if (!hal.has_tile_counter_registers()) {
-        GTEST_SKIP() << "Tile counters are only used on Quasar";
-    }
+TEST_F(MeshWatcherTileCounterFixture, TestWatcherTileCounterLogRemapper) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

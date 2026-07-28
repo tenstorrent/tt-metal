@@ -1,3 +1,0 @@
-rank_to_cluster_mock_cluster_desc:
-  0: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml
-  1: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml

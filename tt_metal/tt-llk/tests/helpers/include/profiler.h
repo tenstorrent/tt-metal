@@ -76,7 +76,8 @@ constexpr std::uint32_t TRISC_ID = 3;
 #error "Profiler can only be used on TRISC cores"
 #endif
 
-constexpr std::uint32_t BUFFER_LENGTH = 0x400; // 1024 entries per core
+constexpr std::uint32_t BUFFER_LENGTH  = 0x400; // 1024 entries per core
+constexpr std::uint32_t ZONE_END_WORDS = 2;     // words written per ZONE_END on scope exit
 // Quasar: 4 TRISCs (UNPACK, MATH, PACK, SFPU); Wormhole/Blackhole: 3 TRISCs
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t NUM_CORES   = 4;
@@ -90,13 +91,17 @@ constexpr std::uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH
 constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
 constexpr std::uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(std::uint32_t));
 
+constexpr std::uint32_t EPOCH_ADDR = BARRIER_START - sizeof(std::uint32_t);
+
 using barrier_ptr_t = volatile std::uint32_t (*)[NUM_CORES];
 using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
+using epoch_ptr_t   = volatile std::uint32_t*;
 
 extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
+extern epoch_ptr_t epoch_ptr;
 extern std::uint32_t write_idx;
-extern std::uint32_t open_zone_cnt;
+extern std::uint32_t reserved_words_count;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
@@ -104,7 +109,7 @@ __attribute__((always_inline)) inline void sync_threads()
 
     // wait for all the threads to set the barrier
     barrier[TRISC_ID] = 1;
-    asm volatile("fence" ::: "memory");
+    ckernel::invalidate_data_cache();
     for (std::uint32_t i = 0; i < NUM_CORES; ++i)
     {
         if (i == TRISC_ID)
@@ -113,17 +118,66 @@ __attribute__((always_inline)) inline void sync_threads()
         }
         while (barrier[i] != 1)
         {
-            asm volatile("fence" ::: "memory");
+            ckernel::invalidate_data_cache();
         }
     }
 }
 
+// Cross-thread actor-release rendezvous used at each zone: all announce arrival, the actor waits for
+// all, runs action() then bumps epoch to release. Actor spins only before action(), so it never lands
+// inside the measured window. Compiler fences at entry/exit keep surrounding work from reordering
+// across the rendezvous.
+template <typename Action>
+__attribute__((always_inline)) inline void sync_point(bool is_actor, Action action)
+{
+    ckernel::fence_compiler();
+
+    auto& barrier = *barrier_ptr;
+
+    // Read epoch BEFORE announcing arrival (else the actor could bump it first and a waiter deadlocks).
+    const std::uint32_t my_epoch = *epoch_ptr;
+
+    const std::uint32_t gen = barrier[TRISC_ID] + 1;
+    barrier[TRISC_ID]       = gen;
+
+    if (is_actor)
+    {
+        for (std::uint32_t i = 0; i < NUM_CORES; ++i)
+        {
+            if (i == TRISC_ID)
+            {
+                continue;
+            }
+            // Lock-step: a peer cannot advance past this generation before the actor releases it, so
+            // wait for exact equality — also wrap-safe if the 32-bit generation ever rolls over.
+            while (barrier[i] != gen)
+            {
+                ckernel::invalidate_data_cache();
+            }
+        }
+        action();                  // arm / freeze / no-op — actor never spins AFTER this
+        *epoch_ptr = my_epoch + 1; // single-writer release
+    }
+    else
+    {
+        while (*epoch_ptr == my_epoch)
+        {
+            ckernel::invalidate_data_cache();
+        }
+    }
+
+    ckernel::fence_compiler();
+}
+
 __attribute__((always_inline)) inline void reset()
 {
-    barrier_ptr   = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
-    buffer        = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
-    write_idx     = 0;
-    open_zone_cnt = 0;
+    barrier_ptr          = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
+    buffer               = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+    epoch_ptr            = reinterpret_cast<epoch_ptr_t>(EPOCH_ADDR);
+    write_idx            = 0;
+    reserved_words_count = 0;
+
+    *epoch_ptr = 0;
 
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }
@@ -134,7 +188,7 @@ __attribute__((always_inline)) inline bool is_buffer_full()
     // - timestamp with data (TIMESTAMP_DATA_ENTRY) (size = 16B)
     // - new zone (ZONE_START_ENTRY + ZONE_END_ENTRY) (size = 16B)
     // after closing all of the currently open zones
-    return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+    return (BUFFER_LENGTH - (write_idx + reserved_words_count)) < 4;
 }
 
 __attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
@@ -169,21 +223,25 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
+        ckernel::fence_compiler();
         if (!is_buffer_full())
         {
             is_opened = true;
             write_entry(EntryType::ZONE_START, id16);
-            ++open_zone_cnt;
+            reserved_words_count += ZONE_END_WORDS;
         }
+        ckernel::fence_compiler();
     }
 
     ~zone_scoped()
     {
+        ckernel::fence_compiler();
         if (is_opened)
         {
             write_entry(EntryType::ZONE_END, id16);
-            --open_zone_cnt;
+            reserved_words_count -= ZONE_END_WORDS;
         }
+        ckernel::fence_compiler();
     }
 };
 
@@ -206,6 +264,15 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 
 } // namespace llk_profiler
 
+// WC build: emit only metadata; NC build: full wall_clock tracking. Mutually exclusive with MEASURE_PERF_COUNTERS.
+#ifdef PERF_COUNTERS_COMPILED
+
+#define ZONE_SCOPED(marker)          PROFILER_META(MARKER_FULL(marker))
+#define TIMESTAMP(marker)            PROFILER_META(MARKER_FULL(marker))
+#define TIMESTAMP_DATA(marker, data) PROFILER_META(MARKER_FULL(marker))
+
+#else // !PERF_COUNTERS_COMPILED
+
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
     const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker)>();
@@ -217,6 +284,8 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 #define TIMESTAMP_DATA(marker, data)   \
     PROFILER_META(MARKER_FULL(marker)) \
     llk_profiler::write_timestamp(MARKER_ID(marker), data);
+
+#endif // PERF_COUNTERS_COMPILED
 
 #define PROFILER_SYNC() tensix_sync()
 

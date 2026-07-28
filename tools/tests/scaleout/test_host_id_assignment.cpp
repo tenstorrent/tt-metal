@@ -12,6 +12,7 @@
 
 #include <cabling_generator/cabling_generator.hpp>
 #include "protobuf/cluster_config.pb.h"
+#include "protobuf/deployment.pb.h"
 #include "protobuf/factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools {
@@ -237,6 +238,151 @@ root_instance { template_name: "root"
     }
     EXPECT_FALSE(stale) << "n1 (id=0) must not appear in inter-node connections";
     EXPECT_TRUE(n2_n3) << "n2 (id=1) and n3 (id=2) must be connected after remap";
+
+    std::filesystem::remove_all(dir);
+}
+
+// ---- Heterogeneous merge tests ----
+//
+// These exercise build_from_directory(dir, DeploymentDescriptor). When every leaf child
+// name in every cabling file maps to a deployment hostname, the deployment is sliced
+// per file (enables disjoint per-file templates). Otherwise we fall back to feeding the
+// full deployment to each per-file ctor (preserves the pre-PR positional convention).
+
+static void write_single_node_cabling(
+    const std::string& path, const std::string& node, const std::string& desc, uint32_t hid = 0) {
+    write(path,
+        "graph_templates { key: \"root\" value {\n"
+        "  children { name: \"" + node + "\" node_ref { node_descriptor: \"" + desc + "\" } }\n"
+        "}}\nroot_instance { template_name: \"root\"\n"
+        "  child_mappings { key: \"" + node + "\" value { host_id: " + std::to_string(hid) + " } }\n}\n");
+}
+
+// File A declares WH_GALAXY, file B declares WH_GALAXY_Y_TORUS - disjoint same-arch templates.
+// Pre-PR this failed as "structural mismatch"; post-PR the templates union and merge succeeds.
+TEST(HeterogeneousMergeTest, DisjointSameArchTemplates_Merge) {
+    auto dir = tmp_dir("hetero_disjoint");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write_single_node_cabling(cdir + "a.textproto", "node1", "WH_GALAXY");
+    write_single_node_cabling(cdir + "b.textproto", "node2", "WH_GALAXY_Y_TORUS");
+    write(dir + "dep.textproto",
+        "hosts{host:\"node1\" node_type:\"WH_GALAXY\"}\n"
+        "hosts{host:\"node2\" node_type:\"WH_GALAXY_Y_TORUS\"}\n");
+
+    CablingGenerator gen(cdir, dir + "dep.textproto");
+    const auto hosts = gen.generate_factory_system_descriptor().hosts();
+
+    ASSERT_EQ(hosts.size(), 2u);
+    EXPECT_EQ(hosts[0].hostname(), "node1");
+    EXPECT_EQ(hosts[1].hostname(), "node2");
+
+    std::filesystem::remove_all(dir);
+}
+
+// Deployment lists a host that no cabling file references - new orphan check should fire.
+TEST(HeterogeneousMergeTest, OrphanDeploymentHost_Throws) {
+    auto dir = tmp_dir("hetero_orphan");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write_single_node_cabling(cdir + "a.textproto", "node1", "WH_GALAXY");
+    write(dir + "dep.textproto",
+        "hosts{host:\"node1\" node_type:\"WH_GALAXY\"}\n"
+        "hosts{host:\"ghost\" node_type:\"WH_GALAXY\"}\n");
+
+    EXPECT_THROW(CablingGenerator(cdir, dir + "dep.textproto"), std::runtime_error);
+
+    std::filesystem::remove_all(dir);
+}
+
+// Cabling file uses host_ids {0, 2} - per-file slicing requires a contiguous 0..N-1 space.
+TEST(HeterogeneousMergeTest, NonContiguousHostIds_Throws) {
+    auto dir = tmp_dir("hetero_gap");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write(cdir + "a.textproto", R"(
+graph_templates { key: "root" value {
+  children { name: "node1" node_ref { node_descriptor: "WH_GALAXY" } }
+  children { name: "node2" node_ref { node_descriptor: "WH_GALAXY" } }
+}}
+root_instance { template_name: "root"
+  child_mappings { key: "node1" value { host_id: 0 } }
+  child_mappings { key: "node2" value { host_id: 2 } }
+}
+)");
+    write_deploy(dir + "dep.textproto", {"node1", "node2"}, "WH_GALAXY");
+
+    EXPECT_THROW(CablingGenerator(cdir, dir + "dep.textproto"), std::runtime_error);
+
+    std::filesystem::remove_all(dir);
+}
+
+// REV_AB and REV_C share motherboard + boards and differ only in internal wiring, so the
+// shape-based output lookup collapsed every child to the same key. Each child must keep its
+// source template, and cabling node_descriptor must equal deployment node_type per host.
+TEST(HeterogeneousMergeTest, MixedRevAB_RevC_PreservesPerChildBinding) {
+    auto dir = tmp_dir("hetero_mixed_revs");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write_single_node_cabling(cdir + "a.textproto", "host_ab", "BH_GALAXY_REV_AB", 0);
+    write_single_node_cabling(cdir + "b.textproto", "host_c", "BH_GALAXY_REV_C", 0);
+    write(
+        dir + "dep.textproto",
+        "hosts{host:\"host_ab\" node_type:\"BH_GALAXY_REV_AB\"}\n"
+        "hosts{host:\"host_c\" node_type:\"BH_GALAXY_REV_C\"}\n");
+
+    CablingGenerator gen(cdir, dir + "dep.textproto");
+    gen.emit_cabling_descriptor(dir + "out.textproto");
+    gen.emit_deployment_descriptor(dir + "dep_out.textproto");
+
+    cabling_generator::proto::ClusterDescriptor desc;
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(read_file(dir + "out.textproto"), &desc));
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor dep_out;
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(read_file(dir + "dep_out.textproto"), &dep_out));
+
+    std::map<std::string, std::string> child_to_desc;
+    for (const auto& [_, tmpl] : desc.graph_templates()) {
+        for (const auto& child : tmpl.children()) {
+            if (child.has_node_ref()) {
+                child_to_desc[child.name()] = child.node_ref().node_descriptor();
+            }
+        }
+    }
+    std::map<std::string, std::string> host_to_node_type;
+    for (const auto& h : dep_out.hosts()) {
+        host_to_node_type[h.host()] = h.node_type();
+    }
+
+    ASSERT_EQ(child_to_desc.size(), 2u);
+    EXPECT_EQ(child_to_desc["host_ab"], "BH_GALAXY_REV_AB");
+    EXPECT_EQ(child_to_desc["host_c"], "BH_GALAXY_REV_C");
+    for (const auto& [name, desc_name] : child_to_desc) {
+        EXPECT_EQ(host_to_node_type[name], desc_name) << name;
+    }
+
+    std::filesystem::remove_all(dir);
+}
+
+// Directory mode with placeholder child names + real deployment hostnames (the existing
+// in-repo convention used by 5_wh_galaxy_y_torus_superpod, 16_n300_lb_cluster, etc.). Slicing
+// must auto-disable here so directory mode stays compatible with the single-file ctor.
+TEST(HeterogeneousMergeTest, PlaceholderNamesWithRealHostnames_FallsBackToFullDeployment) {
+    auto dir = tmp_dir("hetero_placeholder");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    std::filesystem::copy(k5NodeCabling, cdir + "a.textproto");
+    write(dir + "dep.textproto",
+        "hosts{host:\"wh-glx-a03u02\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
+        "hosts{host:\"wh-glx-a03u08\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
+        "hosts{host:\"wh-glx-a03u14\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
+        "hosts{host:\"wh-glx-a04u02\" node_type:\"WH_GALAXY_Y_TORUS\"}\n"
+        "hosts{host:\"wh-glx-a04u08\" node_type:\"WH_GALAXY_Y_TORUS\"}\n");
+
+    CablingGenerator gen(cdir, dir + "dep.textproto");
+    const auto hosts = gen.generate_factory_system_descriptor().hosts();
+    ASSERT_EQ(hosts.size(), 5u);
+    EXPECT_EQ(hosts[0].hostname(), "wh-glx-a03u02");
+    EXPECT_EQ(hosts[4].hostname(), "wh-glx-a04u08");
 
     std::filesystem::remove_all(dir);
 }

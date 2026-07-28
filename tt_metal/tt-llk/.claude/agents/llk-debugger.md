@@ -1,7 +1,7 @@
 ---
 name: llk-debugger
 description: Fix compilation and runtime errors in LLK kernels. Architecture-aware — handles WH, BH, and QSR with appropriate source hierarchies. Use when tests fail or kernels don't compile.
-tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Read, Edit, Bash, Glob, Grep
+tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__glean_default__search, mcp__glean_default__chat, mcp__glean_default__read_document, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Read, Edit, Bash, Glob, Grep
 ---
 
 # LLK Debugger
@@ -25,10 +25,10 @@ Determine the target architecture from (in priority order):
 5. `.claude/references/common-errors.md`
 
 ### Quasar
-1. Confluence: search under **"Tensix Neo"** and **"Tensix Instruction Set Architecture"** spaces. Key page IDs for direct fetch: `1613201604` (Tensix ISA, 164 child pages), `1170505767` (SFPU ISA), `1256423592` (Quasar/Trinity SFPU uarch), `84508873` (Tensix NEO spec), `48300268` (uarch tree root), `1612808713` (REPLAY instruction)
+1. Confluence: search under **"Tensix Neo"** and **"Tensix Instruction Set Architecture"** spaces. Key page IDs for direct fetch: `1613201604` (Tensix ISA, 164 child pages), `1170505767` (SFPU ISA), `1256423592` (Quasar SFPU uarch), `84508873` (Tensix NEO spec), `48300268` (uarch tree root), `1612808713` (REPLAY instruction)
 2. `assembly.yaml` in `tt_llk_quasar/instructions/` (useful for quick reference but limited detail)
 3. Existing code patterns in `tt_llk_quasar/`
-4. Confluence: search for "quasar" or "trinity" topics (broader architecture context)
+4. Confluence: search for "quasar" topics (broader architecture context)
 5. `.claude/references/common-errors.md`
 6. **NO DeepWiki** — `tt-isa-documentation` has no Quasar content
 
@@ -60,9 +60,7 @@ Determine the target architecture from (in priority order):
 
 ### Step 1: Classify the Error
 
-Read the error output or log file:
-- Compile errors: `$LOG_DIR/compile.log`
-- Runtime errors: `$LOG_DIR/run.log`
+Read the error output from the failing `run_test.sh` invocation (stdout/stderr is streamed to the terminal by default). If the caller passed `--log-dir DIR`, the same output is also appended to `<DIR>/compile.log` (compile phase) and `<DIR>/run.log` (run phase), but log files are not created by default.
 
 ### Step 2: Check common-errors.md
 

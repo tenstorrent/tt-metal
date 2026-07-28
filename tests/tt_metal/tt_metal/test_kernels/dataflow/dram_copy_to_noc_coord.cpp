@@ -4,10 +4,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 #include "internal/firmware_common.h"
-#include "api/compile_time_args.h"
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #include "internal/ethernet/tunneling.h"
 #endif
@@ -18,28 +17,6 @@
  * APIs explicit flushes need to be used since the calls are non-blocking
  * */
 void kernel_main() {
-#if defined(COMPILE_FOR_DM)
-    uint32_t cpu_index = get_my_thread_id();
-
-#if defined(TEST_MULTI_DM_SANITIZE_RACE)
-    // Having explicit sync barrier helps stress test CAS in sanitize.h since
-    // testing showed DM0 (which wakes other DMs) most likely wins without a barrier
-    constexpr uint32_t num_dms = get_compile_time_arg_val(0);
-    constexpr uint32_t multi_dm_base_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t multi_dm_base_size = get_compile_time_arg_val(2);
-    constexpr uint32_t l1_sync_addr = get_compile_time_arg_val(3);
-    uint64_t* l1_ptr = reinterpret_cast<uint64_t*>(l1_sync_addr);
-    __atomic_add_fetch(l1_ptr, 1, __ATOMIC_RELAXED);
-    while (__atomic_load_n(l1_ptr, __ATOMIC_ACQUIRE) != num_dms) {
-    }
-#else
-    // Single DM test: only specified dm_id executes, others exit early
-    constexpr uint32_t dm_id = get_compile_time_arg_val(0);
-    if (cpu_index != dm_id) {
-        return;
-    }
-#endif
-#endif
     std::uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
 
     std::uint32_t buffer_src_addr = get_arg_val<uint32_t>(1);
@@ -51,11 +28,6 @@ void kernel_main() {
     std::uint32_t dst_noc_y = get_arg_val<uint32_t>(6);
 
     std::uint32_t buffer_size = get_arg_val<uint32_t>(7);
-
-#if defined(COMPILE_FOR_DM) && defined(TEST_MULTI_DM_SANITIZE_RACE)
-    buffer_dst_addr = (multi_dm_base_addr | static_cast<uint32_t>(cpu_index));
-    buffer_size = (multi_dm_base_size | static_cast<uint32_t>(cpu_index));
-#endif
 
     bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
     bool bad_linked_transaction = static_cast<bool>(get_arg_val<uint32_t>(9));
@@ -72,9 +44,8 @@ void kernel_main() {
     // Device Close () requires fast dispatch kernels to finish.
     volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
     // Signal completion to dispatcher before assert hangs the kernel
-    // SD signaling: IDLE_ERISC (all archs) and Quasar DM require RUN_MSG_DONE
-    // TODO: Remove COMPILE_FOR_DM once FD is enabled on Quasar
-#if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DM)
+    // SD signaling: IDLE_ERISC (all archs) requires RUN_MSG_DONE
+#if defined(COMPILE_FOR_IDLE_ERISC)
     go_message_in->signal = RUN_MSG_DONE;
 #else
     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
@@ -82,7 +53,7 @@ void kernel_main() {
 #endif
 
     if (l1_overflow_addr) {
-        experimental::CoreLocalMem<std::uint32_t> l1_overflow_buffer(l1_overflow_addr);
+        CoreLocalMem<std::uint32_t> l1_overflow_buffer(l1_overflow_addr);
         l1_overflow_buffer[0] = 0xDEADBEEF;
     }
 
@@ -104,9 +75,9 @@ void kernel_main() {
     }
 
     // NOC src address
-    experimental::Noc noc;
-    experimental::CoreLocalMem<std::uint32_t> local_buffer(local_buffer_addr);
-    experimental::UnicastEndpoint src_unicast_endpoint;
+    Noc noc;
+    CoreLocalMem<std::uint32_t> local_buffer(local_buffer_addr);
+    UnicastEndpoint src_unicast_endpoint;
 
     noc.async_read(
         src_unicast_endpoint,
@@ -118,7 +89,7 @@ void kernel_main() {
 
     // NOC dst address
     if (bad_linked_transaction) {
-        experimental::MulticastEndpoint dst_mcast_endpoint;
+        MulticastEndpoint dst_mcast_endpoint;
         noc.async_write_multicast(
             local_buffer,
             dst_mcast_endpoint,
@@ -134,7 +105,7 @@ void kernel_main() {
         // linked transaction not closed, the next unicast will hang.
     }
 
-    experimental::UnicastEndpoint dst_unicast_endpoint;
+    UnicastEndpoint dst_unicast_endpoint;
     if (use_inline_dw_write) {
         // Just write something to trigger the watcher assertion. Result data doesn't matter.
         noc.inline_dw_write(

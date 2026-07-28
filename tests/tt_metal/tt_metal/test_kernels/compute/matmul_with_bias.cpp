@@ -4,12 +4,13 @@
 
 #include <cstdint>
 
-#define BCAST_LLKOP ELWADD
+#define BCAST_LLKOP EltwiseBinaryType::ELWADD
 #define BCAST_DIM BroadcastType::ROW
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
@@ -21,13 +22,14 @@ void kernel_main() {
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
     uint32_t with_bias = get_compile_time_arg_val(7);
 
-    acquire_dst();
+    tile_regs_acquire();
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb1(tt::CBIndex::c_1);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
     for (uint32_t b = 0; b < block_cnt; ++b) {
         cb0.wait_front(in0_block_tile_cnt);
         cb1.wait_front(in1_block_tile_cnt);
@@ -55,17 +57,19 @@ void kernel_main() {
 
     // add bias in2 to intermed0 and load to dst
     if (with_bias) {
-        experimental::CircularBuffer cb24(tt::CBIndex::c_24);
-        experimental::CircularBuffer cb2(tt::CBIndex::c_2);
-        // Pack out
+        CircularBuffer cb24(tt::CBIndex::c_24);
+        CircularBuffer cb2(tt::CBIndex::c_2);
+        // Pack out to intermediate
+        tile_regs_commit();
+        tile_regs_wait();
         cb24.reserve_back(out_block_tile_cnt);
         for (uint32_t i = 0; i < out_block_tile_cnt; ++i) {
             pack_tile(i, tt::CBIndex::c_24);
         }
         cb24.push_back(out_block_tile_cnt);
-        release_dst();
+        tile_regs_release();
 
-        acquire_dst();
+        tile_regs_acquire();
 
         add_bcast_rows_init_short(tt::HlkOperand::intermed0, tt::HlkOperand::in2);
         cb24.wait_front(out_block_tile_cnt);
@@ -81,6 +85,9 @@ void kernel_main() {
         cb2.pop_front(dst_tile_cols);
     }
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     // Pack to c_out0
     cb16.reserve_back(out_block_tile_cnt);
     for (uint32_t i = 0; i < out_block_tile_cnt; ++i) {
@@ -88,5 +95,5 @@ void kernel_main() {
     }
 
     cb16.push_back(out_block_tile_cnt);
-    release_dst();
+    tile_regs_release();
 }

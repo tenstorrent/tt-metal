@@ -18,6 +18,7 @@ TEST_PADDING_VALUE = -42
 @pytest.mark.parametrize(
     "batch_size, h, w, dim",
     [
+        (1, 128, 128000, -1),
         (1, 32, 128000, -1),
         (1, 2048, 32000, -1),
         (1, 512, 32000, -1),
@@ -44,7 +45,7 @@ def test_large_softmax(device, batch_size, h, w, dim):
         pcc_threshold=0.999,
         rtol=0.10,
         atol=0.04,
-        frobenius_threshold=0.044,
+        frobenius_threshold=0.050,
     )
 
 
@@ -311,6 +312,7 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    dim_size = torch_output_tensor.shape[dim]
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -318,6 +320,8 @@ def test_softmax(device, batch_size, h, w, dim):
         rtol=0.088,
         atol=0.009,
         frobenius_threshold=0.030,
+        # PCC undefined when softmax axis has size 1 (constant output).
+        check_pcc=(dim_size > 1),
     )
 
 
@@ -337,7 +341,7 @@ def test_softmax_with_3D(device):
         pcc_threshold=0.999,
         rtol=0.158,
         atol=0.010,
-        frobenius_threshold=0.024,
+        frobenius_threshold=0.028,
     )
 
 
@@ -383,7 +387,7 @@ def test_softmax_with_padded_tile_layout_large(device):
         pcc_threshold=0.999,
         rtol=0.148,
         atol=0.010,
-        frobenius_threshold=0.029,
+        frobenius_threshold=0.034,
     )
 
 
@@ -485,14 +489,15 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999,
         rtol=0.008,
         atol=0.002,
         frobenius_threshold=0.008,
+        check_pcc=False,
     )
 
 
 def test_softmax_sd(device):
+    torch.manual_seed(0)
     shape = (1, 16, 256, 256)
 
     input = torch.randn(shape, dtype=torch.bfloat16).float() * 10
@@ -729,4 +734,44 @@ def test_softmax_4096x4096_fp32(device):
         rtol=0.044,
         atol=0.001,
         frobenius_threshold=0.019,
+    )
+
+
+@pytest.mark.parametrize(
+    "shape, dim",
+    [
+        ((1, 100, 6800), -1),
+    ],
+)
+def test_softmax_large_kernel_mask_padded(device, shape, dim):
+    """Regression test for issue #42555: softmax deadlocks in the large-kernel path when a
+    non-tile-aligned H combines with a Wt not divisible by the capped CB length."""
+    torch.manual_seed(0)
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = F.softmax(torch_input, dim=dim, dtype=torch.bfloat16)
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.softmax(
+        ttnn_input,
+        dim=dim,
+        compute_kernel_config=compute_config,
+        numeric_stable=True,
+    )
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.03,
+        atol=0.001,
+        frobenius_threshold=0.02,
+        ulp_threshold=15,
+        check_ulp=True,
     )

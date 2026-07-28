@@ -132,29 +132,53 @@ std::vector<uint32_t> get_multi_dim_per_core_factor(
         }
     }
 
-    // Find what fits, going from largest to smallest m*n. Have k in outer loop to
-    // try to maintain per_core_factor_k.
+    // Find what fits, going from largest to smallest m*n.
+    // When adjust_in0_block_w is true (all-DRAM 2D path), prefer keeping the output
+    // block large and shrinking in0_block_w first — this matches hand-tuned configs
+    // that stream K in smaller chunks rather than chopping out_block.
+    // Otherwise keep k in the outer loop to preserve in0_block_w when possible.
+    // factors is keyed by per_core_factor_m * per_core_factor_n, so reverse iteration
+    // visits larger output blocks first for maximizing L1 utilization.
     uint32_t min_per_core_factor_k = adjust_in0_block_w ? 1 : in0_block_w;
-    for (uint32_t per_core_factor_k = in0_block_w; per_core_factor_k >= min_per_core_factor_k; per_core_factor_k--) {
-        if (in0_block_w % per_core_factor_k != 0) {
-            continue;
-        }
+    auto fits_in_l1 = [&](uint32_t per_core_factor_m, uint32_t per_core_factor_n, uint32_t per_core_factor_k) {
+        return utilities::get_estimated_size_of_cbs(
+                   per_core_factor_m,
+                   per_core_factor_n,
+                   per_core_factor_k,
+                   input_tensor_a,
+                   input_tensor_b,
+                   transpose_a,
+                   transpose_b,
+                   interm_cb_size,
+                   bias_single_tile_size) < max_l1_space;
+    };
+
+    if (adjust_in0_block_w) {
         for (const auto& factor : std::ranges::reverse_view(factors)) {
             uint32_t per_core_factor_m = std::get<0>(factor.second);
             uint32_t per_core_factor_n = std::get<1>(factor.second);
-
-            size = utilities::get_estimated_size_of_cbs(
-                per_core_factor_m,
-                per_core_factor_n,
-                per_core_factor_k,
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                interm_cb_size,
-                bias_single_tile_size);
-            if (size < max_l1_space) {
-                return {per_core_factor_m, per_core_factor_n, per_core_factor_k};
+            for (uint32_t per_core_factor_k = in0_block_w; per_core_factor_k >= min_per_core_factor_k;
+                 per_core_factor_k--) {
+                if (in0_block_w % per_core_factor_k != 0) {
+                    continue;
+                }
+                if (fits_in_l1(per_core_factor_m, per_core_factor_n, per_core_factor_k)) {
+                    return {per_core_factor_m, per_core_factor_n, per_core_factor_k};
+                }
+            }
+        }
+    } else {
+        for (uint32_t per_core_factor_k = in0_block_w; per_core_factor_k >= min_per_core_factor_k;
+             per_core_factor_k--) {
+            if (in0_block_w % per_core_factor_k != 0) {
+                continue;
+            }
+            for (const auto& factor : std::ranges::reverse_view(factors)) {
+                uint32_t per_core_factor_m = std::get<0>(factor.second);
+                uint32_t per_core_factor_n = std::get<1>(factor.second);
+                if (fits_in_l1(per_core_factor_m, per_core_factor_n, per_core_factor_k)) {
+                    return {per_core_factor_m, per_core_factor_n, per_core_factor_k};
+                }
             }
         }
     }
@@ -1043,6 +1067,23 @@ MatmulProgramConfig get_program_config(
                     program_config.per_core_N % program_config.out_subblock_w == 0,
                     "per_core_N must be divisible by out_subblock_w!");
             }
+            if constexpr (requires { program_config.allowed_worker_cores; }) {
+                if (program_config.allowed_worker_cores.has_value()) {
+                    const auto& awc = program_config.allowed_worker_cores.value();
+                    TT_FATAL(awc.num_cores() > 0, "allowed_worker_cores must be non-empty!");
+                    auto bbox = awc.bounding_box();
+                    TT_FATAL(
+                        awc.num_cores() == bbox.size(),
+                        "allowed_worker_cores must form a dense rectangle (got {} cores in a {} bounding box)",
+                        awc.num_cores(),
+                        bbox);
+                    auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                    CoreRangeSet device_cores({CoreRange({0, 0}, {device_grid.x - 1, device_grid.y - 1})});
+                    TT_FATAL(
+                        device_cores.contains(awc),
+                        "allowed_worker_cores must be a subset of the device compute grid!");
+                }
+            }
         },
         config);
     return config;
@@ -1165,19 +1206,31 @@ MatmulProgramConfig create_simple_matmul_program_config(
             }
         }
 
+        // A batch=1, B batch>1: force mcast_in0=false so in0_reuse can keep A in L1 across all
+        // B batches. mcast_in0=true has no batch-reuse path and would FATAL in the validator.
+        const bool a_batch_broadcast =
+            all_interleaved and get_batch_size(a_shape_padded) == 1 and get_batch_size(b_shape_padded) > 1;
+
         bool use_mcast_1d_in0_config =
-            is_wide or
+            (is_wide and not a_batch_broadcast) or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or block_sharded_on_1d_row_grid));
         bool use_mcast_1d_in1_config =
-            is_tall or
+            is_tall or a_batch_broadcast or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED or block_sharded_on_1d_column_grid));
         bool use_mcast_2d_config =
             all_dram_interleaved or (core_range.y == 0 and mem_config.is_sharded() and
                                      mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
                                      not block_sharded_on_1d_column_grid and not block_sharded_on_1d_row_grid);
-        if (core_range.y == 1 or use_mcast_1d_in0_config) {
+        // For all-DRAM interleaved matmuls, do not treat a provisional single-row/column
+        // block grid (core_range.y/x == 1) as a 1D signal. That heuristic is based on a
+        // fixed per_core_factor (~16) and mis-routes non-narrow shapes such as
+        // 512x1024x1024 onto 1D mcast instead of the preferred 2D path. Narrow shapes
+        // still take 1D via is_wide / is_tall above.
+        const bool single_row_blocks_prefer_1d = core_range.y == 1 and not all_dram_interleaved;
+        const bool single_col_blocks_prefer_1d = core_range.x == 1 and not all_dram_interleaved;
+        if ((single_row_blocks_prefer_1d and not a_batch_broadcast) or use_mcast_1d_in0_config) {
             // Pass user's shard_spec when BLOCK_SHARDED on 1D row grid
             std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
                 (block_sharded_on_1d_row_grid && mem_config.shard_spec().has_value())
@@ -1203,7 +1256,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 all_dram_interleaved,
                 user_shard_spec);
         }
-        if (core_range.x == 1 or use_mcast_1d_in1_config) {
+        if (single_col_blocks_prefer_1d or use_mcast_1d_in1_config) {
             // Pass user's shard_spec when BLOCK_SHARDED on 1D column grid
             std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
                 (block_sharded_on_1d_column_grid && mem_config.shard_spec().has_value())

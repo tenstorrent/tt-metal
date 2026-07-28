@@ -15,7 +15,8 @@ from models.experimental.uniad.tt.ttnn_utils import TtLiDARInstance3DBoxes
 import copy
 
 from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_model_parameters_uniad
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -533,29 +534,205 @@ def test_uniad(device, reset_seeds, model_location_generator):
         command=command,
     )
 
-    ttnn_output = ttnn_model(
-        return_loss=False,
-        rescale=ttnn_rescale,
-        img_metas=ttnn_img_metas,
-        img=ttnn_img,
-        timestamp=ttnn_timestamp,
-        l2g_r_mat=ttnn_l2g_r_mat,
-        l2g_t=ttnn_l2g_t,
-        gt_lane_labels=ttnn_gt_lane_labels,
-        gt_lane_bboxes=ttnn_gt_lane_bboxes,
-        gt_lane_masks=ttnn_gt_lane_masks,
-        gt_segmentation=ttnn_gt_segmentation,
-        gt_instance=ttnn_gt_instance,
-        gt_centerness=ttnn_gt_centerness,
-        gt_offset=ttnn_gt_offset,
-        gt_flow=ttnn_gt_flow,
-        gt_backward_flow=ttnn_gt_backward_flow,
-        gt_occ_has_invalid_frame=ttnn_gt_occ_has_invalid_frame,
-        gt_occ_img_is_valid=ttnn_gt_occ_img_is_valid,
-        sdc_planning=ttnn_sdc_planning,
-        sdc_planning_mask=ttnn_sdc_planning_mask,
-        command=ttnn_command,
-    )
+    import os as _os
 
-    logger.info(f"reference_output: {reference_output}")
-    logger.info(f"ttnn_output: {ttnn_output}")
+    # TT_UNIAD_WARM_ITERS=N adds N extra forward passes (with state reset
+    # via ttnn_model.reset_test_state()) before the PCC-asserted final
+    # pass, so TT_UNIAD_TIMING=1 sees warm-cache phase timings instead of
+    # only the cold call.
+    _warm_iters = int(_os.environ.get("TT_UNIAD_WARM_ITERS", "0"))
+
+    def _forward():
+        return ttnn_model(
+            return_loss=False,
+            rescale=ttnn_rescale,
+            img_metas=ttnn_img_metas,
+            img=ttnn_img,
+            timestamp=ttnn_timestamp,
+            l2g_r_mat=ttnn_l2g_r_mat,
+            l2g_t=ttnn_l2g_t,
+            gt_lane_labels=ttnn_gt_lane_labels,
+            gt_lane_bboxes=ttnn_gt_lane_bboxes,
+            gt_lane_masks=ttnn_gt_lane_masks,
+            gt_segmentation=ttnn_gt_segmentation,
+            gt_instance=ttnn_gt_instance,
+            gt_centerness=ttnn_gt_centerness,
+            gt_offset=ttnn_gt_offset,
+            gt_flow=ttnn_gt_flow,
+            gt_backward_flow=ttnn_gt_backward_flow,
+            gt_occ_has_invalid_frame=ttnn_gt_occ_has_invalid_frame,
+            gt_occ_img_is_valid=ttnn_gt_occ_img_is_valid,
+            sdc_planning=ttnn_sdc_planning,
+            sdc_planning_mask=ttnn_sdc_planning_mask,
+            command=ttnn_command,
+        )
+
+    # Per-phase wall-ms regression gate. Active when TT_UNIAD_TIMING=1
+    # AND TT_UNIAD_WARM_ITERS >= 1, on by default in that mode. Reads the
+    # baseline JSON committed in the same directory; asserts each named
+    # phase stays within tolerance (default ±5%). Set TT_UNIAD_PERF_GATE=0
+    # to silence the gate while keeping the timing prints (useful while
+    # iterating on a known regression).
+    _perf_gate_enabled = (
+        _os.environ.get("TT_UNIAD_TIMING") == "1"
+        and _warm_iters >= 1
+        and _os.environ.get("TT_UNIAD_PERF_GATE", "1") != "0"
+    )
+    if _perf_gate_enabled:
+        from models.experimental.uniad.tt.ttnn_uniad import get_timing_stats, reset_timing_stats
+
+        reset_timing_stats()
+
+    if _warm_iters > 0:
+        ttnn_model.warmup(
+            return_loss=False,
+            rescale=ttnn_rescale,
+            img_metas=ttnn_img_metas,
+            img=ttnn_img,
+            timestamp=ttnn_timestamp,
+            l2g_r_mat=ttnn_l2g_r_mat,
+            l2g_t=ttnn_l2g_t,
+            gt_lane_labels=ttnn_gt_lane_labels,
+            gt_lane_bboxes=ttnn_gt_lane_bboxes,
+            gt_lane_masks=ttnn_gt_lane_masks,
+            gt_segmentation=ttnn_gt_segmentation,
+            gt_instance=ttnn_gt_instance,
+            gt_centerness=ttnn_gt_centerness,
+            gt_offset=ttnn_gt_offset,
+            gt_flow=ttnn_gt_flow,
+            gt_backward_flow=ttnn_gt_backward_flow,
+            gt_occ_has_invalid_frame=ttnn_gt_occ_has_invalid_frame,
+            gt_occ_img_is_valid=ttnn_gt_occ_img_is_valid,
+            sdc_planning=ttnn_sdc_planning,
+            sdc_planning_mask=ttnn_sdc_planning_mask,
+            command=ttnn_command,
+            n_iters=_warm_iters,
+        )
+    ttnn_output = _forward()
+
+    logger.info(f"reference_output keys: {list(reference_output[0].keys())}")
+    logger.info(f"ttnn_output keys:      {list(ttnn_output[0].keys())}")
+
+    # ----- PCC quality gate (T4) ------------------------------------------
+    # Promote the "smoke test" e2e to a proper PCC test against the PyTorch
+    # reference. Compares planning's sdc_traj — the final downstream output
+    # of the whole pipeline; if it matches, the upstream perception +
+    # decoder + motion all matched too.
+    def _to_torch(x):
+        if isinstance(x, ttnn.Tensor):
+            return ttnn.to_torch(x)
+        return torch.as_tensor(x) if not isinstance(x, torch.Tensor) else x
+
+    failures = []
+
+    try:
+        ref_traj = reference_output[0]["planning"]["result_planning"]["sdc_traj"]
+        ttnn_traj = ttnn_output[0]["planning"]["result_planning"]["sdc_traj"]
+        ref_t = _to_torch(ref_traj).to(torch.float32)
+        ttnn_t = _to_torch(ttnn_traj).to(torch.float32)
+        pcc, msg = assert_with_pcc(ref_t, ttnn_t, pcc=0.99)
+        logger.info(f"PCC sdc_traj: {msg}")
+    except (KeyError, AssertionError, TypeError) as exc:
+        failures.append(("planning.result_planning.sdc_traj", exc))
+
+    # ----- seg-head PCC gate (real bev_embed) -----------------------------
+    # The seg head's accuracy is validated HERE, on the real BEV embedding —
+    # NOT in test_ttnn_pan_segformer_head, which feeds random pts_feats. White
+    # noise makes the seg DETR encoder's deformable-attention PCC meaningless
+    # (sampling uncorrelated noise amplifies bf16 error: outputs_classes ~0.75
+    # on random vs ~0.999 here on real features). The continuous forward()
+    # outputs are the clean signal that feeds motion -> planning.
+    for _key in ("outputs_classes", "outputs_coords"):
+        try:
+            _rt = reference_model.seg_head._last_forward_outs[_key].to(torch.float32).reshape(-1)
+            _xt = ttnn.to_torch(ttnn_model.seg_head._last_forward_outs[_key]).to(torch.float32).reshape(-1)
+            _n = min(_rt.numel(), _xt.numel())
+            _, _msg = assert_with_pcc(_rt[:_n], _xt[:_n], pcc=0.99)
+            logger.info(f"PCC seg_head.{_key}: {_msg}")
+        except (KeyError, AssertionError, TypeError, AttributeError) as exc:
+            failures.append((f"seg_head.{_key}", exc))
+
+    # ----- Perf regression gate -------------------------------------------
+    # Asserts every tracked phase stays within tolerance vs the baseline
+    # committed alongside this test. Runs only when the timing harness is
+    # active and at least one warm iter ran (so call#2 — the warm-cache
+    # measurement — exists).
+    if _perf_gate_enabled:
+        import json as _json
+        from pathlib import Path as _Path
+
+        baseline_path = _Path(__file__).resolve().parent.parent / "perf_baseline.json"
+        with open(baseline_path) as _f:
+            baseline = _json.load(_f)
+        tol_pct = float(baseline.get("_tolerance_pct", 5.0))
+        baseline_phases = baseline["phases"]
+        stats = get_timing_stats()
+        # call#1 is cold (JIT compile, weight prep) — skip. Use call#2 and
+        # later as the warm measurement; mean across the available warm
+        # calls protects against single-iter noise.
+        warm_call_ids = sorted(k for k in stats.keys() if k >= 2)
+        if not warm_call_ids:
+            failures.append(
+                (
+                    "perf:gate-setup",
+                    AssertionError(
+                        "Perf gate active but no warm-call timing was captured (TT_UNIAD_WARM_ITERS too small?)"
+                    ),
+                )
+            )
+        else:
+            per_phase_warm = {}
+            for phase, baseline_ms in baseline_phases.items():
+                samples = [stats[cid][phase] for cid in warm_call_ids if phase in stats[cid]]
+                if not samples:
+                    logger.warning(f"Perf gate: phase {phase!r} not present in timing output; skipping")
+                    continue
+                # Anchor on the LAST warm call. With trace replay
+                # enabled, call#2 covers one-time capture overhead; the
+                # production-relevant timing is call#3+ (pure replay).
+                # When WARM_ITERS=1, samples=[call#2] and this falls
+                # back to the pre-replay anchor unchanged.
+                gate_ms = samples[-1]
+                per_phase_warm[phase] = (gate_ms, samples)
+                # Tolerance is max(baseline × (1+tol_pct), baseline + abs_floor)
+                # so small phases (e.g. occ_head ~1 ms, planning_head ~80 ms) get
+                # an absolute floor of headroom on top of the percent tolerance.
+                # 5% × 80 ms = 4 ms, smaller than typical sync noise; the +abs
+                # floor prevents these phases from firing on jitter alone.
+                abs_floor_ms = float(baseline.get("_tolerance_abs_floor_ms", 5.0))
+                limit_ms = max(baseline_ms * (1.0 + tol_pct / 100.0), baseline_ms + abs_floor_ms)
+                if gate_ms > limit_ms:
+                    failures.append(
+                        (
+                            f"perf:{phase}",
+                            AssertionError(
+                                f"{phase}: warm call#{warm_call_ids[-1]} {gate_ms:.2f} ms exceeds baseline {baseline_ms:.2f} ms (limit {limit_ms:.2f} ms — pct {tol_pct}% or abs +{abs_floor_ms} ms) (samples: {samples})"
+                            ),
+                        )
+                    )
+            # Inter-iter variance check: when at least 2 warm iters exist,
+            # warn (not fail) if per-phase ms spread > 3% of mean. Catches
+            # cold-cache leak across iters and any device-state instability.
+            # This is diagnostic only — a future trace-capture phase should
+            # eliminate the iter creep we currently see.
+            if len(warm_call_ids) >= 2:
+                for phase, (gate_ms, samples) in per_phase_warm.items():
+                    if gate_ms < 5.0:
+                        # Phases shorter than 5 ms are dominated by sync noise; skip variance check.
+                        continue
+                    mean_ms = sum(samples) / len(samples)
+                    spread_pct = (max(samples) - min(samples)) / mean_ms * 100.0
+                    if spread_pct > 3.0:
+                        logger.warning(
+                            f"Perf gate: phase {phase!r} inter-warm variance {spread_pct:.1f}% > 3% (samples: {samples})"
+                        )
+            logger.info(
+                f"Perf gate: {len(per_phase_warm)} phases checked vs baseline (tol ±{tol_pct:.1f}%); "
+                f"warm calls used: {warm_call_ids} (gate anchored to call#{warm_call_ids[-1]})"
+            )
+
+    if failures:
+        for key, exc in failures:
+            logger.error(f"FAILED on {key}: {type(exc).__name__}: {exc}")
+        raise AssertionError(f"E2E gate failed on {len(failures)} check(s): " + ", ".join(k for k, _ in failures))
+    logger.info("E2E quality gate: all checks PASS")

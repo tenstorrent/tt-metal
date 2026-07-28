@@ -11,11 +11,13 @@
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
-MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::cached_program_t
-MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
+tt::tt_metal::ProgramDescriptor MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
     log_info(tt::LogTest, "Large tensor algorithm selected");
     const auto& input = tensor_args.input;
     const auto op = operation_attributes.op;
@@ -49,77 +51,189 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
             "compute kernel configuration.");
     }
 
-    Program program = Program();
+    ProgramDescriptor desc;
 
     // create circular buffers
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    const uint32_t tile_size_data = tile_size(data_format);
+    const uint32_t tile_size_intermed = tile_size(intermed_data_format);
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {tt::CBIndex::c_0, 2},                         // input
-            {tt::CBIndex::c_1, 1},                         // mask
-            {tt::CBIndex::c_2, 1},                         // scaler
-            {tt::CBIndex::c_16, 2},                        // output
-            {tt::CBIndex::c_24, 2, intermed_data_format},  // exp(x)
-            {tt::CBIndex::c_25, 1, intermed_data_format},  // reduce
-            {tt::CBIndex::c_26, 1, intermed_data_format},  // syn
-            {tt::CBIndex::c_27, 1, intermed_data_format},  // max
-            {tt::CBIndex::c_28, 1, intermed_data_format},  // tmp
-        });
+    // input
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2 * tile_size_data,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
+            .data_format = data_format,
+            .page_size = tile_size_data,
+        }}},
+    });
+    // mask
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * tile_size_data,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
+            .data_format = data_format,
+            .page_size = tile_size_data,
+        }}},
+    });
+    // max scaler
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * tile_size_data,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
+            .data_format = data_format,
+            .page_size = tile_size_data,
+        }}},
+    });
+    // sum scaler
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * tile_size_data,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_3),
+            .data_format = data_format,
+            .page_size = tile_size_data,
+        }}},
+    });
+    // output
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2 * tile_size_data,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
+            .data_format = data_format,
+            .page_size = tile_size_data,
+        }}},
+    });
+    // exp(x)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2 * tile_size_intermed,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_24),
+            .data_format = intermed_data_format,
+            .page_size = tile_size_intermed,
+        }}},
+    });
+    // reduce
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * tile_size_intermed,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_25),
+            .data_format = intermed_data_format,
+            .page_size = tile_size_intermed,
+        }}},
+    });
+    // syn
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * tile_size_intermed,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_26),
+            .data_format = intermed_data_format,
+            .page_size = tile_size_intermed,
+        }}},
+    });
+    // max
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * tile_size_intermed,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_27),
+            .data_format = intermed_data_format,
+            .page_size = tile_size_intermed,
+        }}},
+    });
+    // tmp
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * tile_size_intermed,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_28),
+            .data_format = intermed_data_format,
+            .page_size = tile_size_intermed,
+        }}},
+    });
 
     // create read/write kernel
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
-
-    std::vector<uint32_t> reader_ct_args = {static_cast<uint32_t>(input.dtype() == DataType::FLOAT32)};
+    KernelDescriptor::CompileTimeArgs reader_ct_args = {static_cast<uint32_t>(input.dtype() == DataType::FLOAT32)};
     TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
-    auto reader_kernel_id = CreateReadKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_w_large.cpp",
-        all_cores,
-        reader_ct_args,
-        reader_defines);
-    std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
-    auto writer_kernel_id = CreateWriteKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_w_large.cpp",
-        all_cores,
-        writer_ct_args,
-        writer_defines);
 
-    std::map<std::string, std::string> compute_defines;
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_w_large.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor::CompileTimeArgs writer_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_w_large.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
+    std::map<std::string, std::string> compute_defines_map;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
-        compute_defines["SOFTMAX"] = "1";
+        compute_defines_map["SOFTMAX"] = "1";
     } else {
-        compute_defines["SOFTMIN"] = "1";
+        compute_defines_map["SOFTMIN"] = "1";
     }
 
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
-        compute_defines["LOG"] = "1";
+        compute_defines_map["LOG"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines_map["FP32_DEST_ACC_EN"] = "1";
     }
+    KernelDescriptor::Defines compute_defines(compute_defines_map.begin(), compute_defines_map.end());
+
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
     // create compute kernel
-    CreateComputeKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp",
-        {
-            {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Wt}},
-            {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Wt}},
-        },
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp";
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = {num_tiles_per_core_group_1, Wt};
+    compute_desc_1.defines = compute_defines;
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    KernelDescriptor compute_desc_2;
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        compute_desc_2.kernel_source =
+            "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp";
+        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2.core_ranges = core_group_2;
+        compute_desc_2.compile_time_args = {num_tiles_per_core_group_2, Wt};
+        compute_desc_2.defines = compute_defines;
+        compute_desc_2.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .math_approx_mode = math_approx_mode,
+        };
+    }
 
     // Set Runtime Args
     auto core_x_offset = core_range.start_coord.x;
@@ -136,50 +250,24 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
             TT_THROW("Core not in specified core ranges");
         }
 
-        float scaler = 1.0f;
         uint32_t mask_w = input.logical_shape()[-1] % tt::constants::TILE_WIDTH;
         if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
         }
-        std::vector<uint32_t> reader_args = {
-            input.buffer()->address(),
-            num_tiles_per_core,
-            tile_offset,
-            Wt,
-            *reinterpret_cast<uint32_t*>(&scaler),
-            mask_w};
+        reader_desc.emplace_runtime_args(core, {input.buffer(), num_tiles_per_core, tile_offset, Wt, mask_w});
 
-        std::vector<uint32_t> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
-
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+        writer_desc.emplace_runtime_args(core, {output.buffer(), num_tiles_per_core, tile_offset, Wt});
 
         tile_offset += num_tiles_per_core * Wt;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h}};
-}
-
-void MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
-        }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output.buffer()->address();
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (has_core_group_2) {
+        desc.kernels.push_back(std::move(compute_desc_2));
     }
+
+    return desc;
 }
 }  // namespace ttnn::operations::moreh::moreh_softmax

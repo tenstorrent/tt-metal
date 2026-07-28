@@ -10,7 +10,11 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -18,6 +22,13 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 namespace {
+
+// Sub-row chunking: pair-batched NOC transfers per stick (last = `last_chunk_size`) so a wide row fits L1.
+struct ChunkingParams {
+    uint32_t chunk_size;
+    uint32_t num_chunks_per_stick;
+    uint32_t last_chunk_size;
+};
 
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm(
     const Tensor& input_tensor,
@@ -29,7 +40,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
-    uint32_t max_read_size) {
+    uint32_t max_read_size,
+    const ChunkingParams& chunking) {
     auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -45,7 +57,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
 
     // TODO: Remove first element of these arrays and update kernel accordingly
-    // This currently just matches tile version where we iterate over the row as well
     num_unpadded_sticks_per_dim[0] = 1;
     num_padded_sticks_per_dim[0] = 0;
     accumulated_total_per_dim[0] = 1;
@@ -71,9 +82,22 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
 
+    // shard_W * elem_size for B/W-sharded (splits row across shards); full row otherwise.
+    // Fallback is padded for the reader tensor, unpadded for the writer tensor.
+    const auto per_shard_page_size_bytes = [&](const Tensor& t, uint32_t row_bytes) -> uint32_t {
+        const auto& mc = t.memory_config();
+        if (mc.is_sharded() && (mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                                mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
+            const auto& spec = mc.shard_spec().value();
+            return spec.shape[1] * t.element_size();
+        }
+        return row_bytes;
+    };
+    const uint32_t reader_page_size = per_shard_page_size_bytes(input_tensor, padded_row_size_bytes);
+
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address,
-        padded_row_size_bytes,
+        reader_page_size,
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
         num_dims,
@@ -81,7 +105,10 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         0,
         0,
         0,
-        0};
+        0,
+        chunking.chunk_size,
+        chunking.num_chunks_per_stick,
+        chunking.last_chunk_size};
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_unpadded_sticks_per_dim.begin(), num_unpadded_sticks_per_dim.end());
     common_reader_kernel_args.insert(
@@ -99,17 +126,20 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         } else if (core_group_2.contains(core)) {
             num_sticks_per_core = num_sticks_per_core_group_2;
         } else {
-            // no-op
             num_sticks_per_core = 0;
         }
 
-        // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            auto num_sticks_per_core_pad32 = num_sticks_per_core + ((32 - num_sticks_per_core % 32) % 32);
-            num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
-                num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
-            num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+            if (chunking.num_chunks_per_stick > 1) {
+                num_sticks_per_core_read = num_sticks_per_core;
+                num_read_per_barrier = 2;
+            } else {
+                auto num_sticks_per_core_pad32 = round_up_to_mul32(num_sticks_per_core);
+                num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
+                    num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
+                num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+            }
         }
 
         id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
@@ -122,15 +152,14 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        //
-        uint32_t addr_offset =
-            6;  // input buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims, misalignment
+        uint32_t addr_offset = 6;
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
         reader_kernel_args[addr_offset++] = num_sticks_per_core_read;
         reader_kernel_args[addr_offset] = num_read_per_barrier;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
+        const uint32_t writer_page_size = per_shard_page_size_bytes(output_tensor, unpadded_row_size_bytes);
         std::vector<uint32_t> writer_kernel_args = {
             output_buffer->address(),
             unpadded_row_size_bytes,
@@ -139,7 +168,11 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             num_sticks_per_core_read,
             num_read_per_barrier,
             num_sticks_written,
-            0};
+            writer_page_size,
+            chunking.chunk_size,
+            chunking.num_chunks_per_stick,
+            chunking.last_chunk_size,
+        };
         num_sticks_written += num_sticks_per_core;
         ret_val.emplace_back(reader_kernel_args, writer_kernel_args);
     }
@@ -148,8 +181,18 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 
 constexpr uint32_t MAX_READ_SIZE = 4096;
+constexpr uint32_t CHUNK_TARGET_BYTES = 8192;  // NOC-friendly chunk when splitting a wide row
 
-std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
+struct SliceCbSizing {
+    uint32_t cb_page_size;
+    uint32_t num_read_per_barrier;
+    uint32_t misalignment;
+    ChunkingParams chunking;
+};
+
+// Chunks sub-row when double-buffered row page overflows L1; gated on misalignment==0
+// (misalign path uses a whole-stick memmove that doesn't compose with chunk boundaries).
+SliceCbSizing compute_cb_size(
     const Tensor& input,
     const Tensor& output,
     const Shape& output_tensor_start,
@@ -161,30 +204,76 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
+    const auto single_alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
+    auto alignment = single_alignment;
 
-    // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
     uint32_t begins_bytes = output_tensor_start[-1] * input.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
     if (misalignment != 0) {
         alignment *= 2;
     }
-    const ttnn::Shape& output_shape = output.padded_shape();
-    const uint32_t unpadded_row_size_bytes = output_shape[-1] * input.element_size();
-    const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
+    const uint32_t unpadded_row_size_bytes = output.padded_shape()[-1] * input.element_size();
+    const uint32_t stick_size_aligned = tt::round_up(unpadded_row_size_bytes, alignment);
+
+    const uint32_t l1_budget = ttnn::operations::data_movement::get_max_l1_space(input);
+
+    SliceCbSizing s{
+        .cb_page_size = stick_size_aligned,
+        .num_read_per_barrier = 0,
+        .misalignment = misalignment,
+        .chunking = {stick_size_aligned, 1, stick_size_aligned},
+    };
+
+    const bool needs_chunking = (misalignment == 0) && (static_cast<uint64_t>(2u) * stick_size_aligned > l1_budget) &&
+                                (stick_size_aligned > alignment);
+    uint32_t stride_for_merge = tt::round_up(unpadded_row_size_bytes, single_alignment);
+
+    if (needs_chunking) {
+        // l1_budget/8 leaves headroom for reader + writer CBs pair-batched (each 4*chunk_size).
+        uint32_t max_chunk = std::min<uint32_t>(CHUNK_TARGET_BYTES, static_cast<uint32_t>(l1_budget / 8));
+        max_chunk = (max_chunk / alignment) * alignment;
+        TT_FATAL(
+            max_chunk >= alignment,
+            "ttnn::slice: L1 budget {} B too small for sub-row chunking (alignment {} B)",
+            l1_budget,
+            alignment);
+
+        const uint32_t num_chunks = (unpadded_row_size_bytes + max_chunk - 1) / max_chunk;
+        const uint32_t remainder = unpadded_row_size_bytes % max_chunk;
+        s.chunking = {
+            .chunk_size = max_chunk,
+            .num_chunks_per_stick = num_chunks,
+            .last_chunk_size = (remainder == 0) ? max_chunk : remainder,
+        };
+        s.cb_page_size = max_chunk;
+        stride_for_merge = max_chunk;
+    }
+
+    TT_FATAL(
+        static_cast<uint64_t>(2u) * s.cb_page_size <= l1_budget,
+        "ttnn::slice: required CB size {} B exceeds per-core L1 budget {} B "
+        "(row_bytes={}, misalignment={}); consider slicing along a non-width dim",
+        2u * s.cb_page_size,
+        l1_budget,
+        unpadded_row_size_bytes,
+        misalignment);
+
     const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
                                          ? num_sticks_per_core_group_1
                                          : num_sticks_per_core_group_2;
-    uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
     if (num_input_pages != 0) {
-        auto num_sticks_per_core_pad32 = num_input_pages + ((32 - num_input_pages % 32) % 32);
-        num_sticks_per_core_read =
-            tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, MAX_READ_SIZE);
-        num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+        if (needs_chunking) {
+            s.num_read_per_barrier = 2;
+        } else {
+            auto num_sticks_per_core_pad32 = round_up_to_mul32(num_input_pages);
+            uint32_t num_sticks_per_core_read =
+                tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, stride_for_merge, MAX_READ_SIZE);
+            s.num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+        }
     }
 
-    return std::make_tuple(cb_page_size, num_read_per_barrier, misalignment);
+    return s;
 }
 
 }  // namespace
@@ -192,11 +281,12 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
+
+tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
+    ProgramDescriptor desc;
 
     uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
@@ -207,40 +297,51 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    constexpr uint8_t src0_cb_index = 0;
 
-    constexpr uint32_t src0_cb_index = 0;
-
-    const auto [cb_page_size, num_read_per_barrier, misalignment] = ttnn::operations::data_movement::compute_cb_size(
+    // CB sizing (incl. chunking) derives from padded_shape + slice_start + alignment, all of which
+    // fold into compute_program_hash(), so cache entries stay distinct per unique CB layout.
+    const auto sizing = ttnn::operations::data_movement::compute_cb_size(
         input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, cb_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = sizing.num_read_per_barrier * 2 * sizing.cb_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = cb_data_format,
+            .page_size = sizing.cb_page_size,
+        }}},
+    });
 
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {static_cast<uint32_t>(src0_cb_index)};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args_vec);
 
     std::vector<uint32_t> reader_compile_time_args_vec;
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args_vec);
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "slice_reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "slice_writer_unary_stick_layout_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
+        "slice_reader_unary_unpad_dims_rm_interleaved_start_id.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args_vec);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "slice_writer_unary_stick_layout_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args_vec);
+    writer_desc.config = WriterConfigDescriptor{};
 
     auto all_cores_vec = corerange_to_cores(all_cores);
     auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm(
@@ -253,60 +354,20 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE);
+        ttnn::operations::data_movement::MAX_READ_SIZE,
+        sizing.chunking);
 
+    reader_desc.runtime_args.reserve(all_cores_vec.size());
+    writer_desc.runtime_args.reserve(all_cores_vec.size());
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores_vec[i], all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores_vec[i], all_runtime_args[i].second);
+        reader_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(all_runtime_args[i].first));
+        writer_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(all_runtime_args[i].second));
     }
 
-    return {
-        std::move(program),
-        {unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, args.sub_core_grids, cb_src0}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void SliceRmProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    const auto& src_tensor = tensor_args.input;
-    const auto& slice_start = args.slice_start;
-    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        cached_program.shared_variables.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(
-                  cached_program.shared_variables.sub_core_grids.value(), num_unpadded_sticks)
-            : tt::tt_metal::split_work_to_cores(
-                  cached_program.shared_variables.compute_with_storage_grid_size, num_unpadded_sticks);
-
-    const auto [cb_page_size, num_read_per_barrier, misalignment] = ttnn::operations::data_movement::compute_cb_size(
-        src_tensor, output, slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
-
-    const uint32_t cb_size_bytes = num_read_per_barrier * 2 * cb_page_size;
-    UpdateCircularBufferTotalSize(cached_program.program, cached_program.shared_variables.cb_src0, cb_size_bytes);
-    UpdateCircularBufferPageSize(cached_program.program, cached_program.shared_variables.cb_src0, 0, cb_page_size);
-
-    auto all_cores_vec = corerange_to_cores(all_cores);
-    auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm(
-        src_tensor,
-        output,
-        slice_start,
-        num_cores,
-        all_cores_vec,
-        core_group_1,
-        core_group_2,
-        num_sticks_per_core_group_1,
-        num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE);
-
-    for (size_t i = 0; i < all_cores_vec.size(); ++i) {
-        auto& reader_runtime_args = GetRuntimeArgs(
-            cached_program.program, cached_program.shared_variables.unary_reader_kernel_id, all_cores_vec[i]);
-        std::copy(all_runtime_args[i].first.begin(), all_runtime_args[i].first.end(), reader_runtime_args.data());
-
-        auto& writer_runtime_args = GetRuntimeArgs(
-            cached_program.program, cached_program.shared_variables.unary_writer_kernel_id, all_cores_vec[i]);
-        std::copy(all_runtime_args[i].second.begin(), all_runtime_args[i].second.end(), writer_runtime_args.data());
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

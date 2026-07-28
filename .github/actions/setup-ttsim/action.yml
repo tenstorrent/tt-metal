@@ -1,0 +1,72 @@
+name: Setup TTSim
+description: |
+  Install the ttsim simulator binary for a given arch from a pre-uploaded
+  artifact, and export the env vars needed to run tests under the simulator
+  (TT_METAL_SIMULATOR_HOME, TT_METAL_SIMULATOR, TT_METAL_SLOW_DISPATCH_MODE,
+  TT_METAL_DISABLE_SFPLOADMACRO). The caller workflow is expected to have
+  uploaded an artifact containing libttsim_wh.so and libttsim_bh.so (see
+  the fetch-ttsim job pattern in tt-metal-l2-nightly-impl.yaml). This action
+  picks the correct binary based on the SKU and installs it into <root>/sim.
+
+inputs:
+  sku:
+    description: |
+      Matrix-entry SKU. Used to pick the arch-specific ttsim binary: any SKU
+      containing "blackhole" or "bh_" maps to libttsim_bh.so + blackhole soc
+      descriptor; everything else maps to libttsim_wh.so + wormhole_b0 soc
+      descriptor.
+    required: true
+  artifact-name:
+    description: |
+      Name of the artifact containing libttsim_wh.so and libttsim_bh.so,
+      uploaded by an upstream fetch-ttsim job in the calling workflow.
+    required: false
+    default: 'ttsim-binaries'
+  root:
+    description: |
+      Root directory containing tt_metal/soc_descriptors/. The simulator install
+      is placed at <root>/sim/ and TT_METAL_SIMULATOR_HOME is set to that path.
+      Default '/work' assumes the action is invoked inside the standard dev
+      container whose workdir is /work. For containerless callers (e.g. an
+      ubuntu-latest runner with a plain checkout), pass the workspace path.
+    required: false
+    default: '/work'
+
+runs:
+  using: composite
+  steps:
+    - name: Compute ttsim asset name
+      id: ttsim-info
+      shell: bash
+      run: |
+        if [[ "${{ inputs.sku }}" == *blackhole* || "${{ inputs.sku }}" == bh_* ]]; then
+          asset=libttsim_bh.so; soc=blackhole_140_arch.yaml
+        else
+          asset=libttsim_wh.so; soc=wormhole_b0_80_arch.yaml
+        fi
+        echo "asset_name=$asset" >> "$GITHUB_OUTPUT"
+        echo "soc_desc=$soc" >> "$GITHUB_OUTPUT"
+
+    - name: Configure ttsim env vars
+      shell: bash
+      run: |
+        {
+          echo "TT_METAL_SIMULATOR_HOME=${{ inputs.root }}/sim"
+          echo "TT_METAL_SIMULATOR=${{ inputs.root }}/sim/libttsim.so"
+          echo "TT_METAL_SLOW_DISPATCH_MODE=1"
+          echo "TT_METAL_DISABLE_SFPLOADMACRO=1"
+        } >> "$GITHUB_ENV"
+
+    - name: Download ttsim binaries artifact
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: /tmp/ttsim
+
+    - name: Install ttsim
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${{ inputs.root }}/sim"
+        mv "/tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }}" "${{ inputs.root }}/sim/libttsim.so"
+        cp "${{ inputs.root }}/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }}" "${{ inputs.root }}/sim/soc_descriptor.yaml"

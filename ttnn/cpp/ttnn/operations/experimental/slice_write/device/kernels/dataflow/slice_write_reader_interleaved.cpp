@@ -24,7 +24,7 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(src_args, src_addr, stick_size);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
 
     uint32_t i_stick = start_id;
@@ -41,6 +41,7 @@ void kernel_main() {
             noc.async_read_barrier();
             const uint32_t l1_write_addr = cb_in0.get_write_ptr() + l1_offset;
             tt::data_movement::common::tt_memmove<false, false, false, 0>(
+                noc,
                 l1_write_addr + page_offset,  // destination (shifted right)
                 l1_write_addr,                // source (original location)
                 stick_size                    // total bytes to move

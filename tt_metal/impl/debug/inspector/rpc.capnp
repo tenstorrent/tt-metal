@@ -17,6 +17,7 @@ struct KernelData {
     path @2 :Text;
     source @3 :Text;
     programId @4 :UInt64;
+    processorElfPaths @5 :List(Text);
 }
 
 enum BinaryStatus {
@@ -43,6 +44,7 @@ struct MeshDeviceData {
     shape @2 :List(UInt32);
     parentMeshId @3 :Int64;  # -1 if no parent
     initialized @4 :Bool;
+    programCacheEnabled @5 :Bool;
 }
 
 struct MeshCoordinate {
@@ -70,6 +72,7 @@ struct MeshWorkloadRuntimeEntry {
     runtimeId @1 :UInt64;
     operationName @2 :Text;
     operationParameters @3 :Text;
+    traceId @4 :UInt32 = 0xFFFFFFFF;
 }
 
 # Build environment info for a specific device
@@ -82,6 +85,7 @@ struct BuildEnvData {
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
     # Whether DRAM programmable RISC cores are enabled on this device (Blackhole only)
     dramProgrammableCoresEnabled @3 :Bool;
+    tensixFwLaunchAddrValue @4 :UInt32; # Expected value at L1[0] for TENSIX worker cores
 }
 
 struct BuildEnvPerDevice {
@@ -141,6 +145,14 @@ struct LogicalCoord {
     y @1 :UInt64;
 }
 
+# Translated/virtual (UMD) (x, y) coordinate without chip - chip is the map key. A distinct type from
+# LogicalCoord so the coordinate system is explicit at the schema level; translated coords are used
+# where logical coords would be ambiguous between UMD and Metal (e.g. DRAM subchannel numbering).
+struct TranslatedCoord {
+    x @0 :UInt64;
+    y @1 :UInt64;
+}
+
 # Per-chip: block type -> list of logical coordinates
 struct BlocksByTypePerChip {
     activeEth @0 :List(LogicalCoord);
@@ -151,6 +163,12 @@ struct BlocksByTypePerChip {
 struct ChipBlocksByType {
     chipId @0 :UInt64;
     blocks @1 :BlocksByTypePerChip;
+    # The DRAM cores Metal manages, i.e. every DRAM endpoint EXCEPT each view's NOC0 worker endpoint.
+    # The excluded NOC0 endpoints carry regular NOC0 DRAM traffic and are owned by the syseng firmware
+    # (CMFW DRAM telemetry, SYS-1419); Metal runs no DRISC firmware there, so tools should dump only
+    # the cores in this list. Reported as TranslatedCoord so consumers resolve cores without the
+    # UMD-vs-metal logical-DRAM numbering mismatch.
+    dramCores @2 :List(TranslatedCoord);
 }
 
 enum ConfigurationScope {
@@ -163,6 +181,20 @@ struct ConfigurationEntry {
     name @0 :Text;
     value @1 :Text;
     scope @2 :ConfigurationScope;
+}
+
+struct MappedDevice {
+    isLocal @0 :Bool;
+    localChipId @1 :UInt32;   # valid iff isLocal
+    fabricMeshId @2 :UInt32;  # global identity (always valid)
+    fabricChipId @3 :UInt32;
+}
+
+struct SystemMeshData {
+    globalShape @0 :List(UInt32);          # Global mesh shape across all hosts
+    localShape @1 :List(UInt32);           # This host's local mesh shape
+    localOffset @2 :List(UInt32);          # Where this host's slice sits in the global mesh
+    mappedDevices @3 :List(MappedDevice);  # Row-major over globalShape
 }
 
 interface Inspector {
@@ -201,4 +233,7 @@ interface Inspector {
 
     # Get configuration data (environment variables, runtime options, TTNN config)
     getConfiguration @10 () -> (entries :List(ConfigurationEntry));
+
+    # Get the host's SystemMesh shape (global + local).
+    getSystemMesh @11 () -> (systemMesh :SystemMeshData);
 }

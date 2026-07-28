@@ -12,12 +12,18 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
+from ...tests.test_factory import (
+    TestFactory,
+    compare_tensors,
+    get_pcc_threshold,
+    parametrize_batch_seq,
+    parametrize_mesh_with_fabric,
+)
 
 
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_shared_mlp(batch_size, seq_len, mesh_device):
+def test_shared_mlp(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test SharedMLP against HF Gemma4TextMLP (GeGLU)."""
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.ccl import CCLManager
@@ -62,5 +68,5 @@ def test_shared_mlp(batch_size, seq_len, mesh_device):
     tt_output = tt_mlp(x_tt)
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output)
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.99)
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"SharedMLP (tp={tp}) PCC too low: {pcc_msg}"

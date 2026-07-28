@@ -96,29 +96,62 @@ static program_factory_t select_program_factory(
     const operation_attributes_t&, const tensor_args_t&);
 ```
 
-**Optional `prepare_resources` hook (multi-variant only):**
+**Mesh-workload ops with workload-scoped state — `WorkloadDescriptor` pattern:**
 
-If `create_descriptor` needs a device-side resource that isn't in `tensor_args` or
-the output tensor (e.g., a config tensor that must be allocated once and kept alive
-across cache hits), add a `prepare_resources` static method on the factory struct:
+Most ops only need `create_descriptor`. But mesh-workload ops that allocate
+`GlobalSemaphore`s or call `Synchronize` need to do that **once per workload**
+(not once per coord, not once per dispatch). For those ops, define a
+declarative `WorkloadDescriptor` that owns both the workload-scoped resources
+**and** the per-coord program descriptors:
 
 ```cpp
-struct ProgramFactory {
-    static tt::tt_metal::DeviceStorage prepare_resources(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&);
+struct MyMeshFactory {
+    // Op-defined struct holding the entire workload:
+    //   - workload-scoped resources (GlobalSemaphores, Synchronize tokens,
+    //     anything that must outlive the per-coord programs)
+    //   - a `programs` vector with one ProgramDescriptor per coord (or per
+    //     coord-range, if multiple coords share the same program).
+    //
+    // GlobalSemaphore has no default constructor; wrap each in
+    // std::optional<> so WorkloadDescriptor is value-initialisable.
+    struct WorkloadDescriptor {
+        std::optional<ttnn::GlobalSemaphore> semaphore;
+        // ... any other workload-wide resources
+        std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramDescriptor>> programs;
+    };
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Builds the entire workload in one call. Invoked ONCE per workload
+    // (cache miss). The right place to:
+    //   1. Allocate GlobalSemaphores / run Synchronize.
+    //   2. Loop over `tensor_coords` and push a ProgramDescriptor per coord
+    //      into `programs`.
+    // The framework iterates `programs` verbatim to build the MeshWorkload.
+    static WorkloadDescriptor create_workload_descriptor(
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&,
-        tt::tt_metal::DeviceStorage& resources);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 ```
 
-Most operations do NOT need this. It was needed for Conv2d because it allocates
-sliding-window config tensors that must live as long as the cached program.
+When the framework adapter sees `T::WorkloadDescriptor` + `T::create_workload_descriptor`
++ a `programs` field on the descriptor, it dispatches through this contract:
+
+1. **Cache miss**: calls `create_workload_descriptor` ONCE. The factory allocates
+   resources and populates `programs`. The adapter then turns each
+   `(MeshCoordinateRange, ProgramDescriptor)` pair into a `Program` and adds
+   it to the cached `MeshWorkload`.
+2. **Cache hit**: the factory is **not** invoked. The framework's
+   `BufferBinding` fast path patches buffer addresses directly into the
+   cached programs. Declarative factories MUST use `emplace_runtime_args()`
+   with `Buffer*` args for every position that can change between dispatches
+   — there is no rebuild fallback for declarative ops (a rebuild would
+   reallocate GlobalSemaphores).
+
+> Single-device ops without workload-scoped state continue to use just
+> `create_descriptor` (no workload concept). Only ops that need to allocate
+> something once per workload (`GlobalSemaphore`s, halo lookup tables uploaded
+> to device, etc.) need the declarative `WorkloadDescriptor` pattern above.
 
 ### 1.3 Program factory implementation (`create_descriptor`)
 
@@ -166,6 +199,73 @@ No custom `compute_program_hash` is needed. The framework automatically hashes
 While both the old and `_new` operations exist side by side (Phase 1), their program
 caches won't collide because the default hash includes `type_hash<YourDeviceOperation>`,
 which differs between the two distinct operation types.
+
+**Never write a custom `compute_program_hash` to exclude a per-call value.** A legacy op
+often hand-wrote a hash that dropped a value which varies per call but doesn't change the
+program structure (RNG `seed`, a fused `scalar`, a `from`/`to` range, a semaphore address).
+Under the descriptor framework that is a trap: on a cache **hit** only `Buffer*` address
+slots are re-patched, so a non-`Buffer` value baked into the runtime args is **frozen** at
+the first miss (silent wrong result), unless the op happens to fall to the slow-path rebuild.
+
+The correct pattern (static/dynamic split):
+
+- **Static** (program identity → hashed): exclude the per-call value from the default hash by
+  giving `operation_attributes_t` an `attribute_names` / `attribute_values()` pair that lists
+  only the structural fields and omits the dynamic one. Do **not** add a `compute_program_hash`.
+
+  ```cpp
+  struct operation_attributes_t {
+      Shape shape; DataType dtype; MemoryConfig memory_config;
+      uint32_t seed;  // dynamic — omitted below
+      static constexpr auto attribute_names = std::forward_as_tuple("shape", "dtype", "memory_config");
+      auto attribute_values() const { return std::forward_as_tuple(shape, dtype, memory_config); }
+  };
+  ```
+
+- **Dynamic** (re-patched every dispatch): declare a `get_dynamic_runtime_args` hook returning the
+  current value at the (kernel, core, arg) slot `create_descriptor()` wrote it to. The framework
+  re-applies these on every cache hit (the non-`Buffer` analog of a `BufferBinding`):
+
+  ```cpp
+  static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+      const operation_attributes_t& attrs, const tensor_args_t&, tensor_return_value_t& output,
+      const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
+  ```
+
+  Each `DynamicRuntimeArg` is `{kernel_idx, core, arg_idx, value}`. Ops without the hook compile
+  to nothing — only declare it when you excluded a value from the hash.
+
+  > **Gotcha:** `attribute_values()` is also how the framework **discovers the mesh device** (via
+  > `get_first_object_of_type<MeshDevice*>`). For ops with no input tensor (e.g. `rand`) the device
+  > lives in the attrs, so it must appear in `attribute_values()` — and as the **first** element,
+  > because that helper's tuple path only inspects element 0. Put `device` first; otherwise dispatch
+  > throws "No mesh device found". Ops with an input tensor source the device from `tensor_args`, so
+  > this only bites device-in-attrs ops.
+
+- **Do not copy-paste** the work-split / core enumeration between `create_descriptor` and
+  `get_dynamic_runtime_args`. Extract a shared helper both call, so the miss-build and the
+  hit-patch derive the identical core list and value by construction.
+
+- **In-place ops** (output aliases an input) take the fast path fine — register both as `Buffer*`
+  bindings via `emplace_runtime_args`; the framework allows the output==input alias. (A duplicate
+  among two *distinct* inputs, e.g. `matmul(X, X)`, still bails to the slow path.)
+
+Compile-time values (CB sizes, `#define`s, compile args) can **never** be dynamic — they bake the
+kernel ELF. They must stay hashed (keep them in `attribute_values()`).
+
+> **Precondition for the fast path: the program hash must include everything the per-core runtime
+> args depend on — in particular the shape.** The fast cache-hit path (buffer bindings +
+> `get_dynamic_runtime_args`) only re-patches buffer addresses and your declared dynamic scalars; it
+> does **not** recompute the rest of the runtime args. So it's only correct when "same hash" implies
+> "same program structure" — same shape, same work-split, same per-core tile counts/offsets.
+>
+> Some ops deliberately do the opposite: they **exclude shape from the hash** so one program is
+> reused across shapes, with the per-core args (num_tiles, offsets, num_cores) carrying the shape and
+> the **slow-path rebuild** recomputing them every dispatch (e.g. `binary_ng` hashes `shard_volumes`,
+> not shape). Such shape-agnostic ops **cannot** use buffer bindings — the fast path would leave the
+> shape-dependent args stale and miscompute. Leave them on the slow path (raw addresses, no
+> bindings). Forcing the fast path would require either putting shape back in the hash (losing the
+> cross-shape reuse) or re-deriving every per-core arg (which is just the slow-path rebuild).
 
 ### 1.5 CMakeLists.txt
 
@@ -283,6 +383,12 @@ directory. Update:
 If the old operation had a custom `compute_program_hash`, delete it. The framework
 handles hashing automatically.
 
+If that custom hash existed to **exclude a per-call value** (seed, scalar, range, semaphore
+address), deleting it would put the value back in the key (recompile per value). Instead apply
+the static/dynamic split from §1.4: omit the value from `attribute_values()` and re-apply it via
+`get_dynamic_runtime_args`. Verify with a regression test: a differing value must NOT add a cache
+entry (it's not in the key) AND must change the output (it's re-patched, not frozen).
+
 ### 3.4 Update CMakeLists.txt
 
 - In `ttnn/CMakeLists.txt`: remove the `_new` target from link dependencies and
@@ -366,5 +472,8 @@ See the Bernoulli operation for another complete example:
 - Factory: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_program_factory.cpp`
 - Header: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp`
 
-See the Conv2d operation for an example with `prepare_resources`:
-- Factory: `ttnn/cpp/ttnn/operations/conv/conv2d/device/factory/sharded_descriptor.cpp`
+See `pool/generic` for a complete declarative `WorkloadDescriptor` example
+whose descriptor carries device-uploaded helper tensors (halo lookup
+table, avg-pool scalar config) alongside the per-coord programs:
+- Header: `ttnn/cpp/ttnn/operations/pool/generic/device/pool_op.hpp`
+- Factory: `ttnn/cpp/ttnn/operations/pool/generic/device/pool_multi_core_program_factory.cpp`

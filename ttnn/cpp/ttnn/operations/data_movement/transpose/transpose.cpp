@@ -5,6 +5,7 @@
 
 #include "clone/clone.hpp"
 #include "device/transpose_device_operation.hpp"
+#include "device/transpose_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -19,54 +20,105 @@ namespace detail {
 
 using namespace tt::tt_metal::experimental;
 using namespace tt;
+using tt::tt_metal::BufferType;
 
 inline Tensor transpose_(
     const Tensor& a,
     ttnn::prim::TransposeOpDim transpose_dim,
     const std::optional<MemoryConfig>& output_mem_config,
     float pad_value = 0.0f) {
-    uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2];
-    auto* device = a.device();
-    auto lowest_address = device->lowest_occupied_compute_l1_address();
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-
-    uint32_t W_padded = round_up(W, tt::constants::TILE_WIDTH);
-    uint32_t H_padded = round_up(H, tt::constants::TILE_HEIGHT);
-    uint32_t cb_size_for_rm = (2 * W_padded + 2 * H_padded + H_padded * W_padded) * a.element_size();
     MemoryConfig output_mem_constructed;
     if (!output_mem_config.has_value() ||
         (output_mem_config.value().is_sharded() && !output_mem_config.value().shard_spec().has_value())) {
-        output_mem_constructed = a.memory_config();
-        if (a.is_sharded() && transpose_dim == ttnn::prim::TransposeOpDim::WH) {
+        // Native sharded subset: derive output shard_spec from input's. Otherwise fall back to L1
+        // interleaved (the interleaved factories handle non-native via TensorAccessor).
+        const bool native = is_native_transpose_sharding(a.tensor_spec());
+        if (a.is_sharded() && native) {
+            // Seed: honor user's requested sharded layout (spec gets synthesized below); else
+            // inherit input config so downstream can promote (e.g. N=C=1 → WIDTH_SHARDED).
+            const bool user_requested_layout = output_mem_config.has_value() && output_mem_config.value().is_sharded();
+            output_mem_constructed = user_requested_layout ? output_mem_config.value() : a.memory_config();
+            // If shard geometry can't scale to a valid output shard, hand back a shard-spec-less
+            // sharded MemoryConfig (device op synthesizes via generate_transpose_shard_spec) when
+            // the user requested sharded; otherwise fall back to L1 interleaved.
+            const auto shard_derivation_fallback = [&]() {
+                if (user_requested_layout) {
+                    output_mem_constructed = MemoryConfig(
+                        output_mem_config.value().memory_layout(), output_mem_config.value().buffer_type());
+                } else {
+                    output_mem_constructed = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+                }
+            };
             const auto& input_padded_shape = a.padded_shape();
-            uint32_t W = input_padded_shape[3], H = input_padded_shape[2], C = input_padded_shape[1],
-                     N = input_padded_shape[0];
-            auto shard_spec = a.shard_spec().value();
-            if (N == 1 && C == 1 && shard_spec.shape[1] == W) {
-                std::swap(shard_spec.shape[0], shard_spec.shape[1]);
-                output_mem_constructed =
-                    MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, output_mem_constructed.buffer_type(), shard_spec);
-            } else {
-                shard_spec.shape[0] = shard_spec.shape[0] * W / H;
-                shard_spec.shape[1] = shard_spec.shape[1] * H / W;
-                output_mem_constructed = output_mem_constructed.with_shard_spec(shard_spec);
+            if (transpose_dim == ttnn::prim::TransposeOpDim::WH) {
+                const uint32_t W = input_padded_shape[3], C = input_padded_shape[1], N = input_padded_shape[0];
+                auto shard_spec = a.shard_spec().value();
+                // N=C=1 height-sharded-with-full-width → WIDTH_SHARDED (skip if user requested layout).
+                const bool can_promote_to_width_sharded =
+                    !user_requested_layout && N == 1 && C == 1 && shard_spec.shape[1] == W;
+                if (can_promote_to_width_sharded) {
+                    std::swap(shard_spec.shape[0], shard_spec.shape[1]);
+                    if (a.layout() == Layout::TILE && (shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+                                                       shard_spec.shape[1] % tt::constants::TILE_WIDTH != 0)) {
+                        shard_derivation_fallback();
+                    } else {
+                        output_mem_constructed = MemoryConfig(
+                            TensorMemoryLayout::WIDTH_SHARDED, output_mem_constructed.buffer_type(), shard_spec);
+                    }
+                } else {
+                    auto output_padded_shape = input_padded_shape;
+                    std::swap(output_padded_shape[2], output_padded_shape[3]);
+                    auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
+                    // Layout mismatch: synthesize a fresh spec instead of reusing the input's.
+                    const bool layouts_match = !user_requested_layout || output_mem_config.value().memory_layout() ==
+                                                                             a.memory_config().memory_layout();
+                    if (!adjusted.has_value() || !layouts_match ||
+                        (a.layout() == Layout::TILE && (adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+                                                        adjusted->shape[1] % tt::constants::TILE_WIDTH != 0))) {
+                        shard_derivation_fallback();
+                    } else {
+                        output_mem_constructed = MemoryConfig(
+                            output_mem_constructed.memory_layout(),
+                            output_mem_constructed.buffer_type(),
+                            std::move(adjusted));
+                    }
+                }
+            } else if (transpose_dim == ttnn::prim::TransposeOpDim::HC && a.layout() == Layout::TILE) {
+                auto shard_spec = a.shard_spec().value();
+                // HC TILE padded-shape contract: dim[1] = logical H, dim[2] = round_up(logical C, TILE_HEIGHT).
+                auto output_padded_shape = input_padded_shape;
+                output_padded_shape[1] = a.logical_shape()[2];
+                output_padded_shape[2] = tt::round_up(a.logical_shape()[1], tt::constants::TILE_HEIGHT);
+                auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
+                // Layout mismatch: synthesize a fresh spec instead of reusing the input's.
+                const bool layouts_match = !user_requested_layout || output_mem_config.value().memory_layout() ==
+                                                                         a.memory_config().memory_layout();
+                if (!adjusted.has_value() || !layouts_match || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+                    adjusted->shape[1] % tt::constants::TILE_WIDTH != 0) {
+                    shard_derivation_fallback();
+                } else {
+                    output_mem_constructed = MemoryConfig(
+                        output_mem_constructed.memory_layout(),
+                        output_mem_constructed.buffer_type(),
+                        std::move(adjusted));
+                }
             }
-        }
-        if (a.is_sharded() && transpose_dim == ttnn::prim::TransposeOpDim::HC && a.layout() == Layout::TILE) {
-            const auto& input_padded_shape = a.padded_shape();
-            const auto& input_logical_shape = a.logical_shape();
-            uint32_t H = input_logical_shape[2], C = input_logical_shape[1];
-            uint32_t H_padded = input_padded_shape[2], C_padded = tt::round_up(C, tt::constants::TILE_HEIGHT);
-            auto shard_spec = a.shard_spec().value();
-            shard_spec.shape[0] = shard_spec.shape[0] * H * C_padded / H_padded / C;
-            output_mem_constructed = output_mem_constructed.with_shard_spec(shard_spec);
+        } else if (output_mem_config.has_value()) {
+            // User-requested sharded output (no spec): honor the layout; device op will synthesize
+            // the spec. Must precede the non-native fallback below so it isn't overridden.
+            output_mem_constructed = output_mem_config.value();
+        } else if (a.is_sharded()) {
+            // Non-native sharded input → mirror input's memory_layout (no shard_spec, device op
+            // synthesizes via adjust_shard_spec_to_shape / generate_transpose_shard_spec)
+            output_mem_constructed = MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type());
+        } else {
+            output_mem_constructed = a.memory_config();
         }
     } else {
         output_mem_constructed = output_mem_config.value();
     }
 
-    auto prim_permute = [&](const ttnn::Tensor& input, const ttnn::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
+    auto prim_permute = [&](const ttnn::Tensor& input, const ttsl::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_constructed, std::nullopt, pad_value);
     };
 
@@ -74,29 +126,42 @@ inline Tensor transpose_(
     switch (transpose_dim) {
         case ttnn::prim::TransposeOpDim::HC:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>{0, 2, 1, 3});
+                return prim_permute(a, ttsl::SmallVector<uint32_t>{0, 2, 1, 3});
             }
             break;
         case ttnn::prim::TransposeOpDim::NH:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
         case ttnn::prim::TransposeOpDim::NW:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
         case ttnn::prim::TransposeOpDim::CW:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
         case ttnn::prim::TransposeOpDim::CN:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>({1, 0, 2, 3}));
+                return prim_permute(a, ttsl::SmallVector<uint32_t>({1, 0, 2, 3}));
             }
             break;
         case ttnn::prim::TransposeOpDim::WH:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}));
+                return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
             }
-            if (a.layout() == Layout::ROW_MAJOR && cb_size_for_rm > max_l1_space) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}));
+            if (a.layout() == Layout::ROW_MAJOR) {
+                // Only compute the RM WH CB-vs-L1 budget when actually on the RM WH path:
+                // the allocator query and padded-shape arithmetic are wasted work otherwise.
+                const uint32_t W_padded = round_up(a.logical_shape()[3], tt::constants::TILE_WIDTH);
+                const uint32_t H_padded = round_up(a.logical_shape()[2], tt::constants::TILE_HEIGHT);
+                const uint32_t cb_size_for_rm = (2 * W_padded + 2 * H_padded + H_padded * W_padded) * a.element_size();
+                auto* device = a.device();
+                auto lowest_address = device->lowest_occupied_compute_l1_address();
+                uint32_t max_l1_space =
+                    lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+                max_l1_space =
+                    max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+                if (cb_size_for_rm > max_l1_space) {
+                    return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
+                }
             }
             break;
         default: break;
@@ -111,13 +176,18 @@ ttnn::Tensor transpose_nd(
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
     const auto rank = input_tensor.logical_shape().rank();
-    ttnn::SmallVector<int64_t> permutation;
+    ttsl::SmallVector<int64_t> permutation;
     permutation.reserve(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         permutation.push_back(i);
     }
     std::swap(permutation[dim1], permutation[dim2]);
     return ttnn::permute(input_tensor, permutation, memory_config_arg, pad_value);
+}
+
+inline bool is_block_or_width_sharded_mc(const tt::tt_metal::MemoryConfig& mc) {
+    return mc.is_sharded() && (mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+                               mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
 }
 
 }  // namespace detail
@@ -128,6 +198,40 @@ ttnn::Tensor transpose_impl(
     int64_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
+    {
+        // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
+        // Unshard until the kernel-side helpers handle irregular RM geometries.
+        const bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
+        const bool in_sharded = detail::is_block_or_width_sharded_mc(input_tensor.memory_config());
+        const auto& input_logical = input_tensor.logical_shape();
+        const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
+                                                                input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
+        if (rm && in_sharded && irregular_hw) {
+            // Snapshot orientation before the L1-interleaved staging hop strips it.
+            std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
+            if (input_tensor.shard_spec().has_value()) {
+                input_orientation_hint = input_tensor.shard_spec()->orientation;
+            }
+            auto resolved_mc = memory_config_arg;
+            if (memory_config_arg.has_value() && memory_config_arg->is_sharded() &&
+                !memory_config_arg->shard_spec().has_value()) {
+                const auto& input_padded = input_tensor.padded_shape();
+                const uint32_t n1 = input_logical.get_normalized_index(dim1);
+                const uint32_t n2 = input_logical.get_normalized_index(dim2);
+                ttsl::SmallVector<uint32_t> out_padded_vec(input_padded.cbegin(), input_padded.cend());
+                std::swap(out_padded_vec[n1], out_padded_vec[n2]);
+                auto output_padded_shape = ttnn::Shape(std::move(out_padded_vec));
+                auto spec = generate_transpose_shard_spec(
+                    input_tensor, output_padded_shape, memory_config_arg->memory_layout(), input_orientation_hint);
+                resolved_mc = tt::tt_metal::MemoryConfig(
+                    memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
+            }
+            const auto interleaved_l1 =
+                tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+            Tensor x = ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt);
+            return transpose_impl(x, dim1, dim2, resolved_mc, pad_value);
+        }
+    }
     const auto& input_shape = input_tensor.logical_shape();
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);

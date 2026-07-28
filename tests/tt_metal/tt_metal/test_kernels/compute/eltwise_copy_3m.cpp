@@ -15,13 +15,14 @@
 
 void core_agnostic_main() {
     int __outer_loop_iter;
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0)));
     llk_math_pack_sync_init<DST_ACCUM_MODE>();
     llk_math_hw_configure<DST_ACCUM_MODE>(0, 0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_math_wait_for_dest_available();
-        llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
+        llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
+            0 /* dst_index */, 0 /* operand */);
         llk_math_dest_section_done<DST_ACCUM_MODE>();
     }
 }
@@ -35,12 +36,12 @@ void core_agnostic_main() {
     int __outer_loop_iter;
     llk_pack_init();
     llk_pack_hw_configure<DST_ACCUM_MODE>(16);
-    llk_pack_dest_init<DST_ACCUM_MODE, false>();
+    llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>();
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_packer_wait_for_math_done();
         llk_wait_for_free_tiles<false, false, false>(16, 1);
-        llk_pack<DST_ACCUM_MODE, false, false>(0, 16);
+        llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(0, 16);
         llk_push_tiles<false, false>(16, 1);
         llk_pack_dest_section_done<DST_ACCUM_MODE>();
     }

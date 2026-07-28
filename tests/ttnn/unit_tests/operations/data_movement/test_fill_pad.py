@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,17 @@ import pytest
 import torch
 import ttnn
 import math
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
 from models.common.utility_functions import torch_random, run_for_wormhole_b0
+
+
+def assert_quality(expected_tensor, actual_tensor):
+    # fill_implicit_tile_padding is bit-exact for integer dtypes and deterministic for float paths.
+    # For float outputs we use tight ULP checks (with nonfinite support); for integers we require equality.
+    if actual_tensor.dtype == torch.float32 or actual_tensor.dtype == torch.bfloat16:
+        assert_with_ulp(expected_tensor, actual_tensor, ulp_threshold=1, allow_nonfinite=True)
+    else:
+        assert_equal(expected_tensor, actual_tensor)
 
 
 def create_nd_padded_tiled_tensor(shape, tile_size, fill_value, dtype):
@@ -44,16 +53,13 @@ def create_nd_padded_tiled_tensor(shape, tile_size, fill_value, dtype):
     return tensor, padded_tensor
 
 
-import pytest
-import torch
-import ttnn
-
 ttnn_dtype_to_torch_dtype = {
     ttnn.uint16: torch.int16,
     ttnn.uint32: torch.int32,
     ttnn.int32: torch.int32,
     ttnn.bfloat16: torch.float32,
     ttnn.bfloat8_b: torch.bfloat16,
+    ttnn.bfloat4_b: torch.bfloat16,
     ttnn.float32: torch.float32,
 }
 
@@ -99,7 +105,16 @@ def test_fill_pad_float(
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
-    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+    assert_quality(padded_torch_tensor, padded_torch_output_tensor)
+
+
+BLOCK_FLOAT_FILL_PAD = {
+    ttnn.bfloat8_b: {"pcc": 0.9999, "fill_values": (1.5, float("inf"), float("-inf"))},
+    ttnn.bfloat4_b: {"pcc": 0.95, "fill_values": (1.5,)},
+}
+BLOCK_FLOAT_FILL_PAD_CASES = [
+    (dtype, fill_value) for dtype, cfg in BLOCK_FLOAT_FILL_PAD.items() for fill_value in cfg["fill_values"]
+]
 
 
 @pytest.mark.parametrize(
@@ -118,13 +133,10 @@ def test_fill_pad_float(
         (1, 2, 3, 2, 1, 2, 97, 96),
     ],
 )
-
-# separate test for bfloat8_b where last dim is tile_width aligned (required for bf8b)
-@pytest.mark.parametrize("fill_value", [1.5, float("inf"), float("-inf")])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype, fill_value", BLOCK_FLOAT_FILL_PAD_CASES)
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
-def test_fill_pad_bfloat8_b(
+def test_fill_pad_block_float(
     device,
     shape,
     fill_value,
@@ -143,9 +155,16 @@ def test_fill_pad_bfloat8_b(
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
+    # Guard against the rank>3 dtype leak: block-float inputs typecast through BFLOAT16 internally,
+    # but the helper must cast back to the input dtype on every return path (incl. the rank>3 reshape branch).
+    assert (
+        output_tensor.dtype == dtype
+    ), f"fill_implicit_tile_padding leaked dtype: expected {dtype}, got {output_tensor.dtype}"
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
-    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+    # Block-float (bfp8/bfp4) is a reduced-precision format; keep PCC-based validation for stability,
+    # with the per-dtype bound from BLOCK_FLOAT_FILL_PAD.
+    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, BLOCK_FLOAT_FILL_PAD[dtype]["pcc"])
 
 
 @pytest.mark.parametrize(
@@ -189,7 +208,7 @@ def test_fill_pad_int(
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
-    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+    assert_equal(padded_torch_tensor, padded_torch_output_tensor)
 
 
 @pytest.mark.parametrize("fill_value", [1])
@@ -256,7 +275,7 @@ def test_fill_pad_complex_sharding(device, fill_value, shape, shard_scheme, dtyp
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
-    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, 0.99)
+    assert_quality(padded_torch_tensor, padded_torch_output_tensor)
 
 
 @pytest.mark.parametrize("fill_value", [1])
@@ -268,7 +287,6 @@ def test_fill_pad_complex_sharding(device, fill_value, shape, shard_scheme, dtyp
         (17, 17),
         (17, 1),
         (16, 16),
-        (17, 17),
         (31, 31),
         (33, 33),
         (97, 97),
@@ -282,7 +300,7 @@ def test_fill_pad_complex_sharding(device, fill_value, shape, shard_scheme, dtyp
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.int32])
 def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
@@ -329,4 +347,4 @@ def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
-    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, 0.99)
+    assert_quality(padded_torch_tensor, padded_torch_output_tensor)

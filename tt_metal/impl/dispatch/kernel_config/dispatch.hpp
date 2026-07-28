@@ -30,7 +30,6 @@ struct dispatch_static_config_t {
 
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
-    std::optional<uint32_t> split_dispatch_page_preamble_size;  // 14
     std::optional<uint32_t> prefetch_h_max_credits;             // Used if split_prefetch is true
 
     std::optional<uint32_t> packed_write_max_unicast_sub_cmds;  // 19
@@ -41,6 +40,7 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> unicast_go_signal_addr;
     std::optional<uint32_t> distributed_dispatcher;
     std::optional<uint32_t> first_stream_used;
+    std::optional<uint32_t> completion_counter_offset;
 
     std::optional<uint32_t> host_completion_q_wr_ptr;  // 26
     std::optional<uint32_t> dev_completion_q_wr_ptr;
@@ -51,6 +51,17 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> fabric_header_rb_entries;
     std::optional<uint32_t> my_fabric_sync_status_addr;
     std::optional<bool> is_2d_fabric;
+
+    // Dispatch-core-local L1 address of the realtime_profiler_msg_t block (state, ping-pong
+    // timestamps, host<->device sync, and the program-id handoff FIFO between cq_dispatch BRISC
+    // and cq_dispatch_subordinate NCRISC). Assigned by DispatchMemMap via
+    // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. The same address must be passed to
+    // DispatchSKernel and to the RT-profiler core kernels.
+    std::optional<uint32_t> realtime_profiler_msg_addr;
+
+    std::optional<uint32_t> dispatch_telemetry_addr;
+    std::optional<uint32_t> dispatch_telemetry_control_addr;
+    std::optional<bool> dispatch_telemetry_disabled;
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
@@ -69,6 +80,7 @@ struct dispatch_dependent_config_t {
     std::optional<uint32_t> upstream_dispatch_cb_sem_id;  // Dependent
 
     std::optional<uint32_t> upstream_sync_sem;  // Dependent
+    std::optional<uint32_t> dispatch_d_shutdown_sem_id;
 
     std::optional<uint32_t> downstream_cb_base;    // 10, dependent
     std::optional<uint32_t> downstream_cb_size;    // Dependent

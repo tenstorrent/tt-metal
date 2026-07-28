@@ -6,7 +6,6 @@
 
 #include <cstdint>
 
-#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -14,7 +13,10 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_defs.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -35,7 +37,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_mop_config_", tensor_shape);
 
     if (transpose_of_faces)
     {
@@ -62,7 +64,6 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_transpose =
         TT_OP_UNPACR(SrcA, 0b10 /*This is an inc of 2, which is meant to be num_faces_c_dim*/, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    [[maybe_unused]] const std::uint32_t srca_end_op = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
 
     const std::uint32_t outerloop = transpose_of_faces ? num_faces_c_dim : num_faces_r_dim;
     const std::uint32_t innerloop = transpose_of_faces ? num_faces_r_dim : num_faces_c_dim;
@@ -151,34 +152,69 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @param transpose: Whether to transpose within each face (0 = no transpose, >0 = transpose)
+ * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
+ * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @ref _llk_unpack_AB_ is the matching execute call.
+ * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose = 0)
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape);
+    const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
+    const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
 
     config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
 
-    _llk_unpack_AB_mop_config_<BType>(transpose > 0, tensor_shape); // transpose of faces 0,2,1,3
+    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape); // transpose of faces 0,2,1,3
 }
 
 /**
- * @brief Uninitialize unpacker after AB unpacking operations
+ * @brief Initialize unpacker to unpack operands A and B with no transpose.
  *
- * Resets the unpacker address counters for both SrcA and SrcB to their default
- * tile element counts based on the provided tensor shapes.
+ * Convenience overload that forwards to the transpose-aware init with @ref ckernel::Transpose::None.
  *
- * @param unpA_tensor_shape: Tensor shape for source A operand
- * @param unpB_tensor_shape: Tensor shape for source B operand
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+ * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @ref _llk_unpack_AB_ is the matching execute call.
  */
-inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape, const ckernel::TensorShape unpB_tensor_shape)
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, unpA_tensor_shape.face_r_dim * unpA_tensor_shape.face_c_dim - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_tensor_shape.face_r_dim * unpB_tensor_shape.face_c_dim - 1, 0x0);
+    _llk_unpack_AB_init_<BType>(tensor_shape, ckernel::Transpose::None);
+}
+
+/**
+ * @brief Initialize unpacker to unpack operands A and B with a boolean transpose flag.
+ *
+ * Convenience overload taking an integer flag: nonzero selects @ref ckernel::Transpose::Both,
+ * zero selects @ref ckernel::Transpose::None.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+ * @param transpose: Nonzero to enable both inter-face and within-face transpose, zero for none.
+ * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @ref _llk_unpack_AB_ is the matching execute call.
+ */
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
+}
+
+/**
+ * @brief No-op teardown after AB (two-operand) unpacking.
+ *
+ * The SrcA/SrcB unpacker x-start/x-end (datum-count) state is transient and reprogrammed by each
+ * operation's init (see tt-llk#1036), so there is nothing to restore here.
+ *
+ * @note Call @ref _llk_unpack_AB_init_ before this function.
+ */
+inline void _llk_unpack_AB_uninit_()
+{
 }
 
 /**
@@ -190,12 +226,49 @@ inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape,
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param address_a: L1 memory address of source A tile
  * @param address_b: L1 memory address of source B tile
+ * @param bcast_row_idx: Row index within source B tile for ROW broadcast
+ * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
+ * @note Call @ref _llk_unpack_AB_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_AB_uninit_ after it to restore modified state.
+ * @ref _llk_math_eltwise_binary_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t address_b)
+inline void _llk_unpack_AB_(
+    const std::uint32_t address_a,
+    std::uint32_t address_b,
+    [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
+    [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
+
+    if constexpr (BType == BroadcastType::ROW)
+    {
+        if (bcast_row_idx > 0)
+        {
+            // Row broadcast reads a full 32-element row, which spans two faces:
+            //   Row 0: Face0 row 0 (cols 0-15) + Face1 row 0 (cols 16-31)
+            //   Row 31: Face2 row 15 (cols 0-15) + Face3 row 15 (cols 16-31)
+            //
+            // Within each face, rows are stored contiguously.
+            const std::uint32_t bytes_per_row_in_face = SCALE_DATUM_SIZE(srcb_format, FACE_WIDTH);
+            const std::uint32_t bytes_per_face        = SCALE_DATUM_SIZE(srcb_format, FACE_WIDTH * FACE_HEIGHT);
+
+            std::uint32_t row_offset_bytes;
+            if (bcast_row_idx < FACE_HEIGHT)
+            {
+                // Rows 0-15 are in Face 0/1. Offset to the row within Face 0.
+                row_offset_bytes = bcast_row_idx * bytes_per_row_in_face;
+            }
+            else
+            {
+                // Rows 16-31 are in Face 2/3. Skip first two faces, then offset to the row within Face 2.
+                row_offset_bytes = 2 * bytes_per_face + (bcast_row_idx - FACE_HEIGHT) * bytes_per_row_in_face;
+            }
+
+            address_b += row_offset_bytes >> 4;
+        }
+    }
 
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID

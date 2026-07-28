@@ -2,59 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layernorm_pre_all_gather_program_factory.hpp"
+#include "layernorm_pre_all_gather_device_operation.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include <optional>
+#include <map>
 #include <string>
-#include <variant>
 
 using uint32_t = std::uint32_t;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
 
 // =============================================================================
 // LayerNormPreAllGatherProgramFactory - Normal (non-Welford, non-2D) operation
 // =============================================================================
 
-LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgramFactory::create(
+tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_descriptor(
     const LayerNormPreAllGatherParams& operation_attributes,
     const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-
     const auto& a = tensor_args.input;
+    const auto& b = tensor_args.residual_input_tensor;
+    const bool fuse_pre_add = b.has_value();
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
@@ -87,20 +61,27 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format =
+        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
+    uint32_t inb_single_tile_size = 0;
+    if (fuse_pre_add) {
+        inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b->dtype());
+        inb_single_tile_size = tt::tile_size(inb_data_format);
+    }
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
 
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
-
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
     const uint32_t in1_tiles = 1;  // reduce scalar
+    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
+    const uint32_t fused_tiles = Wt;                           // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;
@@ -140,92 +121,40 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
     log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
     log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)block_size,
+        block_size,
     };
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> compute_defines;
-
-    auto reader_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "reader_unary_interleaved_ln_rm_gb_pre_allgather.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    auto writer_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_blocked.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    // Get program config
-    ttnn::prim::LayerNormDefaultProgramConfig program_config;
-    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
-        program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config);
+    if (fuse_pre_add) {
+        tt::tt_metal::TensorAccessorArgs(b->buffer()).append_to(reader_compile_time_args);
     }
 
-    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
-    std::vector<uint32_t> compute_args = {Wt, block_size, float32_reduction ? 1u : 0u};
+    std::vector<uint32_t> writer_compile_time_args = {writer_block_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
+    reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+
+    std::vector<uint32_t> compute_args = {Wt, block_size};
 
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_pre_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
                      "layernorm_pre_allgather.cpp";
-    auto compute_config = tt::tt_metal::ComputeConfig{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .math_approx_mode = math_approx_mode,
-        .compile_args = compute_args,
-        .defines = compute_defines};
-    auto compute_kernels_id = tt::tt_metal::CreateKernel(program, compute_kernel_file, all_cores, compute_config);
 
-    // Create circular buffers
-    // c_in0 -> a
-    auto cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
-            .set_page_size(tt::CBIndex::c_0, in_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-    // c_in1 -> reduce scalar
-    auto cb_reduce_config =
-        tt::tt_metal::CircularBufferConfig(in1_tiles * bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_1, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_reduce_config);
-
-    // LN and RMS shared intermediates
-    // c_intermed0 -> x^2
-    auto cb_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_6, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
-
-    auto cb_out0_config =
-        tt::tt_metal::CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
-            .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
-
-    // Log all circular buffers
-    for (const auto& cb : program.circular_buffers()) {
-        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
-            log_debug(tt::LogOp, "cb_id {}", index);
-            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
-            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
-            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
-        }
-    }
+    // Build runtime args per core.  Buffer base addresses are bound via
+    // emplace_runtime_args() so the framework patches them on cache hits.
+    KernelDescriptor reader_kernel_desc;
+    KernelDescriptor writer_kernel_desc;
+    KernelDescriptor compute_kernel_desc;
+    reader_kernel_desc.runtime_args.reserve(num_cores);
+    writer_kernel_desc.runtime_args.reserve(num_cores);
+    compute_kernel_desc.runtime_args.reserve(num_cores);
 
     uint32_t curr_row = 0;
-    float winv = 1.0f;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -241,62 +170,135 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
         uint32_t in_tile_offset = curr_row * Wt;
         uint32_t out_tile_offset = curr_row * out0_tiles;
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, reader_kernels_id, core, {a_addr, num_tile_rows_per_core, Wt, in_tile_offset, packed_winv_value});
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
-        tt::tt_metal::SetRuntimeArgs(
-            program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(a.buffer());
+        reader_args.push_back(num_tile_rows_per_core);
+        reader_args.push_back(Wt);
+        reader_args.push_back(in_tile_offset);
+        if (fuse_pre_add) {
+            reader_args.push_back(b->buffer());
+        }
+        reader_kernel_desc.emplace_runtime_args(core, reader_args);
+        compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
+        writer_kernel_desc.emplace_runtime_args(
+            core, {output.buffer(), num_tile_rows_per_core * out0_tiles, out_tile_offset});
+
         curr_row += num_tile_rows_per_core;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernels_id,
-         .writer_kernel_id = writer_kernels_id,
-         .num_cores = num_cores,
-         .grid_size = grid_size}};
-}
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build ProgramDescriptor
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor program_descriptor;
 
-void LayerNormPreAllGatherProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const LayerNormPreAllGatherParams& /*operation_attributes*/,
-    const LayerNormPreAllGatherInputs& tensor_args,
-    Tensor& output) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    // Reader kernel
+    reader_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "reader_unary_interleaved_ln_rm_gb_pre_allgather.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto output_addr = output.buffer()->address();
+    // Writer kernel
+    writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id_blocked.cpp";
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = all_cores;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel_desc.config = WriterConfigDescriptor{};
+    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
-    auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-    auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+    // Compute kernel
+    compute_kernel_desc.kernel_source = compute_kernel_file;
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
+    program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
-    for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
-        const CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build CBDescriptors
+    ////////////////////////////////////////////////////////////////////////////
+    // c_in0 -> a
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = in0_tiles * in_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+            .data_format = in_data_format,
+            .page_size = in_single_tile_size}}}});
 
-        {
-            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
-            reader_args[0] = input_addr;
-        }
+    // c_in1 -> reduce scalar
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = in1_tiles * scaler_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+            .data_format = scaler_cb_data_format,
+            .page_size = scaler_tile_size}}}});
 
-        {
-            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-            writer_args[0] = output_addr;
-        }
+    if (fuse_pre_add) {
+        // c_5 -> residual b. Sized in residual's own data format so a residual with a different
+        // dtype than the input is read correctly; add_tiles handles the per-operand format.
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = res_tiles * inb_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = inb_data_format,
+                .page_size = inb_single_tile_size}}}});
+        // c_3 -> fused a + b (compute kernel writes into this and downstream consumes)
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = fused_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size}}}});
     }
+
+    // LN and RMS shared intermediates
+    // c_intermed0 -> x^2
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = intermed0_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // Output
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = out0_tiles * out_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
+            .data_format = out_data_format,
+            .page_size = out_single_tile_size}}}});
+
+    return program_descriptor;
 }
 
 // =============================================================================
 // LayerNormPreAllGather2DProgramFactory - 2D core grid operation
 // =============================================================================
 
-LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DProgramFactory::create(
+tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_descriptor(
     const LayerNormPreAllGatherParams& operation_attributes,
     const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-
     const auto& a = tensor_args.input;
+    const auto& b = tensor_args.residual_input_tensor;
+    const bool fuse_pre_add = b.has_value();
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const auto& shape = a.padded_shape();
@@ -320,17 +322,24 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format =
+        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
+    uint32_t inb_single_tile_size = 0;
+    if (fuse_pre_add) {
+        inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b->dtype());
+        inb_single_tile_size = tt::tile_size(inb_data_format);
+    }
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
-
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
+    uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
     const uint32_t in1_tiles = 1;  // reduce scalar
+    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
+    const uint32_t fused_tiles = Wt;                           // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;
@@ -368,107 +377,43 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
 
     CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
     CoreRangeSet all_cores = CoreRangeSet(std::vector{all_cores_range});
-    auto cores = corerange_to_cores(all_cores, std::nullopt);
 
     std::vector<CoreRange> merge_core_ranges_vec;
     for (uint32_t x = 0; x < cores_x; ++x) {
         CoreCoord merge_core = {x, 0};
-        merge_core_ranges_vec.push_back(CoreRange(merge_core, merge_core));
+        merge_core_ranges_vec.emplace_back(CoreRange(merge_core, merge_core));
     }
     CoreRangeSet merge_cores(merge_core_ranges_vec);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    auto reducer_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    // Translate CreateSemaphore(...) to SemaphoreDescriptor with id 0.
+    constexpr uint32_t reducer_semaphore_id = 0;
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)block_size,
-        (std::uint32_t)reducer_semaphore_id,
-        (std::uint32_t)cores_y,
+        block_size,
+        reducer_semaphore_id,
+        cores_y,
     };
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> compute_defines;
-
-    auto reader_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "reader_layernorm_preallgather_2d.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    auto writer_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_blocked.cpp",
-        merge_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    // Get program config
-    ttnn::prim::LayerNormDefaultProgramConfig program_config;
-    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
-        program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config);
+    if (fuse_pre_add) {
+        tt::tt_metal::TensorAccessorArgs(b->buffer()).append_to(reader_compile_time_args);
     }
 
-    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
-    std::vector<uint32_t> compute_args = {
-        tiles_per_core_x, tiles_per_core_y, block_size, cores_y, float32_reduction ? 1u : 0u};
+    std::vector<uint32_t> writer_compile_time_args = {writer_block_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    auto compute_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-        "layernorm_pre_allgather_2d.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_args,
-            .defines = compute_defines});
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
+    reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
 
-    // Create circular buffers
-    // c_in0 -> a
-    auto cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
-            .set_page_size(tt::CBIndex::c_0, in_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-    // c_in1 -> reduce scalar
-    auto cb_reduce_config =
-        tt::tt_metal::CircularBufferConfig(in1_tiles * bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_1, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_reduce_config);
+    std::vector<uint32_t> compute_args = {tiles_per_core_x, tiles_per_core_y, block_size, cores_y};
 
-    // LN and RMS shared intermediates
-    // c_intermed0 -> x^2
-    auto cb_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_6, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    // Build runtime args per core.  Buffer base addresses are bound via
+    // emplace_runtime_args() so the framework patches them on cache hits.
+    KernelDescriptor reader_kernel_desc;
+    KernelDescriptor writer_kernel_desc;
+    KernelDescriptor compute_kernel_desc;
 
-    auto cb_intermed1_config =
-        tt::tt_metal::CircularBufferConfig(tiles_per_core_y * single_tile_size, {{tt::CBIndex::c_15, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_15, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
-
-    auto cb_out0_config =
-        tt::tt_metal::CircularBufferConfig(out0_tiles * single_tile_size, {{tt::CBIndex::c_16, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_16, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
-    auto cb_zero_config =
-        tt::tt_metal::CircularBufferConfig(out0_tiles * single_tile_size, {{tt::CBIndex::c_13, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_13, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_zero_config);
-
-    auto cb_out_final_config =
-        tt::tt_metal::CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
-            .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, merge_cores, cb_out_final_config);
-
-    float winv = 1.0f;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     for (uint32_t x = 0; x < cores_x; ++x) {
         for (uint32_t y = 0; y < cores_y; ++y) {
             CoreCoord core = {x, y};
@@ -480,57 +425,166 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
             uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
             uint32_t out_tile_offset = x * out0_tiles;
 
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                reader_kernels_id,
-                core,
-                {a_addr,
-                 tiles_per_core_x,
-                 tiles_per_core_y,
-                 in_tile_offset,
-                 is_merge_core,
-                 merge_core.x,
-                 merge_core.y,
-                 y,
-                 packed_winv_value});
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {is_merge_core});
+            KernelDescriptor::RTArgList reader_args;
+            reader_args.push_back(a.buffer());
+            reader_args.push_back(tiles_per_core_x);
+            reader_args.push_back(tiles_per_core_y);
+            reader_args.push_back(in_tile_offset);
+            reader_args.push_back(static_cast<uint32_t>(is_merge_core));
+            reader_args.push_back(static_cast<uint32_t>(merge_core.x));
+            reader_args.push_back(static_cast<uint32_t>(merge_core.y));
+            reader_args.push_back(y);
+            if (fuse_pre_add) {
+                reader_args.push_back(b->buffer());
+            }
+            reader_kernel_desc.emplace_runtime_args(core, reader_args);
+            compute_kernel_desc.emplace_runtime_args(core, {static_cast<uint32_t>(is_merge_core)});
             if (is_merge_core) {
-                tt::tt_metal::SetRuntimeArgs(
-                    program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
+                writer_kernel_desc.emplace_runtime_args(
+                    core, {output.buffer(), num_tile_rows_per_core * out0_tiles, out_tile_offset});
             }
         }
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernels_id, .writer_kernel_id = writer_kernels_id, .cores = cores}};
-}
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build ProgramDescriptor
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor program_descriptor;
 
-void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const LayerNormPreAllGatherParams& /*operation_attributes*/,
-    const LayerNormPreAllGatherInputs& tensor_args,
-    Tensor& output) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    // Semaphore: reducer_semaphore_id (id 0)
+    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
+        .id = reducer_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
 
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto output_addr = output.buffer()->address();
+    // Reader kernel
+    reader_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "reader_layernorm_preallgather_2d.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
-    auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-    auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+    // Writer kernel (only on merge cores)
+    writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id_blocked.cpp";
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = merge_cores;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel_desc.config = WriterConfigDescriptor{};
+    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
-    for (const auto& core : shared_vars.cores) {
-        {
-            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
-            reader_args[0] = input_addr;
-        }
+    // Compute kernel
+    compute_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+        "layernorm_pre_allgather_2d.cpp";
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
+    program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
-        if (core.y == 0) {
-            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-            writer_args[0] = output_addr;
-        }
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build CBDescriptors
+    ////////////////////////////////////////////////////////////////////////////
+    // c_in0 -> a
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = in0_tiles * in_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+            .data_format = in_data_format,
+            .page_size = in_single_tile_size}}}});
+
+    // c_in1 -> reduce scalar
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = in1_tiles * scaler_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+            .data_format = scaler_cb_data_format,
+            .page_size = scaler_tile_size}}}});
+
+    if (fuse_pre_add) {
+        // c_5 -> residual b. Sized in residual's own data format so a residual with a different
+        // dtype than the input is read correctly; add_tiles handles the per-operand format.
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = res_tiles * inb_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = inb_data_format,
+                .page_size = inb_single_tile_size}}}});
+        // c_3 -> fused a + b (compute kernel writes into this and downstream consumes)
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = fused_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size}}}});
     }
+
+    // LN and RMS shared intermediates
+    // c_intermed0 -> x^2
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = intermed0_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // c_intermed1 (CB 15) — cross-core merge buffer (cb_x2_merge) for the 2D core grid.
+    // Each of the cores_y worker rows writes one partial-stat tile into this buffer on the merge
+    // core, and the merge core's compute wait_front/add_tiles/pop_front over cores_y tiles. Size it
+    // by the gather count (cores_y), NOT the per-core width (tiles_per_core_y): when
+    // cores_y > tiles_per_core_y (i.e. cores_y^2 > Wt, e.g. grid.y=8 with Wt=32 -> cores_y=8,
+    // tiles_per_core_y=4) the old sizing was too small and workers with y >= tiles_per_core_y wrote
+    // past the allocation, corrupting adjacent L1 (with a matching over-read on the compute side).
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = cores_y * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // c_out (CB 16) - per-core partial output
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = out0_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // c_zero (CB 13)
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = out0_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // c_out_final (CB 14) - only on merge cores
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = out0_tiles * out_single_tile_size,
+        .core_ranges = merge_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
+            .data_format = out_data_format,
+            .page_size = out_single_tile_size}}}});
+
+    return program_descriptor;
 }
 
 }  // namespace ttnn::prim

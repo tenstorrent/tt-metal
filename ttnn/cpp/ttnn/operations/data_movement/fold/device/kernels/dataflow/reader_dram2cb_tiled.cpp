@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<3>();
     const auto s = TensorAccessor(src_args, src_addr);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
 
     // Process each block of data

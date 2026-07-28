@@ -8,12 +8,12 @@
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
 
-struct operation_attributes_t {
+struct RMSNormForwardParams {
     bool return_intermediates{false};
     float epsilon{1e-6F};
 };
 
-struct tensor_args_t {
+struct RMSNormForwardInputs {
     const ttnn::Tensor& input;
     const ttnn::Tensor& gamma;
 
@@ -21,8 +21,11 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_output;
 };
 
+using operation_attributes_t = RMSNormForwardParams;
+using tensor_args_t = RMSNormForwardInputs;
+
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttml::metal::ops::rmsnorm_fw::device

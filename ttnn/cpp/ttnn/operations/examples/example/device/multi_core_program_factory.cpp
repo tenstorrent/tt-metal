@@ -86,7 +86,7 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
 
     // Compute kernel (eltwise_sfpu.cpp reads num_tiles via get_arg_val, i.e. runtime args)
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp";
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.config = ComputeConfigDescriptor{
@@ -106,11 +106,9 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{src_buffer->address(), num_tiles_per_core, num_tiles_written});
+        reader_desc.emplace_runtime_args(core, {src_buffer, num_tiles_per_core, num_tiles_written});
 
-        writer_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
 
         compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core});
 

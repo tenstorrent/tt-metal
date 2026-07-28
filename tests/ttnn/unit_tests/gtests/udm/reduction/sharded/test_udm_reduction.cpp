@@ -184,15 +184,11 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     }
 
     // ===== COMPILE-TIME ARGS =====
-    // For SUM reduction, scaler should be 1.0 (not 1/W which is for MEAN)
-    bfloat16 bfloat_scaler = bfloat16(1.0f);
-    uint32_t packed_winv = pack_two_bfloat16_into_uint32({bfloat_scaler, bfloat_scaler});
-
     // Get coordinate dimensions from any gcore
     uint32_t coord_dims = gcores[0].global_coord.dims();
 
     // Sender kernel args: sem_recv_addr, sem_send_addr, num_blocks, block_ht, rows_per_worker, rows_per_worker_last,
-    // winv, coord_dims
+    // coord_dims
     std::vector<uint32_t> reader_sender_compile_time_args = {
         reduce_receiver_semaphore_addr.at(0),  // GlobalSemaphore address (same on all devices)
         reduce_sender_semaphore_addr.at(0),
@@ -200,11 +196,10 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         (uint32_t)block_ht,
         (uint32_t)num_rows_per_worker,
         (uint32_t)num_rows_per_worker_last,
-        packed_winv,
         (uint32_t)coord_dims};
 
     // Receiver kernel args: sem_recv_addr, sem_send_addr, num_blocks, block_ht, rows_per_worker, rows_per_worker_last,
-    // winv, coord_dims
+    // coord_dims
     std::vector<uint32_t> reader_receiver_compile_time_args = {
         reduce_receiver_semaphore_addr.at(0),  // GlobalSemaphore address (same on all devices)
         reduce_sender_semaphore_addr.at(0),
@@ -212,7 +207,6 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         (uint32_t)block_ht,
         (uint32_t)num_rows_per_worker,
         (uint32_t)num_rows_per_worker_last,
-        packed_winv,
         (uint32_t)coord_dims};
 
     // ===== CREATE READER KERNELS =====

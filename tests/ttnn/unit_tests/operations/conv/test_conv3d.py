@@ -10,6 +10,8 @@ import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
 
+pytestmark = pytest.mark.use_module_device
+
 
 def _out_size(in_size, pad, stride, k, dilation):
     effective_k = (dilation * (k - 1)) + 1
@@ -186,17 +188,51 @@ def run_conv3d_test(
     assert pcc_passed, pcc_message
 
 
-@pytest.mark.parametrize("B", [1, 2])
-@pytest.mark.parametrize("C_in", [12, 64])
-@pytest.mark.parametrize("C_out", [64, 48])
-@pytest.mark.parametrize("T", [8, 11])
-@pytest.mark.parametrize("H", [10, 13])
-@pytest.mark.parametrize("W", [9, 12])
-@pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)], ids=["kernel_333", "kernel_111"])
-@pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
-@pytest.mark.parametrize("groups", [1, 2, 4], ids=["groups_1", "groups_2", "groups_4"])
-@pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
-@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@pytest.mark.parametrize(
+    "B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode",
+    [
+        # fmt: off
+        # 1. baseline: k333, s111, g1, zeros, aligned Cin/Cout
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 2. grouped conv + replicate padding
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 4, (0, 1, 1), "replicate"),
+        # 3. kernel 1×1×1 + non-aligned Cout
+        (1, 64, 48, 8, 10, 9, (1, 1, 1), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 4. stride 2×2×2
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 5. stride 2×2×2 + groups + replicate + non-aligned Cout
+        (1, 64, 48, 8, 10, 9, (3, 3, 3), (2, 2, 2), 4, (0, 1, 1), "replicate"),
+        # 6. kernel 1×1×1 + stride 2×2×2
+        (1, 64, 64, 8, 10, 9, (1, 1, 1), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 7. non-aligned Cin (12), k333, s111
+        (1, 12, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 8. non-aligned Cin + kernel 1×1×1 + stride 2×2×2 + non-aligned Cout
+        (1, 12, 48, 8, 10, 9, (1, 1, 1), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 9. non-aligned Cin + groups + replicate + non-aligned Cout
+        (1, 12, 48, 8, 10, 9, (3, 3, 3), (1, 1, 1), 4, (0, 1, 1), "replicate"),
+        # 10. batch > 1
+        (2, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 11. kernel 1×1×1 + groups + zeros
+        (1, 64, 64, 8, 10, 9, (1, 1, 1), (1, 1, 1), 4, (0, 1, 1), "zeros"),
+        # 12. stride 2×2×2 + replicate + non-aligned Cin
+        (1, 12, 64, 8, 10, 9, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "replicate"),
+        # fmt: on
+    ],
+    ids=[
+        "k333_s111_g1_zeros_c64_c64",
+        "k333_s111_g4_replicate_c64_c64",
+        "k111_s111_g1_zeros_c64_c48",
+        "k333_s222_g1_zeros_c64_c64",
+        "k333_s222_g4_replicate_c64_c48",
+        "k111_s222_g1_zeros_c64_c64",
+        "k333_s111_g1_zeros_c12_c64",
+        "k111_s222_g1_zeros_c12_c48",
+        "k333_s111_g4_replicate_c12_c48",
+        "k333_s111_g1_zeros_c64_c64_B2",
+        "k111_s111_g4_zeros_c64_c64",
+        "k333_s222_g1_replicate_c12_c64",
+    ],
+)
 @skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_sweep_shapes(
     device,
@@ -213,17 +249,11 @@ def test_conv3d_sweep_shapes(
     padding_mode,
 ):
     input_shape = (B, C_in, T, H, W)
-    out_channels = C_out
-    kernel_size = kernel_size
-    stride = stride
-    groups = groups
-    padding = padding
-    padding_mode = padding_mode
     grid_size = device.compute_with_storage_grid_size()
     run_conv3d_test(
         device,
         input_shape,
-        out_channels,
+        C_out,
         kernel_size,
         stride,
         groups,
@@ -398,8 +428,9 @@ def test_conv3d_qwen_shapes(
         [(1, 64, 8, 10, 9), 64, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"],
         [(1, 64, 8, 10, 9), 64, (1, 1, 1), (1, 1, 1), 1, (0, 1, 1), "zeros"],
         [(1, 32, 4, 8, 8), 32, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "zeros"],
+        [(2, 3, 2, 14, 14), 1280, (2, 14, 14), (2, 14, 14), 1, (0, 0, 0), "zeros"],
     ],
-    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222"],
+    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222", "auto_block_large_kernel"],
 )
 def test_conv3d_no_config(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode):
     """Test Conv3d with no config (auto-blocking with conservative defaults)."""

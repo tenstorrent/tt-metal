@@ -6,14 +6,26 @@ inputs:
     description: 'Environment name'
     required: true
   namespace:
-    description: 'Kubernetes namespace for the environment'
+    description: 'Target namespace for the environment'
     required: false
     default: 'ttop-ci'
+  timeoutSeconds:
+    description: 'Max seconds to keep retrying the delete before failing.'
+    required: false
+    default: '300'
+  retries:
+    description: 'Number of retries minting the OIDC in one attempt before giving up'
+    required: false
+    default: '3'
 
 runs:
   using: 'composite'
   steps:
     - name: Delete Environment
-      shell: bash
-      run: |
-        kubectl -n ${{ inputs.namespace }} delete helmrelease/${{ inputs.environmentName }} --ignore-not-found
+      uses: ./.github/actions/ttop-await-resource
+      with:
+        namespace: ${{ inputs.namespace }}
+        resource: helmrelease/${{ inputs.environmentName }}
+        mode: delete
+        timeoutSeconds: ${{ inputs.timeoutSeconds }}
+        retries: ${{ inputs.retries }}

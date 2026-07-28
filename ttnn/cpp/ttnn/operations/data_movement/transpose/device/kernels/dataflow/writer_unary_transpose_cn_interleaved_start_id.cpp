@@ -3,16 +3,16 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_pages = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t write_size = get_compile_time_arg_val(2);
     constexpr auto dst_args = TensorAccessorArgs<3>();
@@ -21,19 +21,21 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_out);
+    Noc noc;
+    DataflowBuffer dfb(dfb_id_out);
 
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb.wait_front(onepage);
+        dfb.wait_front(onepage);
 #ifdef CN_RM
-        noc.async_write(cb, s, write_size, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
+        // Restored native sharded multi-page split (see common.hpp helper).
+        // RM-only: see reader kernel for rationale; TILE-layout below uses original API.
+        const uint32_t cb_read_ptr = dfb.get_read_ptr();
+        tt::data_movement::common::noc_async_write_sharded(noc, cb_read_ptr, s, i, 0, write_size);
 #else
-        noc.async_write(cb, s, page_size, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write(dfb, s, page_size, {.offset_bytes = 0}, {.page_id = i});
 #endif
-
         noc.async_write_barrier();
-        cb.pop_front(onepage);
+        dfb.pop_front(onepage);
     }
 }

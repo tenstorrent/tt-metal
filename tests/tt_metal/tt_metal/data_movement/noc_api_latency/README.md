@@ -11,7 +11,7 @@ The tests measure the time taken by NOC API calls themselves, excluding barrier 
 1. Performs a sweep over number of transactions (1 to 256)
 2. Performs a sweep over transaction sizes (configurable)
 3. Measures cycles for the API calls only (barriers are outside the measurement window)
-4. Uses experimental NOC 2.0 API (`experimental::Noc`, `experimental::UnicastEndpoint`, etc.)
+4. Uses NOC 2.0 API (`Noc`, `UnicastEndpoint`, etc.)
 
 ## Test Parameters
 

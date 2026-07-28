@@ -5,8 +5,8 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr std::uint32_t cb_id = get_compile_time_arg_val(0);
@@ -15,8 +15,8 @@ void kernel_main() {
     std::uint32_t src_addr_base = get_arg_val<uint32_t>(0);
     std::uint32_t num_tiles = get_arg_val<uint32_t>(1);
 
-    experimental::CircularBuffer cb(cb_id);
-    experimental::Noc noc(noc_index);
+    CircularBuffer cb(cb_id);
+    Noc noc(noc_index);
 
     const uint32_t ublock_size_tiles = 1;
     uint32_t tile_bytes = cb.get_tile_size();

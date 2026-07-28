@@ -48,7 +48,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Runtime arguments - first get basic parameters
@@ -60,7 +63,7 @@ void kernel_main() {
     uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Compile-time arguments
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
@@ -90,8 +93,9 @@ void kernel_main() {
     // Set up TensorAccessor for input data - use row size as page size
     const auto s0 = TensorAccessor(src_args, src_addr);
 
-    // Create experimental CircularBuffer for Device 2.0 API
-    experimental::CircularBuffer cb_out(cb_id_out);
+    Noc noc;
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer dfb_out(dfb_id_out);
 
     // Multi-core work distribution using iterative approach with explicit coordinate tracking
     // Track current position in N-dimensional space
@@ -130,13 +134,14 @@ void kernel_main() {
                 }
             }
 
-            cb_out.reserve_back(1);
-            uint32_t l1_write_addr = cb_out.get_write_ptr();
+            dfb_out.reserve_back(1);
+            uint32_t l1_write_addr = dfb_out.get_write_ptr();
 
-            // Read the full input row first
-            uint64_t input_row_noc_addr = get_noc_addr(input_row_idx, s0);
-            noc_async_read(input_row_noc_addr, l1_write_addr, input_bytes_per_row);
-            noc_async_read_barrier();
+            // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
+            // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
+            tt::data_movement::common::noc_async_read_sharded(
+                noc, l1_write_addr, s0, input_row_idx, /*offset=*/0, /*size=*/input_bytes_per_row);
+            noc.async_read_barrier();
 
             // Now slice the row according to width slice parameters (last dimension)
             uint32_t last_dim = tensor_rank - 1;
@@ -158,7 +163,7 @@ void kernel_main() {
                 }
             }
 
-            cb_out.push_back(1);
+            dfb_out.push_back(1);
             rows_processed++;
         }
 

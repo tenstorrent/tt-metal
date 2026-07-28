@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce 
 struct PostCombineReduceDeviceOperation {
     using operation_attributes_t = PostCombineReduceParams;
     using tensor_args_t = PostCombineReduceInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<PostCombineReduceProgramFactory>;
 
@@ -36,8 +36,8 @@ namespace ttnn::prim {
 ttnn::Tensor post_combine_reduce(
     const ttnn::Tensor& combine_output,
     const ttnn::Tensor& weights,
-    const ttnn::Tensor& indices,
-    const ttnn::Tensor& expert_dispatch_table,
+    const std::optional<ttnn::Tensor>& indices,
+    const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 

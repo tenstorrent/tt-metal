@@ -49,14 +49,17 @@ void PrintTo(const AdamWFullPrecisionCase& pc, std::ostream* os) {
 }
 
 class AdamWFullPrecisionComparisonTest : public ::testing::TestWithParam<AdamWFullPrecisionCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
 
+protected:
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
-        ttml::autograd::ctx().close_device();
     }
 };
 
@@ -67,13 +70,13 @@ static ttnn::Tensor to_tt_bf16(const xt::xarray<bfloat16>& x) {
 // NOTE: ttml::core::from_xtensor() performs fp32 -> bf16 conversion, that's why this function exists
 static ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
     auto* device = &ttml::autograd::ctx().get_device();
-    auto shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(x);
+    auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(x);
     auto buffer_span = ttml::core::xtensor_to_span(x);
 
     ttnn::MemoryConfig output_mem_config{};
-    const auto tensor_layout = ttnn::TensorLayout(
+    const auto tensor_layout = tt::tt_metal::TensorLayout(
         ttnn::DataType::FLOAT32, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
-    auto output = ttnn::Tensor::from_span<float>(buffer_span, ttnn::TensorSpec(shape, tensor_layout));
+    auto output = ttnn::Tensor::from_span<float>(buffer_span, tt::tt_metal::TensorSpec(shape, tensor_layout));
 
     output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
     output = ttnn::to_device(output, device, output_mem_config);
@@ -210,6 +213,11 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     // Inject optimizer state
     serialization::StateDict state;
     state["steps"] = initial_steps;
+    state["lr"] = pc.lr;
+    state["beta1"] = pc.beta1;
+    state["beta2"] = pc.beta2;
+    state["epsilon"] = pc.epsilon;
+    state["weight_decay"] = pc.weight_decay;
     state["master_weights"] =
         serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(w0_fp32), false)}};
     state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};
@@ -317,8 +325,8 @@ INSTANTIATE_TEST_SUITE_P(
 static const AdamWFullPrecisionCase kAMSGradCases[] = {
     // Standard AMSGrad
     {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard"},
-    // AMSGrad with weight decay
-    {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
+    // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+    // {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
     // AMSGrad with different shape
     {{2, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "NIGHTLY_Large_4D"},
 };

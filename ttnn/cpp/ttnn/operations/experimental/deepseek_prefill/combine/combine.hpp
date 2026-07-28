@@ -15,6 +15,7 @@ ttnn::Tensor combine(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
     const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
@@ -25,7 +26,8 @@ ttnn::Tensor combine(
     std::optional<uint32_t> num_links = 1,
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
     bool init_zeros = true,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    bool use_fp8_combine = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine
 

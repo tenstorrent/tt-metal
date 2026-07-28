@@ -10,6 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_gate_weights,
@@ -65,7 +66,9 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     hidden_dim = 512
     num_routed_experts = 256  # Required by gate kernel
     num_experts_per_tok = 8  # Required by gate kernel
-    capacity_factor = 2
+    # ceil(N/2) of the most conservative integer N such that dgs*seq*N >= theoretical
+    # worst-case dispatch buffer. Real traffic never approaches the worst case.
+    dispatch_buffer_capacity_factor = 6
 
     # Compute constants
     num_devices = mesh_device.get_num_devices()
@@ -73,8 +76,18 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
     total_experts = num_devices * experts_per_chip
 
@@ -96,7 +109,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)  # SP on axis 0, TP on axis 1
             ),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             dtype=ttnn.bfloat16,
         )
@@ -119,6 +132,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         gate_weights=gate_weights,
         emb_dim=emb_dim,
@@ -127,13 +141,16 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         topology=ttnn.Topology.Linear,
         routed_expert_weights=routed_expert_weights,
         shared_expert_weights=shared_expert_weights,
-        routed_expert_activations_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat16,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat16,
         gate_fallback_mode=gate_mode,
         weight_cache_path=None,
         layer_idx=0,
+        n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
+        n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
+        route_scale=DeepSeekV3Config.ROUTE_SCALE,
     )
     output1_tt, _ = moe_from_weights(create_input(), return_intermediates=False)
     output1 = to_torch_tp(output1_tt)
@@ -183,6 +200,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         gate_weights=None,  # Cache-only mode
         emb_dim=emb_dim,
@@ -191,13 +209,16 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         topology=ttnn.Topology.Linear,
         routed_expert_weights=None,
         shared_expert_weights=None,
-        routed_expert_activations_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat16,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat16,
         gate_fallback_mode=gate_mode,
         weight_cache_path=CACHE_DIR,
         layer_idx=0,
+        n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
+        n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
+        route_scale=DeepSeekV3Config.ROUTE_SCALE,
     )
     profiler.end("cold_load")
     output2_tt, _ = moe_cold(create_input(), return_intermediates=False)
@@ -220,6 +241,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         gate_weights=None,
         emb_dim=emb_dim,
@@ -228,13 +250,16 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         topology=ttnn.Topology.Linear,
         routed_expert_weights=None,
         shared_expert_weights=None,
-        routed_expert_activations_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat16,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat16,
         gate_fallback_mode=gate_mode,
         weight_cache_path=CACHE_DIR,
         layer_idx=0,
+        n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
+        n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
+        route_scale=DeepSeekV3Config.ROUTE_SCALE,
     )
     profiler.end("warm_load")
     output3_tt, _ = moe_warm(create_input(), return_intermediates=False)

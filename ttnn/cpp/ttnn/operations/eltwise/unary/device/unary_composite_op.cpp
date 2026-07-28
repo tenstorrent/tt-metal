@@ -16,7 +16,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/operations/eltwise/unary_ng/unary_ng.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -24,95 +24,9 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/hal.hpp>
+#include <cstdint>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::detail {
-
-// Existing implementation of _lgamma.
-// TODO: Remove this once the multigammaln is uplifted.
-Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result(x);
-    {
-        Tensor t(x);
-        {
-            Tensor temp_log(x);
-            {
-                Tensor temp(x);
-                Tensor input = ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config);
-                {
-                    Tensor z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 1.0f, std::nullopt, output_mem_config), output_mem_config),
-                        76.18009172947146f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(z1, 1.0f, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 2.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -86.50532032941677f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 3.0f, std::nullopt, output_mem_config), output_mem_config),
-                        24.01409824083091f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 4.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -1.231739572450155f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 5.0f, std::nullopt, output_mem_config), output_mem_config),
-                        0.1208650973866179e-2f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 6.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -0.5395239384953e-5f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-                }
-                {
-                    Tensor t_log(x);
-                    {
-                        t = ttnn::add(input, 5.5f, std::nullopt, output_mem_config);
-                        t_log = ttnn::log(t, true, output_mem_config);
-                    }
-                    temp_log = ttnn::log(temp, true, output_mem_config);
-                    result = ttnn::add(
-                        ttnn::multiply(
-                            ttnn::add(input, 0.5f, std::nullopt, output_mem_config),
-                            t_log,
-                            std::nullopt,
-                            output_mem_config),
-                        0.918938531357171f,
-                        std::nullopt,
-                        output_mem_config);
-                }
-            }
-            result = ttnn::add(result, temp_log, std::nullopt, output_mem_config);
-        }
-        result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
-        {
-            {
-                result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result);
-            }
-            {
-                result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result);
-            }
-        }
-    }
-    return result;
-}
 
 // Function variance of whole tensor.
 Tensor _variance_impl(
@@ -120,7 +34,7 @@ Tensor _variance_impl(
     const Tensor& /*mean_y*/,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    ttnn::SmallVector<int> dims = {2, 3};
+    ttsl::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
     auto shape_wh = y.padded_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
@@ -145,17 +59,17 @@ Tensor _std(
 }
 
 std::vector<Tensor> split_tensor_for_glu(
-    const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
     ttnn::Shape inshape(input_a.padded_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-    ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttsl::SmallVector<std::uint32_t> s_a = {0, 0, 0, 0};
+    ttsl::SmallVector<std::uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
-    ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
+    ttsl::SmallVector<std::uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
+    ttsl::SmallVector<std::uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+    auto step = ttsl::SmallVector<std::uint32_t>({1, 1, 1, 1});
     Tensor t_a = ttnn::slice(input_a, s_a, e_a, step, output_mem_config);
     Tensor t_b = ttnn::slice(input_a, s_b, e_b, step, output_mem_config);
 
@@ -191,23 +105,25 @@ Tensor _make_global_from_hw_impl(
 
 namespace ttnn {
 
-// multivariate log-gamma function
+// Multivariate log-gamma function for p=4:
+// ln(Gamma_4(a)) = 3*ln(pi) + ln(Gamma(a)) + ln(Gamma(a - 0.5)) + ln(Gamma(a - 1.0)) + ln(Gamma(a - 1.5))
+// Valid domain: a > 1.5
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = detail::_lgamma(x, output_mem_config);
+    Tensor result = ttnn::lgamma(x, output_mem_config);
     result = ttnn::add(
         result,
-        detail::_lgamma(ttnn::subtract(x, 0.5f, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::lgamma(ttnn::subtract(x, 0.5f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     result = ttnn::add(
         result,
-        detail::_lgamma(ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::lgamma(ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     result = ttnn::add(
         result,
-        detail::_lgamma(ttnn::subtract(x, 1.5f, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::lgamma(ttnn::subtract(x, 1.5f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     result = ttnn::add(result, 3.434189657547f, std::nullopt, output_mem_config);
@@ -216,7 +132,7 @@ Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_m
 
 Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(y.memory_config());
-    ttnn::SmallVector<int> dims = {2, 3};
+    ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
     return detail::_variance_impl(y, mean_y, output_memory_config);
 }
@@ -231,7 +147,7 @@ Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_con
 // Function normalize
 // use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    ttnn::SmallVector<int> dims = {2, 3};
+    ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = detail::_std(y, mean_y, y_minus_mean_y, output_mem_config);
@@ -249,10 +165,10 @@ Tensor clip(
     std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
     // Convert float optionals to variant optionals
-    std::optional<std::variant<float, int32_t>> min_variant =
-        min ? std::make_optional<std::variant<float, int32_t>>(std::in_place_type<float>, *min) : std::nullopt;
-    std::optional<std::variant<float, int32_t>> max_variant =
-        max ? std::make_optional<std::variant<float, int32_t>>(std::in_place_type<float>, *max) : std::nullopt;
+    std::optional<std::variant<float, std::int32_t>> min_variant =
+        min ? std::make_optional<std::variant<float, std::int32_t>>(std::in_place_type<float>, *min) : std::nullopt;
+    std::optional<std::variant<float, std::int32_t>> max_variant =
+        max ? std::make_optional<std::variant<float, std::int32_t>>(std::in_place_type<float>, *max) : std::nullopt;
 
     return clamp(input_a, min_variant, max_variant, output_mem_config);
 }
@@ -268,8 +184,8 @@ Tensor clip(
 // clamp
 Tensor clamp(
     const Tensor& input_a,
-    std::optional<std::variant<float, int32_t>> min,
-    std::optional<std::variant<float, int32_t>> max,
+    std::optional<std::variant<float, std::int32_t>> min,
+    std::optional<std::variant<float, std::int32_t>> max,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
     TT_FATAL(
@@ -278,8 +194,8 @@ Tensor clamp(
     Tensor a = input_a;
 
     // Check if we have any int32_t scalars (both will be int32_t or null)
-    bool has_int32_scalar = (min.has_value() && std::holds_alternative<int32_t>(min.value())) ||
-                            (max.has_value() && std::holds_alternative<int32_t>(max.value()));
+    bool has_int32_scalar = (min.has_value() && std::holds_alternative<std::int32_t>(min.value())) ||
+                            (max.has_value() && std::holds_alternative<std::int32_t>(max.value()));
 
     // Convert input tensor to float32 only if input is INT32 and scalars are float (not int32)
     if (input_a.dtype() == DataType::INT32 && !has_int32_scalar) {
@@ -288,9 +204,9 @@ Tensor clamp(
 
     if (has_int32_scalar) {
         // All scalars are int32_t (or null)
-        int32_t min_val = min.has_value() ? std::get<int32_t>(min.value()) : -16775716;
-        int32_t max_val =
-            max.has_value() ? std::get<int32_t>(max.value())
+        std::int32_t min_val = min.has_value() ? std::get<std::int32_t>(min.value()) : -16775716;
+        std::int32_t max_val =
+            max.has_value() ? std::get<std::int32_t>(max.value())
                             : 16775716;  // max_val and min_val will be updated once unary infra supports int32 scalar.
         return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
     }  // All scalars are float (or null)
@@ -335,7 +251,7 @@ Tensor clamp(
 }
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
-Tensor glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor glu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -348,7 +264,7 @@ Tensor glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>
 }
 
 // ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
-Tensor reglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor reglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -360,7 +276,7 @@ Tensor reglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfi
 }
 
 // Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
-Tensor geglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor geglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -375,7 +291,7 @@ Tensor geglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfi
 }
 
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
-Tensor swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -389,7 +305,7 @@ Tensor swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConf
 }
 
 // tril : select lower triangular region of input matrix
-Tensor tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor tril(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_l = ttnn::index_tril<::bfloat16>(
         input_a.logical_shape(),
         input_a.padded_shape(),
@@ -402,7 +318,7 @@ Tensor tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
 }
 
 // triu : select upper triangular region of input matrix
-Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor triu(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_u = ttnn::index_triu<::bfloat16>(
         input_a.logical_shape(),
         input_a.padded_shape(),
@@ -415,17 +331,17 @@ Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
 }
 
 // polygamma ψ^(n)(x): implemented via a fused SFPU kernel using a finite-sum + tail approximation.
-// The kernel evaluates (-1)^(n+1) * n! * Σ_{k=0}^{10} 1/(x + k)^(n+1) and applies an Euler–Maclaurin
-// tail correction term to approximate the infinite remainder Σ_{k=11}^{∞} 1/(x + k)^(n+1), rather than
-// performing a hard truncation at k = 10. This is a single kernel dispatch instead of 11+ composite ops.
-Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
+// The kernel evaluates (-1)^(n+1) * n! * Σ_{k=0}^{5} 1/(x + k)^(n+1) and applies an Euler–Maclaurin
+// tail correction term to approximate the infinite remainder Σ_{k=6}^{∞} 1/(x + k)^(n+1), rather than
+// performing a hard truncation at k = 5. This is a single kernel dispatch instead of 11+ composite ops.
+Tensor polygamma(const Tensor& input_a, std::int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
     // Range includes k=11 to support polygamma_bw which computes polygamma(input, n+1)
     TT_FATAL(k >= 1 && k <= 11, "polygamma order must be in range [1, 11], got {}", k);
     float n = static_cast<float>(k);
     float fact_val = std::tgamma(1.0f + k);       // k!
     float pos_neg = (k % 2 == 0) ? -1.0f : 1.0f;  // (-1)^(k+1)
     float scale = fact_val * pos_neg;
-    return ttnn::operations::unary_ng::detail::unary_ng_impl(
+    return ttnn::operations::unary::detail::unary_impl(
         input_a,
         {operations::unary::UnaryWithParam(operations::unary::UnaryOpType::POLYGAMMA, {n, scale})},
         output_mem_config);

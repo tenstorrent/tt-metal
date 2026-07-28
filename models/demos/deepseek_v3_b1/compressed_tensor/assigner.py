@@ -87,6 +87,47 @@ class CompressedTensorAssigner:
             If input was a torch tensor, quantized will be a torch tensor.
         """
         input_is_torch = isinstance(weight_fp32, torch.Tensor)
+        tile_hw = 32
+
+        # Single-format short-circuit. With one candidate format the fallback
+        # ``best_precision`` and the only entry of ``formats_by_cost`` are the
+        # same, so every tile is assigned that format regardless of its score.
+        # Skipping the per-format ``quantize_fn`` + ``tile_metrics`` + per-tile
+        # assignment loop avoids the dominant host CPU cost when production uses
+        # a single format (``formats=["bfp4"]``).  This also
+        # bypasses the ``.float().cpu().numpy()`` copy and the padded-zeros
+        # allocation -- only the input shape is needed.  ``quantized`` is left
+        # as ``None`` because no current caller reads it; callers that need
+        # the round-tripped tensor must use a multi-format assigner.
+        if len(self.formats) == 1:
+            shape = tuple(weight_fp32.shape)
+            if 0 in shape or len(shape) == 0:
+                # Empty / scalar inputs share the legacy 1x1 "empty" return
+                # below; fall through to keep behavior identical for those.
+                pass
+            else:
+                if len(shape) == 1:
+                    h, w = 1, shape[0]
+                else:
+                    w = shape[-1]
+                    h = 1
+                    for d in shape[:-1]:
+                        h *= d
+                tiles_h = (h + tile_hw - 1) // tile_hw
+                tiles_w = (w + tile_hw - 1) // tile_hw
+                num_tiles = tiles_h * tiles_w
+                fmt = self.formats[0]
+                fmt_to_idx = {f: idx for idx, f in enumerate(COMPRESSED_FORMATS)}
+                assignment = np.full((tiles_h, tiles_w), fmt_to_idx[fmt], dtype=np.int8)
+                counts = {f: 0 for f in COMPRESSED_FORMATS}
+                counts[fmt] = num_tiles
+                return CompressedTensorResult(
+                    assignment=assignment,
+                    tile_counts=counts,
+                    total_bytes=compressed_total_bytes(counts),
+                    quantized=None,
+                )
+
         if input_is_torch:
             input_device = weight_fp32.device
             xf = weight_fp32.detach().float().cpu().numpy()
@@ -102,7 +143,6 @@ class CompressedTensorAssigner:
                 quantized=empty_q,
             )
 
-        tile_hw = 32
         padded_ref, shape_info, pad_info = reshape_to_2d_with_padding(xf)
         tiles_h = pad_info[2] // tile_hw
         tiles_w = pad_info[3] // tile_hw

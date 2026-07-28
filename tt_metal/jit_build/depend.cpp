@@ -69,7 +69,7 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
 namespace {
 
 uint64_t hash_file_content(std::istream& file) {
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     char buf[65536];
     for (;;) {
         file.read(buf, sizeof(buf));
@@ -77,7 +77,7 @@ uint64_t hash_file_content(std::istream& file) {
         if (bytes_read <= 0) {
             break;
         }
-        hasher.update(buf, buf + bytes_read);
+        hasher.update(std::string_view{buf, static_cast<std::size_t>(bytes_read)});
     }
     return hasher.digest();
 }
@@ -285,6 +285,14 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     tok.record(elapsed_ms);
 
     return up_to_date;
+}
+
+bool dependencies_up_to_date_file(const std::string& hash_file_path) {
+    std::ifstream hash_file(hash_file_path);
+    if (!hash_file.is_open()) {
+        return false;
+    }
+    return dependencies_up_to_date(hash_file);
 }
 
 void clear_file_hash_cache() { FileHashCache::instance().clear(); }

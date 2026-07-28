@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: g14glx03_0
+    - hostname: 6u_quad_host_cluster_desc_rank_0.yaml
       mesh:
         - mesh: 0
         - chips:
@@ -260,7 +260,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 69
               asic_id: 591431948248821840
-    - hostname: g14glx03_1
+    - hostname: 6u_quad_host_cluster_desc_rank_1.yaml
       mesh:
         - mesh: 0
         - chips:
@@ -520,7 +520,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 65
               asic_id: 591431948248821817
-    - hostname: g14glx03_2
+    - hostname: 6u_quad_host_cluster_desc_rank_2.yaml
       mesh:
         - mesh: 0
         - chips:
@@ -780,7 +780,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 61
               asic_id: 591431948248822102
-    - hostname: g14glx03_3
+    - hostname: 6u_quad_host_cluster_desc_rank_3.yaml
       mesh:
         - mesh: 0
         - chips:

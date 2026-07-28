@@ -10,7 +10,7 @@ Uses sfpu_dummy_test.cpp with empty run_kernels for all 4 TRISCs.
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     NUM_FACES,
@@ -28,19 +28,25 @@ def test_sfpu_dummy_quasar():
     )
     input_dimensions = [32, 32]
 
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=False,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
     )
 
     configuration = TestConfig(
         "sources/quasar/sfpu_dummy_test.cpp",
         formats,
-        templates=[generate_input_dim(input_dimensions, input_dimensions)],
-        runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
+        templates=[],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(4),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

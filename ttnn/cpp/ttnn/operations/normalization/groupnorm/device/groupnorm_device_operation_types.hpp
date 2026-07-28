@@ -14,16 +14,22 @@ namespace ttnn::prim {
 
 // Program config types
 struct GroupNormMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     tt::tt_metal::DataType im_data_format{tt::tt_metal::DataType::INVALID};
     tt::tt_metal::DataType out_data_format{tt::tt_metal::DataType::INVALID};
     bool inplace{};
     tt::tt_metal::Layout output_layout{tt::tt_metal::Layout::INVALID};
+    // Number of chunks to split the per-core output height (block_h) into.
+    // Smaller chunks reduce per-iteration SRAM use at the cost of perf.
+    // Sentinel value -1 means "auto": the program factory picks a value
+    // using its built-in heuristic (see groupnorm_{mcast,no_mcast}_program_factory.cpp).
+    // Any non-negative value is taken as an explicit chunk count and must
+    // satisfy 1 <= num_out_blocks <= block_h after grid sizing.
     int num_out_blocks{};
 };
 
 struct GroupNormShardedMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     tt::tt_metal::DataType im_data_format{tt::tt_metal::DataType::INVALID};
     tt::tt_metal::DataType out_data_format{tt::tt_metal::DataType::INVALID};
     bool inplace{};

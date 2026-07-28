@@ -14,51 +14,51 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_pre_lhs_id = tt::CBIndex::c_0;
+    constexpr auto cb_pre_rhs_id = tt::CBIndex::c_1;
 
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
+    CircularBuffer cb_post_lhs(HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id);
+    CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
+    CircularBuffer cb_out(tt::CBIndex::c_2);
 
-    binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+    binary_op_init_common(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), cb_out.get_cb_id());
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
-    binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
+    binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
 
     // Inline helper to process n tiles
     auto process_tiles = [&](uint32_t n) {
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
-        cb_wait_front(cb_post_lhs, n);
+        PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+        cb_post_lhs.wait_front(n);
 
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, n);
-        cb_wait_front(cb_post_rhs, n);
+        PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
+        cb_post_rhs.wait_front(n);
 
-        cb_reserve_back(cb_out, n);
+        cb_out.reserve_back(n);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
         tile_regs_acquire();
         for (uint32_t i = 0; i < n; ++i) {
-            BINARY_OP(cb_post_lhs, cb_post_rhs, i, i, i);
+            BINARY_OP(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), i, i, i);
             PROCESS_POST_ACTIVATIONS(i);
         }
         tile_regs_commit();
 
         tile_regs_wait();
         for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, cb_out);
+            pack_tile(i, cb_out.get_cb_id());
         }
         tile_regs_release();
 
-        cb_push_back(cb_out, n);
-        cb_pop_front(cb_post_lhs, n);
-        cb_pop_front(cb_post_rhs, n);
+        cb_out.push_back(n);
+        cb_post_lhs.pop_front(n);
+        cb_post_rhs.pop_front(n);
     };
 
     // Process full chunks

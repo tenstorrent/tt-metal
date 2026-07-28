@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "topk_common_funcs.hpp"
 
@@ -121,9 +122,13 @@ void kernel_main() {
     // Supports K only up to 64
     int end_phase = (K <= 64) ? logk - 1 : 5;
 
+    compute_kernel_hw_startup(input_cb_index, index_cb_index, input_transposed_cb_index);
     ckernel::topk_tile_init();
-    transpose_wh_init(input_cb_index, input_transposed_cb_index);
-    transpose_wh_init(index_cb_index, index_transposed_cb_index);
+
+    CircularBuffer input_transposed_cb(input_transposed_cb_index);
+    CircularBuffer index_transposed_cb(index_transposed_cb_index);
+    CircularBuffer values_cb(values_cb_index);
+    CircularBuffer output_ind_cb(output_ind_cb_index);
 
     bool switch_dir = (K == 64);
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
@@ -183,35 +188,45 @@ void kernel_main() {
         pack_reconfig_data_format(values_cb_index);
 
         // Extract local TopK values (first Kt tiles contain best values)
-        cb_wait_front(input_transposed_cb_index, Kt);
+        input_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
-            acquire_dst();
-            cb_reserve_back(values_cb_index, 1);
+            tile_regs_acquire();
             copy_tile(input_transposed_cb_index, i, 0);  // Copy i-th sorted value tile
-            pack_tile(0, values_cb_index);               // Pack for output transmission
-            cb_push_back(values_cb_index, 1);
-            release_dst();
+            tile_regs_commit();
+
+            values_cb.reserve_back(1);
+
+            tile_regs_wait();
+            pack_tile(0, values_cb_index);  // Pack for output transmission
+            tile_regs_release();
+
+            values_cb.push_back(1);
         }
         // Clean up remaining tiles in transposed buffer
-        cb_wait_front(input_transposed_cb_index, Wt);
-        cb_pop_front(input_transposed_cb_index, Wt);
+        input_transposed_cb.wait_front(Wt);
+        input_transposed_cb.pop_front(Wt);
 
         // Extract local TopK indices (corresponding to the best values)
         reconfig_data_format_srca(index_transposed_cb_index);
         copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
-        cb_wait_front(index_transposed_cb_index, Kt);
+        index_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
-            acquire_dst();
-            cb_reserve_back(output_ind_cb_index, 1);
+            tile_regs_acquire();
             copy_tile(index_transposed_cb_index, i, 0);  // Copy i-th sorted index tile
-            pack_tile(0, output_ind_cb_index);           // Pack for output transmission
-            cb_push_back(output_ind_cb_index, 1);
-            release_dst();
+            tile_regs_commit();
+
+            output_ind_cb.reserve_back(1);
+
+            tile_regs_wait();
+            pack_tile(0, output_ind_cb_index);  // Pack for output transmission
+            tile_regs_release();
+
+            output_ind_cb.push_back(1);
         }
         // Clean up remaining tiles in transposed buffer
-        cb_wait_front(index_transposed_cb_index, Wt);
-        cb_pop_front(index_transposed_cb_index, Wt);
+        index_transposed_cb.wait_front(Wt);
+        index_transposed_cb.pop_front(Wt);
 
         // NOTE: At this point, values_cb_index and output_ind_cb_index contain
         // the locally optimal TopK results for this core's width chunk.

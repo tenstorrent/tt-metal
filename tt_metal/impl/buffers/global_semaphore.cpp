@@ -17,25 +17,28 @@
 #include <variant>
 #include <vector>
 
+#include "global_semaphore_impl.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
-GlobalSemaphore::GlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
+// GlobalSemaphoreImpl implementation
+
+GlobalSemaphoreImpl::GlobalSemaphoreImpl(
+    IDevice* device, const CoreRangeSet& cores, std::optional<uint32_t> initial_value, BufferType buffer_type) :
     device_(device), cores_(cores) {
-    this->setup_buffer(initial_value, buffer_type);
+    this->setup_buffer(initial_value, buffer_type, std::nullopt);
 }
 
-GlobalSemaphore::GlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
+GlobalSemaphoreImpl::GlobalSemaphoreImpl(
+    IDevice* device, CoreRangeSet&& cores, std::optional<uint32_t> initial_value, BufferType buffer_type) :
     device_(device), cores_(std::move(cores)) {
-    this->setup_buffer(initial_value, buffer_type);
+    this->setup_buffer(initial_value, buffer_type, std::nullopt);
 }
 
-GlobalSemaphore::GlobalSemaphore(
+GlobalSemaphoreImpl::GlobalSemaphoreImpl(
     IDevice* device,
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
@@ -45,7 +48,38 @@ GlobalSemaphore::GlobalSemaphore(
     this->setup_buffer(initial_value, buffer_type, address);
 }
 
-void GlobalSemaphore::setup_buffer(
+IDevice* GlobalSemaphoreImpl::device() const { return device_; }
+
+const CoreRangeSet& GlobalSemaphoreImpl::cores() const { return cores_; }
+
+BufferType GlobalSemaphoreImpl::buffer_type() const { return buffer_.get_buffer()->buffer_type(); }
+
+DeviceAddr GlobalSemaphoreImpl::address() const { return buffer_.get_buffer()->address(); }
+
+void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
+    // Blocking write here to ensure that Global Semaphore reset value lands on
+    // each physical device before the next program runs.
+    // This is to ensure that cross-chip writes to the Global Semaphore are not
+    // lost due to device skew.
+    std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
+    auto mesh_buffer = buffer_.get_mesh_buffer();
+    bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
+    bool using_simulator = MetalContext::instance().rtoptions().get_simulator_enabled();
+    if (using_fast_dispatch && !using_simulator) {
+        distributed::EnqueueWriteMeshBuffer(
+            mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
+    } else {
+        auto* mesh_device = mesh_buffer->device();
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            if (!mesh_device->is_local(coord)) {
+                continue;
+            }
+            tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
+        }
+    }
+}
+
+void GlobalSemaphoreImpl::setup_buffer(
     std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
@@ -69,31 +103,60 @@ void GlobalSemaphore::setup_buffer(
     }
 }
 
-IDevice* GlobalSemaphore::device() const { return device_; }
+namespace experimental {
+// Forge backdoor API.
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type, address));
+}
+}  // namespace experimental
+
+// GlobalSemaphore implementation
+
+GlobalSemaphore::GlobalSemaphore(
+    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
+    GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type)) {}
+
+GlobalSemaphore::GlobalSemaphore(
+    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
+    GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type)) {}
+
+GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl&& impl) :
+    pimpl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}
+
+GlobalSemaphore::GlobalSemaphore(const GlobalSemaphore& other) :
+    pimpl_(other.pimpl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.pimpl_) : nullptr) {}
+
+GlobalSemaphore& GlobalSemaphore::operator=(const GlobalSemaphore& other) {
+    if (this != &other) {
+        pimpl_ = other.pimpl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.pimpl_) : nullptr;
+    }
+    return *this;
+}
+
+GlobalSemaphore::GlobalSemaphore(GlobalSemaphore&& other) noexcept = default;
+
+GlobalSemaphore& GlobalSemaphore::operator=(GlobalSemaphore&& other) noexcept = default;
+
+GlobalSemaphore::~GlobalSemaphore() = default;
+
+IDevice* GlobalSemaphore::device() const { return pimpl_->device(); }
 
 std::ostream& operator<<(std::ostream& os, const GlobalSemaphore& global_semaphore) {
-    tt::stl::reflection::operator<<(os, global_semaphore);
+    ttsl::reflection::operator<<(os, global_semaphore);
     return os;
 }
 
-DeviceAddr GlobalSemaphore::address() const { return buffer_.get_buffer()->address(); }
+DeviceAddr GlobalSemaphore::address() const { return pimpl_->address(); }
 
-void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
-    // Blocking write here to ensure that Global Semaphore reset value lands on
-    // each physical device before the next program runs.
-    // This is to ensure that cross-chip writes to the Global Semaphore are not
-    // lost due to device skew.
-    std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
-    auto mesh_buffer = buffer_.get_mesh_buffer();
-    bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
-    if (using_fast_dispatch) {
-        distributed::EnqueueWriteMeshBuffer(
-            mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
-    } else {
-        for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
-            tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
-        }
-    }
+void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const { pimpl_->reset_semaphore_value(reset_value); }
+
+std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
+    return std::make_tuple(pimpl_->cores(), pimpl_->buffer_type());
 }
 
 }  // namespace tt::tt_metal
@@ -102,7 +165,7 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::GlobalSemaphore>::operator()(
     const tt::tt_metal::GlobalSemaphore& global_semaphore) const {
-    return tt::stl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
 }
 
 }  // namespace std

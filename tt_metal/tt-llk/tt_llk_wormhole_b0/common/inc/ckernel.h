@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ckernel_common_ops.h"
+#include "ckernel_fence.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "internal/risc_attribs.h"
@@ -17,11 +18,6 @@
 
 // MT: This should be dissolved and moved to the appropriate place
 #include "tensix.h"
-
-// compiler hints
-#define LIKELY(condition)   __builtin_expect(static_cast<bool>(condition), 1)
-#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
-#define UNREACHABLE()       __builtin_unreachable()
 
 #define UNROLL_LOOP(factor) GCC unroll factor
 
@@ -42,6 +38,8 @@
 #endif
 
 #define TT_ALWAYS_INLINE inline __attribute__((always_inline))
+#define NOINLINE         __attribute__((noinline))
+#define NOCLONE          __attribute__((noclone))
 
 #include <cstdint>
 
@@ -143,14 +141,14 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
 
 /**
  * @brief Issues a load transaction that will block the core until the transaction is completed.
- * @tparam T 32-bit type to load
+ * @tparam T 16-bit or 32-bit type to load
  * @param ptr address to read from
  * @return value read from the address
  */
 template <typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
 inline T load_blocking(volatile T *ptr)
 {
-    static_assert(sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 32-bit");
+    static_assert(sizeof(T) == sizeof(std::uint16_t) || sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 16-bit or 32-bit");
 
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md
 
@@ -158,7 +156,7 @@ inline T load_blocking(volatile T *ptr)
     //
     // this code provides a blocking load by doing the following:
     // - issue a LOAD transaction to the address
-    //     - actual load that was requested
+    //     - actual load that was requested (lw for 32-bit, lhu for 16-bit)
     // - issue an instruction that requires the data from the LOAD transaction
     //     - block the pipeline until the LOAD transaction completes
     // - memory clobber
@@ -166,12 +164,24 @@ inline T load_blocking(volatile T *ptr)
 
     std::uint32_t raw;
 
-    asm volatile(
-        "lw %[raw], (%[ptr])\n\t"
-        "and %[raw], %[raw], %[raw]"
-        : [raw] "=r"(raw)
-        : [ptr] "r"(ptr)
-        : "memory");
+    if constexpr (sizeof(T) == sizeof(std::uint16_t))
+    {
+        asm volatile(
+            "lhu %[raw], (%[ptr])\n\t"
+            "and %[raw], %[raw], %[raw]"
+            : [raw] "=r"(raw)
+            : [ptr] "r"(ptr)
+            : "memory");
+    }
+    else
+    {
+        asm volatile(
+            "lw %[raw], (%[ptr])\n\t"
+            "and %[raw], %[raw], %[raw]"
+            : [raw] "=r"(raw)
+            : [ptr] "r"(ptr)
+            : "memory");
+    }
 
     T val;
     std::memcpy(&val, &raw, sizeof(T)); // trickery to return T loaded into register
@@ -599,9 +609,6 @@ inline void record_kernel_runtime(std::uint64_t kernel_runtime)
     debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48) & 0xffff;
 }
 
-void debug_dump(const std::uint8_t *data, std::uint32_t byte_size);
-void debug_dump_seek(std::uint8_t offset);
-
 inline void init_prng_seed(const std::uint32_t seed)
 {
     // The seed for PRNG should at least be initialized during chip boot-up time.
@@ -733,15 +740,6 @@ inline void store_force(T &ref, U &&val)
     // "m" input constraint: tells compiler this asm reads from ref
     // Effect: compiler must flush any pending write to ref before this point
     asm volatile("" : : "m"(ref));
-}
-
-/**
- * @brief Compiler-only barrier: prevents reordering of memory accesses across this point.
- * @note Does not enforce CPU or system memory ordering by itself.
- */
-inline void fence_compiler()
-{
-    asm volatile("" ::: "memory");
 }
 
 /**

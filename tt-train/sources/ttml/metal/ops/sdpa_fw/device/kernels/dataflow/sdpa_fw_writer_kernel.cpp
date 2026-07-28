@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);      // number of tiles in inner dimension
+    constexpr uint32_t vWt = get_compile_time_arg_val(0);      // number of tiles in output/value inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
     constexpr uint32_t pairs_per_seq = Ht / 2;
@@ -47,12 +47,21 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // Generate causal mask tile ONCE - will be reused for every diagonal
+    // Emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
+    // onto QK^T scores via the packer's L1-accumulate path (TTNN's
+    // `apply_causal_mask_lightweight` pattern). The mask values are added in FP32 in L1 by
+    // the packer's read-modify-write — score never leaves FP32, no DST→SRC truncation.
+    //
+    //   tile[0] = causal-diagonal: 0.0 on/below diagonal (kept), -1e9 above (masked).
+    //             Applied on the diagonal K tile of every row.
+    //   tile[1] = all -1e9: applied on K tiles strictly past the diagonal inside the
+    //             diagonal chunk when Sk_chunk_t > 1.
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
-    generate_causal_mask_tile(cb_attn_mask);
+    generate_pretransformed_causal_mask_tile(cb_attn_mask);
+    generate_tile_with_bfloat16_value(cb_attn_mask, BF16_NEG_LARGE_BITS);
 #endif
 
-    const uint32_t tiles_per_head = qWt;
+    const uint32_t tiles_per_head = vWt;
     constexpr uint32_t kIntermediateTilesPerRow = 1U;
 
 #ifdef BALANCED_PARALLELISM
@@ -74,7 +83,7 @@ void kernel_main() {
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
         const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        noc_async_write_tile(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
+        noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
 #endif
@@ -94,8 +103,8 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        write_row(light_global_row);
         write_row(heavy_global_row);
+        write_row(light_global_row);
     }
 #else
     // Standard mode: write outputs sequentially
@@ -119,7 +128,7 @@ void kernel_main() {
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
         const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        noc_async_write_tile(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
+        noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
 #endif

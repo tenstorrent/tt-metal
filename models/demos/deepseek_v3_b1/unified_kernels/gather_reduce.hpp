@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "dataflow_utils.hpp"
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
 
@@ -92,7 +93,7 @@ struct GatherReduce {
     // number of 32x32 tiles so the half boundary is tile-aligned.
     // num_tiles is the 32x32 tile count per half (e.g. 2 for 56 rows).
     static inline void add_half_tiles(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-        reconfig_data_format<false, true>(in_cb, in_cb);
+        reconfig_data_format<SrcOrder::Regular, true>(in_cb, in_cb);
         pack_reconfig_data_format<true>(out_cb);
         pack_block_contiguous_init(out_cb);
         add_tiles_init(in_cb, in_cb);
@@ -158,15 +159,16 @@ struct GatherReduce {
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(dst_base_addr + dst_offset);
                 uint64_t dst_sem_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
+                uint32_t src_addr = get_read_ptr(args.src_cb);
+                unified_kernels::noc_async_write_preprogram_all_state<true>(
+                    src_addr, dst_data_noc_addr, args.data_size_bytes, args.noc);
+                unified_kernels::noc_async_atomic_inc_preprogram_all_state<false>(dst_sem_noc_addr, 1, 31, args.noc);
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
-                // Get source address from CB
-                uint32_t src_addr = get_read_ptr(args.src_cb);
-
-                noc_async_write_one_packet<true, true>(src_addr, dst_data_noc_addr, args.data_size_bytes, args.noc);
+                unified_kernels::noc_async_write_issue_txn<true>(args.noc);
                 // BH does not support posted atomics due to a bug
-                noc_semaphore_inc(dst_sem_noc_addr, 1, args.noc);
+                unified_kernels::noc_async_atomic_inc_issue_txn<false>(args.noc);
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {

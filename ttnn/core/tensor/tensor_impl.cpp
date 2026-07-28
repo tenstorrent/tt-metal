@@ -30,6 +30,7 @@
 #include "tt-metalium/mesh_command_queue.hpp"
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/float8.hpp>
 
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
@@ -37,22 +38,21 @@
 
 #include <tracy/Tracy.hpp>
 
-using namespace tt::tt_metal;
-
-namespace tt::tt_metal::tensor_impl {
+namespace ttnn::tensor_impl {
 
 PrintOptions TTNN_PRINT_OPTIONS;
 
-std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& dtype) {
     switch (dtype) {
-        case DataType::BFLOAT8_B: os << "bfloat8_b"; break;
-        case DataType::BFLOAT4_B: os << "bfloat4_b"; break;
-        case DataType::BFLOAT16: os << "bfloat16"; break;
-        case DataType::FLOAT32: os << "float32"; break;
-        case DataType::UINT8: os << "uint8"; break;
-        case DataType::UINT16: os << "uint16"; break;
-        case DataType::UINT32: os << "uint32"; break;
-        case DataType::INT32: os << "int32"; break;
+        case tt::tt_metal::DataType::BFLOAT8_B: os << "bfloat8_b"; break;
+        case tt::tt_metal::DataType::BFLOAT4_B: os << "bfloat4_b"; break;
+        case tt::tt_metal::DataType::BFLOAT16: os << "bfloat16"; break;
+        case tt::tt_metal::DataType::FLOAT32: os << "float32"; break;
+        case tt::tt_metal::DataType::UINT8: os << "uint8"; break;
+        case tt::tt_metal::DataType::UINT16: os << "uint16"; break;
+        case tt::tt_metal::DataType::UINT32: os << "uint32"; break;
+        case tt::tt_metal::DataType::INT32: os << "int32"; break;
+        case tt::tt_metal::DataType::FP8_E4M3: os << "fp8_e4m3"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
@@ -226,8 +226,8 @@ void to_string(
     ttsl::Span<const T> buffer,
     const tt::tt_metal::Shape& shape,
     const tt::tt_metal::Strides& strides,
-    DataType dtype,
-    Layout layout) {
+    tt::tt_metal::DataType dtype,
+    tt::tt_metal::Layout layout) {
     ss << TENSOR_TYPE_STRING << "(";
 
     if (TTNN_PRINT_OPTIONS.profile == TensorPrintProfile::Empty) {
@@ -243,7 +243,7 @@ void to_string(
 }  // namespace detail
 
 template <typename T>
-std::string to_string_impl(const Tensor& tensor) {
+std::string to_string_impl(const ttnn::Tensor& tensor) {
     const auto& shape = tensor.logical_shape();
 
     if (!tensor.is_allocated()) {
@@ -255,26 +255,37 @@ std::string to_string_impl(const Tensor& tensor) {
             tensor.layout());
     }
 
-    auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
-        if (tensor.layout() == Layout::ROW_MAJOR) {
+    auto get_row_major_tensor = [&](const ttnn::Tensor& tensor) -> ttnn::Tensor {
+        if (tensor.dtype() == tt::tt_metal::DataType::FP8_E4M3) {
+            // FP8 is element-encoded and is already ROW_MAJOR (constrained in tensor_spec.cpp),
+            // but the downstream detail::to_string uses view_as<float> which would misinterpret
+            // FP8 bytes as floats. Pivot through FLOAT32 via host-side conversion
+            // (float8_e4m3::operator float) so print sees real float values. Checked before the
+            // ROW_MAJOR early return below because an FP8 tensor satisfies that early-return
+            // condition but still needs the dtype pivot.
+            return ttnn::to_dtype(tensor, tt::tt_metal::DataType::FLOAT32);
+        }
+        if (tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
             return tensor;
         }
-        if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+        if (tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+            tensor.dtype() == tt::tt_metal::DataType::BFLOAT4_B) {
+            return tt::tt_metal::to_layout(
+                ttnn::to_dtype(tensor, tt::tt_metal::DataType::FLOAT32), tt::tt_metal::Layout::ROW_MAJOR);
         }
-        return to_layout(tensor, Layout::ROW_MAJOR);
+        return tt::tt_metal::to_layout(tensor, tt::tt_metal::Layout::ROW_MAJOR);
     };
 
     auto get_host_buffers = [&](const HostStorage& storage) {
-        std::vector<HostBuffer> buffers;
-        storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
+        std::vector<tt::tt_metal::HostBuffer> buffers;
+        storage.buffer().apply([&](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
         return buffers;
     };
 
     if (is_cpu_tensor(tensor)) {
-        const Tensor row_major_tensor = get_row_major_tensor(tensor);
+        const ttnn::Tensor row_major_tensor = get_row_major_tensor(tensor);
         const auto strides = row_major_tensor.tensor_spec().compute_strides();
-        const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
+        const std::vector<tt::tt_metal::HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
         std::stringstream ss;
         for (size_t i = 0; i < buffers.size(); i++) {
             detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
@@ -292,17 +303,17 @@ std::string to_string_impl(const Tensor& tensor) {
         return to_string_impl<T>(cpu_tensor);
     }
 
-    auto& mesh_device = storage.get_mesh_tensor().device();
+    const auto& mesh_device = storage.get_mesh_tensor().device();
     // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
     // if (mesh_device->num_devices() == 1) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
     // }
 
-    const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
+    const ttnn::Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
     const auto strides = row_major_tensor.tensor_spec().compute_strides();
     const auto coords = storage.get_coords();
     auto coords_it = coords.begin();
-    const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
+    const std::vector<tt::tt_metal::HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
     std::stringstream ss;
     for (size_t i = 0; i < buffers.size(); i++) {
         const distributed::MeshCoordinate coord = *coords_it++;
@@ -318,57 +329,100 @@ std::string to_string_impl(const Tensor& tensor) {
 }
 
 template <>
-std::string to_string_impl<bfloat8_b>(const Tensor& tensor) {
+std::string to_string_impl<tt::tt_metal::tensor_impl::bfloat8_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
 template <>
-std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
+std::string to_string_impl<tt::tt_metal::tensor_impl::bfloat4_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
-std::string to_string(const Tensor& tensor) {
-    return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
+template <>
+std::string to_string_impl<float8_e4m3>(const ttnn::Tensor& tensor) {
+    return to_string_impl<float>(tensor);
+}
+
+std::string to_string(const ttnn::Tensor& tensor) {
+    return tt::tt_metal::tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
 
 // ======================================================================================
 //                                  .view()
 // ======================================================================================
 
-HostTensor view(
-    const HostTensor& tensor,
+tt::tt_metal::HostTensor view(
+    const tt::tt_metal::HostTensor& tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape) {
     // Just edit shape if shape has a 0 dimension
     if (tensor.logical_volume() == 0) {
-        TT_FATAL(new_logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");
+        TT_FATAL(new_logical_shape.volume() == 0, "ttnn::Tensor volume is 0, but shape's volume is not");
     }
-    bool is_row_major = tensor.layout() == Layout::ROW_MAJOR;
-    bool changing_last_dim = new_padded_shape[-1] != tensor.padded_shape()[-1];
     const auto& input_memory_config = tensor.memory_config();
-    TT_FATAL(
-        !input_memory_config.is_sharded() || !changing_last_dim ||
-            input_memory_config.shard_spec()->shape[1] == tensor.padded_shape()[-1],
-        "Changing the last dimension of a sharded tensor is not supported unless the shard width matches the input "
-        "last dimension. "
-        "Input shape: {}, New shape: {}, Shard width: {}",
-        tensor.padded_shape(),
-        new_padded_shape,
-        input_memory_config.shard_spec()->shape[1]);
-
     auto output_memory_config = input_memory_config;
-    if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
-        auto shard_spec = input_memory_config.shard_spec().value();
-        auto shard_volume = shard_spec.numel();
-        shard_spec.shape[1] = new_padded_shape[-1];  // update output shard to match new shard width
-        shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
-        output_memory_config =
-            MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
+
+    if (input_memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        const auto old_rank = tensor.padded_shape().rank();
+        const auto& old_nd_spec = input_memory_config.nd_shard_spec().value();
+
+        // Rank-expansion of a 0D/1D tensor into a 2D shape — the original allow-listed
+        // case. Requires the expanded 2D shape to still match the input's logical footprint.
+        bool is_rank_expansion_to_2d = old_rank < 2 && new_padded_shape.rank() == 2 && new_padded_shape[0] == 1 &&
+                                       (old_rank == 0 || new_padded_shape[1] == tensor.padded_shape()[-1]);
+
+        // Logical-shape-only update: same rank and same padded shape as the input. No bytes
+        // move, the physical tile layout is unchanged, and the per-core shard location and
+        // size are unchanged. The caller is just reinterpreting which logical elements live
+        // in which physical positions (e.g. a reduction op trimming logical dim after keeping
+        // the padded tile intact). Safe for ND-sharded tensors.
+        bool is_same_physical_shape = new_padded_shape.rank() == old_rank && new_padded_shape == tensor.padded_shape();
+
+        TT_FATAL(
+            is_rank_expansion_to_2d || is_same_physical_shape,
+            "View is not supported for ND sharded tensors except for rank expansion to 2D "
+            "or same-physical-shape (logical-only) metadata updates. Input shape: {}, New shape: {}",
+            tensor.padded_shape(),
+            new_padded_shape);
+
+        if (is_same_physical_shape) {
+            // Keep the input's MemoryConfig as-is (including nd_shard_spec + flags) — no
+            // physical layout change means no metadata adjustment needed.
+            output_memory_config = input_memory_config;
+        } else {
+            // Rank-expansion-to-2D path: synthesize a new nd_shard_spec for the expanded shape.
+            ttsl::SmallVector<uint32_t> new_shard_shape =
+                old_rank == 0 ? ttsl::SmallVector<uint32_t>{1, 1}
+                              : ttsl::SmallVector<uint32_t>{1, old_nd_spec.shard_shape[-1]};
+            output_memory_config = MemoryConfig(
+                input_memory_config.buffer_type(), old_nd_spec.with_shard_shape(tt::tt_metal::Shape(new_shard_shape)));
+        }
+    } else {
+        bool is_row_major = tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
+        bool changing_last_dim = new_padded_shape[-1] != tensor.padded_shape()[-1];
+        TT_FATAL(
+            !input_memory_config.is_sharded() || !changing_last_dim ||
+                input_memory_config.shard_spec()->shape[1] == tensor.padded_shape()[-1],
+            "Changing the last dimension of a sharded tensor is not supported unless the shard width matches the "
+            "input last dimension. "
+            "Input shape: {}, New shape: {}, Shard width: {}",
+            tensor.padded_shape(),
+            new_padded_shape,
+            input_memory_config.shard_spec()->shape[1]);
+
+        if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
+            auto shard_spec = input_memory_config.shard_spec().value();
+            auto shard_volume = shard_spec.numel();
+            shard_spec.shape[1] = new_padded_shape[-1];
+            shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
+            output_memory_config =
+                MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
+        }
     }
 
     auto new_spec = tt::tt_metal::TensorSpec(
         new_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             tensor.dtype(),
             tensor.tensor_spec().page_config(),
             output_memory_config,
@@ -377,7 +431,7 @@ HostTensor view(
 
     // TODO (#25340): Review tensor topology logic for reshape
     const auto& buffer = tensor.buffer();
-    return HostTensor(buffer, new_spec, tensor.tensor_topology());
+    return tt::tt_metal::HostTensor::from_buffer(buffer, new_spec, tensor.tensor_topology());
 }
 
 // ======================================================================================
@@ -385,16 +439,16 @@ HostTensor view(
 // ======================================================================================
 
 template <typename T>
-Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     auto* buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
     tt::tt_metal::Shape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
     std::vector<T> device_data;
-    ::detail::ReadShard(*buffer, device_data, core_id);
+    tt::tt_metal::detail::ReadShard(*buffer, device_data, core_id);
 
     auto output_buffer = std::vector<T>(std::move(device_data));
-    return Tensor(
-        HostBuffer(std::move(output_buffer)),
+    return ttnn::Tensor(
+        tt::tt_metal::HostBuffer(std::move(output_buffer)),
         shard_shape,
         tensor.dtype(),
         tensor.layout(),
@@ -402,17 +456,27 @@ Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
 }
 
 template <>
-Tensor extract_shard_impl<bfloat8_b>(const Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<tt::tt_metal::tensor_impl::bfloat8_b>(
+    const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
 template <>
-Tensor extract_shard_impl<bfloat4_b>(const Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<tt::tt_metal::tensor_impl::bfloat4_b>(
+    const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
-Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
-    return dispatch(tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
+template <>
+ttnn::Tensor extract_shard_impl<float8_e4m3>(const ttnn::Tensor&, const uint32_t&) {
+    // FP8_E4M3 sharded device tensors are not produced by any current op (combine emits
+    // interleaved output). Add a real implementation when a use case appears.
+    TT_THROW("extract_shard: FP8_E4M3 is not supported");
 }
 
-}  // namespace tt::tt_metal::tensor_impl
+ttnn::Tensor extract_shard(const ttnn::Tensor& tensor, const uint32_t& core_id) {
+    return tt::tt_metal::tensor_impl::dispatch(
+        tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
+}
+
+}  // namespace ttnn::tensor_impl

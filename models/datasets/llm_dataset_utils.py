@@ -47,7 +47,7 @@ def wikitext_detokenizer(string):
 
 
 def prepare_textgen_dataset(dataset_name, dataset_config, split):
-    dataset = datasets.load_dataset(dataset_name, dataset_config, split=split, ignore_verifications=True)
+    dataset = datasets.load_dataset(dataset_name, dataset_config, split=split, verification_mode="no_checks")
     if dataset_name == "wikitext":
         dataset = wikitext_detokenizer("\n".join(dataset["text"]))
     else:

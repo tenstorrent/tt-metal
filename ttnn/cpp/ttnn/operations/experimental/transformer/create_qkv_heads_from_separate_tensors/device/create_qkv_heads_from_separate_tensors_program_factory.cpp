@@ -80,12 +80,16 @@ CreateQKVHeadsSeparateTensorsProgramFactory::cached_program_t CreateQKVHeadsSepa
         std::vector<uint32_t> compute_args = {
             (std::uint32_t)(per_core_k_tiles),  // number of K tiles
         };
+        // For FLOAT32 input, enable fp32 dest accumulation so the JIT data-format selection
+        // resolves the unpack-dst CB to Tf32 (10-bit mantissa) instead of Float16_b (7-bit
+        // mantissa). Mirrors the per-dtype promotion in eltwise unary/binary primitives.
+        const bool fp32_dest_acc_en = input_tensor_kv.dtype() == tt_metal::DataType::FLOAT32;
         tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
             "compute/transpose_wh_sharded.cpp",
             all_cores,
-            tt_metal::ComputeConfig{.compile_args = compute_args});
+            tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
     }
 
     uint32_t q_size = per_core_q_tiles * single_tile_size;

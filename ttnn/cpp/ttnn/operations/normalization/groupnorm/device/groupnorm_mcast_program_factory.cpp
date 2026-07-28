@@ -2,17 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "groupnorm_mcast_program_factory.hpp"
+#include "groupnorm_device_operation.hpp"
 #include "groupnorm_program_utils.hpp"
+#include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
+#include <map>
 #include <string>
 #include <optional>
+#include <unordered_map>
 
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
 
 using uint32_t = std::uint32_t;
@@ -20,8 +24,23 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::create(
-    const GroupNormParams& operation_attributes, const GroupNormInputs& tensor_args, Tensor& tensor_return_value) {
+namespace {
+
+KernelDescriptor::NamedCompileTimeArgs to_named_args_mcast(const std::unordered_map<std::string, uint32_t>& m) {
+    KernelDescriptor::NamedCompileTimeArgs out;
+    out.reserve(m.size());
+    for (const auto& [k, v] : m) {
+        out.emplace_back(k, v);
+    }
+    return out;
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramFactory::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const auto& a = tensor_args.input;
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
@@ -149,6 +168,10 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         "num_groups_per_core ({}) must be <= 16 when use_welfords is true.",
         num_groups_per_core);
 
+    // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select":
+    // pick num_out_blocks from a simple input-size / grid-size heuristic, rounded
+    // up to the next power of two and capped at MAX_HEURISTIC_NUM_OUT_BLOCKS.
+    // Any other value is taken as an explicit user choice and validated below.
     if (num_out_blocks == static_cast<uint32_t>(-1)) {
         const uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
         const uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
@@ -202,6 +225,36 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    TT_FATAL(
+        !(use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
+        "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
+
+    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_tile
+    // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
+    // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
+    // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
+    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of the math-thread
+    // replay buffer (clobbering welford's LREG2 / LREG3 portions), so the kernel's SFPU re-init
+    // after the transpose must fire iff this is true.
+    const bool welford_unpack_fp32_active =
+        use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
+
+    // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
+    // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
+    const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
+
+    const uint32_t cb_in0_welford_index =
+        welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
+
     TT_FATAL(num_channels_per_group > 0, "num_channels_per_group must be > 0 (W={}, num_groups={})", W, num_groups);
     TT_FATAL(
         num_rows_per_batch_per_core_group_1 > 0,
@@ -229,12 +282,6 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
             input_mask.value().padded_shape()[3],
             block_wt * tile_width);
     }
-
-    auto in0_dram_addr = a.buffer()->address();
-    auto out_dram_addr = output.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
 
     uint32_t in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
     uint32_t in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
@@ -265,8 +312,6 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         x_CB_size_group_1 = single_tile_size * 1;
         xmm_CB_size_group_1 = single_tile_size * 3;
     }
-
-    Program program = Program();
 
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
@@ -317,8 +362,23 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     }
 
     uint32_t num_cores_per_mcast_group = mcast_groups[0].size();
-    auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
+    // ---- Build ProgramDescriptor ----
+    ProgramDescriptor desc;
+
+    // Semaphores - sender (id=0), receiver (id=1)
+    constexpr uint32_t reduce_sender_semaphore_id = 0;
+    constexpr uint32_t reduce_receiver_semaphore_id = 1;
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = reduce_sender_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores,
+        .initial_value = 0});
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = reduce_receiver_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores,
+        .initial_value = 0});
 
     std::map<std::string, std::string> reader_mcast_sender_defines;
     std::map<std::string, std::string> reader_mcast_receiver_defines;
@@ -364,12 +424,17 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_tiles_per_batch", per_core_Mt_group_1 * Wt / num_batches_per_core_group_1},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
-         (num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0},
-        {"GROUP_SIZE_SMALLER_THAN_TILE_W", num_channels_per_group < tile_width},
+         static_cast<uint32_t>((num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0)},
+        {"GROUP_SIZE_SMALLER_THAN_TILE_W", static_cast<uint32_t>(num_channels_per_group < tile_width)},
         {"group_row_offset", num_channels_per_group - ((block_wt - 1) * tile_width)},
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
+        // Reader pushes the cb_in0_welford alias in lockstep with cb_in0 so compute's welford
+        // section can wait_front on the alias independently. When welford_fp32_alias is false,
+        // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
+        {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
+        {"cb_in0_welford", cb_in0_welford_index},
     };
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
@@ -393,12 +458,17 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_tiles_per_batch", per_core_Mt_group_1 * Wt / num_batches_per_core_group_1},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
-         (num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0},
-        {"GROUP_SIZE_SMALLER_THAN_TILE_W", num_channels_per_group < tile_width},
+         static_cast<uint32_t>((num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0)},
+        {"GROUP_SIZE_SMALLER_THAN_TILE_W", static_cast<uint32_t>(num_channels_per_group < tile_width)},
         {"group_row_offset", num_channels_per_group - ((block_wt - 1) * tile_width)},
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
+        // Reader pushes the cb_in0_welford alias in lockstep with cb_in0 so compute's welford
+        // section can wait_front on the alias independently. When welford_fp32_alias is false,
+        // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
+        {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
+        {"cb_in0_welford", cb_in0_welford_index},
     };
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
@@ -406,40 +476,49 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
-    auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(
-        program,
+    std::string reader_sender_kernel_path =
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "welford_reader_mcast_sender_unary_gn.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-                       "reader_mcast_sender_unary_gn.cpp"),
-        mcast_sender_cores_group_1,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = reader_noc,
-            .compile_args = reader_mcast_sender_compile_time_args_group_1,
-            .defines = reader_mcast_sender_defines,
-            .named_compile_args = reader_mcast_sender_named_compile_time_args});
-    KernelHandle reader_mcast_receiver_kernels_id_group_1 = CreateKernel(
-        program,
+                       "reader_mcast_sender_unary_gn.cpp");
+    std::string reader_receiver_kernel_path =
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "welford_reader_mcast_receiver_unary_gn.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-                       "reader_mcast_receiver_unary_gn.cpp"),
-        mcast_receiver_cores_group_1,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = reader_noc,
-            .compile_args = reader_mcast_receiver_compile_time_args_group_1,
-            .defines = reader_mcast_receiver_defines,
-            .named_compile_args = reader_mcast_receiver_named_compile_time_args,
-        });
+                       "reader_mcast_receiver_unary_gn.cpp");
 
-    std::map<std::string, std::string> writer_defines;
+    KernelDescriptor reader_mcast_sender_desc;
+    reader_mcast_sender_desc.kernel_source = reader_sender_kernel_path;
+    reader_mcast_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_mcast_sender_desc.core_ranges = mcast_sender_cores_group_1;
+    reader_mcast_sender_desc.compile_time_args = reader_mcast_sender_compile_time_args_group_1;
+    reader_mcast_sender_desc.named_compile_time_args = to_named_args_mcast(reader_mcast_sender_named_compile_time_args);
+    reader_mcast_sender_desc.defines =
+        KernelDescriptor::Defines(reader_mcast_sender_defines.begin(), reader_mcast_sender_defines.end());
+    reader_mcast_sender_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = reader_noc,
+    };
+
+    KernelDescriptor reader_mcast_receiver_desc;
+    reader_mcast_receiver_desc.kernel_source = reader_receiver_kernel_path;
+    reader_mcast_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_mcast_receiver_desc.core_ranges = mcast_receiver_cores_group_1;
+    reader_mcast_receiver_desc.compile_time_args = reader_mcast_receiver_compile_time_args_group_1;
+    reader_mcast_receiver_desc.named_compile_time_args =
+        to_named_args_mcast(reader_mcast_receiver_named_compile_time_args);
+    reader_mcast_receiver_desc.defines =
+        KernelDescriptor::Defines(reader_mcast_receiver_defines.begin(), reader_mcast_receiver_defines.end());
+    reader_mcast_receiver_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = reader_noc,
+    };
+
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
-        {"fuse_gamma", gamma.has_value()},
-        {"fuse_beta", beta.has_value()},
+        {"fuse_gamma", static_cast<uint32_t>(gamma.has_value())},
+        {"fuse_beta", static_cast<uint32_t>(beta.has_value())},
         {"num_cols_tile_gamma_beta", gamma_beta_num_cols_tile_per_core},
         {"per_core_M", per_core_Mt_group_1},
         {"per_core_N", per_core_Nt},
@@ -451,8 +530,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_tiles_per_batch", per_core_Mt_group_1 * Wt / num_batches_per_core_group_1},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
-         (num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0},
-        {"GROUP_SIZE_SMALLER_THAN_TILE_W", num_channels_per_group < tile_width},
+         static_cast<uint32_t>((num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0)},
+        {"GROUP_SIZE_SMALLER_THAN_TILE_W", static_cast<uint32_t>(num_channels_per_group < tile_width)},
         {"group_row_offset", num_channels_per_group - ((block_wt - 1) * tile_width)},
         {"num_out_blocks", num_out_blocks},
         {"block_h", block_ht_group_1},
@@ -461,6 +540,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"groupnorm_mode", groupnorm_mode},
         {"TILE_WIDTH", tile_width},
         {"TILE_HW", tile_hw},
+        {"reduce_factor_w", num_rows_per_batch_per_core_group_1 * num_channels_per_group},
+        {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -486,16 +567,17 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
                        "welford_writer_unary_gn_rm_gb.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
-    auto writer_kernels_id_group_1 = CreateKernel(
-        program,
-        writer_kernel,
-        all_cores_group_1,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = writer_noc,
-            .compile_args = writer_mcast_sender_compile_time_args_group_1,
-            .defines = writer_defines,
-            .named_compile_args = writer_named_compile_time_args_group_1});
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = writer_kernel;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores_group_1;
+    writer_desc.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
+    writer_desc.named_compile_time_args = to_named_args_mcast(writer_named_compile_time_args_group_1);
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = writer_noc,
+    };
 
     std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
@@ -511,8 +593,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> mcast_sender_compute_named_compile_time_args = {
         {"is_mcast_sender", 1},
-        {"do_gamma", gamma.has_value()},
-        {"do_beta", beta.has_value()},
+        {"do_gamma", static_cast<uint32_t>(gamma.has_value())},
+        {"do_beta", static_cast<uint32_t>(beta.has_value())},
         {"num_cores_per_mcast_group", num_cores_per_mcast_group},
         {"batch", num_batches_per_core_group_1},
         {"group", num_groups_per_core},
@@ -532,8 +614,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_cols_per_group", num_channels_per_group_mod_tile_w},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
-         (num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0},
-        {"GROUP_SIZE_SMALLER_THAN_TILE_W", num_channels_per_group < tile_width},
+         static_cast<uint32_t>((num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0)},
+        {"GROUP_SIZE_SMALLER_THAN_TILE_W", static_cast<uint32_t>(num_channels_per_group < tile_width)},
         {"group_row_offset", num_channels_per_group - ((block_wt - 1) * tile_width)},
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
@@ -545,8 +627,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> mcast_receiver_compute_named_compile_time_args = {
         {"is_mcast_sender", 0},
-        {"do_gamma", gamma.has_value()},
-        {"do_beta", beta.has_value()},
+        {"do_gamma", static_cast<uint32_t>(gamma.has_value())},
+        {"do_beta", static_cast<uint32_t>(beta.has_value())},
         {"num_cores_per_mcast_group", num_cores_per_mcast_group},
         {"batch", num_batches_per_core_group_1},
         {"group", num_groups_per_core},
@@ -566,8 +648,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_cols_per_group", num_channels_per_group_mod_tile_w},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
-         (num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0},
-        {"GROUP_SIZE_SMALLER_THAN_TILE_W", num_channels_per_group < tile_width},
+         static_cast<uint32_t>((num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0)},
+        {"GROUP_SIZE_SMALLER_THAN_TILE_W", static_cast<uint32_t>(num_channels_per_group < tile_width)},
         {"group_row_offset", num_channels_per_group - ((block_wt - 1) * tile_width)},
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
@@ -576,228 +658,400 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"TILE_WIDTH", tile_width},
     };
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
-    CreateKernel(
-        program,
+
+    std::string compute_kernel_path =
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
-        mcast_sender_cores_group_1,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = mcast_sender_compute_compile_time_args_group_1,
-            .defines = eltwise_binary_defines,
-            .named_compile_args = mcast_sender_compute_named_compile_time_args});
-    CreateKernel(
-        program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
-        mcast_receiver_cores_group_1,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = mcast_receiver_compute_compile_time_args_group_1,
-            .defines = eltwise_binary_defines,
-            .named_compile_args = mcast_receiver_compute_named_compile_time_args});
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp");
+
+    // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode):
+    // c_0 (input) has two consumers in the welford kernel: transpose_tile during the
+    //   welford intake (non-TILIZE_IN branch) and sub_tiles_bcast_scalar during the final
+    //   (x - mean) normalization. The latter is FPU on SrcA, so the flag cannot be set on
+    //   c_0 directly. Instead we register c_19 as a second buffer index pointing to the same
+    //   SRAM allocation, with UnpackToDestFp32 set on that alias only. The compute kernel
+    //   reads via c_19 for the welford intake transpose (UnpackToDest path preserves the full
+    //   23-bit mantissa into DEST, which the SFPU welford then consumes) and via c_0 for the
+    //   final-stage FPU sub.
+    // c_29 is the tilized-input CB used by the welford TILIZE_IN path; its only consumer is
+    //   transpose_tile (final normalization reads c_0, not c_29). Pure unary-only path,
+    //   so the flag is safe.
+    //
+    // Other FP32 CBs were considered and rejected because, even though they pass through an
+    // unpack-to-DEST-capable op, the next consumer is a pack into a CB whose downstream
+    // reader is an FPU op reading via SrcA, which truncates to TF32 regardless of what
+    // was preserved in DEST. Setting the flag would incur the cost without improving precision:
+    //   - cb_xmm (c_25): the (x - mean) intermediate. copy_tile into DEST then pack to cb_x;
+    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation.
+    //   - cb_x (c_24): accumulates (x - mean) results across groups via repeated add_tiles,
+    //     each of which reads cb_x via SrcA (truncating to TF32) before producing the next
+    //     FP32 sum. The final stored value does carry one add_tiles step's worth of FP32
+    //     precision, so an UnpackToDestFp32 alias on the final copy_tile would
+    //     preserve ~ one mantissa-bit step beyond TF32, but the accumulated TF32
+    //     errors from previous iteration dominate, so the gain doesn't justify the overhead.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (welford_unpack_fp32_active) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (welford_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_19)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    mcast_sender_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
+    mcast_sender_compute_named_compile_time_args["welford_unpack_fp32_active"] =
+        static_cast<uint32_t>(welford_unpack_fp32_active);
+    mcast_sender_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
+    mcast_receiver_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
+    mcast_receiver_compute_named_compile_time_args["welford_unpack_fp32_active"] =
+        static_cast<uint32_t>(welford_unpack_fp32_active);
+    mcast_receiver_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
+
+    KernelDescriptor compute_sender_desc;
+    compute_sender_desc.kernel_source = compute_kernel_path;
+    compute_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_sender_desc.core_ranges = mcast_sender_cores_group_1;
+    compute_sender_desc.compile_time_args = mcast_sender_compute_compile_time_args_group_1;
+    compute_sender_desc.named_compile_time_args = to_named_args_mcast(mcast_sender_compute_named_compile_time_args);
+    compute_sender_desc.defines =
+        KernelDescriptor::Defines(eltwise_binary_defines.begin(), eltwise_binary_defines.end());
+    compute_sender_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    KernelDescriptor compute_receiver_desc;
+    compute_receiver_desc.kernel_source = compute_kernel_path;
+    compute_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_receiver_desc.core_ranges = mcast_receiver_cores_group_1;
+    compute_receiver_desc.compile_time_args = mcast_receiver_compute_compile_time_args_group_1;
+    compute_receiver_desc.named_compile_time_args = to_named_args_mcast(mcast_receiver_compute_named_compile_time_args);
+    compute_receiver_desc.defines =
+        KernelDescriptor::Defines(eltwise_binary_defines.begin(), eltwise_binary_defines.end());
+    compute_receiver_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = math_approx_mode,
+    };
 
     // Create circular buffers
-    uint32_t in0_cb_index = tt::CBIndex::c_0;
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    tt::tt_metal::CircularBufferConfig in0_cb_config_group_1 =
-        tt::tt_metal::CircularBufferConfig(in0_CB_size_group_1, {{in0_cb_index, in_data_format}})
-            .set_page_size(in0_cb_index, in_single_tile_size);
-    tt::tt_metal::CircularBufferConfig output_cb_config_group_1 =
-        tt::tt_metal::CircularBufferConfig(out_CB_size_group_1, {{output_cb_index, out_data_format}})
-            .set_page_size(output_cb_index, out_single_tile_size);
+    constexpr uint32_t in0_cb_index = tt::CBIndex::c_0;
+    constexpr uint32_t in0_welford_alias_index = tt::CBIndex::c_19;
+    constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
+    {
+        CBDescriptor in0_desc{
+            .total_size = in0_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in0_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        };
+        if (welford_fp32_alias) {
+            in0_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in0_welford_alias_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            });
+        }
+        desc.cbs.push_back(std::move(in0_desc));
+    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_CB_size_group_1,
+        .core_ranges = all_cores_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = out_data_format,
+            .page_size = out_single_tile_size,
+        }}},
+    });
 
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, in0_cb_config_group_1);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, output_cb_config_group_1);
-
-    uint32_t in_cb_index = tt::CBIndex::c_29;
-    tt::tt_metal::CircularBufferConfig in_cb_config_group_1 =
-        tt::tt_metal::CircularBufferConfig(in_CB_size_group_1, {{in_cb_index, in_data_format}})
-            .set_page_size(in_cb_index, in_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, in_cb_config_group_1);
+    constexpr uint32_t in_cb_index = tt::CBIndex::c_29;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in_CB_size_group_1,
+        .core_ranges = all_cores_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(in_cb_index),
+            .data_format = in_data_format,
+            .page_size = in_single_tile_size,
+        }}},
+    });
 
     if (untilize_out) {
-        uint32_t out_cb_index = tt::CBIndex::c_30;
-        tt::tt_metal::CircularBufferConfig out_cb_config_group_1 =
-            tt::tt_metal::CircularBufferConfig(in_CB_size_group_1, {{out_cb_index, in_data_format}})
-                .set_page_size(out_cb_index, in_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, out_cb_config_group_1);
+        constexpr uint32_t out_cb_index = tt::CBIndex::c_30;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(out_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
     }
 
-    uint32_t in2_cb_index = tt::CBIndex::c_2;
-    tt::tt_metal::CircularBufferConfig in2_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, cb_data_format}})
-            .set_page_size(in2_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
+    constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in2_CB_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(in2_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    uint32_t in3_cb_index = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig in3_cb_config =
-        tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, cb_data_format}})
-            .set_page_size(in3_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
+    constexpr uint32_t in3_cb_index = tt::CBIndex::c_3;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in3_CB_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(in3_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    uint32_t in4_cb_index = tt::CBIndex::c_4;
-    tt::tt_metal::CircularBufferConfig in4_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, cb_data_format}})
-            .set_page_size(in4_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
+    constexpr uint32_t in4_cb_index = tt::CBIndex::c_4;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in2_CB_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(in4_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
     if (gamma.has_value()) {
-        uint32_t in5_cb_index = tt::CBIndex::c_5;
-        tt::tt_metal::CircularBufferConfig in5_cb_config =
-            tt::tt_metal::CircularBufferConfig(in5_CB_size, {{in5_cb_index, gamma_beta_cb_data_format}})
-                .set_page_size(in5_cb_index, gamma_beta_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, in5_cb_config);
+        constexpr uint32_t in5_cb_index = tt::CBIndex::c_5;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in5_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in5_cb_index),
+                .data_format = gamma_beta_cb_data_format,
+                .page_size = gamma_beta_single_tile_size,
+            }}},
+        });
     }
     if (beta.has_value()) {
-        uint32_t in6_cb_index = tt::CBIndex::c_6;
-        tt::tt_metal::CircularBufferConfig in6_cb_config =
-            tt::tt_metal::CircularBufferConfig(in6_CB_size, {{in6_cb_index, gamma_beta_cb_data_format}})
-                .set_page_size(in6_cb_index, gamma_beta_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, in6_cb_config);
+        constexpr uint32_t in6_cb_index = tt::CBIndex::c_6;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in6_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in6_cb_index),
+                .data_format = gamma_beta_cb_data_format,
+                .page_size = gamma_beta_single_tile_size,
+            }}},
+        });
     }
     if (input_mask.has_value()) {
-        uint32_t in_mask_cb_index = tt::CBIndex::c_28;
-        tt::tt_metal::CircularBufferConfig in_mask_cb_config =
-            tt::tt_metal::CircularBufferConfig(in_mask_CB_size, {{in_mask_cb_index, in_mask_cb_data_format}})
-                .set_page_size(in_mask_cb_index, in_mask_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, in_mask_cb_config);
+        constexpr uint32_t in_mask_cb_index = tt::CBIndex::c_28;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_mask_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in_mask_cb_index),
+                .data_format = in_mask_cb_data_format,
+                .page_size = in_mask_single_tile_size,
+            }}},
+        });
     }
     if (reader_repack_output) {
-        uint32_t repack_cb_index = tt::CBIndex::c_26;
-        uint32_t repack_out_cb_index = tt::CBIndex::c_31;
-        std::map<uint8_t, tt::DataFormat> in0_out0_cb_data_format_spec{
-            {repack_cb_index, in_data_format}, {repack_out_cb_index, in_data_format}};
-        tt::tt_metal::CircularBufferConfig repack_cb_config =
-            tt::tt_metal::CircularBufferConfig(repack_CB_size, in0_out0_cb_data_format_spec)
-                .set_page_size(repack_cb_index, in_single_tile_size)
-                .set_page_size(repack_out_cb_index, in_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, repack_cb_config);
+        constexpr uint32_t repack_cb_index = tt::CBIndex::c_26;
+        constexpr uint32_t repack_out_cb_index = tt::CBIndex::c_31;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = repack_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors =
+                {{CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(repack_cb_index),
+                      .data_format = in_data_format,
+                      .page_size = in_single_tile_size,
+                  },
+                  CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(repack_out_cb_index),
+                      .data_format = in_data_format,
+                      .page_size = in_single_tile_size,
+                  }}},
+        });
     }
 
-    uint32_t x_cb_index = tt::CBIndex::c_24;
-    tt::tt_metal::CircularBufferConfig x_cb_config_group_1 =
-        tt::tt_metal::CircularBufferConfig(x_CB_size_group_1, {{x_cb_index, cb_data_format}})
-            .set_page_size(x_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, x_cb_config_group_1);
+    constexpr uint32_t x_cb_index = tt::CBIndex::c_24;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = x_CB_size_group_1,
+        .core_ranges = all_cores_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(x_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    uint32_t xmm_cb_index = tt::CBIndex::c_25;
-    tt::tt_metal::CircularBufferConfig xmm_cb_config_group_1 =
-        tt::tt_metal::CircularBufferConfig(xmm_CB_size_group_1, {{xmm_cb_index, cb_data_format}})
-            .set_page_size(xmm_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, xmm_cb_config_group_1);
+    constexpr uint32_t xmm_cb_index = tt::CBIndex::c_25;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = xmm_CB_size_group_1,
+        .core_ranges = all_cores_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(xmm_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    uint32_t xmm2_cb_index = tt::CBIndex::c_23;
-    tt::tt_metal::CircularBufferConfig xmm2_cb_config_group_1 =
-        tt::tt_metal::CircularBufferConfig(xmm2_CB_size_group_1, {{xmm2_cb_index, cb_data_format}})
-            .set_page_size(xmm2_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, xmm2_cb_config_group_1);
+    constexpr uint32_t xmm2_cb_index = tt::CBIndex::c_23;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = xmm2_CB_size_group_1,
+        .core_ranges = all_cores_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(xmm2_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    uint32_t xmm3_cb_index = tt::CBIndex::c_22;
-    tt::tt_metal::CircularBufferConfig xmm3_cb_config_group_1 =
-        tt::tt_metal::CircularBufferConfig(xmm3_CB_size_group_1, {{xmm3_cb_index, cb_data_format}})
-            .set_page_size(xmm3_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, xmm3_cb_config_group_1);
+    constexpr uint32_t xmm3_cb_index = tt::CBIndex::c_22;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = xmm3_CB_size_group_1,
+        .core_ranges = all_cores_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(xmm3_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    uint32_t ex_cb_partial_index = tt::CBIndex::c_8;
-    tt::tt_metal::CircularBufferConfig ex_cb_partial_config =
-        tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial_index, cb_data_format}})
-            .set_page_size(ex_cb_partial_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
+    constexpr uint32_t ex_cb_partial_index = tt::CBIndex::c_8;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = ex_partial_CB_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(ex_cb_partial_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
     if (!use_welford) {
-        uint32_t ex2_cb_partial_index = tt::CBIndex::c_21;
-        tt::tt_metal::CircularBufferConfig ex2_cb_partial_config =
-            tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex2_cb_partial_index, cb_data_format}})
-                .set_page_size(ex2_cb_partial_index, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
+        constexpr uint32_t ex2_cb_partial_index = tt::CBIndex::c_21;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = ex_partial_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(ex2_cb_partial_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
     }
 
-    // cb_ex_external holds packed 16-byte partial-reduction scalars gathered from
-    // every core in the mcast group, for every out_block.  The reader kernel
-    // (reader_mcast_sender_unary_gn) and compute kernel (groupnorm) both
+    // cb_ex_external holds packed cb_ex_external_slot_pitch_bytes-sized partial-reduction
+    // scalars gathered from every core in the mcast group, for every out_block. The
+    // reader kernel (reader_mcast_sender_unary_gn) and compute kernel (groupnorm) both
     // reserve / wait-for cb_ex_external_tiles_required tiles at once, where
-    //   cb_ex_external_tiles_required = ceil(num_out_blocks_padded * num_mcast_cores * 16 / tile_size)
-    // so the CB must be at least that large.  Mirror the kernel's
+    //   cb_ex_external_tiles_required =
+    //       ceil(num_out_blocks_padded * num_mcast_cores * cb_ex_external_slot_pitch_bytes / tile_size)
+    // so the CB must be at least that large. Mirror the kernel's
     // num_out_blocks_padded calculation to get the exact count.
-    uint32_t ex_cb_external_index = tt::CBIndex::c_10;
-    uint32_t num_out_blocks_padded = num_out_blocks;
+    // Note that Welford does not use cb_ex_external.
     if (!use_welford) {
-        // Legacy mcast sender/compute path: mirror kernel's num_out_blocks_padded calculation.
+        constexpr uint32_t ex_cb_external_index = tt::CBIndex::c_10;
+        uint32_t num_out_blocks_padded = num_out_blocks;
         uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
         if (block_ht_group_1 % num_out_blocks != 0) {
             uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
             num_out_blocks_padded += (residual / out_block_h_normal + 1);
         }
+        uint32_t cb_ex_external_tiles =
+            (num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes + single_tile_size -
+             1) /
+            single_tile_size;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cb_ex_external_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(ex_cb_external_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
     }
-    uint32_t cb_ex_external_tiles = 1;
+
+    constexpr uint32_t ex_cb_index = tt::CBIndex::c_9;
+    constexpr uint32_t ex_global_cb_index = tt::CBIndex::c_15;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = ex_global_CB_size,
+        .core_ranges = all_cores,
+        .format_descriptors =
+            {{CBFormatDescriptor{
+                  .buffer_index = static_cast<uint8_t>(ex_global_cb_index),
+                  .data_format = cb_data_format,
+                  .page_size = single_tile_size,
+              },
+              CBFormatDescriptor{
+                  .buffer_index = static_cast<uint8_t>(ex_cb_index),
+                  .data_format = cb_data_format,
+                  .page_size = single_tile_size,
+              }}},
+    });
+
     if (!use_welford) {
-        // Only the legacy kernels reference CBIndex::c_10; in Welford mode use a minimal size
-        // to preserve L1 headroom while keeping the CB index valid.
-        cb_ex_external_tiles =
-            (num_out_blocks_padded * num_cores_per_mcast_group * 16 + single_tile_size - 1) / single_tile_size;
-    }
-    tt::tt_metal::CircularBufferConfig ex_cb_external_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_ex_external_tiles * single_tile_size, {{ex_cb_external_index, cb_data_format}})
-            .set_page_size(ex_cb_external_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
-
-    uint32_t ex_cb_index = tt::CBIndex::c_9;
-    uint32_t ex_global_cb_index = tt::CBIndex::c_15;
-    std::map<uint8_t, tt::DataFormat> ex_global_cb_data_format_spec{
-        {ex_global_cb_index, cb_data_format}, {ex_cb_index, cb_data_format}};
-    auto ex_global_cb_config = tt::tt_metal::CircularBufferConfig(ex_global_CB_size, ex_global_cb_data_format_spec)
-                                   .set_page_size(ex_global_cb_index, single_tile_size)
-                                   .set_page_size(ex_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
-
-    if (!use_welford) {
-        uint32_t ex2_cb_index = tt::CBIndex::c_13;
-        uint32_t ex2_global_cb_index = tt::CBIndex::c_14;
-        std::map<uint8_t, tt::DataFormat> ex2_global_cb_data_format_spec{
-            {ex2_global_cb_index, cb_data_format}, {ex2_cb_index, cb_data_format}};
-        auto ex2_global_cb_config =
-            tt::tt_metal::CircularBufferConfig(ex2_global_CB_size, ex2_global_cb_data_format_spec)
-                .set_page_size(ex2_global_cb_index, single_tile_size)
-                .set_page_size(ex2_cb_index, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
+        constexpr uint32_t ex2_cb_index = tt::CBIndex::c_13;
+        constexpr uint32_t ex2_global_cb_index = tt::CBIndex::c_14;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = ex2_global_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors =
+                {{CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(ex2_global_cb_index),
+                      .data_format = cb_data_format,
+                      .page_size = single_tile_size,
+                  },
+                  CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(ex2_cb_index),
+                      .data_format = cb_data_format,
+                      .page_size = single_tile_size,
+                  }}},
+        });
     }
 
-    uint32_t cb_ex2pe_index = tt::CBIndex::c_27;
-    tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
-        tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
-            .set_page_size(cb_ex2pe_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
+    constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_27;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = ex2pe_CB_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_ex2pe_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    uint32_t cb_reciprocals = tt::CBIndex::c_18;
-    CBHandle cb_reciprocals_handle = 0;
     if (reciprocals.has_value()) {
-        tt::tt_metal::CircularBufferConfig reciprocal_cb_config =
-            tt::tt_metal::CircularBufferConfig(reciprocal_CB_size, {{cb_reciprocals, reciprocal_cb_data_format}})
-                .set_page_size(cb_reciprocals, reciprocal_CB_size)
-                .set_globally_allocated_address(*reciprocals.value().buffer());
-        cb_reciprocals_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores, reciprocal_cb_config);
+        constexpr uint32_t cb_reciprocals = tt::CBIndex::c_18;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = reciprocal_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_reciprocals),
+                .data_format = reciprocal_cb_data_format,
+                .page_size = reciprocal_CB_size,
+            }}},
+            .buffer = reciprocals.value().buffer(),
+        });
     }
 
     // Runtime Args
-    std::vector<KernelHandle> writer_kernel_ids;
-    std::vector<KernelHandle> reader_sender_kernel_ids;
-    std::vector<KernelHandle> reader_receiver_kernel_ids;
-    float winv_group_1 = 1.0f / std::sqrt(num_rows_per_batch_per_core_group_1 * num_channels_per_group);
-    bfloat16 bfloat_winv_value_group_1 = bfloat16::truncate(winv_group_1);
-    uint32_t packed_winv_value_group_1 =
-        pack_two_bfloat16_into_uint32({bfloat_winv_value_group_1, bfloat_winv_value_group_1});
-    float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);
-    bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
-    uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
     for (size_t i = 0; i < mcast_groups.size(); ++i) {
@@ -808,9 +1062,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         for (size_t j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord virtual_core = virtual_group[j];
-            uint32_t in0_start_id, out_tile_start_id;
-            in0_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
-            out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
+            uint32_t in0_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
+            uint32_t out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
 
             if (j == 0) {  // mcast sender
                 std::vector<CoreCoord> mcast_group_first;
@@ -826,14 +1079,14 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
                 if (reader_noc == NOC::NOC_1) {
                     std::swap(mcast_start, mcast_end);
                 }
-                std::vector<uint32_t> mcast_sender_args;
-                mcast_sender_args.push_back((std::uint32_t)in0_dram_addr);
-                mcast_sender_args.push_back((std::uint32_t)out_dram_addr);
+                tt::tt_metal::KernelDescriptor::RTArgList mcast_sender_args;
+                mcast_sender_args.push_back(a.buffer());
+                mcast_sender_args.push_back(output.buffer());
                 mcast_sender_args.push_back(in0_start_id);
                 mcast_sender_args.push_back(out_tile_start_id);
                 mcast_sender_args.push_back(Wt);
-                mcast_sender_args.push_back(!mcast_group_first.empty());
-                mcast_sender_args.push_back(!mcast_group_last.empty());
+                mcast_sender_args.push_back(static_cast<uint32_t>(!mcast_group_first.empty()));
+                mcast_sender_args.push_back(static_cast<uint32_t>(!mcast_group_last.empty()));
                 mcast_sender_args.push_back(mcast_start.x);
                 mcast_sender_args.push_back(mcast_start.y);
                 mcast_sender_args.push_back(mcast_end.x);
@@ -872,29 +1125,26 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
                 }
 
                 std::vector<uint32_t> mcast_noc_xy;
-                for (const auto& core : group) {
-                    CoreCoord coord = device->worker_core_from_logical_core(core);
+                for (const auto& gcore : group) {
+                    CoreCoord coord = device->worker_core_from_logical_core(gcore);
                     mcast_noc_xy.push_back(coord.x);
                 }
-                for (const auto& core : group) {
-                    CoreCoord coord = device->worker_core_from_logical_core(core);
+                for (const auto& gcore : group) {
+                    CoreCoord coord = device->worker_core_from_logical_core(gcore);
                     mcast_noc_xy.push_back(coord.y);
                 }
-                mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
-                tt::tt_metal::SetRuntimeArgs(program, reader_mcast_sender_kernels_id_group_1, core, mcast_sender_args);
-                reader_sender_kernel_ids.push_back(reader_mcast_sender_kernels_id_group_1);
+                mcast_sender_args.append(mcast_noc_xy);
+                reader_mcast_sender_desc.emplace_runtime_args(core, mcast_sender_args);
             } else {  // mcast receiver
-                std::vector<uint32_t> mcast_receiver_args = {
-                    (std::uint32_t)in0_dram_addr,
-                    (std::uint32_t)out_dram_addr,
-                    (std::uint32_t)in0_start_id,
-                    (std::uint32_t)out_tile_start_id,
-                    (std::uint32_t)Wt,
-                    (std::uint32_t)(device->worker_core_from_logical_core(group.front()).x),
-                    (std::uint32_t)(device->worker_core_from_logical_core(group.front()).y)};
-                tt::tt_metal::SetRuntimeArgs(
-                    program, reader_mcast_receiver_kernels_id_group_1, core, mcast_receiver_args);
-                reader_receiver_kernel_ids.push_back(reader_mcast_receiver_kernels_id_group_1);
+                reader_mcast_receiver_desc.emplace_runtime_args(
+                    core,
+                    {a.buffer(),
+                     output.buffer(),
+                     in0_start_id,
+                     out_tile_start_id,
+                     Wt,
+                     static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).x),
+                     static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).y)});
             }
         }
     }
@@ -907,9 +1157,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     for (size_t i = 0; i < core_coords.size(); ++i) {
         auto core = core_coords[i];
         auto virtual_core = virtual_core_coords[i];
-        uint32_t out_tile_start_id;
 
-        out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
+        uint32_t out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
 
         if (virtual_core.x > curr_virtual_core_x) {
             curr_virtual_core_x++;
@@ -927,94 +1176,39 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
             }
         }
 
-        std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(packed_cinv_value);
-        writer_mcast_sender_args.push_back(packed_winv_value_group_1);
+        tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(eps_u);
-        writer_mcast_sender_args.push_back(out_dram_addr);
-        writer_mcast_sender_args.push_back(gamma_dram_addr);
-        writer_mcast_sender_args.push_back(beta_dram_addr);
-        writer_mcast_sender_args.push_back(input_mask_dram_addr);
+        writer_mcast_sender_args.push_back(output.buffer());
+        if (gamma.has_value()) {
+            writer_mcast_sender_args.push_back(gamma.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (beta.has_value()) {
+            writer_mcast_sender_args.push_back(beta.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (input_mask.has_value()) {
+            writer_mcast_sender_args.push_back(input_mask.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
         writer_mcast_sender_args.push_back(out_tile_start_id);
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id_group_1, core, writer_mcast_sender_args);
-        writer_kernel_ids.push_back(writer_kernels_id_group_1);
+        writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
     }
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .writer_kernel_ids = writer_kernel_ids,
-            .reader_sender_kernel_ids = reader_sender_kernel_ids,
-            .reader_receiver_kernel_ids = reader_receiver_kernel_ids,
-            .core_coords = core_coords,
-            .grid_size = grid_size,
-            .mcast_groups = mcast_groups,
-            .groupnorm_mode = groupnorm_mode,
-            .cb_reciprocals_handle = cb_reciprocals_handle}};
-}
+    desc.kernels.push_back(std::move(reader_mcast_sender_desc));
+    desc.kernels.push_back(std::move(reader_mcast_receiver_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_sender_desc));
+    desc.kernels.push_back(std::move(compute_receiver_desc));
 
-void GroupNormMcastProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const GroupNormParams& /*operation_attributes*/,
-    const GroupNormInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_vars = cached_program.shared_variables;
-
-    auto src_buffer_a = tensor_args.input.buffer()->address();
-    auto dst_buffer = tensor_return_value.buffer()->address();
-
-    const auto& gamma = tensor_args.gamma;
-    const auto& beta = tensor_args.beta;
-    const auto& mask = tensor_args.input_mask;
-    const auto& reciprocals = tensor_args.reciprocals;
-
-    if (shared_vars.groupnorm_mode == 2 && reciprocals.has_value()) {
-        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_reciprocals_handle, *reciprocals.value().buffer());
-    }
-
-    for (uint32_t i = 0; i < shared_vars.core_coords.size(); ++i) {
-        CoreCoord core = shared_vars.core_coords[i];
-        auto writer_kernel_id = shared_vars.writer_kernel_ids.at(i);
-        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-
-        writer_runtime_args[3] = dst_buffer;
-        if (gamma.has_value()) {
-            writer_runtime_args[4] = gamma.value().buffer()->address();
-        }
-        if (beta.has_value()) {
-            writer_runtime_args[5] = beta.value().buffer()->address();
-        }
-        if (mask.has_value()) {
-            writer_runtime_args[6] = mask.value().buffer()->address();
-        }
-    }
-
-    uint32_t sender_index = 0;
-    uint32_t receiver_index = 0;
-    for (size_t i = 0; i < shared_vars.mcast_groups.size(); ++i) {
-        const auto& group = shared_vars.mcast_groups[i];
-        for (size_t j = 0; j < group.size(); ++j) {
-            CoreCoord core = group[j];
-            if (j == 0) {
-                auto reader_sender_kernel_id = shared_vars.reader_sender_kernel_ids.at(sender_index);
-                auto& reader_sender_runtime_args = GetRuntimeArgs(program, reader_sender_kernel_id, core);
-                reader_sender_runtime_args[0] = src_buffer_a;
-                reader_sender_runtime_args[1] = dst_buffer;
-                sender_index++;
-            } else {
-                auto reader_receiver_kernel_id = shared_vars.reader_receiver_kernel_ids.at(receiver_index);
-                auto& reader_receiver_runtime_args = GetRuntimeArgs(program, reader_receiver_kernel_id, core);
-                reader_receiver_runtime_args[0] = src_buffer_a;
-                reader_receiver_runtime_args[1] = dst_buffer;
-                receiver_index++;
-            }
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

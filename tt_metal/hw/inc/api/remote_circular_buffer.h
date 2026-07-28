@@ -9,11 +9,24 @@
 #include "api/alignment.h"
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/lock.h"
+#include "api/dataflow/noc.h"
+#include "api/lock.h"
 #endif
 
 namespace experimental {
+
+// Per-receiver layout of the sender's local pages_sent / pages_acked slots.
+// For a sharded GCB the sender is a worker and slots live in the receivers'
+// config buffer pages at L1 alignment. For a DRAM-sender (DRISC) GCB the slots
+// live in DRISC L1 and can be packed at uint32 alignment — NoC atomic inc only
+// needs 4-byte alignment. The receiver-side layout is unchanged in both cases.
+#ifdef COMPILE_FOR_DRISC
+static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET = sizeof(uint32_t);
+static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_STRIDE = 2 * sizeof(uint32_t);
+#else
+static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET = L1_ALIGNMENT;
+static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_STRIDE = 2 * L1_ALIGNMENT;
+#endif
 
 namespace detail {
 
@@ -32,8 +45,10 @@ FORCE_INLINE void update_pages_sent(
     bool posted,
     uint8_t cmd_buf) {
     uint32_t aligned_pages_sent_addr = sender_cb_interface.aligned_pages_sent_ptr;
+    uint32_t remote_pages_sent_addr =
+        remote_cb_remote_pages_sent_ptr(sender_cb_interface.num_receivers_and_remote_pages_sent_ptr);
     uint32_t remote_noc_xy_addr = sender_cb_interface.receiver_noc_xy_ptr;
-    uint32_t num_receivers = sender_cb_interface.num_receivers;
+    uint32_t num_receivers = remote_cb_num_receivers(sender_cb_interface.num_receivers_and_remote_pages_sent_ptr);
 
     // increment the aligned pages sent because we skipped to next aligned page location
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
@@ -43,7 +58,7 @@ FORCE_INLINE void update_pages_sent(
         uint32_t remote_noc_xy = uint32_t(
             NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
         *pages_sent_ptr += aligned_page_adjustment;
-        uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
+        uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, remote_pages_sent_addr);
         noc_fast_atomic_increment<nm>(
             noc,
             cmd_buf,
@@ -54,7 +69,8 @@ FORCE_INLINE void update_pages_sent(
             false /*linked*/,
             posted /*posted*/,
             MEM_NOC_ATOMIC_RET_VAL_ADDR);
-        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        remote_pages_sent_addr += 2 * L1_ALIGNMENT;
         remote_noc_xy_ptr += 2;
     }
 }
@@ -74,7 +90,11 @@ FORCE_INLINE void update_pages_acked(
     volatile tt_l1_ptr uint32_t* pages_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
     *pages_acked_ptr += aligned_page_adjustment;
-    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uintptr_t)pages_acked_ptr, noc);
+    // remote_pages_acked_ptr is the canonical NoC target for the sender-side pages_acked
+    // counter; host writes the same value as aligned_pages_acked_ptr for sharded GCB (where
+    // local == remote) and the DRISC-side slot for DRAM-sender GCB.
+    uint64_t remote_ack_ptr_addr =
+        get_noc_addr(sender_noc_x, sender_noc_y, receiver_cb_interface.remote_pages_acked_ptr, noc);
     noc_fast_atomic_increment<nm>(
         noc,
         cmd_buf,
@@ -270,10 +290,10 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
 
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
-    volatile tt_l1_ptr uint32_t* pages_acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
+    volatile tt_l1_ptr uint32_t* pages_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        remote_cb.aligned_pages_sent_ptr + REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET);
 
-    uint32_t num_receivers = remote_cb.num_receivers;
+    uint32_t num_receivers = remote_cb_num_receivers(remote_cb.num_receivers_and_remote_pages_sent_ptr);
     uint32_t fifo_aligned_num_pages = fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
 
     for (uint32_t i = 0; i < num_receivers; ++i) {
@@ -284,8 +304,8 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
             uint32_t sent_minus_ack = pages_sent - pages_acked;
             free_pages = fifo_aligned_num_pages - sent_minus_ack;
         } while (free_pages < num_pages_wait);
-        pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
-        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        pages_acked_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
     }
 
     WAYPOINT("RCRD");
@@ -297,16 +317,16 @@ FORCE_INLINE void remote_cb_sender_barrier(uint32_t cb_id) {
 
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
-    volatile tt_l1_ptr uint32_t* pages_acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
+    volatile tt_l1_ptr uint32_t* pages_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        remote_cb.aligned_pages_sent_ptr + REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET);
 
-    uint32_t num_receivers = remote_cb.num_receivers;
+    uint32_t num_receivers = remote_cb_num_receivers(remote_cb.num_receivers_and_remote_pages_sent_ptr);
 
     for (uint32_t i = 0; i < num_receivers; ++i) {
         while (*pages_acked_ptr != *pages_sent_ptr) {
         }
-        pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
-        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        pages_acked_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
     }
     WAYPOINT("RCBD");
 }
@@ -332,7 +352,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         len_bytes += fifo_start_addr + fifo_size - fifo_limit_page_aligned;
     }
     uint32_t pages_sent = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-    uint32_t num_receivers = remote_cb.num_receivers;
+    uint32_t num_receivers = remote_cb_num_receivers(remote_cb.num_receivers_and_remote_pages_sent_ptr);
 
     uint32_t next_receiver_start_addr_stride = coalesced_num_pages_per_row * coalesced_page_size;
     uint32_t next_block_row_stride = next_receiver_start_addr_stride * num_receivers;
@@ -342,6 +362,10 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
     uint32_t next_receiver_start_addr_offset = 0;
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
+    // The packed remote_pages_sent_ptr is the canonical NoC target for the receiver-side
+    // pages_sent counter; host writes the same value as aligned_pages_sent_ptr for sharded
+    // GCB (where local == remote) and the worker-side base for DRAM-sender GCB.
+    uint32_t remote_sent_base = remote_cb_remote_pages_sent_ptr(remote_cb.num_receivers_and_remote_pages_sent_ptr);
     volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.receiver_noc_xy_ptr);
     for (uint32_t i = 0; i < num_receivers; ++i) {
@@ -369,9 +393,12 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         next_receiver_start_addr_offset += next_receiver_start_addr_stride;
         *pages_sent_ptr += pages_sent;
 
-        uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
+        uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, remote_sent_base);
         noc_semaphore_inc<posted>(remote_sent_ptr_addr, pages_sent, noc);
-        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        // Local stride may be smaller than the remote stride on a DRISC sender (see
+        // REMOTE_CB_LOCAL_PAGES_STRIDE) — the receiver-side layout is always L1-aligned.
+        pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        remote_sent_base += 2 * L1_ALIGNMENT;
         remote_noc_xy_ptr += 2;
     }
 
@@ -389,6 +416,14 @@ FORCE_INLINE void align_local_cbs_to_remote_cb(
     // We assert that the offset of sender and receiver common attributes are the same
     // so we can use either interface here
     const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index);
+    // The align define is emitted per-kernel, so a kernel spanning a core range where only some cores
+    // own this remote CB also runs here on cores that don't. setup_remote_cb_interfaces zeroes
+    // fifo_start_addr on those cores, so fifo_start_addr == 0 means "remote CB not present here" (a real
+    // start is an L1 buffer address, never 0): nothing to align, and the interface may hold stale state
+    // from a prior program, so skip.
+    if (remote_cb.fifo_start_addr == 0) {
+        return;
+    }
     uint32_t fifo_limit = remote_cb.fifo_limit_page_aligned >> cb_addr_shift;
     uint32_t fifo_size = fifo_limit - (remote_cb.fifo_start_addr >> cb_addr_shift);
     uint32_t fifo_ptr = remote_cb.fifo_rd_ptr >> cb_addr_shift;
@@ -414,9 +449,6 @@ FORCE_INLINE void update_remote_cb_config_in_l1(uint32_t remote_cb_index) {
 }
 
 #if !defined(COMPILE_FOR_TRISC) && defined(KERNEL_BUILD)
-
-class Noc;
-class CircularBuffer;
 
 /** @brief Remote circular buffer API
  * Provides an interface for the Producer and Consumer cores of a Circular Buffer to be on different cores on the same
@@ -464,15 +496,15 @@ public:
      */
     template <typename Src, RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void push_back(
-        experimental::Noc& noc,
+        Noc& noc,
         const Src& src,
         uint32_t num_pages,
         uint32_t num_rows,
         uint32_t coalesced_num_pages_per_row,
         uint32_t coalesced_page_size,
-        const typename experimental::noc_traits_t<Src>::src_args_type& src_args =
-            typename experimental::noc_traits_t<Src>::src_args_type{}) {
-        auto src_addr = experimental::noc_traits_t<Src>::template src_addr<experimental::Noc::AddressType::LOCAL_L1>(
+        const typename noc_traits_t<Src>::src_args_type& src_args =
+            typename noc_traits_t<Src>::src_args_type{}) {
+        auto src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(
             src, noc, src_args);
         remote_cb_push_back_and_write_pages<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
             remote_cb_index_,
@@ -501,7 +533,7 @@ public:
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void set_sender_page_size(
-        experimental::Noc& noc,
+        Noc& noc,
         uint32_t page_size,
         uint8_t noc_mode = detail::default_noc_mode,
         bool posted = true,
@@ -529,7 +561,7 @@ public:
      * @param noc The NoC to use for the remote pointer update
      * @param num_pages The number of pages to pop
      */
-    void pop_front(experimental::Noc& noc, uint32_t num_pages) {
+    void pop_front(Noc& noc, uint32_t num_pages) {
         remote_cb_pop_front(remote_cb_index_, num_pages, noc.get_noc_id());
     }
 
@@ -545,22 +577,22 @@ public:
      * @param noc The NoC to use for the remote pointer update
      * @param page_size The new page size
      * @param noc_mode The NoC mode to use for the remote pointer update
-     * @param posted Whether to use posted semaphore inc
+     * @param posted Whether to use posted semaphore inc (default: true)
      * @param cmd_buf The command buffer to use for the remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void set_receiver_page_size(
-        experimental::Noc& noc,
+        Noc& noc,
         uint32_t page_size,
         uint8_t noc_mode = detail::default_noc_mode,
-        Noc::ResponseMode response_mode = Noc::ResponseMode::POSTED,
+        bool posted = true,
         uint8_t cmd_buf = detail::default_cmd_buf) {
         resize_remote_sender_cb_interface<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
             remote_cb_index_,
             page_size,
             noc.get_noc_id(),
             noc_mode,
-            response_mode == Noc::ResponseMode::POSTED,
+            posted,
             cmd_buf);
     }
 

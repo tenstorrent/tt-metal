@@ -8,11 +8,11 @@ Usage:
     dump_aggregated_callstacks [--all-cores] [--device-visualization]
 
 Options:
-    --all-cores                      Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
+    --all-cores                      Show all cores, including those with Go Message = DONE and RISCs not enabled by the running program. By default, both are filtered out.
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 
 Description:
-    Aggregates callstacks by (Kernel Id, normalized PC, RISC Name) and shows:
+    Aggregates callstacks by (Kernel Id, normalized PC, RISC Name and Operation Id) and shows:
       - Kernel Id / Kernel Name
       - Op Id (host_assigned_id, for correlation with dump_running_operations.py)
       - Callstack
@@ -132,11 +132,11 @@ class AggregationBucket:
     def add_core(self, location: OnChipCoordinate, device_label: str):
         """Add a core to this aggregation bucket."""
 
-        coord_str = location.to_str("noc0")
+        coord_str = location.to_user_str()
         self.core_locations.add(f"{device_label}:{coord_str}")
         self.device_labels.add(device_label)
 
-        dev_id = location._device.id
+        dev_id = location.device.id
         x, y = location._noc0_coord
         self.per_core_hits[dev_id].add((x, y))
 
@@ -189,11 +189,9 @@ def _collect_aggregated(
         try:
             if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
                 return None
-            # Filter DONE cores, like dump_callstacks.py does
-            if not show_all_cores:
-                d = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
-                if d.go_message == "DONE":
-                    return None
+            # Filter DONE / not-enabled-by-design cores, like dump_callstacks.py does
+            if not show_all_cores and callstack_provider.dispatcher_data.is_idle_in_default_view(location, risc_name):
+                return None
 
             return callstack_provider.get_cached_callstacks(location, risc_name)
         except TimeoutDeviceRegisterError:
@@ -215,8 +213,8 @@ def _collect_aggregated(
     if not results:
         return None
 
-    # Aggregate by (kernel_id, normalized_pc, risc_name)
-    buckets: dict[tuple[int | None, int | None, str], AggregationBucket] = {}
+    # Aggregate by (kernel_id, normalized_pc, risc_name, op_id)
+    buckets: dict[tuple[int | None, int | None, str, int | None], AggregationBucket] = {}
 
     for check_result in results:
         if check_result.result is None:
@@ -229,7 +227,7 @@ def _collect_aggregated(
         # Normalize PC into kernel space when kernel_offset is available
         normalized_pc = pc - d.kernel_offset if d.kernel_offset is not None and pc is not None else pc
 
-        key = (d.watcher_kernel_id, normalized_pc, check_result.risc_name)
+        key = (d.watcher_kernel_id, normalized_pc, check_result.risc_name, d.host_assigned_id)
         bucket = buckets.get(key)
         if bucket is None:
             bucket = AggregationBucket(cs_data, check_result.risc_name)
@@ -243,7 +241,7 @@ def _collect_aggregated(
         )
 
     # Sort ascending by op_id
-    sorted_buckets = sorted(buckets.values(), key=lambda b: b.op_id)
+    sorted_buckets = sorted(buckets.values(), key=lambda b: (b.op_id is None, b.op_id))
     return [b.to_row(visualize_devices, verbose, context) for b in sorted_buckets]
 
 

@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -16,13 +13,12 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -42,6 +38,24 @@ void kernel_main() {
     constexpr uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(24);
     constexpr uint32_t tile_width = get_compile_time_arg_val(25);
+
+    // Welford-fp32 alias args. When the alias is active, cb_in0_welford_id points
+    // to c_29 (shares SRAM with c_0) and cb_in_welford_id points to c_31 (shares SRAM with c_1).
+    // Both alias indices are configured with unpack_to_dest_mode=UnpackToDestFp32 so
+    // transpose_tile preserves FP32 precision for the SFPU Welford.
+    // The final-stage sub_tiles_bcast_scalar reads c_0 / c_1 (Default SrcA path).
+    //
+    // Unlike the mcast / no_mcast groupnorm kernels, no separate
+    // welford_unpack_fp32_active flag is needed here. Both the TILIZE_IN and
+    // non-TILIZE_IN branches route the welford intake transpose through an alias
+    // CB (cb_in_welford_id or cb_in0_welford_id), so the unpack-to-DEST fp32
+    // path is active on both branches iff the alias is active. In the
+    // mcast/no_mcast kernels the TILIZE_IN branch tilizes directly into the
+    // unpack-fp32 CB without an alias, so those kernels need the unpack-fp32
+    // state and the alias gating to be tracked independently.
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    constexpr uint32_t cb_in_welford_id = get_named_compile_time_arg_val("cb_in_welford");
 
     // dst regs
     constexpr uint32_t dst0 = 0;
@@ -90,16 +104,18 @@ void kernel_main() {
     constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
-    experimental::CircularBuffer cb_beta(cb_beta_id);
-    experimental::CircularBuffer cb_eps(cb_eps_id);
-    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_gamma(cb_gamma_id);
-    experimental::CircularBuffer cb_in(cb_in_id);
-    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
-    experimental::CircularBuffer cb_x(cb_x_id);
-    experimental::CircularBuffer cb_xmm(cb_xmm_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_eps(cb_eps_id);
+    CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_in_welford(cb_in_welford_id);
+    CircularBuffer cb_in0_welford(cb_in0_welford_id);
+    CircularBuffer cb_input_mask(cb_input_mask_id);
+    CircularBuffer cb_x(cb_x_id);
+    CircularBuffer cb_xmm(cb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -125,6 +141,14 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     cb_in.wait_front(per_core_MN);
+    if constexpr (welford_fp32_alias) {
+        // Mirror the tilize push on the alias (c_31, shares SRAM with cb_in / c_1) so it tracks
+        // cb_in's state. Must be done in compute: the producer of cb_in is the
+        // tilize call above (a compute op), not the reader; the reader never writes cb_in.
+        cb_in_welford.reserve_back(per_core_MN);
+        cb_in_welford.push_back(per_core_MN);
+        cb_in_welford.wait_front(per_core_MN);
+    }
 #else
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
@@ -145,7 +169,17 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t tile_id = b * block_hw;
         cb_ex_partial.reserve_back(2);
-        transpose_wh_init(cb_in0_id, cb_ex_partial_id);
+        if constexpr (welford_fp32_alias) {
+            // Reconfigure the transpose op for the alias buffer index consumed by the
+            // welford loop below.
+#ifdef TILIZE_IN
+            transpose_init(cb_in_welford_id);
+#else
+            transpose_init(cb_in0_welford_id);
+#endif
+        } else {
+            transpose_init(cb_in0_id);
+        }
         tile_regs_acquire();
         welford_init();
 
@@ -175,12 +209,25 @@ void kernel_main() {
 
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
 #ifdef TILIZE_IN
-                transpose_wh_init_short(cb_in_id);
-                transpose_wh_tile(cb_in_id, tile_id, input_dst);
+                transpose_init(cb_in_welford_id);
+                transpose_tile(cb_in_welford_id, tile_id, input_dst);
 #else
-                transpose_wh_init_short(cb_in0_id);
-                transpose_wh_tile(cb_in0_id, tile_id, input_dst);
+                transpose_init(cb_in0_welford_id);
+                transpose_tile(cb_in0_welford_id, tile_id, input_dst);
 #endif
+
+                // Re-establish the welford SFPU replay buffer state. When transpose_tile
+                // takes the unpack-to-DEST fp32 path, transpose_tile calls
+                // llk_math_transpose_dest, whose math-side init records slots [16, 32) of
+                // the math-thread replay buffer, clobbering welford's LREG2 / LREG3 portions.
+                // Without welford_init<WelfordInitMode::PreserveStats>(), welford_update_rows would replay stale
+                // transpose-dest ops.
+                // When the unpack-to-DEST fp32 path is inactive, transpose_tile routes
+                // through SrcA without touching the math-thread replay buffer, so re-init is
+                // not needed.
+                if constexpr (welford_fp32_alias) {
+                    welford_init<WelfordInitMode::PreserveStats>();
+                }
 
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
@@ -238,8 +285,8 @@ void kernel_main() {
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        add_tiles_init(cb_ex_global_id, cb_eps_id);
         reconfig_data_format_srcb(cb_eps_id);
+        add_tiles_init(cb_ex_global_id, cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
             add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
@@ -284,8 +331,8 @@ void kernel_main() {
 
                     // // Now let us do the actual computation for the current group here
                     // // a. x-u
-                    sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
                     reconfig_data_format(cb_in0_id, cb_ex_global_id);
+                    sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
 
                     tile_regs_acquire();
 #ifdef TILIZE_IN
@@ -302,8 +349,8 @@ void kernel_main() {
                     const uint32_t mask_offset = g * block_w;
                     const uint32_t mask_index = mask_offset + block_w_index;
 
-                    mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
                     reconfig_data_format(cb_in0_id, cb_input_mask_id, cb_ex_global_id, cb_ex2pe_id);
+                    mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
                     tile_regs_acquire();
                     mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
                     tile_regs_commit();
@@ -314,8 +361,8 @@ void kernel_main() {
 
                     // // c. a * b
                     cb_xmm.wait_front(2);
-                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
                     reconfig_data_format(cb_input_mask_id, cb_xmm_id, cb_ex2pe_id, cb_xmm_id);
+                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
                     tile_regs_acquire();
                     mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
                     tile_regs_commit();
@@ -390,8 +437,8 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
-                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
                     reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
+                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
 
                     cb_x.wait_front(1);
                     tile_regs_acquire();
@@ -406,8 +453,8 @@ void kernel_main() {
                 }
 
                 if constexpr (do_beta) {
-                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
                     reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
+                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
 
                     cb_x.wait_front(1);
                     tile_regs_acquire();
@@ -422,8 +469,8 @@ void kernel_main() {
                 }
 
                 // Write out the final output
-                copy_tile_init(cb_x_id);
                 reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
+                copy_tile_init(cb_x_id);
 
                 cb_x.wait_front(1);
                 tile_regs_acquire();
@@ -435,7 +482,7 @@ void kernel_main() {
 #else
                 auto write_cb_id = cb_out0_id;
 #endif
-                experimental::CircularBuffer write_cb(write_cb_id);
+                CircularBuffer write_cb(write_cb_id);
                 write_cb.reserve_back(1);
                 tile_regs_wait();
                 pack_tile(dst0, write_cb_id);

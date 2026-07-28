@@ -154,6 +154,30 @@ run_tracy_case \
     "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_all_gather_preff1_3.py::test_ds_all_gather_preff1_3" \
     "program_cache and not no_program_cache and eager and prefill and 128"
 
+# MoE fused op
+run_tracy_case \
+    "moe decode seq1 (trace+pcache)" \
+    "DS_MOE_FORWARD_DEVICE_PERF" \
+    "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe.py::test_ds_moe_forward" \
+    "test_ds_moe_forward and decode and 1 and real_weights and trace and program_cache and not no_program_cache"
+run_tracy_case \
+    "moe prefill seq128 (eager+pcache)" \
+    "DS_MOE_FORWARD_DEVICE_PERF" \
+    "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe.py::test_ds_moe_forward" \
+    "test_ds_moe_forward and prefill and 128 and real_weights and eager and program_cache and not no_program_cache"
+
+# MLA fused op
+run_tracy_case \
+    "mla decode seq1 (trace+pcache)" \
+    "DS_MLA_FORWARD_DEVICE_PERF" \
+    "models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_ds_mla.py::test_ds_mla_forward" \
+    "test_ds_mla_forward and decode and 1 and real_weights and trace and program_cache and not no_program_cache"
+run_tracy_case \
+    "mla prefill seq128 (eager+pcache)" \
+    "DS_MLA_FORWARD_DEVICE_PERF" \
+    "models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_ds_mla.py::test_ds_mla_forward" \
+    "test_ds_mla_forward and prefill and 128 and real_weights and eager and program_cache and not no_program_cache"
+
 echo ""
 echo "=============================================="
 echo "All direct Tracy fused-op perf cases completed"

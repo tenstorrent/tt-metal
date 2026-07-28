@@ -6,9 +6,10 @@ import ast
 import json
 import os
 import pathlib
+import re
 from abc import ABC, abstractmethod
 
-from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
+from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix, strip_mesh_suffix
 from .matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     SUPPORTED_VECTOR_GROUPING_MODES,
@@ -111,8 +112,19 @@ class VectorExportSource(VectorSource):
 
     def __init__(self, export_dir: pathlib.Path | None = None):
         if export_dir is None:
-            # Default to vectors_export directory relative to this file
-            self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
+            # Honor TTNN_VECTORS_EXPORT_DIR env var so the two-pass workflow
+            # can point at vectors_export_col / vectors_export_row without
+            # needing a new --vector-source arg-parser choice.
+            import os as _os
+
+            _env_dir = _os.environ.get("TTNN_VECTORS_EXPORT_DIR", "").strip()
+            if _env_dir:
+                self.export_dir = pathlib.Path(_env_dir)
+                if not self.export_dir.is_absolute():
+                    self.export_dir = pathlib.Path(__file__).parent.parent / self.export_dir.name
+            else:
+                # Default to vectors_export directory relative to this file
+                self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
         self._cached_generation_manifest = None
@@ -190,11 +202,17 @@ class VectorExportSource(VectorSource):
 
     @staticmethod
     def _get_grouping_kind(module_name: str) -> str | None:
-        """Classify a manifest module name by shared suffix parsing rules."""
+        """Classify a manifest module name by shared suffix parsing rules.
+        When both hw and mesh suffixes are present (e.g. .hw_..._1c.mesh_4x8),
+        return 'hw' since that is the primary grouping mode. The mesh suffix
+        is a sub-grouping within the hw group.
+        """
+        # Check hw first: strip_mesh_suffix removes .mesh_NxM so parse_hardware_suffix
+        # can find the .hw_ pattern that was hidden behind the mesh suffix.
+        if parse_hardware_suffix(strip_mesh_suffix(module_name)) is not None:
+            return "hw"
         if parse_mesh_suffix(module_name) is not None:
             return "mesh"
-        if parse_hardware_suffix(module_name) is not None:
-            return "hw"
         return None
 
     def _manifest_entry_matches_module(
@@ -271,7 +289,11 @@ class VectorExportSource(VectorSource):
         if not board_type or not device_series or not isinstance(card_count, int):
             return None
 
-        return (str(board_type).lower(), str(device_series).lower(), card_count)
+        return (
+            re.sub(r"[^a-z0-9]+", "_", str(board_type).lower()).strip("_"),
+            re.sub(r"[^a-z0-9]+", "_", str(device_series).lower()).strip("_"),
+            card_count,
+        )
 
     @staticmethod
     def _normalize_traced_machine_entries(vector_data: dict) -> list[dict]:
@@ -326,8 +348,8 @@ class VectorExportSource(VectorSource):
         if not board_type and not device_series and card_count is None:
             return None
 
-        normalized_board = str(board_type).lower() if board_type else None
-        normalized_series = str(device_series).lower() if device_series else None
+        normalized_board = re.sub(r"[^a-z0-9]+", "_", str(board_type).lower()).strip("_") if board_type else None
+        normalized_series = re.sub(r"[^a-z0-9]+", "_", str(device_series).lower()).strip("_") if device_series else None
         normalized_cards = card_count if isinstance(card_count, int) else None
         return (normalized_board, normalized_series, normalized_cards)
 
@@ -511,7 +533,11 @@ class VectorExportSource(VectorSource):
                 "but no owned mesh shapes were configured for that lane."
             )
 
-        hardware_rules = capability_profile.get("hardware_rules", ())
+        # capability_profile is None when no TEST_GROUP_NAME is set and none can be
+        # inferred from the machine (common for local single-/sub-mesh runs); guard
+        # so vector loading degrades to "no hardware rules" instead of crashing with
+        # AttributeError on None.
+        hardware_rules = (capability_profile or {}).get("hardware_rules", ())
         if filter_policy["enforce_hardware_capability"] and not hardware_rules:
             logger.warning(
                 f"Manifest grouping mode is 'hw' for module '{module_name}', but no hardware capability profile "
@@ -578,6 +604,20 @@ class VectorExportSource(VectorSource):
                                         f"test_group_name='{test_group_name}'"
                                     )
                                     machine_mismatch_count += 1
+                                    continue
+
+                            # Explicit MESH_DEVICE_SHAPE filter: when set by mesh-split
+                            # batches, reject vectors whose traced mesh doesn't match.
+                            _mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+                            if _mesh_env and "x" in _mesh_env and traced_machine_entries:
+                                _target = tuple(int(x) for x in _mesh_env.split("x"))
+                                _has_mesh_match = any(
+                                    tuple(e.get("mesh_device_shape", [])) == _target
+                                    for e in traced_machine_entries
+                                    if isinstance(e.get("mesh_device_shape"), (list, tuple))
+                                )
+                                if not _has_mesh_match:
+                                    filtered_count += 1
                                     continue
 
                             # Apply mesh filtering when manifest grouping mode says ownership is by mesh.

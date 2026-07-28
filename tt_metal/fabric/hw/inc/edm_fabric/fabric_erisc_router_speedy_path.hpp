@@ -5,21 +5,38 @@
 #pragma once
 
 // This header provides amortized credit-passing "speedy" step functions for the
-// fabric erisc router.  They are only used when super_speedy_mode == true
-// (single sender channel with non-zero amortization frequencies).
+// fabric erisc router. They are only used when super_speedy_mode == true
+// for the explicit VC0 worker-only fast path.
 //
 // Must be included AFTER fabric_erisc_router_ct_args.hpp and all other router
 // headers that define helpers such as send_next_data, send_credits_to_upstream_workers,
 // receiver_send_completion_ack, receiver_send_received_ack, etc.
 
+static constexpr bool speedy_mode_has_non_worker_vc0_sender = []() constexpr {
+    for (size_t ch = 1; ch < ACTUAL_VC0_SENDER_CHANNELS; ++ch) {
+        if (is_sender_channel_serviced[ch]) {
+            return true;
+        }
+    }
+    return false;
+}();
+
 static_assert(
     !super_speedy_mode || !enable_deadlock_avoidance,
     "super_speedy_mode is incompatible with deadlock avoidance (bubble flow control)");
-static_assert(!super_speedy_mode || NUM_SENDER_CHANNELS == 1, "super_speedy_mode requires exactly 1 sender channel");
+static_assert(
+    !super_speedy_mode || !ENABLE_FIRST_LEVEL_ACK_VC0, "super_speedy_mode is incompatible with first-level ack on VC0");
+static_assert(
+    !super_speedy_mode || !speedy_mode_has_non_worker_vc0_sender,
+    "super_speedy_mode requires all serviced VC0 senders beyond channel 0 to be trimmed");
+static_assert(
+    !super_speedy_mode || !is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL] || disable_rx_ch0_forwarding,
+    "super_speedy_mode requires RX channel 0 forwarding to be disabled when RX0 is serviced");
 
 struct SpeedySenderState {
     size_t completion_count = 0;
     uint32_t sender_amort_counter = 0;
+    uint32_t connection_liveness_check_counter = 0;
 };
 
 template <size_t VC_ID>
@@ -74,6 +91,7 @@ template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
     size_t SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL,
+    bool MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER,
     typename SenderChannelT,
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
@@ -170,6 +188,32 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             local_sender_channel_worker_interface, sender_state.completion_count, channel_connection_established);
         sender_state.sender_amort_counter -= sender_state.completion_count;
         sender_state.completion_count = 0;
+    }
+
+    if constexpr (MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER) {
+        // Speedy sender service cadence is still decoupled from the credit
+        // amortization cadence. A period of N gives a 1:N liveness polling
+        // ratio for the helper-managed VC0 path.
+        static constexpr uint32_t speedy_connection_liveness_check_period = 1;
+        static_assert(speedy_connection_liveness_check_period > 0);
+
+        sender_state.connection_liveness_check_counter++;
+        const bool reached_liveness_poll_period =
+            sender_state.connection_liveness_check_counter >= speedy_connection_liveness_check_period;
+        if (reached_liveness_poll_period) {
+            // Reset on the scheduled poll boundary so the cadence stays exact
+            // even when there is no open/close transition to process.
+            sender_state.connection_liveness_check_counter = 0;
+
+            auto check_connection_status =
+                !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
+            if (check_connection_status) {
+                check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+                    local_sender_channel_worker_interface,
+                    channel_connection_established,
+                    sender_channel_free_slots_stream_id);
+            }
+        }
     }
     return progress;
 }

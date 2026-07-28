@@ -38,7 +38,7 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
 
     TT_FATAL(rank >= 2, "Expected input tensor to be of at least rank 2");
 
-    ttnn::SmallVector<uint32_t> shape_vec(padded_shape.cbegin(), padded_shape.cend());
+    ttsl::SmallVector<uint32_t> shape_vec(padded_shape.cbegin(), padded_shape.cend());
     if (layout == Layout::TILE) {
         const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
         auto tile_shape_it = tile_shape.crbegin();
@@ -50,15 +50,6 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
 
     auto end_it = shape_vec.crend();
     return (dim_it == end_it) ? rank : end_it - dim_it - 1;  // forward index
-}
-
-// True 2D mesh when both mesh axes have more than one device.
-bool is_true_2d_mesh(const ttnn::Tensor& input_tensor, tt::tt_fabric::Topology topology) {
-    if (topology != tt::tt_fabric::Topology::Mesh && topology != tt::tt_fabric::Topology::Torus) {
-        return false;
-    }
-    const auto mesh_shape = input_tensor.device()->shape();
-    return mesh_shape.dims() >= 2 && mesh_shape[0] > 1 && mesh_shape[1] > 1;
 }
 }  // namespace detail
 
@@ -123,7 +114,7 @@ Tensor local_sum_float32(
         input_tensor = ttnn::to_layout(gathered_tensor, Layout::TILE);
     }
 
-    ttnn::SmallVector<uint32_t> reshape_dims_vec;
+    ttsl::SmallVector<uint32_t> reshape_dims_vec;
     for (int i = 0; i < rank; ++i) {
         if (i == reduce_dim) {
             reshape_dims_vec.push_back(num_devices);
@@ -178,8 +169,7 @@ ttnn::Tensor all_reduce_async(
 
     const auto& initial_shape = input_tensor.logical_shape();
     auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
-    bool composite_all_gather =
-        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
+    bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, std::nullopt);
 
@@ -189,23 +179,19 @@ ttnn::Tensor all_reduce_async(
     const bool change_mem_config = input_is_sharded;
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
-            ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
         interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
     // .value_or() returns by value, .value() returns by reference
     const ttnn::Tensor& working_input_tensor =
         interleaved_input_tensor.has_value() ? interleaved_input_tensor.value() : input_tensor;
 
-    const bool composite_for_2d_mesh =
-        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
-        ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology);
-
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         // All reduce = all gather + local reduce
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
 
         // Reshape (B, C, H, W) -> (1, B, C, H, W)
-        ttnn::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
+        ttsl::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
         ag_shape_vec[0] = 1;
         std::copy(initial_shape.cbegin(), initial_shape.cend(), ag_shape_vec.begin() + 1);
         auto reshaped_tensor = ttnn::reshape(working_input_tensor, ttnn::Shape(ag_shape_vec));
@@ -215,10 +201,13 @@ ttnn::Tensor all_reduce_async(
 
         // AllGather (1, B, C, H, W) -> (num_devices, B, C, H, W)
         composite_dim = 0;
+        // TODO(#30798): pass topology=nullopt for best perf (there's multiple places in this file).
+        // Needs to be verified.
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
             resolved_num_links,
+            ttnn::ccl::Topology::Linear,
             out_memory_config,
             worker_subdevice_id_opt,
             std::nullopt);
@@ -311,7 +300,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<ttnn::Tensor> interleaved_input_tensor;
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
-            ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
         interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
     // .value_or() returns by value, .value() returns by reference
@@ -320,20 +309,15 @@ ttnn::Tensor all_reduce_async(
 
     // Logic for taking the AG+local reduce code path
     auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
-    bool composite_all_gather =
-        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
+    bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, cluster_axis);
-    const bool composite_for_2d_mesh =
-        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
-        ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology_);
-
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         // All reduce = all gather + local reduce
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
 
         // Reshape (B, C, H, W) -> (1, B, C, H, W)
-        ttnn::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
+        ttsl::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
         ag_shape_vec[0] = 1;
         std::copy(initial_shape.cbegin(), initial_shape.cend(), ag_shape_vec.begin() + 1);
         auto reshaped_tensor = ttnn::reshape(working_input_tensor, ttnn::Shape(ag_shape_vec));
@@ -347,6 +331,7 @@ ttnn::Tensor all_reduce_async(
             reshaped_tensor,
             composite_dim,
             resolved_num_links,
+            ttnn::ccl::Topology::Linear,
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             worker_subdevice_id_opt,
             cluster_axis);
@@ -427,14 +412,7 @@ ttnn::Tensor all_reduce_async(
             /*mesh_device*/ &mesh_device);
     } else {
         gathered = ttnn::all_gather(
-            scattered_tensor,
-            dim,
-            cluster_axis,
-            worker_subdevice_id_opt,
-            out_memory_config,
-            std::nullopt,
-            num_preferred_links,
-            topology_);
+            scattered_tensor, dim, cluster_axis, out_memory_config, std::nullopt, worker_subdevice_id_opt);
     }
     scattered_tensor.deallocate();
 

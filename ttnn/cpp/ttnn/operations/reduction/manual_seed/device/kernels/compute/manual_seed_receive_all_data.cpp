@@ -5,6 +5,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/rand.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
@@ -17,17 +18,18 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_tile = 1;
 
+    CircularBuffer kernel_communication_cb(kernel_communication_cb_index);
+
     // Get message from reader
-    cb_wait_front(kernel_communication_cb_index, one_tile);
+    kernel_communication_cb.wait_front(one_tile);
 
     // Read core ID from message
-    const uint32_t message_core_id =
-        read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/0);
+    const uint32_t message_core_id = kernel_communication_cb.read_tile_value(/*tile_index=*/0, /*element_offset=*/0);
     const bool is_core_id = (message_core_id != 0) ? true : false;
 
     if (is_core_id) {
         // Read seed from message
-        const uint32_t seed = read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/1);
+        const uint32_t seed = kernel_communication_cb.read_tile_value(/*tile_index=*/0, /*element_offset=*/1);
 
         // A seed value of UINT32_MAX (0xFFFFFFFF) is a special value
         // that skips rand_tile_init, leaving the PRNG state unchanged.
@@ -37,5 +39,5 @@ void kernel_main() {
     }
 
     // Pop the communication entry
-    cb_pop_front(kernel_communication_cb_index, one_tile);
+    kernel_communication_cb.pop_front(one_tile);
 }

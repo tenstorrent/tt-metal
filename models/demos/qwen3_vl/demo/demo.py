@@ -16,16 +16,19 @@ import ttnn
 from models.common.sampling import SamplingParams
 from models.demos.qwen3_vl.tt.common import (
     PagedAttentionConfig,
+    get_hf_visual,
     get_pad_embedding,
-    merge_vision_tokens_ttnn,
-    multimodal_rope_from_hf,
-    preprocess_inputs_prefill_ttnn,
+    merge_vision_tokens_single_user_ttnn,
+    multimodal_rope_single_user_from_hf,
+    preprocess_inputs_prefill_single_user_ttnn,
     sample_host,
 )
 from models.demos.qwen3_vl.tt.generator import Generator
 from models.demos.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
@@ -106,7 +109,7 @@ def create_tt_model(
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/qwen3_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             4096,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -119,7 +122,7 @@ def create_tt_model(
         (  # Batch-32 run (Throughput) - 32 users, small prompts
             "models/demos/qwen3_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
+            2,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
             32,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -145,7 +148,7 @@ def create_tt_model(
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
             "models/demos/qwen3_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
+            2,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -158,7 +161,7 @@ def create_tt_model(
         (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             16384,  # max_seq_len, allow for image tokens
             4,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -171,7 +174,7 @@ def create_tt_model(
         (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             32768,  # max_seq_len, allow for image tokens
             2,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -184,7 +187,7 @@ def create_tt_model(
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             65536,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -197,7 +200,7 @@ def create_tt_model(
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            2,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             131072,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
@@ -230,13 +233,13 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 28467200, "num_command_queues": 1}],
+    [{"fabric_config": True, TRACE_MODEL_KEY_PARAM: "qwen3-vl", "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -382,9 +385,11 @@ def test_demo(
             optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
+        visual_model = DropInVisionTransformer(
+            get_hf_visual(reference_model), vision_model_args, debug=False
+        )  # show PCC
     else:
-        visual_model = reference_model.visual
+        visual_model = get_hf_visual(reference_model)
     processor = AutoProcessor.from_pretrained(ref_model_name)
     num_tokens_generated_decode = []
     num_image_tokens = []
@@ -417,108 +422,171 @@ def test_demo(
             # text-only
             num_image_tokens.append([0] * batch_size)
 
-        # Vision prefill
-        logger.info(f"Vision model prefill batch {batch_idx}")
-        if not vision_model_traced:
-            image_embeds, deepstack_visual_embeds = (
-                visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-                if "pixel_values" in inputs
-                else (torch.tensor([], dtype=torch.bfloat16), None)
-            )
-            vision_model_traced = True
-        profiler.start(f"vision_model_prefill", iteration=batch_idx)
-        image_embeds, deepstack_visual_embeds = (
-            visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-            if "pixel_values" in inputs
-            else (
-                ttnn.from_torch(
-                    torch.tensor([], dtype=torch.bfloat16), device=model_args.mesh_device, dtype=ttnn.bfloat16
-                ),
-                None,
-            )
-        )
-        profiler.end(f"vision_model_prefill", iteration=batch_idx)
-
-        # Prepare text + vision inputs for decoder model
-        logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
-        # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
-        text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        text_embeds_tt = ttnn.from_torch(
-            text_embeds,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                model_args.mesh_device, dims=(None, 2), mesh_shape=model_args.cluster_shape
-            ),
-        )
-        input_embeds, deepstack_visual_embeds = merge_vision_tokens_ttnn(
-            inputs.input_ids,
-            text_embeds_tt,
-            image_embeds,
-            reference_model.config,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-            model_args=model_args,
-        )
+        # Single loop over users: vision → text embed → merge → preprocess → prefill
+        # This reduces memory pressure by processing and deallocating each user's data before moving to next
         pad_token_id = tokenizer.pad_token_id
-        max_prompt_len = max(x.shape[0] for x in input_embeds)
-        assert (
-            model_args.max_seq_len >= max_prompt_len + max_generated_tokens
-        ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({max_prompt_len}) + max generated tokens ({max_generated_tokens})"
         pad_embedding_tt = get_pad_embedding(reference_model, pad_token_id, model_args)
-        (
-            input_prefill_pt,
-            deepstack_visual_embeds,
-            decoding_pos,  # Position where decoding should start for each user
-            prefill_lens,
-        ) = preprocess_inputs_prefill_ttnn(
-            input_embeds,
-            model_args,
-            inputs.attention_mask,
-            pad_embedding=pad_embedding_tt,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-        )
-        # Get user-specific rotary position embeddings
-        cos, sin, rope_deltas = multimodal_rope_from_hf(inputs, reference_model, model_args, pad_token_id=pad_token_id)
+
+        # Check if we have images
+        has_images = "pixel_values" in inputs
+
+        # Track pixel value offset for extracting per-user images
+        pixel_offset = 0
+
+        # Output storage
+        output_logits = torch.zeros(batch_size, 1, model_args.vocab_size)
+        all_decoding_pos = []
+        all_prefill_lens = []
+        all_rope_deltas = []
+
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
-        # [INFO] prefill_forward_text is read-only of the cos/sin matrices
-        logits = generator.prefill_forward_text(
-            ttnn.unsqueeze(input_prefill_pt[0], 0),  # Just warmup prefill for 1 user
-            rot_mats=(cos, sin),
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
+        # Single loop: process each user completely before moving to next
+        profiler.start("inference_prefill", iteration=batch_idx)
+        for user_id in range(batch_size):
+            logger.info(f"Processing user {user_id + 1}/{batch_size} for batch {batch_idx}")
 
-        logger.info(f"Starting prefill...")
-        profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_prefill_pt,
-            rot_mats=(cos, sin),
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-        )
-        # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
-        generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
-        # torch.save(logits, f"ttnn_logits.pt")
-        prefilled_token = torch.argmax(logits, dim=-1)
-        profiler.end(f"inference_prefill", iteration=batch_idx)
-        logger.info(f"Prefill finished")
+            # Get this user's input_ids and attention_mask
+            user_input_ids = inputs.input_ids[user_id]
+            user_attention_mask = inputs.attention_mask[user_id]
+
+            # === VISION MODEL ===
+            profiler.start(f"vision_model_prefill_user_{user_id}", iteration=batch_idx)
+            if has_images and image_inputs and user_id < len(image_inputs) and image_inputs[user_id] is not None:
+                # Get this user's grid_thw
+                user_grid_thw = inputs.image_grid_thw[user_id]
+
+                # Calculate number of pixels for this user's image
+                num_pixels = user_grid_thw.prod().item()
+
+                # Extract this user's pixel_values
+                user_pixel_values = inputs.pixel_values[pixel_offset : pixel_offset + num_pixels]
+                pixel_offset += num_pixels
+
+                # Warmup vision model on first user of first batch
+                if not vision_model_traced:
+                    _ = visual_model.forward_single_user(user_pixel_values, grid_thw=user_grid_thw)
+                    vision_model_traced = True
+
+                # Run vision model for this single user
+                image_embeds, deepstack_visual_embeds = visual_model.forward_single_user(
+                    user_pixel_values, grid_thw=user_grid_thw
+                )
+            else:
+                # Text-only user
+                image_embeds = ttnn.from_torch(
+                    torch.tensor([], dtype=torch.bfloat16), device=model_args.mesh_device, dtype=ttnn.bfloat16
+                )
+                deepstack_visual_embeds = None
+                user_grid_thw = None
+            profiler.end(f"vision_model_prefill_user_{user_id}", iteration=batch_idx)
+
+            # === TEXT EMBEDDINGS ===
+            user_text_embeds = reference_model.model.language_model.embed_tokens(user_input_ids.unsqueeze(0))
+            user_text_embeds_tt = ttnn.from_torch(
+                user_text_embeds.squeeze(0),  # Remove batch dim for single-user processing
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    model_args.mesh_device, dims=(None, 1), mesh_shape=model_args.cluster_shape
+                ),
+            )
+
+            # === MERGE VISION TOKENS ===
+            input_embeds, deepstack_visual_embeds = merge_vision_tokens_single_user_ttnn(
+                user_input_ids,
+                user_text_embeds_tt,
+                image_embeds,
+                reference_model.config,
+                deepstack_visual_embeds,
+                model_args,
+            )
+            ttnn.deallocate(user_text_embeds_tt)
+            ttnn.deallocate(image_embeds)
+
+            # === PREPROCESS ===
+            (
+                input_prefill,
+                deepstack_visual_embeds_processed,
+                decoding_pos,
+                prefill_len,
+            ) = preprocess_inputs_prefill_single_user_ttnn(
+                input_embeds,
+                model_args,
+                user_attention_mask,
+                pad_embedding=pad_embedding_tt,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+            )
+
+            # Store decoding position and prefill length
+            all_decoding_pos.append(decoding_pos)
+            all_prefill_lens.append(prefill_len)
+
+            # === COMPUTE ROPE ===
+            cos, sin, rope_deltas = multimodal_rope_single_user_from_hf(
+                user_input_ids,
+                user_grid_thw.unsqueeze(0) if user_grid_thw is not None else None,
+                reference_model,
+                model_args,
+                pad_token_id=pad_token_id,
+            )
+            all_rope_deltas.append(rope_deltas)
+
+            # === PREFILL ===
+            # Get page table for this user
+            if page_table is not None:
+                page_table_user = generator._ttt_generator._get_prefill_user_page_table(
+                    page_table, tt_kv_cache, decoding_pos
+                )
+            else:
+                page_table_user = None
+
+            # Run prefill for this user (timed per-user)
+            profiler.start(f"inference_prefill_user_{user_id}", iteration=batch_idx)
+            logits = generator.prefill_forward_single_user_text(
+                ttnn.unsqueeze(input_prefill, 0),
+                page_table=page_table_user,
+                user_id=user_id,
+                last_token_idx=decoding_pos - 1,
+                rot_mats=(cos, sin),
+                kv_cache=tt_kv_cache,
+                deepstack_visual_embeds=deepstack_visual_embeds_processed,
+            )
+            profiler.end(f"inference_prefill_user_{user_id}", iteration=batch_idx)
+            output_logits[user_id] = logits
+
+            # === DEALLOCATE === (free memory before next user)
+            ttnn.deallocate(input_prefill)
+            if deepstack_visual_embeds_processed is not None:
+                for dsve in deepstack_visual_embeds_processed:
+                    ttnn.deallocate(dsve)
+        profiler.end("inference_prefill", iteration=batch_idx)
+
+        # Update rope deltas for decode
+        generator.update_rope_deltas([rd.squeeze(0).item() for rd in all_rope_deltas])
+        prefilled_token = torch.argmax(output_logits, dim=-1)
+
+        # Use the per-user results for decoding
+        decoding_pos = all_decoding_pos
+        prefill_lens = all_prefill_lens
+
+        # Deallocate pad embedding
+        ttnn.deallocate(pad_embedding_tt)
+        logger.info(f"Prefill finished for all {batch_size} users")
 
         # Initial positions continuing from prefill, no need to offset by rope_deltas
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        # Diagnostic A/B toggle (#48037). The actual gibberish fix is on the model side
+        # (Transformer in tt/model.py: force-argmax sampling path + always-refresh + eager sampling),
+        # which keeps on-device sampling. Setting TT_QWEN_FORCE_HOST_SAMPLING=1 forces host argmax
+        # instead: a known-good reference (correct output) but slower (per-step logits read-back),
+        # useful to compare against the on-device path locally.
+        force_host_sampling = os.environ.get("TT_QWEN_FORCE_HOST_SAMPLING", "0") == "1"
+        argmax_on_device = model._supports_on_device_sampling and not force_host_sampling
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -568,6 +636,9 @@ def test_demo(
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
+                # Normalize to the device-path feedback shape [batch, 1] so the next decode_forward and
+                # the out_tok[user].item() reads below behave identically to the on-device path.
+                out_tok = out_tok.reshape(batch_size, 1)
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
@@ -663,7 +734,22 @@ def test_demo(
 
     if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
+        import bert_score.utils as _bert_score_utils
         from bert_score import score as bert_score
+
+        # transformers 5.x leaves some tokenizers' model_max_length at the VERY_LARGE_INTEGER sentinel
+        # (~1e30); bert_score forwards it straight into the fast tokenizer's truncation, which overflows
+        # the Rust usize ("OverflowError: int too big to convert"). Clamp to the model's real limit so the
+        # metric runs (deberta-xlarge-mnli supports 512 positions; demo outputs are far shorter, so this
+        # never actually truncates).
+        _orig_sent_encode = _bert_score_utils.sent_encode
+
+        def _sent_encode_clamped(tokenizer, sent):
+            if getattr(tokenizer, "model_max_length", 0) and tokenizer.model_max_length > 1_000_000:
+                tokenizer.model_max_length = 512
+            return _orig_sent_encode(tokenizer, sent)
+
+        _bert_score_utils.sent_encode = _sent_encode_clamped
 
         candidates = text_outputs_all_users_all_batches
         references = [expected_output] * len(candidates)
@@ -684,28 +770,33 @@ def test_demo(
         assert F10.mean().item() > 0.70, f"BERTScore F1 (raw) is lower than expected."
 
     # Prepare profile benchmark metrics for the last repeat batch only -- batch_idx'th batch
-    compile_prefill_time = profiler.get_duration("compile_prefill", iteration=batch_idx)
     compile_decode_time = profiler.get_duration("compile_decode", iteration=batch_idx)
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill", iteration=batch_idx)
+    # Sum up per-user prefill times (excludes vision model time)
+    total_inference_prefill_time = sum(
+        profiler.get_duration(f"inference_prefill_user_{i}", iteration=batch_idx) for i in range(batch_size)
+    )
     total_inference_decode_time = 0
     for i in range(1, iteration):  # i == 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
 
-    # Average prefill time for each user
-    avg_time_to_first_token = total_inference_prefill_time / batch_size
+    # Average prefill time for each user (text prefill only, excludes vision)
+    avg_time_to_first_token = total_inference_prefill_time / (batch_size)
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * batch_size
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * (batch_size)
     decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
     decode_tok_s = (
         (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
     )  # Remove the compile time
 
-    vision_model_time = profiler.get_duration("vision_model_prefill", iteration=batch_idx)
+    # Sum up per-user vision model times
+    vision_model_time = sum(
+        profiler.get_duration(f"vision_model_prefill_user_{i}", iteration=batch_idx) for i in range(batch_size)
+    )
     vision_model_time_per_user = vision_model_time / batch_size
-    vision_model_t_s = sum(num_image_tokens[0]) / vision_model_time
+    vision_model_t_s = sum(num_image_tokens[0]) / vision_model_time if vision_model_time > 0 else 0
     vision_model_t_u_s = vision_model_t_s / batch_size
 
     measurements = {
@@ -713,16 +804,15 @@ def test_demo(
         "vision_model_prefill": vision_model_time,
         "vision_model_prefill time per user": vision_model_time_per_user,
         "vision_model_prefill time per user per token": vision_model_t_u_s,
-        "compile_prefill": compile_prefill_time,
         "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
+        "inference_prefill time per user": avg_time_to_first_token,
         "inference_decode": total_inference_decode_time,
         "prefill_time_to_token": avg_time_to_first_token,
         "prefill_t/s": prefill_tok_s,  # tokens/s
         "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
         "decode_t/s": decode_tok_s,  # tokens/s
         # Optional measurements
-        "Total compile time": compile_prefill_time + compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),
     }
 
@@ -761,7 +851,6 @@ def test_demo(
 
     # Print some of the perf metrics
     logger.info("==")
-    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
     logger.info(f"Vision model prefill time: {round(vision_model_time, 2)}s")
@@ -774,30 +863,28 @@ def test_demo(
         f"Text model average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    # Benchmark targets
-    supported_models = []
-    supported_devices = []
-
     tt_device_name = model_args.device_name
-
-    if model_args.base_model_name in supported_models:
-        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        # Set the target times to first token for every combination of device and model
-        target_prefill_tok_s = {}[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        # Set the target decode timesfor every combination of device and model
-        target_decode_tok_s_u = {}[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
+    resolved_perf_targets = resolve_perf_targets(
+        model_name=model_args.base_model_name,
+        sku=tt_device_name,
+        batch_size=batch_size,
+        seq_len=max(prefill_lens),
+    )
+    targets = {}
+    if resolved_perf_targets:
+        if resolved_perf_targets.get("prefill_t/s") is not None:
+            targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
+        if resolved_perf_targets.get("decode_t/s/u") is not None:
+            targets["decode_t/s/u"] = float(resolved_perf_targets["decode_t/s/u"])
+        if resolved_perf_targets.get("decode_t/s") is not None:
+            targets["decode_t/s"] = float(resolved_perf_targets["decode_t/s"])
+        elif "decode_t/s/u" in targets:
+            targets["decode_t/s"] = targets["decode_t/s/u"] * batch_size
     else:
-        logger.warning(f"Model {model_args.base_model_name} not does not have performance targets set")
-        targets = {}
+        logger.warning(
+            f"No centralized perf targets for model={model_args.base_model_name}, sku={tt_device_name}, "
+            f"batch={batch_size}, seq_len={max(prefill_lens)}"
+        )
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
@@ -833,15 +920,25 @@ def test_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
+            run_type="demo_perf",
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args.n_layers,
             batch_size=batch_size,
             config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
+        if targets:
+            verify_perf(
+                measurements,
+                expected_measurements={k: True for k in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if k in targets},
+                model_name=model_args.base_model_name,
+                sku=tt_device_name,
+                batch_size=batch_size,
+                seq_len=max(prefill_lens),
+            )
 
 
 def load_inputs(input_file, batch_size):

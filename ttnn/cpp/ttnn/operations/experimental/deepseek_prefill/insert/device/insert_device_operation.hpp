@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::insert {
 struct InsertDeviceOperation {
     using operation_attributes_t = InsertParams;
     using tensor_args_t = InsertInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<InsertProgramFactory>;
 
@@ -37,6 +37,7 @@ ttnn::Tensor prefill_insert(
     const ttnn::Tensor& local_tensor,
     const ttnn::Tensor& start,
     const ttnn::Tensor& counts,
-    uint32_t global_expert_id);
+    const ttnn::Tensor& global_expert_idx_table,
+    uint32_t local_expert_id);
 
 }  // namespace ttnn::prim

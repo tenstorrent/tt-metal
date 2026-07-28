@@ -6,8 +6,8 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
@@ -15,6 +15,10 @@ from fuser.fuser_config import GlobalConfig
 
 class ReduceUnpacker(Unpacker):
     loop: FusedLoop = LoopTileByTile()
+
+    def __init__(self, reduce_dim, reduce_pool):
+        self.reduce_dim = reduce_dim
+        self.reduce_pool = reduce_pool
 
     def get_headers(self) -> List[str]:
         return [
@@ -30,7 +34,7 @@ class ReduceUnpacker(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b
 
@@ -38,11 +42,11 @@ class ReduceUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.num_faces
-        face_r_dim = operation.face_r_dim
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         return (
             f"_perf_unpack_loop_set_valid<false, true>(1);\n"
             f"_perf_unpack_loop_set_valid<true, false>({face_r_dim * num_faces});\n"
@@ -52,11 +56,11 @@ class ReduceUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.num_faces
-        face_r_dim = operation.face_r_dim
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         return (
             f"_perf_math_loop_clear_valid<false, true>(1);\n"
             f"_perf_math_loop_clear_valid<true, false>({face_r_dim * num_faces});\n"
@@ -66,31 +70,25 @@ class ReduceUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        reduce_dim = compute_unit.reduce_dim.cpp_enum_value
-        pool_type = compute_unit.reduce_pool.cpp_enum_value
-
-        tile_shape = operation.src_a.tile_shape
-        tensor_shape_instantiation: str = (
-            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        )
-
+        reduce_dim = self.reduce_dim.cpp_enum_value
+        pool_type = self.reduce_pool.cpp_enum_value
         return (
             f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}>(\n"
-            f"{tensor_shape_instantiation});\n"
+            f"{compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 
     def unpack(
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
-
-        reduce_dim = compute_unit.reduce_dim.cpp_enum_value
-        pool_type = compute_unit.reduce_pool.cpp_enum_value
-        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS(buffer_A{stage}[{block.tile_id_global}]), L1_ADDRESS(buffer_B{stage}[{block.tile_id_global}]));\n"
+        buffer_a = compute_unit.src_a.cpp_name
+        buffer_b = compute_unit.src_b.cpp_name
+        reduce_dim = self.reduce_dim.cpp_enum_value
+        pool_type = self.reduce_pool.cpp_enum_value
+        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"

@@ -6,10 +6,10 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_sfpu import Sfpu
 from fuser.fuser_config import GlobalConfig
+from fuser.sfpu_node import SfpuNode
 from helpers.golden_generators import (
     UnarySFPUGolden,
     get_golden_generator,
@@ -53,12 +53,12 @@ class UnarySfpu(Sfpu):
         tensor: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        format_input = operation.src_a.data_format
-        format_output = operation.output.data_format
+        format_input = config.sentinel.golden_math_format
+        format_output = config.sentinel.golden_math_format
         dest_acc = config.dest_acc
 
         generate_sfpu_golden = get_golden_generator(UnarySFPUGolden)
@@ -80,21 +80,7 @@ class UnarySfpu(Sfpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
-        block: BlockData,
-    ) -> str:
-        stage = operation.stage_id
-
-        return (
-            f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
-            f"    _llk_math_eltwise_unary_sfpu_init_<SfpuType::{self.operation.cpp_enum_value}>();\n"
-        )
-
-    def calculate(
-        self,
-        operation: FusedOperation,
-        config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
@@ -103,9 +89,27 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
-            f"    _llk_math_eltwise_unary_sfpu_start_<dest_sync{stage}>({self.dest_idx});\n"
-            f"    test_utils::call_sfpu_operation<{approx_mode}, {dest_acc}, {self.iterations}>({op}, math_format{stage}, {self.fill_const_value});\n"
-            f"    _llk_math_eltwise_unary_sfpu_done_();\n"
+            f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
+            f"    test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>();\n"
+        )
+
+    def calculate(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: SfpuNode,
+        block: BlockData,
+    ) -> str:
+        dest_sync = operation.dest_sync.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
+        op = f"SfpuType::{self.operation.cpp_enum_value}"
+
+        return (
+            f"    test_utils::call_unary_sfpu_operation<"
+            f"{dest_sync}, {dest_acc}, "
+            f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
+            f">({self.dest_idx}, {config.sentinel.math_format}, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:

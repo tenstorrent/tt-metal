@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::extract {
 struct ExtractDeviceOperation {
     using operation_attributes_t = ExtractParams;
     using tensor_args_t = ExtractInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<ExtractProgramFactory>;
 
@@ -36,7 +36,8 @@ ttnn::Tensor prefill_extract(
     const ttnn::Tensor& global_tensor,
     const ttnn::Tensor& start,
     const ttnn::Tensor& counts,
-    uint32_t global_expert_id,
+    const ttnn::Tensor& global_expert_idx_table,
+    uint32_t local_expert_id,
     uint32_t max_dispatched_tokens_per_expert);
 
 }  // namespace ttnn::prim

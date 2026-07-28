@@ -4,9 +4,14 @@
 
 #include <tt_stl/fmt.hpp>
 #include "data_collector.hpp"
+#include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
+#include <exception>
+#include <filesystem>
+#include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt-metalium/program.hpp"
 
@@ -126,6 +131,103 @@ void DataCollector::RecordKernelGroup(
 
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
+void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
+    // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
+    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
+    uint64_t program_id = program.get_id();
+    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
+    auto [it, inserted] = program_id_to_kernel_sources_.try_emplace(program_id);
+    if (inserted) {
+        auto& kernel_sources = it->second;
+        const auto& hal = MetalContext::instance().hal();
+        for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
+            for (const auto& [handle, kernel] : program.get_kernels(i)) {
+                // insert(const string&) allocates only on a miss; on a hit it just returns the
+                // existing node, so this allocation is only done once per unique source.
+                const std::string& stored_path = *unique_kernel_sources_.insert(kernel->kernel_source().source_).first;
+                kernel_sources.emplace_back(stored_path);
+            }
+        }
+    }
+    runtime_id_to_kernel_sources_[runtime_id].store(&it->second, std::memory_order_release);
+}
+
+void DataCollector::RecordProgramSubDevice(
+    tt::ChipId device_id,
+    uint64_t sub_device_manager_id,
+    uint64_t runtime_id,
+    SubDeviceId sub_device_id,
+    uint32_t num_available_worker_cores) {
+    std::lock_guard<std::mutex> lock(runtime_id_to_sub_device_mutex_);
+    runtime_id_to_sub_device[std::make_pair(device_id, static_cast<uint16_t>(runtime_id))] =
+        tt::ProgramSubDeviceInfo{*sub_device_id, sub_device_manager_id, num_available_worker_cores};
+}
+
+std::optional<tt::ProgramSubDeviceInfo> DataCollector::GetProgramSubDevice(
+    tt::ChipId device_id, uint64_t runtime_id) const {
+    std::lock_guard<std::mutex> lock(runtime_id_to_sub_device_mutex_);
+    auto it = runtime_id_to_sub_device.find(std::make_pair(device_id, static_cast<uint16_t>(runtime_id)));
+    if (it == runtime_id_to_sub_device.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+tt::ProgramRealtimeProfilerCallbackHandle DataCollector::RegisterProgramRealtimeProfilerCallback(
+    tt::ProgramRealtimeProfilerCallback callback) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    auto handle = next_callback_handle_++;
+    program_realtime_profiler_callbacks_.push_back({handle, std::move(callback)});
+    const auto& stored_callback = program_realtime_profiler_callbacks_.back().callback;
+    for (auto* listener : realtime_callback_listeners_) {
+        listener->on_callback_registered(handle, stored_callback);
+    }
+    return handle;
+}
+
+void DataCollector::UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    auto it = std::find_if(
+        program_realtime_profiler_callbacks_.begin(),
+        program_realtime_profiler_callbacks_.end(),
+        [handle](const auto& entry) { return entry.handle == handle; });
+    if (it == program_realtime_profiler_callbacks_.end()) {
+        return;
+    }
+    program_realtime_profiler_callbacks_.erase(it);
+    for (auto* listener : realtime_callback_listeners_) {
+        listener->on_callback_unregistered(handle);
+    }
+}
+
+void DataCollector::AttachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    realtime_callback_listeners_.push_back(listener);
+    for (const auto& registration : program_realtime_profiler_callbacks_) {
+        listener->on_callback_registered(registration.handle, registration.callback);
+    }
+}
+
+void DataCollector::DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    std::erase(realtime_callback_listeners_, listener);
+}
+
+void DataCollector::NotifyRealtimeProfilerActivated(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
+    realtime_profiler_active_chips_.insert(chip_id);
+}
+
+void DataCollector::NotifyRealtimeProfilerDeactivated(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
+    realtime_profiler_active_chips_.erase(chip_id);
+}
+
+bool DataCollector::IsRealtimeProfilerActive() const {
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
+    return !realtime_profiler_active_chips_.empty();
+}
+
 void DataCollector::DumpData() {
     if (program_id_to_dispatch_data.empty() && program_id_to_kernel_groups.empty() &&
         program_id_to_call_count.empty()) {
@@ -174,7 +276,9 @@ void DataCollector::DumpData() {
     for (const auto& type_data : cross_program_data) {
         type_data.DumpStats(outfile);
     }
+
     outfile.close();
+    log_info(tt::LogMetal, "Dispatch data dumped to {}", std::filesystem::absolute("dispatch_data.txt").string());
 }
 
 }  // namespace tt::tt_metal

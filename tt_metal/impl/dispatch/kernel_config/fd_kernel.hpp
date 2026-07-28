@@ -23,6 +23,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 
@@ -116,19 +117,16 @@ public:
         get_dispatch_query_manager_(get_dispatch_query_manager),
         get_max_num_eth_cores_(get_max_num_eth_cores),
         get_reads_dispatch_cores_(get_reads_dispatch_cores) {
-        bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::WORKER,
-            descriptor.num_cqs(),
-            descriptor.hal(),
-            is_galaxy_cluster,
-            descriptor.rtoptions().get_dram_backed_cq());
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::ETH,
-            descriptor.num_cqs(),
-            descriptor.hal(),
-            is_galaxy_cluster,
-            descriptor.rtoptions().get_dram_backed_cq());
+        const bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
+        std::vector<CoreType> core_types{CoreType::WORKER, CoreType::ETH};
+        if (descriptor.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+            core_types.push_back(CoreType::DISPATCH);
+        }
+        for (CoreType core_type : core_types) {
+            const auto& layout = get_dispatch_query_manager_ref().cq_dispatch_layout(core_type);
+            dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
+                core_type, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster, layout, descriptor.rtoptions());
+        }
     }
     virtual ~FDKernel() = default;
 
@@ -166,10 +164,6 @@ public:
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
         const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
-
-    // Translate DispatchCoreType to programmable core type index
-    static uint32_t get_programmable_core_type_index(
-        const ContextDescriptor& descriptor, CoreType dispatch_core_type, bool is_active_eth_core = false);
 
     // Translate core coord using the chip_id from the logical_cxy
     //
@@ -214,9 +208,6 @@ protected:
         const std::string& path,
         const std::vector<uint32_t>& compile_args,
         std::map<std::string, std::string> defines_in,
-        bool is_active_eth_core,
-        bool send_to_brisc,
-        bool force_watcher_no_inline,
         tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
     int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) const {
         for (int idx = 0; idx < kernels.size(); idx++) {
@@ -246,6 +237,8 @@ protected:
     int node_id_;
     uint8_t cq_id_;
     noc_selection_t noc_selection_;
+    bool send_to_brisc_ = false;            // WH/BH only: selects RISCV_0 (true) vs RISCV_1 (false)
+    bool force_watcher_no_inline_ = false;  // Prefetcher enables to fit in code region when watcher is enabled
 
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;

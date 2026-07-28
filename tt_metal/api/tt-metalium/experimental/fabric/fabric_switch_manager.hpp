@@ -65,7 +65,7 @@ public:
     FabricSwitchManager& operator=(FabricSwitchManager&&) = delete;
 
 private:
-    friend class tt::stl::Indestructible<FabricSwitchManager>;
+    friend class ttsl::Indestructible<FabricSwitchManager>;
     FabricSwitchManager() = default;
     ~FabricSwitchManager() = default;
 

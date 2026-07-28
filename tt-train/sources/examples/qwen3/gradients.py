@@ -46,11 +46,12 @@ from utils.tensor_utils import (
     create_input_tensor_from_torch as create_input_tensor,
     create_input_tensor_dp,
 )
-from utils.sharded_loss import sharded_cross_entropy_loss
 from utils.memory import MemoryUsageTracker, finalize_memory
-from utils.param_utils import (
+from ttml.models.qwen3.weights import (
     repermute_proj_rows,
     repermute_norm_weights,
+)
+from utils.param_utils import (
     _build_grad_mapping_single,
     _build_grad_mapping_distributed,
     _extract_grad_distributed,
@@ -272,7 +273,6 @@ def run_backward_comparison(
     shard_dim=None,
     track_memory=False,
     tokenizer=None,
-    sharded_loss=False,
     dp_size=1,
 ):
     """Run backward on both HF and TTML models, compare per-parameter gradients.
@@ -280,9 +280,9 @@ def run_backward_comparison(
     sequences: list of token lists (one per batch element / DP group).
 
     Uses cross-entropy loss with next-token prediction targets — the standard
-    LLM training objective.  For vocab-sharded logits (sharded_loss=True) uses
-    a distributed cross-entropy that communicates only tiny [B,1,S,1] correction
-    tensors instead of gathering the full vocabulary.
+    LLM training objective.  In TP mode the LM head emits vocab-sharded logits
+    and we use a distributed cross-entropy that communicates only tiny
+    [B,1,S,1] correction tensors instead of gathering the full vocabulary.
     Supports single-device, TP, DP, and combined DP+TP configurations.
     """
     print("\n" + "=" * 70)
@@ -293,7 +293,8 @@ def run_backward_comparison(
     if tp_size_disp > 1:
         parts.append(f"TP={tp_size_disp}")
     mode_str = "distributed " + ", ".join(parts) if parts else "single-device"
-    loss_type = "distributed cross-entropy" if sharded_loss else "cross-entropy"
+    use_tp = tp_size_disp > 1
+    loss_type = "distributed cross-entropy" if use_tp else "cross-entropy"
     effective_batch = len(sequences)
     print(f"Backward pass: gradient comparison ({mode_str}, " f"batch_size={effective_batch}, loss={loss_type})")
     print("=" * 70)
@@ -374,18 +375,26 @@ def run_backward_comparison(
     print(f"  [Backward] logits shape: {list(logits.shape())}")
 
     tp_size = device.shape[shard_dim] if (distributed and shard_dim is not None) else 1
-    if sharded_loss:
-        print(f"  [Backward] sharded_loss: logits kept sharded, " f"per-device vocab dim = {list(logits.shape())[3]}")
+    use_tp = tp_size > 1
+    if use_tp:
+        print(f"  [Backward] TP mode: logits kept vocab-sharded, " f"per-device vocab dim = {list(logits.shape())[3]}")
 
     target_np = np.zeros((effective_batch, max_seq_len), dtype=np.uint32)
     for b in range(effective_batch):
         if seq_lens[b] > 1:
             target_np[b, : seq_lens[b] - 1] = np.array(sequences[b][1:], dtype=np.uint32)
 
-    if sharded_loss:
+    if use_tp:
         print(f"  [Backward] using distributed cross-entropy " f"(tp_size={tp_size}, dp_size={dp_size})")
-        ttml_loss = sharded_cross_entropy_loss(
-            logits, target_np, vocab_padded, tp_size, tp_axis=shard_dim, dp_size=dp_size
+        if dp_size > 1:
+            target_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, 0)
+        else:
+            target_mapper = None
+        target_tensor = ttml.autograd.Tensor.from_numpy(
+            target_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, target_mapper
+        )
+        ttml_loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+            logits, target_tensor, cluster_axis=shard_dim
         )
     elif dp_size > 1:
         dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, 0)
@@ -490,14 +499,6 @@ def main():
         help="Enable gradient checkpointing (activation recomputation). " "Trades compute for memory during backward.",
     )
     parser.add_argument(
-        "--sharded_loss",
-        action="store_true",
-        default=False,
-        help="Keep LM head output sharded (no all-gather) and compute "
-        "loss on per-device vocab shards.  Dramatically reduces "
-        "peak memory for the LM head forward/backward.",
-    )
-    parser.add_argument(
         "--batch_size",
         type=int,
         default=1,
@@ -578,10 +579,7 @@ def main():
         tp_size=tp_size,
         checkpoint=args.checkpoint,
         track_memory=args.track_memory,
-        sharded_loss=args.sharded_loss,
     )
-    if not use_distributed_model and args.sharded_loss:
-        args.sharded_loss = False
 
     if args.track_memory:
         MemoryUsageTracker.snapshot("AFTER_MODEL_CREATION")
@@ -621,7 +619,6 @@ def main():
         shard_dim=shard_dim,
         track_memory=args.track_memory,
         tokenizer=tokenizer,
-        sharded_loss=getattr(ttml_model, "sharded_loss", False),
         dp_size=dp_size,
     )
 

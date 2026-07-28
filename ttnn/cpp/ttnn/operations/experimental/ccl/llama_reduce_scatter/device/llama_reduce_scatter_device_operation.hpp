@@ -36,7 +36,7 @@ struct LlamaReduceScatterDeviceOperation {
         Tensor intermediate_packet_buffer;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = Tensor;
 

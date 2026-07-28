@@ -20,7 +20,9 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         softmax_output.logical_shape() == upstream_grad.logical_shape(),
         "Softmax output and upstream gradient tensors must have the same shape");
-    TT_FATAL(softmax_output.dtype() == DataType::BFLOAT16, "Softmax backward only supports BFLOAT16");
+    TT_FATAL(
+        softmax_output.dtype() == DataType::BFLOAT16 || softmax_output.dtype() == DataType::FLOAT32,
+        "Softmax backward only supports BFLOAT16 and FLOAT32");
     TT_FATAL(
         upstream_grad.dtype() == softmax_output.dtype(),
         "Softmax output and upstream gradient must have the same dtype");
@@ -46,7 +48,7 @@ SoftmaxBackwardDeviceOperation::spec_return_value_t SoftmaxBackwardDeviceOperati
 SoftmaxBackwardDeviceOperation::tensor_return_value_t SoftmaxBackwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.softmax_output.device());
+    return ttnn::create_device_tensor(output_spec, tensor_args.softmax_output.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxBackwardDeviceOperation::tensor_return_value_t>

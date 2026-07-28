@@ -2,55 +2,98 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
+Performance scatter plot: TFLOPs comparison N150 vs P150.
+
 Usage:
-1. Generate performance data using manually selected GEMM configurations
-2. Rename output files to n150-manual.csv and p150-manual.csv
-3. Place the CSV files in tech_reports/GEMM_FLOPS/
-4. Run this script from the tt-metal root directory
+1. Run the benchmark via run_bench.sh on both devices
+2. CSVs are placed in tech_reports/GEMM_FLOPS/data/{wh,bh}.csv
+3. Run this script from the tt-metal root directory
 """
+
+from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-# Load N150 and P150 data
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-df_n150["source"] = "N150"
+DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
+IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
 
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
-df_p150["source"] = "P150"
+DEVICE_FILES = {
+    "N150": DATA_DIR / "wh.csv",
+    "P150": DATA_DIR / "bh.csv",
+}
 
-# Standardize column names
-if "TFLOPs (avg)" in df_n150.columns:
-    df_n150.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-if "TFLOPs (avg)" in df_p150.columns:
-    df_p150.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
+BASE_SHAPE_COLUMNS = ["base_m", "base_k", "base_n"]
 
-# Convert tflops to numeric
-df_n150["tflops"] = pd.to_numeric(df_n150["tflops"], errors="coerce")
-df_p150["tflops"] = pd.to_numeric(df_p150["tflops"], errors="coerce")
 
-# Create dtype_fidelity column
-df_n150["dtype_fidelity"] = (
-    df_n150["dtype"].astype(str).str.replace("DataType.", "")
-    + "_"
-    + df_n150["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
-)
-df_p150["dtype_fidelity"] = (
-    df_p150["dtype"].astype(str).str.replace("DataType.", "")
-    + "_"
-    + df_p150["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
-)
+def safe_read_csv(path):
+    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
+    if path.exists():
+        return pd.read_csv(path)
+    print(f"WARNING: {path} not found — skipping that device.")
+    return pd.DataFrame()
 
-# Calculate matrix elements (M × K × N)
-df_n150["matrix_elements"] = df_n150["m"] * df_n150["k"] * df_n150["n"]
-df_p150["matrix_elements"] = df_p150["m"] * df_p150["k"] * df_p150["n"]
 
-df_n150 = df_n150[~((df_n150["m"] == 3328) & (df_n150["k"] == 2560) & (df_n150["n"] == 2560))].copy()
-df_p150 = df_p150[~((df_p150["m"] == 4160) & (df_p150["k"] == 4160) & (df_p150["n"] == 4160))].copy()
+def parse_grid_size(raw):
+    cleaned = str(raw).strip("() ")
+    grid_x, grid_y = [int(x.strip()) for x in cleaned.split(",")]
+    return grid_x, grid_y
 
-# Combine dataframes
-df = pd.concat([df_n150, df_p150], ignore_index=True)
+
+def add_base_shape_columns(df):
+    """Ensure base_m/base_k/base_n exist while preserving full scaled m/k/n."""
+    if not all(col in df.columns for col in BASE_SHAPE_COLUMNS):
+        grid_dims = df["grid_size"].apply(parse_grid_size)
+        df["base_m"] = [m // grid_y for m, (_, grid_y) in zip(df["m"], grid_dims)]
+        df["base_k"] = [k // grid_x for k, (grid_x, _) in zip(df["k"], grid_dims)]
+        df["base_n"] = [n // grid_x for n, (grid_x, _) in zip(df["n"], grid_dims)]
+    df["base_shape"] = list(zip(df["base_m"], df["base_k"], df["base_n"]))
+    return df
+
+
+def load_and_prepare(path, source):
+    """Load CSV and prepare derived columns."""
+    df = safe_read_csv(path)
+    if df.empty:
+        return df
+    df["source"] = source
+    # Use best performance across all tuned modes
+    if "mode" in df.columns:
+        df = df[df["mode"] != "oob"].copy()
+    if "TFLOPs (avg)" in df.columns:
+        df.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
+    df["tflops"] = pd.to_numeric(df["tflops"], errors="coerce")
+    df["dtype_fidelity"] = (
+        df["dtype"].astype(str).str.replace("DataType.", "")
+        + "_"
+        + df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
+    )
+    df["matrix_elements"] = df["m"] * df["k"] * df["n"]
+    df = add_base_shape_columns(df)
+    return df
+
+
+def get_best_by_base_shape(df_slice):
+    best_rows = []
+    for _, group in df_slice.groupby("base_shape", sort=True):
+        best_rows.append(group.loc[group["tflops"].idxmax()])
+    if not best_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(best_rows).sort_values("matrix_elements")
+
+
+frames = []
+for source, path in DEVICE_FILES.items():
+    loaded = load_and_prepare(path, source)
+    if not loaded.empty:
+        frames.append(loaded)
+
+if not frames:
+    print("ERROR: No data available for any device. Exiting.")
+    raise SystemExit(1)
+
+df = pd.concat(frames, ignore_index=True)
 
 # dtype-fidelity configurations to plot with colors
 dtype_configs = [
@@ -67,13 +110,8 @@ for dtype_fidelity, color, label_short in dtype_configs:
     p150_data = df[(df["dtype_fidelity"] == dtype_fidelity) & (df["source"] == "P150")].copy()
 
     if not p150_data.empty:
-        # Get best (max tflops) for each matrix size
-        p150_best = (
-            p150_data.groupby("matrix_elements")
-            .agg({"tflops": "max", "m": "first", "k": "first", "n": "first"})
-            .reset_index()
-            .sort_values("matrix_elements")
-        )
+        # Get best (max tflops) for each base shape; plot its scaled matrix size.
+        p150_best = get_best_by_base_shape(p150_data)
 
         # Plot P150: solid line with filled upward triangles
         ax.plot(
@@ -96,13 +134,8 @@ for dtype_fidelity, color, label_short in dtype_configs:
     n150_data = df[(df["dtype_fidelity"] == dtype_fidelity) & (df["source"] == "N150")].copy()
 
     if not n150_data.empty:
-        # Get best (max tflops) for each matrix size
-        n150_best = (
-            n150_data.groupby("matrix_elements")
-            .agg({"tflops": "max", "m": "first", "k": "first", "n": "first"})
-            .reset_index()
-            .sort_values("matrix_elements")
-        )
+        # Get best (max tflops) for each base shape; plot its scaled matrix size.
+        n150_best = get_best_by_base_shape(n150_data)
 
         # Plot N150: dashed line with hollow downward triangles
         ax.plot(
@@ -203,11 +236,14 @@ ax.legend(
     handlelength=3.5,
 )
 
+IMG_DIR.mkdir(parents=True, exist_ok=True)
 plt.tight_layout()
-plt.savefig("tech_reports/GEMM_FLOPS/images/flops_vs_matrix_elements_comparison.png", dpi=300, bbox_inches="tight")
+plt.savefig(IMG_DIR / "flops_vs_matrix_elements_comparison.png", dpi=300, bbox_inches="tight")
 plt.close()
 
 print("✓ Performance scatter plot saved!")
-print(f"  - N150: {df[df['source'] == 'N150'].groupby(['m','k','n']).ngroups} unique matrix sizes")
-print(f"  - P150: {df[df['source'] == 'P150'].groupby(['m','k','n']).ngroups} unique matrix sizes")
+n150_count = df[df["source"] == "N150"].groupby(["m", "k", "n"]).ngroups
+p150_count = df[df["source"] == "P150"].groupby(["m", "k", "n"]).ngroups
+print(f"  - N150: {n150_count} unique matrix sizes")
+print(f"  - P150: {p150_count} unique matrix sizes")
 print(f"  - Configurations plotted: BFLOAT4_B_LoFi, BFLOAT8_B_HiFi2, BFLOAT16_HiFi4")

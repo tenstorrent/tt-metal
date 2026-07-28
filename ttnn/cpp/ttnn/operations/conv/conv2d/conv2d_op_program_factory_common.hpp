@@ -9,7 +9,9 @@
 
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
+#include "tt-metalium/buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
+#include "tt-metalium/program_descriptors.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -32,7 +34,6 @@ enum class Conv2dCb {
     L1_ARRAY,
     MATMUL_PARTIALS,
     OUT,
-    TEMP_SUM,
     COUNT
 };
 struct CBInfo {
@@ -59,6 +60,9 @@ struct CBInfo {
 // Returns a vector of CBInfo objects for the Conv2d operation.
 // The vector will contain information about all circular buffers used in the Conv2d operation.
 // CBInfo::index and CBInfo::handle won't be valid until allocate_cbs() is called.
+// When the program factory has the real reader indices DRAM buffer, it can pass its actual page
+// size so the predicted READER_INDICES CB footprint matches the CB the factory creates. Auto-shard
+// L1 estimation passes std::nullopt and falls back to the worst case (1 uint16 index per output row).
 std::vector<CBInfo> get_cb_info(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
@@ -75,7 +79,8 @@ std::vector<CBInfo> get_cb_info(
     bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
-    uint32_t input_channels_padded);
+    uint32_t input_channels_padded,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
 
 // Allocates circular buffers for the Conv2d operation.
 // This function will populate index and handle fields of each CBInfo in the cb_info vector,
@@ -110,10 +115,46 @@ bool is_split_reader_viable(
     DataType output_datatype,
     bool act_reuse_enabled);
 
+// reader_indices_actual_page_size lets the factory communicate the in-DRAM config tensor's true
+// per-core page size so the post-build CB-size equality check matches what was allocated. When
+// std::nullopt, the worst-case READER_INDICES CB size is used (matches the factory's previous
+// behaviour for the in-DRAM path).
 void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
-    Tensor& output_tensor);
+    Tensor& output_tensor,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+
+// Builds CBDescriptor entries from a vector of CBInfo onto the supplied
+// ProgramDescriptor, mirroring allocate_cbs() but emitting onto the descriptor
+// data structures instead of a realised Program.  The set of globally-allocated
+// CBs (ACT_SHARDED/OUT/MATMUL_PARTIALS/READER_INDICES) is wired to the supplied
+// raw Buffer*s, which is what the framework's fast cache-hit path patches.
+// This single helper is used by both the sharded and width-sharded conv2d
+// program factories to avoid divergence in CB emission logic.
+void emit_cb_descriptors(
+    std::vector<CBInfo>& cb_info,
+    tt::tt_metal::ProgramDescriptor& desc,
+    const CoreRangeSet& all_cores_set,
+    tt::tt_metal::Buffer* input_buffer,
+    tt::tt_metal::Buffer* output_buffer,
+    tt::tt_metal::Buffer* indices_buffer);
+
+// Descriptor-path equivalent of post_conv2d_op_memory_checks().  Verifies that
+// the sum of non-globally-allocated CB sizes emitted on `desc` matches the L1
+// usage predicted by calculate_L1_usage() — the same equality the legacy
+// program-based check enforced via calculate_total_cb_size().  The L1
+// allocator-tracking half of post_conv2d_op_memory_checks() can't be performed
+// here because the framework realises the Program after this function returns,
+// so post_op_l1_allocation_size isn't observable.  When that check is wanted
+// against a realised Program, post_conv2d_op_memory_checks() should be used
+// instead.  Fails fast (TT_FATAL) on CB-size mismatch so misconfigured CB
+// footprints surface in the same way as on the legacy path.
+void post_conv2d_op_memory_checks_descriptor(
+    const tt::tt_metal::ProgramDescriptor& desc,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
 
 }  // namespace ttnn::prim

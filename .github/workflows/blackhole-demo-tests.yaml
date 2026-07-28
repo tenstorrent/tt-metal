@@ -9,35 +9,24 @@ on:
         type: boolean
         default: false
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'llama3.1-8b'
+        default: 'all'
         type: choice
         options:
           - all
-          - whisper
-          - llama3.1-8b
-          - unet-shallow
-          - stable_diffusion_xl
-          - llama3.3-70b
-          - qwen3-32b
-          - flux.1-dev
+          - mistral-small-3.1-24b
           - mochi
           - wan2.2-t2v-a14b
+          - z-image-turbo
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "all"
         type: choice
         options:
           - all
-          - P150 (1xP150)
-          - P150 CIv2 (1xP150)
-          - Quietbox (4xP150)
-          - DeskBox (2xP150)
-          - LoudBox (8xP150)
-          - P300 (1xP300)
-          - QuietBox 2 (2xP300)
+          - bh_quietbox_2
       build-type:
         required: false
         type: choice
@@ -72,10 +61,10 @@ on:
       model:
         required: false
         type: string
-        default: 'all'
+        default: "all"
         description: "Select model to test"
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "all"
         type: string
@@ -95,45 +84,83 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 4 * * *"  # Every day at 4:00 UTC
+    - cron: "0 4 * * *" # Every day at 4:00 UTC
 
 jobs:
-  generate-card-matrix:
-    runs-on: ubuntu-latest
+  generate-model-matrix:
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Set matrix
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build per-model matrix
         id: set-matrix
+        env:
+          SELECTED_MODEL: ${{ inputs.model || 'all' }}
+          SYSTEM_TYPE_FILTER: ${{ inputs.system-type || 'all' }}
         run: |
-          all_systems='[
-            {"name": "P150 (1xP150)", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
-            {"name": "P150 (1xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 1, "sku": "bh_p150"},
-            {"name": "P150 CIv2 (1xP150)", "weights-cache-mode": "lfc", "num_devices": 1, "sku": "bh_p150b_civ2"},
-            {"name": "Quietbox (4xP150)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_llmbox"},
-            {"name": "DeskBox (2xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 2, "sku": "bh_deskbox"},
-            {"name": "LoudBox (8xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 8, "sku": "bh_loudbox"},
-            {"name": "P300 (1xP300)", "weights-cache-mode": "lfc", "num_devices": 2, "sku": "bh_p300"},
-            {"name": "QuietBox 2 (2xP300)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_quietbox_2"}
-          ]'
-          # Schedule or "all": use all systems; otherwise filter by selected system name
-          selected_system_type="${{ inputs.system-type || 'all' }}"
-          if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
-            matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
-          else
-            filtered=$(echo "$all_systems" | jq -c --arg name "$selected_system_type" '[.[] | select(.name == $name)]')
-            if [[ "$filtered" == "[]" ]]; then
-              echo "Error: No system found matching system-type=\"$selected_system_type\". Valid options: all, or one of the system names from the matrix." >&2
-              exit 1
-            fi
-            matrix_output=$(echo "{\"test-group\": $filtered}" | jq -c .)
-          fi
-          echo "Selected system type: $selected_system_type"
+          set -e
+          # Compute the distinct list of models that have at least one test
+          # entry targeting an SKU on the requested system. This keeps the
+          # run page from showing model groups that have no jobs to run after
+          # the system-type filter is applied.
+          models=$(python3 - <<'PY'
+          import json, os, sys, yaml
+
+          with open("tests/pipeline_reorg/blackhole_demo_tests.yaml") as f:
+              tests = yaml.safe_load(f) or []
+
+          selected_model = os.environ["SELECTED_MODEL"]
+          system_filter = os.environ["SYSTEM_TYPE_FILTER"]
+
+          all_models = []
+          matching_models = []
+          for t in tests:
+              m = t.get("model-name")
+              if not m:
+                  continue
+              if m not in all_models:
+                  all_models.append(m)
+              if selected_model != "all" and m != selected_model:
+                  continue
+              if system_filter != "all":
+                  if system_filter not in (t.get("skus") or {}):
+                      continue
+              if m not in matching_models:
+                  matching_models.append(m)
+
+          if not matching_models:
+              print(
+                  f"::error::No tests match model='{selected_model}', "
+                  f"system-type='{system_filter}'. Available models: {all_models}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          print(json.dumps(matching_models))
+          PY
+          )
+          matrix_output=$(echo "{\"model\": $models}" | jq -c .)
+          echo "Selected model: $SELECTED_MODEL"
+          echo "System-type filter: $SYSTEM_TYPE_FILTER"
           echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -143,17 +170,17 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-demo-tests:
-    needs: [build-artifact, generate-card-matrix]
+    needs: [build-artifact, generate-model-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.generate-model-matrix.outputs.matrix) }}
+    name: ${{ matrix.model }}
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ matrix.test-group.sku }}
-      weights-cache-mode: ${{ matrix.test-group.weights-cache-mode }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
-      model: ${{ inputs.model || 'all' }}
+      model: ${{ matrix.model }}
+      system-type-filter: ${{ inputs.system-type || 'all' }}

@@ -10,10 +10,12 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
@@ -44,25 +46,52 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
+
+
+def _nch_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
+def _nch_per_chip_concat_heads(per_chip_input):
+    if per_chip_input.ndim != 4:
+        return per_chip_input.clone()
+    b, h, s, d = per_chip_input.shape
+    return per_chip_input.permute(0, 2, 1, 3).contiguous().view(b, s, h * d).unsqueeze(1)
 
 
 def run(
@@ -101,19 +130,17 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # nlp_concat_heads concatenates heads: [B, H, S, D] -> [B, 1, S, H*D]
-    # Compute the expected output and reshape
+    # nlp_concat_heads: [B, H, S, D] -> [B, 1, S, H*D]. With a sharded input
+    # the kernel runs this per-chip and the mesh assembler concats along the
+    # input shard axis; concat-of-per-chip differs element-wise from the
+    # global op, so we mirror the kernel.
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and runs nlp_concat_heads on it. The gathered
+    # output is the per-chip result tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
     if len(shape) == 4:
-        batch, num_heads, seq_len, head_dim = shape
-        # Reshape input to match expected output for comparison
-        torch_output_tensor = (
-            torch_input_tensor_a.permute(0, 2, 1, 3)
-            .contiguous()
-            .view(batch, seq_len, num_heads * head_dim)
-            .unsqueeze(1)
-        )
+        torch_output_tensor = _nch_per_chip_concat_heads(torch_input_tensor_a)
     else:
-        # Fallback: just clone the input
         torch_output_tensor = torch_input_tensor_a.clone()
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
@@ -156,8 +183,11 @@ def run(
     # memory_config kwarg controls the output layout (the op auto-derives shard spec).
     output_tensor = ttnn.experimental.nlp_concat_heads(input_tensor_a, **op_kwargs)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     return [pcc, e2e_perf]

@@ -14,7 +14,7 @@ jobs:
         github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'OWNER'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       pull-requests: write
     outputs:
@@ -124,18 +124,19 @@ jobs:
           elif [ "$SUBCOMMAND" = "check-rule" ]; then
             NOTICE="**Bug Checker** — running rule \`$RULE_ID\`…"
           else
-            NOTICE="**Bug Checker** — scanning PR for known bug patterns…"
+            NOTICE="**Bug Checker** — scanning PR for known bug patterns… See the [Bug Checker README](https://github.com/$REPO/blob/main/.github/bug_checker/README.md) for what this tool does."
           fi
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$NOTICE"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: main
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
           cache: 'pip'

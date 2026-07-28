@@ -5,114 +5,60 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
-#ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
-#endif
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t block_tile_dim = get_compile_time_arg_val(0);
-    uint32_t dst_tile_rows = get_compile_time_arg_val(1);
-    uint32_t dst_tile_cols = get_compile_time_arg_val(2);
-    uint32_t block_cnt = get_compile_time_arg_val(3);
-    uint32_t in0_block_tile_cnt = get_compile_time_arg_val(4);
-    uint32_t in1_block_tile_cnt = get_compile_time_arg_val(5);
-    uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
+    constexpr uint32_t block_tile_dim = get_arg(args::block_tile_dim);
+    constexpr uint32_t dst_tile_rows = get_arg(args::dst_tile_rows);
+    constexpr uint32_t dst_tile_cols = get_arg(args::dst_tile_cols);
+    constexpr uint32_t block_cnt = get_arg(args::block_cnt);
+    constexpr uint32_t in0_block_tile_cnt = get_arg(args::in0_block_tile_cnt);
+    constexpr uint32_t in1_block_tile_cnt = get_arg(args::in1_block_tile_cnt);
+    constexpr uint32_t out_block_tile_cnt = get_arg(args::out_block_tile_cnt);
 
-#ifdef ARCH_QUASAR
-    constexpr uint32_t dfb0_id = get_compile_time_arg_val(7);
-    constexpr uint32_t dfb1_id = get_compile_time_arg_val(8);
-    constexpr uint32_t dfb_out_id = get_compile_time_arg_val(9);
-    experimental::DataflowBuffer dfb0(dfb0_id);
-    experimental::DataflowBuffer dfb1(dfb1_id);
-    experimental::DataflowBuffer dfb_out(dfb_out_id);
-#endif
+    DataflowBuffer dfb0(dfb::in0);
+    DataflowBuffer dfb1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::out);
 
 #if (TEST_INIT_SHORT == 1)
 #if (WITH_DT == 1)
-    // Intentionally wrong init with different data formats
-#ifdef ARCH_QUASAR
-    // The TEST_INIT_SHORT WITH_DT path is not implemented for Quasar yet
-#else
-    mm_block_init(
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_2,
-        tt::CBIndex::c_16,
-        false,
-        dst_tile_cols - 1,
-        dst_tile_rows - 1,
-        block_tile_dim - 1);
-    // Corrected init short with dt
-    mm_block_init_short_with_dt(
-        tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
-#endif
+    // Intentionally wrong init (in0/in1 swapped, dst dims off-by-one) — exercises
+    // the reconfig_data_format_srca + matmul_block_init ability to re-init data formats from a
+    // bad state. The legacy variant of this test used a separate uint16 CB to model a true
+    // data-format mismatch; with DFBs we reuse dfb_out as the old srcA operand since adding an
+    // unused dummy DFB has no Metal 2.0 equivalent. The reconfig path is still exercised.
+    matmul_block_init(dfb::in1, dfb::in0, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
+    reconfig_data_format_srca(dfb::out, dfb::in1);
+    matmul_block_init(dfb::in0, dfb::in1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #elif (WITH_DT == 0)
-    // Intentionally wrong init with same data formats
-#ifdef ARCH_QUASAR
-    mm_block_init(
-        dfb1.get_id(),
-        dfb0.get_id(),
-        dfb_out.get_id(),
-        false,
-        dst_tile_cols - 1,
-        dst_tile_rows - 1,
-        block_tile_dim - 1);
-    mm_block_init_short(dfb0.get_id(), dfb1.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
-#else
-    mm_block_init(
-        tt::CBIndex::c_1,
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_16,
-        false,
-        dst_tile_cols - 1,
-        dst_tile_rows - 1,
-        block_tile_dim - 1);
-    // Corrected init short
-    mm_block_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
-#endif
+    matmul_block_init(dfb::in1, dfb::in0, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
+    matmul_block_init(dfb::in0, dfb::in1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 #elif (TEST_INIT_SHORT == 0)
-#ifdef ARCH_QUASAR
-    mm_block_init(dfb0.get_id(), dfb1.get_id(), dfb_out.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
-#else
-    mm_block_init(
-        tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
-#endif
+    matmul_block_init(dfb::in0, dfb::in1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 
-    acquire_dst();
+    tile_regs_acquire();
+    tile_regs_wait();
     for (uint32_t b = 0; b < block_cnt; ++b) {
-#ifdef ARCH_QUASAR
         dfb0.wait_front(in0_block_tile_cnt);
         dfb1.wait_front(in1_block_tile_cnt);
 
-        matmul_block(dfb0.get_id(), dfb1.get_id(), 0, 0, 0, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+        matmul_block(dfb::in0, dfb::in1, 0, 0, 0, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 
         dfb0.pop_front(in0_block_tile_cnt);
         dfb1.pop_front(in1_block_tile_cnt);
-#else
-        cb_wait_front(tt::CBIndex::c_0, in0_block_tile_cnt);
-        cb_wait_front(tt::CBIndex::c_1, in1_block_tile_cnt);
-
-        matmul_block(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
-
-        cb_pop_front(tt::CBIndex::c_0, in0_block_tile_cnt);
-        cb_pop_front(tt::CBIndex::c_1, in1_block_tile_cnt);
-#endif
     }
 
-    // Pack out
-#ifdef ARCH_QUASAR
     dfb_out.reserve_back(out_block_tile_cnt);
     for (uint32_t i = 0; i < out_block_tile_cnt; ++i) {
-        pack_tile(i, dfb_out.get_id());
+        pack_tile(i, dfb::out);
     }
     dfb_out.push_back(out_block_tile_cnt);
-#else
-    cb_reserve_back(tt::CBIndex::c_16, out_block_tile_cnt);
-    for (uint32_t i = 0; i < out_block_tile_cnt; ++i) {
-        pack_tile(i, tt::CBIndex::c_16);
-    }
-    cb_push_back(tt::CBIndex::c_16, out_block_tile_cnt);
-#endif
-    release_dst();
+    tile_regs_commit();
+    tile_regs_release();
 }

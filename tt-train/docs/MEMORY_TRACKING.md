@@ -69,7 +69,7 @@ MemoryUsageTracker.clear()
 guard.release()  # Prevent double cleanup when guard is garbage collected
 ```
 
-See [train_nanogpt.py](/tt-train/sources/examples/nano_gpt/train_nanogpt.py) with `--track_memory` flag for a complete example.
+See [train.py](/tt-train/sources/examples/train/train.py) with `--track_memory` flag for a complete example.
 
 ### NO_DISPATCH Mode
 
@@ -198,7 +198,7 @@ python scripts/analyze_memory.py --logs <logfile> [options]
 ```
 
 **Required:**
-- `--logs`: A single log file containing memory usage summaries created by training script ([cpp](/tt-train/sources/examples/nano_gpt/main.cpp) or [python](/tt-train/sources/examples/nano_gpt/train_nanogpt.py)). Note: you can concatenate multiple training logs in one file, it would analyze them separately, and add all of them on the histogram
+- `--logs`: A single log file containing memory usage summaries created by training script ([cpp](/tt-train/sources/examples/nano_gpt/main.cpp) or [python](/tt-train/sources/examples/train/train.py)). Note: you can concatenate multiple training logs in one file, it would analyze them separately, and add all of them on the histogram
 
 **Optional:**
 - `--device_memory`: Device memory in bytes (default: 12GB)

@@ -23,6 +23,7 @@ def apply_activations(tensor, activations):
         ttnn.UnaryOpType.LOG: torch.log,
         ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
         ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
+        ttnn.UnaryOpType.GELU_TANH: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ttnn.UnaryOpType.SQRT: torch.sqrt,
     }
 
@@ -396,7 +397,9 @@ def torch_squared_difference(x, y, *args, **kwargs):
 def _golden_function_outer(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    return torch.outer(input_tensor_a.squeeze(), input_tensor_b.squeeze())
+    if input_tensor_a.dim() == 1 and input_tensor_b.dim() == 1:
+        return torch.outer(input_tensor_a, input_tensor_b)
+    return torch.einsum("...i,...j->...ij", input_tensor_a, input_tensor_b)
 
 
 ttnn.attach_golden_function(ttnn.outer, golden_function=_golden_function_outer)

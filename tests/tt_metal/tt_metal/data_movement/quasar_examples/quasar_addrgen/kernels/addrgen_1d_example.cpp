@@ -3,14 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compile-time args:
-//   0: src_stride_en    - 1 = src uses 1D striding, 0 = src fixed at base
-//   1: dst_stride_en    - 1 = dst uses 1D striding, 0 = dst fixed at base
-//   2: num_of_addresses - total number of addresses to generate in the main loop
+//   src_stride_en    - 1 = src uses 1D striding, 0 = src fixed at base
+//   dst_stride_en    - 1 = dst uses 1D striding, 0 = dst fixed at base
+//   num_of_addresses - total number of addresses to generate in the main loop
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
+
+using namespace overlay;
 
 constexpr uint32_t src_base = 0x10000;
 constexpr uint64_t src_stride = 4096;  // 2 tiles × 2048 B — skips 1 tile between each access
@@ -19,9 +22,9 @@ constexpr uint32_t dst_base = 0x20000;
 constexpr uint64_t dst_stride = 4096;
 
 void kernel_main() {
-    constexpr uint32_t src_stride_en = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_stride_en = get_compile_time_arg_val(1);
-    constexpr uint32_t num_of_addresses = get_compile_time_arg_val(2);
+    constexpr uint32_t src_stride_en = get_arg(args::src_stride_en);
+    constexpr uint32_t dst_stride_en = get_arg(args::dst_stride_en);
+    constexpr uint32_t num_of_addresses = get_arg(args::num_of_addresses);
 
     reset_addrgen_0();
 

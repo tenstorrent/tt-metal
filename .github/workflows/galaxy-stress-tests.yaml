@@ -29,11 +29,28 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      test-selection:
+        description: "Run all stress suites or one id (see tests/pipeline_reorg/galaxy_stress_tests.yaml)"
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - all
+          - galaxy-fabric-stability-stress
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -43,10 +60,14 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
 
   galaxy-stress-test:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-stress-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: wh_galaxy_perf
+      test-selection: ${{ github.event_name == 'workflow_dispatch' && inputs.test-selection || 'all' }}
+      extra-tag: ${{ github.event_name == 'workflow_dispatch' && inputs.extra-tag || 'in-service' }}
+      topology: topology-6u

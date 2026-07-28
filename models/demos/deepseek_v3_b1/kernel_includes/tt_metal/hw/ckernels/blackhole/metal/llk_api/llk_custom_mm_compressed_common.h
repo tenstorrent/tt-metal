@@ -147,34 +147,34 @@ inline void _llk_unpack_AB_custom_mm_compressed_mop_config_() {
 
             load_replay_buf(0, replay_buf_prog_len, [] {
                 t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
-                TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                 TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);
+                TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                 TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
                 TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);
                 t6_semaphore_get(semaphore::UNPACK_SYNC);
 
                 if (ct_dim == 1) {
                     t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                     TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                     TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
                     TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);
                     t6_semaphore_get(semaphore::UNPACK_SYNC);
                 } else {
                     t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                     TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
                     for (uint32_t i = 0; i < ct_dim / 4; i++) {
                         t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
-                        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                         TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);
+                        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                         t6_semaphore_get(semaphore::UNPACK_SYNC);
 
                         t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
-                        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                         TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);
+                        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                         t6_semaphore_get(semaphore::UNPACK_SYNC);
                     }
                 }
@@ -258,7 +258,6 @@ inline void custom_mm_compressed_block_init_short(
     const uint32_t in0_cb_id, const uint32_t in1_cb_id, const uint32_t out_cb_id) {
     llk_unpack_AB_custom_mm_compressed_init<use_barrier, ct_dim>(in0_cb_id, in1_cb_id);
     MATH((llk_math_custom_mm_init<false, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
-    PACK((llk_pack_init<false, false>(out_cb_id)));
     if constexpr (dense_packing) {
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));

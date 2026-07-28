@@ -5,11 +5,14 @@ import ttnn
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
+    apply_allgather_and_slice,
     apply_allreduce,
     apply_output_projection,
+    apply_output_projection_fused_rs,
     apply_qkv_projection,
     apply_rope,
     concat_heads,
+    is_shape_fused_mm_rs_supported,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
@@ -104,16 +107,18 @@ def prefill_forward(
         block_size = k_cache.shape[2]
         page_len = page_table.shape[-1] * block_size
         if batch_size > 1:
-            # Flatten batch into seq dim, heads into last dim — single fill call, no per-user loop.
-            # Paged cache just maps sequence positions to physical pages.
-            k_fill = ttnn.reshape(tt_k, [1, 1, total_seq_len, -1])
-            v_fill = ttnn.reshape(tt_v, [1, 1, total_seq_len, -1])
-            page_table_flat = ttnn.reshape(page_table, [1, -1])
-            ttnn.experimental.paged_fill_cache(k_cache, k_fill, page_table_flat, batch_idx=0)
-            ttnn.experimental.paged_fill_cache(v_cache, v_fill, page_table_flat, batch_idx=0)
-            k_fill.deallocate(True)
-            v_fill.deallocate(True)
-            page_table_flat.deallocate(True)
+            # Per-user paged cache fill. The flattened approach (reshape batch into seq
+            # + flattened page_table) produces wrong cache for users beyond the first —
+            # paged_fill_cache doesn't correctly handle positions beyond the original
+            # page_table's block count. Use per-user calls with batch_idx=0 instead.
+            for b in range(batch_size):
+                k_b = tt_k[b : b + 1, :, :, :]
+                v_b = tt_v[b : b + 1, :, :, :]
+                pt_b = page_table[b : b + 1, :]
+                k_b_fill = k_b[:, :, :page_len, :] if page_len < k_b.shape[2] else k_b
+                v_b_fill = v_b[:, :, :page_len, :] if page_len < v_b.shape[2] else v_b
+                ttnn.experimental.paged_fill_cache(k_cache, k_b_fill, pt_b, batch_idx=0)
+                ttnn.experimental.paged_fill_cache(v_cache, v_b_fill, pt_b, batch_idx=0)
         else:
             tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
             tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
@@ -162,8 +167,16 @@ def prefill_forward(
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
-    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-    tt_sdpa_out.deallocate(True)
-    # Tensor parallel allreduce
-    tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+    # Output projection + tensor-parallel allreduce.
+    # When TP > 1 we use the fused matmul + reduce-scatter op; the trailing
+    # all-gather + padding slice stay as separate ops. See
+    # apply_output_projection_fused_rs for the per-shape tuned configs.
+    if mesh_config.tp > 1 and is_shape_fused_mm_rs_supported(tt_sdpa_out):
+        rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
+        tt_sdpa_out.deallocate(True)
+        tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
+    else:
+        tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+        tt_sdpa_out.deallocate(True)
+        tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
     return tt_out_result

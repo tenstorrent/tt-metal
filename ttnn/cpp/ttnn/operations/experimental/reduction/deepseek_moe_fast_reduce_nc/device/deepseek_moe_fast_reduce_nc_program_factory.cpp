@@ -8,7 +8,8 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.hpp"
@@ -19,7 +20,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCProgramFactory::create(
+tt::tt_metal::ProgramDescriptor DeepseekMoEFastReduceNCProgramFactory::create_descriptor(
     const DeepseekMoEFastReduceNCParams& operation_attributes,
     const DeepseekMoEFastReduceNCInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
@@ -27,7 +28,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = tensor_args.input_tensor.device();
-    auto program = Program();
+    ProgramDescriptor desc;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -93,25 +94,37 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     const uint32_t output_tensor_buffer_factor = 2;
 
     uint32_t compute_input_cb_id_0 = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig compute_input_cb_config_0 =
-        tt::tt_metal::CircularBufferConfig(
-            input_tensor_buffer_factor * input_page_size, {{compute_input_cb_id_0, input_data_format}})
-            .set_page_size(compute_input_cb_id_0, input_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, compute_input_cb_config_0);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_tensor_buffer_factor * input_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(compute_input_cb_id_0),
+            .data_format = input_data_format,
+            .page_size = input_page_size,
+        }}},
+    });
 
     uint32_t compute_input_cb_id_1 = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig compute_input_cb_config_1 =
-        tt::tt_metal::CircularBufferConfig(
-            compute_buffer_factor * compute_page_size, {{compute_input_cb_id_1, compute_data_format}})
-            .set_page_size(compute_input_cb_id_1, compute_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, compute_input_cb_config_1);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = compute_buffer_factor * compute_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(compute_input_cb_id_1),
+            .data_format = compute_data_format,
+            .page_size = compute_page_size,
+        }}},
+    });
 
     uint32_t compute_output_cb_id = tt::CBIndex::c_16;
-    tt::tt_metal::CircularBufferConfig compute_output_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            output_tensor_buffer_factor * output_page_size, {{compute_output_cb_id, output_data_format}})
-            .set_page_size(compute_output_cb_id, output_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, compute_output_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_tensor_buffer_factor * output_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(compute_output_cb_id),
+            .data_format = output_data_format,
+            .page_size = output_page_size,
+        }}},
+    });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -144,11 +157,19 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/kernels/"
         "deepseek_moe_fast_reduce_nc_writer.cpp";
 
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program, reader_kernel_file, all_cores, tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = reader_kernel_file;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program, writer_kernel_file, all_cores, tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = writer_kernel_file;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -172,17 +193,20 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         compute_input_cb_id_1,
         compute_output_cb_id,
     };
-    tt::tt_metal::CreateKernel(
-        program,
-        compute_kernel_file,
-        core_group_1,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_ct_args_group_1,
-            .defines = compute_defines});
 
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = compute_kernel_file;
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = std::move(compute_ct_args_group_1);
+    compute_desc_1.defines = {compute_defines.begin(), compute_defines.end()};
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    std::optional<KernelDescriptor> compute_desc_2;
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_ct_args_group_2 = {
             num_cols_per_core_group_2,
@@ -192,16 +216,17 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
             compute_input_cb_id_1,
             compute_output_cb_id,
         };
-        tt::tt_metal::CreateKernel(
-            program,
-            compute_kernel_file,
-            core_group_2,
-            tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_ct_args_group_2,
-                .defines = compute_defines});
+        compute_desc_2.emplace();
+        compute_desc_2->kernel_source = compute_kernel_file;
+        compute_desc_2->source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2->core_ranges = core_group_2;
+        compute_desc_2->compile_time_args = std::move(compute_ct_args_group_2);
+        compute_desc_2->defines = {compute_defines.begin(), compute_defines.end()};
+        compute_desc_2->config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+        };
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -244,50 +269,27 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         uint32_t start_slice_row_offset = (start_tiles_read / input_tensor_Wt) * slice_Wt;
         uint32_t start_pages_read_in_row = start_tiles_read % input_tensor_Wt;
 
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(), start_tiles_read, start_tiles_to_read};
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), start_tiles_read, start_tiles_to_read});
 
-        std::vector<uint32_t> writer_rt_args = {
-            start_tiles_read, start_tiles_to_read, start_slice_row_offset, start_pages_read_in_row};
+        KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.push_back(start_tiles_read);
+        writer_rt_args.push_back(start_tiles_to_read);
+        writer_rt_args.push_back(start_slice_row_offset);
+        writer_rt_args.push_back(start_pages_read_in_row);
         for (const ttnn::Tensor& output_tensor : output_tensors) {
-            writer_rt_args.push_back(output_tensor.buffer()->address());
+            writer_rt_args.push_back(output_tensor.buffer());
         }
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+        writer_desc.emplace_runtime_args(core, writer_rt_args);
     }
 
-    return cached_program_t{
-        std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_x}};
-}
-
-void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const DeepseekMoEFastReduceNCParams&,
-    const DeepseekMoEFastReduceNCInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const std::vector<ttnn::Tensor>& output_tensors = tensor_return_value;
-
-    auto& program = cached_program.program;
-    const tt::tt_metal::KernelHandle& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const tt::tt_metal::KernelHandle& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const uint32_t num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    const uint32_t num_cores_x = cached_program.shared_variables.num_cores_x;
-
-    auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
-
-        auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
-        reader_kernel_args[0] = input_tensor.buffer()->address();
-
-        auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
-        const uint32_t output_tensor_start_idx = 4;
-        for (unsigned j = 0; j < output_tensors.size(); ++j) {
-            writer_kernel_args[output_tensor_start_idx + j] = output_tensors.at(j).buffer()->address();
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (compute_desc_2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_2));
     }
+
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

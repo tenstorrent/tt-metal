@@ -27,7 +27,7 @@ uint32_t get_num_pages(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->num
 uint32_t get_page_size(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->page_size(); }
 uint32_t get_aligned_page_size(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->aligned_page_size(); }
 
-std::string serialize_physical_core_coords(const std::vector<CoreCoord>& cores, tt::tt_metal::IDevice* device) {
+std::string serialize_physical_core_coords(const std::vector<tt::tt_metal::CoreCoord>& cores, tt::tt_metal::IDevice* device) {
     std::vector<uint32_t> flat_physical_core_coords;
     flat_physical_core_coords.reserve(2 * cores.size());
 
@@ -625,8 +625,8 @@ MoEGPTMeshWorkloadFactory::create_at(
         const auto tilize_mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(expert_mapping.dtype());
         const auto tilize_output_data_format = tt::tt_metal::datatype_to_dataformat_converter(sparse_buffer.dtype());
 
-        // tiles_per_local_chunk for the drain core (used for CB sizing)
-        uint32_t shared_cb_num_pages = max_tiles_per_local_chunk;
+        // tiles_per_global_chunk: drain core gathers from all tilize cores before multicast
+        uint32_t shared_cb_num_pages = hidden_size / TILE_WIDTH;
 
         tt::tt_metal::create_cb(
             per_expert_total_tokens_cb_id,
@@ -688,7 +688,7 @@ MoEGPTMeshWorkloadFactory::create_at(
             program,
             tilize_core_range_set,
             tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment),
-            tokens,
+            tokens + 1,
             tt::DataFormat::UInt32);
 
         tt::tt_metal::create_cb(

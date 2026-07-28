@@ -17,10 +17,10 @@ void core_agnostic_main();
 
 #ifdef COMPILE_FOR_BRISC
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #else
 #include "api/compute/common.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 // We are in compute kernel land
 #endif
 
@@ -33,7 +33,7 @@ static constexpr std::size_t CHURN_TARGET = (0x10000 - 2 * CB_STEP_SIZE);
 static constexpr std::size_t CHURN_LOOP_COUNT = CHURN_TARGET / CB_STEP_SIZE;
 
 void core_agnostic_main() {
-    experimental::CircularBuffer cb(CB_ID);
+    CircularBuffer cb(CB_ID);
     for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
         cb.wait_front(CB_STEP_SIZE);
         cb.pop_front(CB_STEP_SIZE);

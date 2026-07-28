@@ -175,6 +175,36 @@ inline bool FileContainsAllStrings(const std::string& file_name, const std::vect
     return false;
 }
 
+// Check that the given file contains NONE of the listed strings. Returns false as soon as any one
+// is found. Doesn't check for strings spanning lines in the file.
+inline bool FileContainsNoneOfStrings(const std::string& file_name, const std::vector<std::string>& must_not_contain) {
+    if (must_not_contain.empty()) {
+        return true;
+    }
+
+    std::fstream log_file;
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
+        return false;
+    }
+
+    std::string line;
+    while (getline(log_file, line)) {
+        for (const auto& forbidden : must_not_contain) {
+            if (StringContainsGlob(line, forbidden)) {
+                log_info(
+                    tt::LogTest,
+                    "Test Error: file {} unexpectedly contains forbidden string \"{}\"",
+                    file_name,
+                    forbidden);
+                DumpFile(file_name);
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 // Check whether the given file contains a list of strings (in order). Doesn't check for strings
 // between lines in a file.
 inline bool FileContainsAllStringsInOrder(const std::string& file_name, const std::vector<std::string>& must_contain) {
