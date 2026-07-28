@@ -24,7 +24,7 @@ import numpy as np
 import torch
 import ttnn
 
-from models.experimental.vibevoice.tt.vibevoice_config import DecoderConfig, damp_weight
+from models.experimental.vibevoice.tt.vibevoice_config import DecoderConfig
 
 
 _HIFI4 = ttnn.WormholeComputeKernelConfig(
@@ -201,19 +201,11 @@ class LMWeights:
     config: DecoderConfig
 
 
-def _tile(t: torch.Tensor, device, dtype=ttnn.bfloat16, damp_ibw: Optional[int] = None) -> ttnn.Tensor:
-    """Convert 2D [out, in] weight to TTNN TILE layout, transposed for x@W semantics.
-
-    damp_ibw: in0_block_w of the matmul this weight feeds.  When set, fold the pre-#50250
-    K-reduction damping into the weight (see mm_damp) — scaling W is equivalent to scaling the
-    matmul output, so this costs nothing at runtime.  Only ttnn.linear weights pass it.
-    """
+def _tile(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """Convert 2D [out, in] weight to TTNN TILE layout, transposed for x@W semantics."""
     # ttnn.linear computes x @ W (no implicit transpose), so store as [in, out]
-    # bf16's ULP is coarser than most of these factors, so the shrink that lands is not the one
-    # requested — that is intended, see mm_damp / damp_weight.
-    t_bf = damp_weight(t, t.shape[1], damp_ibw) if damp_ibw is not None else t.to(torch.bfloat16)
     return ttnn.as_tensor(
-        t_bf.t().unsqueeze(0).unsqueeze(0),
+        t.to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0),
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -265,14 +257,14 @@ def preprocess_lm_weights(
         lm_head_w = state_dict["lm_head.weight"].to(torch.bfloat16)
     else:
         lm_head_w = tok_emb_torch  # tied weights
-    lm_head_tt = _tile(lm_head_w, device, damp_ibw=2)
+    lm_head_tt = _tile(lm_head_w, device)
 
     layers: List[LayerWeights] = []
     for i in range(config.num_hidden_layers):
         prefix = f"layers.{i}"
 
-        def _w(key: str, damp_ibw: int = 2) -> ttnn.Tensor:
-            return _tile(state_dict[f"{prefix}.{key}.weight"], device, damp_ibw=damp_ibw)
+        def _w(key: str) -> ttnn.Tensor:
+            return _tile(state_dict[f"{prefix}.{key}.weight"], device)
 
         def _b(key: str) -> Optional[ttnn.Tensor]:
             bias_key = f"{prefix}.{key}.bias"
@@ -292,7 +284,7 @@ def preprocess_lm_weights(
         # separate K/V matmuls (byte-identical; see fused-KV probe).
         wk_t = state_dict[f"{prefix}.attention.wk.weight"]
         wv_t = state_dict[f"{prefix}.attention.wv.weight"]
-        wkv_tt = _tile(torch.cat([wk_t, wv_t], dim=0), device, damp_ibw=2)
+        wkv_tt = _tile(torch.cat([wk_t, wv_t], dim=0), device)
         k_b = _b("attention.wk")
         v_b = _b("attention.wv")
         if k_b is not None and v_b is not None:
@@ -300,12 +292,10 @@ def preprocess_lm_weights(
         else:
             kv_bias = None
 
-        # damp_ibw = the in0_block_w of the decode program config each weight feeds:
-        # wq/wo use _QO_DECODE_PROGCFG (ibw=4); wkv/w1/w2/w3 use ibw=2.
         lw = LayerWeights(
-            wq=_w("attention.wq", damp_ibw=4),
+            wq=_w("attention.wq"),
             wkv=wkv_tt,
-            wo=_w("attention.wo", damp_ibw=4),
+            wo=_w("attention.wo"),
             w1=_w("feed_forward.w1"),
             w2=_w("feed_forward.w2"),
             w3=_w("feed_forward.w3"),
