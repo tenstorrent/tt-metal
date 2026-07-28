@@ -209,10 +209,29 @@ def hide_prefill_pads_enabled() -> bool:
     pads restores 20/12/11, i.e. baseline. See ``doc/decision_fidelity/device_gumbel_restored.md``
     section 16.
 
-    Default OFF pending its device gate, since it is decision-changing for every prompt whose length
-    is not a 32-multiple. Prompts that ARE aligned have no pad slots, so the mask is unchanged there.
+    Default **ON** since 2026-07-28: the device gate it was waiting for is done, twice.
+
+    * doc/decision_fidelity/device_gumbel_restored.md section 18 -- the seven questions that
+      collapse on block 0 all stop collapsing, 7 of 7, and block 0 halts in every case where six of
+      seven previously ran the full 48 steps and committed an unsettled canvas.
+    * Language drift (an English prompt answered in Chinese) on 16 trivial-English probes through the
+      shipped vLLM server: **2/16 -> 0/16, repairing both and breaking none**, matching the A100 CUDA
+      reference's 0/16, at **no latency cost** (24.6 s vs 24.5 s per request). The same A/B rules out
+      the sampler: DG_VLLM_GUMBEL_MODE=host (IID) drifts on the same two prompts as device
+      (2/16, repaired 0) while costing 1.40x per request, so the residual ttnn.rand correlation is
+      NOT what makes TT answer in the wrong language.
+
+    Still decision-changing for every prompt whose length is not a 32-multiple; prompts that ARE
+    aligned have no pad slots, so the mask is unchanged there. Set
+    DG_DENOISE_HIDE_PREFILL_PADS=0 to get the old maskless behaviour back.
+
+    NOTE the interaction now reachable by default: combining this with a BOUNDED sliding span
+    (DG_DENOISE_SLIDING_SPAN=1, still default off) raises NotImplementedError in
+    _build_reveal_mask_device -- the bounded read is built for (span, lo), so pad slots would have
+    to be mapped into that window rather than hidden by absolute position. Enabling the span needs
+    that mask first.
     """
-    return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "0").lower() in ("1", "true", "yes", "on")
+    return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "1").lower() in ("1", "true", "yes", "on")
 
 
 def prefill_pad_span(true_prompt_len: int | None, padded_prompt_len: int | None):

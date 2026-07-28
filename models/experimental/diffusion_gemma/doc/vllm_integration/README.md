@@ -52,13 +52,36 @@ halt from **72% to 99%** and per-block latency to **0.652x (~1.53x faster)**. Se
 maskless path. Evidence: `doc/decision_fidelity/device_gumbel_restored.md` sections 10, 17 and 19,
 with the gate scripts under `doc/decision_fidelity/gate/`.
 
-`DG_DENOISE_HIDE_PREFILL_PADS` is **default OFF and not yet shippable**. Prefill right-pads the prompt
-to a tile multiple and writes K/V for the pad tokens while the reveal predicate uses the padded
-length, so the canvas attends up to 31 garbage keys immediately before itself. Hiding them fixed
-**7 of 7** block-0 collapses on device, and injecting the same geometry into the HF reference
-reproduces the failure there (q096 hits the 48-step cap), but its own clean-question regression arm
-(`doc/decision_fidelity/gate/padfix_regression_arm.sh`) has not run. Do not enable it in a serving
-spec until it does.
+`DG_DENOISE_HIDE_PREFILL_PADS` is **default ON since 2026-07-28**. Prefill right-pads the prompt to a
+tile multiple and writes K/V for the pad tokens while the reveal predicate uses the padded length, so
+the canvas attends up to 31 garbage keys immediately before itself, destroying the thinking-template
+prefix at canvas positions 0-4 -- the entire accept budget block 0 bootstraps from.
+
+Three independent measurements, all on device:
+
+* **7 of 7** block-0 collapses fixed (`doc/decision_fidelity/device_gumbel_restored.md` section 18),
+  and injecting the same padding geometry into the HF reference reproduces the failure there (q096
+  hits the 48-step cap; hiding the pads restores baseline).
+* **Language drift**, the shipped vLLM server replaying the GPQA prompts that actually drifted in the
+  198-question run, one knob, 512-token budget: **6 of 6 reproduced drifts repaired, 0 regressions**
+  across 5 clean controls, and the **3 empty replies also fixed** (the think channel now closes, so
+  `--reasoning-parser diffusion_gemma` returns text instead of nothing). Drift among non-empty
+  replies 6/11 = 55% -> 1/14 = 7%, and that remaining one (`doc_id 58`) is degenerate in BOTH arms --
+  a collapsed tail whose garbage merely changes language -- so it is pre-existing, not caused here.
+* On 16 trivial-English probes: **2/16 -> 0/16**, matching the A100 CUDA reference's 0/16, at no
+  latency cost (24.6 s vs 24.5 s per request).
+
+The same A/B exonerates the sampler: `DG_VLLM_GUMBEL_MODE=host` (IID) drifts on exactly the same
+prompts as `device` (2/16, repaired 0) while costing 1.40x per request, so do NOT revert that default
+for language reasons. Cost of the pad fix on GPQA prompts is +12% mean latency (39.3 -> 44.1 s),
+because more replies now finish their think channel instead of being truncated mid-thought.
+
+Set `DG_DENOISE_HIDE_PREFILL_PADS=0` for the old maskless behaviour. **Still owed:** a full 198-question
+GPQA run at the reference budget to confirm the 38/198 non-English rate drops and the score holds, and
+the clean-question mechanism arm (`gate/padfix_regression_arm.sh`, 3 of 30 pairs done). **Landmine:**
+combining this with a bounded sliding span (`DG_DENOISE_SLIDING_SPAN=1`, default off) raises
+`NotImplementedError` -- the bounded read is built for (span, lo), so pad slots need mapping into that
+window first.
 
 `DG_VLLM_GUMBEL_MODE` defaults to **`device`**, the on-device permuted-vocab RNG: **~53.6 vs ~36.3
 tokens/block/s** against `host` (~1.48x), since it removes the per-step host RNG and its replicated
