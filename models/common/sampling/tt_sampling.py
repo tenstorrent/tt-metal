@@ -256,9 +256,11 @@ class TTSampling(LightweightModule):
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
-            if self._sampling_dp > 1
-            else None,
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
+                if self._sampling_dp > 1
+                else None
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.user_ids_tt_tensor = ttnn.as_tensor(
@@ -334,14 +336,14 @@ class TTSampling(LightweightModule):
         self._invalid_vocab_tail_width = 0
 
         vocab_shard_dims = get_vocab_shard_dims(self.cluster_shape, self.sampling_all_gather_axis)
-        # The compact tail-mask path slices off the valid region, masks the tail,
-        # and concats back. That reassembly is only safe when sampling runs on the
-        # full compute grid: on a sampling sub-core grid (e.g. Llama TG) the slice
-        # and concat are placed on different cores and the columns are stitched back
-        # incorrectly, so padded-vocab tokens (id >= vocab_size) survive into top-k
-        # and get sampled -> garbage / non-deterministic output. Fall back to the
-        # plain full-width additive mask (a single elementwise add, no reassembly)
-        # whenever a sub-core grid is in use.
+        # The compact tail-mask path masks only the padded tail, but it has to slice the
+        # logits and concat them back. ttnn.concat only honours sub_core_grids when the
+        # input is unsharded and the output is interleaved; otherwise it falls through to
+        # the "massaged" untilize/transpose path, which is invoked without sub_core_grids
+        # and so runs on the full Tensix grid. The sampling logits are width-sharded
+        # (DECODE_LOGITS_MEMCFG), so on a sampling sub-core grid the concat escapes the
+        # sub-device. Use the plain full-width additive mask (one elementwise add, no
+        # reassembly) whenever a sub-core grid is in use.
         tail_mask = (
             build_tail_invalid_vocab_mask(
                 self.vocab_size,
@@ -614,33 +616,43 @@ class TTSampling(LightweightModule):
         Validated on a restricted active sub-device by
         tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py.
         """
-        if getattr(self, "_greedy_col", None) is None:
-            return gathered_values
-        try:
-            scg = self.sub_core_grids
-            BIG = 1.0e9  # >> max vocab index; EXACT binary offset (no bf16 (maxv-value) magnitude dependence)
-            DELTA = 1.0  # >> bf16 tie granularity => the chosen tied-max becomes the strict argmax
-            maxv = ttnn.max(gathered_values, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] bf16
-            idx_f = ttnn.typecast(gathered_global_indices, ttnn.float32, sub_core_grids=scg)
-            is_max = ttnn.eq(gathered_values, maxv, sub_core_grids=scg)  # 1.0 at the (tied) maxima, exact
-            not_max = ttnn.lt(gathered_values, maxv, sub_core_grids=scg)  # 1.0 strictly below max
-            # lowest global index among the maxima: push non-maxima up by BIG (exact, robust), then min.
-            masked_idx = ttnn.add(idx_f, ttnn.multiply(not_max, BIG, sub_core_grids=scg), sub_core_grids=scg)
-            greedy_i = ttnn.min(masked_idx, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] f32
-            is_lowidx = ttnn.eq(idx_f, greedy_i, sub_core_grids=scg)  # broadcast over W
-            is_winner = ttnn.multiply(is_max, is_lowidx, sub_core_grids=scg)  # 1.0 at exactly one candidate
-            # gate by k==1 (self._greedy_col [1,1,B,1]); random users get boost 0 => values unchanged
-            boost = ttnn.multiply(
-                ttnn.multiply(is_winner, self._greedy_col, sub_core_grids=scg), DELTA, sub_core_grids=scg
-            )
-            return ttnn.add(
-                gathered_values, ttnn.typecast(boost, ttnn.bfloat16, sub_core_grids=scg), sub_core_grids=scg
-            )
-        except Exception as e:
-            if not getattr(self, "_tiebreak_logged", False):
-                self._tiebreak_logged = True
-                logger.error(f"[TIEBREAK_FIX] disabled (using original values) due to: {e}")
-            return gathered_values
+        scg = self.sub_core_grids
+        BIG = 1.0e9  # >> max vocab index; EXACT binary offset (no bf16 (maxv-value) magnitude dependence)
+        DELTA = 1.0  # >> bf16 tie granularity => the chosen tied-max becomes the strict argmax
+        # Every intermediate is deallocated as soon as its last reader is issued: this runs once per
+        # decode step, so leaving them to Python refcounting would hold ~9 extra buffers per step.
+        maxv = ttnn.max(gathered_values, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] bf16
+        idx_f = ttnn.typecast(gathered_global_indices, ttnn.float32, sub_core_grids=scg)
+        is_max = ttnn.eq(gathered_values, maxv, sub_core_grids=scg)  # 1.0 at the (tied) maxima, exact
+        not_max = ttnn.lt(gathered_values, maxv, sub_core_grids=scg)  # 1.0 strictly below max
+        ttnn.deallocate(maxv)
+
+        # lowest global index among the maxima: push non-maxima up by BIG (exact, robust), then min.
+        not_max_scaled = ttnn.multiply(not_max, BIG, sub_core_grids=scg)
+        ttnn.deallocate(not_max)
+        masked_idx = ttnn.add(idx_f, not_max_scaled, sub_core_grids=scg)
+        ttnn.deallocate(not_max_scaled)
+        greedy_i = ttnn.min(masked_idx, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] f32
+        ttnn.deallocate(masked_idx)
+
+        is_lowidx = ttnn.eq(idx_f, greedy_i, sub_core_grids=scg)  # broadcast over W
+        ttnn.deallocate(idx_f)
+        ttnn.deallocate(greedy_i)
+        is_winner = ttnn.multiply(is_max, is_lowidx, sub_core_grids=scg)  # 1.0 at exactly one candidate
+        ttnn.deallocate(is_max)
+        ttnn.deallocate(is_lowidx)
+
+        # gate by k==1 (self._greedy_col [1,1,B,1]); random users get boost 0 => values unchanged
+        winner_gated = ttnn.multiply(is_winner, self._greedy_col, sub_core_grids=scg)
+        ttnn.deallocate(is_winner)
+        boost = ttnn.multiply(winner_gated, DELTA, sub_core_grids=scg)
+        ttnn.deallocate(winner_gated)
+        boost_bf16 = ttnn.typecast(boost, ttnn.bfloat16, sub_core_grids=scg)
+        ttnn.deallocate(boost)
+
+        adjusted = ttnn.add(gathered_values, boost_bf16, sub_core_grids=scg)
+        ttnn.deallocate(boost_bf16)
+        return adjusted
 
     def forward(
         self,
@@ -720,6 +732,9 @@ class TTSampling(LightweightModule):
                     dim=-1,
                     sub_core_grids=self.sub_core_grid_topk,
                     indices_tensor=indices_tensor_list[i],
+                    # Break exact-value ties by lowest index instead of array position, so the
+                    # candidate set handed to ttnn.sampling does not depend on placement.
+                    stable=True,
                 )
                 topk_values_list.append(topk_values)
                 topk_indices_list.append(topk_indices)
@@ -753,6 +768,9 @@ class TTSampling(LightweightModule):
                 dim=-1,
                 sub_core_grids=self.sub_core_grid_topk,
                 indices_tensor=self.tt_indices_tensor,
+                # Break exact-value ties by lowest index instead of array position, so the
+                # candidate set handed to ttnn.sampling does not depend on placement.
+                stable=True,
             )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
@@ -865,8 +883,7 @@ class TTSampling(LightweightModule):
         else:
             self.tt_log_probs = None
 
-        if sampling_values is not topk_values_gathered_bf16_interleaved:
-            ttnn.deallocate(sampling_values)
+        ttnn.deallocate(sampling_values)
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
