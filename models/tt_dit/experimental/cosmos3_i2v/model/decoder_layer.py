@@ -149,6 +149,18 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
         # might return a persistent buffer. To stay correct without micro-managing which
         # specific tensors are persistent, we don't manually deallocate inside the layer.
         # Python GC + the ccl_manager's ping-pong rotation handle memory reuse.
+        # Once the und K/V are cached (steps after the first), the und stream is skipped
+        # entirely: its trunk forward is step-invariant, so recomputing norm/attn/MLP for
+        # the (large, negative-prompt) und sequence every step is redundant. und_seq is
+        # passed through unused; only gen is advanced.
+        if getattr(self.self_attn, "_und_kv_cache", None) is not None:
+            gen_norm = self.input_layernorm_moe_gen(gen_seq)
+            _, gen_attn = self.self_attn(None, gen_norm, None, None, cos_gen, sin_gen, logical_n_gen=logical_n_gen)
+            residual_gen = ttnn.add(gen_seq, gen_attn)
+            mlp_gen_out = self.mlp_moe_gen(self.post_attention_layernorm_moe_gen(residual_gen))
+            gen_out = ttnn.add(residual_gen, mlp_gen_out)
+            return und_seq, gen_out
+
         und_norm = self.input_layernorm(und_seq)
         gen_norm = self.input_layernorm_moe_gen(gen_seq)
 

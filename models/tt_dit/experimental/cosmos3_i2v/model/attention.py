@@ -293,6 +293,15 @@ class Cosmos3JointAttention(Module):
 
         self._k_pad_mask_cache: dict[tuple[int, int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
+        # und (text) K/V cache for the ring joint SDPA. und is step-invariant (no
+        # timestep/adaLN reaches it), so its per-layer K/V are identical across denoise
+        # steps. When TT_COSMOS3_UND_CACHE is on, step 0 captures them here and later
+        # steps skip the entire und pathway, feeding the cached joint K/V into the ring
+        # op. Only the sp>1 ring path is cached (the production path).
+        self._und_cache_enabled = os.environ.get("TT_COSMOS3_UND_CACHE") in ("1", "true", "True")
+        self._capture_und_kv = False
+        self._und_kv_cache: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None
+
     def _k_pad_mask(self, padded_n_gen: int, logical_n_gen: int, head_dim: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         key = (padded_n_gen, logical_n_gen, head_dim)
         cached = self._k_pad_mask_cache.get(key)
@@ -438,6 +447,80 @@ class Cosmos3JointAttention(Module):
         out_replicated = self.ccl_manager.all_gather_persistent_buffer(out_fractured, dim=3, mesh_axis=self._tp_axis())
         return out_replicated
 
+    def _forward_gen_only(
+        self,
+        gen_seq_11Mh: ttnn.Tensor,
+        cos_gen_11ME: ttnn.Tensor,
+        sin_gen_11ME: ttnn.Tensor,
+        logical_n_gen: int,
+    ) -> tuple[None, ttnn.Tensor]:
+        """Gen-only ring attention using the cached step-invariant und K/V.
+
+        Mirrors the sp>1 ring path of `forward`, but skips the und pathway (projection,
+        norm, RoPE, causal SDPA, MLP) entirely — the joint Q/K/V come from
+        `_und_kv_cache`. und_out is not produced (discarded for I2V). The cached tensors
+        are never deallocated; they are read on every replay of the gen-only trace.
+        """
+        q_gen, k_gen, v_gen = self._pathway(
+            gen_seq_11Mh,
+            cos_gen_11ME,
+            sin_gen_11ME,
+            proj_q=self.add_q_proj,
+            proj_k=self.add_k_proj,
+            proj_v=self.add_v_proj,
+            norm_q=self.norm_added_q,
+            norm_k=self.norm_added_k,
+        )
+        kv_repeat = self.n_local_heads // self.n_local_kv_heads
+        if kv_repeat > 1:
+            crs = self.safe_core_range_set
+            k_gen_b = _gqa_interleave_broadcast(k_gen, kv_repeat, self.n_local_kv_heads, crs)
+            v_gen_b = _gqa_interleave_broadcast(v_gen, kv_repeat, self.n_local_kv_heads, crs)
+            ttnn.deallocate(k_gen)
+            ttnn.deallocate(v_gen)
+        else:
+            k_gen_b, v_gen_b = k_gen, v_gen
+
+        padded_n_gen = k_gen_b.shape[2] * self.sp_factor
+        if logical_n_gen < padded_n_gen:
+            head_dim = k_gen_b.shape[3]
+            mask_tt, neg_pad_tt = self._k_pad_mask(padded_n_gen, logical_n_gen, head_dim)
+            k_real_tt = ttnn.multiply(k_gen_b, mask_tt)
+            k_masked = ttnn.add(k_real_tt, neg_pad_tt)
+            ttnn.deallocate(k_real_tt)
+            ttnn.deallocate(k_gen_b)
+            k_gen_b = k_masked
+
+        q_und_c, k_und_c, v_und_c = self._und_kv_cache
+        gen_attn_BHME, und_attn_via_ring, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            q_gen,
+            k_gen_b,
+            v_gen_b,
+            q_und_c,
+            k_und_c,
+            v_und_c,
+            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k_gen_b.shape, 2, self.sp_axis),
+            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v_gen_b.shape, 2, self.sp_axis),
+            joint_strategy="rear",
+            logical_n=logical_n_gen,
+            program_config=self.ring_sdpa_program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
+            num_links=self.ccl_manager.num_links,
+            cluster_axis=self.sp_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_manager.topology,
+            subdevice_id=self.ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid.y),
+        )
+        ttnn.deallocate(q_gen)
+        ttnn.deallocate(k_gen_b)
+        ttnn.deallocate(v_gen_b)
+        ttnn.deallocate(und_attn_via_ring)
+        gen_out = self._project_out(gen_attn_BHME, self.to_add_out)
+        return None, gen_out
+
     def forward(
         self,
         und_seq_11Nh: ttnn.Tensor,
@@ -462,6 +545,10 @@ class Cosmos3JointAttention(Module):
         Returns:
             (und_out, gen_out). und is replicated. At sp>1, gen stays sp-sharded.
         """
+        # Steps after the first reuse the cached step-invariant und K/V and run gen only.
+        if self._und_kv_cache is not None and self.sp_factor > 1 and sp_ring_enabled():
+            return self._forward_gen_only(gen_seq_11Mh, cos_gen_11ME, sin_gen_11ME, logical_n_gen)
+
         global _attn_dump_done
         _dump_dir = os.environ.get("TT_COSMOS3_DUMP_ATTN_DIR")
         _do_dump = _dump_dir is not None and not _attn_dump_done
@@ -584,6 +671,17 @@ class Cosmos3JointAttention(Module):
                 ttnn.deallocate(v_und)
             else:
                 k_und_pad_b, v_und_pad_b = k_und, v_und
+
+            # und is step-invariant (no timestep/adaLN reaches it), so these ring-format
+            # joint Q/K/V are identical every denoise step. Clone them to persistent DRAM on
+            # the first full forward; later steps take `_forward_gen_only` and skip the whole
+            # und pathway. Cloned because the originals are deallocated below.
+            if self._und_cache_enabled and self._und_kv_cache is None:
+                self._und_kv_cache = (
+                    ttnn.clone(q_und_pad, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    ttnn.clone(k_und_pad_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    ttnn.clone(v_und_pad_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                )
 
             gen_attn_BHME, und_attn_via_ring, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_gen,

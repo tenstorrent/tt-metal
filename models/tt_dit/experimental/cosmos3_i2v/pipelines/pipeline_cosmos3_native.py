@@ -312,7 +312,18 @@ class NativeLayerProxy(nn.Module):
             trunk_kwargs["time_embed"] = time_embed_tt
             trunk_kwargs["noisy_mask_gen"] = noisy_mask_tt
 
-        if _os.environ.get("TT_COSMOS3_DISABLE_TRACE") in (None, "", "0", "false", "False"):
+        und_cache = _os.environ.get("TT_COSMOS3_UND_CACHE") in ("1", "true", "True")
+        trace_enabled = _os.environ.get("TT_COSMOS3_DISABLE_TRACE") in (None, "", "0", "false", "False")
+
+        if und_cache and not getattr(self, "_und_prime_done", False):
+            # First step runs eager and full so each layer clones its step-invariant und
+            # K/V into a persistent buffer. The gen-only trace captured on the next step
+            # then reads those buffers, skipping the und pathway for all later steps.
+            und_out_tt, gen_out_tt = self._native_trunk(
+                und_tt, gen_tt, cos_und_tt, sin_und_tt, cos_gen_tt, sin_gen_tt, **trunk_kwargs
+            )
+            object.__setattr__(self, "_und_prime_done", True)
+        elif trace_enabled:
             if self._trunk_tracer is None:
                 from models.tt_dit.utils.tracing import Tracer
 
