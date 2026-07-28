@@ -362,9 +362,9 @@ inline void _llk_unpack_tilize_strided_(const TensorShape& tensor_shape, const s
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor (row-major).
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- *        stored in the buffer descriptor table, values = 0 - 16
+            stored in the buffer descriptor table, values = 0 - 16
+ * @param block_ct_dim: Number of tiles in a row of a block.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32_t buf_desc_id, const std::uint32_t block_ct_dim)
@@ -418,10 +418,11 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
+ * @param full_ct_dim: Number of tiles in a row of the input tensor (row-major).
+ * @param block_ct_dim: Number of tiles in a row of a block.
  * @note @ref _llk_unpack_tilize_strided_small_faces_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
@@ -449,7 +450,6 @@ inline void _llk_unpack_tilize_strided_init_small_faces_(
  * @brief Unpacks and tilizes an entire tiny tile using the stride instruction; sizes 8x32, 4x32, 2x32, 1x32.
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
  * @note Call @ref _llk_unpack_tilize_strided_init_small_faces_ before this function to program the MOP.
