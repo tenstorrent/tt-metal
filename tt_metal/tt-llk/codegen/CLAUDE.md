@@ -44,15 +44,18 @@ When a user references a **GitHub issue** (e.g., "solve issue #123", "fix #456",
 - `REQUEST_TYPE` = `issue`
 - `TASK_ID` = `issue-{ISSUE_NUMBER}` (e.g., `issue-123`)
 
-Then load **all** issue data — title, body, comments, and labels:
+Then load **all** issue data — title, body, comments, and labels. For a frozen
+regression run (`CODEGEN_ISSUE_SNAPSHOT` is set), use:
 
 ```bash
 python codegen/scripts/load_issue.py {number}
 ```
 
-When `CODEGEN_ISSUE_SNAPSHOT` is set, the helper reads that frozen JSON file and
-does not access GitHub. When it is unset, it runs the existing `gh issue view`
-command.
+Otherwise, preserve the existing live issue flow:
+
+```bash
+gh issue view {number} --json number,title,body,labels,comments
+```
 
 Extract and store verbatim:
 - `ISSUE_NUMBER` — the issue number
