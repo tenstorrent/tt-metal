@@ -235,14 +235,20 @@ class TTVibeVoiceModel:
         generator = self._make_generator(
             tokenizer, cfg_scale, num_diffusion_steps, max_new_tokens, max_length_times, ref_inference=ref_inference
         )
-        return generator.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            speech_tensors=speech_tensors,
-            speech_masks=speech_masks,
-            speech_input_mask=speech_input_mask,
-            prefill_speech_embeds=prefill_speech_embeds,
-            max_new_tokens=max_new_tokens,
-            forced_token_ids=forced_token_ids,
-            rng=rng,
-        )
+        try:
+            return generator.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                speech_tensors=speech_tensors,
+                speech_masks=speech_masks,
+                speech_input_mask=speech_input_mask,
+                prefill_speech_embeds=prefill_speech_embeds,
+                max_new_tokens=max_new_tokens,
+                forced_token_ids=forced_token_ids,
+                rng=rng,
+            )
+        finally:
+            # Each call builds its own generator, so its fused-frame trace would otherwise stay
+            # registered on the device for the rest of the session — one leaked trace per
+            # generate() (already the case for --warmup, and once per chunk for --chunks).
+            generator._reset_segment_frame_trace()
