@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-// [#48552 DIAGNOSTIC] DFB credit APIs removed to bisect fused-conv MATH 0x19 (DFB-credit vs compute); revert after.
 
 // Metal 2.0 fork of writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp
 // (block-sharded conv2d weights+bias mcast sender; also does the split-reader second-half
@@ -55,7 +54,6 @@ void kernel_main() {
     constexpr uint32_t window_outer = get_arg(args::window_outer);  // num_blocks_act_w
     constexpr bool sliced_inner_dim = num_blocks_weight_h > 1;      // Derived like block sharded reader
     constexpr uint32_t act_block_num_tiles_split_last = get_arg(args::act_block_num_tiles_split_last);
-    (void)act_block_num_tiles_split_last;  // [#48552 DIAG] only DFB-call arg; keep to avoid -Wunused
     constexpr uint32_t conv_act_c_read_bytes = get_arg(args::conv_act_c_read_bytes);
     constexpr uint32_t weight_size_w = get_arg(args::weight_size_w);
     constexpr uint32_t padded_conv_act_size_w = get_arg(args::padded_conv_act_size_w);
@@ -112,7 +110,7 @@ void kernel_main() {
     if constexpr (split_reader_enabled) {
 #ifdef SPLIT_READER
 #ifdef CONFIG_TENSOR_IN_DRAM
-        // [#48552 DIAG] DFB API removed: cb_reader_indices_obj.wait_front(1);
+        cb_reader_indices_obj.wait_front(1);
 #endif
         if constexpr (needs_act_block_zero_out) {
             zero_out_tiles<dfb::act_second_reader>(noc, cb_act_second_obj);
@@ -182,7 +180,7 @@ void kernel_main() {
 #ifdef SPLIT_READER
                 if constexpr (split_reader_enabled) {
                     reader_idx = start_reader_idx;
-                    // [#48552 DIAG] DFB API removed: cb_act_second_obj.reserve_back(act_block_num_tiles_split_last);
+                    cb_act_second_obj.reserve_back(act_block_num_tiles_split_last);
                     if (is_sender_core) {
                         l1_write_addr_act = cb_act_second_obj.get_write_ptr();
                         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
@@ -205,7 +203,7 @@ void kernel_main() {
                             act_l1_read_addr,
                             stride_h_bytes);
                     }
-                    // [#48552 DIAG] DFB API removed: cb_act_second_obj.push_back(act_block_num_tiles_split_last);
+                    cb_act_second_obj.push_back(act_block_num_tiles_split_last);
                     if (skip_work) {
                         continue;
                     }
@@ -216,7 +214,7 @@ void kernel_main() {
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
                     WATCHER_RING_BUFFER_PUSH(0xE1000000u | (rb_wcnt & 0xffff));  // sender: pre reserve cb_weight
-                    // [#48552 DIAG] DFB API removed: cb_weight_obj.reserve_back(weight_block_num_tiles);
+                    cb_weight_obj.reserve_back(weight_block_num_tiles);
 
                     const uint32_t outer_block_offset = weight_tile_h_outer_i * tiles_per_full_block;
                     uint32_t tile_id = weight_start_tile_id + height_block_offset + outer_block_offset;
@@ -273,7 +271,7 @@ void kernel_main() {
 #endif
                     WATCHER_RING_BUFFER_PUSH(0xE3000000u | (rb_wcnt & 0xffff));  // sender: mcast done
                     rb_wcnt++;
-                    // [#48552 DIAG] DFB API removed: cb_weight_obj.push_back(weight_block_num_tiles);
+                    cb_weight_obj.push_back(weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
             }
 #ifdef SPLIT_READER
@@ -292,7 +290,7 @@ void kernel_main() {
             if constexpr (fuse_bias) {
                 if (load_bias) {
 #ifdef FUSE_BIAS
-                    // [#48552 DIAG] DFB API removed: cb_bias_obj.reserve_back(bias_ntiles);
+                    cb_bias_obj.reserve_back(bias_ntiles);
 
                     uint32_t bias_write_offset = 0;
                     uint32_t bias_block_size_bytes = 0;
@@ -343,7 +341,7 @@ void kernel_main() {
                         weights_mcast_num_cores);
 #endif
 
-                    // [#48552 DIAG] DFB API removed: cb_bias_obj.push_back(bias_ntiles);
+                    cb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;
 #endif
                 }

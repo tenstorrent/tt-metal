@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-// [#48552 DIAGNOSTIC] DFB credit APIs removed to bisect fused-conv MATH 0x19 (DFB-credit vs compute); revert after.
 
 // Metal 2.0 fork of reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp
 // (block-sharded 2D-mcast conv2d activation reader).
@@ -127,7 +126,7 @@ void mcast_block_chunked(
     constexpr uint32_t wait_tile_start_cnt = std::min(block_tile_count, wait_tile_full_cnt);
     uint32_t wait_tile_curr = wait_tile_start_cnt;
     for (uint32_t i = 0; i < mcast_full_burst_cnt; i++) {
-        // [#48552 DIAG] DFB API removed: src_cb_obj.wait_front(wait_tile_curr);
+        src_cb_obj.wait_front(wait_tile_curr);
         multicast_data<act_mcast_num_dest_cores>(
             noc, mcast_ep, is_receiver_core, src_cb_obj, src_offset, dst, mcast_noc_burst_size);
         src_offset += mcast_noc_burst_size;
@@ -145,7 +144,7 @@ void mcast_block_chunked(
         }
     }
     if constexpr (mcast_leftover_burst_size > 0) {
-        // [#48552 DIAG] DFB API removed: src_cb_obj.wait_front(block_tile_count);
+        src_cb_obj.wait_front(block_tile_count);
         multicast_data<act_mcast_num_dest_cores>(
             noc, mcast_ep, is_receiver_core, src_cb_obj, src_offset, dst, mcast_leftover_burst_size);
     }
@@ -165,7 +164,6 @@ void kernel_main() {
     constexpr uint32_t conv_act_c_read_bytes = get_arg(args::conv_act_c_read_bytes);
     constexpr uint32_t window_outer = get_arg(args::window_outer);
     constexpr uint32_t act_block_num_tiles_read = get_arg(args::act_block_num_tiles_read);
-    (void)act_block_num_tiles_read;  // [#48552 DIAG] only DFB-call arg; keep to avoid -Wunused
     constexpr uint32_t weight_size_h = get_arg(args::weight_size_h);
     constexpr uint32_t weight_size_w = get_arg(args::weight_size_w);
     constexpr uint32_t padded_conv_act_size_w = get_arg(args::padded_conv_act_size_w);
@@ -227,7 +225,7 @@ void kernel_main() {
         noc.async_read(
             config_accessor, cb_reader_indices_obj, config_page_size, {.page_id = dram_config_reader_index}, {});
         noc.async_read_barrier();
-        // [#48552 DIAG] DFB API removed: cb_reader_indices_obj.push_back(1);
+        cb_reader_indices_obj.push_back(1);
     }
 #else
     packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -264,7 +262,7 @@ void kernel_main() {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
-            // [#48552 DIAG] DFB API removed: cb_act_rm_obj.reserve_back(act_block_num_tiles_read);
+            cb_act_rm_obj.reserve_back(act_block_num_tiles_read);
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = cb_act_rm_obj.get_write_ptr();
                 read_activation_data<
@@ -286,13 +284,13 @@ void kernel_main() {
                     act_l1_read_addr,
                     stride_h_bytes);
             }
-            // [#48552 DIAG] DFB API removed: cb_act_rm_obj.push_back(act_block_num_tiles_read);
+            cb_act_rm_obj.push_back(act_block_num_tiles_read);
 
 #ifndef SKIP_MCAST
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
-                // [#48552 DIAG] DFB API removed: cb_act_obj.reserve_back(act_block_num_tiles);
+                cb_act_obj.reserve_back(act_block_num_tiles);
                 if (act_w_outer_i == act_mcast_sender_id) {
                     // MCAST SENDER: send entire tilized input to other cores in column
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr
@@ -368,10 +366,10 @@ void kernel_main() {
                     WATCHER_RING_BUFFER_PUSH(0xA6000000u | RB_ITER(nbh, act_w_outer_i));  // recv: got VALID
                     DPRINT("RDR Rgot nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
                 }
-                // [#48552 DIAG] DFB API removed: cb_act_obj.push_back(act_block_num_tiles);
+                cb_act_obj.push_back(act_block_num_tiles);
             }  // act_w_num_outer
 
-            // [#48552 DIAG] DFB API removed: cb_tilized_in0_obj.pop_front(act_block_num_tiles);
+            cb_tilized_in0_obj.pop_front(act_block_num_tiles);
 #endif
         }
         start_reader_idx = reader_idx;
