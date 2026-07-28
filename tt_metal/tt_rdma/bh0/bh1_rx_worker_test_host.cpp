@@ -111,14 +111,14 @@ int main(int argc, char** argv) {
     cluster.write_core(
         device->id(), cqc, std::vector<uint32_t>(kCqSlots * 1536u / 4u, 0u), kCqBase);  // clear the whole ring
 
-    std::vector<uint32_t> z9(9, 0u), z8(8, 0u);
+    std::vector<uint32_t> z9(9, 0u), z10(10, 0u);
     cluster.write_core(device->id(), eth_phys, z9, (uint32_t)eth_stats_addr);
     cluster.write_core(device->id(), eth_phys, mrempty, kSharedMr);  // empty table; RISC1 registers slot 0
     // Registration request: [go, slot, base, len, rkey, access, dest_x, dest_y]. RISC1 fulfils it -> slot 0.
     std::vector<uint32_t> reg{1u, 0u, kLandBase, 0x100000u, kRkey, 0x2u, (uint32_t)land.x, (uint32_t)land.y};
     cluster.write_core(device->id(), eth_phys, reg, kRegReq);
     for (uint32_t i = 0; i < nworkers; ++i) {
-        cluster.write_core(device->id(), wphys[i], z8, kWStats);
+        cluster.write_core(device->id(), wphys[i], z10, kWStats);
         cluster.write_core(device->id(), wphys[i], std::vector<uint32_t>{0u}, kWStop);
         cluster.write_core(device->id(), wphys[i], mrempty, kWMr);  // empty cache; refreshed from RISC1 on gen bump
     }
@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
     std::printf("BH-rx-worker: up. Fire the DOCA sender now.\n");
 
     auto rd = [&](const CoreCoord& c) {
-        return cluster.read_core<uint32_t>(device->id(), c, kWStats, 8 * sizeof(uint32_t));
+        return cluster.read_core<uint32_t>(device->id(), c, kWStats, 10 * sizeof(uint32_t));
     };
     uint64_t prev_sum = 0;
     bool have_prev = false;
@@ -254,12 +254,13 @@ int main(int argc, char** argv) {
             ++workers_on_gen2;
         }
         std::printf(
-            "    worker %u: processed=%u lapped=%u produced_seen=%u cached_gen=%u completions=%u\n",
+            "    worker %u: produced_seen=%u first_produced=%u phead_addr=0x%x processed=%u lapped=%u completions=%u\n",
             i,
+            w[5],
+            w[8],
+            w[9],
             w[3],
             w[4],
-            w[5],
-            w[6],
             w[7]);
     }
     // Shared-MR-table check: after the central invalidate, every worker must have refreshed to gen 2 and

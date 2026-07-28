@@ -87,6 +87,10 @@ void kernel_main() {
         noc_async_read(get_noc_addr(src_x, src_y, phead_addr), scratch + 0x3000u, 4u);
         noc_async_read_barrier();
         produced = ph[0];
+        if (poll == 0u) {
+            stats[8] = produced;    // DEBUG: first produce-head read
+            stats[9] = phead_addr;  // DEBUG: the phead L1 addr this worker was given
+        }
 
         // Lapping guard: if the MAC has advanced > (nslots - N) frames past our next index, our claimed
         // slot is already overwritten -> jump to the freshest index we own and count the skipped gap.
