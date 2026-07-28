@@ -30,6 +30,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0_5.common.configs import GemmaConfig
+from models.experimental.pi0_5.tt._ttnn_compat import kv_sdpa as _kv_sdpa_compat
 from models.experimental.pi0_5.tt.ttnn_common import (
     get_sdpa_compute_kernel_config,
     get_sdpa_exp_approx_mode,
@@ -934,13 +935,15 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
             ttnn.deallocate(cos_for_rope)
             ttnn.deallocate(sin_for_rope)
 
-        # Expert SDPA is always the specialized fused-flash ttnn.kv_sdpa (the same op the L1 decode_all
-        # path uses — see tt_pipeline/denoise_block.py). It honors attn_mask (additive bf16 mask over the
-        # full folded KV) and, when prefix-KV is present and we are NOT caching, folds past_k/past_v into
-        # its reader as two ranges so the two ttnn.concat ops are skipped. The op requires the small-query
-        # MQA shape: Sq == 1 tile (== 32, already asserted above) and a single KV head. compute_kernel_config
-        # is passed so the flash accumulation runs at fp32_dest_acc (HiFi2) — kv_sdpa's own default is bf16
-        # dest accumulation, which loses expert-attention precision.
+        # Expert SDPA goes through the _ttnn_compat kv_sdpa shim. When attn_mask is None it dispatches
+        # the specialized fused-flash ttnn.kv_sdpa (the same op the L1 decode_all path uses — see
+        # tt_pipeline/denoise_block.py), folding past_k/past_v into its reader as two KV ranges when
+        # prefix-KV is present and we are NOT caching, so the two ttnn.concat ops are skipped.
+        # When a mask IS supplied the shim falls back to the general SDPA: the tiny-tile kv_sdpa
+        # removed the mask path and now hard-fails on it (see the shim for details). The op requires
+        # the small-query MQA shape: Sq == 1 tile and a single KV head. compute_kernel_config is
+        # passed so the flash accumulation runs at fp32_dest_acc (HiFi2) — kv_sdpa's own default is
+        # bf16 dest accumulation, which loses expert-attention precision.
         assert int(q_rope.shape[-2]) == _tile_h, (
             f"kv_sdpa requires Sq == exactly one tile ({_tile_h}); got {int(q_rope.shape[-2])}"
         )
@@ -948,7 +951,7 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
         if past_key_value is not None and not use_cache:
             # Fold path: kv_sdpa reads past_k/past_v + suffix k/v as two KV ranges — no pre-concat.
             past_k, past_v = past_key_value
-            attn_output = ttnn.kv_sdpa(
+            attn_output = _kv_sdpa_compat(
                 q_rope,
                 k_rope,
                 v,
@@ -966,7 +969,7 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
                 k_rope = ttnn.concat([past_k, k_rope], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
                 v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
             new_cache = (k_rope, v) if use_cache else None
-            attn_output = ttnn.kv_sdpa(
+            attn_output = _kv_sdpa_compat(
                 q_rope,
                 k_rope,
                 v,

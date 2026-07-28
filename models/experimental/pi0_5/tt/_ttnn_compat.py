@@ -18,7 +18,14 @@ def nlp_create_qkv_heads_rope(
     memory_config=None,
 ):
     mem = memory_config or ttnn.L1_MEMORY_CONFIG
-    if hasattr(ttnn.experimental, "nlp_create_qkv_heads_rope"):
+    # The fused op is 32x32-tile only: its device op asserts padded_shape()[-2] == TILE_HEIGHT (the
+    # global 32) and sizes its CBs with tt::tile_size(df) rather than the operand tile, so a 16x32
+    # qkv fails validation with "requires Ht == 1 (seq one tile row); got seq 16". Take the unfused
+    # fallback below at a tiny tile -- nlp_create_qkv_heads and rotary_embedding both gained
+    # tiny-tile support, and that is the path the tiny-tile branch itself ran (the fused op does not
+    # exist on main). Threading the operand tile through the fused op is stage 8; see
+    # models/experimental/pi0_5/TINY_TILE_INTEGRATION_PLAN.md.
+    if hasattr(ttnn.experimental, "nlp_create_qkv_heads_rope") and int(xqkv.get_tile().tile_shape[0]) == 32:
         return ttnn.experimental.nlp_create_qkv_heads_rope(xqkv, cos, sin, num_heads, num_kv_heads, memory_config=mem)
     # Fallback: nlp_create_qkv_heads requires a sharded (non-width-sharded) output when its input is
     # sharded. The DECODE_ALL path feeds a WIDTH-SHARDED qkv; convert it to interleaved first so the
@@ -86,7 +93,15 @@ def concat_heads_matmul_decode(
 
 
 def kv_sdpa(q, k, v, *, attn_mask=None, scale=None, past_k=None, past_v=None, compute_kernel_config=None):
-    if hasattr(ttnn, "kv_sdpa"):
+    # The tiny-tile kv_sdpa dropped the mask path our earlier version had (cb_mask_in + a
+    # use_provided_mask compile-time gate) and now hard-fails:
+    #   TT_FATAL: kv_sdpa FlashFused two-source path does not support an attention mask
+    # Callers that genuinely need a mask (the DRAM ExpertChunkSlice expert in ttnn_gemma, which
+    # feeds the 28-chip and pipeline_1x8_v2 paths) fall back to the general SDPA below rather than
+    # silently dropping the mask, which would change numerics wherever the mask is not all-zero
+    # (e.g. the keep_padded phantom -1e4 band). Restoring the fused mask path on top of the
+    # tiny-tile two-phase chunking is stage 8; see TINY_TILE_INTEGRATION_PLAN.md.
+    if hasattr(ttnn, "kv_sdpa") and attn_mask is None:
         kwargs = {"attn_mask": attn_mask, "scale": scale}
         if past_k is not None:
             kwargs["past_k"] = past_k
