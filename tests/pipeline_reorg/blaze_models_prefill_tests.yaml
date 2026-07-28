@@ -121,25 +121,39 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Transformer (Longbook 25k Trace)"
+- name: "Blaze - Chunked Kimi Padded Accuracy (15k)"
+  # Replaces the single-shot "Transformer (Longbook 25k Trace)" job: that one-shot path is no longer
+  # the shape we ship, and it cannot see chunked-prefill bugs at all. This runs 15360 tokens as 6
+  # VARIABLE partial chunks (mid15k), 5 of which start at a NON-slab-aligned actual_start -- the case
+  # that exercises the KV-pad-aware ROTATED block-cyclic layout. Asserts min per-layer PCC across all
+  # 61 layers x 6 chunks, plus the KV-cache PCC, against the code_debug golden trace.
+  #
+  # 15k not 55k: every chunk is a full CHUNK-wide padded tile regardless of its isl, so runtime tracks
+  # the CHUNK count -- 6 chunks costs ~1/3 of full55k's 18 for the same rotation coverage. full55k
+  # stays available for manual deep runs (-k full55k).
+  #
+  # Paths: same as "Blaze - Chunked Kimi (code_debug 55k)" -- HF checkpoint + prebuilt .tensorbin
+  # cache + the 56320-token golden trace (metadata.json token_ids feed the prefill, and the
+  # per-layer decoder_output / kv_post_transform tensors are the PCC reference).
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
-    export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
-    export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
-    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
-    export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "fabric2d-mesh-8x4 and 61_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter1 and pcc and no_determinism and pretrained and balanced and right_pad" -vvv --tb=short --timeout=3600
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k" -vvv --tb=short
     '
-  test_type: prefill_transformer
+  test_type: kimi_chunked_padded
   test_group: module
   skus:
     bh_sc1:
+      # Holds the 40 minutes freed by the retired longbook job, so the bh_sc1 budget total is
+      # unchanged. This is headroom, not a measured duration -- 6 chunks should land well under it;
+      # tighten once a real run is on record (and drop bh_sc1 in .github/time_budget.yaml to match).
       timeout: 40
-  owner_id: U08RL15T4N8
+  owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
 
