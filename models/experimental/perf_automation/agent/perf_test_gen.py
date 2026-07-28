@@ -293,6 +293,13 @@ def _parse_trace_path(text: str) -> str | None:
 
 _TRACE_REGION_NEED_RE = re.compile(r"Creating trace buffers of size (\d+)B.*?only (\d+)B is allocated")
 _TRACE_REGION_GROW_ROUNDS = 6
+# A single-device overflow reports the exact bytes (parsed above). A MeshDevice overflow is a BARE
+# assertion (get_trace_buffers_size() <= trace_region_size, mesh_trace.cpp) with NO byte count, so the
+# parse can't size it -- detect it by marker and grow by DOUBLING instead, mirroring emit-e2e's
+# trace_gate.overflow_fix_loop (already mesh-safe). Matches the region assertion, not the separate
+# write-during-capture fatal (fd_mesh_command_queue.cpp).
+_MESH_TRACE_OVERFLOW_RE = re.compile(r"get_trace_buffers_size|mesh_trace\.cpp", re.I)
+_DEFAULT_TRACE_REGION_BYTES = 23887872
 
 
 def _needed_trace_region(text: str):
@@ -408,10 +415,16 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
         # capture needs when the region is too small; grow to that (doubling to cover a multi-stage trace's
         # cumulative growth) and re-run, until every stage's capture fits or the grow budget is exhausted.
         for _ in range(_TRACE_REGION_GROW_ROUNDS):
+            cur = (
+                int(ev.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or 0)
+                or _DEFAULT_TRACE_REGION_BYTES
+            )
             need = _needed_trace_region(out)
             if need is None:
-                break
-            cur = int(ev.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or 0)
+                if _MESH_TRACE_OVERFLOW_RE.search(out or ""):
+                    need = cur * 2
+                else:
+                    break
             target = max(need, cur * 2)
             if target <= cur:
                 break
