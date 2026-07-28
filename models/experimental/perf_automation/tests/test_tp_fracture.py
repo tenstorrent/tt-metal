@@ -46,3 +46,74 @@ def test_sweep_degrees_returns_a_legal_fastest():
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def _fake_mesh(rows, cols):
+    class _M:
+        shape = (rows, cols)
+
+        def get_num_devices(self):
+            return rows * cols
+
+    return _M()
+
+
+@pytest.mark.parametrize(
+    "rows,cols,expect_axes",
+    [(1, 4, [1]), (4, 1, [0]), (2, 2, [1, 0]), (1, 8, [1]), (2, 4, [1, 0])],
+)
+def test_all_gather_full_picks_axes_from_the_mesh_shape(rows, cols, expect_axes, monkeypatch):
+    """The gather must cover EVERY device whatever the mesh shape.
+
+    A bare all_gather works only on a 1-D mesh; with 1-D fabric on a 2-D mesh ttnn raises rather than
+    guessing an axis, so this module passed on a (1,4) mesh and crashed on a (2,2) one -- in real runs
+    too, since the mesh shape comes from the model. Runs offline: the mesh and the op are stubbed, so
+    only the axis decision is under test.
+    """
+    pytest.importorskip("torch")
+    ttnn = pytest.importorskip("ttnn")
+    from cc_optimize import tp_fracture
+
+    seen = []
+
+    def _ag(t, dim=None, cluster_axis=None, **kw):
+        seen.append(cluster_axis)
+        return t
+
+    monkeypatch.setattr(ttnn, "all_gather", _ag)
+    out = tp_fracture.all_gather_full(_fake_mesh(rows, cols), object(), dim=-1)
+    assert seen == expect_axes, "mesh (%d,%d) gathered along %s" % (rows, cols, seen)
+    assert out is not None
+
+
+def test_all_gather_full_on_a_single_device_mesh_is_a_no_op(monkeypatch):
+    pytest.importorskip("torch")
+    ttnn = pytest.importorskip("ttnn")
+    from cc_optimize import tp_fracture
+
+    called = []
+    monkeypatch.setattr(ttnn, "all_gather", lambda *a, **k: called.append(1))
+    sentinel = object()
+    assert tp_fracture.all_gather_full(_fake_mesh(1, 1), sentinel, dim=-1) is sentinel
+    assert not called, "a 1-device mesh has nothing to gather"
+
+
+def test_all_gather_full_falls_back_when_the_shape_is_unreadable(monkeypatch):
+    """An unreadable shape must still attempt the gather, not crash the lever."""
+    pytest.importorskip("torch")
+    ttnn = pytest.importorskip("ttnn")
+    from cc_optimize import tp_fracture
+
+    seen = []
+    monkeypatch.setattr(ttnn, "all_gather", lambda t, dim=None, cluster_axis=None, **k: seen.append(cluster_axis) or t)
+
+    class _Opaque:
+        @property
+        def shape(self):
+            raise RuntimeError("no shape")
+
+        def get_num_devices(self):
+            raise RuntimeError("no count")
+
+    tp_fracture.all_gather_full(_Opaque(), object(), dim=-1)
+    assert seen == [None]
