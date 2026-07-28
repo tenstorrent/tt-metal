@@ -13,9 +13,9 @@ so these primitives live here:
   zero-stuffed input with a flipped, in/out-transposed kernel.
 * :class:`TtConv2d`          — thin wrapper over ``ttnn.conv2d``.
 
-Tensor convention: **channels-last** — ``[N, L, C]`` for 1D, ``[N, H, W, C]`` for
-2D (ROW_MAJOR, on device), the layouts ttnn's convs consume — avoiding per-layer
-transposes. Weights are PyTorch tensors (``Conv1d``: ``[out, in/groups, k]``;
+Tensor convention: **channels-last** — ``[N, L, C]`` for 1D, flat ``[1, 1, N*H*W, C]``
+(TILE) for 2D, the layouts ttnn's convs consume — avoiding per-layer transposes and
+relayouts. Weights are PyTorch tensors (``Conv1d``: ``[out, in/groups, k]``;
 ``ConvTranspose1d``: ``[in, out, k]``; ``Conv2d``: ``[out, in/groups, kh, kw]``).
 
 Defaults: **fp32 activations**, bf16 weights, HiFi4, ``fp32_dest_acc_en``. bf16
@@ -365,10 +365,27 @@ class TtConvTranspose1d(LightweightModule):
 
 
 class TtConv2d(LightweightModule):
-    """2D convolution over a channels-last ``[N, H, W, C]`` device tensor.
+    """2D convolution over a **flat** channels-last ``[1, 1, N*H*W, C]`` TILE tensor —
+    the exact layout ``ttnn.conv2d`` produces, so a conv -> eltwise -> conv chain never
+    relayouts. The spatial extent travels beside the tensor (``forward`` takes
+    ``input_height``/``input_width`` and returns the output's), because the flat form
+    doesn't carry it.
 
-    ``stride``/``padding`` follow PyTorch semantics (symmetric). Used by the
-    speaker-encoder SE-ResNet (all 3x3 / 1x1 convs).
+    Keeping TILE (instead of untilizing to a ``[N, H, W, C]`` ROW_MAJOR view) is what the
+    vocoder's conv1d chain already does, and it matters more here: an untilize + 4D
+    reshape + retilize per conv cost ~200us each in the speaker encoder, and the 4D TILE
+    form pads W to a tile per H row, inflating every eltwise op that follows.
+
+    ``forward`` returns the conv's output **as produced** — L1-sharded, unless
+    ``memory_config`` asks otherwise. That is not just cheaper by one gather: ttnn.conv2d
+    picks its execution path from where the input lives (``determine_conv2d_execution_path``),
+    and its DRAM path brackets the conv with a 4D unflatten + re-flatten of the activation
+    — two full relayouts, ~180us per conv at the first stage. Handing the next conv an L1
+    input keeps the whole chain on the L1 path, where those reshapes don't exist.
+
+    ``stride``/``padding`` follow PyTorch semantics (symmetric). ``activation`` (e.g. relu)
+    is fused onto the conv output post-bias, so ``conv(x, activation=relu) == relu(conv(x))``.
+    Used by the speaker-encoder SE-ResNet (all 3x3 / 1x1 convs).
     """
 
     def __init__(
@@ -379,6 +396,7 @@ class TtConv2d(LightweightModule):
         *,
         stride: int = 1,
         padding: int = 1,
+        activation: ttnn.UnaryWithParam | None = None,
         weights_dtype: ttnn.DataType = ttnn.bfloat16,
         activations_dtype: ttnn.DataType = ttnn.float32,
         math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
@@ -402,7 +420,17 @@ class TtConv2d(LightweightModule):
         if bias is not None:
             self.tt_bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1).float(), weights_dtype)
 
-        self.conv_config = ttnn.Conv2dConfig(weights_dtype=weights_dtype, deallocate_activation=False)
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=weights_dtype,
+            deallocate_activation=False,
+            activation=activation,
+            output_layout=ttnn.TILE_LAYOUT,
+            # The halo's config tensors default to L1_SMALL, and they are cached per conv
+            # program: the speaker encoder's 36 convs exhaust the 32 KB L1_SMALL region a
+            # caller typically opens the device with (bank_manager OOM on the 1760 B
+            # allocation). DRAM costs nothing measurable — they are read once per conv.
+            config_tensors_in_dram=True,
+        )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=math_fidelity,
@@ -410,8 +438,13 @@ class TtConv2d(LightweightModule):
             packer_l1_acc=packer_l1_acc,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        batch_size, height, width, _ = x.shape
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        input_height: int,
+        input_width: int,
+        memory_config: ttnn.MemoryConfig | None = None,
+    ) -> tuple[ttnn.Tensor, int, int]:
         out, (out_h, out_w), [weight, bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.tt_weight,
@@ -422,15 +455,18 @@ class TtConv2d(LightweightModule):
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
-            batch_size=batch_size,
-            input_height=height,
-            input_width=width,
+            batch_size=x.shape[0],
+            input_height=input_height,
+            input_width=input_width,
             dtype=self.activations_dtype,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
+            memory_config=memory_config,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
         self.tt_weight = weight
         self.tt_bias = bias
-        return _interleaved(out, [batch_size, out_h, out_w, self.out_channels], row_major=True)
+        # No relayout on the way out: the output is already the flat
+        # [1, 1, N*out_h*out_w, C] TILE form the next conv / eltwise op consumes.
+        return out, out_h, out_w
