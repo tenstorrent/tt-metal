@@ -2,10 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt import stream_mm
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
@@ -105,6 +108,33 @@ class MLP(LightweightModule):
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
         )
 
+        # Streaming decode path: same weights, but tiles reordered column-major per
+        # DRAM bank so the kernel can stream K contiguously. Distinct cache name so
+        # the shuffled copy never collides with the standard one.
+        self.use_stream_mm = stream_mm.enabled(args, prefetcher)
+        if self.use_stream_mm:
+            dram_cores = args.dram_grid_size.x
+            self.stream_n_padded = math.ceil(args.hidden_dim / (ttnn.TILE_SIZE * dram_cores)) * (
+                ttnn.TILE_SIZE * dram_cores
+            )
+
+            def as_stream_weight(name, dtype):
+                raw = torch_weight(name[:2])
+                padded = pad_hidden_dim(raw, -1)
+                shuffled = stream_mm.shuffle_tensor_tiles(padded, dram_cores)
+                return ttnn.as_tensor(
+                    shuffled.unsqueeze(0).unsqueeze(0),
+                    dtype=dtype,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=w1_dims, mesh_shape=args.cluster_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=w1_w3_mem_config,
+                    cache_file_name=(None if args.dummy_weights else cache_name(f"{name}_streamshuf")),
+                )
+
+            self.w1_stream = as_stream_weight("w1_sharded", ff1_3_dtype)
+            self.w3_stream = as_stream_weight("w3_sharded", ff1_3_dtype)
+
         # Insert the tensors into the prefetcher if it is used
         if self.prefetcher is not None:
 
@@ -142,32 +172,42 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
-        w1_out = ttnn.linear(
-            x,
-            self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
+        stream_ff1_3 = self.use_stream_mm and mode == Mode.DECODE
+        if stream_ff1_3:
+            # FF1 and FF3 share x, so the bridge is paid once for both. Outputs are
+            # persistent buffers written in place, hence not deallocated below.
+            ctx = self.args.stream_mm_ctx(self.mesh_device)
+            in0 = stream_mm.bridge_activation(ctx, x, self.dim)
+            w1_out = stream_mm.stream_linear(ctx, in0, self.w1_stream, self.dim, self.stream_n_padded, slot=0)
+            w3_out = stream_mm.stream_linear(ctx, in0, self.w3_stream, self.dim, self.stream_n_padded, slot=1)
+            ttnn.deallocate(in0)
+        else:
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_1,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_3,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
         ttnn.deallocate(x)
 
         if TG:
@@ -233,20 +273,25 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                 )
 
+        # From PR #50666: run the gate activation via the approximate LUT in decode
+        # (fewer cycles). PCC-gated. Single-chip, no prefetcher.
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
+            fast_and_approximate_mode=(mode == Mode.DECODE and not TG and self.prefetcher is None),
         )
 
         if mode == Mode.DECODE and not TG and self.prefetcher is None:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
 
-        ttnn.deallocate(w3_out)
-        ttnn.deallocate(w1_out)
+        if not stream_ff1_3:
+            # persistent streaming buffers must outlive the call
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == Mode.PREFILL):
             cluster_axis = 1

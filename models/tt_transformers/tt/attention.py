@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import torch
 
@@ -648,6 +649,33 @@ class Attention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
+        # PERF (sweep_create_heads.py): by default the fused-QKV is interleaved, so
+        # nlp_create_qkv_heads_decode runs on a single core (~14.8us). Width-sharding
+        # the input across 64 cores lets the op parallelize (~8.9us), with
+        # overlap_qk_coregrid=True (the sweep-winning config). Gated to single device /
+        # no-prefetcher; the multi-device path is left unchanged (it deadlocked before).
+        create_head_kwargs = {}
+        # TT_CREATE_HEADS_MD lets the multi-device path opt in for measurement; a 27B
+        # sweep puts this config at 5.2us vs 11.3us for the default, but the earlier
+        # deadlock means it stays off by default until proven on >1 device.
+        _allow_multi_device = os.getenv("TT_CREATE_HEADS_MD") == "1"
+        if (
+            (self.args.num_devices == 1 or _allow_multi_device)
+            and self.prefetcher is None
+            and fqkv_shape[3] % (32 * 64) == 0
+        ):
+            xqkv_fused = ttnn.to_memory_config(
+                xqkv_fused,
+                ttnn.create_sharded_memory_config(
+                    shape=(32, fqkv_shape[3] // 64),
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+            )
+            create_head_kwargs["overlap_qk_coregrid"] = True
+
         (
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
@@ -657,6 +685,7 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
+            **create_head_kwargs,
         )
         norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE, norm_config=norm_config)
@@ -776,7 +805,9 @@ class Attention(LightweightModule):
                     persistent_output_buffer=None,
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=1,
+                    # Use all available ethernet links (2 on P300, 1 on N300/single-link).
+                    # Auto-detected so other topologies are unaffected.
+                    num_links=max(1, self.tt_ccl.get_num_links()),
                     topology=self.ccl_topology,
                     memory_config=self.args.get_attn_all_gather_output_mem_config(Mode.DECODE, self.prefetcher),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),

@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from tqdm import tqdm
 
@@ -83,7 +85,7 @@ class Transformer(LightweightModule):
                 args.max_seq_len,
                 args.rope_theta_local,
                 use_qk_fused=args.use_qk_fused,
-                prefetcher=None,
+                prefetcher=prefetcher,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -155,6 +157,12 @@ class Transformer(LightweightModule):
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
         self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
+        # EXPERIMENT (env-gated): TTSampling._select_topk_indices_dtype already falls back to
+        # uint32 when per-device vocab exceeds the uint16 index range, so the 64K gate above is
+        # stricter than the kernel requires. Large-vocab models (gemma2: 256K) otherwise fall back
+        # to host sampling, which reads ~8.7MB of logits back and argmaxes on host every token.
+        if os.getenv("TT_FORCE_DEVICE_SAMPLING") == "1" and prefetcher is None:
+            self._supports_on_device_sampling = True
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
@@ -602,10 +610,12 @@ class Transformer(LightweightModule):
                 tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
             return self.concat_host_output(tt_out, is_log_probs)[0, 0, :B, 0]
         if self.args.num_devices > 1:
-            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
-            tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+            tt_out = ttnn.to_torch(tt_out)
+        # Slice before upcasting: the decode tensor is padded to a full 32-row tile, so
+        # converting first upcasts 32x more rows than the batch actually uses.
+        tt_out = tt_out[:, :, :B, : self.vocab_size].float().reshape(B, S, -1)
         return tt_out
 
     def ttnn_prefill_forward(
@@ -818,7 +828,9 @@ class Transformer(LightweightModule):
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
             cluster_axis = 0 if self.args.is_galaxy else None
-            num_links = 2 if self.args.is_galaxy else 1
+            # Use all available ethernet links for the (wide) logits gather.
+            # Auto-detected: 2 on P300, 1 on N300/single-link -> other topologies unaffected.
+            num_links = 2 if self.args.is_galaxy else max(1, self.tt_ccl.get_num_links(cluster_axis))
             tt_logits = ttnn.experimental.all_gather_async(
                 tt_logits,
                 persistent_output_buffer=None,

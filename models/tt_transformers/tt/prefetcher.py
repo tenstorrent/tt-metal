@@ -35,6 +35,8 @@ VERIFIED_MODEL_CONFIGS = {
     "Qwen3-VL-72B": {"dim": 8192, "hidden_dim": 28672, "n_heads": 64, "n_kv_heads": 8},
     "Gemma3-4B": {"dim": 2560, "hidden_dim": 14336, "n_heads": 20, "n_kv_heads": 20},
     "Gemma3-27B": {"dim": 4608, "hidden_dim": 24576, "n_heads": 32, "n_kv_heads": 8},
+    "gemma-2-9b": {"dim": 3584, "hidden_dim": 14336, "n_heads": 16, "n_kv_heads": 8},
+    "gemma-2-27b": {"dim": 4608, "hidden_dim": 36864, "n_heads": 32, "n_kv_heads": 16},
 }
 
 
@@ -100,6 +102,22 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
         f"DRAM Prefetcher support check: tiles_per_core: {tiles_per_core} <= {MAX_CB_PAGES} is {pages_ok}, bytes_per_core: {bytes_per_core} <= {MAX_L1_PER_BANK} is {l1_ok}, kv_heads_divisible: {kv_heads_divisible}"
     )
     return pages_ok and l1_ok and kv_heads_divisible
+
+
+def is_prefetcher_supported_any_ring(model_name: str, num_devices: int) -> bool:
+    """
+    Return True if the DRAM prefetcher is supported for the model on num_devices for ANY of the
+    legal receiver-core counts (i.e. the ring size the Prefetcher constructor would auto-select).
+    The single-arg is_prefetcher_supported() uses the default ring_size=16 which can be overly
+    conservative, since the constructor searches legal_receiver_cores for a fitting ring.
+    """
+    if not is_blackhole():
+        return False
+    num_senders = len(ARCH_CONFIG["blackhole"]["dram_banks"])
+    for num_receivers in ARCH_CONFIG["blackhole"]["legal_receiver_cores"]:
+        if is_prefetcher_supported(model_name, num_devices, num_receivers * num_senders):
+            return True
+    return False
 
 
 @dataclass

@@ -29,7 +29,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
-from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
+from models.tt_transformers.tt.prefetcher import is_prefetcher_supported_any_ring
 
 # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
 models_not_supported_for_device_sampling = ["Mistral-7B"]
@@ -937,7 +937,9 @@ def test_demo_text(
         logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
         use_prefetcher = False
     use_prefetcher = (
-        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+        use_prefetcher
+        and is_prefetcher_supported_any_ring(hf_dir, num_devices)
+        and (("Llama" in hf_dir and "8B" in hf_dir) or "gemma-2" in hf_dir)
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
     use_hf_rope = request.config.getoption("--use_hf_rope")
@@ -1312,7 +1314,6 @@ def test_demo_text(
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
             )
-
             # Get the next token
             if device_sampling_params is not None:
                 out_tok = logits.unsqueeze(1)

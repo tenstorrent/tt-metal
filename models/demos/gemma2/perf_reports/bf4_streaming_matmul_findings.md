@@ -141,7 +141,37 @@ Device times under tracy at FF1/FF3 shapes, bfp4 weights, LoFi
 The bridge costs 5.03 us to save 30.75 us, so the economics are decisively
 positive. PCC 0.993. FF1 and FF3 share an input, so one bridge serves both.
 
-## Still blocked: the reverse bridge
+## MEASURED IN-MODEL RESULT
+
+gemma2-9B, 1x P150, ISL 128 / OSL 200, FF1 and FF3 on the streaming path
+(`TT_STREAM_MM=1`), everything else unchanged:
+
+| run | baseline | streaming | gain |
+| --- | --- | --- | --- |
+| performance mode, run 1 | 40.20 t/s/u | 43.09 t/s/u | +7.2% |
+| performance mode, run 2 | 40.30 | 43.23 | +7.3% |
+| performance mode, run 3 | 40.37 | 43.14 | +6.9% |
+| accuracy mode | 22.21 | 24.79 | +11.6% |
+
+Per token 24.8 ms -> 23.2 ms. The accuracy test passes in both configurations.
+
+Predicted was +9.5%; actual is +7.2%, i.e. about 75% of the per-op arithmetic
+survives into the model. Only FF1/FF3 are converted so far; FF2, QKV and WO are
+still on the production kernel.
+
+## No reverse bridge needed
+
+An earlier revision of this document claimed integration was blocked on a reverse
+retile micro-op. It is not. The streaming matmul writes straight into an ordinary
+`[32,32]`-tiled output tensor: DST is physically 32x32 whatever the logical tile,
+so with m=1 the result lands in row 0 and pack emits a full tile whose other rows
+are junk. That is already the batch-1 padding contract, so stock eltwise ops
+consume the result unchanged. Measured PCC 0.993, and it costs nothing (63.12 us
+with a standard output vs 63.15 us with a tiny-tile one).
+
+The dead end below is kept because it is the obvious thing to try first.
+
+## Dead end: converting the output tensor
 
 The streaming matmul emits `[1,32]`-tiled output. Stock eltwise ops (the `mul`
 between FF1/FF3, the residual add) need standard `[32,32]` tiles, and nothing can
@@ -159,24 +189,22 @@ The last two are the same root cause: untilize sizes its circular buffer assumin
 because CB aliasing happens inside a `generic_op` we control; the reverse has to
 go through stock ops we do not.
 
-## What integration needs
+## How it is wired up
 
-Two micro-ops, both modelled on existing ones:
+- `models/tt_transformers/tt/stream_mm.py` -- weight shuffle, shared device
+  buffers, the bridge, and the matmul wrapper.
+- `models/tt_transformers/tt/mlp.py` -- streaming branch for FF1/FF3 in decode.
+- `models/tt_transformers/tt/model_config.py` -- `stream_mm_ctx()`, one set of
+  buffers for the whole model rather than per layer.
 
-1. **Reverse retile** `[1,32]` -> `[32,32]`, to hand results back to stock ops.
-   `micro_ops/tilize_8x32` (159 lines plus a 23-line kernel) is the template.
-2. **Tiny-tile eltwise mul**, so FF1/FF3 -> mul -> FF2 can stay tiny-tile and need
-   only one reverse bridge per MLP instead of two. The op's own `mul_tensor` path
-   will not do: it aliases a single `[16,16]` tile, sized for DeepSeek's MoE, not
-   a 14336-wide FFN.
+Gated on `TT_STREAM_MM=1`, single device, no prefetcher. Shuffled weights get
+their own cache name so they cannot collide with the standard copy.
 
-### What it is worth
+## Next
 
-Per layer, the three MLP matmuls cost roughly 282 us today. Streaming them with
-one shared forward bridge and one reverse bridge is about 195 us plus the reverse
-cost, so roughly 87 us saved per layer, 3.65 ms per token over 42 layers. Against
-a 26.7 ms token that is about **+15% (37.5 -> ~43 t/s/u)** from the MLP alone,
-before touching QKV and WO.
+FF2, QKV and WO are still on the production kernel. FF2 is the same size as
+FF1/FF3, so converting it should give a similar increment; QKV and WO are
+smaller. Extending to all of them is the obvious next step.
 
 ## Caveats
 

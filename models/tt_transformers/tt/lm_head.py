@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup
 
 
 class LMHead(LightweightModule):
@@ -103,6 +104,10 @@ class LMHead(LightweightModule):
                     memory_config = args.create_dram_sharded_mem_config(
                         k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
                     )
+                    # NOTE: lm_head weight kept at bfp8. Tested bfp4 here (biggest single
+                    # weight, ~975MB): gave +2.4% t/s/u but collapsed generation into
+                    # repetition loops (final-logit precision drives token selection), so
+                    # rejected. Keep bfp8.
                     self.output_weights_dram_sharded.append(
                         ttnn.as_tensor(
                             combined_split,
@@ -132,12 +137,23 @@ class LMHead(LightweightModule):
                         )
                     )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+        # From PR #50666: LM-head compute fidelity is config-driven via LI_LM_HEAD.
+        # Preserve the exact original hardcoded HiFi2 kernel unless the config overrides
+        # it (performance mode sets LoFi), to avoid changing accuracy for other models.
+        lm_head_fidelity = args.decoders_optimizations.decoder_optimizations[0].op_fidelity_settings.get(
+            OpGroup.LI_LM_HEAD, MathFidelitySetting.HIFI2
         )
+        if lm_head_fidelity == MathFidelitySetting.HIFI2:
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        else:
+            self.compute_kernel_config = args.decoders_optimizations.get_math_fidelity(
+                decoder_id=0, op=OpGroup.LI_LM_HEAD, configuration=args
+            )
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []

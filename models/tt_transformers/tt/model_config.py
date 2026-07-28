@@ -93,6 +93,7 @@ class OpGroup(Enum):
     LI_QKV_PREFILL = "li_qkv_prefill"
     LI_O_PREFILL = "li_o_prefill"
     SDPA_PREFILL = "sdpa_prefill"
+    LI_LM_HEAD = "li_lm_head"  # final vocab projection (logits), runs every decode token
     ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
 
 
@@ -226,8 +227,39 @@ class ModelOptimizations:
         else:
             settings = {
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
-                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+                # From PR #50666 (Llama-3.1-8B P150 +28%): drop decode matmul compute
+                # fidelity HiFi2 -> LoFi (fewer math cycles, dtype unchanged). Applies to
+                # all `performance`-mode models incl. Gemma-2. PCC-gated.
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                    OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.LI_LM_HEAD: MathFidelitySetting.LOFI,
+                    # SDPA decode defaults to HiFi2; decode softmax/QK are short and
+                    # PCC-tolerant at bf8 KV, so LoFi halves the math cycles. PCC-gated.
+                    OpGroup.SDPA_DECODE: MathFidelitySetting.LOFI,
+                },
             }
+            # Gemma-2 single-P150 batch-1 decode is DRAM-BW bound with the matmuls already
+            # at the weight roofline (see sweep_gemma2_mm.py), so cutting weight bytes lowers
+            # the floor directly. Dropping QKV/WO/FF2 from BFP8 -> BFP4 (FF1/FF3 already BFP4)
+            # gives ~+5% t/s/u and still passes PCC (0.982-0.99, both perf+accuracy) with
+            # coherent generation. Gated to Gemma-2 so other models keep BFP8 attention/down.
+            # Env vars can force each on for experimentation on other models.
+            _gemma2 = "gemma-2" in get_base_model_name(model_name).lower()
+            if _gemma2 or os.getenv("GEMMA_FF2_BFP4") == "1":
+                settings["TensorPrecision"][TensorGroup.FF2] = PrecisionSetting.BFP4
+            if _gemma2 or os.getenv("GEMMA_QKV_BFP4") == "1":
+                settings["TensorPrecision"][TensorGroup.WQKV] = PrecisionSetting.BFP4
+            if _gemma2 or os.getenv("GEMMA_WO_BFP4") == "1":
+                settings["TensorPrecision"][TensorGroup.WO] = PrecisionSetting.BFP4
+            # EXPERIMENT (env-gated, no default change): force all layer weights to BFP8 to
+            # measure the "full bf8" perf point vs the mixed-bf4 default. Keeps LoFi fidelity
+            # and every other perf-mode optimization, so it isolates the weight-dtype effect.
+            if os.getenv("GEMMA_ALL_BF8") == "1":
+                for _tg in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
+                    settings["TensorPrecision"][_tg] = PrecisionSetting.BFP8
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
@@ -314,6 +346,8 @@ class ModelOptimizations:
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
+                # LM head: default HiFi2 preserves prior hardcoded lm_head.py behavior
+                OpGroup.LI_LM_HEAD: MathFidelitySetting.HIFI2,
                 OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
         }
@@ -768,6 +802,20 @@ class ModelArgs:
             self.mlp_core_grid = (
                 self.dram_shard_core_grid_for_k(self.dim)
                 if self.is_galaxy
+                # SWEEP-TUNED (single P150, gemma2 K=3584): the default k_and_n heuristic
+                # maxes out at 56c (8x7) for FF1/FF3, which over-parallelizes the DRAM-sharded
+                # matmul -> bank contention (~106us). The op sweep (sweep_gemma2_mm.py) shows
+                # fewer cores are faster (~95us at 16c). 16c broke accuracy-mode L1 (per-core
+                # buffers too big for fp32 CBs), so use 28c (7x4): still faster than 56c
+                # (~100us) while keeping per-core work small enough to fit accuracy-mode L1.
+                # NOTE: 16c is faster for the FF1/FF3 matmul *in isolation* (308 vs 296 GB/s),
+                # but mlp_core_grid also drives the FF norm, SwiGLU-mul and input sharding;
+                # running those elementwise ops on 16c instead of 28c regresses end-to-end
+                # decode by ~17% (measured: 31.2 vs 37.4 t/s/u). Keep 28c.
+                # Gated to single device so multi-device/other-model paths are unchanged.
+                # 3584/28 = 128 = 4 tiles: tile-aligned width-sharding OK.
+                else ttnn.CoreGrid(x=7, y=4)
+                if (self.num_devices == 1 and self.dim == 3584 and self.dim % (32 * 28) == 0)
                 else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
             )
 
@@ -1079,7 +1127,8 @@ class ModelArgs:
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
-                "allow_force_argmax": False,
+                # Single-chip only: argmax fast-path speeds up greedy decode on P150 (PR #50666)
+                "allow_force_argmax": self.num_devices == 1,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
@@ -1217,7 +1266,15 @@ class ModelArgs:
             elif self.is_galaxy:
                 return ttnn.L1_MEMORY_CONFIG
             else:
-                residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+                # On multi-device Blackhole meshes the DRAM-bank-derived grid can be
+                # 12 columns wide, which reaches a column reserved for dispatch cores
+                # and makes the residual sharded->interleaved writer kernel illegal
+                # (TT_FATAL: not on_dispatch_core). Cap the width to keep the residual
+                # shard cores clear of dispatch cores. Single-device stays unchanged.
+                residual_max_cols = 8 if self.num_devices > 1 else None
+                residual_grid = self.dram_shard_core_grid_for_k(
+                    self.dim // self.num_devices, max_cols=residual_max_cols
+                )
                 return ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
@@ -1573,7 +1630,9 @@ class ModelArgs:
         else:
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=False,
+                # Fast-approximate exp in the decode softmax (same trade as the SwiGLU
+                # fast_and_approximate_mode already enabled in mlp.py). PCC-gated.
+                exp_approx_mode=True,
                 q_chunk_size=0,
                 k_chunk_size=0,
             )
@@ -2367,8 +2426,13 @@ class ModelArgs:
     # NOTE: These attention helpers are placed here for historical reasons
     def get_sharded_wo_ring_mem_config(self):
         """Get the memory config for WO weights in ring mode."""
+        # WO's input (k / height) dim is n_heads*head_dim, which only equals self.dim when
+        # head_dim*n_heads == dim (e.g. Llama-8B: 32*128 == 4096). For models like gemma2 where
+        # n_heads*head_dim (16*256=4096) != dim (3584), using self.dim for k mismatches the
+        # physical weight height and trips the width-sharded "shard height must match physical
+        # height" assert. Use the true WO input dim for k.
         wo_shape_ring = (
-            self.dim // self.cluster_shape[0],
+            (self.n_heads * self.head_dim) // self.cluster_shape[0],
             self.dim // self.cluster_shape[1],
         )
         return self.create_dram_sharded_mem_config(
@@ -3156,6 +3220,18 @@ class ModelArgs:
     # =========================================================================
     # MATMUL / CONFIG HELPERS
     # =========================================================================
+    def stream_mm_ctx(self, mesh_device):
+        """Buffers for the streaming decode matmuls, shared by all decoder layers.
+
+        One set for the whole model rather than per layer: the layers run serially,
+        so peak L1 matches what a single layer's matmul already needs.
+        """
+        if getattr(self, "_stream_mm_ctx", None) is None:
+            from models.tt_transformers.tt.stream_mm import StreamMMContext
+
+            self._stream_mm_ctx = StreamMMContext(mesh_device)
+        return self._stream_mm_ctx
+
     def create_dram_sharded_mem_config(self, k, n, dram_grid=None):
         """Create DRAM-sharded memory config for width-sharded tensors"""
         dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
@@ -3206,11 +3282,11 @@ class ModelArgs:
             fuse_batch=fuse_batch,
         )
 
-    def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
-        rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
+    def dram_shard_core_grid_for_k(self, k: int, max_cols: int = None) -> Tuple[int, int]:
+        rows, cols = self.find_grid(k // ttnn.TILE_SIZE, max_cols=max_cols)
         return ttnn.CoreGrid(x=cols, y=rows)
 
-    def find_grid(self, N):
+    def find_grid(self, N, max_cols: int = None):
         """
         Find the number of rows and columns for a grid of cores such that
         the total number of tiles N can be evenly divided among the cores.
@@ -3227,7 +3303,20 @@ class ModelArgs:
             AssertionError: If it's not possible to find such a grid configuration.
         """
         max_rows = 8 if is_wormhole_b0() else 10
-        max_cols = 8 if is_wormhole_b0() else 12
+        default_max_cols = 8 if is_wormhole_b0() else 12
+        # Clamp to the device's actual compute-with-storage (worker) grid so we
+        # never emit a program grid wider/taller than the device. Harvested and
+        # multi-device Blackhole meshes expose an 11x10 worker grid (not the
+        # nominal 12-wide), and the nominal 12th column is a dispatch core -- a
+        # 12-wide grid there fails with either "must be contained within device
+        # grid" or "Kernels cannot be placed on dispatch cores". Because the
+        # worker grid already excludes dispatch cores, clamping to it fixes both.
+        dev_grid = getattr(self, "max_grid_size", None)
+        if dev_grid is not None:
+            max_rows = min(max_rows, dev_grid.y)
+            default_max_cols = min(default_max_cols, dev_grid.x)
+        # Callers may further cap the width (extra safety margin on multi-device).
+        max_cols = default_max_cols if max_cols is None else min(max_cols, default_max_cols)
         max_cores = max_rows * max_cols
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores

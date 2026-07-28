@@ -91,27 +91,22 @@ def test_bench_bridged_ff(device):
         device=device,
         memory_config=mem_cfg,
     )
-    # Output allocated with height 32 rather than 1. The kernel still writes only
-    # per_core_N tiles, which in a [1,32]-tiled shard laid out row-major is exactly
-    # row 0. Height 32 is what makes stock untilize legal (it asserts
-    # height % 32 == 0), giving a reverse bridge out of stock ops only. Rows 1-31
-    # are don't-care, which is already the batch-1 padding contract in
-    # tt_transformers.
-    out_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_grid, (32, padded_n // num_cores), ttnn.ShardOrientation.ROW_MAJOR),
-    )
+    # Standard [32,32]-tiled output. The DST register is 32x32 regardless, so with
+    # m=1 the result lands in row 0 and pack writes a full tile whose remaining
+    # rows are junk -- exactly tt_transformers' batch-1 padding contract. Costs 32x
+    # the output write (~1.8 us at N=14336) and removes the reverse bridge entirely.
     out_rm = ttnn.from_torch(
         torch.zeros(1, 1, 32, padded_n),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=out_mem,
-        tile=tiny,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core_grid, (32, padded_n // num_cores), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
     )
     OUT_IS_RM = False
-    logger.info(f"BENCH out tensor h=32 tile[1,32] shape={out_rm.shape} shard=(32,{padded_n//num_cores})")
 
     subblock_k = DIM // tile_w // 4
     working = ttnn.from_torch(
@@ -177,7 +172,7 @@ def test_bench_bridged_ff(device):
 
     # NOTE: with_reverse=False returns out_rm itself (written in place), so it must
     # not be deallocated; doing so frees the persistent output buffer.
-    for label, rev in (("fwd bridge + streaming mm", False), ("full chain incl reverse", True)):
+    for label, rev in (("fwd bridge + streaming mm -> std tile out", False),):
         run_bridged(rev)
         ttnn.synchronize_device(device)
         t0 = time.time()
