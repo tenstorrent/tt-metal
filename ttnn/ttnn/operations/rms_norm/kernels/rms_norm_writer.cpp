@@ -85,9 +85,10 @@ void kernel_main() {
     constexpr bool TWO_STAGE = CW2 > 1;
     static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
 
-    // 27..36 are the two multicast-family CT blocks (reader-side; the writer
-    // shares the layout so a knob cannot drift between them).
-    constexpr auto out_args = TensorAccessorArgs<37>();
+    // 27..36 are the two combine multicast-family CT blocks and 37..47 the Perf 1
+    // gamma-broadcast tail (flag word + two families); both are reader-side, but
+    // the writer shares the layout so a knob cannot drift between them.
+    constexpr auto out_args = TensorAccessorArgs<48>();
 
     static_assert(WT_LAST == WT_CHUNK, "writer assumes uniform chunk widths");
 

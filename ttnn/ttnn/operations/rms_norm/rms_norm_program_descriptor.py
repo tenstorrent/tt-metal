@@ -215,6 +215,32 @@ FUSE_SQUARE_ACCUM = True
 SEM_GATHER = 0  # stage 1: row members -> their row leader ("my partial landed")
 SEM_MCAST_BASE = 1  # Mcast2D takes SEM_MCAST_BASE (data_ready) and +1 (consumer_ready)
 SEM_GATHER2 = 5  # stage 2: row leaders -> the group root (two-stage combine only)
+# Perf 1 (op_design Lamp L2): the gamma broadcast. One semaphore PAIR per
+# multicast family, starting here (family f -> data_ready = base + 2f,
+# consumer_ready = base + 2f + 1). 0..5 are taken by the combine above.
+#
+# The families must NOT share an id pair even though their rectangles are
+# disjoint: `SenderPipe` resets consumer_ready to 0 after each send, so a shared
+# cell would wipe the other family's acks.
+SEM_GAMMA_BASE = 6
+
+# Perf 1: the measured core-count floor for the gamma broadcast. `gamma` is
+# reuse-shared only in the row-only split (cw == 1), and the broadcast only pays
+# when DRAM is the binding constraint — below ~40 active cores the grid does not
+# saturate it and the ~15 us serial injector prologue exceeds the DRAM time it
+# saves. Measured on (1,1,8192,7168), one run per point:
+#
+#     active cores   per-core DRAM read   broadcast   speedup
+#              110              354_010     253_671    1.386x
+#               55              171_124     146_270    1.170x
+#               44              137_969     121_122    1.139x
+#               33              104_810      99_423    1.054x
+#               22               74_654      74_344    1.004x  (NULL)
+#               11               41_782      49_658    0.841x  (REGRESSION)
+#
+# 44 is the measured spelling of "the broadcast wins"; 33 is marginal and inside
+# the noise band for the smaller shapes, so the guard sits above it.
+GAMMA_MCAST_MIN_CORES = 44
 
 # Buffer depths (§1.2). Phase-1 minimal = 2 (double buffer).
 X_DEPTH = 2
@@ -770,6 +796,74 @@ def _virtual_x_runs(device, grid):
     return runs
 
 
+def _gamma_mcast_plan(placement, runs, blk, gamma, sharded_in):
+    """Perf 1 — the reuse-shared gamma broadcast (op_design Lamp L2), or ``None``.
+
+    `gamma` does not vary along the tile-row axis, which is the axis the row-only
+    split (``cw == 1``) distributes across cores, so every active core reads the
+    SAME ``Wt`` pages — op_design §1.4's operand-reuse table calls this out
+    explicitly. This plans the broadcast that replaces those ``num_cores x Wt``
+    DRAM reads with one ``Wt``-page read per virtually-contiguous column run.
+
+    Returns ``([(rect, injector, ack_count)], {(x, y): family})``, or ``None``
+    when the predicate refuses — in which case the caller keeps the per-core
+    `TensorAccessor` read, byte-identical.
+
+    Every clause of the predicate is MEASURED, not assumed (see the table at
+    GAMMA_MCAST_MIN_CORES and the Perf 1 changelog entry):
+
+      * ``cw == 1``          — a W-split already hands every core a DISJOINT
+                               gamma slice, so gamma is read exactly once in
+                               total and there is nothing to share.
+      * ``gamma_resident``   — a broadcast is one shot; the streamed spelling
+                               re-reads per chunk per row-block. This also
+                               excludes the cases where gamma cannot fit L1.
+      * ``not is_rm_gamma``  — the RM path's landing CB is a stick buffer
+                               consumed by compute's own tilize, not a tile CB
+                               whose address is uniform across the rectangle.
+      * ``not sharded_in``   — measured 0.735x on HEIGHT_SHARDED (1,1,256,512):
+                               both tensors are zero-copy L1 shards there, so
+                               gamma is the only DRAM traffic and it is
+                               uncontended (ablation 4_307 -> 4_319 ns, i.e.
+                               ZERO data-movement headroom to win back).
+      * ``>= GAMMA_MCAST_MIN_CORES`` active cores — below that the grid does not
+                               saturate DRAM and the injector prologue costs more
+                               than it saves.
+      * at most ``MAX_MCAST_FAMILIES`` DENSE rectangles, one per virtual-x run —
+                               a broadcast rectangle covering a core that runs no
+                               kernel has nothing to reserve the landing CB and
+                               nothing to ack the handshake. A ragged active set
+                               falls back rather than guess.
+    """
+    if gamma is None or sharded_in or not blk.gamma_resident or blk.is_rm_gamma:
+        return None
+    if placement.cw != 1:
+        return None
+    active = [(int(w.core.x), int(w.core.y)) for w in placement.works if w.num_rows > 0]
+    if len(active) < GAMMA_MCAST_MIN_CORES:
+        return None
+    fams, fam_of = [], {}
+    for lo, hi in runs:
+        sub = [c for c in active if lo <= c[0] <= hi]
+        if not sub:
+            continue
+        x0, x1 = min(c[0] for c in sub), max(c[0] for c in sub)
+        y0, y1 = min(c[1] for c in sub), max(c[1] for c in sub)
+        area = (x1 - x0 + 1) * (y1 - y0 + 1)
+        if len(sub) != area or len(fams) >= MAX_MCAST_FAMILIES:
+            return None  # ragged, or needs more families than the CT block carries
+        f = len(fams)
+        # Injector at the rectangle's low corner: its own copy is already in the
+        # CB, so `send(src == dst)` makes the pipe EXCLUDE-source and the fan-out
+        # is `area - 1`. One injector PER RUN (rather than one for the grid) is
+        # the measured winner — two injections overlap on two cores instead of
+        # serializing on one, for one extra gamma read (0.2% of traffic).
+        fams.append(((x0, y0, x1, y1), (x0, y0), area - 1))
+        for c in sub:
+            fam_of[c] = f
+    return (fams, fam_of) if fams else None
+
+
 def _split_rect_by_runs(x0, y0, x1, y1, runs):
     """The rectangle, cut into the per-run pieces a multicast may legally address."""
     out = []
@@ -1272,6 +1366,19 @@ def create_program_descriptor(
                 rect_set = ttnn.CoreRangeSet([_rect(*rect)])
                 mcasts[(g, f)] = ttnn.Mcast2D(device, rect_set, grp["root"], cfg, ack)
 
+    # ---------- Perf 1: the reuse-shared gamma broadcast (Lamp L2) ----------
+    # Predicate-guarded fast path; `None` keeps the per-core TensorAccessor read
+    # exactly as it was. Disjoint from the combine's wiring above by construction:
+    # this engages only when `cw == 1`, and the combine only when `cw > 1`.
+    gamma_plan = _gamma_mcast_plan(placement, _virtual_x_runs(device, grid), blk, gamma, in_sharded)
+    gamma_fams, gamma_fam_of = gamma_plan if gamma_plan is not None else ([], {})
+    gamma_mcasts = {}
+    for f, (rect, inj, ack) in enumerate(gamma_fams):
+        for sid in (SEM_GAMMA_BASE + 2 * f, SEM_GAMMA_BASE + 2 * f + 1):
+            semaphores.append(ttnn.SemaphoreDescriptor(id=sid, core_ranges=all_cores, initial_value=0))
+        gcfg = ttnn.McastConfig(sem_ids=[SEM_GAMMA_BASE + 2 * f, SEM_GAMMA_BASE + 2 * f + 1])
+        gamma_mcasts[f] = ttnn.Mcast2D(device, ttnn.CoreRangeSet([_rect(*rect)]), ttnn.CoreCoord(*inj), gcfg, ack)
+
     # ---------- shared compile-time knobs ----------
     chunk_row_bytes = blk.wt_chunk * TILE_DIM * blk.elem_bytes
     # Real bytes in the FINAL chunk of the core that owns the tensor's last
@@ -1324,9 +1431,16 @@ def create_program_descriptor(
         ]
         + mcast_ct
     )
-    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<37>
-    assert DATAFLOW_ACCESSOR_ARG_BASE == 37, (
-        "rms_norm: reader/writer read TensorAccessorArgs<37>; the shared CT block "
+    # Perf 1: the gamma-broadcast block — one flag word (bit0 = the broadcast is
+    # engaged) plus one 5-word mcast block per family. An unengaged family emits a
+    # zeroed block and `McastArgs::active` compiles the whole leg away.
+    gamma_ct = [1 if gamma_fams else 0]
+    for f in range(MAX_MCAST_FAMILIES):
+        gamma_ct += list(gamma_mcasts[f].compile_time_args()) if f in gamma_mcasts else [0, 0, 0, 0, 0]
+    dataflow_ct_args = dataflow_ct_args + gamma_ct
+    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<48>
+    assert DATAFLOW_ACCESSOR_ARG_BASE == 48, (
+        "rms_norm: reader/writer read TensorAccessorArgs<48>; the shared CT block "
         f"is now {DATAFLOW_ACCESSOR_ARG_BASE} long — update both kernels together"
     )
 
@@ -1369,19 +1483,40 @@ def create_program_descriptor(
         # must mask the tile-padded columns of that tile.
         is_last_w = 1 if (w.wt_start + wt_real == wt_global) else 0
 
-        reader_rt[core.x][core.y] = [
-            src_addr,
-            gamma_addr,
-            w.start_row,
-            w.num_rows,
-            w.wt_start,
-            w.slot,
-            is_root,
-            is_last_w,
-            wt_real,
-            w.family,
-            1 if w.is_leader else 0,
-        ] + mcast_rt
+        # Perf 1: this core's gamma-broadcast role. `g_inject` is a per-family
+        # BITMASK — set means "I read gamma from DRAM and broadcast it to that
+        # family's rectangle"; `g_family` is which rectangle I receive in.
+        here = (int(core.x), int(core.y))
+        g_family = gamma_fam_of.get(here, 0)
+        g_inject = 0
+        gamma_rt = [0, 0, 0, 0] * MAX_MCAST_FAMILIES
+        if gamma_fams:
+            for f, (_, inj, _) in enumerate(gamma_fams):
+                if here == inj:
+                    g_inject |= 1 << f
+            gamma_rt = []
+            for f in range(MAX_MCAST_FAMILIES):
+                gmc = gamma_mcasts.get(f)
+                gamma_rt += list(gmc.runtime_args(core)) if gmc is not None else [0, 0, 0, 0]
+
+        reader_rt[core.x][core.y] = (
+            [
+                src_addr,
+                gamma_addr,
+                w.start_row,
+                w.num_rows,
+                w.wt_start,
+                w.slot,
+                is_root,
+                is_last_w,
+                wt_real,
+                w.family,
+                1 if w.is_leader else 0,
+            ]
+            + mcast_rt
+            + [g_inject, g_family]
+            + gamma_rt
+        )
         writer_rt[core.x][core.y] = [
             dst_addr,
             w.start_row,

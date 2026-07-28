@@ -45,8 +45,11 @@ from loguru import logger
 import importlib.util as _ilu
 from pathlib import Path as _P
 
+import sys as _sys
+
 _spec = _ilu.spec_from_file_location("phase4_bench", _P(__file__).resolve().parent / "phase4_bench.py")
 phase4_bench = _ilu.module_from_spec(_spec)
+_sys.modules["phase4_bench"] = phase4_bench  # so the `from phase4_bench import ...` below resolves
 _spec.loader.exec_module(phase4_bench)
 
 from phase4_bench import (  # noqa: E402

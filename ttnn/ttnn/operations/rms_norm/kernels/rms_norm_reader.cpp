@@ -134,7 +134,19 @@ void kernel_main() {
     // the group fits in one run, and then compiles away entirely.
     constexpr auto mc_a = dkl::McastArgs</*CT=*/27, /*RT=*/11>();
     constexpr auto mc_b = dkl::McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
-    constexpr auto in_args = TensorAccessorArgs<mc_b.next_compile_time_args_offset()>();
+
+    // ---- Perf 1: the reuse-shared gamma broadcast (op_design Lamp L2) -------
+    // Flag word (bit0) plus one multicast family per virtually-contiguous column
+    // run. The host owns the predicate — see _gamma_mcast_plan; when it refuses,
+    // GAMMA_MCAST is 0 and every leg below compiles away, leaving the per-core
+    // TensorAccessor read byte-identical to the pre-Perf-1 spelling.
+    constexpr uint32_t GAMMA_FLAGS = get_compile_time_arg_val(mc_b.next_compile_time_args_offset());
+    constexpr bool GAMMA_MCAST = (GAMMA_FLAGS & 0x1u) != 0;
+    constexpr auto gmc_a =
+        dkl::McastArgs<mc_b.next_compile_time_args_offset() + 1, mc_b.next_runtime_args_offset() + 2>();
+    constexpr auto gmc_b = dkl::McastArgs<gmc_a.next_compile_time_args_offset(), gmc_a.next_runtime_args_offset()>();
+    constexpr auto in_args = TensorAccessorArgs<gmc_b.next_compile_time_args_offset()>();
+    static_assert(gmc_b.next_compile_time_args_offset() == 48, "shared dataflow CT block must be 48 words");
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     static_assert(WT_LAST == WT_CHUNK, "reader assumes uniform chunk widths");
@@ -150,6 +162,11 @@ void kernel_main() {
     const uint32_t wt_real = get_arg_val<uint32_t>(8);
     const uint32_t mcast_family = get_arg_val<uint32_t>(9);
     const uint32_t is_leader = get_arg_val<uint32_t>(10);
+    // Perf 1: gamma-broadcast role. `gamma_inject` is a per-family bitmask ("I
+    // read gamma from DRAM and broadcast it to that family"); `gamma_family` is
+    // the rectangle this core receives in.
+    [[maybe_unused]] const uint32_t gamma_inject = get_arg_val<uint32_t>(mc_b.next_runtime_args_offset() + 0);
+    [[maybe_unused]] const uint32_t gamma_family = get_arg_val<uint32_t>(mc_b.next_runtime_args_offset() + 1);
 
     // Filler core: inside the multicast rectangle so the broadcast lands
     // somewhere legal, but it owns no data and takes no part in the combine.
@@ -205,12 +222,53 @@ void kernel_main() {
         } else {
             const uint32_t gt = get_tile_size(cb_gamma);
             cb_reserve_back(cb_gamma, WT);
-            uint32_t addr = get_write_ptr(cb_gamma);
-            for (uint32_t t = 0; t < WT; ++t) {
-                noc_async_read_page(gamma_page(t), gamma_acc, addr);
-                addr += gt;
+            const uint32_t base = get_write_ptr(cb_gamma);
+            if constexpr (GAMMA_MCAST) {
+                // Perf 1 — the reuse-shared broadcast. `cb_gamma` is declared at
+                // the identical size on every core of the rectangle, so its write
+                // pointer is the SAME L1 address everywhere: the injector sends
+                // `src == dst` (its own copy is already in place, so the pipe
+                // picks EXCLUDE-source) and every receiver's landing address is
+                // right by construction. Delivery stays in the PROLOGUE: measured
+                // 1.09x SLOWER when moved after the first pass-A read, because the
+                // prologue is the one window where the injector's own DRAM read is
+                // uncontended. The rectangle, the corner ordering and the
+                // readiness handshake are mcast_pipe's, exactly as for 1/rms.
+                Noc gnoc;
+                if (gamma_inject) {
+                    uint32_t addr = base;
+                    for (uint32_t t = 0; t < WT; ++t) {
+                        noc_async_read_page(gamma_page(t), gamma_acc, addr);
+                        addr += gt;
+                    }
+                    noc_async_read_barrier();
+                    if constexpr (gmc_a.active) {
+                        if (gamma_inject & 0x1u) {
+                            auto pipe = gmc_a.sender(gnoc);
+                            pipe.send(base, base, WT * gt);
+                        }
+                    }
+                    if constexpr (gmc_b.active) {
+                        if (gamma_inject & 0x2u) {
+                            auto pipe = gmc_b.sender(gnoc);
+                            pipe.send(base, base, WT * gt);
+                        }
+                    }
+                } else if (gamma_family == 0) {
+                    auto pipe = gmc_a.receiver(gnoc);
+                    pipe.receive();
+                } else {
+                    auto pipe = gmc_b.receiver(gnoc);
+                    pipe.receive();
+                }
+            } else {
+                uint32_t addr = base;
+                for (uint32_t t = 0; t < WT; ++t) {
+                    noc_async_read_page(gamma_page(t), gamma_acc, addr);
+                    addr += gt;
+                }
+                noc_async_read_barrier();
             }
-            noc_async_read_barrier();
             cb_push_back(cb_gamma, WT);
         }
     }
@@ -419,7 +477,7 @@ void kernel_main() {
     // ReceiverPipe's readiness ack is a NON-POSTED remote atomic; drain it
     // before the kernel exits so the core's NoC transaction counters balance
     // (an outstanding atomic at exit stalls dispatch completion).
-    if constexpr (W_SPLIT) {
+    if constexpr (W_SPLIT || GAMMA_MCAST) {
         noc_async_atomic_barrier();
     }
 }
