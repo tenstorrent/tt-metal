@@ -10,10 +10,11 @@ mock cluster (36 hosts x 32 ASICs = 1152 ASICs total):
   * 4x4 shape  -- device_topology [4, 4] RING,RING (16 ASICs/stage). Single mesh type (M0): every
                   stage is a 4x4 torus split across a "1x2" split-host galaxy (host_topology [2, 1],
                   which is how the schema expresses the 1x2 split, matching blitz_decode_quad_galaxy_4x4).
-                  All-to-all corner pinnings per stage (defined in the config file). Stage counts come
-                  from the config.
+                  All-to-all corner pinnings plus orientation anchors per stage (defined in the config
+                  file). Stage counts come from the config.
 
-All rings close (last stage -> stage 0). Regenerate in place with:
+All rings close (last stage -> stage 0). The MGDs are not checked in; the bh-pipeline-sweep group
+generates them before sweeping, and they can be written by hand with:
 
     python3 tests/scripts/multihost/gen_pipeline_sweep_mgds.py
 
@@ -31,15 +32,33 @@ import yaml
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _DEFAULT_CONFIG = _SCRIPT_DIR / "pipeline_sweep_config.yaml"
-_DEFAULT_OUT = _SCRIPT_DIR.parents[2] / "tests/tt_metal/tt_fabric/custom_mesh_descriptors/pipeline_sweep"
+_DEFAULT_OUT = _SCRIPT_DIR.parents[2] / "generated/mgd/pipeline_sweep"
+
+
+@dataclass(frozen=True)
+class AsicPosition:
+    asic_location: int
+    tray_id: int | None = None
+    tray_id_regex: str | None = None
+
+    def render(self) -> str:
+        tray = f"tray_id: {self.tray_id}" if self.tray_id is not None else f'tray_id_regex: "{self.tray_id_regex}"'
+        return f"  physical_asic_position {{ {tray} asic_location: {self.asic_location} }}"
 
 
 @dataclass(frozen=True)
 class PinningGroup:
     name: str
     mesh_id_regex: str
-    chip_ids: list[int]
-    positions: list[tuple[int, int]]
+    positions: list[AsicPosition]
+    chip_ids: list[int] | None = None
+    chip_id_regex: str | None = None
+
+    def render_nodes(self) -> list[str]:
+        prefix = f'  logical_fabric_node_id {{ mesh_id_regex: "{self.mesh_id_regex}"'
+        if self.chip_id_regex is not None:
+            return [f'{prefix} chip_id_regex: "{self.chip_id_regex}" }}']
+        return [f"{prefix} chip_id: {chip_id} }}" for chip_id in self.chip_ids or []]
 
 
 @dataclass(frozen=True)
@@ -83,25 +102,35 @@ def _parse_pinning_group(path: Path, shape: str, index: int, group: Any) -> Pinn
     name = group.get("name", f"group{index}")
     mesh_id_regex = group.get("mesh_id_regex")
     chip_ids = group.get("chip_ids")
+    chip_id_regex = group.get("chip_id_regex")
     positions_raw = group.get("positions")
     if not mesh_id_regex:
         raise ValueError(f"{prefix}.mesh_id_regex is required")
-    if not chip_ids:
-        raise ValueError(f"{prefix}.chip_ids must be a non-empty list")
+    if bool(chip_ids) == bool(chip_id_regex):
+        raise ValueError(f"{prefix} needs exactly one of chip_ids (non-empty list) or chip_id_regex")
     if not positions_raw:
         raise ValueError(f"{prefix}.positions must be a non-empty list")
 
-    positions: list[tuple[int, int]] = []
+    positions: list[AsicPosition] = []
     for j, pos in enumerate(positions_raw):
-        if not isinstance(pos, dict) or "tray_id" not in pos or "asic_location" not in pos:
-            raise ValueError(f"{prefix}.positions[{j}] must be {{tray_id, asic_location}}")
-        positions.append((int(pos["tray_id"]), int(pos["asic_location"])))
+        if not isinstance(pos, dict) or "asic_location" not in pos:
+            raise ValueError(f"{prefix}.positions[{j}] must be a mapping with asic_location")
+        if ("tray_id" in pos) == ("tray_id_regex" in pos):
+            raise ValueError(f"{prefix}.positions[{j}] needs exactly one of tray_id or tray_id_regex")
+        positions.append(
+            AsicPosition(
+                asic_location=int(pos["asic_location"]),
+                tray_id=int(pos["tray_id"]) if "tray_id" in pos else None,
+                tray_id_regex=str(pos["tray_id_regex"]) if "tray_id_regex" in pos else None,
+            )
+        )
 
     return PinningGroup(
         name=str(name),
         mesh_id_regex=str(mesh_id_regex),
-        chip_ids=[int(c) for c in chip_ids],
         positions=positions,
+        chip_ids=[int(c) for c in chip_ids] if chip_ids else None,
+        chip_id_regex=str(chip_id_regex) if chip_id_regex else None,
     )
 
 
@@ -135,24 +164,30 @@ def _pinnings_section(groups: list[PinningGroup]) -> str:
     if not groups:
         return ""
 
-    chip_summary = ", ".join(str(c) for c in groups[0].chip_ids)
     lines = [
         "# --- Pinnings ---------------------------------------------------------------",
-        f"# All-to-all corner pinning per mesh: logical chips ({chip_summary}) may map to any of",
-        "# the tray/asic positions in each group. The solver enforces a bijection. Groups are keyed",
-        "# by mesh_id_regex (parity-based for the 1x2 split-host galaxy wiring).",
+        "# All-to-all corner pinning per mesh: the logical chips of a group may map to any of the",
+        "# tray/asic positions in that group. The solver enforces a bijection, so each chip lands on a",
+        "# distinct ASIC.",
         "#",
-        '# mesh_id_regex expands PER matched mesh (one all-to-all group each). Ranges like "0-8"',
-        '# and comma lists like "0,2,4-6" are also supported.',
+        "# A 4x4 slice occupies 4 trays x 4 asic_locations, and the two slices of a 1x2 split-host galaxy",
+        "# use disjoint location columns (3/4/7/8 vs 1/2/5/6). The corner group offers both columns, and",
+        "# positions absent from a given physical mesh are filtered out, so one set of entries covers every",
+        "# mesh: whichever column the assigned physical mesh actually has is the one that survives.",
+        "#",
+        "# The 1:1 entries anchor one chip per column to fix orientation (no rotation, folding or",
+        "# reflection). Each entry is applied as its own constraint, so the anchor for the column the mesh",
+        "# does not have is filtered away and only the matching one takes effect.",
+        "#",
+        "# mesh_id_regex expands PER matched mesh (one all-to-all group each). chip_id_regex and",
+        "# tray_id_regex use the same range/list/regex syntax.",
         "",
     ]
     for group in groups:
-        lines.append(f"# {group.name} mesh ids ({group.mesh_id_regex})")
+        lines.append(f"# {group.name}")
         lines.append("pinnings {")
-        for chip_id in group.chip_ids:
-            lines.append(f'  logical_fabric_node_id {{ mesh_id_regex: "{group.mesh_id_regex}" chip_id: {chip_id} }}')
-        for tray_id, asic_location in group.positions:
-            lines.append(f"  physical_asic_position {{ tray_id: {tray_id} asic_location: {asic_location} }}")
+        lines.extend(group.render_nodes())
+        lines.extend(position.render() for position in group.positions)
         lines.append("}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -194,9 +229,9 @@ def build_4x4(stages: int, pinnings: list[PinningGroup]) -> str:
 # GENERATED by tests/scripts/multihost/gen_pipeline_sweep_mgds.py -- do not edit by hand.
 # 4x4 pipeline ring, {stages} stages ({stages} x 16 = {stages * 16} ASICs). Single mesh type (M0):
 # every stage is a 4x4 RING,RING torus split across a 1x2 split-host galaxy (host_topology [2,1]).
-# All-to-all corner pinnings from pipeline_sweep_config.yaml; position set alternates by mesh-id
-# parity. The ring closes (stage {stages - 1} -> stage 0). Mirrors blitz_decode_quad_galaxy_4x4
-# scaled to {stages} stages.
+# All-to-all corner pinnings plus orientation anchors from pipeline_sweep_config.yaml, covering both
+# split-host location columns. The ring closes (stage {stages - 1} -> stage 0). Mirrors
+# blitz_decode_quad_galaxy_4x4 scaled to {stages} stages.
 
 mesh_descriptors {{
   name: "M0"

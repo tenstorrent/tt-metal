@@ -146,14 +146,15 @@ MGD_BLITZ_128="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_12
 MGD_BLITZ_144="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_144stage_mesh_graph_descriptor.textproto"
 
 # --- Pipeline-sweep MGDs (generated) ---------------------------------------
-# Ring-pipeline MGDs swept on the SC36 mock by the bh-pipeline-sweep group. Regenerate with:
-#   python3 tests/scripts/multihost/gen_pipeline_sweep_mgds.py
+# Ring-pipeline MGDs swept on the SC36 mock by the bh-pipeline-sweep group. These are not checked in:
+# the group generates them before sweeping with
+#   python3 tests/scripts/multihost/gen_pipeline_sweep_mgds.py --out-dir "${MGD_PIPELINE_SWEEP}"
 # Pinnings and stage counts live in tests/scripts/multihost/pipeline_sweep_config.yaml.
 # 2x4 = device [4,2] RING,LINE (8 ASICs/stage, single-host, no pinnings).
-# 4x4 = device [4,4] RING,RING, alternating single-host [1,1] / split-host [2,1] with corner pinnings
+# 4x4 = device [4,4] RING,RING split-host [2,1] with corner pinnings plus orientation anchors
 #       (16 ASICs/stage). The largest ring of each shape exactly fills the 1152-ASIC SC36 mock
 #       (144 x 8 = 72 x 16 = 1152). Files: ${MGD_PIPELINE_SWEEP}/sweep_<shape>_pipeline_<N>stage_*.textproto
-MGD_PIPELINE_SWEEP="${MGD_CUSTOM}/pipeline_sweep"
+MGD_PIPELINE_SWEEP="generated/mgd/pipeline_sweep"
 PIPELINE_SWEEP_2X4_STAGES="16 32 64 80 96 112 128 144"
 PIPELINE_SWEEP_4X4_STAGES="8 16 32 40 48 56 64 72"
 
@@ -726,6 +727,9 @@ if run_group "bh-pipeline-sweep"; then
 PIPELINE_SWEEP_SOLUTIONS=20
 PIPELINE_SWEEP_MOCK="${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}"
 PIPELINE_SWEEP_OUT="generated/ttrun/pipeline_sweep"
+
+# The swept MGDs are generated, not checked in; stage counts and pinnings come from the config file.
+python3 tests/scripts/multihost/gen_pipeline_sweep_mgds.py --out-dir "${MGD_PIPELINE_SWEEP}"
 
 # Workload per solution: just the pipeline-builder check (no layout-check prerequisite for now).
 PIPELINE_SWEEP_WORKLOAD_FILTER="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
