@@ -96,3 +96,5 @@ additionally have `doc/fused_decoder/`. The shared baseline is `doc/functional_d
 across all four arms for a given model, by construction.
 
 Full run plan, machine split, exact commands and handoff protocol: `.agents/RUN-PLAN.md`.
+Live experiment record, results and the monitoring scripts: agentic-research branch
+`mvasiljevic/skillexp-fusing-advisor`, `pipeline-experiments/skillexp-fusing-advisor/`.

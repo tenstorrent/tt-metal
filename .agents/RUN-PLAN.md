@@ -145,14 +145,23 @@ machine before phase 2.
 
 ## 3. Branch and tag naming
 
-| what | name |
-|---|---|
-| functional decoder, per model | `mvasiljevic/qb2/skillexp/fd/<model_dir>` |
-| a completed arm run | `mvasiljevic/qb2/skillexp/run/<arm>/<model_dir>` |
-| "FD is done, you may pull it" | tag `skillexp/fd-ready/<model_dir>` |
-| "this arm+model is done" | tag `skillexp/done/<arm>/<model_dir>` |
+**Eight branches total, not twenty.** The arm is the unit of analysis, so one result branch per
+arm accumulates all four models; completion is marked per model by a tag, not by a branch.
+
+| what | name | count |
+|---|---|---|
+| functional decoder, per model | `mvasiljevic/qb2/skillexp/fd/<model_dir>` | 4 |
+| results, per arm (all 4 models) | `mvasiljevic/qb2/skillexp/run/<arm>` | 4 |
+| this machine's live status | `mvasiljevic/qb2/skillexp/status/<machine>` | 1 each |
+| "FD is done, you may pull it" | tag `skillexp/fd-ready/<model_dir>` | 4 |
+| "this arm+model is done" | tag `skillexp/done/<arm>/<model_dir>` | 16 |
 
 `<arm>` is one of `nofuse-advise`, `nofuse-noadvise`, `fuse-advise`, `fuse-noadvise`.
+`<machine>` is `a` or `b`.
+
+Model directories are disjoint, so four models coexist on one arm branch without interacting, and
+redoing one model is a new commit touching only its directory — never a history rewrite. Arm-vs-arm
+comparison is then a single `git diff` between two branches instead of a cross-product of sixteen.
 
 **Only tags mean "complete".** A branch may be pushed mid-run; a tag is pushed only after the stage
 passed its gate. Wait on tags, never on branches:
@@ -239,11 +248,13 @@ git merge --no-edit mvasiljevic/qb2/skillexp/fd/$MD      # brings in the shared 
 run_stage skillexp-work "$HF" "$MD" "p2-$ARM-$MD" 2 \
   .agents/prompts/model_bringup_multigoal/02-optimized-decoder.txt
 
-git branch -m skillexp-work
-git checkout -B mvasiljevic/qb2/skillexp/run/$ARM/$MD
+# first model of this arm creates the branch; later models add commits to it
+git fetch origin && git checkout -B mvasiljevic/qb2/skillexp/run/$ARM \
+  $(git rev-parse --verify --quiet origin/mvasiljevic/qb2/skillexp/run/$ARM || echo skillexp-work)
+git merge --no-edit skillexp-work            # no-op when this is the first model
 git add models/autoports/$MD
 git commit -m "skillexp $ARM: $MD optimized decoder (FD from skillexp/fd-ready/$MD)"
-git push origin mvasiljevic/qb2/skillexp/run/$ARM/$MD
+git push origin mvasiljevic/qb2/skillexp/run/$ARM
 git tag -a skillexp/done/$ARM/$MD -m "traced decode b1 <y> -> <y'>, b32 <z> -> <z'>, PCC <p>"
 git push origin skillexp/done/$ARM/$MD
 ```
@@ -281,7 +292,7 @@ ARM=nofuse-noadvise; MD=microsoft_phi_3_5_mini_instruct
 # same as phase 2, on machine A, using machine B's arm branch
 ```
 
-Push as `mvasiljevic/qb2/skillexp/run/nofuse-noadvise-onA/$MD`. If it lands within noise of machine
+Push as `mvasiljevic/qb2/skillexp/run/nofuse-noadvise-onA`. If it lands within noise of machine
 B's number for that model, the machine/advisor confound is bounded.
 
 ---
@@ -310,12 +321,19 @@ substitutable, because shard params differ between a sub-tile and a full-tile ac
 
 ## 6. Coordination and failure
 
-- **Comms are tags plus one file.** Append to `~/skillexp-logs/STATUS.md` on your own machine and
-  push it with each result branch. One line per event: UTC timestamp, phase, arm, model, verdict,
-  traced-decode numbers, blocker if any.
+- **Comms are tags plus your own status branch.** Run the monitor in tmux beside the run; it
+  publishes to `mvasiljevic/qb2/skillexp/status/<machine>`, which only your machine writes, so there
+  is never a merge. See the experiment record in agentic-research
+  (`pipeline-experiments/skillexp-fusing-advisor/`, branch
+  `mvasiljevic/skillexp-fusing-advisor`):
+
+  ```bash
+  MACHINE=a ./scripts/skillexp_monitor.sh   # per machine, in tmux, once
+  ./scripts/skillexp_board.sh               # the 4x4 board, from anywhere with a tt-metal clone
+  ```
 - **A blocked stage is a result, not a hole.** Push whatever the stage produced to its
-  `run/<arm>/<model_dir>` branch, do **not** tag it done, and add a `BLOCKED` line to `STATUS.md`
-  naming the exit code and the failing gate. Do not silently substitute a weaker measurement.
+  `run/<arm>` branch, do **not** tag it done, and let the monitor record the exit code and failing
+  gate. Do not silently substitute a weaker measurement.
 - **Do not touch the five skillexp skill branches.** If a skill genuinely needs a fix mid-experiment,
   it must land on `base` and be cherry-picked to all four arms, and every completed run before it is
   invalidated. Say so in `STATUS.md` before doing it.
