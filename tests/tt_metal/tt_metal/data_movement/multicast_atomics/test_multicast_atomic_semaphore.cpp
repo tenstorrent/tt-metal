@@ -137,8 +137,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
         .unique_id = KernelSpecName{"receiver"},
         .source = "tests/tt_metal/tt_metal/data_movement/multicast_atomics/kernels/multicast_atomic_receiver_2_0.cpp",
         .num_threads = 1,
+        // Read-only: the receiver only wait()s (multicast_atomic_receiver_2_0.cpp), so OBSERVE keeps it
+        // out of the writer census. The sem still resolves EXTERNAL via the sender's remote atomic.
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
-            .semaphore_spec_name = atomic_sem.unique_id, .accessor_name = "sem_name"}},
+            .semaphore_spec_name = atomic_sem.unique_id,
+            .accessor_name = "sem_name",
+            .access_type = KernelSpec::SemaphoreBinding::AccessType::OBSERVE}},
         .compile_time_args = receiver_cta_bindings,
         .hw_config = receiver_hw_config,
     };

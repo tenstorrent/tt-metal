@@ -299,9 +299,13 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     producer.compile_time_args = {
         {"num_entries_per_producer", kPushTiles}, {"implicit_sync", 1u}, {"kPreloadPostedValue", kPreloadValue}};
     producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+    // The producer set()s prod_ready but only wait_min()s cons_ready, so cons_ready is OBSERVE
+    // (kept out of the writer census -> the sem stays on the cheap single-writer path).
     producer.semaphore_bindings = {
         {.semaphore_spec_name = SEM_PROD_READY, .accessor_name = "prod_ready"},
-        {.semaphore_spec_name = SEM_CONS_READY, .accessor_name = "cons_ready"}};
+        {.semaphore_spec_name = SEM_CONS_READY,
+         .accessor_name = "cons_ready",
+         .access_type = m2::SemaphoreAccessType::OBSERVE}};
 
     auto consumer =
         make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_with_tc_preload_2_0.cpp");
@@ -317,8 +321,11 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         {"implicit_sync", 1u},
         {"kPreloadAckedValue", kPreloadValue}};
     consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+    // Mirror image: the consumer set()s cons_ready but only wait_min()s prod_ready -> prod_ready is OBSERVE.
     consumer.semaphore_bindings = {
-        {.semaphore_spec_name = SEM_PROD_READY, .accessor_name = "prod_ready"},
+        {.semaphore_spec_name = SEM_PROD_READY,
+         .accessor_name = "prod_ready",
+         .access_type = m2::SemaphoreAccessType::OBSERVE},
         {.semaphore_spec_name = SEM_CONS_READY, .accessor_name = "cons_ready"}};
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
