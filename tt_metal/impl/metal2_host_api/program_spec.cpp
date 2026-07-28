@@ -241,6 +241,22 @@ const CollectedSpecData::SemaphoreBinderInfo& SemaphoreBinders(
     return it != collected.semaphore_endpoints.end() ? it->second : kEmpty;
 }
 
+// Is every binder a data-movement kernel? ValidateProgramSpec forbids semaphore bindings on compute
+// kernels outright, so this is expected to be trivially true -- but the cached pool is a DM-cache-domain
+// region and the scope is baked unconditionally (BuildProgramFromSpec can be reached without the
+// validator), so the cached path re-checks it where the decision is actually made rather than trusting
+// a validation that may be skipped.
+bool all_binders_are_dm(const CollectedSpecData::SemaphoreBinderInfo& binders) {
+    for (const auto* recs : {&binders.writers, &binders.readers}) {
+        for (const auto& rec : *recs) {
+            if (!rec.kernel->is_data_movement_kernel()) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
@@ -275,10 +291,14 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 "or use SemaphoreScope::EXTERNAL.",
                 sem.unique_id,
                 binders.binder_kernel_count);
-            // NOTE: no "binders must be DM kernels" check is needed -- ValidateProgramSpec already
-            // forbids semaphore bindings on compute kernels outright, and hw_config has no third
-            // alternative, so every binder is necessarily data-movement.
-            //
+            // Re-checked here rather than trusting ValidateProgramSpec's compute-binding ban, because
+            // the scope is baked unconditionally and the validator can be skipped.
+            TT_FATAL(
+                all_binders_are_dm(binders),
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by a non-data-movement kernel; "
+                "the cached-only pool lives in the DM cache domain, so such a binder would address a "
+                "different word (the kernel_config ring) and the semaphore would split.",
+                sem.unique_id);
             // A binder on another node would address ITS OWN node's pool at the same offset.
             // merge() then compare counts: if the union grew, some binder sits outside the sem's node.
             TT_FATAL(
@@ -344,7 +364,7 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             const bool binders_confined_to_sem_node =
                 sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores();
             if (is_gen2_arch() && single_node && binders_confined_to_sem_node &&
-                binders.binder_kernel_count == 1) {
+                binders.binder_kernel_count == 1 && all_binders_are_dm(binders)) {
                 return SemScope::DM_LOCAL_CACHED;
             }
             return SemScope::EXTERNAL;
@@ -599,6 +619,22 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             // Census for the AUTO scope classifier: a writer (INCREMENT/CONSUME/SET) or a reader
             // (OBSERVE). Instance counts are derived in Pass 2, once kernel node sets exist.
             auto& sem_info = collected.semaphore_endpoints[binding.semaphore_spec_name];
+            // At most once per kernel, mirroring the DFB and scratchpad rules: a second binding would
+            // double-count this kernel's instances in the census (inflating writer_instance_count and
+            // so the mechanism choice) while adding nothing a handle alias cannot express.
+            for (const auto* recs : {&sem_info.writers, &sem_info.readers}) {
+                for (const auto& rec : *recs) {
+                    TT_FATAL(
+                        rec.kernel != &kernel,
+                        "Kernel '{}' binds semaphore '{}' more than once (accessor names '{}' and '{}'). A "
+                        "kernel may bind a given semaphore at most once; to refer to it by another name in "
+                        "kernel code, alias the handle (constexpr auto x = sem::y) instead.",
+                        kernel.unique_id,
+                        binding.semaphore_spec_name,
+                        rec.binding->accessor_name,
+                        binding.accessor_name);
+                }
+            }
             if (binding.access_type == SemaphoreAccessType::OBSERVE) {
                 sem_info.readers.push_back({&kernel, &binding});
             } else {
@@ -3276,8 +3312,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         semaphore_name_to_id[semaphore_name] = sem_id;
         // Resolve the host intent (SemaphoreSpec.scope) to a device SemScope now, so it can be baked
         // into every kernel that binds this semaphore. For AUTO this consults the who-touches census
-        // (single-writer single-node -> cheap LOCAL_NONATOMIC, else atomic EXTERNAL; never
-        // DM_LOCAL_CACHED). Contradictions/honesty violations already FATALed in ValidateProgramSpec.
+        // (single-writer single-node -> cheap LOCAL_NONATOMIC; multi-writer confined to one node on
+        // Gen2 with a single binder kernel -> the cached pool; otherwise atomic EXTERNAL). The pick is
+        // arch-sensitive: on Gen1 the cached tier is unavailable and AUTO falls through to EXTERNAL. Contradictions/honesty violations already FATALed in ValidateProgramSpec.
         semaphore_name_to_scope[semaphore_name] =
             ResolveSemaphoreScope(semaphore_spec, SemaphoreBinders(collected, semaphore_name));
     }
