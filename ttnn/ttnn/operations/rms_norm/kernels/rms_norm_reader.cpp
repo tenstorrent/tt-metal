@@ -28,13 +28,18 @@
 // shard — and zero any trailing W-padding tiles the shard grid over-covers.
 //
 // CROSS-CORE W-SPLIT (W_SPLIT): this kernel owns the *receive* half of the
-// combine.  Per row-block the group ROOT waits for all CW partial-sum tiles to
-// land in cb_group_partials (the writers push them; see rms_norm_writer.cpp),
-// hands them to compute, then multicasts compute's combined mean(x^2) back over
-// the group rectangle; every other core waits for that broadcast.  Both legs go
-// through kernel_lib/mcast_pipe.hpp (SenderPipe / ReceiverPipe) — the
-// multicast, the readiness handshake and the per-NoC rectangle corner ordering
-// are the helper's, never hand-rolled here.
+// combine.  Per row-block a LEADER waits for all CW1 partial-sum tiles of its
+// stage-1 fan-in to land in cb_group_partials (the writers push them; see
+// rms_norm_writer.cpp) and hands them to compute.  With CW2 == 1 the only leader
+// is the group root and that single gather IS the combine (the flat topology).
+// With CW2 > 1 the combine is TWO-STAGE: each grid row's leader folds its row,
+// and the root then waits for the CW2 row-sums in cb_group_partials2 — the
+// serial fan-in is CW1 + CW2 instead of CW1 * CW2.  The root finally multicasts
+// compute's combined mean(x^2) back over the group rectangle; every other core
+// waits for that broadcast.  The broadcast goes through
+// kernel_lib/mcast_pipe.hpp (SenderPipe / ReceiverPipe) — the multicast, the
+// readiness handshake and the per-NoC rectangle corner ordering are the
+// helper's, never hand-rolled here.
 //
 // Helper substitution note: the TILE path uses TensorAccessor +
 // noc_async_read_page directly because no dataflow helper can express a
@@ -65,6 +70,7 @@ constexpr uint32_t cb_gamma_rm = 4;
 constexpr uint32_t cb_ones = 5;
 constexpr uint32_t cb_group_partials = 6;
 constexpr uint32_t cb_rms_mean = 7;
+constexpr uint32_t cb_group_partials2 = 9;
 constexpr uint32_t cb_rms_sum = 26;
 }  // namespace
 
@@ -103,6 +109,13 @@ void kernel_main() {
     constexpr bool SHARDED_IN = get_compile_time_arg_val(21) != 0;
     constexpr bool SHARDED_OUT = get_compile_time_arg_val(22) != 0;
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(23);
+    // Combine topology: CW1 * CW2 == CW. CW2 == 1 -> flat root gather (the only
+    // leader is the root); CW2 > 1 -> two-stage (row leaders, then the root).
+    constexpr uint32_t CW1 = get_compile_time_arg_val(24);
+    constexpr uint32_t CW2 = get_compile_time_arg_val(25);
+    constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(26);
+    constexpr bool TWO_STAGE = CW2 > 1;
+    static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
     (void)SHARDED_OUT;
 
     // ONE multicast family per virtually-contiguous column run of the group. A
@@ -112,7 +125,7 @@ void kernel_main() {
     // must broadcast as two rectangles rather than one bounding box that would
     // target non-worker endpoints. Family B is inactive (`active == 0`) whenever
     // the group fits in one run, and then compiles away entirely.
-    constexpr auto mc_a = dkl::McastArgs</*CT=*/24, /*RT=*/10>();
+    constexpr auto mc_a = dkl::McastArgs</*CT=*/27, /*RT=*/11>();
     constexpr auto mc_b = dkl::McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
     constexpr auto in_args = TensorAccessorArgs<mc_b.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -129,6 +142,7 @@ void kernel_main() {
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(7);
     const uint32_t wt_real = get_arg_val<uint32_t>(8);
     const uint32_t mcast_family = get_arg_val<uint32_t>(9);
+    const uint32_t is_leader = get_arg_val<uint32_t>(10);
 
     // Filler core: inside the multicast rectangle so the broadcast lands
     // somewhere legal, but it owns no data and takes no part in the combine.
@@ -287,6 +301,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t fp32_tile_bytes = get_tile_size(cb_rms_sum);
     [[maybe_unused]] Noc noc;
     [[maybe_unused]] Semaphore<> gather_sem(SEM_GATHER);
+    [[maybe_unused]] Semaphore<> gather2_sem(SEM_GATHER2);
 
     // ---- 3. row-block loop -------------------------------------------------
     const uint32_t num_row_blocks = (num_tile_rows + HT_BLOCK - 1) / HT_BLOCK;
@@ -315,11 +330,22 @@ void kernel_main() {
         // cannot start before the broadcast lands, so a reader that queued its
         // pass-B reads first would fill cb_input_tiles and deadlock.
         if constexpr (W_SPLIT) {
-            if (is_root) {
-                cb_reserve_back(cb_group_partials, HT_BLOCK * CW);
-                gather_sem.wait(CW);
+            // stage 1 — every leader folds its own fan-in (CW1 cores). On the
+            // flat topology the root is the only leader and CW1 == CW.
+            if (is_leader) {
+                cb_reserve_back(cb_group_partials, HT_BLOCK * CW1);
+                gather_sem.wait(CW1);
                 gather_sem.set(0);
-                cb_push_back(cb_group_partials, HT_BLOCK * CW);
+                cb_push_back(cb_group_partials, HT_BLOCK * CW1);
+            }
+            // stage 2 — the root folds the CW2 row-sums the leaders shipped.
+            if constexpr (TWO_STAGE) {
+                if (is_root) {
+                    cb_reserve_back(cb_group_partials2, HT_BLOCK * CW2);
+                    gather2_sem.wait(CW2);
+                    gather2_sem.set(0);
+                    cb_push_back(cb_group_partials2, HT_BLOCK * CW2);
+                }
             }
             cb_reserve_back(cb_rms_sum, HT_BLOCK);
             const uint32_t dst = get_write_ptr(cb_rms_sum);

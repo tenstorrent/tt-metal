@@ -95,18 +95,58 @@ W_SPLIT_MAX_HT_FOR_SPLIT = None  # None => grid.y (derived at call time)
 # (examples/double_buffer): below it the combine handshake dominates the work.
 W_SPLIT_MIN_WT = 8
 
-# L1 the ROOT core may spend on the gathered partial-sum tiles
-# (CW * HT_BLOCK fp32 tiles). Caps how wide an *interleaved* W-split goes; a
+# L1 the gather buffers may occupy per core (HT_BLOCK * gather_tiles fp32
+# tiles; see _gather_tiles). Caps how wide an *interleaved* W-split goes; a
 # sharded input's CW is pinned by its shard grid and is instead absorbed by the
 # halve-and-re-derive loop in _derive_blocking.
 L1_GATHER_BUDGET_BYTES = 256 * 1024
+
+# Combine topology knob (Refinement 3). The widest fan-in ONE root is allowed to
+# serialize before the gather is split into two stages.
+#
+# A flat root gather makes a single core absorb CW * 4 KB of NoC writes and then
+# run CW fp32 tile-adds back to back. Measured by ablation at the pinned perf
+# config (the W-split placement with the combine legs removed vs. the real op),
+# the combine is 45-49% of the whole decode kernel and grows ~73 ns per extra
+# contributor:
+#
+#     shape         cores   full ns   no-combine ns   combine ns
+#     (1,1,32,1024)    32      6_938           3_524        3_414
+#     (1,1,32,2304)    36      7_555           3_827        3_728
+#     (1,1,32,5120)    40      9_309           5_152        4_157
+#     (1,1,32,7168)    56     10_929           5_759        5_170
+#
+# When the group is a dense rectangle with both extents > 1 and its area exceeds
+# this cap, the gather goes TWO-STAGE (examples/tensix_all_reduce's measured
+# `two_stage_grid_reduce`, 1.45-1.60x over a flat root under grid contention and
+# the winner at the 1-tile latency floor): row members -> their row leader, the
+# row leaders -> the root. The serial fan-in becomes cx + cy instead of cx * cy,
+# and the per-core gather L1 falls the same way. Measured at matched CW (same
+# core count, same slices, only the topology differs):
+#
+#     shape          CW  cx*cy   flat ns   two-stage ns   speedup
+#     (1,1,32,1024)  32   4x8      6_938          5_987     1.16x
+#     (1,1,32,2304)  36   6x6      7_555          6_513     1.16x
+#     (1,1,32,5120)  40   5x8      9_309          8_320     1.12x
+#     (1,1,32,7168)  56   7x8     10_929          9_200     1.19x
+#
+# The second stage is not free — it buys back ~73 ns per contributor removed from
+# the root's serial fan-in but costs one extra gather round (~1.3 us, fitted from
+# the same measurements). So it only pays above a fairly wide fan-in, and this cap
+# is deliberately set at the widest flat gather still measured to be competitive
+# rather than at the fitted break-even (~28): every group at or below it keeps the
+# Refinement 2 flat topology byte-for-byte, and the staged one engages only in the
+# range it is measured to win. Raise it above any reachable group area to force
+# flat everywhere; lower it to engage staging on narrower groups.
+COMBINE_MAX_FLAT_FANIN = 24
 
 # Semaphore ids. Disjoint combine groups reuse the SAME ids -- a semaphore id
 # resolves to a per-core L1 cell, so group {A,B} bumping id 0 on B is a
 # different cell from group {C,D} bumping id 0 on D
 # (references/cross_core_reduction_design.md §5).
-SEM_GATHER = 0  # workers -> group root: "my partial has landed" counter
+SEM_GATHER = 0  # stage 1: row members -> their row leader ("my partial landed")
 SEM_MCAST_BASE = 1  # Mcast2D takes SEM_MCAST_BASE (data_ready) and +1 (consumer_ready)
+SEM_GATHER2 = 5  # stage 2: row leaders -> the group root (two-stage combine only)
 
 # Buffer depths (§1.2). Phase-1 minimal = 2 (double buffer).
 X_DEPTH = 2
@@ -167,9 +207,10 @@ CB_INPUT_RM = 3
 CB_GAMMA_RM = 4
 # --- cross-core W-split only (Refinement 2) ---
 CB_ONES = 5  # Float32 scaler for the combine reduce (root cores only)
-CB_GROUP_PARTIALS = 6  # gathered raw sum(x^2), CW slots per tile-row (root only)
+CB_GROUP_PARTIALS = 6  # stage-1 gather: raw sum(x^2), CW1 slots per tile-row (leaders)
 CB_RMS_MEAN = 7  # root's combined mean(x^2)  compute -> reader (mcast source)
 CB_PARTIAL_OUT = 8  # this core's raw sum(x^2)  compute -> writer (gather source)
+CB_GROUP_PARTIALS2 = 9  # stage-2 gather: leaders' row sums, CW2 slots per tile-row (root)
 CB_OUTPUT_TILES = 16
 CB_OUTPUT_RM = 17
 CB_X_SQUARED = 24
@@ -218,6 +259,8 @@ class _Blocking:
         wt_core=None,
         rows_core_max=None,
         cw=1,
+        cw1=None,
+        cw2=1,
         sharded_in=False,
         sharded_out=False,
     ):
@@ -236,6 +279,13 @@ class _Blocking:
         self.Wt = self.wt_global if wt_core is None else int(wt_core)
         self.cw = int(cw)
         self.w_split = self.cw > 1
+        # Combine fan-in per stage. cw2 == 1 is the flat root gather (cw1 == cw);
+        # cw2 > 1 is the two-stage gather, whose serial fan-in — and whose
+        # per-core gather L1 — is cw1 + cw2 instead of cw1 * cw2.
+        self.cw1 = self.cw if cw1 is None else int(cw1)
+        self.cw2 = int(cw2)
+        self.two_stage = self.w_split and self.cw2 > 1
+        assert self.cw1 * self.cw2 == self.cw, f"combine stages {self.cw1}x{self.cw2} must tile CW={self.cw}"
 
         # §5.1 tile geometry — alignment-aware, per image, ceil everywhere.
         if self.is_rm:
@@ -441,7 +491,13 @@ class _Blocking:
                 "cb_group_partials",
                 CB_GROUP_PARTIALS,
                 self.fp32_tile_bytes,
-                (H * self.cw) if self.w_split else 0,
+                (H * self.cw1) if self.w_split else 0,
+            ),
+            (
+                "cb_group_partials2",
+                CB_GROUP_PARTIALS2,
+                self.fp32_tile_bytes,
+                (H * self.cw2) if self.two_stage else 0,
             ),
             ("cb_rms_mean", CB_RMS_MEAN, self.fp32_tile_bytes, H if self.w_split else 0),
             ("cb_partial_out", CB_PARTIAL_OUT, self.fp32_tile_bytes, H if self.w_split else 0),
@@ -479,6 +535,8 @@ def _derive_blocking(input_tensor, gamma, grid_cores, placement, sharded_in=Fals
         wt_core=placement.wt_core,
         rows_core_max=placement.rows_core_max,
         cw=placement.cw,
+        cw1=placement.cw1,
+        cw2=placement.cw2,
         sharded_in=sharded_in,
         sharded_out=sharded_out,
     )
@@ -559,9 +617,33 @@ def _split_rect_by_runs(x0, y0, x1, y1, runs):
 
 
 class _CoreWork:
-    """What one core owns: a tile-row range x a W-tile slice, plus its combine role."""
+    """What one core owns: a tile-row range x a W-tile slice, plus its combine role.
 
-    __slots__ = ("core", "start_row", "num_rows", "wt_start", "wt_real", "slot", "group", "family")
+    The combine role is three fields, all defaulted so the flat topology (and the
+    no-split path) needs no extra bookkeeping:
+
+      ``s1_slot``   this core's tile index inside its stage-1 gather target
+      ``s2_slot``   a LEADER's tile index inside the root's stage-2 gather
+      ``is_leader`` does this core run stage 1? (always the root on a flat gather)
+
+    ``leader`` is the logical core the stage-1 partial is unicast to — the row
+    leader under a two-stage combine, the group root under a flat one.
+    """
+
+    __slots__ = (
+        "core",
+        "start_row",
+        "num_rows",
+        "wt_start",
+        "wt_real",
+        "slot",
+        "group",
+        "family",
+        "leader",
+        "s1_slot",
+        "s2_slot",
+        "is_leader",
+    )
 
     def __init__(self, core, start_row, num_rows, wt_start, wt_real, slot, group, family=0):
         self.core = core
@@ -572,6 +654,52 @@ class _CoreWork:
         self.slot = slot  # index inside the combine group
         self.group = group  # index into _Placement.groups (-1 == no group)
         self.family = family  # which multicast family (per-run sub-rectangle) reaches it
+        self.leader = None  # stage-1 gather target (filled by _assign_combine_roles)
+        self.s1_slot = slot
+        self.s2_slot = 0
+        self.is_leader = False
+
+
+def _two_stage_extents(cx, cy):
+    """(cw1, cw2) for a dense cx x cy group: two-stage when it beats a flat root.
+
+    A stage narrower than 2 buys nothing (its round-trip is pure overhead), and a
+    fan-in at or below ``COMBINE_MAX_FLAT_FANIN`` is cheaper to serialize on one
+    root than to split. Otherwise the rows gather to their leader (fan-in cx) and
+    the leaders to the root (fan-in cy).
+    """
+    if cx > 1 and cy > 1 and cx * cy > COMBINE_MAX_FLAT_FANIN:
+        return cx, cy
+    return cx * cy, 1
+
+
+def _gather_tiles(cx, cy):
+    """fp32 gather tiles one core must hold for a dense cx x cy group's combine."""
+    cw1, cw2 = _two_stage_extents(cx, cy)
+    return cw1 + cw2 if cw2 > 1 else cw1
+
+
+def _assign_combine_roles(works, group_index, root, cw1, cw2, x0, y0):
+    """Fill every core's stage-1/stage-2 combine role for one group.
+
+    Flat (``cw2 == 1``): the root is the only leader and ``s1_slot`` stays the
+    core's index in the group. Two-stage: the leader of a core is the core at
+    column ``x0`` of its own grid row, ``s1_slot`` is its column offset and a
+    leader's ``s2_slot`` is its row offset.
+    """
+    for w in works:
+        if w.group != group_index or w.num_rows == 0:
+            continue
+        if cw2 > 1:
+            w.leader = ttnn.CoreCoord(x0, int(w.core.y))
+            w.s1_slot = int(w.core.x) - x0
+            w.s2_slot = int(w.core.y) - y0
+            w.is_leader = int(w.core.x) == x0
+        else:
+            w.leader = root
+            w.s1_slot = w.slot
+            w.s2_slot = 0
+            w.is_leader = int(w.core.x) == int(root.x) and int(w.core.y) == int(root.y)
 
 
 class _Placement:
@@ -591,18 +719,27 @@ class _Placement:
     zero-work filler cores.
     """
 
-    def __init__(self, all_cores, works, groups, cw, wt_core, rows_core_max):
+    def __init__(self, all_cores, works, groups, cw, wt_core, rows_core_max, cw1=None, cw2=1):
         self.all_cores = all_cores
         self.works = works
         # [{root, subrects: [(x0,y0,x1,y1), ...], acks: [n, ...]}]
         self.groups = groups
         self.cw = cw
+        # Combine fan-in per stage; cw1 * cw2 == cw. cw2 == 1 is the flat root
+        # gather. Uniform across every group, because one compile-time kernel
+        # serves the whole grid.
+        self.cw1 = cw if cw1 is None else cw1
+        self.cw2 = cw2
         self.wt_core = wt_core
         self.rows_core_max = rows_core_max
 
     @property
     def w_split(self):
         return self.cw > 1
+
+    @property
+    def two_stage(self):
+        return self.w_split and self.cw2 > 1
 
     @property
     def num_cores(self):
@@ -646,22 +783,30 @@ def _placement_rows(grid, ht_total):
 def _w_split_rectangle(max_run_w, band_h, wt_global, gather_tile_bytes):
     """Widest core rectangle (cw_x <= max_run_w, cw_y <= band_h) that DIVIDES `wt_global`.
 
-    Two constraints, both structural:
+    Three constraints, all structural:
       * the rectangle must fit inside ONE virtually-contiguous column run, so the
-        1/rms broadcast never addresses a non-worker endpoint; and
+        1/rms broadcast never addresses a non-worker endpoint;
       * the group size must divide `Wt`, which keeps every core's slice the same
         width — so one compile-time `WT` / `WT_CHUNK` / `NW` serves the whole grid,
         and the last core's last tile is still the tensor's last tile (where the
-        partial-W mask belongs).
+        partial-W mask belongs); and
+      * its combine must fit ``L1_GATHER_BUDGET_BYTES``. That cost is the
+        topology's, not the area's (``_gather_tiles``): a two-stage rectangle
+        holds cx + cy tiles where a flat one holds cx * cy, so the budget reaches
+        a much wider group once the gather is staged.
+
+    Ties on area are broken toward the CHEAPEST combine, then toward the squarer
+    rectangle — a square minimises cx + cy at fixed area, which is exactly the
+    two-stage serial fan-in.
     """
-    cap = max(1, L1_GATHER_BUDGET_BYTES // gather_tile_bytes)
+    budget_tiles = max(1, L1_GATHER_BUDGET_BYTES // gather_tile_bytes)
     best = (1, 1)
     for cy in range(1, band_h + 1):
         for cx in range(1, max_run_w + 1):
             n = cx * cy
-            if n > cap or wt_global % n != 0:
+            if wt_global % n != 0 or _gather_tiles(cx, cy) > budget_tiles:
                 continue
-            if n > best[0] * best[1]:
+            if (n, -_gather_tiles(cx, cy)) > (best[0] * best[1], -_gather_tiles(*best)):
                 best = (cx, cy)
     return best
 
@@ -693,6 +838,7 @@ def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes, runs):
 
     wt_core = wt_global // cw
     rows = _rows_split(ht_total, num_groups)
+    cw1, cw2 = _two_stage_extents(cw_x, cw_y)
 
     works = []
     groups = []
@@ -701,9 +847,10 @@ def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes, runs):
     for g in range(num_groups):
         x0, y0 = slots[g]
         ranges.append(_rect(x0, y0, x0 + cw_x - 1, y0 + cw_y - 1))
+        root = ttnn.CoreCoord(x0, y0)
         groups.append(
             {
-                "root": ttnn.CoreCoord(x0, y0),
+                "root": root,
                 "subrects": [(x0, y0, x0 + cw_x - 1, y0 + cw_y - 1)],
                 "acks": [cw - 1],
             }
@@ -713,9 +860,10 @@ def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes, runs):
             for xx in range(x0, x0 + cw_x):
                 works.append(_CoreWork(ttnn.CoreCoord(xx, yy), start_row, rows[g], slot * wt_core, wt_core, slot, g, 0))
                 slot += 1
+        _assign_combine_roles(works, g, root, cw1, cw2, x0, y0)
         start_row += rows[g]
     assert start_row == ht_total
-    return _Placement(ttnn.CoreRangeSet(ranges), works, groups, cw, wt_core, max(rows))
+    return _Placement(ttnn.CoreRangeSet(ranges), works, groups, cw, wt_core, max(rows), cw1, cw2)
 
 
 def _shard_geometry(tensor):
@@ -782,6 +930,11 @@ def _placement_sharded(input_tensor, ht_total, wt_global, runs):
     works = []
     groups = []
     owned = {(int(c.x), int(c.y)) for c in cores}
+    # Two-stage needs a DENSE rectangle: every row must have a real core at
+    # column x0 to lead it, and every row's fan-in must be the same cx. A ragged
+    # shard grid (auto_shard_config's full rows + partial last row) has neither,
+    # so it keeps the flat root gather.
+    dense = len(cores) == (x1 - x0 + 1) * (y1 - y0 + 1)
     if layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
         nx = x1 - x0 + 1
         ny = y1 - y0 + 1
@@ -804,7 +957,12 @@ def _placement_sharded(input_tensor, ht_total, wt_global, runs):
                         _family_of(core, grp["subrects"]),
                     )
                 )
+        # Each BLOCK_SHARDED group is ONE grid row, so cw_y == 1 and the combine
+        # is flat by construction (a one-row group has no second axis to stage).
         cw = nx
+        cw1, cw2 = _two_stage_extents(nx, 1)
+        for gy in range(ny):
+            _assign_combine_roles(works, gy, ttnn.CoreCoord(x0, y0 + gy), cw1, cw2, x0, y0 + gy)
         rows_max = ht_s
     else:  # WIDTH_SHARDED — one group, every shard core owns a W slice of all rows
         cw = len(cores)  # combine width == real W slices (fillers do not contribute)
@@ -831,10 +989,12 @@ def _placement_sharded(input_tensor, ht_total, wt_global, runs):
                 if (xx, yy) not in owned:
                     core = ttnn.CoreCoord(xx, yy)
                     works.append(_CoreWork(core, 0, 0, 0, 0, 0, 0, _family_of(core, grp["subrects"])))
+        cw1, cw2 = _two_stage_extents(x1 - x0 + 1, y1 - y0 + 1) if dense else (cw, 1)
+        _assign_combine_roles(works, 0, cores[0], cw1, cw2, x0, y0)
         rows_max = ht_total
 
     all_cores = ttnn.CoreRangeSet([_rect(x0, y0, x1, y1)])
-    return _Placement(all_cores, works, groups, cw, wt_s, rows_max)
+    return _Placement(all_cores, works, groups, cw, wt_s, rows_max, cw1, cw2)
 
 
 def create_program_descriptor(
@@ -902,6 +1062,8 @@ def create_program_descriptor(
     mcasts = {}  # (group index, family) -> Mcast2D
     if placement.w_split:
         semaphores = [ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0)]
+        if placement.two_stage:
+            semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_GATHER2, core_ranges=all_cores, initial_value=0))
         for f in range(MAX_MCAST_FAMILIES):
             base = SEM_MCAST_BASE + 2 * f
             semaphores.append(ttnn.SemaphoreDescriptor(id=base, core_ranges=all_cores, initial_value=0))
@@ -956,12 +1118,17 @@ def create_program_descriptor(
             1 if in_sharded else 0,
             1 if out_sharded else 0,
             SEM_GATHER,
+            # Combine topology (Refinement 3): CW1 x CW2 == CW; CW2 == 1 is the
+            # flat root gather, CW2 > 1 the two-stage one.
+            placement.cw1,
+            placement.cw2,
+            SEM_GATHER2,
         ]
         + mcast_ct
     )
-    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<34>
-    assert DATAFLOW_ACCESSOR_ARG_BASE == 34, (
-        "rms_norm: reader/writer read TensorAccessorArgs<34>; the shared CT block "
+    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<37>
+    assert DATAFLOW_ACCESSOR_ARG_BASE == 37, (
+        "rms_norm: reader/writer read TensorAccessorArgs<37>; the shared CT block "
         f"is now {DATAFLOW_ACCESSOR_ARG_BASE} long — update both kernels together"
     )
 
@@ -987,12 +1154,15 @@ def create_program_descriptor(
         wt_real = blk.Wt if w.wt_real is None else min(w.wt_real, blk.Wt)
         is_root = 0
         root_v = (0, 0)
+        leader_v = (0, 0)
         mcast_rt = [0, 0, 0, 0] * MAX_MCAST_FAMILIES
         if placement.w_split:
             root = placement.groups[w.group]["root"]
             is_root = 1 if (int(core.x) == int(root.x) and int(core.y) == int(root.y)) else 0
             rv = device.worker_core_from_logical_core(root)
             root_v = (rv.x, rv.y)
+            lv = device.worker_core_from_logical_core(w.leader if w.leader is not None else root)
+            leader_v = (lv.x, lv.y)
             mcast_rt = []
             for f in range(MAX_MCAST_FAMILIES):
                 mc = mcasts.get((w.group, f))
@@ -1012,18 +1182,23 @@ def create_program_descriptor(
             is_last_w,
             wt_real,
             w.family,
+            1 if w.is_leader else 0,
         ] + mcast_rt
         writer_rt[core.x][core.y] = [
             dst_addr,
             w.start_row,
             w.num_rows,
             w.wt_start,
-            w.slot,
+            w.s1_slot,
+            leader_v[0],
+            leader_v[1],
+            is_last_w,
             root_v[0],
             root_v[1],
-            is_last_w,
+            w.s2_slot,
+            1 if w.is_leader else 0,
         ]
-        compute_rt[core.x][core.y] = [w.num_rows, eps_bits, is_root, is_last_w]
+        compute_rt[core.x][core.y] = [w.num_rows, eps_bits, is_root, is_last_w, 1 if w.is_leader else 0]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -1054,6 +1229,8 @@ def create_program_descriptor(
             blk.W,
             1 if placement.w_split else 0,
             placement.cw,
+            placement.cw1,
+            placement.cw2,
         ]
     )
 
@@ -1114,6 +1291,7 @@ def _cb_format(name, blk, input_tensor, gamma):
         "cb_rms_recip",
         "cb_ones",
         "cb_group_partials",
+        "cb_group_partials2",
         "cb_rms_mean",
         "cb_partial_out",
     ):

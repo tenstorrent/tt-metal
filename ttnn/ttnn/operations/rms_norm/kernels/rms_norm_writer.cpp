@@ -17,9 +17,15 @@
 //
 // CROSS-CORE W-SPLIT (W_SPLIT): this kernel owns the *gather* half of the
 // combine. Per row-block it ships this core's raw sum(x^2) tiles into slot
-// `slot` of the group root's cb_group_partials and bumps the root's gather
-// counter; the root's reader waits for all CW of them (see rms_norm_reader.cpp).
-// Many-to-one has no multicast form and no helper covers it, so the leg is a
+// `s1_slot` of its LEADER's cb_group_partials and bumps that leader's stage-1
+// counter; the leader's reader waits for all CW1 of them (see
+// rms_norm_reader.cpp). With CW2 == 1 the leader is the group root and that is
+// the whole combine. With CW2 > 1 the combine is TWO-STAGE, and a leader ships a
+// SECOND tile — the row sum compute folded out of its stage-1 gather — into slot
+// `s2_slot` of the root's cb_group_partials2, bumping the stage-2 counter. Both
+// pushes ride the SAME cb_partial_out (one producer, one consumer, two
+// sequential pushes), so the staged topology adds no CB.
+// Many-to-one has no multicast form and no helper covers it, so each leg is a
 // plain noc_async_write + barrier + noc_semaphore_inc
 // (references/cross_core_reduction_design.md §1/§7).
 //
@@ -38,6 +44,7 @@
 namespace {
 constexpr uint32_t cb_group_partials = 6;
 constexpr uint32_t cb_partial_out = 8;
+constexpr uint32_t cb_group_partials2 = 9;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 }  // namespace
@@ -66,10 +73,15 @@ void kernel_main() {
     constexpr uint32_t WT_STRIDE = get_compile_time_arg_val(20);
     constexpr bool SHARDED_OUT = get_compile_time_arg_val(22) != 0;
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(23);
+    constexpr uint32_t CW1 = get_compile_time_arg_val(24);
+    constexpr uint32_t CW2 = get_compile_time_arg_val(25);
+    constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(26);
+    constexpr bool TWO_STAGE = CW2 > 1;
+    static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
 
-    // 24..33 are the two multicast-family CT blocks (reader-side; the writer
+    // 27..36 are the two multicast-family CT blocks (reader-side; the writer
     // shares the layout so a knob cannot drift between them).
-    constexpr auto out_args = TensorAccessorArgs<34>();
+    constexpr auto out_args = TensorAccessorArgs<37>();
 
     static_assert(WT_LAST == WT_CHUNK, "writer assumes uniform chunk widths");
 
@@ -77,10 +89,14 @@ void kernel_main() {
     const uint32_t start_tile_row = get_arg_val<uint32_t>(1);
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
     const uint32_t wt_start = get_arg_val<uint32_t>(3);
-    const uint32_t slot = get_arg_val<uint32_t>(4);
-    const uint32_t root_x = get_arg_val<uint32_t>(5);
-    const uint32_t root_y = get_arg_val<uint32_t>(6);
+    const uint32_t s1_slot = get_arg_val<uint32_t>(4);
+    const uint32_t leader_x = get_arg_val<uint32_t>(5);
+    const uint32_t leader_y = get_arg_val<uint32_t>(6);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(7);
+    const uint32_t root_x = get_arg_val<uint32_t>(8);
+    const uint32_t root_y = get_arg_val<uint32_t>(9);
+    const uint32_t s2_slot = get_arg_val<uint32_t>(10);
+    const uint32_t is_leader = get_arg_val<uint32_t>(11);
 
     // Filler core (inside the multicast rectangle, owns no data).
     if (num_tile_rows == 0) {
@@ -91,12 +107,39 @@ void kernel_main() {
     const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
     const uint32_t chunk0 = wt_start / WT_CHUNK;
 
-    // Gather target: the root's cb_group_partials. Every core declares that CB
-    // at the same size, so it sits at the same L1 offset everywhere and this
-    // core's own write pointer IS the root's base address.
+    // Gather targets: the leader's cb_group_partials (stage 1) and the root's
+    // cb_group_partials2 (stage 2). Every core declares both CBs at the same
+    // size, so each sits at the same L1 offset everywhere and this core's own
+    // write pointer IS the remote base address.
     [[maybe_unused]] const uint32_t partial_tile_bytes = get_tile_size(cb_partial_out);
     [[maybe_unused]] const uint32_t gather_base = get_write_ptr(cb_group_partials);
+    [[maybe_unused]] const uint32_t gather2_base = get_write_ptr(cb_group_partials2);
     [[maybe_unused]] const uint32_t gather_sem_addr = get_semaphore<ProgrammableCoreType::TENSIX>(SEM_GATHER);
+    [[maybe_unused]] const uint32_t gather2_sem_addr = get_semaphore<ProgrammableCoreType::TENSIX>(SEM_GATHER2);
+
+    // One gather hop: ship `ht` settled cb_partial_out tiles into `slot` of the
+    // destination core's gather CB (laid out h-major, tile h*fan_in + slot, so
+    // the folding core reads them as a contiguous (ht x fan_in) block), then let
+    // it know they LANDED.
+    [[maybe_unused]] auto gather_hop = [&](uint32_t ht,
+                                           uint32_t dst_x,
+                                           uint32_t dst_y,
+                                           uint32_t base,
+                                           uint32_t fan_in,
+                                           uint32_t slot,
+                                           uint32_t sem_addr) {
+        cb_wait_front(cb_partial_out, ht);
+        uint32_t src = get_read_ptr(cb_partial_out);
+        for (uint32_t h = 0; h < ht; ++h) {
+            const uint64_t dst = get_noc_addr(dst_x, dst_y, base + (h * fan_in + slot) * partial_tile_bytes);
+            noc_async_write(src, dst, partial_tile_bytes);
+            src += partial_tile_bytes;
+        }
+        // The data must have LANDED before the destination sees the counter move.
+        noc_async_write_barrier();
+        noc_semaphore_inc(get_noc_addr(dst_x, dst_y, sem_addr), 1);
+        cb_pop_front(cb_partial_out, ht);
+    };
 
     const uint32_t num_row_blocks = (num_tile_rows + HT_BLOCK - 1) / HT_BLOCK;
     for (uint32_t hb = 0; hb < num_row_blocks; ++hb) {
@@ -114,21 +157,15 @@ void kernel_main() {
             }
         }
 
-        // ---- gather leg: ship this core's raw partial sums to the root -----
-        // Laid out h-major (tile h*CW + slot) so the root's combine reads them
-        // as a contiguous (ht x CW) block.
+        // ---- gather legs: this core's raw partial sum, then (leaders only)
+        // the row sum compute folded out of the stage-1 gather.
         if constexpr (W_SPLIT) {
-            cb_wait_front(cb_partial_out, ht);
-            uint32_t src = get_read_ptr(cb_partial_out);
-            for (uint32_t h = 0; h < ht; ++h) {
-                const uint64_t dst = get_noc_addr(root_x, root_y, gather_base + (h * CW + slot) * partial_tile_bytes);
-                noc_async_write(src, dst, partial_tile_bytes);
-                src += partial_tile_bytes;
+            gather_hop(ht, leader_x, leader_y, gather_base, CW1, s1_slot, gather_sem_addr);
+            if constexpr (TWO_STAGE) {
+                if (is_leader) {
+                    gather_hop(ht, root_x, root_y, gather2_base, CW2, s2_slot, gather2_sem_addr);
+                }
             }
-            // The data must have LANDED before the root sees the counter move.
-            noc_async_write_barrier();
-            noc_semaphore_inc(get_noc_addr(root_x, root_y, gather_sem_addr), 1);
-            cb_pop_front(cb_partial_out, ht);
         }
 
         for (uint32_t wc = 0; wc < NW; ++wc) {

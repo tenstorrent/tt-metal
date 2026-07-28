@@ -15,11 +15,14 @@
 // Under the cross-core W-split (W_SPLIT, §4.2) this core owns only a SLICE of W,
 // so pass A stops one step earlier: no chunk finalizes, cb_partials keeps the
 // RAW elementwise x^2 accumulator, and a copy publishes it for the writer's
-// gather leg. The group root then folds the CW gathered accumulators with the
-// SAME reduce — the local chunk-accumulate, done across cores instead of across
-// chunks — and n_reduced stays the grand total W. Phase 4 onwards is byte
-// identical on every core; only the producer of cb_rms_sum changes (the reader's
-// multicast receive instead of phase 3).
+// gather leg. The combine then folds the gathered accumulators with the SAME
+// reduce — the local chunk-accumulate, done across cores instead of across
+// chunks — and n_reduced stays the grand total W. Its shape is the CW1 x CW2
+// topology knob (Refinement 3): CW2 == 1 is one flat fold on the root over all
+// CW tiles; CW2 > 1 stages it, so each row LEADER folds CW1 tiles raw (again
+// never finalizing) and the root finalizes over CW2 row-sums. Phase 4 onwards is
+// byte identical on every core; only the producer of cb_rms_sum changes (the
+// reader's multicast receive instead of phase 3).
 //
 // Every loop trip count and every helper block shape is a function of the block
 // knobs (HT_BLOCK / WT_CHUNK / NW / CW) — never of a whole-op dimension.
@@ -52,6 +55,7 @@ constexpr uint32_t cb_ones = 5;
 constexpr uint32_t cb_group_partials = 6;
 constexpr uint32_t cb_rms_mean = 7;
 constexpr uint32_t cb_partial_out = 8;
+constexpr uint32_t cb_group_partials2 = 9;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t cb_x_squared = 24;
@@ -87,7 +91,11 @@ void kernel_main() {
     constexpr uint32_t N_REDUCED = get_compile_time_arg_val(13);  // true element count == W
     // ---- cross-core W-split (§4.2) ----
     constexpr bool W_SPLIT = get_compile_time_arg_val(14) != 0;
-    constexpr uint32_t CW = get_compile_time_arg_val(15);  // cores per combine group
+    constexpr uint32_t CW = get_compile_time_arg_val(15);   // cores per combine group
+    constexpr uint32_t CW1 = get_compile_time_arg_val(16);  // stage-1 fan-in (row -> leader)
+    constexpr uint32_t CW2 = get_compile_time_arg_val(17);  // stage-2 fan-in (leaders -> root)
+    constexpr bool TWO_STAGE = CW2 > 1;
+    static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
 
     static_assert(WT_LAST == WT_CHUNK, "compute assumes uniform chunk widths");
     static_assert(NW * WT_CHUNK == WT, "chunking must tile Wt exactly");
@@ -98,6 +106,7 @@ void kernel_main() {
     const uint32_t eps_bits = get_arg_val<uint32_t>(1);
     const uint32_t is_root = get_arg_val<uint32_t>(2);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(3);
+    const uint32_t is_leader = get_arg_val<uint32_t>(4);
 
     // Filler core (inside a group's multicast rectangle, owns no data).
     if (num_tile_rows == 0) {
@@ -274,16 +283,62 @@ void kernel_main() {
         }
 
         // ========== phase 3b: cross-core combine (W-split only) ============
-        // The group ROOT folds the CW raw slice-accumulators its writers
-        // gathered into cb_group_partials into ONE mean(x^2) per tile-row. This
-        // is EXACTLY the local chunk accumulate, done across cores instead of
-        // across chunks: AccumulateViaAdd elementwise-adds the CW tiles into
-        // DEST, folds the result within the tile ONCE, and applies 1/n_reduced
-        // with n_reduced = W, the GRAND total (§4.2 "Finalize"). The gathered
-        // tiles are laid out h-major (tile h*CW + c), so of(ht, CW) reads them
-        // contiguously. The reader then multicasts the result back (see reader).
+        // The combine folds the raw slice-accumulators the writers gathered into
+        // ONE mean(x^2) per tile-row. That fold is EXACTLY the local chunk
+        // accumulate, done across cores instead of across chunks: AccumulateViaAdd
+        // elementwise-adds the gathered tiles into DEST, folds the result within
+        // the tile ONCE, and applies 1/n_reduced with n_reduced = W, the GRAND
+        // total (§4.2 "Finalize"). Gathered tiles are laid out h-major
+        // (tile h*fan_in + slot), so of(ht, fan_in) reads them contiguously.
+        //
+        // With CW2 == 1 there is one fold, on the root, over all CW tiles.
+        // With CW2 > 1 it is staged: every LEADER first folds its row's CW1
+        // tiles WITHOUT finalizing — Accumulate::at (never at_last) keeps the raw
+        // elementwise accumulator, the same object a worker's chunk loop
+        // produces, so the second fold cannot double-count the surviving x^2
+        // lanes — and republishes it through cb_partial_out for its own writer.
+        // The root then finalizes over just the CW2 row-sums.
         if constexpr (W_SPLIT) {
-            if (is_root) {
+            if constexpr (TWO_STAGE) {
+                if (is_leader) {
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_group_partials,
+                        cb_ones,
+                        cb_partials,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        ckl::ReduceInputBlockShape::of(ht, CW1, 1),
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::Accumulate::at(cb_partials, 0),
+                        ckl::NoOp{},
+                        ckl::ReducePartialScaler::none());
+                    if (ht < HT_BLOCK) {
+                        cb_pop_front(cb_group_partials, (HT_BLOCK - ht) * CW1);
+                    }
+                    ckl::copy<cb_partials, cb_partial_out>(ckl::EltwiseShape::tiles(ht));
+                }
+                if (is_root) {
+                    ckl::reduce_mean<
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_group_partials2,
+                        cb_ones,
+                        cb_rms_mean,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        ckl::ReduceInputBlockShape::of(ht, CW2, 1),
+                        N_REDUCED,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::NoAccumulation{},
+                        ckl::ReducePartialScaler::none());
+                    if (ht < HT_BLOCK) {
+                        cb_pop_front(cb_group_partials2, (HT_BLOCK - ht) * CW2);
+                    }
+                }
+            } else if (is_root) {
                 ckl::reduce_mean<
                     ckernel::ReduceDim::REDUCE_ROW,
                     cb_group_partials,
@@ -292,15 +347,15 @@ void kernel_main() {
                     ckl::ReduceInputPolicy::BulkWaitBulkPop,
                     ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                     ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                    ckl::ReduceInputBlockShape::of(ht, CW, 1),
+                    ckl::ReduceInputBlockShape::of(ht, CW1, 1),
                     N_REDUCED,
                     ckl::ReduceInputMemoryLayout::contiguous(),
                     ckl::NoAccumulation{},
                     ckl::ReducePartialScaler::none());
-                // The reader publishes a fixed HT_BLOCK*CW block so the gather
+                // The reader publishes a fixed HT_BLOCK*CW1 block so the gather
                 // slots stay at a constant L1 offset; drop the unused tail.
                 if (ht < HT_BLOCK) {
-                    cb_pop_front(cb_group_partials, (HT_BLOCK - ht) * CW);
+                    cb_pop_front(cb_group_partials, (HT_BLOCK - ht) * CW1);
                 }
             }
         }

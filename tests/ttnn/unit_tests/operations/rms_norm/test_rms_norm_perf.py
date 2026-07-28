@@ -110,11 +110,43 @@ PERF_SHAPES = [
     (1, 1, 8192, 7168),
 ]
 
+# The four perf-flagged DECODE profiles of eval/golden_tests/rms_norm/feature_spec.py,
+# with their clock-scalable achievable_ns reference (and the required speedup
+# where feature_spec pins one). Refinement 3 optimizes exactly these, at the
+# PINNED perf config below — never at the op's default HiFi4 / fp32-on corner.
+DECODE_REFERENCE_NS = {
+    (1, 1, 32, 1024): (9149, 1.0),
+    (1, 1, 32, 2304): (17003, 1.0),
+    (1, 1, 32, 5120): (75825, 1.0),
+    (1, 1, 32, 7168): (104259, 7.0),
+}
+REFERENCE_AICLK_MHZ = 1350
+
+
+def perf_compute_kernel_config():
+    """feature_spec._PERF_BASE's fixed precision: HiFi2 + bf16 DEST.
+
+    Single source for every perf measurement in this file, so a knob A/B can
+    never accidentally be taken on the default (HiFi4 / fp32_dest_acc_en=True)
+    datapath the achievable_ns references were NOT measured at.
+    """
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = ttnn.MathFidelity.HiFi2
+    cfg.fp32_dest_acc_en = False
+    cfg.math_approx_mode = False
+    return cfg
+
 
 @pytest.fixture(autouse=True)
 def _knob_overrides():
     """Apply the env-var knob overrides for one test, then restore."""
-    saved = (pd.L1_BLOCK_BUDGET_BYTES, pd.L1_CB_BUDGET_BYTES, pd.X_RESIDENT_DEPTH)
+    saved = (
+        pd.L1_BLOCK_BUDGET_BYTES,
+        pd.L1_CB_BUDGET_BYTES,
+        pd.X_RESIDENT_DEPTH,
+        pd.L1_GATHER_BUDGET_BYTES,
+        pd.COMBINE_MAX_FLAT_FANIN,
+    )
     kb = os.environ.get("RMS_NORM_BLOCK_BUDGET_KB")
     if kb:
         pd.L1_BLOCK_BUDGET_BYTES = int(kb) * 1024
@@ -125,8 +157,25 @@ def _knob_overrides():
         # A CB budget of 0 makes both residency predicates false, selecting the
         # bounded streaming fallback (2 reader passes) without touching the op.
         pd.L1_CB_BUDGET_BYTES = 0
+    # Refinement 3: the combine's own two knobs. The gather budget caps the group
+    # width CW (cap = budget // fp32_tile_bytes), so sweeping it sweeps how many
+    # cores share one reduce group; the flat-fan-in cap selects the combine
+    # TOPOLOGY at a fixed CW (raise it past the group area to force the flat root
+    # gather, i.e. the Refinement 2 behaviour).
+    gkb = os.environ.get("RMS_NORM_GATHER_BUDGET_KB")
+    if gkb:
+        pd.L1_GATHER_BUDGET_BYTES = int(gkb) * 1024
+    flat = os.environ.get("RMS_NORM_MAX_FLAT_FANIN")
+    if flat:
+        pd.COMBINE_MAX_FLAT_FANIN = int(flat)
     yield
-    pd.L1_BLOCK_BUDGET_BYTES, pd.L1_CB_BUDGET_BYTES, pd.X_RESIDENT_DEPTH = saved
+    (
+        pd.L1_BLOCK_BUDGET_BYTES,
+        pd.L1_CB_BUDGET_BYTES,
+        pd.X_RESIDENT_DEPTH,
+        pd.L1_GATHER_BUDGET_BYTES,
+        pd.COMBINE_MAX_FLAT_FANIN,
+    ) = saved
 
 
 @pytest.mark.parametrize("shape", PERF_SHAPES, ids=lambda s: "x".join(map(str, s)))
@@ -154,6 +203,87 @@ def test_rms_norm_perf(device, shape):
     assert passed, message
 
 
+@pytest.mark.skipif(
+    not os.environ.get("RMS_NORM_ABLATE"),
+    reason="ablation variant — opt in with RMS_NORM_ABLATE=<stage[,stage]> (output is WRONG by design)",
+)
+@pytest.mark.parametrize("shape", list(DECODE_REFERENCE_NS), ids=lambda s: "x".join(map(str, s)))
+def test_rms_norm_ablate(device, shape, monkeypatch):
+    """ABLATION (perf only, output is wrong by design): peel one stage, keep the rest.
+
+    ``RMS_NORM_ABLATE`` is a comma list of stages to remove:
+
+      ``combine`` — keeps the cross-core placement byte-for-byte (same core
+        count, same per-core W slice, same DRAM reads and writes, same per-core
+        square/reduce/scale) and removes only the gather + root-fold +
+        multicast legs, by handing the kernels ``cw = 1`` after the placement is
+        already laid out. Each core then finalizes ``rsqrt`` over its OWN slice.
+      ``gamma`` — drops the gamma tensor, removing its DRAM read and the phase-6
+        multiply.
+
+    Deliberately asserts nothing (perf-measure: never PCC-gate an ablated
+    kernel). Opt-in only, so a normal suite run never executes it.
+    """
+    stages = set(os.environ.get("RMS_NORM_ABLATE", "").split(","))
+
+    if "combine" in stages:
+        real_select = pd._select_placement
+
+        def _no_combine(*args, **kwargs):
+            p = real_select(*args, **kwargs)
+            p.cw = p.cw1 = p.cw2 = 1  # kernels compile with W_SPLIT == 0; slices unchanged
+            p.groups = []
+            return p
+
+        monkeypatch.setattr(pd, "_select_placement", _no_combine)
+
+    torch.manual_seed(42)
+    tt_x = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_gamma = None
+    if "gamma" not in stages:
+        tt_gamma = ttnn.from_torch(
+            torch.randn(1, 1, 1, shape[-1], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+    rms_norm(tt_x, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=perf_compute_kernel_config())
+
+
+@pytest.mark.parametrize("shape", list(DECODE_REFERENCE_NS), ids=lambda s: "x".join(map(str, s)))
+def test_rms_norm_perf_decode_pinned(device, shape):
+    """Decode column at the PINNED perf config (bf16 / TILE / HiFi2 / fp32-off).
+
+    Refinement 3's measurement surface. Same single dispatch per shape as
+    test_rms_norm_perf, but with the compute config feature_spec's perf loose
+    cases actually run at, and the tighter pcc_threshold = 0.9995 soft gate
+    those cases carry.
+    """
+    torch.manual_seed(42)
+    torch_x = torch.randn(shape, dtype=torch.bfloat16)
+    torch_gamma = torch.randn(shape[-1], dtype=torch.bfloat16)
+
+    tt_x = ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_gamma = ttnn.from_torch(
+        torch_gamma.reshape(1, 1, 1, shape[-1]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    tt_out = rms_norm(tt_x, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=perf_compute_kernel_config())
+
+    xf = torch_x.to(torch.float32)
+    expected = xf / torch.sqrt(torch.mean(xf**2, dim=-1, keepdim=True) + 1e-6)
+    expected = expected * torch_gamma.to(torch.float32).reshape(-1)
+
+    actual = ttnn.to_torch(tt_out).to(torch.float32)
+    passed, message = check_with_pcc(expected, actual, 0.9995)
+    assert passed, message
+
+
 def test_report_blocking(device):
     """Print the derived blocking for every perf shape (no device work).
 
@@ -164,7 +294,8 @@ def test_report_blocking(device):
     print(f"\ncompute grid: {grid.x} x {grid.y} = {grid.x * grid.y} cores")
     header = (
         f"{'shape':22s} {'Wt/core':>7} {'C':>4} {'NW':>4} {'H':>3} "
-        f"{'ht_tot':>7} {'CW':>4} {'cores':>6} {'xdep':>5} {'gres':>5} {'rdbat':>6} {'CB KB':>7}"
+        f"{'ht_tot':>7} {'CW':>4} {'CW1':>4} {'CW2':>4} {'cores':>6} "
+        f"{'xdep':>5} {'gres':>5} {'rdbat':>6} {'CB KB':>7}"
     )
     print(header)
     for shape in PERF_SHAPES:
@@ -185,8 +316,8 @@ def test_report_blocking(device):
         blk = pd._derive_blocking(tt_x, tt_g, grid.x * grid.y, placement)
         print(
             f"{str(shape):22s} {blk.Wt:7d} {blk.wt_chunk:4d} {blk.nw:4d} {blk.ht_block:3d} "
-            f"{blk.ht_total:7d} {placement.cw:4d} {placement.num_cores:6d} "
-            f"{blk.x_res_depth:5d} {int(blk.gamma_resident):5d} "
+            f"{blk.ht_total:7d} {placement.cw:4d} {placement.cw1:4d} {placement.cw2:4d} "
+            f"{placement.num_cores:6d} {blk.x_res_depth:5d} {int(blk.gamma_resident):5d} "
             f"{pd._x_read_chunks(blk):6d} {blk.cb_total_bytes // 1024:7d}"
         )
         ttnn.deallocate(tt_x)
