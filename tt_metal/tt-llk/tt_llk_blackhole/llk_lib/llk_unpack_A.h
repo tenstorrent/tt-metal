@@ -185,11 +185,17 @@ inline void _llk_unpack_A_mop_config_(
         {
             if constexpr (acc_to_dest)
             {
+                // The dummy source must wait on the unpacker's bank before clearing it. Otherwise
+                // it can race a destination-to-source move using a bank retained by the prior op.
                 static constexpr std::uint32_t unpack_srca_reuse =
-                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? unpack_srca_set_dvalid : unpack_srca;
+                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+                        ? TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)
+                        : unpack_srca;
 
                 static constexpr std::uint32_t unpack_srcb_reuse =
-                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? unpack_srcb_set_dvalid : unpack_srcb;
+                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
+                        ? TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)
+                        : unpack_srcb;
 
                 const std::uint32_t outerloop     = num_faces;
                 constexpr std::uint32_t innerloop = 1;
