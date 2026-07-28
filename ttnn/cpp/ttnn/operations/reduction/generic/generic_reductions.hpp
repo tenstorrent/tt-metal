@@ -23,7 +23,10 @@ Tensor pool_sum(
     int dim_arg,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar);
+    float scalar,
+    // Layout of the returned tensor; nullopt (default) keeps the reduce path's natural layout.
+    // Pass TILE to skip a tilize of the reduced row when the pool's caller wants tiles.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 }  // namespace operations::reduction
 
@@ -39,7 +42,12 @@ Tensor sum(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 sum reduces on the accurate SFPU path (full fp32); true selects the faster tf32 FPU
     // path.
-    bool fast_and_approximate_mode = false);
+    bool fast_and_approximate_mode = false,
+    // Layout of the returned tensor. nullopt (default) keeps whichever layout the selected path
+    // produces: ROW_MAJOR from the dense row-major reduces, TILE otherwise. Pass TILE when the
+    // consumer needs tiles — the row-major H reduce then emits them straight from the kernel instead
+    // of writing a row the caller has to tilize.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor mean(
     const Tensor& input_tensor_arg,
@@ -52,7 +60,10 @@ Tensor mean(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 mean reduces on the accurate SFPU path (full fp32); true selects the faster tf32 FPU
     // path.
-    bool fast_and_approximate_mode = false);
+    bool fast_and_approximate_mode = false,
+    // See sum(): nullopt keeps the selected path's natural layout; TILE lets the row-major H reduce
+    // emit tiles directly rather than a row the caller must tilize.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor max(
     const Tensor& input_tensor_arg,

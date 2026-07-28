@@ -84,7 +84,8 @@ Tensor reduce(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     bool negate,
     bool use_row_major_support,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<tt::tt_metal::Layout>& output_layout) {
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
@@ -141,7 +142,16 @@ Tensor reduce(
         (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
-    const bool use_rm_dense_w = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W;
+    // A TILE output request is served natively by the RM-H writer (it emits the tiles the compute
+    // kernel already packed) but not by the RM-W writer, whose per-core work is split by logical row
+    // rather than by tile, so two cores can share an output tile. RM-W therefore declines the fast
+    // path when TILE is requested and tilizes instead — correct, and the same cost as before this
+    // parameter existed. A ROW_MAJOR request needs no plumbing: it is the RM paths' natural layout,
+    // and reduce_impl converts for the paths that can only produce TILE.
+    const bool request_tile_output = output_layout == tt::tt_metal::Layout::TILE;
+    const std::optional<tt::tt_metal::Layout> rm_h_output_layout = request_tile_output ? output_layout : std::nullopt;
+
+    const bool use_rm_dense_w = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W && !request_tile_output;
     const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 
@@ -318,7 +328,11 @@ Tensor reduce(
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
                 /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
-                /*num_h_slices=*/num_h_slices);
+                /*num_h_slices=*/num_h_slices,
+                // Stage 1 must stay ROW_MAJOR: it is stage 2's input, and the RM path requires
+                // ROW_MAJOR input. Its num_h_slices rows also share one tile row, so whole-tile
+                // writes would collide.
+                /*output_layout=*/std::nullopt);
 
             return ttnn::prim::reduce(
                 partials,
@@ -334,7 +348,8 @@ Tensor reduce(
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
                 /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
-                /*num_h_slices=*/1);
+                /*num_h_slices=*/1,
+                /*output_layout=*/rm_h_output_layout);
         }
     }
 
@@ -351,7 +366,10 @@ Tensor reduce(
         /*post_mul_scaler=*/post_mul,
         /*row_major_w_dense_path=*/use_rm_dense_w,
         /*row_major_h_dense_path=*/use_rm_dense_h,
-        /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
+        /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+        /*num_h_slices=*/1,
+        // Only the RM-H writer needs telling; every other path's natural output is already TILE.
+        /*output_layout=*/use_rm_dense_h ? rm_h_output_layout : std::nullopt);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

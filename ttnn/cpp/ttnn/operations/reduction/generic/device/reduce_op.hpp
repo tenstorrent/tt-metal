@@ -31,7 +31,13 @@ Tensor reduce(
     bool use_row_major_support = false,
     // When false (default), fp32 mean runs on the accurate SFPU path (full fp32); true selects the FPU. Ignored for
     // non-fp32/non-AVG.
-    bool fast_and_approximate_mode = false);
+    bool fast_and_approximate_mode = false,
+    // Requested output layout, or nullopt (default) for each path's natural layout: ROW_MAJOR from
+    // the dense row-major paths, TILE from the tile-reduce kernels. Requesting TILE lets the RM-H
+    // writer emit the tiles its compute kernel already packed, sparing the caller a tilize of the
+    // reduced row. Not every path can produce every layout, so callers that need a hard guarantee
+    // must still convert (reduce_impl does).
+    const std::optional<tt::tt_metal::Layout>& output_layout = std::nullopt);
 
 }  // namespace ttnn::operations::reduction::generic::detail
 

@@ -42,6 +42,12 @@ struct ReduceParams {
     // (N, C, num_h_slices, W) partial tensor that a second H-reduce collapses to (N, C, 1, W).
     // Lets the op use NC*Wt*num_h_slices cores instead of NC*Wt on tall-H shapes. See reduce_op.cpp.
     uint32_t num_h_slices{1};
+    // Requested output layout. nullopt = each path's natural layout (ROW_MAJOR for the dense RM
+    // paths, TILE otherwise). Set to TILE on the RM-H path to have the writer emit the tiles the
+    // compute kernel already packed, instead of scattering them into RM pages for a consumer that
+    // would only tilize them again. Only TILE-on-RM-H (without an H-axis split) differs from the
+    // natural layout; validated in validate_on_program_cache_miss.
+    std::optional<tt::tt_metal::Layout> output_layout{};
 };
 
 }  // namespace ttnn::prim

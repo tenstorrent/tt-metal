@@ -689,6 +689,11 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
 @pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True])
 @pytest.mark.parametrize(
+    "output_layout",
+    [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["layout_default", "layout_row_major", "layout_tile"],
+)
+@pytest.mark.parametrize(
     "shape",
     [
         (1, 1, 3136, 144),  # EfficientNetB0 global-pool; Wt=5, split fills the grid
@@ -699,7 +704,7 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
         (2, 3, 512, 40),  # NC>1 with tall H (Ht_rm=16)
     ],
 )
-def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, fast_and_approximate_mode, shape):
+def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
     # fast_and_approximate_mode toggles the accurate SFPU (False) vs FPU (True) fp32 mean; only
     # ttnn.mean accepts it and it only affects fp32, so the True variant is meaningful only there.
@@ -721,7 +726,15 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, fast_and_appr
     op_kwargs = {"dim": -2, "keepdim": keepdim}
     if reduce_op == "mean":
         op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
+    if output_layout is not None:
+        op_kwargs["output_layout"] = output_layout
     tt_output = ttnn_op(tt_input, **op_kwargs)
+
+    # Default and ROW_MAJOR both keep the RM path's natural layout; TILE_LAYOUT makes the RM-H
+    # writer emit the tiles the compute kernel already packed (stage 1 of the split stays RM).
+    expected_layout = ttnn.ROW_MAJOR_LAYOUT if output_layout is None else output_layout
+    assert tt_output.layout == expected_layout
+
     output = ttnn.to_torch(tt_output)
 
     if dtype == ttnn.float32:

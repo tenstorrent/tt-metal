@@ -44,6 +44,21 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path,
         "num_h_slices > 1 (H-axis split) is only supported on the row-major H dense path");
+    if (operation_attributes.output_layout.has_value()) {
+        const bool on_rm_path =
+            operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path;
+        if (operation_attributes.output_layout == Layout::TILE) {
+            // The RM writer can emit the compute-packed tiles directly, but only when each output
+            // tile is one page: an H-axis split writes num_h_slices rows into a single tile row, so
+            // whole-tile writes would collide. The W path's per-core work is split by logical row
+            // (not by tile), so two cores can share an output tile there.
+            TT_FATAL(
+                !on_rm_path || (operation_attributes.row_major_h_dense_path && operation_attributes.num_h_slices == 1),
+                "TILE output on a dense row-major reduce is only supported for the H path without an H-axis split");
+        } else {
+            TT_FATAL(on_rm_path, "ROW_MAJOR output is only produced by the dense row-major paths");
+        }
+    }
     if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
         const auto expected_dim =
             operation_attributes.row_major_w_dense_path ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
@@ -194,10 +209,11 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             break;
     }
 
-    const tt::tt_metal::Layout output_layout =
+    const tt::tt_metal::Layout natural_layout =
         (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path)
             ? tt::tt_metal::Layout::ROW_MAJOR
             : tt::tt_metal::Layout::TILE;
+    const tt::tt_metal::Layout output_layout = operation_attributes.output_layout.value_or(natural_layout);
     return build_reduce_output_tensor_spec(
         output_shape,
         operation_attributes.output_dtype,
@@ -226,7 +242,8 @@ ttnn::Tensor reduce(
     bool row_major_w_dense_path,
     bool row_major_h_dense_path,
     bool use_sfpu_reduce,
-    uint32_t num_h_slices) {
+    uint32_t num_h_slices,
+    const std::optional<Layout>& output_layout) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -241,7 +258,8 @@ ttnn::Tensor reduce(
             row_major_w_dense_path,
             row_major_h_dense_path,
             use_sfpu_reduce,
-            num_h_slices},
+            num_h_slices,
+            output_layout},
         input_tensor);
 }
 

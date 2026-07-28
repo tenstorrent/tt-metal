@@ -27,9 +27,10 @@ inline std::string get_generic_reduction_doc(
                 * - INT32
                   - TILE)doc"
                                             : "";
-    // Only ttnn.mean exposes fast_and_approximate_mode.
+    // Only sum/mean expose fast_and_approximate_mode and output_layout.
     const char* fast_approx_kwarg = has_fast_approximate_mode ? R"doc(
-            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc"
+            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.
+            output_layout (ttnn.Layout, optional): Layout of the returned tensor. `None` (default) keeps the layout the selected path produces (see the Note below). Pass `ttnn.TILE_LAYOUT` when the consumer needs tiles: a ROW_MAJOR input reduced along -2 then emits tiles from the kernel instead of a row that has to be tilized afterwards.)doc"
                                                               : "";
     return fmt::format(
         R"doc(
@@ -68,7 +69,8 @@ inline std::string get_generic_reduction_doc(
 
             The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`.
             Exception: for sum and mean, 4D ROW_MAJOR BFLOAT16/FLOAT32 inputs with INTERLEAVED memory
-            config reduced along the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout.
+            config reduced along the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout,
+            unless :attr:`output_layout` requests otherwise.
 
         Memory Support:
             - Interleaved: DRAM and L1
@@ -131,7 +133,8 @@ Tensor generic_reduction_fast_mode_with_deprecated_correction(
     float scalar,
     std::optional<bool> correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
     if (correction.has_value()) {
         nb::gil_scoped_acquire acquire;
         PyErr_WarnEx(
@@ -148,7 +151,8 @@ Tensor generic_reduction_fast_mode_with_deprecated_correction(
         scalar,
         correction.value_or(true),
         sub_core_grids,
-        fast_and_approximate_mode);
+        fast_and_approximate_mode,
+        output_layout);
 }
 
 inline void bind_generic_reductions(nb::module_& mod) {
@@ -169,7 +173,9 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("sub_core_grids") = nb::none(),
         // fast_and_approximate_mode=false (default) selects the accurate fp32 SFPU reduce; true selects the FPU. No
         // effect for non-fp32.
-        nb::arg("fast_and_approximate_mode") = false);
+        nb::arg("fast_and_approximate_mode") = false,
+        // output_layout=None (default) keeps the layout the selected path produces.
+        nb::arg("output_layout") = nb::none());
 
     const auto mean_doc =
         get_generic_reduction_doc("mean", "ttnn.mean", /*int32_supported=*/false, /*has_fast_approximate_mode=*/true);
@@ -188,7 +194,9 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("sub_core_grids") = nb::none(),
         // fast_and_approximate_mode=false (default) selects the accurate fp32 SFPU reduce; true selects the FPU. No
         // effect for non-fp32.
-        nb::arg("fast_and_approximate_mode") = false);
+        nb::arg("fast_and_approximate_mode") = false,
+        // output_layout=None (default) keeps the layout the selected path produces.
+        nb::arg("output_layout") = nb::none());
 
     const auto max_doc = get_generic_reduction_doc("max", "ttnn.max", /*int32_supported=*/true);
     ttnn::bind_function<"max">(

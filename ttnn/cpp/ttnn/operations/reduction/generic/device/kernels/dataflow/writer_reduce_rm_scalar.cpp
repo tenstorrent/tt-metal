@@ -30,6 +30,9 @@
 //   page at offset (w_base_col * datum_bytes), clamping the last W tile to W_logical so we don't
 //   overflow the destination page.
 //
+//   Under REDUCE_RM_TILE_OUTPUT the destination is TILE instead, so the writer emits each
+//   compute-packed tile whole (one page per tile) and the extraction above is skipped.
+//
 
 template <ckernel::ReduceDim DIM>
 void reduce_rm_writer() {
@@ -125,6 +128,18 @@ void reduce_rm_writer() {
 
             for (uint32_t wt = 0; wt < wt_in_chunk; ++wt) {
                 const uint32_t w_tile_col = wt_in_nc + wt;
+#ifdef REDUCE_RM_TILE_OUTPUT
+                // TILE output: the tile compute already packed *is* the output tile (reduced row in
+                // tile-row 0, padding elsewhere — same content the tilized reduce path produces), so
+                // emit it whole instead of extracting its datums. Output H is one tile row (the host
+                // rejects TILE output for the H-axis split), so page_id is the global output tile id.
+                noc.async_write(
+                    cb_tile,
+                    dst_accessor,
+                    tile_size_bytes,
+                    {.offset_bytes = wt * tile_size_bytes},
+                    {.page_id = current_nc * Wt + w_tile_col, .offset_bytes = 0});
+#else
                 const uint32_t w_base_col = w_tile_col * tt::constants::TILE_WIDTH;
                 // Clamp the last W tile to W_logical so we don't write into padding.
                 uint32_t valid_cols = tt::constants::TILE_WIDTH;
@@ -146,6 +161,7 @@ void reduce_rm_writer() {
                         {.offset_bytes = wt * tile_size_bytes + src_idx_in_tile * datum_bytes},
                         {.page_id = current_nc, .offset_bytes = (w_base_col + face_col) * datum_bytes});
                 }
+#endif
             }
 
             noc.async_write_barrier();

@@ -369,6 +369,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     if (rm_path && dst_cb_data_format != src0_cb_data_format) {
         reduce_defines["REDUCE_RM_MIXED_FORMAT"] = "1";
     }
+    // TILE output on the RM path: the writer emits the compute-packed tiles whole instead of
+    // extracting their reduced row into RM pages. Validation guarantees num_h_slices == 1 here,
+    // so each output tile is exactly one destination page.
+    if (rm_path && output.layout() == Layout::TILE) {
+        reduce_defines["REDUCE_RM_TILE_OUTPUT"] = "1";
+    }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     // UnpackToDestFp32 unpacks c_0 straight into the fp32 DEST, bypassing the SrcA tf32 truncation.

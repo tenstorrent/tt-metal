@@ -1123,14 +1123,23 @@ static std::vector<Tensor> pool2d(
         // ttnn::sum exposes a scalar parameter, but pool_sum is the only reduction entry point
         // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
         // Replace once ttnn::sum gains equivalent handling.
-        Tensor output = ttnn::operations::reduction::pool_sum(canonical, 2, reduce_mem, compute_kernel_config, scalar);
+        // Ask the reduce for the layout the caller wants: on a ROW_MAJOR input the dense RM-H reduce
+        // can emit tiles straight from the kernel, which skips the to_layout below (tilizing the
+        // 1-row result costs more than tilizing the whole input for these channel counts). Only for
+        // batch=1: the batch>1 reshape below moves batch into the (tile-aligned) H dim, which a
+        // 1-tile-row TILE output can't express, so those keep the row-major result and convert.
+        const std::optional<Layout> reduce_output_layout =
+            (batch_size == 1) ? std::optional<Layout>(output_layout) : std::nullopt;
+        Tensor output = ttnn::operations::reduction::pool_sum(
+            canonical, 2, reduce_mem, compute_kernel_config, scalar, reduce_output_layout);
         // pool_sum returns (N, 1, 1, C). For batch=1 this is (1, 1, 1, C), the avg_pool2d output
         // convention (1, 1, N*out_H*out_W, C) coincides. For batch>1 we reshape to (1, 1, N, C).
         const auto& output_padded_shape = output.padded_shape();
         if (batch_size == 1) {
-            // Set logical channel count (zero-copy view).
+            // Set logical channel count (zero-copy view). Carry the reduce's padded H through
+            // rather than assuming 1: a TILE result pads it to a full tile row.
             ttnn::Shape out_logical({1, 1, 1, channels});
-            ttnn::Shape out_padded({output_padded_shape[0], 1, 1, output_padded_shape[3]});
+            ttnn::Shape out_padded({output_padded_shape[0], 1, output_padded_shape[2], output_padded_shape[3]});
             output = ttnn::experimental::view(output, out_logical, out_padded);
         } else {
             ttnn::Shape correct_logical({1, 1, batch_size, channels});
