@@ -676,7 +676,6 @@ def _run_quant(binary_op, tile_indices):
     output_format = DataFormat.Float32 if is_dequant else DataFormat.Int32
 
     # ---- stimuli (one tile's worth of active datums) ----
-    torch.manual_seed(42)
     n = MAX_TILE_ELEMENTS
 
     # Scale: small positive fp32 so the quantized magnitudes stay inside [-127,127].
@@ -789,8 +788,10 @@ def _run_quant(binary_op, tile_indices):
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
-@pytest.mark.parametrize("binary_op", _QUANT_OPS, ids=_QUANT_OPS)
+@parametrize(
+    binary_op=_QUANT_OPS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
 def test_eltwise_binary_sfpu_quant_quasar(binary_op, tile_indices):
     """Binary SFPU quant family (quant / requant / dequant), Int32-staged operands
     with a runtime fp32 zero-point; output Int32 (quant/requant) or Float32
