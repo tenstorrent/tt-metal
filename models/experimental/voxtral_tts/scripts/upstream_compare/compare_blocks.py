@@ -176,10 +176,42 @@ def block3(tokmod, full_params):
                 report(f"b3   stage {conv_i}: CausalConvTranspose1d(k4,s2)", emb_our, emb_up)
 
 
+def block1_input(tokmod, full_params):
+    """The 37-codebook frame embedding — Block 1's INPUT side, and the feedback path of the
+    generation loop. Upstream's MultiVocabEmbeddings offsets each codebook into one flat table
+    and sums; a wrong offset would misread the table with no crash."""
+    print("\n=== BLOCK 1 (input side): 37-codebook frame embedding ===")
+    from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as B
+    from models.experimental.voxtral_tts.reference.voxtral_common_ref import N_AUDIO_SPECIAL, NUM_CODEBOOKS
+
+    args = full_params["multimodal"]["audio_model_args"]
+    up = tokmod.MultiVocabEmbeddings(audio_model_args=dict(args), embedding_dim=full_params["dim"])
+    W = SafeTensors(CKPT).get("mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight", torch.float32)
+    up.embeddings.weight.data.copy_(W)
+    up = up.float().eval()
+
+    same_off = bool((up.offsets.long() == B.codebook_offsets()).all())
+    RESULTS.append(("b1-in codebook offsets (exact)", 1.0 if same_off else 0.0, 0.0, same_off))
+    print(f"{'PASS' if same_off else 'FAIL'}  {'b1-in codebook offsets (exact)':52s} "
+          f"{B.codebook_offsets()[:4].tolist()}...")
+
+    torch.manual_seed(5)
+    T = 6
+    frames = torch.cat([torch.randint(0, 8192, (T, 1)),
+                        torch.randint(0, 21, (T, NUM_CODEBOOKS - 1))], dim=1) + N_AUDIO_SPECIAL
+    w = {"audio_embeddings": W}
+    with torch.no_grad():
+        up_emb = up(frames.t().unsqueeze(0)).sum(dim=1).squeeze(0)  # BxCBxL -> sum over codebooks
+        report("b1-in embed_frames (batched) ", B.embed_frames(w, frames)[0], up_emb)
+        single = torch.cat([B.embed_frame(w, frames[i])[0] for i in range(T)], dim=0)
+        report("b1-in embed_frame (per-frame, decode loop)", single, up_emb)
+
+
 def main():
     full_params, audio_args = load_params()
     gen = UL.load_generation()
     tokmod = UL.load_tokenizer_module()
+    block1_input(tokmod, full_params)
     block2(gen, audio_args)
     block3(tokmod, full_params)
 
