@@ -4,73 +4,9 @@
 """VibeVoice-1.5B architecture configuration parsed from config.json."""
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
-
-
-# Matmul K-reduction damping — restores a numeric property the long-form loop depends on.
-#
-# Before upstream #50250 ("Enable UnpackToDestFp32 in matmul when appropriate"), a matmul with
-# fp32_dest_acc_en=True / packer_l1_acc=False wrote fp32 partial sums to an intermediate CB and
-# unpacked them back as bf16 on every cross-K-block reload.  That truncation was toward zero, so
-# each reload shaved a little magnitude off the running sum: measured across all 13 matmul configs
-# this model runs, the pre-#50250 build came out systematically small by ~0.0169% per K-block
-# reload (down_proj K=8960/ibw=2 = 140 blocks -> -2.354%; K=1536/ibw=2 = 24 blocks -> -0.407%;
-# K=1536/ibw=4 = 12 blocks -> -0.194%).  The post-fix build is unbiased (+0.005% mean).
-#
-# That bias was an accidental per-matmul damping term, and the ~15k-step autoregressive audio loop
-# was relying on it to keep its gain below 1.  Without it the loop runs away: rms 0.10 -> 0.32 with
-# clipping from min 7 and unintelligible output from min 13, reproduced on two independent seeds
-# (the measured per-frame excess gain is only ~1.0002, far smaller than the damping removed).
-#
-# Fold the same factor into the weights at load time — linear, so scaling the weight is equivalent
-# to scaling the matmul output, and it costs nothing at runtime.  Set VV_MM_DAMP=0 to disable and
-# get the raw post-rebase behaviour.
-#
-# IMPORTANT — the factor below is nominal, not what actually lands.  Callers apply it by scaling in
-# fp32 and casting to bf16, and these factors (0.02%-2.4%) are near or below bf16's ~0.39% ULP, so
-# rounding does not preserve the mean: measured on layer 0, q/o_proj asks for -0.203% and realizes
-# -0.024% (94% of weights unchanged), while gate/up/k_proj ask for -0.406% and realize -0.561%.
-# Only the large-K tensors (down_proj, -2.366% -> -2.356%) come out as written.
-#
-# That uneven realized pattern is DELIBERATELY KEPT.  Solving for the pre-rounding scale so every
-# tensor realizes its nominal target was implemented and measured (`vv_damp_fix`), and it is much
-# worse: dynamic range collapses at min 7 and pins at crest factor 3.1 — a constant drone, with
-# whisper returning nothing from min 11 — versus the as-is build holding speech-like dynamics
-# (crest 7.5-8.9) through 48 min with a single 2.25-min gap.  So this is an empirical stabilizer
-# whose validated setting is the one bf16 rounding produces, NOT a faithful replay of the old
-# build's numerics.  Do not "fix" the rounding without re-running a >=17 min render and checking
-# crest factor + whisper; rms alone calls the broken version an improvement.
-_DAMP_PER_K_BLOCK = 1.69e-4
-
-
-def mm_damp(k_dim: int, in0_block_w: int = 2) -> float:
-    """Nominal weight scale for a K-reduction (see above: the realized value differs).
-
-    k_dim: the matmul's K (contraction) dimension.
-    in0_block_w: K-block width in tiles from the program config (2 for most of this model's
-                 pinned decode configs, 4 for the wq/wo 1536x1536 projections).
-    """
-    if os.environ.get("VV_MM_DAMP", "1") != "1":
-        return 1.0
-    return 1.0 - _DAMP_PER_K_BLOCK * (k_dim / 32.0 / in0_block_w)
-
-
-def damp_weight(t: "torch.Tensor", k_dim: int, in0_block_w: int = 2) -> "torch.Tensor":
-    """bf16 weight carrying the validated damping.  Scaling in fp32 then rounding once is the
-    whole operation — the uneven realized pattern that produces (see above) is the point.
-
-    Weakening this damping has been tried twice and fails the same way both times: replacing the
-    pattern with the uniform nominal law, and scaling the validated pattern by 0.5, each collapse
-    the dynamic range to a crest-factor ~3 drone by min 7-8 (normal rms, no intelligible speech)
-    and then die.  The strength sits at a narrow optimum; do not tune it without a >=17 min render
-    checked on crest factor and transcription, because rms alone reads the drone as healthy.
-    """
-    import torch
-
-    return (t.to(torch.float32) * mm_damp(k_dim, in0_block_w)).to(torch.bfloat16)
 
 
 @dataclass
