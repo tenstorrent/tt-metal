@@ -187,8 +187,7 @@ void UniformDeviceOperation::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its
     // per-core runtime args (incl. hash-excluded seed/from/to) + tensor-backed CB/buffer addresses to
-    // the cached program. No program rebuild; supersedes get_dynamic/resolve_bindings and is correct
-    // under in-place aliasing (#48928).
+    // the cached program. No program rebuild;
     auto desc = create_descriptor(operation_attributes, tensor_args, output);
     tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
