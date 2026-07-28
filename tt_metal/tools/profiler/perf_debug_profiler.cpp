@@ -5,6 +5,7 @@
 #include "tools/profiler/perf_debug_profiler.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <fstream>
@@ -587,6 +588,13 @@ void PerfDebugProfiler::push_hart_zones() {
         std::stable_sort(
             ordered.begin(), ordered.end(), [](const HZItem& a, const HZItem& b) { return a.ts < b.ts; });
         std::vector<uint32_t> nz_per_hart(ctx.hz_raw.size(), 0);
+        // Per-hart, per-KIND accounting (0=DRAIN 1=BULK 2=HOST-WAIT 3=SPSC-WAIT). Counts alone mislead -- a few
+        // very long HOST-WAITs matter more than many short drains -- so accumulate occupancy too. This is what
+        // answers "is the host still the wall, or has the bottleneck moved upstream to the reader?"
+        const size_t nh = ctx.hz_raw.size();
+        std::vector<std::array<uint64_t, 4>> kcount(nh, {0, 0, 0, 0});
+        std::vector<std::array<uint64_t, 4>> kcyc(nh, {0, 0, 0, 0});
+        std::vector<std::array<uint64_t, 4>> kopen(nh, {0, 0, 0, 0});
         for (const auto& it : ordered) {
             const uint64_t h = it.hart;
             const bool is_reader = (h < kNRead);
@@ -615,14 +623,26 @@ void PerfDebugProfiler::push_hart_zones() {
             pkt.is_start = (is_start != 0u);
             tracy_->HandleWorkerZone(pkt);
             nz_per_hart[h] += is_start;
+            if (is_start) {
+                kcount[h][kind]++;
+                kopen[h][kind] = it.ts;
+            } else if (kopen[h][kind] != 0) {
+                kcyc[h][kind] += (it.ts > kopen[h][kind]) ? (it.ts - kopen[h][kind]) : 0;
+                kopen[h][kind] = 0;
+            }
         }
         for (uint64_t h = 0; h < nz_per_hart.size(); h++) {
             log_info(
                 tt::LogMetal,
-                "[perf-debug profiler] hart {} ({}): {} zones -> Tracy (chronologically merged)",
+                "[perf-debug profiler] hart {} ({}): {} zones | DRAIN {}x/{:.0f}ms  BULK {}x/{:.0f}ms  "
+                "HOST-WAIT {}x/{:.0f}ms  SPSC-WAIT {}x/{:.0f}ms",
                 h,
                 (h < kNRead) ? "READ" : "RELAY",
-                nz_per_hart[h]);
+                nz_per_hart[h],
+                kcount[h][0], static_cast<double>(kcyc[h][0]) / 1.35e6,
+                kcount[h][1], static_cast<double>(kcyc[h][1]) / 1.35e6,
+                kcount[h][2], static_cast<double>(kcyc[h][2]) / 1.35e6,
+                kcount[h][3], static_cast<double>(kcyc[h][3]) / 1.35e6);
         }
         for (uint64_t h = 0; h < 0; h++) {  // (old per-hart push loop retained below only for its diagnostics)
             const bool is_reader = (h < kNRead);
