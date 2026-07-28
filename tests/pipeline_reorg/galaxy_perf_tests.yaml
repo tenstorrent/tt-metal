@@ -143,15 +143,37 @@
   save-perf-data: false
 
 #  Hanging on g13blx01, disable until issue is resolved: https://github.com/tenstorrent/tt-metal/issues/49557
-# - name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
-#   cmd: |
-#     ./tt-train/scripts/setup_pth.sh
-#     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
-#   model: llama_8b_tp4_ddp8_shakespeare
-#   skus:
-#     bh_galaxy_perf:
-#       timeout: 55
-#   owner_id: U07K00A281X # Kevin Wu
-#   team: train
-#   arch: blackhole
-#   save-perf-data: false
+- name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
+  cmd: |
+    ./tt-train/scripts/setup_pth.sh
+    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
+  model: llama_8b_tp4_ddp8_shakespeare
+  skus:
+    bh_galaxy_perf:
+      timeout: 55
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+  save-perf-data: false
+
+- name: GalaxyCCLStressTest.ReduceScatterSemaphorePoolWrapHang
+  cmd: |
+    # Regression guard for the CCL semaphore-pool-wrap hang (fixed by bumping
+    # kNumSemaphoresPairs). Reproduces the intra-step collective overlap without a
+    # model: many back-to-back TP all_reduces through the shared CclResources pool.
+    # Ring (torus) fabric is selected via the same MGD the tp4_ddp8 training uses.
+    # `timeout` caps a regression hang (exit 124 -> job fails); with the fix it
+    # completes all steps and exits 0.
+    export TT_TRAIN_CCL_STRESS=1
+    export TT_TRAIN_CCL_STRESS_STEPS=2048
+    export TT_TRAIN_CCL_STRESS_COLLECTIVES=128
+    export TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_ring_ring.textproto
+    ./build/tt-train/tests/ttml_tests --gtest_filter='GalaxyCCLStressTest.ReduceScatterSemaphorePoolWrapHang'
+  model: ccl_semaphore_pool_stress_test
+  skus:
+    bh_galaxy_perf:
+      timeout: 55
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+  save-perf-data: false
