@@ -3,12 +3,16 @@
 """Pi0.5 device tile geometry — single source of truth for TILE-layout uploads."""
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 import ttnn
 
 # M-dimension tile height. Use 16 for M16 decode paths; 32 for legacy 32×32 geometry.
-TILE_HEIGHT = 16
+# PI05_TILE_HEIGHT overrides it so the tiny-tile vs legacy A/B can run against one build
+# (read at import time, like every other geometry constant here).
+TILE_HEIGHT = int(os.environ.get("PI05_TILE_HEIGHT", "16"))
+assert TILE_HEIGHT in (16, 32), f"PI05_TILE_HEIGHT must be 16 or 32, got {TILE_HEIGHT}"
 TILE_WIDTH = 32
 # Packed bfloat8_b activations at the model tile geometry (tiny tiles now support blocked dtypes).
 ACT_DTYPE = ttnn.bfloat8_b

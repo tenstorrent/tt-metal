@@ -61,6 +61,51 @@ tiles (LLK `partial_face` unpack/math mismatch for `ct_dim > 1`); a retile lands
 | 7 | Production 16-chip path | `test_perf_tt_bh_glx_16_e2e_trace_2cq.py` + PCC suite |
 | 8 | Re-fuse onto our fused ops | A/B each step against Stage 6 |
 
+## Results
+
+### Stage 3 — build
+
+Two duplicate-registration merge artifacts had to be fixed first. Both sides added registration
+lines in **different files**, so git auto-merged them with no conflict:
+`kv_sdpa` was `add_subdirectory`'d from both `ttnn/CMakeLists.txt` and
+`operations/CMakeLists.txt` (hard CMake error), and `ttnn-nanobind/__init__.cpp` both included
+`kv_sdpa_nanobind.hpp` and defined the `m_kv_sdpa` submodule twice. **Lesson: after a merge like
+this, always grep for duplicated CMake/nanobind registrations — conflict markers will not show
+them.** Also note `cmake --build` alone is not enough; `build_metal.sh` uses `--target install`,
+which is what stages `_ttnn.so` into `ttnn/ttnn/`.
+
+### Stage 4 — ttnn tiny-tile verification
+
+Found and fixed a real bug **in the source branch**: `QK_COL_VECTOR_MODE` was defined at namespace
+scope in *both* `compute_common.hpp` and `compute_streaming.hpp`, and five kernels include both in
+one TU (`sdpa.cpp`, `{exp_,}ring_joint_sdpa.cpp`, `sparse_sdpa{,_msa}_compute.cpp`), so none of them
+JIT-compiled — `ttnn.transformer.scaled_dot_product_attention` and the joint/sparse variants were
+entirely dead at **both** tile heights. Hidden on their branch because `kv_sdpa/flash_fused.cpp`
+includes only `compute_common.hpp` and the denoise path uses `ttnn.kv_sdpa`; only the SDPA fallback
+and their own new nightly `test_sdpa_tiny_tile` reach it. **Report upstream to Sankar.**
+
+| Test | tile32 | tile16 |
+|---|---|---|
+| `test_sdpa_tiny_tile_numerics` | PCC 0.99993 | PCC 0.99993 |
+| `test_pad_tiny_tile_corrupts_data` | 0.99999 | 0.99999 |
+| `test_addcmul_tiny_tile_promotes_tile` | pass | pass, `out_tile==(16,32)` |
+| `test_sdpa_bf8_mask_corrupts` qkv_bf16 | pass | pass |
+| `test_sdpa_bf8_mask_corrupts` qkv_bf8 | pass | **FAIL, PCC −0.99983** |
+| `experimental/test_matmul_decode.py` | — | 12 passed |
+| `test_tilize_retile` | 40 passed / 10 skipped (bf8 at height < 16), 0 failed |
+
+These files are *bug reproducers* whose docstrings say tile16 is expected to fail — they now pass,
+so the branch really did fix the tiny-tile SDPA numerics and the addcmul tile-promotion. That
+retroactively justifies `_gated_residual` keeping `ttnn.addcmul`.
+
+One real bug remains, narrowly scoped: **bf8 q/k/v + dense `attn_mask` + 16-row tile inverts the
+sign**. bf16 passes at both heights and bf8 passes at 32×32. Does not block the denoise path, which
+passes `attn_mask=None` (the mask is an all-zero no-op) — but that workaround is load-bearing.
+
+Deferred: the full 713-item `test_tilize.py` sweep (~5 h at ~25 s/param since each re-opens a
+32-chip mesh). 35/35 passed before it was stopped; re-run it and the `i2s`/`s2i` regressions
+out-of-band.
+
 ## Conflict resolution notes
 
 All 18 resolved as follows.
