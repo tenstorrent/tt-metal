@@ -22,7 +22,6 @@ export DG_UPFRONT_PREFILL_WARMUP_LENS=<all-admitted-aligned-prompt-lengths>  # r
 export DG_TRACE_REGION_SIZE=<validated-positive-reservation>                 # required, no default
 export DG_DENOISE_REVEAL_PMAX=<positive-tile-aligned-served-cap>             # optional; derived from --max-model-len
 export DG_VLLM_GUMBEL_MODE=device                                            # default; ~1.48x faster than `host`
-export DG_VLLM_MAX_DENOISE_STEPS=48
 export DG_DENOISE_SLIDING_WINDOW=1                                           # default ON since 2026-07-27; redundant but explicit
 ```
 

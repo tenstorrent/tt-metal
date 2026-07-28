@@ -5,7 +5,6 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-import os
 from threading import Lock
 
 import ttnn
@@ -20,10 +19,14 @@ _original_prefill_geglu = gemma4_expert_prefill.apply_geglu
 
 
 def apply_gelu(value):
-    """Apply the checkpoint's configured GELU variant."""
-    if os.environ.get("DG_GELU_TANH", "1") == "1":
-        return ttnn.gelu(value, variant=ttnn.GeluVariant.Tanh)
-    return ttnn.gelu(value, fast_and_approximate_mode=True)
+    """Apply the checkpoint's GELU variant (``hidden_activation: gelu_pytorch_tanh``).
+
+    A ``DG_GELU_TANH=0`` arm used to select ``fast_and_approximate_mode`` here. It was deleted
+    2026-07-28: it is wrong math against this checkpoint, and because the flag was also read in
+    four other places it simultaneously swapped the shared-MLP code path and its CCL call, so it
+    could not serve the activation bisect it was retained for.
+    """
+    return ttnn.gelu(value, variant=ttnn.GeluVariant.Tanh)
 
 
 def apply_geglu(gate, up):
@@ -66,10 +69,13 @@ def _install_contextual_geglu() -> None:
 
 
 @contextmanager
-def use_tanh_expert_activations(enabled: bool | None = None):
-    """Select DG tanh-GELU for shared expert fallbacks in this call context."""
-    if enabled is None:
-        enabled = os.environ.get("DG_GELU_TANH", "1") == "1"
+def use_tanh_expert_activations(enabled: bool = True):
+    """Select DG tanh-GELU for shared expert fallbacks in this call context.
+
+    ``enabled`` is retained because ``prefill_moe`` threads a computed value through it; the
+    ``DG_GELU_TANH`` env consult it used to fall back to was deleted 2026-07-28 (the OFF arm is
+    wrong math against this checkpoint).
+    """
     if not enabled:
         yield
         return

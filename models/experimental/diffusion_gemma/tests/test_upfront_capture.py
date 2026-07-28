@@ -156,7 +156,6 @@ def test_session_prefill_rebinds_injected_adapter_instead_of_building(monkeypatc
     session.tt_model = SimpleNamespace()
     session.page_table = None
     session.page_tables_per_layer = None
-    session.prefix_cache = None
     session.prefill_reused = False
     session.prefill_time_s = 0.0
     session._persistent_adapter = adapter

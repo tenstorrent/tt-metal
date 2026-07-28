@@ -938,8 +938,6 @@ def denoise_and_commit_block(
 
     ``commit_fn`` defaults to the torch-verified-correct batched single-prefill
     commit (:func:`commit_canvas_tokens_batched`) for contiguous caches, falling
-    back to the sequential commit for paged caches; set ``DG_COMMIT_BATCHED=0`` to
-    force sequential, or pass ``commit_fn`` explicitly.
     """
     if commit_fn is None:
         commit_fn = _resolve_default_commit_fn(page_table, page_tables_per_layer)

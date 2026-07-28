@@ -253,7 +253,7 @@ def use_tuned_prefill_moe(model):
 
     tuned = tuned_prefill_moe_enabled()
     ragged = ragged_prefill_moe_enabled()
-    tanh_gelu = os.environ.get("DG_GELU_TANH", "1") == "1"
+    tanh_gelu = True
     supported_experts = _find_supported_experts(model)
     if not tanh_gelu and ((not tuned and not ragged) or supported_experts is None):
         yield

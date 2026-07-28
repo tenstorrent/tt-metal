@@ -4,9 +4,8 @@
 from models.experimental.diffusion_gemma.tt import expert_operations
 
 
-def test_diffusion_gemma_gelu_defaults_to_tanh_variant(monkeypatch):
+def test_diffusion_gemma_gelu_uses_the_checkpoint_tanh_variant(monkeypatch):
     calls = []
-    monkeypatch.delenv("DG_GELU_TANH", raising=False)
     monkeypatch.setattr(
         expert_operations.ttnn,
         "gelu",
@@ -15,19 +14,6 @@ def test_diffusion_gemma_gelu_defaults_to_tanh_variant(monkeypatch):
 
     assert expert_operations.apply_gelu("gate") == "activated"
     assert calls == [("gate", {"variant": expert_operations.ttnn.GeluVariant.Tanh})]
-
-
-def test_diffusion_gemma_gelu_keeps_legacy_bisect(monkeypatch):
-    calls = []
-    monkeypatch.setenv("DG_GELU_TANH", "0")
-    monkeypatch.setattr(
-        expert_operations.ttnn,
-        "gelu",
-        lambda value, **kwargs: calls.append((value, kwargs)) or "activated",
-    )
-
-    assert expert_operations.apply_gelu("gate") == "activated"
-    assert calls == [("gate", {"fast_and_approximate_mode": True})]
 
 
 def test_dense_expert_dispatch_is_context_local_and_resets(monkeypatch):

@@ -7,20 +7,6 @@ import pytest
 import torch
 
 
-def test_vllm_adapter_applies_validated_step_override(monkeypatch, expect_error):
-    pytest.importorskip("vllm")
-    from models.experimental.diffusion_gemma.config import DiffusionConfig
-    from models.experimental.diffusion_gemma.tt.generator_vllm import _with_vllm_max_denoise_steps
-
-    monkeypatch.setenv("DG_VLLM_MAX_DENOISE_STEPS", "20")
-    assert _with_vllm_max_denoise_steps(DiffusionConfig()).max_denoise_steps == 20
-
-    for invalid in ("0", "49", "not-an-int"):
-        monkeypatch.setenv("DG_VLLM_MAX_DENOISE_STEPS", invalid)
-        with expect_error(ValueError, match=r"\[1, 48\]"):
-            _with_vllm_max_denoise_steps(DiffusionConfig())
-
-
 def test_vllm_hybrid_kv_spec_keeps_one_full_attention_head_per_device():
     pytest.importorskip("vllm")
     from models.experimental.diffusion_gemma.tt.generator_vllm import DiffusionGemmaForCausalLM
@@ -66,7 +52,6 @@ def test_vllm_session_selects_upfront_or_eager_from_sole_model_trace_flag(monkey
     model._config = SimpleNamespace(canvas_length=256, max_denoise_steps=48)
     model._tokenizer = None
     model._gumbel_mode = "host"
-    model._prefix_cache = None
     model.canvas_length = 256
 
     model._make_session()

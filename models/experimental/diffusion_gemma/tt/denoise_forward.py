@@ -554,27 +554,6 @@ def _denoise_router_forward(router, hidden_states):
     return dense_routing
 
 
-def _denoise_router_compact_forward(router, hidden_states):
-    """Router forward that preserves compact top-k metadata for ragged MoE."""
-    from models.experimental.diffusion_gemma.tt.sparse_moe import RaggedRouting
-
-    normed = _chunked_norm_forward(router.norm, hidden_states)
-    scaled = ttnn.mul(normed, router.scale)
-    normed.deallocate(True)
-    scaled = ttnn.mul(scaled, router.scalar_root_size)
-    expert_scores = ttnn.linear(scaled, router.proj_weight)
-    scaled.deallocate(True)
-    router_probs = ttnn.softmax(expert_scores, dim=-1)
-    expert_scores.deallocate(True)
-    top_k_values, top_k_indices = ttnn.topk(router_probs, k=router.top_k, dim=-1)
-    router_probs.deallocate(True)
-    top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
-    normalized_values = ttnn.div(top_k_values, top_k_sum)
-    top_k_values.deallocate(True)
-    top_k_sum.deallocate(True)
-    return RaggedRouting(normalized_values, top_k_indices, router.per_expert_scale)
-
-
 def _sparse_moe_enabled() -> bool:
     """Whether the optimized true-sparse token-gather MoE runs (``DG_SPARSE_MOE``).
 
@@ -607,8 +586,6 @@ def _denoise_moe_forward(moe, router_input, expert_input):
         # Silently winning that race is how DG_TERMINAL_SHARDED became a no-op and how a corrupting
         # DG_VLLM_GUMBEL_MODE default survived two weeks: the run looks fine and the label lies.
         # Fail loud instead, naming both knobs, in the style of the DG_SPARSE_MOE=0 guard below.
-        from models.experimental.diffusion_gemma.tt.sparse_moe import compact_ragged_denoise_enabled
-
         # DG_MOE_EXPERT_BFP8 used to be checked here. It was deleted along with the sparse path's
         # only consumer of it; the supported route to quantized experts is DG_EXPERTS_DTYPE /
         # DG_EXPERTS_BFP8 in tt/precision_build.py, which quantizes at build time and so applies to
@@ -616,8 +593,6 @@ def _denoise_moe_forward(moe, router_input, expert_input):
         conflicts = []
         if not _sparse_moe_enabled():
             conflicts.append("DG_SPARSE_MOE=0 (asks for the dense reference, would silently get concat)")
-        if compact_ragged_denoise_enabled():
-            conflicts.append("DG_DENOISE_COMPACT_RAGGED=1 (unreachable under concat)")
         if conflicts:
             raise RuntimeError(
                 "DG_MOE_CONCAT=1 takes the concat-experts MoE path, which ignores: "
@@ -631,21 +606,13 @@ def _denoise_moe_forward(moe, router_input, expert_input):
         return out
 
     if _sparse_moe_enabled():
-        from models.experimental.diffusion_gemma.tt.sparse_moe import (
-            compact_ragged_denoise_enabled,
-            compact_ragged_denoise_forward,
-            sparse_experts_forward,
-        )
+        from models.experimental.diffusion_gemma.tt.sparse_moe import sparse_experts_forward
 
-        if compact_ragged_denoise_enabled():
-            routing = _denoise_router_compact_forward(moe.router, router_input)
-            return compact_ragged_denoise_forward(moe.experts, expert_input, routing)
         dense_routing = _denoise_router_forward(moe.router, router_input)
-        # Capacity must be zero-drop for diffusion correctness: real routing is highly
-        # concentrated (measured max expert load 156-256 for a 256-token canvas), so the
-        # old default of 32 silently discarded 41-84% of active routes per layer.
-        capacity = int(os.environ.get("DG_SPARSE_MOE_CAPACITY", str(expert_input.shape[2])))
-        out = sparse_experts_forward(moe.experts, expert_input, dense_routing, capacity=capacity)
+        # Zero-drop capacity: real routing is highly concentrated (measured max expert load
+        # 156-256 for a 256-token canvas), so anything smaller silently discards active routes.
+        # Passed explicitly rather than left to the callee default so the contract is visible here.
+        out = sparse_experts_forward(moe.experts, expert_input, dense_routing, capacity=expert_input.shape[2])
         dense_routing.deallocate(True)
         return out
     if not _dense_moe_explicitly_allowed():
@@ -661,8 +628,6 @@ def _denoise_moe_forward(moe, router_input, expert_input):
 
 
 def _denoise_shared_mlp_forward(mlp, hidden_states):
-    if os.environ.get("DG_GELU_TANH", "1") != "1":
-        return mlp(hidden_states)
     return shared_mlp_forward(mlp, hidden_states)
 
 

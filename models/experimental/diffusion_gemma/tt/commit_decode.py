@@ -12,7 +12,6 @@ through this file instead of ``Gemma4Model.ttnn_decode_forward``.
 
 from __future__ import annotations
 
-import os
 
 import ttnn
 from models.demos.gemma4.tt.attention.operations import (
@@ -490,11 +489,7 @@ def _commit_layer_forward(
 
     residual = hidden_states
     normed = _decode_rms_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
-    mlp_output = (
-        shared_mlp_forward(layer.shared_mlp, normed)
-        if os.environ.get("DG_GELU_TANH", "1") == "1"
-        else layer.shared_mlp(normed)
-    )
+    mlp_output = shared_mlp_forward(layer.shared_mlp, normed)
     normed.deallocate(True)
 
     if layer.enable_moe_block:

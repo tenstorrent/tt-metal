@@ -36,7 +36,7 @@ register copy) means cross-layer **KV-sharing** is handled for free: a shared
 layer skips its own K/V write, and its earlier source layer has already written
 the canvas K/V into the shared cache tensor by the time the shared layer runs.
 
-This path is the **default** (``DG_COMMIT_BATCHED``, see :func:`batched_commit_enabled`)
+This path is the **default**
 — it is both faster and more correct than the sequential decode-append commit, whose
 decode-MoE kernel is defective. It never edits shared ``models/demos/gemma4`` code — it
 composes over the importable Gemma4 ops, exactly like ``tt/commit_decode.py`` and
@@ -680,11 +680,7 @@ def _commit_layer_forward_batched(
 
     residual = hidden_states
     normed = _chunked_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
-    mlp_output = (
-        shared_mlp_forward(layer.shared_mlp, normed)
-        if os.environ.get("DG_GELU_TANH", "1") == "1"
-        else layer.shared_mlp(normed)
-    )
+    mlp_output = shared_mlp_forward(layer.shared_mlp, normed)
     normed.deallocate(True)
 
     if layer.enable_moe_block:
@@ -842,30 +838,17 @@ def commit_canvas_tokens_batched(
     hidden.deallocate(True)
 
 
-def batched_commit_enabled() -> bool:
-    """Whether the batched single-prefill commit is enabled.
-
-    **Default ON** (``DG_COMMIT_BATCHED`` unset ⇒ batched): the batched commit was
-    device-verified against a torch MoE oracle (``probe_moe_vs_torch.py``,
-    ``artifacts/leverB_moe_vs_torch_L0.log``) to be **correct** (layer-0 MoE PCC vs
-    HF torch = 0.994), while the previous default — the sequential
-    ``_commit_experts_decode_forward`` decode-MoE — is *defective* (PCC vs torch =
-    0.154). The batched commit is thus both faster (~6.3×) and more correct. Set
-    ``DG_COMMIT_BATCHED=0`` to force the (buggy, but paged-cache-capable) sequential
-    path — e.g. for paged / vLLM hybrid caches the batched path does not support yet.
-    """
-    return os.environ.get("DG_COMMIT_BATCHED", "1").lower() in ("1", "true", "yes", "on")
-
-
 def select_commit_fn(batched: bool | None = None):
     """Return the commit callable: batched (default) unless forced off / paged.
 
-    ``batched=None`` consults ``DG_COMMIT_BATCHED`` (default on). Kept here (not in
-    ``generate``) so the commit dispatch lives with the batched implementation.
+    ``batched=None`` means batched. Kept here (not in ``generate``) so the commit dispatch lives
+    with the batched implementation. The ``DG_COMMIT_BATCHED`` env override was deleted
+    2026-07-28: the path it forced measures PCC 0.154 vs 0.994 and ~6.3x slower, and the paged case
+    it cited is already selected automatically in ``tt/generate.py``.
     """
     from models.experimental.diffusion_gemma.tt.generate import commit_canvas_tokens
 
-    use_batched = batched_commit_enabled() if batched is None else batched
+    use_batched = True if batched is None else batched
     if use_batched:
         logger.info("[commit] using batched single-prefill commit (torch-verified correct, default)")
         return commit_canvas_tokens_batched

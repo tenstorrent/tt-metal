@@ -53,7 +53,6 @@ Never benchmark or judge quality from an implicit launch:
   source is a distribution change, not bit-exact against
   host IID Gumbel, and the sub-40 GPQA host-vs-device @3072 re-gate is still outstanding; use
   `DG_VLLM_GUMBEL_MODE=host` as the IID reference fallback when judging quality.
-- Set `DG_VLLM_MAX_DENOISE_STEPS=48`.
 - Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Do not set
   legacy selector flags.
 - Every admitted prefill shape must compile before capture. Reject unseen runtime shapes rather

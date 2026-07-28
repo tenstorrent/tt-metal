@@ -26,7 +26,6 @@ import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.demo.text_demo import _close_mesh_device, _open_mesh_device
-from models.experimental.diffusion_gemma.tt.commit_batched import batched_commit_enabled
 from models.experimental.diffusion_gemma.tt.generate import prefill_prompt_tokens
 from models.experimental.diffusion_gemma.tt.prefill_moe import (
     _find_supported_experts,
@@ -161,9 +160,6 @@ def run(args) -> dict:
                 "DG_PREFILL_MOE_TUNED",
                 "DG_SPARSE_MOE",
                 "DG_SPARSE_MOE_TUNED",
-                "DG_SPARSE_MOE_CAPACITY",
-                "DG_DEDUP_ARGMAX",
-                "DG_COMMIT_BATCHED",
                 "DG_SELFCOND_PRECHUNK_EMBED",
                 "DG_SELFCOND_LOGITS_L1",
                 "DG_NORM_FULLCANVAS",
@@ -175,7 +171,7 @@ def run(args) -> dict:
         "resolved_defaults": {
             "prefill_moe_tuned": tuned_prefill_moe_enabled(),
             "sparse_moe_tuned": tuned_configs_enabled(),
-            "batched_commit": batched_commit_enabled(),
+            "batched_commit": True,
             "selfcond_prechunk": self_conditioning_embedding_prechunk_enabled(),
             "selfcond_logits_l1": self_conditioning_logits_l1_mode(),
             "denoise_block_fn": "tt_denoise_block",

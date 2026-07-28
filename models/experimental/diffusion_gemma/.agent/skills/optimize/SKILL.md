@@ -37,7 +37,7 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
   and positive `DG_TRACE_REGION_SIZE` (the reserved region cannot be read back from the device, and
   a trace-region overflow poisons the device). `DG_DENOISE_REVEAL_PMAX` is now optional — unset
   means the span is derived from `max_model_len` rounded DOWN to a tile and logged; an explicit
-  tile-aligned value still wins. Keep `DG_VLLM_MAX_DENOISE_STEPS=48`.
+  tile-aligned value still wins. The 48-step schedule is the only one the up-front capture accepts.
 - Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. There are no
   fixed-budget, grouped/multistep, frozen-prefix, per-request, or argmax trace choices.
 - For vLLM, split queue time, pure prefill, denoise, commit, trace capture, and replay. API-visible

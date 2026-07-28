@@ -62,7 +62,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import replace
 
 import torch
 from loguru import logger
@@ -71,7 +70,6 @@ import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt.generate import prefill_prompt_tokens
-from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.experimental.diffusion_gemma.tt.traced_denoise import (
     UPFRONT_DENOISE_STEPS,
@@ -81,7 +79,6 @@ from models.experimental.diffusion_gemma.tt.traced_denoise import (
 )
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
-MAX_DENOISE_STEPS = 48
 
 # Served default Gumbel source: the on-device permuted-vocab RNG (see the __init__ note).
 # Requires the Blackhole ttnn.rand kernel fix; without it this default corrupts generated text.
@@ -98,20 +95,6 @@ def _resolve_checkpoint_dir(hf_config):
     if env_path:
         return env_path
     raise ValueError("DiffusionGemma checkpoint path not found on hf_config (_name_or_path) or DG_CKPT env var")
-
-
-def _with_vllm_max_denoise_steps(config: DiffusionConfig) -> DiffusionConfig:
-    """Apply the DG-local serving step cap, rejecting non-model budgets."""
-    raw = os.environ.get("DG_VLLM_MAX_DENOISE_STEPS")
-    if raw is None:
-        return config
-    try:
-        steps = int(raw)
-    except ValueError as exc:
-        raise ValueError("DG_VLLM_MAX_DENOISE_STEPS must be an integer in [1, 48]") from exc
-    if not 1 <= steps <= MAX_DENOISE_STEPS:
-        raise ValueError("DG_VLLM_MAX_DENOISE_STEPS must be in [1, 48]")
-    return replace(config, max_denoise_steps=steps)
 
 
 def _round_down_to_tile(value: int) -> int:
@@ -239,12 +222,12 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
     #  * on-device sampling: the canvas Gumbel-max / entropy-budget / renoise path
     #    runs on device (no host argmax, no full-logits readback) → True.
     #  * prefix caching: the vLLM APC contract needs paged-cache ownership + a
-    #    block pool (#47488), which is NOT wired here → advertise False. A DG
-    #    serving-layer frozen prompt-prefix KV reuse prototype exists behind the
-    #    DG_PREFIX_CACHE env flag (see tt/prefix_cache.py + the prefix_cache design
-    #    note); it reuses the model-owned contiguous cache across sessions but does
-    #    NOT change the vLLM-advertised capability, so vLLM's own block pool stays
-    #    disabled. Flipping this flag requires the #47488 paged path + its tests.
+    #    block pool (#47488), which is NOT wired here → advertise False. A serving-layer
+    #    frozen-prefix KV reuse prototype used to sit behind DG_PREFIX_CACHE; it was deleted
+    #    2026-07-28 (only its exact-full-match tier could fire from serving, the proper-prefix
+    #    tier measured 57/256 flipped tokens, and under the shipped up-front capture every
+    #    admitted prompt length is pre-enumerated anyway). See doc/vllm_integration/prefix_cache/
+    #    for the design note; the real path is #47488.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
@@ -264,7 +247,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         super().__init__(*args, **kwargs)
         self._dg_state_dict = dg_state_dict
         self._tokenizer = tokenizer
-        self._config = _with_vllm_max_denoise_steps(DiffusionConfig() if config is None else config)
+        self._config = DiffusionConfig() if config is None else config
         self.canvas_length = self._config.canvas_length
         # The served bound, used to derive the fixed reveal span when the operator does not
         # pin DG_DENOISE_REVEAL_PMAX explicitly.
@@ -329,7 +312,6 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # resident contiguous-cache prompt can skip its prefill. Inert unless
         # DG_PREFIX_CACHE is set (checked per-prefill inside the session); safe for
         # max_num_seqs=1 (one contiguous cache = one resident prompt).
-        self._prefix_cache = PrefixKVCache()
 
     # ── construction ────────────────────────────────────────────────────
     @classmethod
@@ -352,7 +334,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             raise ValueError("DiffusionGemma TT serving is TP=4 single-replica (tt_data_parallel must be 1)")
 
         checkpoint_dir = _resolve_checkpoint_dir(hf_config)
-        diffusion_config = _with_vllm_max_denoise_steps(DiffusionConfig())
+        diffusion_config = DiffusionConfig()
         model_kwargs = dict(
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
@@ -696,7 +678,6 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             gumbel_mode=self._gumbel_mode,
             seed=seed,
             stop_token_ids=[],
-            prefix_cache=self._prefix_cache,
             denoise_block_fn=denoise_block_fn,
         )
 

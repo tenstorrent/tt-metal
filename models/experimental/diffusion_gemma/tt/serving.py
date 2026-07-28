@@ -65,7 +65,6 @@ from models.experimental.diffusion_gemma.tt.generate import (
     make_seeded_host_noise_tokens_fn,
     prefill_prompt_tokens,
 )
-from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache, prefix_cache_enabled
 
 # Sampling modes exposed to the serving layer. "chunked" remains the bounded-memory
 # DEFAULT because it fits full-depth 256K, but QB2's current 1024-wide innermost-axis
@@ -151,7 +150,6 @@ class BlockDiffusionServingSession:
         stop_token_ids=None,
         page_table=None,
         page_tables_per_layer=None,
-        prefix_cache: PrefixKVCache | None = None,
         adapter_kwargs: dict | None = None,
         denoise_block_fn=None,
         logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
@@ -170,10 +168,6 @@ class BlockDiffusionServingSession:
         # up-front model-lifetime denoise function when DG_UPFRONT_CAPTURE is enabled.
         self._denoise_block_fn = denoise_block_fn
         # Frozen prompt-prefix KV reuse (APC prototype, #47466). Off unless a
-        # PrefixKVCache is attached AND DG_PREFIX_CACHE is set; the paged frozen
-        # prefix read is #47488. Reuse only kicks in for a model-owned contiguous
-        # cache (page_table=None) — a paged/vLLM cache owns its own prefix caching.
-        self.prefix_cache = prefix_cache
         self.prefill_reused = False
         self.prefill_time_s = 0.0
 
@@ -241,16 +235,6 @@ class BlockDiffusionServingSession:
             seed=TS._validate_ttnn_rand_seed(gumbel_seed),
         )
 
-    def _prefix_reuse_active(self) -> bool:
-        # Reuse only for the model-owned contiguous cache (a paged/vLLM cache owns
-        # its own APC — #47488) and only when opted in via DG_PREFIX_CACHE.
-        return (
-            self.prefix_cache is not None
-            and self.page_table is None
-            and self.page_tables_per_layer is None
-            and prefix_cache_enabled()
-        )
-
     def attach_persistent_adapter(self, adapter) -> None:
         """Borrow a startup-captured adapter for this request's prefill/decode lifetime."""
         if adapter is None:
@@ -268,13 +252,6 @@ class BlockDiffusionServingSession:
         internally and reports both the logical ``prompt_len`` and the aligned
         ``cache_len`` used for the frozen-prefix read. Returns ``cache_len``.
 
-        When a :class:`~models.experimental.diffusion_gemma.tt.prefix_cache.PrefixKVCache`
-        is attached and ``DG_PREFIX_CACHE`` is on, a prompt whose aligned token span
-        is a byte-identical leading span of the resident contiguous cache **skips the
-        prefill forward entirely** (frozen prompt-prefix reuse — see the design note).
-        The committed output is bit-identical to a fresh prefill because causal
-        prefill makes position ``i``'s K/V a pure function of ``tokens[0:i]`` + the
-        absolute (RoPE) position ``i``.
         """
         _validate_prompt_tokens(prompt_tokens)
         if prompt_tokens.shape[0] != 1:
@@ -285,62 +262,33 @@ class BlockDiffusionServingSession:
         prompt_len = int(prompt_tokens.shape[1])
         aligned = _pad_prompt_tokens_for_prefill(prompt_tokens)
         cache_len = int(aligned.shape[1])
-        aligned_ids = aligned.reshape(-1).tolist()
 
+        # prefill_reused stays False: the DG_PREFIX_CACHE reuse tier was deleted 2026-07-28 (only
+        # the exact-full-match tier could ever fire from serving, and vLLM advertises
+        # supports_prefix_caching: False). The field and prefill_time_s are KEPT — generator_vllm
+        # emits both in the prefill_block0 metric that run_upfront_gpqa.sh greps.
         self.prefill_reused = False
         self.prefill_time_s = 0.0
-        reuse_active = self._prefix_reuse_active()
-        plan = self.prefix_cache.plan(aligned_ids, prompt_len, cache_len) if reuse_active else None
-
-        if plan is not None and plan.reuse:
-            # [0:cache_len] is already correct in the contiguous cache — skip prefill.
-            self.prefix_cache.note_reuse(plan, prefill_time_saved_s=self.prefix_cache.avg_prefill_time_s)
-            logger.info(
-                f"[prefix_cache] REUSE prompt_len={prompt_len} cache_len={cache_len} "
-                f"(resident_cache_len={self.prefix_cache.resident_cache_len}) — prefill skipped"
-            )
-        else:
-            if plan is not None:
-                self.prefix_cache.note_miss(plan)
-                if plan.shorter_prefix:
-                    logger.info(
-                        f"[prefix_cache] shorter-prefix miss: incoming aligned prompt is a byte-identical "
-                        f"proper prefix ({plan.cache_len} of resident {self.prefix_cache.resident_cache_len}), "
-                        f"but bf16 SDPA reduction-length makes it non-bit-exact → full prefill "
-                        f"(reuse only with allow_shorter_prefix, approximate tier)"
-                    )
-                elif plan.partial_prefix:
-                    logger.info(
-                        f"[prefix_cache] partial-prefix miss: matched {plan.matched_len} aligned "
-                        f"tokens, suffix differs/extends → full prefill (needs chunked prefill / #47488)"
-                    )
-            if self._persistent_adapter is not None:
-                logger.info(f"DG_UPFRONT_MARK prefill_device_begin prompt_len={prompt_len} cache_len={cache_len}")
-            t0 = time.perf_counter()
-            prefill = prefill_prompt_tokens(
-                self.tt_model,
-                prompt_tokens,
-                page_table=self.page_table,
-                page_tables_per_layer=self.page_tables_per_layer,
-            )
-            self.prefill_time_s = time.perf_counter() - t0
-            prompt_len = prefill.prompt_len
-            cache_len = prefill.cache_len
-            if self._persistent_adapter is not None:
-                logger.info(f"DG_UPFRONT_MARK prefill_device_end prompt_len={prompt_len} cache_len={cache_len}")
-            if reuse_active:
-                self.prefix_cache.observe_prefill_time(self.prefill_time_s)
-
-        # After either path, the contiguous cache holds THIS prompt's [0:cache_len].
-        if reuse_active:
-            self.prefix_cache.record(aligned_ids, prompt_len, cache_len)
+        if self._persistent_adapter is not None:
+            logger.info(f"DG_UPFRONT_MARK prefill_device_begin prompt_len={prompt_len} cache_len={cache_len}")
+        t0 = time.perf_counter()
+        prefill = prefill_prompt_tokens(
+            self.tt_model,
+            prompt_tokens,
+            page_table=self.page_table,
+            page_tables_per_layer=self.page_tables_per_layer,
+        )
+        self.prefill_time_s = time.perf_counter() - t0
+        prompt_len = prefill.prompt_len
+        cache_len = prefill.cache_len
+        if self._persistent_adapter is not None:
+            logger.info(f"DG_UPFRONT_MARK prefill_device_end prompt_len={prompt_len} cache_len={cache_len}")
 
         self.prompt_len = prompt_len
         self.cache_len = cache_len
         self.next_pos = cache_len
         self.block_idx = 0
         self.finished = False
-        self.prefill_reused = bool(plan is not None and plan.reuse)
         if self._persistent_adapter is not None:
             logger.info(f"DG_UPFRONT_MARK rebind_begin cache_len={cache_len}")
             self._persistent_adapter.rebind_prompt(cache_len, true_prompt_len=prompt_len)
