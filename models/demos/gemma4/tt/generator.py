@@ -395,9 +395,12 @@ class ChunkedPrefillPageTableGuardMixin:
         tt_rot_mats_prefill_local = host_inputs[2]
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
-        # Match Python graph for both compile and capture (sp0: no tails).
+        # Match Python graph for both compile and capture (sp0: first-alloc,
+        # no ttnn.copy). Soft release leaves sliding_prefill_tail_persistent set
+        # after compile, so capture would take the copy path and TT_FATAL
+        # (program not in cache). Hard-clear persistent on both sides.
         if int(start_pos) == 0:
-            self._release_all_sliding_prefill_tails(model_id)
+            self._release_all_sliding_prefill_tails(model_id, clear_persistent=True)
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -415,7 +418,7 @@ class ChunkedPrefillPageTableGuardMixin:
 
         # Restore the same starting tail state as compile before capture.
         if int(start_pos) == 0:
-            self._release_all_sliding_prefill_tails(model_id)
+            self._release_all_sliding_prefill_tails(model_id, clear_persistent=True)
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
@@ -559,11 +562,11 @@ class ChunkedPrefillPageTableGuardMixin:
             start_pos=chunk_start_idx,
         )
 
-    def _release_all_sliding_prefill_tails(self, model_id=-1):
+    def _release_all_sliding_prefill_tails(self, model_id=-1, *, clear_persistent: bool = False):
         for layer in getattr(self.model[model_id], "layers", []):
             attn = getattr(layer, "self_attn", None)
             if attn is not None and hasattr(attn, "_release_sliding_prefill_tail"):
-                attn._release_sliding_prefill_tail()
+                attn._release_sliding_prefill_tail(clear_persistent=clear_persistent)
 
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs

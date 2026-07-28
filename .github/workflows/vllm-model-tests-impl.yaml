@@ -342,6 +342,9 @@ jobs:
                 export GEMMA4_DEMO_SINGLE_CHUNK=0
                 export GEMMA4_CHUNKED_PREFILL_TRACE=1
                 # WH T3K 31B: pin metal prefill chunk to 2048 (12 GB/ASIC headroom).
+                # Keep chunked-prefill *trace* on — sp0 capture hard-clears the
+                # sliding persistent ring so compile/capture match (see
+                # _release_sliding_prefill_tail(clear_persistent=True)).
                 if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] && [ "${{ matrix.test-group.mesh-device }}" = "T3K" ]; then
                   export GEMMA4_GEN_PREFILL_CHUNK=2048
                   echo "Gemma4 WH-T3K: GEMMA4_GEN_PREFILL_CHUNK=$GEMMA4_GEN_PREFILL_CHUNK"
