@@ -191,17 +191,20 @@ def pcc_metrics(ref: torch.Tensor, tt_out: torch.Tensor, threshold: float) -> tu
 
 
 def write_isl_csv(rows: list[dict], path: Path | str) -> Path:
-    # Normalized + extension-checked so an HY_PCC_CSV typo can't clobber an
-    # arbitrary file through this writer.
-    path = safe_output_path(path, suffix=".csv")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Absolutized and extension-checked inline, so the path reaching ``open`` is a
+    # normalized .csv artifact path and an HY_PCC_CSV typo cannot clobber something else.
+    csv_path = os.path.abspath(str(path))
+    if not csv_path.endswith(".csv"):
+        raise ValueError(f"refusing output path {csv_path!r}: expected a .csv file")
+    out = Path(csv_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
-        return path
-    with open(path, "w", newline="") as f:
+        return out
+    with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
-    return path
+    return out
 
 
 def isl_csv_path(default_name: str = "hunyuan_isl_sweep.csv") -> Path | None:

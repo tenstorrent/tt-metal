@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
 import torch
@@ -43,6 +41,21 @@ def _index_path(model_dir: Path) -> Path:
     return safe_join(model_dir, _WEIGHT_INDEX)
 
 
+def _read_weight_index(model_dir: Path) -> tuple[Path, dict[str, str]]:
+    """Read the checkpoint's weight index → ``(index_path, weight_map)``.
+
+    The only place in this module that opens the index. The join and the containment
+    check are written out here rather than delegated, so the path reaching ``open`` is
+    visibly constrained to the absolute checkpoint directory at the call site.
+    """
+    base_dir = os.path.abspath(str(model_dir))
+    index_path = os.path.abspath(os.path.join(base_dir, _WEIGHT_INDEX))
+    if not index_path.startswith(base_dir + os.sep):
+        raise ValueError(f"refusing path {index_path!r}: outside checkpoint directory {base_dir!r}")
+    with open(index_path) as f:
+        return Path(index_path), json.load(f)["weight_map"]
+
+
 def _hub_cache_dir() -> Path:
     if cache := os.environ.get("HUGGINGFACE_HUB_CACHE"):
         return Path(cache)
@@ -58,11 +71,9 @@ def _repo_snapshots_dir(repo_id: str) -> Path:
 
 def _weight_shard_names(model_dir: Path) -> list[str]:
     """Unique safetensor shard filenames listed in ``model.safetensors.index.json``."""
-    index_path = _index_path(model_dir)
-    if not index_path.is_file():
+    if not _index_path(model_dir).is_file():
         return []
-    with open(index_path) as f:
-        weight_map = json.load(f)["weight_map"]
+    _, weight_map = _read_weight_index(model_dir)
     return sorted(set(weight_map.values()))
 
 
@@ -131,13 +142,16 @@ def _downloads_disabled() -> bool:
 
 
 def _hf_download(repo_id: str, local_dir: Path | None = None) -> None:
-    """Download ``repo_id`` via ``snapshot_download`` / ``hf download``.
+    """Download ``repo_id`` with ``huggingface_hub.snapshot_download``.
 
     When ``local_dir`` is set (e.g. ``HUNYUAN_MODEL_DIR``), files land there so CI
     paths stay stable across runs. Otherwise the HF hub cache under ``HF_HOME`` is used.
 
-    ``repo_id`` is checked against the ``_ALLOWED_REPOS`` safelist before it reaches
-    ``hf download``, so only the three known HunyuanImage-3.0 repos are ever fetched.
+    In-process only — no ``hf download`` subprocess. The ``hf`` / ``huggingface-cli``
+    executables are console-script entry points of ``huggingface_hub`` itself, so a
+    CLI fallback could never run in an environment where this import fails; it was
+    unreachable code. ``repo_id`` is still safelisted so only the three known
+    HunyuanImage-3.0 repos can be fetched.
     """
     repo_id = _checked_repo_id(repo_id)
     if os.environ.get("HY_SKIP_WEIGHT_DOWNLOAD", "0") == "1":
@@ -146,50 +160,19 @@ def _hf_download(repo_id: str, local_dir: Path | None = None) -> None:
 
     try:
         from huggingface_hub import snapshot_download
-    except ImportError:
-        snapshot_download = None  # type: ignore[misc, assignment]
+    except ImportError as exc:
+        raise RuntimeError(
+            f"huggingface_hub is required to download {repo_id!r}; install it "
+            f"(pip install huggingface_hub) or pre-stage the checkpoint and set the model-dir env var"
+        ) from exc
 
-    if snapshot_download is not None:
-        if local_dir is not None:
-            local_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[weights] downloading {repo_id} via huggingface_hub → {local_dir} ...", flush=True)
-            snapshot_download(repo_id, local_dir=str(local_dir))
-        else:
-            print(f"[weights] downloading {repo_id} via huggingface_hub → {_hub_cache_dir()} ...", flush=True)
-            snapshot_download(repo_id)
-        return
-
-    hf = shutil.which("hf") or shutil.which("huggingface-cli")
-    if hf is None:
-        raise RuntimeError(f"Install huggingface_hub or put `hf` on PATH to download {repo_id!r}")
-
-    # argv list form (never shell=True); `hf` is an absolute path from shutil.which,
-    # the repo id is safelisted above, and dest is normalized to an absolute path.
     if local_dir is not None:
         local_dir.mkdir(parents=True, exist_ok=True)
-        dest = os.path.abspath(str(local_dir))
-        print(f"[weights] downloading {repo_id} → {dest} ...", flush=True)
-        proc = subprocess.run([hf, "download", repo_id, "--local-dir", dest], shell=False)
+        print(f"[weights] downloading {repo_id} via huggingface_hub → {local_dir} ...", flush=True)
+        snapshot_download(repo_id, local_dir=str(local_dir))
     else:
-        print(f"[weights] downloading {repo_id} → {_hub_cache_dir()} ...", flush=True)
-        proc = subprocess.run([hf, "download", repo_id], shell=False)
-    if proc.returncode == 0:
-        return
-    # ``hf download`` often prints "Download complete" then exits 1 (click Exit quirk).
-    if local_dir is not None and is_checkpoint_complete(local_dir):
-        print(
-            f"[weights] hf exited {proc.returncode} but checkpoint is complete at {local_dir}",
-            flush=True,
-        )
-        return
-    snap = find_hf_snapshot(repo_id)
-    if snap is not None and is_checkpoint_complete(snap):
-        print(
-            f"[weights] hf exited {proc.returncode} but checkpoint is complete at {snap}",
-            flush=True,
-        )
-        return
-    raise subprocess.CalledProcessError(proc.returncode, proc.args)
+        print(f"[weights] downloading {repo_id} via huggingface_hub → {_hub_cache_dir()} ...", flush=True)
+        snapshot_download(repo_id)
 
 
 def resolve_checkpoint(*, env_var: str, repo_id: str) -> Path:
@@ -381,9 +364,7 @@ def __getattr__(name: str):
 
 
 def load_tensors(model_dir: Path, keys: list[str]) -> dict[str, Tensor]:
-    index_path = _index_path(model_dir)
-    with open(index_path) as f:
-        weight_map = json.load(f)["weight_map"]
+    index_path, weight_map = _read_weight_index(model_dir)
 
     shard_to_keys: dict[str, list[str]] = {}
     for key in keys:
@@ -404,9 +385,7 @@ def load_tensors(model_dir: Path, keys: list[str]) -> dict[str, Tensor]:
 
 
 def load_prefixed_state_dict(model_dir: Path, prefix: str, dtype: torch.dtype = torch.float32) -> dict[str, Tensor]:
-    index_path = _index_path(model_dir)
-    with open(index_path) as f:
-        weight_map = json.load(f)["weight_map"]
+    index_path, weight_map = _read_weight_index(model_dir)
 
     keys = [k for k in weight_map if k.startswith(prefix)]
     if not keys:
