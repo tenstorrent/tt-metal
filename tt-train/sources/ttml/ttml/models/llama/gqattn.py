@@ -18,10 +18,10 @@ from ttml.parallel import TPStrategy
 class GroupedQueryAttention(AbstractModuleBase):
     """Grouped-query attention (GQA) with optional tensor-parallel linear layers.
 
-    When ``use_tp=True`` the Q and KV projections use ``ColumnParallelLinear``
-    (output features sharded) with ``gather_output=False``, and the output
-    projection uses ``RowParallelLinear`` with ``input_is_parallel=True``.
-    This avoids redundant communication between the two matmuls.
+    Under tensor parallelism the fused QKV projection uses ``ColumnParallelLinear``
+    (output features sharded) with ``gather_output=False``, and the output projection
+    uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
+    communication between the two matmuls.
     """
 
     def __init__(

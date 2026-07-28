@@ -175,9 +175,9 @@ class VocabParallelEmbedding(AbstractModuleBase):
         mask = ttnn.transpose(ttnn.to_layout(ttnn.typecast(in_range, ttnn.DataType.FLOAT32), ttnn.Layout.TILE), 2, 3)
         emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
 
-        # Each token is nonzero on exactly one device. Sum across TP reconstructs
-        # the full embedding for every token.
+        # Each token is nonzero on exactly one device, so summing across TP reconstructs it.
         if self.sequence_parallel:
+            # Same sum, but leaves the result sequence-sharded for the first block.
             return ttml.ops.distributed.reduce_scatter(emb, 2, self.cluster_axis)
         return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
 

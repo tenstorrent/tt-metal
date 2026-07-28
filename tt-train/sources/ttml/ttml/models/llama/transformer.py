@@ -86,19 +86,21 @@ class LlamaMLP(AbstractModuleBase):
 
         # Fused gate+up: one [2*I, E] weight, rows [0:I) = gate, [I:2*I) = up.
         gate_up_size = 2 * intermediate_size
+
+        # Each device's gate|up half is I/tp wide and must stay tile-aligned, or the packed
+        # SwiGLU op's two halves straddle a tile boundary.
+        tp_size = ttml.mesh().axis_size("tp") if use_tp else 1
+        if intermediate_size % tp_size != 0:
+            raise ValueError(
+                f"intermediate_size ({intermediate_size}) must be divisible by the tensor-parallel size ({tp_size})"
+            )
+        if (intermediate_size // tp_size) % 32 != 0:
+            raise ValueError(
+                f"intermediate_size per device ({intermediate_size // tp_size}) must be a "
+                f"multiple of 32 so the packed gate|up halves stay tile-aligned"
+            )
+
         if use_tp:
-            # Each device's gate|up half is I/tp wide and must stay tile-aligned (multiple of 32).
-            tp_size = ttml.mesh().axis_size("tp")
-            if intermediate_size % tp_size != 0:
-                raise ValueError(
-                    f"intermediate_size ({intermediate_size}) must be divisible by the "
-                    f"tensor-parallel size ({tp_size})"
-                )
-            if (intermediate_size // tp_size) % 32 != 0:
-                raise ValueError(
-                    f"per-device intermediate shard ({intermediate_size // tp_size}) must be a "
-                    f"multiple of 32 so the packed gate|up halves stay tile-aligned"
-                )
             self.w_gate_up = ColumnParallelLinear(
                 embedding_size,
                 gate_up_size,
