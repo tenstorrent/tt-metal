@@ -6,6 +6,10 @@
 #       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
 #       env:            (optional) Extra environment variables as key: value pairs
 #       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
+#       back2back:      (optional) When true, run this entry in the same gtest process as
+#                       other consecutive back2back entries that share the same group,
+#                       config, env, and gtest_repeat. Used by run_quasar_regression.sh.
+#                       Defaults to false (each entry runs in its own process).
 #
 # Example test entry
 #
@@ -16,87 +20,325 @@
 #       TT_METAL_SOMETHING: 1
 
 unit_tests_legacy:
-  - filter: "*SingleDmL1Write*"
-    config: 1x3, 2x3, 2x3_DISPATCH
-
+# 1x3 tests run back-to-back
   - filter: "*SingleDmL1Write*"
     config: 1x3
+    back2back: true
     env:
-      TT_METAL_DPRINT_CORES: all
-
-  - filter: "*SingleDmL1Write*"
-    config: 1x3
-    gtest_repeat: 5
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*DmLoopback*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarComputeKernelSingleThread*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarComputeKernelMultipleThread*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
     config: 1x3
-
-  - filter: "*MultiDmAddTwoInts*"
-    config: 2x3, 2x3_DISPATCH
-
-  - filter: "*Bmm"
-    config: 1x3
+    back2back: true
     env:
-      TT_METAL_LOGGER_LEVEL: warning
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*Bmm"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# 2x3 tests run back-to-back
+  - filter: "*SingleDmL1Write*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# 2x3_DISPATCH tests run back-to-back
+  - filter: "*SingleDmL1Write*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_debug_tools:
   - filter: "*WatcherAssertTests*DM2"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*WatcherAssertTests*DM7"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*WatcherNonDefaultAssertTests*DMHWFaultStoreAccessFault"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*TensixTestWatcherSanitizeNOCAlignmentL1Write*"
+  - filter: "MeshWatcherFixture.TensixTestWatcherQuasarAlignmentContract"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*QuasarTestWatcherSanitizeMultiDMRace*"
+  - filter: "MeshWatcherFixture.QuasarTestWatcherSanitizeMultiDMRace"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*WatcherStackUsageTests*StackUsage0_QuasarMultiKernel"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*WatcherStackUsageTests*StackUsage16_QuasarMultiKernel"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*TestWatcherWaypoints"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
-#  - filter: "*TestWatcherTileCounterLogRemapper*"
-#    config: 1x3
+  - filter: "*TestWatcherTileCounterLogRemapper*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
-#  - filter: "*TestWatcherTileCounterLogBypass*"
-#    config: 1x3
+  - filter: "*TestWatcherTileCounterLogBypass*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "DevicePrintOutputFixture.PrintConcurrentBabyRiscs"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "DevicePrintOutputFixture.PrintConcurrentRocketRiscs"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "DevicePrintOutputFixture.PrintConcurrentAllRiscs"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_api:
   - filter: "*QuasarCRTASharedL1Address*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarCRTAUniqueL1Addresses*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S_2_0/ImplicitSyncFalse"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB2Sx4S_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx4A_2_0/ImplicitSyncFalse"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB4Sx1S_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB_RingPressure_3Sx3S_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest3xDFB_1Sx1S_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest4xDFB_Mixed_2_0/ImplicitSyncFalse"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB1Sx1S_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB2Sx4S_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB6Sx2A_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest1xDFB1Sx1S_2_0/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest4xDFB_1Sx1S_2_0/ImplicitSyncFalse"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "ImplicitSync/DFBImplicitSyncParamFixture.DMTest1xDFB1Sx1S/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "ImplicitSync/DFBImplicitSyncParamFixture.DMTest1xDFB_NumEntriesOverride_ReEntry_3Sx3S/ImplicitSyncTrue"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "ImplicitSync/DFBImplicitSyncParamFixture.DMTest1xDFB_BothOverride/ImplicitSyncFalse"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "MeshDeviceFixture.DMTest1xDFB2Sx4SConfig"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "MeshDeviceFixture.DFBReentryOverridePreservesTcAndRecomputesTxn"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "MeshDeviceFixture.DFBOverrideCapacityExceedsUint16Fails"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.MultiCoreDMTest2Core_1Sx1S_2_0/ImplicitSyncTrue"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Don't enable yet. Attempt to run all DFB tests.
+  # - filter: "*DFB*:-*MultiCore*"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # - filter: "*DFB*MultiCore*"
+  #   config: 2x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_device:
   - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1

@@ -719,12 +719,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
     }
 
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
         {"cb_in0", tt::CBIndex::c_0},
         {"cb_in1", tt::CBIndex::c_1},
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
-        {"cb_intermed0", tt::CBIndex::c_5},
+        {"cb_intermed0", cb_intermed0},
         {"cb_in0_transposed", tt::CBIndex::c_10},
         {"bias_ntiles", in1_per_core_w},
     };
@@ -739,6 +740,32 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         compute_named_compile_args["activation_param2"] = params.param2;
     }
 
+    // The fused bias add reads the partials CB as an FPU operand (SrcA), so UnpackToDestFp32 cannot be
+    // set on cb_intermed0 directly when bias is present. In that case the cross-block reload instead
+    // copies through cb_intermed0_alias, a second buffer index over the same SRAM carrying
+    // UnpackToDestFp32, while the bias add keeps reading cb_intermed0 via SrcA. The alias index is
+    // handed to the compute kernel through the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the
+    // alias reload path there. Without bias the reload reads cb_intermed0 and the flag is set on it.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
+    // When accumulating in fp32 (fp32_dest_acc_en) with the K reduction split across blocks,
+    // the intermediate partials CB (cb_intermed0) holds Float32 and is reloaded into DEST
+    // between blocks by copy_block_matmul_partials. Unless the reload's CB view is marked
+    // UnpackToDestFp32, that reload is routed through SrcA and rounded to TF32 (10 mantissa bits),
+    // so the fp32 partial loses precision on every block boundary. The flag is set on the alias
+    // when bias forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
@@ -750,6 +777,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -834,9 +862,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            interm0_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            interm0_cb_config =
+                interm0_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
 
         tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -850,11 +887,20 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            output_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                .set_tile_dims(output_cb_index, output_tile)
                                .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            output_cb_config =
+                output_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
     }
 
     if (output_is_sharded) {
@@ -1634,6 +1680,33 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         compute_named_compile_args["activation_param2"] = params.param2;
     }
 
+    // The fused bias add reads the partials CB as an FPU operand (SrcA), so UnpackToDestFp32 cannot be
+    // set on cb_intermed0 directly when bias is present. In that case the cross-block reload instead
+    // copies through cb_intermed0_alias, a second buffer index over the same SRAM carrying
+    // UnpackToDestFp32, while the bias add keeps reading cb_intermed0 via SrcA. The alias index is
+    // handed to the compute kernel through the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the
+    // alias reload path there. Without bias the reload reads cb_intermed0 and the flag is set on it.
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
+    // When accumulating in fp32 (fp32_dest_acc_en) with the K reduction split across blocks, the
+    // intermediate partials CB (cb_intermed0) holds Float32 and is reloaded into DEST between blocks
+    // by copy_block_matmul_partials. Unless the reload's CB view is marked UnpackToDestFp32, that
+    // reload is routed through SrcA and rounded to TF32 (10 mantissa bits), so the fp32 partial loses
+    // precision on every block boundary. The flag is set on the alias when bias forces a separate SrcA
+    // view of cb_intermed0 (see above), else on cb_intermed0 itself.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
@@ -1645,6 +1718,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -1720,9 +1794,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            interm0_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            interm0_cb_config =
+                interm0_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
 
         tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -1736,11 +1819,20 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            output_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                .set_tile_dims(output_cb_index, output_tile)
                                .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            output_cb_config =
+                output_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
     }
 
     if (output_is_sharded) {
@@ -2418,6 +2510,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 {"cb_sync2", sync_cb2_index},
                 {"cb_remote", remote_cb_index}}});
 
+    // fp32 K-partials (interm0_cb_index) are reloaded into DEST between blocks via
+    // copy_block_matmul_partials; mark the CB UnpackToDestFp32 so the reload goes directly to
+    // DEST instead of through SrcA (which would truncate the fp32 partial to TF32).
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[interm0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     auto mm_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp",
@@ -2426,6 +2527,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -3575,6 +3677,19 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores_with_work;
     compute_kernel_desc.compile_time_args = compute_kernel_args;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
+    // The fused bias add reads the partials CB as an FPU operand (SrcA), so UnpackToDestFp32 cannot be
+    // set on cb_intermed0 directly when bias is present. In that case the cross-block reload instead
+    // copies through cb_intermed0_alias, a second buffer index over the same SRAM carrying
+    // UnpackToDestFp32, while the bias add keeps reading cb_intermed0 via SrcA. The alias index is
+    // handed to the compute kernel through the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the
+    // alias reload path there. Without bias the reload reads cb_intermed0 and the flag is set on it.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
     compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
     {
         KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
@@ -3582,7 +3697,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             {"cb_in1", tt::CBIndex::c_1},
             {"cb_bias", tt::CBIndex::c_3},
             {"cb_out", tt::CBIndex::c_4},
-            {"cb_intermed0", tt::CBIndex::c_5},
+            {"cb_intermed0", cb_intermed0},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
         };
@@ -3596,8 +3711,24 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
+    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
+    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
+    // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
+    // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
+    // forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build CBDescriptors
@@ -3693,6 +3824,14 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
                 .tile = output_tile_desc});
+            // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+            if (bias_reload_alias) {
+                cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                    .buffer_index = cb_intermed0_alias,
+                    .data_format = interm0_data_format,
+                    .page_size = interm0_single_tile_size,
+                    .tile = output_tile_desc});
+            }
             desc.cbs.push_back(std::move(cb_desc));
         }
     } else {
@@ -3710,6 +3849,14 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             .data_format = interm0_data_format,
             .page_size = interm0_single_tile_size,
             .tile = output_tile_desc});
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = cb_intermed0_alias,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+        }
         if (output_is_sharded) {
             cb_desc.tensor = &out_tensor;
         }
@@ -4461,6 +4608,17 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = compute_kernel_args;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
+    // See create_program_mcast_in0_descriptor: the fused bias add reads the partials CB via SrcA, so
+    // when bias is present the reload copies through cb_intermed0_alias (an UnpackToDestFp32 view of
+    // the same SRAM) while the bias add keeps reading cb_intermed0. The alias index reaches the compute
+    // kernel via the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the alias reload path there.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
     compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
     {
         KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
@@ -4468,7 +4626,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             {"cb_in1", tt::CBIndex::c_1},
             {"cb_bias", tt::CBIndex::c_3},
             {"cb_out", tt::CBIndex::c_4},
-            {"cb_intermed0", tt::CBIndex::c_5},
+            {"cb_intermed0", cb_intermed0},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
         };
@@ -4482,8 +4640,24 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         }
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
+    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
+    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
+    // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
+    // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
+    // forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build CBDescriptors
@@ -4567,6 +4741,14 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
                 .tile = output_tile_desc});
+            // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+            if (bias_reload_alias) {
+                cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                    .buffer_index = cb_intermed0_alias,
+                    .data_format = interm0_data_format,
+                    .page_size = interm0_single_tile_size,
+                    .tile = output_tile_desc});
+            }
             desc.cbs.push_back(std::move(cb_desc));
         }
     } else {
@@ -4584,6 +4766,14 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             .data_format = interm0_data_format,
             .page_size = interm0_single_tile_size,
             .tile = output_tile_desc});
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = cb_intermed0_alias,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+        }
         if (output_is_sharded) {
             cb_desc.tensor = &out_tensor;
         }
@@ -4847,10 +5037,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());  // in0
     const MeshTensor& in1_tensor = b.mesh_tensor();
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(in1_tensor.dtype());  // in1
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());   // output
 
     ttsl::optional_reference<const MeshTensor> bias_mesh_tensor;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr

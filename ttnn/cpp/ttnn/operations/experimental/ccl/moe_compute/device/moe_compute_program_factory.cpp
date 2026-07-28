@@ -51,15 +51,15 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
 }
 
 std::tuple<
-    std::vector<CoreCoord>,  // T cores
-    std::vector<CoreCoord>,  // MM cores
+    std::vector<tt::tt_metal::CoreCoord>,  // T cores
+    std::vector<tt::tt_metal::CoreCoord>,  // MM cores
     CoreRangeSet,            // T CoreRangeSet
     CoreRangeSet,            // MM CoreRangeSet
     CoreRangeSet,            // T + MM CoreRangeSet
     CoreRangeSet,            // Combine CoreRangeSet
     CoreRangeSet,            // C + MM CoreRangeSet
     CoreRangeSet,            // All worker cores (T + MM + C)
-    std::vector<CoreCoord>,  // Combine vector of CoreCoord
+    std::vector<tt::tt_metal::CoreCoord>,  // Combine vector of CoreCoord
     CoreRange,               // T bounding box
     CoreRange>               // MM bounding box
 get_cores(

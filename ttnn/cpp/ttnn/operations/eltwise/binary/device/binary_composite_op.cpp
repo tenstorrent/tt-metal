@@ -473,16 +473,31 @@ Tensor remainder(
 Tensor remainder(
     const Tensor& input,
     unary::ScalarVariant scalar,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
-    float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_remainder(input, scalar_f, output_mem_config, output_tensor, sub_core_grids);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    if (!output_dtype.has_value() && !sub_device_id.has_value() && post_activations.empty() &&
+        lhs_activations.empty() && rhs_activations.empty()) {
+        return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
+    }
+    return ttnn::detail::invoke_binary_ng(
+        input,
+        scalar,
+        binary::BinaryOpType::REMAINDER,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        std::nullopt,
+        sub_core_grids,
+        sub_device_id);
 }
 
 // FMOD result = input − (other * trunc(input/other))

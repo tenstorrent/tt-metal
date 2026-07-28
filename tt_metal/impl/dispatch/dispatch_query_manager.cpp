@@ -58,11 +58,11 @@ tt_cxy_pair dispatch_core(
     return dispatch_core;
 }
 
-std::vector<CoreCoord> get_consistent_logical_cores(
+std::vector<tt::tt_metal::CoreCoord> get_consistent_logical_cores(
     tt::tt_metal::MetalEnv& env, uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     auto user_chips = tt::tt_metal::MetalEnvAccessor(env).impl().get_cluster().user_exposed_chip_ids();
-    std::vector<CoreCoord> first_core_set;
-    std::vector<CoreCoord> current_cores;
+    std::vector<tt::tt_metal::CoreCoord> first_core_set;
+    std::vector<tt::tt_metal::CoreCoord> current_cores;
 
     for (auto chip : user_chips) {
         current_cores = tt::get_logical_dispatch_cores(
@@ -76,7 +76,7 @@ std::vector<CoreCoord> get_consistent_logical_cores(
     return current_cores;
 }
 
-std::vector<CoreCoord> populate_all_logical_dispatch_cores(
+std::vector<tt::tt_metal::CoreCoord> populate_all_logical_dispatch_cores(
     tt::tt_metal::MetalEnv& env, uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     return get_consistent_logical_cores(env, num_hw_cqs, dispatch_core_config);
 }
@@ -118,11 +118,11 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
         populate_all_logical_dispatch_cores(env_, num_hw_cqs_, dispatch_core_config_);
 }
 
-const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
+const std::vector<tt::tt_metal::CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
     return tt::get_logical_dispatch_cores(MetalEnvAccessor(env_).impl(), device_id, num_hw_cqs_, dispatch_core_config_);
 }
 
-const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores_on_user_chips() const {
+const std::vector<tt::tt_metal::CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores_on_user_chips() const {
     return logical_dispatch_cores_on_user_chips_;
 }
 

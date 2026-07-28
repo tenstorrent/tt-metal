@@ -11,7 +11,6 @@
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::ccl {
 
@@ -113,18 +112,6 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
 
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
-
-ttsl::hash::hash_t AllToAllCombineDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Key on operation attributes + tensor specs only. Input/output buffer base addresses are
-    // refreshed on every cache hit via BufferBinding (Buffer* runtime-arg slots), and the two
-    // GlobalSemaphores live on WorkloadDescriptor::semaphores -- kept alive for the lifetime of
-    // the cached MeshWorkload, so their baked L1 addresses stay valid across hits. Hashing buffer
-    // addresses here (former PR #44408/#45332 workaround) only forced a full workload rebuild on
-    // every reallocation, defeating the program cache on non-trace dispatch.
-    return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<AllToAllCombineDeviceOperation>, attrs, tensor_args);
-}
 
 AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

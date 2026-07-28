@@ -1221,6 +1221,12 @@ void detail::ProgramImpl::CircularBufferAllocator::mark_address(
 }
 
 CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer) {
+    // Metal 2.0 programs use DataflowBuffers, never legacy circular buffers.
+    TT_FATAL(
+        !this->created_from_spec_,
+        "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
+        "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
+
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {

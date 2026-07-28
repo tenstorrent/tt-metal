@@ -23,14 +23,14 @@
 namespace tt {
 
 struct core_descriptor_t {
-    CoreCoord compute_grid_size;
+    tt::tt_metal::CoreCoord compute_grid_size;
     std::vector<tt_metal::RelativeCoreCoord> relative_compute_cores;
     std::vector<tt_metal::RelativeCoreCoord> relative_dispatch_cores;
     std::vector<tt_metal::RelativeCoreCoord> relative_fabric_mux_cores;
 
-    std::vector<CoreCoord> logical_compute_cores;
-    std::vector<CoreCoord> logical_dispatch_cores;
-    std::vector<CoreCoord> logical_fabric_mux_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_compute_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_dispatch_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores;
 };
 
 inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested_on_axis) {
@@ -54,7 +54,7 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
     uint8_t num_hw_cqs,
     const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
-inline const CoreCoord& get_compute_grid_size(
+inline const tt::tt_metal::CoreCoord& get_compute_grid_size(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
@@ -63,7 +63,7 @@ inline const CoreCoord& get_compute_grid_size(
     return core_desc.compute_grid_size;
 }
 
-inline const std::vector<CoreCoord>& get_logical_compute_cores(
+inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_compute_cores(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
@@ -72,7 +72,7 @@ inline const std::vector<CoreCoord>& get_logical_compute_cores(
     return core_desc.logical_compute_cores;
 }
 
-inline const std::vector<CoreCoord>& get_logical_dispatch_cores(
+inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_dispatch_cores(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
@@ -81,7 +81,7 @@ inline const std::vector<CoreCoord>& get_logical_dispatch_cores(
     return core_desc.logical_dispatch_cores;
 }
 
-inline const std::vector<CoreCoord>& get_logical_fabric_mux_cores(
+inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_fabric_mux_cores(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
@@ -93,7 +93,7 @@ inline const std::vector<CoreCoord>& get_logical_fabric_mux_cores(
 // When FabricTensix is DISABLED, wormhole_b0_80_arch.yaml omits fabric_mux_cores, but the same tensix
 // locations are still reserved for fabric mux on boards that use the fabric-mux descriptor layout.
 // Used for heuristics (e.g. real-time profiler spare-core selection) that must not collide with mux rows/columns.
-std::vector<CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
+std::vector<tt::tt_metal::CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     uint8_t num_hw_cqs,

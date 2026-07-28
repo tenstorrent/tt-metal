@@ -9,6 +9,7 @@
 #include <optional>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 using namespace tt::constants;
@@ -320,36 +321,21 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> SliceDeviceOperation::get_dynamic_runtime_args(
-    const operation_attributes_t& args,
+void SliceDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Height-sharded RM factory is CB-bound: addresses ride on the sharded CBs, so re-apply reader arg0
-    // (num source cores, from the same per-core walk create_descriptor uses) on core 0 to trip the
-    // fast-path and let the framework re-patch the CB addresses instead of rebuilding. (#48928)
-    if (!std::holds_alternative<SliceRmShardedProgramFactory>(select_program_factory(args, tensor_args))) {
-        return {};
-    }
-    const auto& input = tensor_args.input;
-    const auto sp_padded = input.shard_spec().value();
-    const auto sp_unpadded = output.shard_spec().value();
-    const auto bbox_p = sp_padded.grid.bounding_box();
-    const auto bbox_u = sp_unpadded.grid.bounding_box();
-    // Build only core 0 (num_cores=1); its reader arg0 == what create_descriptor bakes for core 0.
-    const auto core0 = ttnn::operations::data_movement::get_slice_runtime_args_rm_sharded(
-        input,
-        output,
-        args.slice_start,
-        /*num_cores_unpadded=*/1,
-        sp_unpadded.orientation == ShardOrientation::ROW_MAJOR,
-        bbox_u.end_coord.x + 1,
-        bbox_u.end_coord.y + 1,
-        sp_unpadded.shape[0],
-        sp_padded.shape[0],
-        bbox_p.end_coord.x + 1,
-        bbox_p.end_coord.y + 1);
-    return {tt::tt_metal::DynamicRuntimeArg{0, corerange_to_cores(sp_unpadded.grid).front(), 0, core0[0].first[0]}};
+    // Re-derive the descriptor from the SAME factory the miss path picks (single source of truth), then
+    // re-apply its rt-args + tensor-backed CB addresses to the cached program. No rebuild (still a hit).
+    auto desc = std::visit(
+        [&](auto&& factory) {
+            return std::decay_t<decltype(factory)>::create_descriptor(
+                operation_attributes, tensor_args, tensor_return_value);
+        },
+        select_program_factory(operation_attributes, tensor_args));
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::prim

@@ -36,7 +36,7 @@ global_env:
   # setdefault before the runner's env reads. This binding stays model-agnostic: point PREFILL_MANIFEST
   # at any model's manifest to run it on this topology. ttrun does not propagate shell PREFILL_*, so
   # the manifest path (like the rest of global_env) must live here.
-  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi.json"
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi26.json"
   PREFILL_STANDALONE: "1"   # standalone bring-up/pipeline mode, not the production request loop
   PREFILL_FABRIC_MODE: "2d"   # D2D pipeline transport needs FABRIC_2D
   PREFILL_STANDALONE_PCC: "0"

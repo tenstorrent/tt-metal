@@ -139,13 +139,13 @@ jobs:
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 30
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
-          useDevHostMount: 'true'
-          sharedVolumeEnabled: 'true'
+          useDevHostMount: "true"
+          sharedVolumeEnabled: "true"
           path: /etc/ttop
 
       - name: 📦 Download Build Artifact
@@ -383,14 +383,14 @@ jobs:
         if: always()
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - name: Delete allocation
         if: always()
         uses: ./.github/actions/ttop-delete-allocation
         with:
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - name: Clean up shared staging dir

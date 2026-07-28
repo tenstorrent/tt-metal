@@ -96,7 +96,7 @@ string GetRiscName(
     const umd::CoreDescriptor& logical_core,
     int risc_id,
     bool abbreviated = false) {
-    CoreCoord virtual_core =
+    tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     return hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
@@ -121,7 +121,7 @@ std::ostream null_stream(&null_buffer);
 void WriteInitMagic(
     tt::Cluster& cluster,
     ChipId device_id,
-    const CoreCoord& virtual_core,
+    const tt::tt_metal::CoreCoord& virtual_core,
     const tt::tt_metal::DPrintBufferInfo& buffer_info,
     bool enabled) {
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
@@ -609,7 +609,7 @@ bool DPrintServer::Impl::poll_one_core(
 
 void DPrintServer::Impl::init_print_buffers_for_core(ChipId device_id, const umd::CoreDescriptor& logical_core) {
     auto& cluster = env_.get_cluster();
-    CoreCoord virtual_core =
+    tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     for (auto& buffer_info : get_core_buffers(device_id, logical_core)) {
         WriteInitMagic(cluster, device_id, virtual_core, buffer_info, false);
@@ -618,7 +618,7 @@ void DPrintServer::Impl::init_print_buffers_for_core(ChipId device_id, const umd
 
 void DPrintServer::Impl::enable_print_buffers_for_core(ChipId device_id, const umd::CoreDescriptor& logical_core) {
     auto& cluster = env_.get_cluster();
-    CoreCoord virtual_core =
+    tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     for (auto& buffer_info : get_core_buffers(device_id, logical_core)) {
@@ -1107,14 +1107,14 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 tt::tt_metal::get_core_type_name(core_type));
         } else {
             // No "all cores" option provided, which means print from the cores specified by the user
-            const std::vector<CoreCoord>& print_cores =
+            const std::vector<tt::tt_metal::CoreCoord>& print_cores =
                 rtoptions.get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint).at(core_type);
 
             // We should also validate that the cores the user specified are valid worker cores.
             for (const auto& logical_core : print_cores) {
                 // Need to convert user-specified logical cores to virtual cores, this can throw
                 // if the user gave bad coords.
-                CoreCoord virtual_core;
+                tt::tt_metal::CoreCoord virtual_core;
                 bool valid_logical_core = true;
                 try {
                     virtual_core = env_.get_cluster().get_virtual_coordinate_from_logical_coordinates(

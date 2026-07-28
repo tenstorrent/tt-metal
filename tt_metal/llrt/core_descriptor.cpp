@@ -209,7 +209,7 @@ const core_descriptor_t& get_core_descriptor_config(
     size_t start_x = compute_with_storage_start[0].as<size_t>();
     size_t start_y = compute_with_storage_start[1].as<size_t>();
 
-    CoreCoord compute_grid_size;
+    tt::tt_metal::CoreCoord compute_grid_size;
     // When slow dispatch is on, use full logical grid (no dispatch cores to reserve)
     if (!fast_dispatch && !env.get_rtoptions().is_simulator_or_emulated()) {
         compute_grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
@@ -219,7 +219,7 @@ const core_descriptor_t& get_core_descriptor_config(
             compute_grid_size.x,
             compute_grid_size.y);
     } else {
-        compute_grid_size = CoreCoord((end_x - start_x) + 1, (end_y - start_y) + 1);
+        compute_grid_size = tt::tt_metal::CoreCoord((end_x - start_x) + 1, (end_y - start_y) + 1);
     }
 
     std::vector<RelativeCoreCoord> compute_cores;
@@ -236,9 +236,9 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores_string = "tg_dispatch_cores";
     }
 
-    CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    tt::tt_metal::CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     // For mock devices, control plane doesn't exist, use empty set
-    std::unordered_set<CoreCoord> logical_active_eth_cores;
+    std::unordered_set<tt::tt_metal::CoreCoord> logical_active_eth_cores;
     if (!env.get_cluster().is_mock_or_emulated()) {
         logical_active_eth_cores = env.get_control_plane().get_active_ethernet_cores(device_id);
     }
@@ -277,7 +277,7 @@ const core_descriptor_t& get_core_descriptor_config(
         }
     }
 
-    std::vector<CoreCoord> logical_compute_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_compute_cores;
     logical_compute_cores.reserve(compute_cores.size());
     std::transform(
         compute_cores.cbegin(),
@@ -285,7 +285,7 @@ const core_descriptor_t& get_core_descriptor_config(
         std::back_inserter(logical_compute_cores),
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
-    std::vector<CoreCoord> logical_dispatch_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_dispatch_cores;
     // In slow dispatch mode, no cores are reserved for dispatch
     if (fast_dispatch) {
         logical_dispatch_cores.reserve(dispatch_cores.size());
@@ -297,7 +297,7 @@ const core_descriptor_t& get_core_descriptor_config(
     }
 
     // Convert fabric mux cores to logical coordinates
-    std::vector<CoreCoord> logical_fabric_mux_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores;
     logical_fabric_mux_cores.reserve(fabric_mux_cores.size());
     std::transform(
         fabric_mux_cores.cbegin(),
@@ -318,7 +318,7 @@ const core_descriptor_t& get_core_descriptor_config(
     return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
 }
 
-std::vector<CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
+std::vector<tt::tt_metal::CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     uint8_t num_hw_cqs,
@@ -381,8 +381,8 @@ std::vector<CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml
         return {};
     }
 
-    CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    std::vector<CoreCoord> logical_fabric_mux_cores;
+    tt::tt_metal::CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores;
     for (const auto& core_node : desc_yaml["fabric_mux_cores"]) {
         if (!core_node.IsSequence()) {
             continue;
@@ -418,9 +418,9 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
         const metal_SocDescriptor& soc_desc = env.get_cluster().get_soc_desc(device_id);
         // Get physical compute grid range based on SOC Desc and Logical Coords
         // Logical Worker Coords start at 0,0
-        CoreCoord tensix_worker_start_phys = soc_desc.get_physical_tensix_core_from_logical(CoreCoord(0, 0));
-        CoreCoord tensix_worker_end_phys = soc_desc.get_physical_tensix_core_from_logical(
-            CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1));
+        tt::tt_metal::CoreCoord tensix_worker_start_phys = soc_desc.get_physical_tensix_core_from_logical(tt::tt_metal::CoreCoord(0, 0));
+        tt::tt_metal::CoreCoord tensix_worker_end_phys = soc_desc.get_physical_tensix_core_from_logical(
+            tt::tt_metal::CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1));
         CoreRange tensix_worker_physical_grid = CoreRange(tensix_worker_start_phys, tensix_worker_end_phys);
         physical_grid_config_cache.insert(
             {config_hash, std::make_tuple(tensix_num_worker_cores, tensix_worker_physical_grid)});
