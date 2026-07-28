@@ -67,6 +67,17 @@ uint32_t max_pages_per_read(uint32_t compiled_default) {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_NO_TRACY=1: drain and decode EXACTLY as normal (markers and stall zones are still
+// counted) but skip the Tracy push. Isolates the cost of the sink from the cost of read+decode -- if the
+// relay stops host-waiting with this on, the Tracy push is provably the bottleneck.
+bool tracy_push_disabled() {
+    static const bool off = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_NO_TRACY");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return off;
+}
+
 PerfDebugProfiler::DeviceCtx::DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::~DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
@@ -423,7 +434,9 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 }
                 pkt.timestamp = (ts >= ts_base) ? (ts - ts_base) : 0;
                 pkt.is_start = (type == kernel_profiler::ZONE_START);
-                tracy_->HandleWorkerZone(pkt);
+                if (!tracy_push_disabled()) {
+                    tracy_->HandleWorkerZone(pkt);
+                }
             },
             // X280 drain-hart spans (only produced when bcfg.hartzones was set). Just accumulate here --
             // they cannot be placed on the timeline until stop(), which reads the rdcycle->Tensix calibration.
