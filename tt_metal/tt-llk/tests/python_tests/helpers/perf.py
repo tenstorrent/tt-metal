@@ -714,7 +714,12 @@ class PerfConfig(TestConfig):
 
         # Setting header fields that are always there
         names = (
-            ["formats.input_A", "formats.input_B", "formats.output"]
+            [
+                "formats.input_A",
+                "formats.input_B",
+                "formats.output",
+                "formats.sfpu_math",
+            ]
             if self.formats_config
             else []
         )
@@ -723,6 +728,7 @@ class PerfConfig(TestConfig):
                 self.formats_config[0].unpack_A_src,
                 self.formats_config[0].unpack_B_src,
                 self.formats_config[0].output_format,
+                self.formats_config[0].sfpu_math,
             ]
             if self.formats_config[0]
             else []
