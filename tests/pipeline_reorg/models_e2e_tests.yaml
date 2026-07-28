@@ -307,23 +307,25 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-# Qwen2.5-72B: re-enabled as the TTTv2 demo. The TTTv1 simple_text_demo leg was disabled (ci-token-matching
-# hung on CI); the TTTv2 qwen25_72b demo replaces it on the same T3K (wh_llmbox_perf) SKU, mirroring the
-# disabled leg's single ci-token-matching case as token-accuracy.
-- name: Qwen2.5-72B e2e tests
-  # TTTv2 qwen25_72b demo is T3K-only (80 layers / 64 attn / 8 KV heads => 8-way TP; 72B weights need 8
-  # devices). First CI run builds the TTTv2 LazyWeight cache (cold 72B weight conversion) before the demo.
-  cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-72B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-72B-Instruct MESH_DEVICE=T3K
-    pytest --timeout 3600 models/common/tests/demos/qwen25_72b/demo.py -k "token-accuracy and performance"
-  model: qwen2.5-72b
-  model_family: Qwen
-  skus:
-    wh_llmbox_perf:
-      timeout: 55
-      tier: 3
-  owner_id: U03HY7MK4BT # Mark O'Connor
-  team: models
+# Qwen2.5-72B e2e: still DISABLED. The original TTTv1 leg was disabled because ci-token-matching hung on
+# CI. The TTTv2 qwen25_72b demo below is the staged replacement (T3K parity-verified locally) but stays
+# commented out until that CI hang is understood. Re-enabling it needs two other edits: add qwen2.5-72b
+# back to the workflow_dispatch model list in .github/workflows/models-t3-e2e-tests.yaml, and raise
+# models.e2e_tier3.wh_llmbox_perf in .github/time_budget.yaml (this leg is +55 on a prior sum of 55).
+# - name: Qwen2.5-72B e2e tests
+#   # TTTv2 qwen25_72b demo is T3K-only (80 layers / 64 attn / 8 KV heads => 8-way TP; 72B weights need 8
+#   # devices). First CI run builds the TTTv2 LazyWeight cache (cold 72B weight conversion) before the demo.
+#   cmd: |
+#     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-72B-Instruct MESH_DEVICE=T3K
+#     pytest --timeout 3600 models/common/tests/demos/qwen25_72b/demo.py -k "token-accuracy and performance"
+#   model: qwen2.5-72b
+#   model_family: Qwen
+#   skus:
+#     wh_llmbox_perf:
+#       timeout: 55
+#       tier: 3
+#   owner_id: U03HY7MK4BT # Mark O'Connor
+#   team: models
 
 - name: Qwen2.5-VL-72B e2e tests
   cmd: |

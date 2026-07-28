@@ -319,10 +319,7 @@ models:
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    # wh_llmbox_perf: +55 for the re-enabled Qwen2.5-72B TTTv2 e2e leg (cold 72B cache build).
-    # Prior 64 covered the other tier-3 T3K legs (sum 55); new tier-3 T3K sum is 110, so 120 keeps
-    # 10 min of headroom rather than sitting exactly on the cap (110/110 would fail on the next leg).
-    wh_llmbox_perf: 120
+    wh_llmbox_perf: 64
     wh_n150: 42
     wh_n300: 15
     bh_p150: 7
