@@ -23,55 +23,35 @@ def _make_input(shape, dtype):
     return torch.rand(shape, dtype=torch.bfloat16)
 
 
+_DTYPES = [ttnn.bfloat16, ttnn.float32, ttnn.int32]
+_DTYPE_IDS = ["bfloat16", "float32", "int32"]
+
 _ROUTING = [
-    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([1, 1, 64, 32], {"repeats": 2, "dim": 2}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([1, 1, 64, 32], {"repeats": 2, "dim": 2}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([1, 1, 64, 32], {"repeats": 2, "dim": 2}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([1, 32, 64], {"repeats": 2, "dim": 1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([1, 32, 64], {"repeats": 2, "dim": 1}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([1, 32, 64], {"repeats": 2, "dim": 1}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([2, 3, 32, 8], {"repeats": 2, "dim": 2}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([2, 3, 32, 8], {"repeats": 2, "dim": 2}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([2, 3, 32, 8], {"repeats": 2, "dim": 2}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([2, 3, 4, 8], {"repeats": 3, "dim": 2}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([2, 3, 4, 8], {"repeats": 3, "dim": 2}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([2, 3, 4, 8], {"repeats": 3, "dim": 2}, ttnn.int32, ttnn.TILE_LAYOUT),
-    ([4, 6, 8], {"repeats": 2, "dim": 1}, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ([4, 6, 8], {"repeats": 2, "dim": 1}, ttnn.float32, ttnn.TILE_LAYOUT),
-    ([4, 6, 8], {"repeats": 2, "dim": 1}, ttnn.int32, ttnn.TILE_LAYOUT),
+    # within-stick (last W) dim deferred for RM path
+    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}, ttnn.ROW_MAJOR_LAYOUT),
+    # sub-tile (last two) dims deferred for TILE path
+    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}, ttnn.TILE_LAYOUT),
+    ([1, 1, 64, 32], {"repeats": 2, "dim": 2}, ttnn.TILE_LAYOUT),
+    ([1, 32, 64], {"repeats": 2, "dim": 1}, ttnn.TILE_LAYOUT),
+    ([2, 3, 32, 8], {"repeats": 2, "dim": 2}, ttnn.TILE_LAYOUT),
+    ([2, 3, 4, 8], {"repeats": 3, "dim": 2}, ttnn.TILE_LAYOUT),
+    ([4, 6, 8], {"repeats": 2, "dim": 1}, ttnn.TILE_LAYOUT),
 ]
 _ROUTING_IDS = [
-    "[1, 1, 32, 64]|dim=3&repeats=2|bfloat16|row_major",
-    "[1, 1, 32, 64]|dim=3&repeats=2|bfloat16|tile",
-    "[1, 1, 32, 64]|dim=3&repeats=2|float32|row_major",
-    "[1, 1, 32, 64]|dim=3&repeats=2|float32|tile",
-    "[1, 1, 32, 64]|dim=3&repeats=2|int32|row_major",
-    "[1, 1, 32, 64]|dim=3&repeats=2|int32|tile",
-    "[1, 1, 64, 32]|dim=2&repeats=2|bfloat16|tile",
-    "[1, 1, 64, 32]|dim=2&repeats=2|float32|tile",
-    "[1, 1, 64, 32]|dim=2&repeats=2|int32|tile",
-    "[1, 32, 64]|dim=1&repeats=2|bfloat16|tile",
-    "[1, 32, 64]|dim=1&repeats=2|float32|tile",
-    "[1, 32, 64]|dim=1&repeats=2|int32|tile",
-    "[2, 3, 32, 8]|dim=2&repeats=2|bfloat16|tile",
-    "[2, 3, 32, 8]|dim=2&repeats=2|float32|tile",
-    "[2, 3, 32, 8]|dim=2&repeats=2|int32|tile",
-    "[2, 3, 4, 8]|dim=2&repeats=3|bfloat16|tile",
-    "[2, 3, 4, 8]|dim=2&repeats=3|float32|tile",
-    "[2, 3, 4, 8]|dim=2&repeats=3|int32|tile",
-    "[4, 6, 8]|dim=1&repeats=2|bfloat16|tile",
-    "[4, 6, 8]|dim=1&repeats=2|float32|tile",
-    "[4, 6, 8]|dim=1&repeats=2|int32|tile",
+    # within-stick (last W) dim deferred for RM path
+    "[1, 1, 32, 64]|dim=3&repeats=2|row_major",
+    # sub-tile (last two) dims deferred for TILE path
+    "[1, 1, 32, 64]|dim=3&repeats=2|tile",
+    "[1, 1, 64, 32]|dim=2&repeats=2|tile",
+    "[1, 32, 64]|dim=1&repeats=2|tile",
+    "[2, 3, 32, 8]|dim=2&repeats=2|tile",
+    "[2, 3, 4, 8]|dim=2&repeats=3|tile",
+    "[4, 6, 8]|dim=1&repeats=2|tile",
 ]
 
 
-@pytest.mark.parametrize("shape,kwargs,dtype,layout", _ROUTING, ids=_ROUTING_IDS)
+@pytest.mark.parametrize("dtype", _DTYPES, ids=_DTYPE_IDS)
+@pytest.mark.parametrize("shape,kwargs,layout", _ROUTING, ids=_ROUTING_IDS)
 def test_repeat_interleave_codegen_routing(device, shape, kwargs, dtype, layout):
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
