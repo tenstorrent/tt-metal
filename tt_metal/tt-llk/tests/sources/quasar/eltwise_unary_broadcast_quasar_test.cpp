@@ -57,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(unpack_to_dest ? td_val_A : td_val_B);
     }
 
-    _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(
+    _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, unpack_to_dest>(
         unpack_to_dest ? buf_desc_id_a : buf_desc_id_b, tiles_in_block /* num tiles per unpack */);
 
     for (std::uint32_t block = 0; block < num_blocks; block++)

@@ -79,9 +79,7 @@ inline void llk_unpack_A_init(
             }
         } else {
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest, is_fp32_dest_acc_en>(
-                operand_id, 1);
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(operand_id, 1);
         }
     }
 }

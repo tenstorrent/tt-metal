@@ -20,12 +20,10 @@ using namespace ckernel;
  * @tparam UNP_SEL: Unpacker select; must be UNP_B unless unpack_to_dest (then UNP_A), values = <p_unpacr::UNP_A/UNP_B>
  * @tparam BROADCAST_TYPE: Broadcast type, values = <COL/ROW/SCALAR>
  * @tparam unpack_to_dest: When true, unpack targets math dest (UNP_A); otherwise SrcB (UNP_B), values = <true/false>
- * @tparam is_fp32_dest_acc_en: Float32 dest accumulation enable. Must be false when unpack_to_dest is true
- *         until that path is supported (enforced by static_assert below), values = <true/false>
  * @param buf_desc_id: Buffer descriptor for the UNPACR source.
  * @param num_tiles: Outer MOP loop count (tiles to unpack from L1).
  */
-template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false>
 inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert(
@@ -117,18 +115,17 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
  * @tparam UNP_SEL: Unpacker resource; must be UNP_B unless unpack_to_dest, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam BROADCAST_TYPE: Broadcast type, values = <COL/ROW/SCALAR>
  * @tparam unpack_to_dest: Route unpack to dest (UNP_A) vs SrcB (UNP_B), values = <true/false>
- * @tparam is_fp32_dest_acc_en: Forwarded to mop_config; must be false when unpack_to_dest is true, values = <true/false>
  * @param buf_desc_id: Buffer descriptor for the UNPACR source.
  * @param num_tiles: Number of tiles in the outer unpack loop.
  * @note On the math thread, pair with @ref _llk_math_eltwise_unary_broadcast_init_ (T1) with matching BROADCAST_TYPE/unpack_to_dest.
  * @note @ref _llk_unpack_unary_broadcast_operands_ is the matching execute call on this thread.
  */
-template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false>
 inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-    _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(buf_desc_id, num_tiles);
+    _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, unpack_to_dest>(buf_desc_id, num_tiles);
 }
 
 /**
