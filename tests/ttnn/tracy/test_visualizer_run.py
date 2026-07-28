@@ -9,8 +9,6 @@ import os
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from tracy.visualizer_run import (
     MANIFEST_FILENAME,
     RUN_ID_METADATA_KEY,
@@ -237,12 +235,12 @@ def test_write_manifest_json_stays_under_report_dir(tmp_path):
     assert written.name == MANIFEST_FILENAME
 
 
-def test_write_manifest_json_rejects_outside_allowlist(tmp_path, monkeypatch):
+def test_write_manifest_json_rejects_outside_allowlist(tmp_path, monkeypatch, expect_error):
     """Manifest writes must stay under safelisted roots (cwd/generated/temp/env)."""
     monkeypatch.delenv("TT_METAL_HOME", raising=False)
     monkeypatch.delenv("TT_METAL_PROFILER_DIR", raising=False)
     # Point allowlist away from this path by using a dir that is not under cwd/temp.
     # On typical CI/dev, /etc is outside the allowlist.
     outside = Path("/etc")
-    with pytest.raises(ValueError, match="allowlisted roots"):
+    with expect_error(ValueError, "allowlisted roots"):
         _write_manifest_json({RUN_ID_METADATA_KEY: "x"}, report_dir=outside)
