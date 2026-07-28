@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
             processed += w[3];
             lapped += w[4];
         }
-        auto est = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)eth_stats_addr, 9 * sizeof(uint32_t));
+        auto est = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)eth_stats_addr, 10 * sizeof(uint32_t));
         if (est[3] > max_drop) {
             max_drop = est[3];
         }
@@ -235,6 +235,16 @@ int main(int argc, char** argv) {
                 est[2],
                 (unsigned long long)valid,
                 est[3]);
+            // DIAGNOSTIC: read the eth stats slots the ctrl kernel writes AND each worker's pushed kWHead in
+            // the SAME sample -> pin down the publish-side bug. eth stats[2]=PKT_END (host-read live head),
+            // stats[8]=iters (ctrl loop count). If a worker's kWHead != eth stats[2], the NoC-write push
+            // source read a stale/uncommitted L1 slot (the store-visibility hypothesis).
+            std::printf("      DIAG eth stats: [2]PKT_END=%u [8]iters=%u [9]nreg=%u | worker kWHead:", est[2], est[8], est[9]);
+            for (uint32_t i = 0; i < nworkers; ++i) {
+                auto kh = cluster.read_core<uint32_t>(device->id(), wphys[i], kWHead, sizeof(uint32_t));
+                std::printf(" w%u=%u", i, kh[0]);
+            }
+            std::printf("\n");
             std::fflush(stdout);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));

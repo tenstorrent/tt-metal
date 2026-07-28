@@ -50,23 +50,30 @@ void kernel_main() {
 
     tt_rdma_rxq_init(TT_RDMA_RX_QUEUE, rx_buf, rx_buf_size, /*wrap=*/1u);  // raw BUF_WRAP; MAC lands freely
     const uint32_t qb = TT_ETH_RXQ0_BASE + TT_RDMA_RX_QUEUE * TT_ETH_RXQ_STRIDE;
+    // Head push-source: staged in RDMA-L1 (TX_BUF0), NOT the stats region. stats lives in the RCB/DBG
+    // region, which is base-FW-owned: a RISC C++ store there is host-visible via NoC, but a noc_async_write
+    // that READS it as SOURCE returns stale (same failure that made writes to RCB/DBG not reach workers ->
+    // the gen counter had to move to MR slot 63). TX_BUF0 is a proven-good noc_async_write source.
+    volatile tt_l1_ptr uint32_t* head_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR);
 
     uint32_t iters = 0, n_reg = 0;
     for (;;) {
         // Publish the produce head (+ diagnostics) -- the workers read stats[2] = PKT_END_CNT.
+        const uint32_t pkt_end = TT_ETH_REG32(qb + TT_ETH_RXQ_PKT_END_CNT);  // produce head (single read)
         stats[0] = TT_ETH_REG32(qb + TT_ETH_RXQ_WORD_CNT);
         stats[1] = TT_ETH_REG32(qb + TT_ETH_RXQ_BYTE_CNT);
-        stats[2] = TT_ETH_REG32(qb + TT_ETH_RXQ_PKT_END_CNT);  // produce head
+        stats[2] = pkt_end;  // host-visible produce head (stats region is NoC-readable for the host)
         stats[3] = TT_ETH_REG32(qb + TT_ETH_RXQ_PACKET_DROP_CNT);
         stats[4] = TT_ETH_REG32(qb + TT_ETH_RXQ_BUF_PTR);
         stats[8] = ++iters;
         stats[9] = n_reg;  // MR registrations fulfilled by the control plane
 
-        // 3.1f: PUSH the produce head (PKT_END) to each worker's LOCAL L1. Workers then read it locally --
-        // no NoC read of this eth core (that returned stale values at large frame stride). Source is the
-        // just-written stats[2] in this core's L1 (NoC-write source must be L1). Cheap: N x 4-byte writes.
+        // 3.1f: PUSH the produce head to each worker's LOCAL L1 so workers read it locally (no NoC read of
+        // this eth core). Stage in TX_BUF0 (RDMA-L1) -- the noc_async_write SOURCE must be a proven-good
+        // RDMA-L1 slot, NOT the RCB/DBG stats region (base-FW-owned: NoC source-reads there return stale).
+        head_stage[0] = pkt_end;
         for (uint32_t w = 0; w < nw; ++w) {
-            noc_async_write(stats_addr + 8u, get_noc_addr(wx[w], wy[w], head_local), 4u);
+            noc_async_write(TT_RDMA_TX_BUF0_ADDR, get_noc_addr(wx[w], wy[w], head_local), 4u);
         }
         noc_async_write_barrier();
 
