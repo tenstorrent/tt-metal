@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# VAE encoder posterior on device (mirrors ref/cond_vae_encode.DiagonalGaussianDistribution).
+# VAE encoder posterior on device (mirrors ref/cond_encode.DiagonalGaussianDistribution).
 
 from __future__ import annotations
 

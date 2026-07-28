@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Shared fixtures/helpers for the HunyuanImage-3.0 KV-cache PCC tests
-# (test_kv_cache_prefill.py, test_kv_cache_decode.py).
+# (test_kv_cache.py; also feeds test_prefill_sp2_pcc.py).
 #
 # Mirrors the devstral2 decoder_pcc_common.py split (prefill vs decode, PCC-gated
 # vs a full-precision reference) but adapted to the Hunyuan backbone's KV-cache

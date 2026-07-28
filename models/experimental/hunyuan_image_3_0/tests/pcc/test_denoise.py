@@ -37,20 +37,21 @@ from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder impo
 from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
 from models.experimental.hunyuan_image_3_0.ttnn.pipeline import HunyuanTtDenoiseStep, denoise_loop
 from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
-from denoise_helpers import (
+from pcc_common import PIPELINE_LAYOUT_FAST, PIPELINE_LAYOUT_PROD, pcc_metrics, transformer_cfg
+from pipeline_helpers import (
     denoise_steps,
     host_step_pcc_threshold,
     loop_pcc_threshold,
     num_layers_loop,
     num_layers_step,
+    patch_embed_dims,
     reference_host_step,
     reference_loop,
+    reference_time_embed,
     resident_loop_pcc_threshold,
     run_denoise_loop_tt,
     run_host_routed_step_tt,
 )
-from pcc_common import PIPELINE_LAYOUT_FAST, PIPELINE_LAYOUT_PROD, pcc_metrics, transformer_cfg
-from pipeline_helpers import patch_embed_dims, reference_time_embed
 
 BATCH = 1
 LAYOUT_FAST = [("fast", PIPELINE_LAYOUT_FAST)]

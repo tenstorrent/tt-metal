@@ -90,9 +90,7 @@ import ttnn
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
 from models.experimental.hunyuan_image_3_0.ref.safe_paths import safe_join
-from models.experimental.hunyuan_image_3_0.ref.image_gen.model_loaders import (
-    load_timestep_embedder,
-)
+from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import load_timestep_embedder
 from dataclasses import replace
 
 from models.experimental.hunyuan_image_3_0.ref.recaption import (
@@ -149,7 +147,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.vision.i2i_bundle import (
 )
 from models.experimental.hunyuan_image_3_0.ttnn.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
-from models.experimental.hunyuan_image_3_0.ttnn.trace_config import (
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import (
     invalidate_cond_encode_traces,
     open_pipeline_mesh,
     print_trace_policy,

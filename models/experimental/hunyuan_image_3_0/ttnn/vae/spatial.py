@@ -321,8 +321,7 @@ def enable_vae_spatial(module, ccl, *, h_mesh_axis, w_mesh_axis) -> None:
     `ccl/h_mesh_axis/w_mesh_axis`. No constructor signatures change.
     """
     from models.tt_dit.layers.module import Module, ModuleList
-    from .conv3d import HunyuanSymmetricConv3d
-    from .resnet_conv import HunyuanResnetConvPair
+    from .conv3d import HunyuanResnetConvPair, HunyuanSymmetricConv3d
 
     if isinstance(module, HunyuanSymmetricConv3d):
         module.ccl = ccl

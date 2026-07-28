@@ -36,8 +36,9 @@ if str(PCC_DIR) not in sys.path:
     sys.path.insert(0, str(PCC_DIR))
 
 from models.experimental.hunyuan_image_3_0.ref.weights import load_prefixed_state_dict, resolve_base_model_dir
-from denoise_helpers import (
+from pipeline_helpers import (
     clear_ref_layer_cache,
+    patch_embed_dims,
     production_loop_pcc_threshold,
     reference_loop,
     run_denoise_loop_tt,
@@ -123,8 +124,6 @@ def test_denoise_loop_production_32l_pcc():
     grid = layout["grid"]
     s = layout["seq_len"]
     assert grid == 64 and s == 4160, f"expected production layout, got GRID={grid} S={s}"
-
-    from pipeline_helpers import patch_embed_dims
 
     latent_ch, _, _ = patch_embed_dims(down_sd)
     thr = production_loop_pcc_threshold(num_layers, steps)

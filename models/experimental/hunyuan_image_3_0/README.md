@@ -61,23 +61,27 @@ The implementation has been validated on the following Tenstorrent Blackhole pla
 ```
 hunyuan_image_3_0/
 ├── demo/         # Runnable end-to-end demos (demo.py T2I, demo_i2i.py I2I / Distil)
-├── ref/          # PyTorch reference, mirrored block-for-block against tt/
+├── ref/          # PyTorch reference, mirrored block-for-block against ttnn/
 │   ├── attention/    # RMSNorm, RoPE, attention, mask (reference)
-│   ├── image_gen/    # Patch embed, timestep embedder, sequence scatter (reference)
+│   ├── image_gen/    # Patch embed + loader, timestep embedder + loader, input instantiate
 │   ├── moe/          # Router/gate, expert MLP, MoE block (reference)
 │   ├── tokenizer/    # Host tokenizer (HunyuanTokenizer) + assets
 │   ├── vae/          # VAE encoder/decoder Conv3D blocks (reference)
-│   └── vision/       # SigLIP2 encoder + image preprocess (reference)
-├── tt/           # TTNN device port (see Model Modules below)
+│   ├── vision/       # SigLIP2 encoder + aligner + image preprocess (reference)
+│   └── cond_encode.py    # I2I cond-image encode glue (VAE latents + SigLIP2 pack)
+├── ttnn/         # TTNN device port (see Model Modules below)
 │   ├── attention/    # RMSNorm, RoPE, attention, mask
-│   ├── image_gen/    # Patch embed, timestep embedder, sequence scatter
+│   ├── image_gen/    # Patch embed, timestep embedder, cond instantiate + sequence scatter
 │   ├── moe/          # Router/gate, expert MLP, MoE block, tensor-parallel
-│   ├── vae/          # VAE encoder/decoder + spatial-parallel decode
-│   └── vision/       # SigLIP2 encoder, cond-vision injection, I2I pipeline
-├── tests/        # PCC / parity / perf gates for every block
-│   ├── pcc/          # Per-block PCC tests vs ref/
-│   └── perf/         # Performance benchmarks
-└── scripts/      # Helper / utility scripts
+│   ├── vae/          # Conv3D primitives (3x3x3 / ResNet-pair / pointwise), encoder,
+│   │                 #   decoder, spatial-parallel decode, cond posterior
+│   ├── vision/       # SigLIP2 encoder, cond-vision injection, I2I pipeline
+│   ├── dual_cq.py    # Trace / 2CQ policy + per-stage coordinators
+│   ├── ar_trace.py   # Chunked KV prefill + AR decode trace
+│   └── pipeline.py   # Init noise + denoise step + denoise_loop + VAE decode glue
+└── tests/        # PCC / parity / perf gates for every block
+    ├── pcc/          # Per-block PCC tests vs ref/ (+ shared *_helpers.py rigs)
+    └── perf/         # Performance benchmarks
 ```
 
 ## Model Modules
@@ -115,21 +119,18 @@ full sequence length**, targeting the default **1024×1024** image size (product
 | Patch embed / final layer | `ttnn/image_gen/patch_embed.py` | `UNetDown` patchify / `UNetUp` unpatchify |
 | Patch-embed conv configs | `ttnn/image_gen/patch_embed_conv_configs.py` | Conv program configs for patch embed |
 | Timestep embedder | `ttnn/image_gen/timestep_embedder.py` | Diffusion timestep → embedding |
-| Sequence scatter | `ttnn/image_gen/sequence_scatter.py` | Scatter image latent into the token sequence |
-| Cond instantiation | `ttnn/image_gen/cond_instantiate.py` | Build gen-image / cond input tensors |
+| Cond instantiation / sequence scatter | `ttnn/image_gen/cond_instantiate.py` | Build gen-image / cond input tensors + scatter them into the token sequence |
 | Flow-matching scheduler | `ttnn/scheduler.py` | Euler flow-matching denoise scheduler |
-| Init-noise sampling | `ttnn/noise.py` | On-device `ttnn.randn` initial latent noise |
-| Denoise pipeline | `ttnn/pipeline.py` | Single denoise step + multi-step `denoise_loop` |
+| Denoise pipeline | `ttnn/pipeline.py` | Init-noise sampling + single denoise step + multi-step `denoise_loop` |
 
 ### VAE
 
 | Module | File path | Description |
 |--------|-----------|-------------|
-| Conv3D primitive | `ttnn/vae/conv3d.py`, `ttnn/vae/conv3d_blockings.py` | 3D convolution + blocking/tiling configs |
+| Conv3D primitives | `ttnn/vae/conv3d.py`, `ttnn/vae/conv3d_blockings.py` | 3x3x3 / ResNet-pair / pointwise convolutions + blocking configs |
 | Encoder | `ttnn/vae/encoder.py` | VAE encoder blocks |
 | Decoder | `ttnn/vae/decoder.py` | VAE decoder blocks |
 | Encoder + decoder weights | `ttnn/vae/weights.py` | Shared VAE weight loading (ResNet/attn blocks, GroupNorm affine) |
-| ResNet conv / pointwise | `ttnn/vae/resnet_conv.py`, `ttnn/vae/pointwise.py` | ResNet conv and pointwise conv helpers |
 | Spatial-parallel decode | `ttnn/vae/spatial.py` | Full-res H/W-spatial-parallel decode across mesh |
 | Cond posterior | `ttnn/vae/cond_posterior.py` | I2I conditioning latent encode (posterior) |
 
@@ -148,16 +149,15 @@ full sequence length**, targeting the default **1024×1024** image size (product
 |--------|-----------|-------------|
 | AR sampling loop | `ttnn/generate.py` | Token sampling loop + stage forcing |
 | Device sampling | `ttnn/device_sampling.py` | On-device `topk` / `sampling` ops |
-| AR prefill | `ttnn/ar_prefill.py` | Chunked KV prefill for long prefixes |
 | Recaption orchestration | `ttnn/recaption.py` | Host recaption/think orchestration |
 
 ### Trace, dual-CQ & parallelism
 
 | Module | File path | Description |
 |--------|-----------|-------------|
-| Stage trace | `ttnn/stage_trace.py`, `ttnn/trace_config.py` | CQ0 `execute_trace` for denoise / VAE + config |
-| Dual-CQ (AR / denoise / VAE) | `ttnn/dual_cq.py` | 2CQ async D2H: logits, latent, RGB output |
-| AR decode trace | `ttnn/ar_trace.py` | AR decode `execute_trace` |
+| Stage trace | `ttnn/stage_trace.py` | CQ0 `execute_trace` for denoise / VAE |
+| Trace / 2CQ (AR / denoise / VAE) | `ttnn/dual_cq.py` | Trace policy + 2CQ async D2H: logits, latent, RGB output |
+| AR prefill + decode trace | `ttnn/ar_trace.py` | Chunked KV prefill + AR decode `execute_trace` |
 | Cond-encode trace | `ttnn/cond_encode_trace.py` | Trace for I2I cond VAE + ViT encode |
 | Mesh / parallel utilities | `ttnn/parallel_utils.py`, `ttnn/matmul_utils.py` | Mesh sharding + matmul program-config helpers |
 
@@ -192,15 +192,12 @@ PyTorch `ref/` path; perf tests profile device timing via tracy.
 | `test_pipeline.py` | Single denoise step + e2e latent/RGB pipeline PCC |
 | `test_denoise.py` | Multi-step `denoise_loop` PCC (timestep, Euler, CFG) |
 | `test_teacher_forced.py` | Teacher-forced final PCC + per-layer bf16/bf8 precision audit |
-| `test_kv_cache_prefill.py` | KV-cache prefill correctness |
-| `test_kv_cache_decode.py` | KV-cache incremental single-token decode |
+| `test_kv_cache.py` | KV-cache prefill correctness + incremental single-token decode |
 | `test_prefill_sp2_pcc.py` | Prefill under sequence-parallel (`sp=2`) |
 | `test_recaption.py` | Recaption/think AR orchestration (greedy token parity) |
-| `test_vae_encoder.py` | VAE encoder block PCC |
-| `test_vae_decoder.py` | VAE decoder block PCC |
+| `test_vae.py` | VAE encoder + decoder block PCC |
 | `test_vae_decode_pipeline.py` | Full `decode_latent` glue + spatial decode vs fp32 ref |
-| `test_siglip2_ttnn.py` | SigLIP2 encoder + aligner PCC |
-| `test_siglip2_full_dim.py` | Full 27L vision @ S=1024 (32×32 patches) vs fp32 ref |
+| `test_siglip2_ttnn.py` | SigLIP2 encoder + aligner PCC (smoke S=64/1L + `@slow` full-dim 27L @ S=1024) |
 
 ### Performance (`tests/perf/`)
 
@@ -295,9 +292,9 @@ The following PCCs were measured against the PyTorch reference implementation
 | | All-layers production prefill S=4160 (32L, worst) | 0.999790 |
 | | Final production decode S=1 (32L) | 0.99995817 |
 | | Final production prefill S=4160 (32L) | 0.99989751 |
-| `test_kv_cache_prefill.py` | Prefill sanity ISL=128 (32L) | 0.971850 / 0.973826 |
+| `test_kv_cache.py` | Prefill sanity ISL=128 (32L) | 0.971850 / 0.973826 |
 | | Prefill sanity ISL=22800 (32L) | 0.947658 / 0.951536 |
-| `test_kv_cache_decode.py` | Decode ISL=512 (step 8) | 0.999782 / 0.999713 |
+| | Decode ISL=512 (step 8) | 0.999782 / 0.999713 |
 | | Decode ISL=22800 (step 1) | 0.995632 / 0.997369 |
 | `test_prefill_sp2_pcc.py` | 32L SP=2 TP=2 ISL=128 (bf8) | hidden 0.983526 / logits 0.983150 |
 | | 32L SP=2 TP=2 ISL=2560 (bf8) | hidden 0.964825 / logits 0.963133 |
@@ -305,18 +302,18 @@ The following PCCs were measured against the PyTorch reference implementation
 | | 2L KV trace vs eager | n/a (token match, PASSED) |
 | | 2L 2CQ vs 1CQ / host ref | n/a (token match, PASSED) |
 | | 32L 2×2 resident EP/TP/SP greedy | n/a (token match, PASSED) |
-| `test_vae_encoder.py` | conv_in | 0.999884 |
+| `test_vae.py` (encoder) | encoder conv_in | 0.999884 |
 | | down_block_0 | 0.999686 |
 | | down_block_1 | 0.999592 |
 | | down_block_2 | 0.999040 |
 | | down_block_3 | 0.999623 |
 | | down_block_4 | 0.999807 |
 | | encoder_down | 0.999387 |
-| | mid | 0.999215 |
+| | encoder mid | 0.999215 |
 | | encoder_head | 0.999974 |
 | | full_encoder | 0.998731 |
-| `test_vae_decoder.py` | conv_in | 0.999968 |
-| | mid | 0.999761 |
+| `test_vae.py` (decoder) | decoder conv_in | 0.999968 |
+| | decoder mid | 0.999761 |
 | | up_block_0 | 0.999483 |
 | | up_block_1 | 0.998373 |
 | | up_block_2 | 0.998433 |
@@ -336,7 +333,7 @@ The following PCCs were measured against the PyTorch reference implementation
 | | vision 1L (masked / no mask) | 0.999950 / 0.999951 |
 | | Vision Aligner | 0.999992 |
 | | e2e vision+aligner 1L | 0.999986 |
-| `test_siglip2_full_dim.py` | vision 27L S=1024 | 0.998769 |
+| | vision 27L S=1024 (full-dim) | 0.998769 |
 | | e2e vision+aligner 27L S=1024 | 0.999743 |
 
 ## Performance Summary
@@ -620,8 +617,8 @@ both names are listed.
 ### Test / benchmark-only knobs
 
 Used only by `tests/` (not the demos). PCC gates: `HY_LATENT_PCC`, `HY_RGB_PCC`,
-`HY_DENOISE_LOOP_PCC`, `HY_VIT_PCC_THR`, `HY_RUN_E2E_RANDOM`, `HY_NUM_LAYERS_MAXSEQ`,
-`HY_PCC_CSV`, `HY_PCC_CSV_DIR`. Perf sweeps: `HY_ITERS`, `HY_S`, `HY_DECODE_STEPS`,
+`HY_DENOISE_LOOP_PCC`, `HY_VIT_PCC_THR`, `HY_RUN_E2E_RANDOM`, `HY_NUM_LAYERS_MAXSEQ`.
+Perf sweeps: `HY_ITERS`, `HY_S`, `HY_DECODE_STEPS`,
 `HY_PREFILL_ISL`, `HY_PERF_TOKEN_POS`, `HY_DENOISE_PERF_ITERS`, `HY_DENOISE_PERF_WARMUP`,
 `HY_DENOISE_GRID`, `HY_DENOISE_TEXT_PRE`, `HY_DENOISE_TEXT_POST`, `HY_DENOISE_RESIDENT_TEMB`,
 `HY_ENCODER_PERF_*`, `HY_CONV3D_SWEEP_*`, `HY_PATCH_EMBED_CONV_*`, `HY_VIT_SEQ`.
@@ -655,7 +652,7 @@ checks recover to **~0.99** (see `test_teacher_forced.py` in [PCC Results](#pcc-
 
 ```bash
 HY_MAX_ISL=22800 HY_DECODE_STEPS=1 python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache_decode.py -v -s
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache.py -k decode -v -s
 ```
 
 | ISL | Step | hidden_pcc | logits_pcc |
@@ -668,11 +665,11 @@ HY_MAX_ISL=22800 HY_DECODE_STEPS=1 python_env/bin/python -m pytest \
 ```bash
 # 2-layer default (fast gate)
 HY_MAX_ISL=22800 python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache_prefill.py -k sanity -v -s
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache.py -k "prefill and sanity" -v -s
 
 # Full 32-layer stack
 HY_NUM_LAYERS=32 HY_MAX_ISL=22800 python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache_prefill.py -k sanity -v -s
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache.py -k "prefill and sanity" -v -s
 ```
 
 | ISL | Layers | hidden_pcc | logits_pcc | Notes |

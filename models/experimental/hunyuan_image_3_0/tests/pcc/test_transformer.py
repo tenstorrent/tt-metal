@@ -6,7 +6,6 @@
 #   - Mesh parallel decoder layer (bf8 EP vs dense bf16)
 #   - Resident sharded backbone (scale / memory)
 #   - Transformer weight-cache path helpers
-#   - ISL sweep CSV (decoder layer PCC)
 #   - Mesh integration: SP/TP/EP primitives (merged from test_parallel_2x2.py)
 #
 # Lean ISL: S=1, 32, 4096, 4160 (+ S=22784 max-context @pytest.mark.slow).
@@ -15,9 +14,6 @@
 # Run (fast):
 #   python_env/bin/python -m pytest \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_transformer.py -m "not slow" -v
-# ISL sweep CSV:
-#   HY_PCC_CSV=/tmp/hunyuan_transformer_isl.csv python_env/bin/python -m pytest \
-#     models/experimental/hunyuan_image_3_0/tests/pcc/test_transformer.py -k isl_sweep -v -s
 
 from __future__ import annotations
 
@@ -49,31 +45,93 @@ from models.experimental.hunyuan_image_3_0.ttnn.cache import cache_dir_is_set, t
 from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
 from models.experimental.hunyuan_image_3_0.ttnn.transformer_layer import HunyuanTtDecoderLayer
 from models.tt_dit.parallel.manager import CCLManager
-from mesh_helpers import (
-    build_mesh_model,
-    causal_mask,
-    mesh_ccl,
-    replicate_to_mesh,
-    run_embeds_forward,
-)
 from pcc_common import (
     DECODER_LAYER_PCC_CASES,
     LEAN_ISL_CASES,
     PRODUCTION_MODULE_CASES,
     PCC_BLOCK,
     image_slices_from_infos,
-    isl_csv_path,
     max_seq_tile_aligned,
     pcc_metrics,
     rope_image_infos,
     transformer_cfg,
-    write_isl_csv,
 )
 
 LAYER_NUM = 0
 PCC_PARALLEL = 0.97  # bf8 mesh parallel vs dense bf16
 NUM_LAYERS_RESIDENT = int(os.environ.get("HY_NUM_LAYERS", "8"))
 NUM_LAYERS_MAXSEQ = int(os.environ.get("HY_NUM_LAYERS_MAXSEQ", os.environ.get("HY_NUM_LAYERS", "2")))
+
+MESH_NL = int(os.environ.get("HY_NUM_LAYERS", "2"))
+
+
+# ---------------------------------------------------------------------------
+# 2x2 mesh SP/TP/EP helpers
+# ---------------------------------------------------------------------------
+def mesh_layer_loader(i: int) -> dict[str, torch.Tensor]:
+    sd = load_prefixed_state_dict(resolve_base_model_dir(), f"model.layers.{i}.")
+    prefix = f"model.layers.{i}."
+    return {f"{prefix}{k}": v for k, v in sd.items()}
+
+
+def mesh_ccl(mesh_device) -> CCLManager:
+    return CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+
+def replicate_to_mesh(mesh_device, t: torch.Tensor, *, dtype=ttnn.bfloat16):
+    return ttnn.from_torch(
+        t,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def build_mesh_model(
+    mesh_device, ccl, *, sp_factor: int = 1, tp_factor: int = 1, num_layers: int = MESH_NL
+) -> HunyuanTtModel:
+    c = transformer_cfg()
+    kwargs = dict(
+        num_layers=num_layers,
+        hidden_size=c["H"],
+        num_heads=c["HEADS"],
+        num_kv_heads=c["KV"],
+        head_dim=c["HD"],
+        num_experts=c["E"],
+        moe_topk=c["K"],
+        use_qk_norm=c["QKN"],
+        use_mixed_mlp_moe=c["MIXED"],
+        norm_topk_prob=c["NORM_TOPK"],
+        rms_norm_eps=c["EPS"],
+        weight_dtype=ttnn.bfloat16,
+        stream_experts=False,
+        layer_loader=mesh_layer_loader,
+        apply_final_norm=False,
+        ccl_manager=ccl,
+        sp_axis=0,
+        sp_factor=sp_factor,
+    )
+    if tp_factor > 1:
+        kwargs.update(tp_axis=1, tp_factor=tp_factor)
+    else:
+        kwargs["tp_factor"] = 1
+    return HunyuanTtModel(mesh_device, **kwargs)
+
+
+def causal_mask(seq_len: int) -> torch.Tensor:
+    return torch.triu(torch.full((seq_len, seq_len), -1.0e30), diagonal=1).reshape(1, 1, seq_len, seq_len)
+
+
+def run_embeds_forward(mesh_device, model, x: torch.Tensor, seq_len: int, mask: torch.Tensor) -> torch.Tensor:
+    out = model.forward(
+        inputs_embeds=replicate_to_mesh(mesh_device, x),
+        seq_len=seq_len,
+        attention_mask=replicate_to_mesh(mesh_device, mask),
+    )
+    return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[: x.shape[0]].float()
+
 
 DECODER_LAYER_FAST = [
     (mode, batch, seq_len, image_infos, label)
@@ -422,53 +480,6 @@ def test_backbone_max_seq(mesh_device):
     logger.info(f"max-seq forward OK: S={S} out={tuple(y.shape)} finite={bool(torch.isfinite(y).all())}")
     assert y.shape == (1, S, c["H"])
     assert torch.isfinite(y).all()
-
-
-# ---------------------------------------------------------------------------
-# ISL sweep CSV (decoder layer PCC)
-# ---------------------------------------------------------------------------
-@pytest.mark.slow
-def test_decoder_layer_isl_sweep_table(device, tmp_path):
-    rows = []
-    cases = DECODER_LAYER_FAST + DECODER_LAYER_SLOW
-    for mode, batch, seq_len, image_infos, label in cases:
-        infos = None if mode == "text" else image_infos
-        p, d = _decoder_layer_run(device, batch, seq_len, infos)
-        rows.append(
-            {
-                "module": "decoder_layer",
-                "mode": mode,
-                "batch": batch,
-                "seq_len": seq_len,
-                "label": label,
-                "pcc": f"{p:.8f}",
-                "max_abs_diff": f"{d:.6f}",
-                "threshold": PCC_BLOCK,
-                "pass": p >= PCC_BLOCK,
-            }
-        )
-        print(f"  Decoder layer {mode:5s} {label:40s}  S={seq_len:5d}  PCC={p:.8f}")
-
-    max_seq = max_seq_tile_aligned()
-    p, d = _decoder_layer_run(device, 1, max_seq)
-    rows.append(
-        {
-            "module": "decoder_layer",
-            "mode": "text",
-            "batch": 1,
-            "seq_len": max_seq,
-            "label": f"max context S={max_seq}",
-            "pcc": f"{p:.8f}",
-            "max_abs_diff": f"{d:.6f}",
-            "threshold": PCC_BLOCK,
-            "pass": p >= PCC_BLOCK,
-        }
-    )
-
-    out = isl_csv_path("hunyuan_transformer_isl.csv") or tmp_path / "hunyuan_transformer_isl.csv"
-    write_isl_csv(rows, out)
-    print(f"\nISL sweep CSV: {out}")
-    assert all(r["pass"] for r in rows)
 
 
 # ---------------------------------------------------------------------------

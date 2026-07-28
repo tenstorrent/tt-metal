@@ -17,9 +17,13 @@
 #     t_emb  = Linear(freq, hidden) -> GELU -> Linear(hidden, out)
 
 import math
+from pathlib import Path
 
 import torch
 import torch.nn as nn
+
+from models.experimental.hunyuan_image_3_0.ref.model_config import HIDDEN_SIZE
+from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR, load_prefixed_state_dict
 
 
 def timestep_embedding(t, dim, max_period=10000):
@@ -95,11 +99,32 @@ class TimestepEmbedder(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Checkpoint loader (real HunyuanImage-3.0 weights)
+# ---------------------------------------------------------------------------
+def load_timestep_embedder(
+    prefix: str,
+    model_dir: Path = MODEL_DIR,
+    *,
+    hidden_size: int = HIDDEN_SIZE,
+    dtype: torch.dtype = torch.float32,
+) -> TimestepEmbedder:
+    """Build TimestepEmbedder and load `<prefix>.*` weights.
+
+    `prefix` is one of timestep_emb / time_embed / time_embed_2 / guidance_emb /
+    timestep_r_emb — all share the same structure.
+    """
+    state = load_prefixed_state_dict(model_dir, f"{prefix}.", dtype=dtype)
+    module = TimestepEmbedder(hidden_size=hidden_size)
+    module.load_state_dict(state)
+    module.to(dtype=dtype)
+    module.eval()
+    return module
+
+
+# ---------------------------------------------------------------------------
 # Quick numeric smoke-test
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    from models.experimental.hunyuan_image_3_0.ref.model_config import HIDDEN_SIZE
-
     torch.manual_seed(42)
     H = HIDDEN_SIZE
     emb = TimestepEmbedder(H).eval()

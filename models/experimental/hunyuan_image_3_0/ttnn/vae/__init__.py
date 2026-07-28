@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from .conv3d import HunyuanSymmetricConv3d, promote_conv3d_fallback_to_exact
-from .pointwise import HunyuanPointwiseLinear
+from .conv3d import HunyuanPointwiseLinear, HunyuanSymmetricConv3d, promote_conv3d_fallback_to_exact
 from .decoder import (
     AttnBlockTTNN,
     ConvInTTNN,
