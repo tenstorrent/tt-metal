@@ -33,8 +33,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t buf_desc_id_a = 0;
     const std::uint32_t buf_desc_id_b = 1;
 
+    // no op for unpack thread.
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
+    // Configure the buffer descriptors for the two unpackers (SrcA operand tiles, SrcB single face tile). The unpacker MOP config will use these buffer
+    // descriptors to read the input data from L1.
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
     td_val_A = ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, buf_desc_id_a, formats.unpack_A_dst);
@@ -42,6 +45,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
     _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
+
+    // Configure unpacker engines with buffer descriptors.
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 
     // Block of TILE_CNT operand tiles (SrcA) + one scaler face (SrcB) -> one reduced result tile.

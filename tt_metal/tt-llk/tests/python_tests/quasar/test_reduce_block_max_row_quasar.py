@@ -36,7 +36,7 @@ from helpers.utils import passed_test
 
 # block_ct_dim values: 1 (single tile / first-tile init), 2, 4, 8 (multi-tile accumulation + DEST
 # bank switching across the block).
-BLOCK_CT_DIMS = [1]
+BLOCK_CT_DIMS = [1, 2, 4, 8]
 
 # 32x32 (num_faces=4) and 16x32 tiny tile (num_faces=2, a single input face-row).
 TILE_DIMENSIONS = [(32, 32), (16, 32)]

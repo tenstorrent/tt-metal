@@ -33,11 +33,16 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
     LLK_ASSERT(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
 
     const bool two_face_rows = (tensor_shape.num_faces_r_dim > 1);
-    // CHECKPOINT (known-incomplete): ZEROSRC advance between the pool pairs -- slot0 (F0,F1) exact,
-    // slot1 (F2,F3) a few columns short. This "pool both face-rows then transpose once" structure is
-    // structurally wrong for Quasar (see the compile-time header / project notes); left here as the
-    // least-wrong checkpoint pending the transpose-before-advance redesign.
-    const std::uint32_t pool_len = (two_face_rows ? 6u : 3u);
+    // dvalid-streaming pool. The unpacker writes every face to SrcA rows 0-15 and flips the write bank
+    // per face (see the unpacker's Dst_Face_Idx_Inc=0), so the two SrcA banks act as a double-buffer.
+    // Each GMPOOL reads rows 0-15 of the current read bank (ADDR_MOD_0 = no address advance) and
+    // CLR_SRCA_VLD clears that bank's dvalid -- which frees it for the unpacker to refill AND rotates the
+    // read bank to the next face. The four faces stream F0->F1->F2->F3 through the two rotating banks at
+    // a fixed address; the dst immediate routes F0,F1 -> slot0 and F2,F3 -> slot1.
+    // NOTE: GMPOOL consumes SrcA by bank rotation, NOT by an srca offset (that is the matmul/MVMUL
+    // model). An address-walk (Dst_Face_Idx_Inc=1 to rows 0/16/32/48 + srca+=16) was tried and fails --
+    // the faces scatter across both banks and the walk reads never-written rows.
+    const std::uint32_t pool_len = (two_face_rows ? 5u : 3u);
 
     load_replay_buf(
         0,
@@ -47,13 +52,18 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
         0,
         [two_face_rows]
         {
-            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-            TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0); // F0 -> slot0, consume + rotate bank
+            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0); // F1 -> slot0, consume + rotate bank
             if (two_face_rows)
             {
-                TTI_ZEROSRC(0, 0, 0, 0, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
-                TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST);
-                TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST);
+                TTI_GMPOOL(
+                    p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST); // F2 -> slot1, consume + rotate bank
+                TTI_GMPOOL(
+                    p_gpool::CLR_NONE,
+                    p_gpool::DIM_16X16,
+                    ADDR_MOD_0,
+                    p_gpool::INDEX_DIS,
+                    REDUCE_BLOCK_SLOT1_DST); // F3 -> slot1, keep valid (last face, nothing to hand off to)
             }
             TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_AB);
         });
@@ -92,8 +102,11 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 
     _set_dst_write_addr_by_rows_(dst_index);
 
+    // POOL PHASE: run the MOP to stream every face through the rotating SrcA banks, pooling
+    // F0,F1 -> slot0 and F2,F3 -> slot1.
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 
+    // TRANSPOSE PHASE: transpose each pooled row partial into a column (once).
     const bool two_face_rows = (tensor_shape.num_faces_r_dim > 1);
     const bool wide_face     = (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS);
 

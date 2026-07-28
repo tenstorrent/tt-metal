@@ -70,10 +70,8 @@ inline void reduce_block_max_row_configure_addrmod()
     }
         .set(ADDR_MOD_1);
 
-    // ADDR_MOD_2: advance the SrcA read by one face (FACE_R_DIM rows) without a CLR. Used on the
-    // second pool of the first face-row pair to step SrcA from F1 to F2, so the second pair reads
-    // F2 & F3 (a CLR_SRCA_VLD there, or a SETRWC(CLR_A) between the pairs, instead breaks the pool
-    // and zeros DEST). Not used by the transpose (which uses ADDR_MOD_0 / ADDR_MOD_1).
+    // ADDR_MOD_2: srca += one face (FACE_R_DIM rows), no CLR. Present for experiments; NOT used by
+    // the checkpoint pool (which advances face-rows with ZEROSRC) or the transpose (ADDR_MOD_0/1).
     addr_mod_t {.srca = {.incr = FACE_R_DIM}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0}}.set(ADDR_MOD_2);
 }
 
@@ -88,13 +86,14 @@ inline void reduce_block_max_row_transpose_face_row(const bool wide_face)
     // Move the row partial into SrcB rows [16-31], transposed into rows [32-47].
     TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1, 0);
     TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, 0);
-    TTI_ZEROSRC(0, 0, 0, 0, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
-    // Write the transposed column back to DEST (ADDR_MOD_1 advances DEST/SrcB by ELTWISE_MATH_ROWS).
-    TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_1, 0x0);
+    // Write the transposed column back to DEST via plain MOVB2D (SrcB rows 32-47 -> DEST), instead of
+    // ZEROSRC + ELWADDDI. Mirrors native _reduce_row_transpose_fpu_ step 4 (MOVB2D writeback). First
+    // move covers DEST rows 0-7.
+    TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
     if (wide_face)
     {
-        // face_r_dim > ELTWISE_MATH_ROWS (full 16-row face): second write covers rows 8-15.
-        TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_1, 0x0);
+        // face_r_dim > ELTWISE_MATH_ROWS (full 16-row face): second move covers DEST rows 8-15.
+        TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
     }
 }
 
