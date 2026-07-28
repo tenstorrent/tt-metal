@@ -273,28 +273,6 @@ protected:
     // "a binder runs outside the semaphore's node" case for the cached-pool guard.
     experimental::Nodes kernel_target_{core};
 
-    // Build (but do not run) a minimal ProgramSpec with a COMPUTE kernel binding the semaphore, to
-    // exercise the cached-pool "no compute binder" guard. Validation only; no JIT/kernel execution.
-    void make_program_with_compute_binder(SemaphoreScope scope) {
-        experimental::SemaphoreSpec sem{
-            .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
-        sem.scope = scope;
-        const experimental::KernelSpecName K{"compute_k"};
-        experimental::KernelSpec ks{
-            .unique_id = K,
-            .source = "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp",
-            .num_threads = 1,
-            .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
-            .hw_config = experimental::ComputeGen2Config{},
-        };
-        experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
-        experimental::ProgramSpec spec{
-            .name = "sem_scope_compute_binder", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
-        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
-        (void)program;
-    }
-
     // Build (but do not run) a minimal ProgramSpec whose semaphore carries the given scope
     // intent on the given target, so ValidateProgramSpec's ResolveSemaphoreScope runs.
     // Throws (TT_FATAL) on a contradiction. No JIT/emu-kernel execution.
@@ -474,13 +452,10 @@ TEST_F(SemScopeFixture, TestForcedScopeSingleNodeAccepted) {
     EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, core));
 }
 
-// The cached-only pool is in the DM cache domain, so a COMPUTE binder would read a different word
-// (the kernel_config ring) and the semaphore would silently split -> host FATAL at config time.
-TEST_F(SemScopeFixture, TestForcedDmLocalCachedComputeBinderFatal) {
-    EXPECT_ANY_THROW(make_program_with_compute_binder(SemaphoreScope::DM_LOCAL_CACHED));
-    // Sanity: the same compute binding is perfectly legal on the NoC-atomic path.
-    EXPECT_NO_THROW(make_program_with_compute_binder(SemaphoreScope::EXTERNAL));
-}
+// NOTE: there is deliberately no "compute kernel binds a cached semaphore" test -- Metal 2.0 forbids
+// semaphore bindings on compute kernels outright (ValidateProgramSpec), and hw_config has only
+// DataMovement/Compute alternatives, so a semaphore binder is always a data-movement kernel and the
+// cached path needs no compute-specific guard.
 
 // The pool is per-core, so a binder running on a node OTHER than the semaphore's node would
 // increment its own node's copy -> silent split -> host FATAL at config time.
