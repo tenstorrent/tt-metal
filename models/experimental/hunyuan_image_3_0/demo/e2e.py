@@ -49,8 +49,9 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
-ROOT = "/home/iguser/christy/tt-metal"
-HUNYUAN = "/home/iguser/christy/HunyuanImage-3.0"
+ROOT = str(Path(__file__).resolve().parents[4])  # tt-metal repo root (robust to checkout location)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 # Model variant for the random pipeline, selected by HY_MODEL (default "base"):
 #   base     -> HunyuanImage-3            (T2I pretrain; cfg_distilled=meanflow=False)
@@ -60,21 +61,41 @@ HUNYUAN = "/home/iguser/christy/HunyuanImage-3.0"
 # timestep_r continuous-token embeds differ, and those are read from config.json and
 # wired into denoise_loop below. The per-dir env overrides mirror ref/weights.py.
 HY_MODEL = os.environ.get("HY_MODEL", "base").lower()
-_MODEL_DIRS = {
-    "base": os.environ.get("HUNYUAN_MODEL_DIR", "/home/iguser/christy/HunyuanImage-3"),
-    "instruct": os.environ.get("HUNYUAN_INSTRUCT_MODEL_DIR", "/home/iguser/christy/HunyuanImage-3-Instruct"),
-    "distil": os.environ.get(
-        "HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR", "/home/iguser/christy/HunyuanImage-3-Instruct-Distil"
-    ),
+_MODEL_ENV = {
+    "base": "HUNYUAN_MODEL_DIR",
+    "instruct": "HUNYUAN_INSTRUCT_MODEL_DIR",
+    "distil": "HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR",
 }
-if HY_MODEL not in _MODEL_DIRS:
-    raise SystemExit(f"HY_MODEL={HY_MODEL!r} not in {sorted(_MODEL_DIRS)}")
-WEIGHTS = _MODEL_DIRS[HY_MODEL]
-if not os.path.isdir(WEIGHTS):
-    raise SystemExit(f"weights dir missing for HY_MODEL={HY_MODEL!r}: {WEIGHTS}")
-for p in (ROOT, HUNYUAN):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if HY_MODEL not in _MODEL_ENV:
+    raise SystemExit(f"HY_MODEL={HY_MODEL!r} not in {sorted(_MODEL_ENV)}")
+# Validate an explicit override with stdlib only, BEFORE importing anything from the
+# package: ref/__init__ pulls in ref.vae, whose module-level MODEL_DIR resolves weights
+# eagerly, so a bad override would kick off a multi-hundred-GB HuggingFace download
+# before this file could report the mistake.
+_env_var = _MODEL_ENV[HY_MODEL]
+if (_override := os.environ.get(_env_var)) and not os.path.isfile(
+    os.path.join(_override, "model.safetensors.index.json")
+):
+    raise SystemExit(f"{_env_var}={_override!r} has no model.safetensors.index.json")
+
+from models.experimental.hunyuan_image_3_0.ref.weights import (  # noqa: E402
+    resolve_base_model_dir,
+    resolve_instruct_distil_model_dir,
+    resolve_instruct_model_dir,
+)
+
+# Resolve ONLY the selected variant (resolving all three would stage weights the run
+# never touches): the override above first, then the HF hub cache, downloading only
+# when nothing complete is staged locally.
+_MODEL_RESOLVERS = {
+    "base": resolve_base_model_dir,
+    "instruct": resolve_instruct_model_dir,
+    "distil": resolve_instruct_distil_model_dir,
+}
+WEIGHTS = str(_MODEL_RESOLVERS[HY_MODEL]())
+# Upstream modeling code ships inside the checkpoint repo itself (mirrors demo.py).
+if WEIGHTS not in sys.path:
+    sys.path.insert(0, WEIGHTS)
 # ref/tt VAE weight loaders resolve from HUNYUAN_MODEL_DIR at import time — point them
 # at the selected variant (the PCC gate pre-sets this to base before importing).
 os.environ.setdefault("HUNYUAN_MODEL_DIR", WEIGHTS)
