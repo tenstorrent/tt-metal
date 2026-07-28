@@ -496,6 +496,7 @@ class TtMoe(LightweightModule):
         # gate modes) are dispatched first, so a shortened bound could drop real tokens.
         # Disable padding awareness for left padding and process the full (always-correct)
         # token range by clearing actual_isl for the rest of this forward.
+        actual_isl = None
         if actual_isl is not None and padding_side != "right":
             logger.warning(
                 "[TtMoe.forward] padding-aware MoE is only supported for right padding; "
