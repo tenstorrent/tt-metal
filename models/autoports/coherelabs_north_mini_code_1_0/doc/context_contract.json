@@ -1,0 +1,94 @@
+{
+  "model_id": "CohereLabs/North-Mini-Code-1.0",
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "hf_advertised_context": 500000,
+  "functional_decoder_supported_context": 500000,
+  "largest_prefill_context_tested": 500000,
+  "largest_decode_context_tested": 500000,
+  "largest_decode_position_tested": 499999,
+  "decode_batches_covered": [
+    1,
+    4,
+    32
+  ],
+  "serving_decode_batch": 32,
+  "page_size": 32,
+  "cache_dtype": "bfloat16",
+  "capability_reduction": null,
+  "completion_status": "complete",
+  "pending_gates": [],
+  "independent_stage_review": {
+    "verdict": "clean-pass",
+    "required_work": []
+  },
+  "context_probe_evidence": {
+    "prefill_500000_batch_1": {
+      "layer_kind": "dense full attention with forced RoPE",
+      "result": "pass",
+      "finite_output": true,
+      "single_pass_ms": 159559.73756699677,
+      "artifact": "functional_decoder/prefill_layer0_context500000.json"
+    },
+    "prefill_499999_all_layer_kinds": {
+      "dense_full_forced_rope_ms": 159650.63683899643,
+      "sliding_rope_moe_ms": 22634.39638899581,
+      "full_no_rope_moe_ms": 176343.69263300323,
+      "result": "pass with finite outputs",
+      "artifacts": [
+        "functional_decoder/prefill_layer0_context499999.json",
+        "functional_decoder/prefill_layer1_context499999.json",
+        "functional_decoder/prefill_layer4_context499999.json"
+      ]
+    },
+    "decode_500000_batch_1_all_layer_kinds": {
+      "position": 499999,
+      "traced": true,
+      "result": "pass with finite outputs",
+      "dense_full_forced_rope_ms": 44.23314299492631,
+      "sliding_rope_moe_ms": 9.897506002744194,
+      "full_no_rope_moe_ms": 53.52749900339404,
+      "artifacts": [
+        "functional_decoder/decode_layer0_context500000_batch1.json",
+        "functional_decoder/decode_layer1_context500000_batch1.json",
+        "functional_decoder/decode_layer4_context500000_batch1.json"
+      ]
+    },
+    "decode_500000_batch_32": {
+      "position": 499999,
+      "traced": true,
+      "result": "pass",
+      "trace_replay_ms": 135.98619600088568,
+      "artifact": "functional_decoder/decode_layer0_context500000_batch32.json"
+    },
+    "non_aligned_prefill": [
+      1,
+      31,
+      32,
+      33,
+      65,
+      8193,
+      65537,
+      499999
+    ],
+    "moe_chunk_boundary": [
+      1023,
+      1024,
+      1025
+    ],
+    "sliding_window_boundary": [
+      4095,
+      4096,
+      4097
+    ]
+  },
+  "device_capacity_evidence": {
+    "architecture": "blackhole",
+    "dram_banks": 8,
+    "bytes_per_dram_bank": 4272341376,
+    "total_dram_bytes": 34178731008,
+    "kv_bytes_formula": "batch * context * 2 caches * 4 kv heads * 128 head dim * 2 BF16 bytes",
+    "batch_1_context_500000_kv_bytes": 1024000000,
+    "batch_32_context_500000_kv_bytes": 32768000000,
+    "note": "All three layer kinds passed near-limit nonaligned prefill and batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced dense decode passed; no capability reduction is applied."
+  }
+}
