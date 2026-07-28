@@ -145,10 +145,6 @@ class ColumnParallelLinear(AbstractModuleBase):
 
     def forward(self, x):
         if self.sequence_parallel:
-            # SP: input is sequence-sharded across TP. Gather the full sequence for
-            # the matmul. Backward is reduce_scatter(seq) (GradOutputType.SHARDED ->
-            # plain sum, no averaging), which sums the input grad across TP and
-            # re-shards it along the sequence -- the transpose of this gather.
             x = ttml.ops.distributed.all_gather(
                 x, _SEQUENCE_DIM, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED
             )
@@ -235,15 +231,11 @@ class RowParallelLinear(AbstractModuleBase):
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, None)
         if self.sequence_parallel:
-            # SP: sum partial products across TP and re-shard along the sequence in
-            # one step. Backward is all_gather(seq), which reconstructs the full-
-            # sequence gradient (replicated across TP) that the matmul backward
-            # expects -- no double reduction, so no noop_backward is needed here.
+            # SP: sum partial products across TP and re-shard along the sequence in one step.
             x = ttml.ops.distributed.reduce_scatter(x, _SEQUENCE_DIM, self.cluster_axis)
         else:
             # Sum partial products across TP devices to obtain the full result.
             x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
-        # Bias is replicated, so it is safe to add after the reduction.
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)
         return x
