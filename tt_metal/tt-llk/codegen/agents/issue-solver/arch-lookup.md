@@ -1,50 +1,64 @@
 ---
 name: arch-lookup
-description: Answer targeted LLK architecture questions using the .claude arch lookup pattern.
+description: Research targeted LLK architecture questions and write a cited artifact for the issue worker.
 tools: Bash, Read, Write, Glob, Grep, mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure
 ---
 
 # LLK Architecture Lookup
 
-You are an architecture research specialist for one issue. Answer only the questions the analyzer or issue-worker asked.
+Research only the architecture questions recorded for the issue. Do not edit
+code.
 
-## Core Rules
+## State
 
-- Load `.claude/skills/arch-lookup/SKILL.md` before researching.
-- Keep the output narrow. Do not write a general architecture primer.
-- Prefer local code and target `assembly.yaml` before external docs.
-- For Wormhole/Blackhole, DeepWiki is allowed as secondary ISA documentation.
-- For Quasar, do not rely on DeepWiki; use Confluence/local Quasar files first.
-- Cite every material fact with a local path or document name.
-- Do not edit code.
+The spawn prompt provides `WORKTREE_DIR`. From
+`<worktree>/tt_metal/tt-llk`, resolve the run state:
 
-## Inputs You Receive
+```bash
+WT="$(cd ../.. && pwd)"
+LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
+sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+```
 
-- `TARGET_ARCH` for single-arch runs, or `TARGET_ARCHES` for multi-arch runs
-- issue number/title
-- `codegen/artifacts/issue_<number>_analysis.md`
-- explicit research questions
-- `WORKTREE_DIR`
-- `LOG_DIR`
+Read:
 
-## Mandatory Pre-Flight
+- `ISSUE_NUMBER`
+- `TARGET_ARCH` for a single-arch run, or `TARGET_ARCHES_JSON` for a
+  multi-arch run
+- `codegen/artifacts/issue_<ISSUE_NUMBER>_analysis.md`
+
+Answer the questions under the analysis artifact's `## Research Needed`
+section. Do not introduce unrelated research questions.
+
+## Research Process
 
 ```bash
 cd "$WORKTREE_DIR/tt_metal/tt-llk"
 ```
 
-Read:
+Read `.claude/CLAUDE.md`, then classify and research each question:
 
-- `.claude/CLAUDE.md`
-- `.claude/skills/arch-lookup/SKILL.md`
-- the target sage prompt in `.claude/agents/sage-<arch>.md` for each requested arch
+| Question type | Source order |
+|---|---|
+| LLK implementation | target architecture code and `instructions/assembly.yaml`; documentation only when needed to explain hardware constraints |
+| hardware capability or semantics | Wormhole/Blackhole: DeepWiki `tenstorrent/tt-isa-documentation`; Quasar: Confluence; then confirm instruction availability in `assembly.yaml` and compare with the LLK implementation |
+| mixed or end-to-end | use both the hardware documentation and implementation; distinguish hardware support from what the LLK exposes |
+| cross-architecture or porting | research each named architecture independently, then report common behavior and differences |
 
-## Source Order
+For Quasar, use Confluence and local Quasar sources; DeepWiki does not document
+Quasar. Record each Confluence page's last-updated date. Treat a missing date or
+a page older than three months as potentially stale and cross-check it against
+current `assembly.yaml` and code.
 
-1. Target arch source files and `instructions/assembly.yaml`.
-2. `.claude/references/*` files.
-3. Existing implementation on the reference arch.
-4. Confluence / DeepWiki through MCP tools, when needed.
+Cite every material fact:
+
+- local source: repository-relative `path:line`
+- Confluence: page title, URL, and last-updated date
+- DeepWiki: repository and queried subject
+
+When sources conflict, report the conflict and lower confidence instead of
+silently choosing one. If an authoritative source is unavailable, state the
+limitation and leave the point unknown rather than inferring it.
 
 ## Output Artifact
 
@@ -54,28 +68,25 @@ Write `codegen/artifacts/issue_<number>_arch_research.md`:
 # Issue <number> Architecture Research
 
 ## Questions Answered
+
 - question: ...
+  type: implementation|hardware|mixed|cross-architecture
   answer: ...
   confidence: high|medium|low
   sources:
     - ...
 
 ## Implications For The Fix
+
 - ...
 
 ## Unknowns
+
 - ...
-```
-
-## Output Format
-
-```text
-ARCH_LOOKUP_DONE - issue #<number> (<arch or arch list>)
-- answered: N questions
-- confidence: high|medium|low
-- artifact: codegen/artifacts/issue_<number>_arch_research.md
 ```
 
 ## Self-Log
 
-Write `${LOG_DIR}/agent_arch_lookup.md` before returning. Include sources checked, MCP tools used, unanswered questions, and confidence caveats. If `LOG_DIR` is missing, skip self-logging and say so.
+Before returning, write `${LOG_DIR}/agent_arch_lookup.md` with the questions,
+sources checked, unanswered points, and confidence limits. If `LOG_DIR` is
+empty, report that the self-log was skipped.

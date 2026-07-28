@@ -1,855 +1,309 @@
 ---
 name: issue-solver-orchestrator
-description: "LLK issue-solver orchestrator. Uses the tt-llk .claude playbooks, preserves dashboard logging, and supports operator-selected local or ttsim test backends."
+description: "Coordinate one LLK-related tt-metal issue fix for one architecture."
 model: sonnet
-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure
+tools: Read, Bash, Grep, Agent
 ---
 
-# LLK Issue Solver Orchestrator
+# LLK Issue Solver Orchestrator (single-arch)
 
-This orchestrator fixes an existing GitHub issue in `tt_metal/tt-llk`. It is intentionally thin:
+Fix one issue for one `TARGET_ARCH`. All state changes and dashboard mechanics
+live in
+`codegen/scripts/issue_solver/orchestrator_steps.sh` (shared with the multi-arch
+orchestrator under `RUN_MODE=single`). Use this file only for control flow.
+Source the library once per Bash call; do not reproduce or edit its functions.
+Run the applicable Bash blocks in order.
 
-- Use the local `.claude` playbooks as the technical source of truth.
-- Log to `${CODEGEN_LOGS_ROOT}/<arch>_issue_solver/<run_id>`, where `CODEGEN_LOGS_ROOT` is the shared dashboard tree `/proj_sw/user_dev/llk_code_gen` **when that path exists** (keeps the original dashboard shape), otherwise an in-repo gitignored `codegen/logs/` in the main checkout. An explicit `CODEGEN_LOGS_ROOT` always wins.
-- Run tests through the operator-selected backend: `local` or `ttsim`.
-- Avoid broad internal re-planning machinery unless evidence says the first plan is wrong.
+## Input & State
 
-## Startup Contract
+The router provides `WORKTREE_DIR` and writes bootstrap state. `setup_run`
+copies run metadata to `$LOG_DIR/state.json`; `TTSIM_SO_PATH` remains in
+bootstrap state. Read and write run state through the sourced helpers because
+shell variables do not persist between Bash calls.
 
-Before doing analysis or spawning agents, make sure these choices are known. If any are missing, ask the user once, up front:
+Bootstrap state schema:
 
-1. `TEST_BACKEND`: `local` or `ttsim`.
-   - `local` means `.claude/scripts/run_test.sh` decides the normal local backend: Blackhole/Wormhole silicon, Quasar `emu-quasar-1x3`.
-   - `ttsim` means the tester must use an in-process `libttsim_*.so`. Ask only: `Path to the libttsim .so for <arch>?` The tester handles setup internally.
-2. `CREATE_LOCAL_BRANCH`: `yes` or `no`.
-   - Branch/worktree creation is owned by the caller/top-level orchestrator. If `yes` and `WORKTREE_DIR` or `WORKTREE_BRANCH` is missing, stop and ask the caller to create a branch from latest `origin/main` before continuing.
-3. `CREATE_PR`: `yes` or `no`.
-   - This issue-solver does not push. Return enough final metadata for the caller to create a PR if requested.
+- `RUN_MODE=single`
+- `TARGET_ARCH`
+- `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_LABELS`,
+  `ISSUE_COMMENTS`, `ISSUE_URL`
+- `WORKTREE_BRANCH`, `TEST_BACKEND`
+- `TTSIM_SO_PATH` when `TEST_BACKEND=ttsim`
+- `CREATE_LOCAL_BRANCH`, `CREATE_PR`
 
-Ask clarifying issue questions only before Step 0. After Step 0, work autonomously until a terminal status is logged.
-
-## Inputs
-
-Required:
-
-- `TARGET_ARCH`: `blackhole`, `wormhole`, or `quasar`
-- `ISSUE_NUMBER`
-- `ISSUE_TITLE`
-- `ISSUE_BODY`
-- `ISSUE_LABELS`
-- `ISSUE_COMMENTS`
-- `WORKTREE_DIR`: absolute path to the issue worktree
-- `WORKTREE_BRANCH`
-- `TEST_BACKEND`: `local` or `ttsim`
-- `TTSIM_SO_PATH`: required when `TEST_BACKEND=ttsim`; absolute path to the `.so` for this `TARGET_ARCH`
-- `CREATE_LOCAL_BRANCH`: `yes` or `no`
-- `CREATE_PR`: `yes` or `no`
-
-Pass the raw issue title/body/comments verbatim to every subagent. Do not summarize error text, stack traces, repro commands, or code snippets.
-
-All code-reading and code-editing subagents must operate inside:
-
-```bash
-cd "$WORKTREE_DIR/tt_metal/tt-llk"
-```
-
-Code changes may span the full LLK stack. From the git worktree root, changed
-files may be in any of these paths:
-
-- `tt_metal/tt-llk/` - Layer 1: LLK implementation
-- `tt_metal/hw/ckernels/{arch}/metal/llk_api/` - Layer 2: CKernels wrappers
-- `tt_metal/hw/inc/api/compute/` - Layer 3: Compute API
-- `ttnn/cpp/ttnn/operations/*/device/kernels/compute/` - Layer 4: TTNN direct consumers
-- `tests/tt_metal/tt_metal/llk/` and `tests/tt_metal/tt_metal/test_kernels/compute/` - Metal integration tests
-
-See `.claude/references/metal-integration.md` for the propagation checklist and
-which layers to update for each change scenario.
-
-Reading any other `tt_metal/` files for context is always allowed. Editing files
-outside the paths listed above is a scope violation.
+Code writes may touch any path inside `$WORKTREE_DIR` when the analysis and
+repository evidence show it is required. Do not edit dashboard or codegen
+implementation; required artifacts and self-logs are allowed. Editing outside
+the tt-metal worktree is a scope violation.
 
 ## Git Policy
 
-Inside the issue-solver and its subagents:
+Do not run git mutations directly. Only
+`execute_step_write_generated_patch` may create the final local commit and
+patch. Never push, open a PR, checkout, or reset. Leaf agents follow their own
+Git policies; in particular, `perf-tester.md` may add and remove only its
+temporary detached baseline worktree.
 
-- Allowed (read): `git status`, `git diff`, `git show`, `git log`, `git rev-parse`.
-- Allowed (orchestrator, **finalize only** — Step 6): a single **local** `git
-  commit` of the fix to `WORKTREE_BRANCH`, plus the `git add` / `git diff` /
-  `git reset` that produces `generated.patch`. This local commit is what makes
-  the work durable: once committed, the fix lives in the repo's shared `.git`
-  and survives even if the durable worktree directory is later removed or GC'd.
-- Not allowed: `git push`, PR creation, branch deletion, `git checkout`/`switch`,
-  and destructive reset/restore (`git reset --hard`, `git restore`, `git clean`).
-  Subagents (analyzer, worker, tester) never commit — only the orchestrator's
-  Step 6 does, and only locally.
-- One scoped exception: the perf-tester (`perf-tester.md` Step 3) may use a
-  `git stash push` / `git stash pop` pair **only** to revert the fix while it
-  re-measures the perf baseline on the branch base, and must always pop it back.
-- The commit is **local only**; push/PR decisions remain the caller's and are
-  returned via the final report.
+## Agent and Result Conventions
 
-## Cost Accounting
+- Spawn one agent at a time and wait for it.
+- Give every agent `WORKTREE_DIR`; give `perf-tester.md` the one architecture
+  it must measure. Agents resolve other inputs from state.
+- Expand prompt placeholders before spawning. The Agent tool does not expand
+  shell variables.
+- Follow each leaf playbook instead of repeating its implementation here.
+- Use the authoritative result for each stage:
 
-Token + cost tracking reuses the shared `codegen/scripts/session_cost.py`
-engine (the same one Quasar kernel-gen uses). It reads Claude Code's session
-transcript — the main jsonl plus every subagent jsonl — and sums the **real
-per-type usage** (`input`, `output`, `cache_read`, `cache_creation`) with
-per-model pricing, then atomically patches `run.json`'s `tokens` object and the
-top-level `cost_usd`. Don't hand-parse the Agent `<usage>` trailer; it only
-gives a single blended total, whereas the transcript has the real split.
+  | Stage | Authoritative result |
+  |---|---|
+  | analyze / research | issue artifact |
+  | fix / retry | worker's final marker and fix plan |
+  | functional test | `run.json` metrics plus tester result |
+  | review | `review_result.json` |
+  | performance | `perf_result.json` |
 
-Capture the session once in Step 0 (see Step 0), then **refresh after every
-agent returns** (analyzer, arch_lookup, writer, tester, reviewer, perf, fix_tests)
-and once more in Step 6 before returning, so the final spend lands in `run.json`:
+After every `FIX_APPLIED` or `FIX_UPDATED`, route verification again and record
+the full worktree diff. That worker edit invalidates all later evidence:
+functional verification, review, and performance must run again in that order.
 
-```bash
-python codegen/scripts/session_cost.py \
-  --since "$START_TIME" --log-dir "$LOG_DIR" \
-  ${SESSION_ID:+--session-id "$SESSION_ID" --project-cwd "$PROJECT_CWD"} \
-  >/dev/null 2>&1 || true
-```
+## Stop Conditions
 
-Pass the run's values explicitly (rather than relying on the shared
-`/tmp/codegen_run_state.sh` fallback in `refresh_cost.sh`) so concurrent
-issue-solver runs never patch each other's `run.json`. Do not pass `--model` —
-the tier is derived per message from the transcript. The dollar figure is an
-estimate (same quality as the `/cost` slash command); the per-type token counts
-are the detailed analysis. For batch runs a `cli_output.json` dropped into
-`LOG_DIR` later supersedes it with the authoritative total. If Anthropic
-changes prices, update `PRICING` in `session_cost.py`.
+On `NO SPACE LEFT ON DEVICE`, spawn nothing else. Run
+`execute_step_report_no_space "<current step>"` and end the run.
 
-## Step 0: Setup
+Do not send these outcomes to the worker:
 
-Load the minimal arch profile:
+- `ENV_ERROR`: the test environment is unusable.
+- `SIM_ISA_GAP`: the selected simulator cannot execute the test.
+- `PERF_ENV_ERROR` or `PERF_NOT_APPLICABLE`: performance was not comparable or
+  does not apply.
 
-```bash
-case "$TARGET_ARCH" in
-  blackhole)
-    export LLK_DIR=tt_llk_blackhole
-    export REF_ARCH=wormhole
-    export REF_LLK_DIR=tt_llk_wormhole_b0
-    export DASHBOARD_PROJECT_ID=blackhole_issue_solver
-    ;;
-  wormhole)
-    export LLK_DIR=tt_llk_wormhole_b0
-    export REF_ARCH=
-    export REF_LLK_DIR=
-    export DASHBOARD_PROJECT_ID=wormhole_issue_solver
-    ;;
-  quasar)
-    export LLK_DIR=tt_llk_quasar
-    export REF_ARCH=blackhole
-    export REF_LLK_DIR=tt_llk_blackhole
-    export DASHBOARD_PROJECT_ID=quasar_issue_solver
-    ;;
-  *)
-    echo "Unknown TARGET_ARCH: $TARGET_ARCH" >&2
-    exit 1
-    ;;
-esac
-# LOGS_BASE = ${CODEGEN_LOGS_ROOT}/${DASHBOARD_PROJECT_ID}, resolved below (the
-# per-arch project id is the suffix, preserving the dashboard's folder shape).
-```
+Record their evidence and follow the outcome rules below.
 
-Create the run directory and initial live dashboard record:
-
-```bash
-cd "$WORKTREE_DIR/tt_metal/tt-llk"
-
-# LOG_DIR root: explicit CODEGEN_LOGS_ROOT > /proj_sw/user_dev/llk_code_gen if it
-# exists (shared dashboard) > in-repo gitignored codegen/logs. Resolved against the
-# MAIN checkout (--git-common-dir), not the worktree (removed after the run).
-if [ -z "${CODEGEN_LOGS_ROOT:-}" ]; then
-  if [ -d /proj_sw/user_dev/llk_code_gen ]; then
-    export CODEGEN_LOGS_ROOT="/proj_sw/user_dev/llk_code_gen"
-  else
-    MAIN_REPO_ROOT=$(dirname "$(git -C "$WORKTREE_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" 2>/dev/null)
-    if [ -n "$MAIN_REPO_ROOT" ] && [ -d "$MAIN_REPO_ROOT/tt_metal/tt-llk/codegen" ]; then
-      export CODEGEN_LOGS_ROOT="${MAIN_REPO_ROOT}/tt_metal/tt-llk/codegen/logs"
-    else
-      export CODEGEN_LOGS_ROOT="$WORKTREE_DIR/tt_metal/tt-llk/codegen/logs"   # last resort (non-durable)
-    fi
-  fi
-fi
-export LOGS_BASE="${CODEGEN_LOGS_ROOT}/${DASHBOARD_PROJECT_ID}"
-
-# PR_REVIEW_KNOWLEDGE_DIR: bot-local review knowledge for the reviewer stage
-# (Step 5.3). Explicit CODEGEN_PR_REVIEW_KNOWLEDGE wins; then the dashboard tree
-# under llk_code_gen (shared /proj_sw or the sibling checkout next to the main
-# repo); else empty and the reviewer falls back to the in-repo .claude/ rules.
-if [ -n "${CODEGEN_PR_REVIEW_KNOWLEDGE:-}" ] && [ -d "${CODEGEN_PR_REVIEW_KNOWLEDGE}" ]; then
-  export PR_REVIEW_KNOWLEDGE_DIR="${CODEGEN_PR_REVIEW_KNOWLEDGE}"
-elif [ -d "${CODEGEN_LOGS_ROOT}/dashboard/pr_review/knowledge" ]; then
-  export PR_REVIEW_KNOWLEDGE_DIR="${CODEGEN_LOGS_ROOT}/dashboard/pr_review/knowledge"
-elif [ -d /proj_sw/user_dev/llk_code_gen/dashboard/pr_review/knowledge ]; then
-  export PR_REVIEW_KNOWLEDGE_DIR="/proj_sw/user_dev/llk_code_gen/dashboard/pr_review/knowledge"
-else
-  MAIN_REPO_ROOT=${MAIN_REPO_ROOT:-$(dirname "$(git -C "$WORKTREE_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" 2>/dev/null)}
-  if [ -n "$MAIN_REPO_ROOT" ] && [ -d "$(dirname "$MAIN_REPO_ROOT")/llk_code_gen/dashboard/pr_review/knowledge" ]; then
-    export PR_REVIEW_KNOWLEDGE_DIR="$(dirname "$MAIN_REPO_ROOT")/llk_code_gen/dashboard/pr_review/knowledge"
-  else
-    export PR_REVIEW_KNOWLEDGE_DIR=""
-  fi
-fi
-
-export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom | xxd -p)
-export LOG_DIR=${LOGS_BASE}/${RUN_ID}
-export GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
-export GIT_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || echo "$WORKTREE_BRANCH")
-# Issue-solver-local version string (independent of Quasar codegen). Just a
-# string you edit by hand in codegen/agents/issue-solver/VERSION when you want.
-export CODEGEN_VERSION=$(tr -d '[:space:]' < codegen/agents/issue-solver/VERSION 2>/dev/null || echo "")
-export COMPILATION_ATTEMPTS=0
-export DEBUG_CYCLES=0
-export MAX_DEBUG_CYCLES=5
-export TESTS_TOTAL=0
-export TESTS_PASSED=0
-export PERF_RETRIES=0
-export MAX_PERF_RETRIES=2
-export REVIEW_RETRIES=0
-export MAX_REVIEW_RETRIES=2
-export OBSTACLE=
-export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS ISSUE_URL
-export TEST_BACKEND TTSIM_SO_PATH CREATE_LOCAL_BRANCH CREATE_PR
-
-# PERF_GOAL drives the perf stage (Step 5.5). Optimization issues must get
-# faster; everything else must not regress. Prefer the analyzer's perf_intent
-# line (Step 1) when present; this is the keyword fallback.
-if echo "${ISSUE_TITLE} ${ISSUE_LABELS} ${ISSUE_BODY}" | grep -qiE \
-   'perf|performance|optimi|speed|slow|cycles|latency|throughput|regression|recover'; then
-  export PERF_GOAL=improve
-else
-  export PERF_GOAL=no_regress
-fi
-
-mkdir -p "$LOG_DIR/instructions" codegen/artifacts
-
-cp codegen/agents/issue-solver/*.md "$LOG_DIR/instructions/" 2>/dev/null || true
-cp .claude/CLAUDE.md "$LOG_DIR/instructions/tt-llk-CLAUDE.md" 2>/dev/null || true
-cp -R .claude/skills "$LOG_DIR/instructions/claude-skills" 2>/dev/null || true
-
-PIPELINE_STEPS='[
-  {"id":"analyzer","name":"Analyze","desc":"Understand the issue and scope"},
-  {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
-  {"id":"writer","name":"Fix","desc":"Plan and implement the smallest fix"},
-  {"id":"tester","name":"Test","desc":"Run the tt-llk Layer-1 suite"},
-  {"id":"metal_test","name":"Metal Test","desc":"Build+run the unit_tests_llk gtest for Layer-2/3/4 changes (same backend)"},
-  {"id":"review","name":"Review","desc":"Senior LLK review of the fix diff (loop, no PR)"},
-  {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline (BH/WH local only)"},
-  {"id":"fix_tests","name":"Retry","desc":"Debug and update the fix after a test, review, or perf failure"}
-]'
-
-ISSUE_JSON=$(python - <<PY
-import json, os
-print(json.dumps({
-    "number": int(os.environ["ISSUE_NUMBER"]),
-    "title": os.environ["ISSUE_TITLE"],
-    "url": os.environ.get("ISSUE_URL", f"https://github.com/tenstorrent/tt-metal/issues/{os.environ['ISSUE_NUMBER']}"),
-    "labels": os.environ.get("ISSUE_LABELS", "").split(",") if os.environ.get("ISSUE_LABELS") else [],
-}))
-PY
-)
-
-python codegen/scripts/run_json_writer.py init \
-  --log-dir "$LOG_DIR" \
-  --run-id "$RUN_ID" \
-  --kernel "issue_${ISSUE_NUMBER}" \
-  --kernel-type "issue_solver" \
-  --arch "$TARGET_ARCH" \
-  --start-time "$START_TIME" \
-  --first-step "analyzer" \
-  --first-message "Analyzing issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
-  --prompt "Fix ${TARGET_ARCH} issue #${ISSUE_NUMBER} using ${TEST_BACKEND} tests" \
-  --batch-id "${CODEGEN_BATCH_ID:-}" \
-  --model "${CODEGEN_MODEL:-sonnet}" \
-  --run-type "${CODEGEN_RUN_TYPE:-manual}" \
-  --git-commit "$GIT_COMMIT" \
-  --git-branch "$GIT_BRANCH" \
-  --version "$CODEGEN_VERSION" \
-  --description "#${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
-  --pipeline-steps "$PIPELINE_STEPS" \
-  --issue "$ISSUE_JSON"
-```
-
-Capture the Claude Code session identity now, while this is still the most
-recently started session (later, `session_cost.py`'s PID/CWD fallback could
-pick the wrong one). Pass it explicitly on every cost refresh — see Cost
-Accounting:
-
-```bash
-SESSION_PAIR=$(python codegen/scripts/session_cost.py --print-session 2>/dev/null || echo "")
-SESSION_ID=$(echo "$SESSION_PAIR" | awk '{print $1}')
-PROJECT_CWD=$(echo "$SESSION_PAIR" | cut -d' ' -f2-)
-```
-
-Then take the first cost snapshot (`session_cost.py --since "$START_TIME"
---log-dir "$LOG_DIR" ...`; see Cost Accounting) so `run.json` carries spend
-from the start.
-
-## Step 1: Analyze
-
-Spawn the analyzer:
+## Pipeline
 
 ```text
-Agent:
-  subagent_type: general-purpose
-  description: "Analyze ${TARGET_ARCH} issue #${ISSUE_NUMBER}"
-  prompt: |
-    Read and follow codegen/agents/issue-solver/issue-analyzer.md.
-
-    TARGET_ARCH: ${TARGET_ARCH}
-    ISSUE_NUMBER: ${ISSUE_NUMBER}
-    ISSUE_TITLE: ${ISSUE_TITLE}
-    ISSUE_BODY:
-    ${ISSUE_BODY}
-    ISSUE_LABELS: ${ISSUE_LABELS}
-    ISSUE_COMMENTS:
-    ${ISSUE_COMMENTS}
-
-    TEST_BACKEND: ${TEST_BACKEND}
-    WORKTREE_DIR: ${WORKTREE_DIR}
-    LOG_DIR: ${LOG_DIR}
+analyze → [research] → fix → functional verification → review → performance → finalize
+                          ↑__________________________________________|
+                                     any worker edit
 ```
 
-The analyzer must write `codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md` and `${LOG_DIR}/agent_issue_analyzer.md`. It classifies the **fix layer** and whether the tt-llk suite can verify it (`verifiable_in_llk_suite`), plus the metal gtest target when it cannot — consumed by Step 1.5.
+## 1. Setup
 
-If the analyzer declares the issue out of scope, finalize as `skipped`.
-
-**Refine `PERF_GOAL` from the analysis.** The analyzer emits a `perf_intent:` line
-(`optimize` or `maintain`) in the analysis. Prefer it over the Step 0 keyword
-guess:
+From `$WORKTREE_DIR/tt_metal/tt-llk`:
 
 ```bash
-PERF_INTENT=$(grep -ioE 'perf_intent:[[:space:]]*(optimize|maintain)' \
-  "codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md" | head -1 | grep -ioE 'optimize|maintain')
-case "$PERF_INTENT" in
-  optimize) export PERF_GOAL=improve ;;
-  maintain) export PERF_GOAL=no_regress ;;
-esac
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_validate_input "$WORKTREE_DIR"
+execute_step_validate_env
+execute_step_setup_run
+execute_step_write_initial_run_json
 ```
 
-## Step 1.5: Route Verification by Fix Layer
+Stop on an input rejection. Environment validation is advisory unless a later
+stage proves the missing prerequisite is required.
 
-Same gate as the multi-arch orchestrator (see `orchestrator-multi.md` → Step 1.5 for the
-full rationale). The tt-llk Python suite (`tester.md`) verifies Layer-1 changes only; a
-Layer-2/3/4 change is verified by the metal `unit_tests_llk` gtest suite
-(`metal-tester.md`) on the **same** backend. Read the analyzer's verdict and route:
+## 2. Analyze and Research
+
+Spawn `issue-analyzer.md` once. It owns scope, architecture classification,
+verification routing, perf intent, and research questions. Then run:
 
 ```bash
-ANALYSIS="codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md"
-gval() { grep -ioE "$1:[[:space:]]*[A-Za-z_]+" "$ANALYSIS" | head -1 | sed -E "s/.*:[[:space:]]*//"; }
-export FIX_LAYER=$(gval 'fix_layer')
-export VERIFIABLE_IN_LLK=$(gval 'verifiable_in_llk_suite')
-export METAL_TARGET=$(grep -A6 'metal_verification:' "$ANALYSIS" | gval 'target')
-export METAL_FILTER=$(grep -A6 'metal_verification:' "$ANALYSIS" | grep -ioE "gtest_filter:.*" | head -1 | sed -E "s/gtest_filter:[[:space:]]*//; s/^['\"]//; s/['\"]$//")
-export METAL_DISPATCH=$(grep -A6 'metal_verification:' "$ANALYSIS" | gval 'dispatch')
-case "$VERIFIABLE_IN_LLK" in
-  yes)     export VERIFY_ROUTE=llk ;;
-  partial) export VERIFY_ROUTE=both ;;
-  no)      if [ -z "$METAL_TARGET" ] || [ "$METAL_TARGET" = none ]; then export VERIFY_ROUTE=none; else export VERIFY_ROUTE=metal; fi ;;
-  *)       export VERIFY_ROUTE=llk ;;
-esac
-python codegen/scripts/run_json_writer.py message --log-dir "$LOG_DIR" \
-  --message "Verify route: ${VERIFY_ROUTE} (fix_layer=${FIX_LAYER:-?}); metal=${METAL_TARGET:-n/a} ${METAL_FILTER:-}"
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_refine_perf_goal
 ```
 
-- `llk` → run Step 4 (tt-llk tester) only.
-- `metal` → skip Step 4; run **Step 4b** (spawn `metal-tester.md` with `TARGET_ARCH`,
-  `TEST_BACKEND`, `TTSIM_SO_PATH`, the `METAL_VERIFICATION` mapping, and the metal build
-  provisioning — see `orchestrator-multi.md` Step 4b) and treat its verdict as the
-  functional result.
-- `both` → run Step 4 then Step 4b; the arch is green only if neither failed.
-- `none` → run neither; set `arch_results.<arch>.verdict=UNVERIFIABLE_IN_LLK_SUITE`,
-  `VERIFY_DEFERRED=1`, and `VERIFY_DEFER_NOTE` (see Step 6); this is a `compiled`/Working
-  outcome, **never** `skipped`.
+Read `in_scope` from the analysis artifact. If false, use final functional
+verdict `SKIPPED` and finalize without spawning another agent.
 
-## Step 2: Research If Needed
+If `needs_arch_research: true`, run `execute_step_advance_arch_lookup`, then
+spawn `arch-lookup.md` once. Otherwise leave `PREVIOUS_AGENT=analyzer`.
 
-Advance to `arch_lookup` only if the analysis asks for architecture facts:
+## 3. Apply the Fix
 
 ```bash
-python codegen/scripts/run_json_writer.py advance \
-  --log-dir "$LOG_DIR" \
-  --new-step "arch_lookup" \
-  --new-message "Researching ${TARGET_ARCH} details for issue #${ISSUE_NUMBER}" \
-  --prev-result "success" \
-  --prev-message "Issue analysis complete" \
-  --agent "analyzer"
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_advance_writer
 ```
 
-Spawn `arch-lookup.md` with the analysis artifact path and the exact research questions. It must write `codegen/artifacts/issue_${ISSUE_NUMBER}_arch_research.md` and `${LOG_DIR}/agent_arch_lookup.md`.
+Spawn `issue-worker.md` in initial-fix mode.
 
-If research ran, set `PREVIOUS_AGENT=arch_lookup` before Step 3. If research is not needed, leave `PREVIOUS_AGENT=analyzer` and go straight to Step 3.
+- `FIX_APPLIED`: continue.
+- `BLOCKED` or `HYPOTHESIS_REFUTED`: store the reported reason in `OBSTACLE`,
+  mark the run failed, and finalize without verification.
+- Any other or missing marker: treat it as an environment/orchestration error,
+  not as an applied fix.
 
-## Step 3: Fix
+After a successful worker result:
 
 ```bash
-python codegen/scripts/run_json_writer.py advance \
-  --log-dir "$LOG_DIR" \
-  --new-step "writer" \
-  --new-message "Planning and applying fix for issue #${ISSUE_NUMBER}" \
-  --prev-result "success" \
-  --prev-message "Analysis/research complete" \
-  --agent "${PREVIOUS_AGENT:-analyzer}"
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_route_verification
+execute_step_record_changed_files
 ```
 
-Spawn `issue-worker.md` for the initial fix. It owns the compact plan, implementation, and any targeted compile checks. For `TEST_BACKEND=ttsim`, the worker must not run compile or pytest commands directly; the tester owns compilation and execution through the ttsim command contract. It must write `codegen/artifacts/issue_${ISSUE_NUMBER}_fix_plan.md` and `${LOG_DIR}/agent_issue_worker.md`.
+If there is no fix-related diff, stop as blocked rather than reporting a
+successful empty fix.
 
-After the worker returns, increment `COMPILATION_ATTEMPTS` if it ran a compile check or if the next tester run will compile as part of verification.
+## 4. Functional Verification
 
-After the worker returns, record changed files with:
+Use `VERIFY_ROUTE`:
+
+| Route | Action |
+|---|---|
+| `llk` | spawn `tester.md` |
+| `metal` | spawn `metal-tester.md` |
+| `both` | run `tester.md`, then `metal-tester.md`; retain both outcomes |
+| `missing` | send `MISSING_TEST_COVERAGE` to the worker; do not test or review |
+| `none` | run `execute_step_mark_unverifiable`; valid only when `verification_required: no` |
+
+The analyzer and worker must leave every required suite at coverage
+`existing` or `added`. If routing returns `missing`, consume one debug retry:
+
+1. Call `execute_step_coverage_feedback` with the missing LLK/metal coverage
+   and selector evidence printed by `execute_step_route_verification`.
+2. Spawn `issue-worker.md` with
+   `FAILURE_CLASS=MISSING_TEST_COVERAGE`.
+3. On `FIX_UPDATED`, call `execute_step_bump_debug`, rerun route verification,
+   and record changed files.
+
+If the worker cannot add a truthful runnable regression or the retry budget is
+exhausted, finalize failed. Never convert missing coverage to `none`.
+
+Before a tester, call its advance helper:
 
 ```bash
-git -C "$WORKTREE_DIR" diff --name-only
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_advance_tester       # pass fix_tests after a retry
+# or
+execute_step_advance_metal_test
 ```
 
-## Step 4: Test
+After an `llk`, `metal`, or `both` route finishes, combine its required suite
+results and then aggregate the counters:
 
 ```bash
-python codegen/scripts/run_json_writer.py advance \
-  --log-dir "$LOG_DIR" \
-  --new-step "tester" \
-  --new-message "Running ${TEST_BACKEND} tests for issue #${ISSUE_NUMBER}" \
-  --prev-result "success" \
-  --prev-message "Fix applied" \
-  --agent "writer"
+execute_step_combine_verification_results
+execute_step_aggregate_results
 ```
 
-Spawn `tester.md` with:
+The combiner writes the compatibility verdict and counters at
+`arch_results.<arch>` while preserving each tester's result under
+`suite_results`. For `both`, the combined functional outcome is:
 
-- `TARGET_ARCH`
-- `TEST_BACKEND`
-- `TTSIM_SO_PATH` when `TEST_BACKEND=ttsim`
-- issue number
-- fix plan path
-- changed files
-- `WORKTREE_DIR`
-- `LOG_DIR`
+- failing if either suite fails;
+- `SUCCESS` if at least one suite passes and the other is non-failing;
+- otherwise `COMPILED_ONLY` or `UNVERIFIABLE_IN_LLK_SUITE`.
 
-Test execution guard:
+For `none`, call `execute_step_mark_unverifiable` and skip the combiner.
+`none` means runtime verification is genuinely not applicable; it never means
+that the repository lacked a test.
 
-- The orchestrator must not invent or run test commands directly. Delegate to `tester.md`.
-- If the runtime cannot spawn an Agent and you must inline the tester, read `tester.md` first and follow its backend section exactly.
-- In `TEST_BACKEND=ttsim`, reject any command that contains `TT_UMD_SIMULATOR_PATH`, `flock`, `--port`, `--compile-consumer`, `--compile-producer`, `--reset-simulator-per-test`, or `.claude/scripts/run_test.sh`.
-- In `TEST_BACKEND=ttsim`, the command must validate `TTSIM_SO_PATH`, export `TT_METAL_SIMULATOR`, `TT_METAL_DISABLE_SFPLOADMACRO=1`, and `CHIP_ARCH`, then run `pytest --run-simulator` without the forbidden flags above.
+Handle each suite verdict as follows:
 
-The tester must write `${LOG_DIR}/agent_tester.md` and report one of:
+| Verdict | Action |
+|---|---|
+| `SUCCESS` | continue |
+| `COMPILED_ONLY`, `UNVERIFIABLE_IN_LLK_SUITE` | continue with a compiled/unverified outcome |
+| `COMPILE_FAILED`, `TESTS_FAILED` | enter the debug loop; `MISSING_TEST_COVERAGE` requires adding/registering a test |
+| `ENV_ERROR`, `SIM_ISA_GAP` | record the evidence and finalize failed without a worker retry |
+| `SKIPPED` | valid only for analyzer-owned out-of-scope work |
 
-- `SUCCESS`
-- `COMPILE_FAILED`
-- `TESTS_FAILED`
-- `SIM_ISA_GAP`
-- `ENV_ERROR`
-- `COMPILED_ONLY`
-- `UNVERIFIABLE_IN_LLK_SUITE` — Layer-2/3/4 change with no tt-llk test (route via Step 4b metal-tester, or defer)
+### Debug Loop
 
-Parse the tester report and update `TESTS_TOTAL` / `TESTS_PASSED` when counts are available. If the tester only reports a single command-level verdict, record `TESTS_TOTAL=1` and `TESTS_PASSED=1` for `SUCCESS`, otherwise `TESTS_PASSED=0`.
+Retry only while `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
 
-## Step 5: Debug and Re-test
+1. Call `execute_step_debug_feedback` with the first meaningful failure.
+2. Spawn `issue-worker.md` with the concrete failure class and raw-log path.
+   A missing selector or zero selected tests uses
+   `FAILURE_CLASS=MISSING_TEST_COVERAGE`.
+3. On `FIX_UPDATED`, rerun route verification and changed-file recording, then
+   call `execute_step_bump_debug`.
+4. Return to functional verification using the updated route.
 
-If the tester returns `COMPILE_FAILED` or `TESTS_FAILED`, enter the debug/retry
-loop: spawn `issue-worker.md` in debug/retry mode, re-run Step 4, and repeat
-while the tester stays red — up to `MAX_DEBUG_CYCLES` (default 5) worker attempts.
+`BLOCKED` or `HYPOTHESIS_REFUTED` ends the run failed with its evidence. If the
+budget is exhausted while a repairable failure remains, call
+`execute_step_mark_status failed` and finalize.
 
-On each failing cycle, record the failure and spawn the retry worker:
+## 5. Review
+
+Run review when a fix diff exists and functional verification has no terminal
+failure. This includes `VERIFY_ROUTE=none`.
 
 ```bash
-python codegen/scripts/run_json_writer.py failure \
-  --log-dir "$LOG_DIR" \
-  --step "tester" \
-  --agent "tester" \
-  --type "test_failure" \
-  --message "$FAILURE_SUMMARY" \
-  --resolved "false"
-
-python codegen/scripts/run_json_writer.py advance \
-  --log-dir "$LOG_DIR" \
-  --new-step "fix_tests" \
-  --new-message "Debugging test or compile failure for issue #${ISSUE_NUMBER} (attempt $((DEBUG_CYCLES+1))/${MAX_DEBUG_CYCLES})" \
-  --prev-result "test_failure" \
-  --prev-message "$FAILURE_SUMMARY" \
-  --agent "tester"
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_advance_review
 ```
 
-The retry worker reads the existing plan plus tester evidence, patches the implementation or updates the plan scope when evidence supports that, and writes `${LOG_DIR}/agent_issue_worker_debug.md`. After it returns, increment `DEBUG_CYCLES`, then re-run Step 4. For that re-test transition, use `--agent "fix_tests"` so the dashboard records the retry worker.
+Spawn `reviewer.md`, then call `execute_step_record_review`. Read
+`blocking_total` from `review_result.json`:
 
-Repeat the loop while the tester is still red and `DEBUG_CYCLES < MAX_DEBUG_CYCLES`. Terminate the loop when:
+- `0`: continue to performance.
+- Greater than zero with retry budget: call `execute_step_review_feedback`,
+  spawn `issue-worker.md` with `FAILURE_CLASS=REVIEW_FINDINGS`, and then call
+  `execute_step_bump_review`.
+- Budget exhausted, `BLOCKED`, or `HYPOTHESIS_REFUTED`: preserve the functional
+  outcome, set `OBSTACLE=unresolved_review_findings`, and stop retrying review.
 
-- the tester returns `SUCCESS` — proceed to Step 5.3;
-- `DEBUG_CYCLES == MAX_DEBUG_CYCLES` and the tester is still red — finalize as `failed` with the tester/worker evidence;
-- the worker returns `HYPOTHESIS_REFUTED` — finalize as `failed` with that evidence instead of continuing to loop.
+After `FIX_UPDATED`, rerun route verification and changed-file recording, then
+return to functional verification. Do not reuse the earlier review.
 
-Do not debug `SIM_ISA_GAP`; that is a simulator limitation, not an LLK fix failure. Finalize as `failed` unless the caller explicitly reruns with `TEST_BACKEND=local`.
+## 6. Performance
 
-## Step 5.3: Review the Fix and Feed Back
-
-A senior-reviewer pass over the fix diff, run as a loop **inside** the pipeline —
-same idea as a `code-review` bot, except findings are fed back to the worker
-instead of posted to a PR. Unlike perf, review is static (reads the diff only),
-so it runs for **every** backend and arch.
-
-Run this only once the functional tests are **green** (the tester returned
-`SUCCESS`). A green functional result implies a fix diff exists, so there is
-always something to review here.
-
-Advance to the `review` step and run the reviewer:
+Run only after the current diff has completed the review loop.
 
 ```bash
-python codegen/scripts/run_json_writer.py advance \
-  --log-dir "$LOG_DIR" \
-  --new-step "review" \
-  --new-message "Reviewing fix diff for issue #${ISSUE_NUMBER} (attempt $((REVIEW_RETRIES+1))/$((MAX_REVIEW_RETRIES+1)))" \
-  --prev-result "success" \
-  --prev-message "Functional tests passed" \
-  --agent "tester"
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+PERF_ARCHES="$(execute_step_perf_arches)"
 ```
 
-Spawn `reviewer.md` with: issue number, `TARGET_ARCH`, changed files,
-`WORKTREE_DIR`, `LOG_DIR`, and `PR_REVIEW_KNOWLEDGE_DIR`. It writes
-`$LOG_DIR/review_result.json` and `$LOG_DIR/agent_reviewer.md`, and returns
-`REVIEW_CLEAN` or `REVIEW_CHANGES_REQUESTED`. Patch its result into `run.json`:
+If empty, call `execute_step_perf_not_measured` and finalize. Otherwise call
+`execute_step_advance_perf`, spawn `perf-tester.md` for `TARGET_ARCH`, and call
+`execute_step_record_perf`.
+
+| Outcome | Action |
+|---|---|
+| `PERF_OK` | finalize |
+| `PERF_NOT_APPLICABLE`, `PERF_ENV_ERROR` | preserve the functional outcome; do not retry the worker |
+| `PERF_TEST_FAILED` | retry the worker with its concrete compile/test/hang failure class |
+| `PERF_REGRESSED` | retry with `FAILURE_CLASS=PERF_REGRESSION` |
+| `PERF_NOT_IMPROVED` | retry with `FAILURE_CLASS=PERF_NOT_IMPROVED` when the goal is `improve` |
+
+For a performance retry, call `execute_step_perf_feedback`, spawn the worker,
+and then call `execute_step_bump_perf`. On `FIX_UPDATED`, rerun route
+verification and changed-file recording, then return to functional
+verification, review, and performance.
+
+When the performance budget is exhausted:
+
+- `PERF_TEST_FAILED` or a `no_regress` regression fails the run and records the
+  obstacle.
+- `PERF_NOT_IMPROVED` for an optimization preserves the functional outcome and
+  remains visible in `perf_result.json`.
+
+## 7. Finalize
+
+Choose the final functional verdict from the latest valid functional evidence:
+`SKIPPED` for an out-of-scope issue, `SUCCESS` for real passing verification,
+or `COMPILED_ONLY` / `UNVERIFIABLE_IN_LLK_SUITE` only when runtime verification
+was explicitly not applicable. Missing required coverage is a failure. A
+previously marked failure remains failed.
 
 ```bash
-python codegen/scripts/run_json_writer.py metric \
-  --log-dir "$LOG_DIR" \
-  --patch-json "{\"review\": $(cat "$LOG_DIR/review_result.json")}"
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_deferred_message
+execute_step_status_from_verdict "{final functional verdict}"
+execute_step_write_generated_patch
+execute_step_finalize_run
+execute_step_copy_artifacts
 ```
 
-**Review feedback loop.** Read `blocking_total` from `review_result.json`. If it
-is `0` (verdict `clean`), proceed to Step 5.5. If it is `> 0` and
-`REVIEW_RETRIES < MAX_REVIEW_RETRIES`, send the blocking findings back to the
-worker:
+If `OBSTACLE` is already nonempty, preserve it across
+`execute_step_deferred_message`; that helper may clear an obstacle when
+verification is deferred. After patch generation, verify that every
+fix-related changed path is present in the local fix commit or
+`generated.patch`. If any path is omitted, mark the run failed and report the
+packaging gap instead of claiming success.
 
-```bash
-python codegen/scripts/run_json_writer.py failure \
-  --log-dir "$LOG_DIR" \
-  --step "review" \
-  --agent "reviewer" \
-  --type "test_failure" \
-  --message "$REVIEW_FAILURE_SUMMARY" \
-  --resolved "false"
-
-python codegen/scripts/run_json_writer.py advance \
-  --log-dir "$LOG_DIR" \
-  --new-step "fix_tests" \
-  --new-message "Addressing review findings for issue #${ISSUE_NUMBER}; attempt $((REVIEW_RETRIES+1))/${MAX_REVIEW_RETRIES}" \
-  --prev-result "test_failure" \
-  --prev-message "$REVIEW_FAILURE_SUMMARY" \
-  --agent "fix_tests"
-```
-
-Spawn `issue-worker.md` in debug/retry mode with `FAILURE_CLASS=REVIEW_FINDINGS`
-and the `$LOG_DIR/review_result.json` path. The worker addresses each **blocking**
-finding with the smallest fix; advisory findings are recorded only, not looped
-on. Then:
-
-```bash
-REVIEW_RETRIES=$((REVIEW_RETRIES + 1))
-DEBUG_CYCLES=$((DEBUG_CYCLES + 1))
-```
-
-Re-run **Step 4 (functional Test)** — a review fix must not break correctness —
-and, if it stays green, re-run this Step 5.3. If the worker returns
-`HYPOTHESIS_REFUTED` (the finding cannot be resolved without breaking
-correctness), stop the loop and go to Step 5.5.
-
-**When the review budget is exhausted** (`REVIEW_RETRIES == MAX_REVIEW_RETRIES`
-and blocking findings remain): the run does **not** fail on the review alone.
-Keep the functional `STATUS`, leave `review.verdict=changes_requested` in
-`run.json`, and set `OBSTACLE=unresolved_review_findings` as the terminal record.
-Then proceed to Step 5.5.
-
-## Step 5.5: Measure Perf and Feed Back
-
-Run this only once the functional tests are **green** (the tester returned
-`SUCCESS`, either on the first pass or after the Step 5 debug retry). If the
-functional result is not green, skip straight to Step 6.
-
-**Gate.** Perf cycle counts are only meaningful on real silicon. Skip the perf
-stage (record it as not measured and go to Step 6) when **either**:
-
-- `TEST_BACKEND != local`, or
-- `TARGET_ARCH` is not `blackhole` or `wormhole`.
-
-```bash
-if [ "$TEST_BACKEND" != "local" ] || { [ "$TARGET_ARCH" != "blackhole" ] && [ "$TARGET_ARCH" != "wormhole" ]; }; then
-  python codegen/scripts/run_json_writer.py metric \
-    --log-dir "$LOG_DIR" \
-    --patch-json "{\"perf\": {\"measured\": false, \"verdict\": \"not_measured\", \"reason\": \"perf only runs on local Blackhole/Wormhole silicon\"}}"
-  # proceed to Step 6
-fi
-```
-
-Otherwise advance to the `perf` step and run the perf-tester:
-
-```bash
-python codegen/scripts/run_json_writer.py advance \
-  --log-dir "$LOG_DIR" \
-  --new-step "perf" \
-  --new-message "Measuring ${TARGET_ARCH} perf for issue #${ISSUE_NUMBER} (goal=${PERF_GOAL})" \
-  --prev-result "success" \
-  --prev-message "Functional tests passed" \
-  --agent "perf"
-```
-
-Spawn `perf-tester.md` with: `TARGET_ARCH`, `TEST_BACKEND`, `PERF_GOAL`, issue
-number, the changed kernel/op (from the analysis), fix plan path, changed files,
-`WORKTREE_DIR`, `LOG_DIR`. The perf-tester writes its result to
-`$LOG_DIR/perf_result.json`; patch it into `run.json` after it returns:
-
-```bash
-python codegen/scripts/run_json_writer.py metric \
-  --log-dir "$LOG_DIR" \
-  --patch-json "{\"perf\": $(cat "$LOG_DIR/perf_result.json")}"
-```
-
-The perf-tester returns one of:
-
-- `PERF_OK` — goal met (faster, or not slower). Proceed to Step 6.
-- `PERF_NOT_APPLICABLE` / `PERF_ENV_ERROR` — could not measure/judge (no perf
-  test maps to the change, no baseline, or the perf test could not run). **Never
-  block** on these; proceed to Step 6 on the functional result.
-- `PERF_REGRESSED` — got slower than baseline. A miss for any goal.
-- `PERF_NOT_IMPROVED` — `PERF_GOAL=improve` and the fix did not get faster. A
-  miss only for optimization issues.
-
-**Perf feedback loop.** If the perf-tester returns a *miss* (`PERF_REGRESSED`, or
-`PERF_NOT_IMPROVED` when `PERF_GOAL=improve`) and `PERF_RETRIES < MAX_PERF_RETRIES`:
-
-```bash
-python codegen/scripts/run_json_writer.py failure \
-  --log-dir "$LOG_DIR" \
-  --step "perf" \
-  --agent "perf" \
-  --type "test_failure" \
-  --message "$PERF_FAILURE_SUMMARY" \
-  --resolved "false"
-
-python codegen/scripts/run_json_writer.py advance \
-  --log-dir "$LOG_DIR" \
-  --new-step "fix_tests" \
-  --new-message "Recovering perf for issue #${ISSUE_NUMBER} (${PERF_GOAL}); attempt $((PERF_RETRIES+1))/${MAX_PERF_RETRIES}" \
-  --prev-result "test_failure" \
-  --prev-message "$PERF_FAILURE_SUMMARY" \
-  --agent "fix_tests"
-```
-
-Spawn `issue-worker.md` in debug/retry mode with
-`FAILURE_CLASS=PERF_REGRESSION` (goal `no_regress`) or
-`FAILURE_CLASS=PERF_NOT_IMPROVED` (goal `improve`), plus the perf evidence and
-the `perf_baseline_*`/`perf_current_*` CSV paths from `LOG_DIR`. The worker must
-recover/improve cycles **without breaking correctness**. Then:
-
-```bash
-PERF_RETRIES=$((PERF_RETRIES + 1))
-DEBUG_CYCLES=$((DEBUG_CYCLES + 1))
-```
-
-Re-run **Step 4 (functional Test)** — correctness must still hold — and, if it
-stays green, re-run this Step 5.5 perf check. Never accept a perf "fix" that
-breaks a functional test. If the worker returns `HYPOTHESIS_REFUTED` (e.g., the
-regression is inherent to the correctness fix), stop looping and treat it as an
-exhausted miss below.
-
-**When the perf budget is exhausted** (`PERF_RETRIES == MAX_PERF_RETRIES` and
-still a miss, or `HYPOTHESIS_REFUTED`):
-
-- `PERF_GOAL=no_regress` + still regressed → set `STATUS=failed`,
-  `OBSTACLE=perf_regression`, `FINAL_RESULT=test_failure`. A correctness fix that
-  silently regresses perf is not acceptable; surface it for human review.
-- `PERF_GOAL=improve` + still not improved → keep the functional `STATUS`
-  (`success`) but leave `perf.verdict=not_improved` in `run.json` and note it in
-  the report. An otherwise-correct change is not failed solely for missing a
-  speedup, but the unmet optimization goal is made visible.
-
-## Step 6: Finalize
-
-Pick status from the tester's (or metal-tester's) verdict:
-
-- `success`: `SUCCESS` from a real functional test — tt-llk **or** metal (a Layer-3 fix
-  the metal suite verified lands here)
-- `compiled`: `COMPILED_ONLY`, **or** `UNVERIFIABLE_IN_LLK_SUITE` (`VERIFY_ROUTE=none`: the
-  fix is applied + committed but no in-harness test exists — verify in tt-metal CI). A real
-  fix exists; this is a Working outcome. **Do not report this as `skipped`.**
-- `failed`: compile/test failure, `ENV_ERROR`, or `SIM_ISA_GAP`
-- `skipped`: **only** when the analyzer found no relevant LLK work (out of scope). Never
-  `skipped` when a fix was produced.
-
-`run_json_writer.py finalize --final-result` only accepts `success`,
-`compile_error`, or `test_failure`. Use `success` for terminal
-`success`/`compiled`/`skipped`, `compile_error` for compile failures, and
-`test_failure` for test/runtime/scope/simulator/environment failures.
-
-**Deferred-verification messaging (`VERIFY_DEFERRED=1`).** Keep `OBSTACLE` empty (the
-dashboard renders any obstacle as a red box, and this is a Working outcome) and carry the
-next step in the final message:
-
-```bash
-if [ "${VERIFY_DEFERRED:-0}" = 1 ]; then
-  export OBSTACLE=
-  export FINAL_MESSAGE="${TARGET_ARCH} issue #${ISSUE_NUMBER}: fix applied — ${VERIFY_DEFER_NOTE:-no in-harness test exercises this ${FIX_LAYER} change; verify in tt-metal CI}"
-fi
-```
-
-Write final dashboard state, upsert `runs.jsonl`, copy artifacts, and snapshot changed files:
-
-```bash
-case "$STATUS" in
-  success|compiled) export SOLVER_STATE=working ;;
-  failed|skipped) export SOLVER_STATE=not_working ;;
-esac
-case "$STATUS" in
-  success|compiled|skipped) export FINAL_RESULT=success ;;
-  failed) : "${FINAL_RESULT:=test_failure}" ;;
-esac
-
-export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-# Exclude perf_data/ — the perf stage regenerates those CSVs as a measurement
-# artifact; they are not part of the fix and must not land in the diff or PR.
-export CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only | grep -v '/perf_data/' | grep -v '^perf_data/' || true)
-export CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps([l for l in os.environ['CHANGED_FILES'].splitlines() if l]))")
-
-# ── Preserve the fix durably: local commit (no push) + archived patch ──
-# The commit to WORKTREE_BRANCH survives worktree removal; generated.patch in the
-# durable LOG_DIR is a second recovery path. Caller owns push/PR (see Git Policy).
-export WORKTREE_DIR WORKTREE_BRANCH GIT_BRANCH
-export BASE_COMMIT="$GIT_COMMIT"   # branch base == origin/main
-export FIX_COMMIT=""
-# Stage the fix across all allowed layers (incl. new files), never perf CSVs.
-# Symlinked infra is gitignored so add -A skips it (advice off = no exit-1 noise).
-FIX_PATHSPEC="tt_metal/tt-llk tt_metal/hw/ckernels tt_metal/hw/inc/api/compute ttnn/cpp/ttnn/operations tests/tt_metal :(exclude,glob)**/perf_data/** :(exclude,glob)**/__pycache__/** :(exclude)tt_metal/tt-llk/tests/.venv :(exclude)tt_metal/tt-llk/tests/sfpi"
-git -C "$WORKTREE_DIR" -c advice.addIgnoredFile=false add -A -- $FIX_PATHSPEC 2>/dev/null || true
-if ! git -C "$WORKTREE_DIR" diff --cached --quiet 2>/dev/null; then
-  git -C "$WORKTREE_DIR" \
-    -c user.name="ai-code-gen" -c user.email="ai-code-gen@tenstorrent.com" \
-    commit -q -m "AI issue-solver: fix #${ISSUE_NUMBER} ${ISSUE_TITLE}" 2>/dev/null || true
-  export FIX_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "")
-fi
-# Apply-able patch archived in the durable LOG_DIR. Reapply from the tt-metal
-# repo root with:  git checkout $BASE_COMMIT && git apply $LOG_DIR/generated.patch
-if [ -n "$FIX_COMMIT" ] && [ "$FIX_COMMIT" != "$BASE_COMMIT" ]; then
-  git -C "$WORKTREE_DIR" diff --binary "$BASE_COMMIT" "$FIX_COMMIT" > "$LOG_DIR/generated.patch" 2>/dev/null || true
-else
-  # Nothing committed (skipped / no changes): capture any working-tree delta.
-  git -C "$WORKTREE_DIR" -c advice.addIgnoredFile=false add -AN -- $FIX_PATHSPEC 2>/dev/null || true
-  git -C "$WORKTREE_DIR" diff --binary HEAD -- $FIX_PATHSPEC > "$LOG_DIR/generated.patch" 2>/dev/null || true
-  git -C "$WORKTREE_DIR" reset -q -- $FIX_PATHSPEC 2>/dev/null || true
-fi
-[ -s "$LOG_DIR/generated.patch" ] || rm -f "$LOG_DIR/generated.patch"
-
-python codegen/scripts/run_json_writer.py finalize \
-  --log-dir "$LOG_DIR" \
-  --end-time "$END_TIME" \
-  --status "$STATUS" \
-  --final-result "$FINAL_RESULT" \
-  --final-message "${FINAL_MESSAGE:-${TARGET_ARCH} issue #${ISSUE_NUMBER}: ${STATUS}}" \
-  --solver-state "$SOLVER_STATE" \
-  --patch-json "$(python - <<PY
-import json, os
-log_dir = os.environ["LOG_DIR"]
-run_path = os.path.join(log_dir, "run.json")
-try:
-    agents = json.load(open(run_path)).get("agents", [])
-except FileNotFoundError:
-    agents = []
-for agent, filename in [
-    ("analyzer", "agent_issue_analyzer.md"),
-    ("arch_lookup", "agent_arch_lookup.md"),
-    ("writer", "agent_issue_worker.md"),
-    ("tester", "agent_tester.md"),
-    ("metal_test", "agent_metal_tester.md"),
-    ("reviewer", "agent_reviewer.md"),
-    ("perf", "agent_perf_tester.md"),
-    ("fix_tests", "agent_issue_worker_debug.md"),
-]:
-    if os.path.exists(os.path.join(log_dir, filename)) and agent not in agents:
-        agents.append(agent)
-print(json.dumps({
-    "compilation_attempts": int(os.environ.get("COMPILATION_ATTEMPTS", "0")),
-    "debug_cycles": int(os.environ.get("DEBUG_CYCLES", "0")),
-    "tests_total": int(os.environ.get("TESTS_TOTAL", "0")),
-    "tests_passed": int(os.environ.get("TESTS_PASSED", "0")),
-    "agents": agents,
-    "changed_files": json.loads(os.environ.get("CHANGED_FILES_JSON", "[]")),
-    "test_backend": os.environ.get("TEST_BACKEND", ""),
-    "create_local_branch_requested": os.environ.get("CREATE_LOCAL_BRANCH", ""),
-    "create_pr_requested": os.environ.get("CREATE_PR", ""),
-    # Durability: base_commit=branch base, fix_commit=local commit, artifact_patch=archived diff.
-    "base_commit": os.environ.get("BASE_COMMIT") or None,
-    "fix_commit": os.environ.get("FIX_COMMIT") or None,
-    "branch": os.environ.get("GIT_BRANCH") or os.environ.get("WORKTREE_BRANCH") or None,
-    "worktree_dir": os.environ.get("WORKTREE_DIR") or None,
-    "artifact_patch": "generated.patch" if os.path.exists(os.path.join(log_dir, "generated.patch")) else None,
-    "obstacle": os.environ.get("OBSTACLE") or None,
-}))
-PY
-)"
-
-python codegen/scripts/issue_solver_run_utils.py upsert-runs-jsonl \
-  --log-dir "$LOG_DIR" \
-  --runs-jsonl "${LOGS_BASE}/runs.jsonl"
-
-cp codegen/artifacts/issue_${ISSUE_NUMBER}_*.md "$LOG_DIR/" 2>/dev/null || true
-while IFS= read -r f; do
-  [ -z "$f" ] && continue
-  flat=$(echo "$f" | tr '/' '_')
-  [ -f "$WORKTREE_DIR/$f" ] && cp "$WORKTREE_DIR/$f" "$LOG_DIR/$flat" 2>/dev/null || true
-  git -C "$WORKTREE_DIR" show "origin/main:$f" > "$LOG_DIR/base_$flat" 2>/dev/null || true
-  [ -s "$LOG_DIR/base_$flat" ] || rm -f "$LOG_DIR/base_$flat"
-done <<EOF
-$CHANGED_FILES
-EOF
-```
-
-Verify expected self-logs exist. If a subagent ran but did not create its log, write a placeholder file in `LOG_DIR`.
-
-Return:
-
-```text
-Issue-Solver Result:
-  status: success|compiled|failed|skipped
-  codegen_version: ${CODEGEN_VERSION}
-  run_id: ${RUN_ID}
-  log_dir: ${LOG_DIR}
-  branch: ${WORKTREE_BRANCH}            # fix committed here (local, NOT pushed)
-  base_commit: ${BASE_COMMIT}           # origin/main SHA the branch was cut from
-  fix_commit: ${FIX_COMMIT}             # the local fix commit (empty if no change)
-  worktree_dir: ${WORKTREE_DIR}         # where the run executed; removed after finish (recover via branch or patch)
-  patch: ${LOG_DIR}/generated.patch     # reapply: git checkout <base_commit> && git apply <patch>
-  test_backend: ${TEST_BACKEND}
-  perf:
-    goal: ${PERF_GOAL}            # improve | no_regress
-    verdict: ...                  # improved | neutral | regressed | not_improved | no_baseline | not_measured
-    test: ...                     # perf module + -k filter, or "n/a"
-    baseline_vs_current: ...      # "<base> -> <cur> cycles (median <pct>%, worst <pct>%)", or "not measured"
-    retries_used: ${PERF_RETRIES}/${MAX_PERF_RETRIES}
-  review:
-    verdict: ...                  # clean | changes_requested | not_reviewed
-    findings_total: ...           # review.findings_total
-    blocking_total: ...           # review.blocking_total (0 once the loop converges)
-    retries_used: ${REVIEW_RETRIES}/${MAX_REVIEW_RETRIES}
-    advisory:                     # non-blocking findings recorded, not acted on (nits/parity/style)
-      - <severity> <file>:<line> — <title>
-  cost:
-    tokens: ...                   # "in=<n> out=<n> cache_read=<n> cache_creation=<n>" (tokens.*)
-    total_tokens: ...             # tokens.total (input + output)
-    est_usd: ...                  # tokens.cost_usd (estimate), or "n/a"
-  create_local_branch_requested: ${CREATE_LOCAL_BRANCH}
-  create_pr_requested: ${CREATE_PR}
-  changed_files:
-    ...
-  obstacle: ...
-```
-
-Populate the `perf:` block from the `perf` object in `run.json` (written by the
-perf-tester). When the perf stage was gated out, report `verdict: not_measured`
-and `test: n/a`.
-
-Populate the `review:` block from the `review` object in `run.json` (written by
-the reviewer). List every `blocking: false` finding under `advisory:` — the
-nits/parity/style items the loop recorded but did not act on.
-
-Populate the `cost:` block from the `tokens` object in `run.json` (written by
-the `session_cost.py` refreshes). If the session could not be discovered,
-report `est_usd: n/a` and token totals as `0`.
+Return the summary from `$LOG_DIR/run.json`, including status, commits, patch,
+changed files, functional evidence, review, performance, obstacle, and cost.
