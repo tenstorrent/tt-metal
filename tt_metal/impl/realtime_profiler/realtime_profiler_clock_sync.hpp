@@ -134,6 +134,8 @@ private:
     volatile uint32_t* ack_host_ptr_ = nullptr;
     // Blackhole fast path: static-L1 TLB window for a one-store MMIO token write; null elsewhere. Owned by UMD.
     tt::umd::TlbWindow* sync_tlb_ = nullptr;
+    // The token's mapped address inside sync_tlb_, resolved once at configure time.
+    volatile uint32_t* sync_doorbell_ = nullptr;
 
     // Seeded with the commanded AICLK in configure(), refined by run_fit(), re-anchored by resync().
     ClockModel model_;

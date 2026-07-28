@@ -120,6 +120,8 @@ def main():
                     "start_timestamp": record.start_timestamp,
                     "end_timestamp": record.end_timestamp,
                     "frequency_ghz": record.frequency,
+                    "device_cycle_offset": record.clock_sync.device_cycle_offset,
+                    "sync_error_ns": record.clock_sync.sync_error_ns,
                 }
             )
 

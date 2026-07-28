@@ -24,16 +24,19 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -49,7 +52,9 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+#include <tt-metalium/host_buffer.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
@@ -731,6 +736,277 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
               << " record(s); worst excursion outside dispatch window = " << worst_outside_ns
               << "ns (<= 0 means fully inside); record frequency = [" << min_freq << ", " << max_freq << "] GHz"
               << std::endl;
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
+// Independent measurement of the RT profiler's clock-sync accuracy, sharing no code with the production sync. The
+// roles are deliberately inverted: here the *device* times a round trip and brackets a host clock read inside it,
+// where RealtimeProfilerClockSync has the host time a round trip and bracket a device timestamp. A wrong anchor
+// placement, a wrong clock domain, or a mis-signed offset in production therefore cannot reproduce itself here.
+//
+// Per iteration the kernel stamps WALL_CLOCK, asks the host for a reply, and stamps again once the reply lands. The
+// host's clock read happened somewhere inside that device-measured interval, so (host read, interval midpoint) samples
+// the same mapping. Bracketing on the device keeps the host's polling cost out of the interval; what is left is the
+// asymmetry between the two legs, which the midpoint splits and the reported bracket bounds. Only the tightest
+// brackets are kept, those being the round trips that queued least on either leg.
+constexpr uint32_t kSyncProbeIterations = 2000;
+constexpr double kSyncProbeKeepFraction = 0.05;
+
+std::string make_sync_kernel_source() {
+    return R"(
+#include <cstdint>
+#include "risc_common.h"
+
+void kernel_main() {
+    const uint32_t ack_addr = get_arg_val<uint32_t>(0);
+    const uint32_t request_addr = get_arg_val<uint32_t>(1);
+    const uint32_t log_addr = get_arg_val<uint32_t>(2);
+    const uint32_t iterations = get_arg_val<uint32_t>(3);
+    // PinnedMemory hands the host the address only; a NOC write also needs the PCIe endpoint's coordinates, which the
+    // JIT build supplies as PCIE_NOC_X/Y. Same encoding cq_realtime_profiler_push.cpp builds.
+    const uint64_t host_addr =
+        uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y))) |
+        ((static_cast<uint64_t>(get_arg_val<uint32_t>(5)) << 32) | static_cast<uint64_t>(get_arg_val<uint32_t>(4)));
+
+    volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ack_addr);
+    (void)ack;
+    volatile tt_l1_ptr uint32_t* request = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(request_addr);
+    volatile tt_l1_ptr uint32_t* log = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_addr);
+
+    for (uint32_t i = 1; i <= iterations; i++) {
+        request[0] = i;
+        const uint64_t sent = get_timestamp();
+        noc_async_write(request_addr, host_addr, sizeof(uint32_t));
+        noc_async_write_barrier();
+        const uint64_t written = get_timestamp();
+        while (NOC_STREAM_READ_REG(0, STREAM_SCRATCH_REG_INDEX) != i) {
+        }
+        const uint64_t answered = get_timestamp();
+        log[8 * (i - 1) + 4] = static_cast<uint32_t>(written & 0xFFFFFFFF);
+        log[8 * (i - 1) + 5] = static_cast<uint32_t>(written >> 32);
+        log[8 * (i - 1) + 0] = static_cast<uint32_t>(sent & 0xFFFFFFFF);
+        log[8 * (i - 1) + 1] = static_cast<uint32_t>(sent >> 32);
+        log[8 * (i - 1) + 2] = static_cast<uint32_t>(answered & 0xFFFFFFFF);
+        log[8 * (i - 1) + 3] = static_cast<uint32_t>(answered >> 32);
+    }
+}
+)";
+}
+
+struct SyncProbe {
+    int64_t host_ns = 0;
+    double device_mid_ticks = 0.0;
+    uint64_t bracket_ticks = 0;
+};
+
+TEST(RealtimeProfilerSanity, SyncAccuracyAgainstIndependentHandshake) {
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    if (!IsProgramRealtimeProfilerActive()) {
+        GTEST_SKIP() << "Real-time profiler is not active on this configuration";
+    }
+
+    std::mutex records_mu;
+    std::vector<ProgramRealtimeRecord> records;
+    const auto handle = RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+        std::lock_guard lk(records_mu);
+        records.insert(records.end(), batch.records.begin(), batch.records.end());
+    });
+
+    IDevice* device = mesh_device->get_devices().front();
+    const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t ack_addr = l1_base;
+    const uint32_t request_addr = l1_base + 16;
+    const uint32_t log_addr = l1_base + 32;
+    const CoreCoord core{0, 0};
+    const CoreCoord vcore = device->virtual_core_from_logical_core(core, CoreType::WORKER);
+    auto& cluster = MetalContext::instance().get_cluster();
+    // Stream 0 scratch register: plain read/write storage (scratch exists only in streams 0-3 and 8-11, and 8-39 are
+    // the CB range), unused on this core. Polling it costs the kernel a register load with no cache in the way.
+    constexpr uint32_t kStreamScratchRegIndex = 36;
+    const uint32_t stream_scratch_addr =
+        MetalContext::instance().hal().get_noc_overlay_start_addr() + kStreamScratchRegIndex * sizeof(uint32_t);
+    {
+        const std::vector<uint32_t> zeros(8, 0);
+        cluster.write_core(zeros.data(), zeros.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), vcore), ack_addr);
+    }
+
+    const size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    std::shared_ptr<uint32_t[]> request_backing(
+        static_cast<uint32_t*>(std::aligned_alloc(page_size, page_size)), [](uint32_t* p) { std::free(p); });
+    ASSERT_NE(request_backing, nullptr);
+    request_backing[0] = 0;
+    HostBuffer request_view(ttsl::Span<uint32_t>(request_backing.get(), 4), MemoryPin(request_backing));
+    distributed::MeshCoordinateRangeSet request_range;
+    request_range.merge(distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)));
+    auto request_pinned = experimental::PinnedMemory::Create(*mesh_device, request_range, request_view, true);
+    if (!request_pinned || !request_pinned->get_noc_addr(device->id()).has_value()) {
+        UnregisterProgramRealtimeProfilerCallback(handle);
+        GTEST_SKIP() << "Host memory cannot be pinned for device writes on this configuration";
+    }
+    const uint64_t request_noc_addr = request_pinned->get_noc_addr(device->id())->addr;
+    volatile uint32_t* request_word = request_backing.get();
+    volatile uint32_t* ready_word_probe = request_backing.get() + 3;
+
+    Program program = CreateProgram();
+    auto kernel = CreateKernelFromString(
+        program,
+        make_sync_kernel_source(),
+        CoreRangeSet(CoreRange(core, core)),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateKernelFromString(
+        program, "#include <cstdint>\nvoid kernel_main() {}\n", CoreRangeSet(CoreRange(core, core)), ComputeConfig{});
+    SetRuntimeArgs(
+        program,
+        kernel,
+        core,
+        {ack_addr,
+         request_addr,
+         log_addr,
+         kSyncProbeIterations,
+         static_cast<uint32_t>(request_noc_addr & 0xFFFFFFFFull),
+         static_cast<uint32_t>(request_noc_addr >> 32)});
+    program.set_runtime_id(9001);
+
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
+
+    constexpr uint32_t kCalibrationReps = 2000;
+    auto min_write_ns = std::chrono::nanoseconds::max();
+    for (uint32_t r = 0; r < kCalibrationReps; r++) {
+        const uint32_t probe = 0;
+        const auto before = std::chrono::steady_clock::now();
+        cluster.write_core_immediate(&probe, sizeof(probe), tt_cxy_pair(device->id(), vcore), log_addr + 4096);
+        min_write_ns = std::min(min_write_ns, std::chrono::steady_clock::now() - before);
+    }
+    auto min_detect_ns = std::chrono::nanoseconds::max();
+    for (uint32_t r = 0; r < kCalibrationReps; r++) {
+        const auto before = std::chrono::steady_clock::now();
+        const uint32_t observed = ready_word_probe[0];
+        const auto delta = std::chrono::steady_clock::now() - before;
+        if (observed == 0xFFFFFFFF) {
+            continue;
+        }
+        min_detect_ns = std::min(min_detect_ns, delta);
+    }
+
+    std::vector<int64_t> host_ns_by_iteration;
+    host_ns_by_iteration.reserve(kSyncProbeIterations);
+    for (uint32_t i = 1; i <= kSyncProbeIterations; i++) {
+        bool asked = false;
+        for (uint32_t poll = 0; poll < 2000000; poll++) {
+            if (request_word[0] == i) {
+                asked = true;
+                break;
+            }
+        }
+        if (!asked) {
+            break;
+        }
+        host_ns_by_iteration.push_back(std::chrono::steady_clock::now().time_since_epoch().count());
+        cluster.write_core_immediate(&i, sizeof(i), tt_cxy_pair(device->id(), vcore), stream_scratch_addr);
+    }
+
+    distributed::Finish(mesh_device->mesh_command_queue());
+    std::this_thread::sleep_for(500ms);
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    ASSERT_GE(host_ns_by_iteration.size(), 100u)
+        << "kernel stopped asking after " << host_ns_by_iteration.size() << " iterations";
+
+    const std::vector<uint32_t> log = cluster.read_core(
+        device->id(), vcore, log_addr, static_cast<uint32_t>(host_ns_by_iteration.size() * 8 * sizeof(uint32_t)));
+    std::vector<double> device_work_ns;
+    std::vector<double> remainder_ns;
+    std::vector<SyncProbe> probes;
+    probes.reserve(host_ns_by_iteration.size());
+    for (size_t i = 0; i < host_ns_by_iteration.size(); i++) {
+        const uint64_t sent = (static_cast<uint64_t>(log[8 * i + 1]) << 32) | log[8 * i + 0];
+        const uint64_t answered = (static_cast<uint64_t>(log[8 * i + 3]) << 32) | log[8 * i + 2];
+        const uint64_t written = (static_cast<uint64_t>(log[8 * i + 5]) << 32) | log[8 * i + 4];
+        if (written > sent && answered > written) {
+            device_work_ns.push_back(static_cast<double>(written - sent));
+            remainder_ns.push_back(static_cast<double>(answered - written));
+        }
+        if (answered <= sent) {
+            continue;
+        }
+        probes.push_back(SyncProbe{
+            .host_ns = host_ns_by_iteration[i],
+            .device_mid_ticks = static_cast<double>(sent) + static_cast<double>(answered - sent) / 2.0,
+            .bracket_ticks = (answered - sent) / 2});
+    }
+    ASSERT_GE(probes.size(), 100u) << "too few usable probes: " << probes.size();
+
+    std::sort(probes.begin(), probes.end(), [](const SyncProbe& a, const SyncProbe& b) {
+        return a.bracket_ticks < b.bracket_ticks;
+    });
+    probes.resize(std::max<size_t>(16, static_cast<size_t>(probes.size() * kSyncProbeKeepFraction)));
+
+    double mean_host = 0.0;
+    double mean_device = 0.0;
+    for (const auto& p : probes) {
+        mean_host += static_cast<double>(p.host_ns);
+        mean_device += p.device_mid_ticks;
+    }
+    mean_host /= static_cast<double>(probes.size());
+    mean_device /= static_cast<double>(probes.size());
+    double num = 0.0;
+    double den = 0.0;
+    for (const auto& p : probes) {
+        const double dx = static_cast<double>(p.host_ns) - mean_host;
+        num += dx * (p.device_mid_ticks - mean_device);
+        den += dx * dx;
+    }
+    ASSERT_GT(den, 0.0) << "probes span no host time";
+    const double frequency = num / den;
+    const double offset = mean_device - frequency * mean_host;
+
+    std::lock_guard lk(records_mu);
+    ASSERT_FALSE(records.empty()) << "no RT records collected";
+    const double worst_bracket_ns = static_cast<double>(probes.back().bracket_ticks) / frequency;
+    // The two mappings sit a fixed distance apart, since this test splits its round trip at the midpoint while its two
+    // legs are not equal. That constant is bounded by its own bracket; what has to hold is that it does not move,
+    // because both mappings track the same device clock.
+    std::vector<double> disagreements;
+    uint64_t reported_error_ns = 0;
+    for (const auto& rec : records) {
+        if (rec.frequency <= 0.0) {
+            continue;
+        }
+        const double independent_host_ns = (static_cast<double>(rec.start_timestamp) - offset) / frequency;
+        disagreements.push_back(static_cast<double>(rec.host_start_ns()) - independent_host_ns);
+        reported_error_ns = std::max(reported_error_ns, rec.clock_sync.sync_error_ns);
+    }
+    ASSERT_FALSE(disagreements.empty());
+    const auto [min_it, max_it] = std::minmax_element(disagreements.begin(), disagreements.end());
+    const double offset_spread_ns = *max_it - *min_it;
+    const double mean_offset_ns =
+        std::accumulate(disagreements.begin(), disagreements.end(), 0.0) / static_cast<double>(disagreements.size());
+
+    const auto tick_ns = [&](const std::vector<double>& v) {
+        auto sorted = v;
+        std::sort(sorted.begin(), sorted.end());
+        return sorted.empty() ? 0.0 : sorted[sorted.size() / 20] / frequency;
+    };
+    const double device_work = tick_ns(device_work_ns);
+    const double remainder = tick_ns(remainder_ns);
+    std::cout << "[ BREAKDOWN ] round trip " << (device_work + remainder) << "ns = device write+barrier " << device_work
+              << "ns + remainder " << remainder << "ns; of that remainder, host write issue " << min_write_ns.count()
+              << "ns + host spin detect " << min_detect_ns.count() << "ns => both flights "
+              << (remainder - static_cast<double>(min_write_ns.count()) - static_cast<double>(min_detect_ns.count()))
+              << "ns" << std::endl;
+    std::cout << "[ SYNC ] device-bracketed handshake: " << probes.size() << " tightest probes, frequency " << frequency
+              << " GHz (record reports " << records.front().frequency << "), own bracket +/-" << worst_bracket_ns
+              << "ns; RT mapping offset by " << mean_offset_ns << "ns, moving " << offset_spread_ns
+              << "ns across the session; RT profiler reports " << reported_error_ns << "ns" << std::endl;
+
+    EXPECT_LE(std::abs(mean_offset_ns), worst_bracket_ns + static_cast<double>(reported_error_ns))
+        << "RT mapping sits further from the independent one than both stated uncertainties allow";
+    EXPECT_LE(offset_spread_ns, static_cast<double>(reported_error_ns) + worst_bracket_ns / 4.0)
+        << "the gap between the two mappings moved during the session; one of them is not tracking the device clock";
 
     EXPECT_TRUE(mesh_device->close());
 }

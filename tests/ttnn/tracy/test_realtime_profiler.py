@@ -327,6 +327,10 @@ def _run_cross_reference_workload(
     env["MESH_SHAPE"] = f"{mesh_shape[0]},{mesh_shape[1]}"
     env["RT_RECORDS_PATH"] = str(rt_path)
     env["DEV_PERF_PATH"] = str(dev_path)
+    # sync_device_info.csv carries the device profiler's own host<->device fit, which
+    # test_sync_mapping_cross_check reads back; writing it needs the file dumps left on.
+    env.pop("TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES", None)
+    env["TT_METAL_PROFILER_DIR"] = str(tmp_path / "profiler")
     if require_galaxy:
         env["REQUIRE_GALAXY"] = "1"
 
@@ -508,6 +512,95 @@ def test_cross_reference(tmp_path):
         test_name="test_cross_reference",
         expected_multi_chip=False,
         timeout_s=900,
+    )
+
+
+def _parse_device_profiler_sync(profiler_dir: Path) -> dict[int, list[tuple[float, float]]]:
+    """
+    Read the device profiler's own host<->device sync samples out of
+    ``sync_device_info.csv`` as {chip_id: [(device_cycles, host_ns), ...]}.
+
+    Its host axis is Tracy's CPU-tick domain scaled by ``tracy_ratio``, a
+    different epoch from the ``time.monotonic_ns()`` domain the RT profiler
+    publishes.  Only differences between the two mappings are meaningful, not
+    their absolute values -- see the docstring on the test below.
+    """
+    csv_path = profiler_dir / ".logs" / "sync_device_info.csv"
+    if not csv_path.exists():
+        pytest.skip(f"Device profiler wrote no sync data: {csv_path}")
+    by_chip = defaultdict(list)
+    with open(csv_path) as f:
+        for row in csv.DictReader(f, skipinitialspace=True):
+            chip = int(row["device id"])
+            host_ticks = float(row["host_tracy"]) + float(row["host_start"])
+            by_chip[chip].append((float(row["device"]), host_ticks * float(row["tracy_ratio"])))
+    return by_chip
+
+
+def _fit_line(points: list[tuple[float, float]]) -> tuple[float, float]:
+    """Least-squares (slope, intercept) of y on x."""
+    n = float(len(points))
+    mean_x = sum(x for x, _ in points) / n
+    mean_y = sum(y for _, y in points) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in points)
+    den = sum((x - mean_x) ** 2 for x, _ in points)
+    return (num / den, mean_y - (num / den) * mean_x)
+
+
+# Spread of the disagreement between the two mappings. Each is anchored on its own PCIe round
+# trip, so a difference of a few hundred ns is expected; what this bounds is how much that
+# difference *moves* across a session, which is what a broken anchor or a wrong placement shows up as.
+SYNC_CROSS_CHECK_SPREAD_NS = 25_000
+
+
+@pytest.mark.timeout(1200)
+def test_sync_mapping_cross_check(tmp_path):
+    """
+    Cross-check the RT profiler's host<->device mapping against the device profiler's,
+    which is built by an independent handshake over the same PCIe path.
+
+    The two live in different host epochs (monotonic ns vs Tracy CPU ticks), so the
+    absolute difference between them carries a fixed unknown offset and is not asserted
+    on.  What is asserted is that the difference stays *consistent* across every record
+    of a session: both mappings track the same physical device clock, so once the epoch
+    offset is subtracted out they must move together.  A mis-anchored or mis-placed
+    RT mapping shows up here as spread, and the mean shift is reported so a change in
+    anchor placement can be compared run to run.
+    """
+    if not CROSS_REFERENCE_WORKLOAD.exists():
+        pytest.fail(f"Workload script not found: {CROSS_REFERENCE_WORKLOAD}")
+
+    rt_records, _, _ = _run_cross_reference_workload(tmp_path, mesh_shape=(1, 1), timeout_s=900)
+    sync_by_chip = _parse_device_profiler_sync(tmp_path / "profiler")
+
+    deltas_by_chip = defaultdict(list)
+    for rec in rt_records:
+        chip = rec["chip_id"]
+        freq = rec["frequency_ghz"]
+        points = sync_by_chip.get(chip, [])
+        if freq <= 0 or len(points) < 2:
+            continue
+        slope, intercept = _fit_line(points)
+        device_profiler_host_ns = slope * rec["start_timestamp"] + intercept
+        rt_host_ns = (rec["start_timestamp"] - rec["device_cycle_offset"]) / freq
+        deltas_by_chip[chip].append(rt_host_ns - device_profiler_host_ns)
+
+    assert deltas_by_chip, "No RT record shared a chip with the device profiler's sync data"
+
+    print("\n=== test_sync_mapping_cross_check ===")
+    worst_spread = 0.0
+    for chip, deltas in sorted(deltas_by_chip.items()):
+        centered = [d - (sum(deltas) / len(deltas)) for d in deltas]
+        spread = max(centered) - min(centered)
+        worst_spread = max(worst_spread, spread)
+        print(
+            f"  chip {chip}: n={len(deltas)} mean_offset={sum(deltas)/len(deltas)/1e3:.1f}us " f"spread={spread:.0f}ns"
+        )
+    print(f"  worst spread: {worst_spread:.0f}ns (limit {SYNC_CROSS_CHECK_SPREAD_NS}ns)")
+
+    assert worst_spread <= SYNC_CROSS_CHECK_SPREAD_NS, (
+        f"The two host<->device mappings disagree by a varying amount (spread {worst_spread:.0f}ns > "
+        f"{SYNC_CROSS_CHECK_SPREAD_NS}ns); one of them is not tracking the device clock"
     )
 
 

@@ -104,10 +104,8 @@ sustain, since blank kernels minimize per-program dispatch overhead — and asse
 every record arrives with the device ring and host D2H FIFO never filling.
 
 ## Implementation Notes
-
-- Each MeshDevice's `RealtimeProfilerReceiver` runs a receiver thread that drains device→host pages and
-  publishes decoded records onto its own `BroadcastRing`. A context-wide service
-  owns one delivery thread per consumer; that thread reads every attached manager
-  ring and delivers record batches to that consumer (each record self-carries its
-  clock mapping, so there is no separate sync stream). A slow callback only drops
-  records for its own ring reader; it never stalls page draining or dispatch.
+- The host side runs a receiver thread that drains device→host pages and
+  publishes decoded records onto a `BroadcastRing`; separate per-callback
+  consumer threads read from the ring and invoke the registered callbacks. A slow
+  callback only drops records for that consumer (tracked in `Consumer::dropped`);
+  it never stalls page draining or dispatch.

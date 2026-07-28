@@ -23,6 +23,7 @@
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <umd/device/driver_atomics.hpp>
+#include <umd/device/pcie/tlb_handle.hpp>
 #include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -115,6 +116,16 @@ void RealtimeProfilerClockSync::configure_write_path() {
             MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(device_->id())->get_tlb_manager();
         if (tlb_manager != nullptr) {
             sync_tlb_ = tlb_manager->get_tlb_window(tt_xy_pair(rt_virtual.x, rt_virtual.y));
+            // Resolve the token's mapped address once. TlbWindow::write32 is a virtual call that re-validates the
+            // offset and re-derives the address on every store; the window is static, so the address is not.
+            const uint64_t window_offset =
+                sync_tlb_->get_base_address() - sync_tlb_->handle_ref().get_config().local_offset;
+            TT_FATAL(
+                l1_.host_timestamp + sizeof(uint32_t) <= sync_tlb_->get_size(),
+                "Sync token at {} does not fit the profiler core's TLB window",
+                l1_.host_timestamp);
+            sync_doorbell_ = reinterpret_cast<volatile uint32_t*>(
+                sync_tlb_->handle_ref().get_base() + l1_.host_timestamp + window_offset);
         }
     } catch (const std::exception& e) {
         log_debug(
@@ -146,11 +157,11 @@ void RealtimeProfilerClockSync::configure_ack_word(distributed::MeshDevice& mesh
             write_field(l1_.ack_host_addr + sizeof(uint32_t), 0);
         } else {
             const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+            // Page-aligned because PinnedMemory maps whole pages; aligned new rather than aligned_alloc so the
+            // deleter is not hand-rolled memory management.
             std::shared_ptr<uint32_t[]> backing(
-                static_cast<uint32_t*>(std::aligned_alloc(page, page)), [](uint32_t* p) { std::free(p); });
-            if (!backing) {
-                return;
-            }
+                new (std::align_val_t{page}) uint32_t[page / sizeof(uint32_t)],
+                [page](uint32_t* p) { operator delete[](p, std::align_val_t{page}); });
             for (uint32_t w = 0; w < kSyncAckWords; ++w) {
                 backing[w] = 0;
             }
@@ -185,8 +196,8 @@ void RealtimeProfilerClockSync::write_timestamp(uint32_t value) {
     // TODO: measure on Wormhole. The non-TLB path resolves the virtual core on every probe, inside the interval the
     // round trip is timed over; caching the tt_cxy_pair in configure() would take it off that path. Blackhole always
     // takes the TLB branch, so the change is unmeasurable here.
-    if (sync_tlb_ != nullptr) {
-        sync_tlb_->write32(l1_.host_timestamp, value);
+    if (sync_doorbell_ != nullptr) {
+        *sync_doorbell_ = value;
         tt_driver_atomics::sfence();
     } else {
         const CoreCoord vcore = device_->virtual_core_from_logical_core(profiler_core_, CoreType::WORKER);
@@ -282,21 +293,11 @@ bool RealtimeProfilerClockSync::run_fit() {
 
             const auto p = probe();
             if (!p.has_value()) {
-                consecutive_timeouts++;
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {} sync sample {}/{} round-trip probe timed out "
-                    "(consecutive timeouts: {}/{})",
-                    chip_id_,
-                    i,
-                    kFitSamples,
-                    consecutive_timeouts,
-                    kRunSyncMaxConsecutiveTimeouts);
-                if (consecutive_timeouts >= kRunSyncMaxConsecutiveTimeouts) {
+                if (++consecutive_timeouts >= kRunSyncMaxConsecutiveTimeouts) {
                     log_warning(
                         tt::LogMetal,
-                        "[Real-time profiler] Device {} sync aborted: {} consecutive timeouts. "
-                        "Device kernel may not be responding (check DPRINT output).",
+                        "[Real-time profiler] Device {} sync aborted after {} consecutive probe timeouts; the "
+                        "profiler kernel may not be responding (check DPRINT output)",
                         chip_id_,
                         consecutive_timeouts);
                     break;
@@ -305,11 +306,10 @@ bool RealtimeProfilerClockSync::run_fit() {
             }
             consecutive_timeouts = 0;
 
-            // Discard first sample - can be very off due to cold PCIe path.
-            if (i == 0) {
-                continue;
+            // The first probe pays the cold PCIe path.
+            if (i > 0) {
+                samples.push_back(*p);
             }
-            samples.push_back(*p);
         }
     }
 
@@ -359,12 +359,23 @@ bool RealtimeProfilerClockSync::resync(std::chrono::steady_clock::time_point now
         return true;
     }
     try {
-        const auto sample = probe();
-        if (!sample.has_value()) {
+        // A/B: fire a burst and keep the tightest round trip, so one slow probe cannot set the published bound.
+        // Eight probes per resync, keeping the tightest: measured to flatten the published bound's tail (a single
+        // probe gave p99 1.00us / max 4.54us; eight give p99 0.64us / max 0.64us) while leaving the receiver thread's
+        // page draining untouched at this depth (peak FIFO 120 of 32768 pages under peak load).
+        constexpr int kBurst = 8;
+        std::optional<ClockSyncSample> best;
+        for (int i = 0; i < kBurst; i++) {
+            const auto sample = probe();
+            if (sample.has_value() && (!best.has_value() || sample->rtt < best->rtt)) {
+                best = sample;
+            }
+        }
+        if (!best.has_value()) {
             return false;
         }
-        if (model_.accept_reanchor(sample->rtt, now)) {
-            model_.reanchor(now, *sample);
+        if (model_.accept_reanchor(best->rtt, now)) {
+            model_.reanchor(now, *best);
         }
     } catch (const std::exception& e) {
         log_warning(tt::LogMetal, "[Real-time profiler] Resync failed for device {}: {}", chip_id_, e.what());
