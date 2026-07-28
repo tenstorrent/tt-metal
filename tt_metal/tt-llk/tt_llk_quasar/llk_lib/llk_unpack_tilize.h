@@ -366,8 +366,8 @@ inline void _llk_unpack_tilize_strided_(const TensorShape& tensor_shape, const s
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM>
-inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32_t buf_desc_id, const std::uint32_t block_ct_dim)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
@@ -375,7 +375,7 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
     static_assert(!(IS_32b_DEST_EN && UNP_SEL != p_unpacr::UNP_A), "If IS_32b_DEST_EN then UNP_SEL should be UNP_A");
 
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-    constexpr std::uint32_t MOP_INNER_LOOP = FULL_CT_DIM;
+    const std::uint32_t MOP_INNER_LOOP     = block_ct_dim;
     constexpr std::uint32_t replay_buf_len = 2;
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
@@ -424,8 +424,9 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
  * @note @ref _llk_unpack_tilize_strided_small_faces_ is the matching execute call on this thread.
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM>
-inline void _llk_unpack_tilize_strided_init_small_faces_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+inline void _llk_unpack_tilize_strided_init_small_faces_(
+    const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim)
 {
     // Disable transpose
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
@@ -433,15 +434,15 @@ inline void _llk_unpack_tilize_strided_init_small_faces_(const std::uint32_t buf
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
-        cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * tensor_shape.num_faces_c_dim);
+        cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, full_ct_dim * tensor_shape.num_faces_c_dim);
     }
     else
     {
         cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
-        cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * tensor_shape.num_faces_c_dim);
+        cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, full_ct_dim * tensor_shape.num_faces_c_dim);
     }
 
-    _llk_unpack_tilize_strided_mop_config_small_faces_<UNP_SEL, IS_32b_DEST_EN, FULL_CT_DIM>(buf_desc_id);
+    _llk_unpack_tilize_strided_mop_config_small_faces_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, block_ct_dim);
 }
 
 /**
@@ -453,13 +454,13 @@ inline void _llk_unpack_tilize_strided_init_small_faces_(const std::uint32_t buf
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
  * @note Call @ref _llk_unpack_tilize_strided_init_small_faces_ before this function to program the MOP.
  */
-template <std::uint32_t UNP_SEL, std::uint32_t FULL_CT_DIM>
+template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_tilize_strided_small_faces_(const TensorShape& tensor_shape, const std::uint32_t l1_tile_idx)
 {
     // Reset Dest counters for Unpacker to 0
     // Set Source counter to L1 base + offset
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, l1_tile_idx * tensor_shape.face_r_dim * tensor_shape.num_faces_c_dim);
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, l1_tile_idx * tensor_shape.num_faces_c_dim);
 
     // Face 0 & 1
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
