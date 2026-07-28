@@ -20,8 +20,8 @@ import json
 import struct
 from typing import Callable, List, Optional
 
-from ttnn._ttnn.multi_device import recv_bytes as _mpi_recv_bytes
-from ttnn._ttnn.multi_device import send_bytes as _mpi_send_bytes
+from ttnn import distributed_context_recv_bytes as _mpi_recv_bytes
+from ttnn import distributed_context_send_bytes as _mpi_send_bytes
 
 from .weight_bridge import (
     TTML_RANK,
