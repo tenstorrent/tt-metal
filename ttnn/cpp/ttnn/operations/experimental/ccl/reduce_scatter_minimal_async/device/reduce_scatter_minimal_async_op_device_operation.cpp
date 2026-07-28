@@ -13,6 +13,28 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
+namespace {
+
+// True when this call stages through the chunk-paged contiguous intermediate, which additionally needs
+// the penult intermediate as a third output tensor.
+//
+// compute_output_specs, create_output_tensors and compute_output_topologies must agree exactly on the
+// output count (the framework TT_FATALs if the topology count and the tensor count differ), and the
+// ring program factory keys off the same answer to decide whether it has a penult intermediate to wire up.
+// Routing all four through this one predicate is what keeps them from disagreeing.
+bool uses_contiguous_staging(
+    const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
+    return ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+        tensor_args.input_tensor,
+        tensor_args.optional_intermediate_tensor,
+        operation_attributes.topology,
+        operation_attributes.dim,
+        operation_attributes.ring_size,
+        ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config));
+}
+
+}  // namespace
+
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
@@ -60,13 +82,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.dim,
         operation_attributes.ring_size,
         fp32_dest_acc_en);
-    const bool use_contiguous = ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
-        input_tensor,
-        tensor_args.optional_intermediate_tensor,
-        operation_attributes.topology,
-        operation_attributes.dim,
-        operation_attributes.ring_size,
-        fp32_dest_acc_en);
+    const bool use_contiguous = uses_contiguous_staging(operation_attributes, tensor_args);
 
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         const auto& interm = tensor_args.optional_intermediate_tensor.value();
@@ -99,30 +115,35 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // Validate shortcut tensor if provided. It only exists on the contiguous path, so it is invalid
+    // Validate penult intermediate if provided. It only exists on the contiguous path, so it is invalid
     // both where that path does not apply and where a tiled intermediate opted out of it.
-    if (tensor_args.optional_shortcut_tensor.has_value()) {
-        const auto& shortcut = tensor_args.optional_shortcut_tensor.value();
+    if (tensor_args.optional_penult_intermediate_tensor.has_value()) {
+        const auto& penult_interm = tensor_args.optional_penult_intermediate_tensor.value();
         TT_FATAL(
             use_contiguous,
-            "A persistent shortcut tensor was provided but this call does not use the contiguous reduce-scatter "
-            "staging layout ({}); the shortcut tensor is not applicable.",
+            "A persistent penult intermediate was provided but this call does not use the contiguous "
+            "reduce-scatter "
+            "staging layout ({}); the penult intermediate is not applicable.",
             stage_spec.has_value() ? "the provided persistent intermediate selects the tiled layout"
                                    : "requires Ring topology and scatter dim != 0");
-        auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+        auto penult_intermediate_spec = ttnn::experimental::ccl::reduce_scatter_ring_penult_intermediate_staging_spec(
             input_tensor,
             operation_attributes.topology,
             operation_attributes.dim,
             operation_attributes.ring_size,
             fp32_dest_acc_en);
-        TT_FATAL(shortcut_spec.has_value(), "shortcut staging spec must apply whenever the contiguous path is used");
-        TT_FATAL(shortcut.storage_type() == StorageType::DEVICE, "Persistent shortcut tensor must be on device");
         TT_FATAL(
-            ttnn::experimental::ccl::reduce_scatter_tensor_matches_spec(shortcut, *shortcut_spec),
-            "Persistent shortcut tensor does not match the contiguous reduce-scatter shortcut staging layout "
+            penult_intermediate_spec.has_value(),
+            "penult intermediate staging spec must apply whenever the contiguous path is used");
+        TT_FATAL(
+            penult_interm.storage_type() == StorageType::DEVICE, "Persistent penult intermediate must be on device");
+        TT_FATAL(
+            ttnn::experimental::ccl::reduce_scatter_tensor_matches_spec(penult_interm, *penult_intermediate_spec),
+            "Persistent penult intermediate does not match the contiguous reduce-scatter penult intermediate "
+            "staging layout "
             "(expected shape {}, UINT8 row-major interleaved DRAM). Allocate it with "
             "reduce_scatter_minimal_async_create_intermediate_buffer.",
-            shortcut_spec->logical_shape());
+            penult_intermediate_spec->logical_shape());
     }
 
     // Validate semaphore count
@@ -151,14 +172,23 @@ std::vector<tt::tt_metal::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::
     // allocate caller-provided persistent buffers (reduce_scatter_ring_interm_staging_spec). A
     // caller-provided input-shaped intermediate opts back into the tiled layout below. See
     // rs-contiguous-interm-design.
+    //
+    // This path carries a third output: the smaller penult intermediate the 2nd-last ring
+    // iteration writes into. It is an implementation detail of the layout rather than a result the
+    // caller asked for, but it is declared here (and allocated in create_output_tensors) so the op owns
+    // it the same way it owns the intermediate — the program factory receives a buffer instead of
+    // allocating one behind the framework's back.
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
-    if (ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+    if (uses_contiguous_staging(operation_attributes, tensor_args)) {
+        auto penult_intermediate_spec = ttnn::experimental::ccl::reduce_scatter_ring_penult_intermediate_staging_spec(
             input_tensor,
-            tensor_args.optional_intermediate_tensor,
             operation_attributes.topology,
             operation_attributes.dim,
             operation_attributes.ring_size,
-            fp32_dest_acc_en)) {
+            fp32_dest_acc_en);
+        TT_FATAL(
+            penult_intermediate_spec.has_value(),
+            "penult intermediate staging spec must apply whenever the contiguous path is used");
         return {
             *ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
                 input_tensor,
@@ -166,7 +196,8 @@ std::vector<tt::tt_metal::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::
                 operation_attributes.dim,
                 operation_attributes.ring_size,
                 fp32_dest_acc_en),
-            output_spec};
+            output_spec,
+            *penult_intermediate_spec};
     }
 
     auto inter_shape = input_tensor.padded_shape();
@@ -216,6 +247,16 @@ std::vector<Tensor> ReduceScatterMinimalAsyncDeviceOperation::create_output_tens
                                      ? tensor_args.optional_output_tensor.value()
                                      : create_device_tensor(tensor_specs[1], input_tensor.device());
 
+    // Contiguous staging layout only (see compute_output_specs): the third spec is the penult
+    // intermediate. Like the main intermediate, a caller-provided persistent buffer takes priority — it
+    // was matched against this same spec in validate_on_program_cache_miss.
+    if (tensor_specs.size() > 2) {
+        ttnn::Tensor penult_intermediate_buffer = tensor_args.optional_penult_intermediate_tensor.has_value()
+                                                      ? tensor_args.optional_penult_intermediate_tensor.value()
+                                                      : create_device_tensor(tensor_specs[2], input_tensor.device());
+        return {intermediate_buffer, output_buffer, penult_intermediate_buffer};
+    }
+
     return {intermediate_buffer, output_buffer};
 }
 
@@ -264,6 +305,13 @@ std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalAsyncDeviceOperati
 
     auto output_topology = tt::tt_metal::TensorTopology(
         input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
+
+    // The count must match create_output_tensors exactly, so the contiguous staging path contributes a
+    // third entry for the penult intermediate. It is device-local scratch with no distribution semantics of
+    // its own, so it keeps the input topology — same as the intermediate at index 0.
+    if (uses_contiguous_staging(operation_attributes, tensor_args)) {
+        return {input_topology, std::move(output_topology), input_topology};
+    }
 
     return {input_topology, std::move(output_topology)};
 }
@@ -441,7 +489,7 @@ std::vector<Tensor> reduce_scatter_minimal_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const std::optional<ttnn::Tensor>& optional_shortcut_tensor,
+    const std::optional<ttnn::Tensor>& optional_penult_intermediate_tensor,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
@@ -477,7 +525,7 @@ std::vector<Tensor> reduce_scatter_minimal_async(
         num_buffers_per_channel,
         compute_kernel_config};
     auto tensor_args = OperationType::tensor_args_t{
-        input_tensor, optional_intermediate_tensor, optional_output_tensor, optional_shortcut_tensor};
+        input_tensor, optional_intermediate_tensor, optional_output_tensor, optional_penult_intermediate_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

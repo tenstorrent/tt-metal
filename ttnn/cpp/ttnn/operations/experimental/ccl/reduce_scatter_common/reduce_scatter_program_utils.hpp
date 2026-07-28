@@ -82,7 +82,7 @@ std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_interm_staging_spec(
     uint32_t ring_size,
     bool fp32_dest_acc_en);
 
-// Builds the TensorSpec for the "shortcut" staging buffer: a small chunk-paged region (same
+// Builds the TensorSpec for the penult intermediate: a small chunk-paged region (same
 // row-major UINT8 / interleaved DRAM layout as the main intermediate) used by the ring contiguous
 // path's second-to-last iteration to stage one direction's contribution ahead of schedule, instead
 // of scatter-writing it directly into the tiled output tensor. Unlike the main intermediate, this
@@ -90,7 +90,7 @@ std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_interm_staging_spec(
 // chunks_per_channel pages): each device receives exactly one such contribution, from exactly one
 // neighbor, at exactly one iteration, so no ring-position axis is needed. Returns nullopt when the
 // contiguous path does not apply. See rs-contiguous-interm-design.
-std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_shortcut_staging_spec(
+std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_penult_intermediate_staging_spec(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
     uint32_t dim,

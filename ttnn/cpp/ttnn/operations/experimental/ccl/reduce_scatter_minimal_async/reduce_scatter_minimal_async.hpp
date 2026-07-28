@@ -32,18 +32,19 @@ ttnn::Tensor reduce_scatter_minimal_async(
 // When reduce_scatter_minimal_async runs on the Ring topology with scatter dim != 0, the intermediate
 // is a chunk-paged, row-major, interleaved-DRAM staging tensor (not the input-shaped tensor), and the
 // 2nd-last ring iteration stages one direction's contribution ahead of schedule into a second, smaller
-// chunk-paged "shortcut" buffer (see rs-contiguous-interm-design) instead of scatter-writing it into
+// chunk-paged penult intermediate (see rs-contiguous-interm-design) instead of scatter-writing it into
 // the tiled output tensor. Callers that want to reuse persistent buffers must allocate both with the
 // exact layout the op expects; this helper does that by reusing the op's own sizing helpers, so the
 // returned tensors are guaranteed to match. Pass the result as
-// persistent_output_buffers = {result[0], output_tensor, result[1]} (intermediate at index 0, shortcut
-// at index 2 — output_tensor is the caller's own persistent output, unrelated to this helper).
+// persistent_output_buffers = {result[0], output_tensor, result[1]} (intermediate at index 0, penult
+// intermediate at index 2 — output_tensor is the caller's own persistent output, unrelated to this
+// helper).
 // `dim`, `topology`, `cluster_axis`, and `compute_kernel_config` must match the values passed to
 // reduce_scatter_minimal_async.
 //
 // TT_FATALs if the configuration does not use the contiguous path (Ring + dim != 0); for the legacy
-// path the intermediate has the input tensor's shape and can be allocated directly, and no shortcut
-// buffer is needed.
+// path the intermediate has the input tensor's shape and can be allocated directly, and no penult
+// intermediate is needed.
 std::vector<ttnn::Tensor> reduce_scatter_minimal_async_create_intermediate_buffer(
     const ttnn::Tensor& input_tensor,
     int32_t dim,

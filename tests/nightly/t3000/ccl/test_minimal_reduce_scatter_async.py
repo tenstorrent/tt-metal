@@ -80,9 +80,9 @@ def run_reduce_scatter_impl(
         intermediate_shape.insert(0, 2)
     # Ring / scatter-dim != 0 can use the contiguous fast path: the intermediate is a chunk-paged staging
     # buffer (not input-shaped) and the 2nd-last ring iteration stages one direction's contribution into
-    # a second "shortcut" staging buffer instead of scatter-writing into the tiled output. Both must be
+    # a second penult intermediate instead of scatter-writing into the tiled output. Both must be
     # allocated via the op's own sizing helper; other configs use an input-shaped tiled intermediate and
-    # have no shortcut buffer.
+    # have no penult intermediate.
     #
     # The op picks the path from the intermediate it is handed, so on the ring path a caller may opt into
     # the tiled layout by passing contiguous_staging=False. Everywhere else the tiled layout is the only
@@ -135,11 +135,14 @@ def run_reduce_scatter_impl(
     logger.info("Creating persistent buffers")
     persistent_intermediate_buffers = []
     persistent_output_buffers = []
-    persistent_shortcut_buffers = []
+    persistent_penult_intermediate_buffers = []
     if use_persistent_buffers:
         for i in range(num_iters):
             if use_contiguous_staging:
-                interm_buf, shortcut_buf = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+                (
+                    interm_buf,
+                    penult_interm_buf,
+                ) = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
                     tt_input_tensor_mesh_list[i], dim=dim, topology=rs_topology, cluster_axis=cluster_axis
                 )
             else:
@@ -151,9 +154,9 @@ def run_reduce_scatter_impl(
                     memory_config=mem_config_intermediate,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 )
-                shortcut_buf = None
+                penult_interm_buf = None
             persistent_intermediate_buffers.append(interm_buf)
-            persistent_shortcut_buffers.append(shortcut_buf)
+            persistent_penult_intermediate_buffers.append(penult_interm_buf)
             persistent_output_buffers.append(
                 ttnn.from_torch(
                     torch.zeros(rs_output_shape),
@@ -196,8 +199,8 @@ def run_reduce_scatter_impl(
             logger.info(f"Using experimental reduce scatter")
             if use_persistent_buffers:
                 buffers = [persistent_intermediate_buffers[i], persistent_output_buffers[i]]
-                if persistent_shortcut_buffers[i] is not None:
-                    buffers.append(persistent_shortcut_buffers[i])
+                if persistent_penult_intermediate_buffers[i] is not None:
+                    buffers.append(persistent_penult_intermediate_buffers[i])
             else:
                 buffers = None
             tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(

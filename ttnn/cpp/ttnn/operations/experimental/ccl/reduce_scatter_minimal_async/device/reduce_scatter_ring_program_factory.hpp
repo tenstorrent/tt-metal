@@ -30,8 +30,7 @@ struct RingReduceScatterMeshWorkloadFactory {
         const ReduceScatterMinimalAsyncParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value,
-        const std::optional<Tensor>& shortcut_tensor);
+        std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
@@ -45,7 +44,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
-    const std::optional<Tensor>& shortcut_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -82,6 +81,9 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
-    const Tensor& output);
+    const Tensor& output,
+    // Contiguous staging layout only: the penult intermediate, whose address must be re-published because
+    // the op reallocates it per invocation. nullopt on the tiled layout, where the kernels never read it.
+    const std::optional<Tensor>& penult_intermediate);
 
 }  // namespace ttnn::experimental::prim

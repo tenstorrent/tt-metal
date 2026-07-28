@@ -13,8 +13,6 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
 // Import functions from the new namespace
 using ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts;
@@ -52,32 +50,6 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
 
-    // Contiguous staging layout only: the "shortcut" buffer used by the 2nd-last iteration (see
-    // rs-contiguous-interm-design). Allocated once per program build and reused for the lifetime of
-    // the cached program via shared_variables_t; nullopt when the tiled layout is in use. This op
-    // sizes its intermediate as an input-shaped tiled tensor (compute_output_specs), so the layout is
-    // read off that tensor rather than assumed from topology + dim.
-    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
-    const uint32_t target_ring_size =
-        ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
-    std::optional<Tensor> shortcut_tensor;
-    if (ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
-            tensor_args.input_tensor,
-            tensor_return_value.at(0),
-            operation_attributes.topology,
-            operation_attributes.dim,
-            target_ring_size,
-            fp32_dest_acc_en)) {
-        shortcut_tensor = create_device_tensor(
-            *ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
-                tensor_args.input_tensor,
-                operation_attributes.topology,
-                operation_attributes.dim,
-                target_ring_size,
-                fp32_dest_acc_en),
-            mesh_device);
-    }
-
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
             operation_attributes,
@@ -86,8 +58,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
             tensor_return_value,
             tensor_coords,
             multidevice_semaphores,
-            barrier_semaphore,
-            shortcut_tensor);
+            barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -103,8 +74,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
-    const std::optional<Tensor>& shortcut_tensor) {
+    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     tt::tt_metal::Program program{};
 
     // Get mesh and axis related information
@@ -147,7 +117,11 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         program,
         tensor_args.input_tensor,
         tensor_return_value.at(0),
-        shortcut_tensor,
+        // No penult intermediate: compute_output_specs sizes this op's intermediate as an input-shaped tiled
+        // tensor, so the builder always takes the tiled path and never reads it. The contiguous staging
+        // layout — and the penult intermediate that goes with it — belongs to
+        // ReduceScatterMinimalAsyncDeviceOperation, which declares it as one of its own outputs.
+        /*penult_intermediate_tensor=*/std::nullopt,
         mesh_coordinate,
         forward_coordinate,
         backward_coordinate,
@@ -181,9 +155,7 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto update_runtime_arguments = operation_attributes.topology == ttnn::ccl::Topology::Ring
-                                        ? ring_reduce_scatter_minimal_async_helper_override_runtime_arguments
-                                        : line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+    const bool is_ring = operation_attributes.topology == ttnn::ccl::Topology::Ring;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = range.start_coord();
         TT_FATAL(
@@ -192,22 +164,45 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
             coord,
             range.end_coord());
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        update_runtime_arguments(
-            program,
-            shared_variables.program_artifacts.reader_kernel_id,
-            shared_variables.program_artifacts.writer_kernel_id,
-            shared_variables.program_artifacts.all_cores,
-            operation_attributes.num_links,
-            shared_variables.program_artifacts.num_directions_per_link,
-            shared_variables.program_artifacts.num_workers_per_direction,
-            shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
-            shared_variables.program_artifacts.num_cores_per_link,
-            shared_variables.program_artifacts.normalized_dim,
-            shared_variables.barrier_semaphore,
-            shared_variables.multidevice_semaphores,
-            tensor_args.input_tensor,
-            tensor_return_value.at(0),
-            tensor_return_value.at(1));
+        // The two helpers no longer share a signature: the ring one also re-publishes the contiguous
+        // staging path's penult intermediate address. This op never uses that path (see create_at), so it
+        // passes nullopt — but the differing arity means these cannot be selected as a function pointer.
+        if (is_ring) {
+            ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+                program,
+                shared_variables.program_artifacts.reader_kernel_id,
+                shared_variables.program_artifacts.writer_kernel_id,
+                shared_variables.program_artifacts.all_cores,
+                operation_attributes.num_links,
+                shared_variables.program_artifacts.num_directions_per_link,
+                shared_variables.program_artifacts.num_workers_per_direction,
+                shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
+                shared_variables.program_artifacts.num_cores_per_link,
+                shared_variables.program_artifacts.normalized_dim,
+                shared_variables.barrier_semaphore,
+                shared_variables.multidevice_semaphores,
+                tensor_args.input_tensor,
+                tensor_return_value.at(0),
+                tensor_return_value.at(1),
+                /*penult_intermediate=*/std::nullopt);
+        } else {
+            line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+                program,
+                shared_variables.program_artifacts.reader_kernel_id,
+                shared_variables.program_artifacts.writer_kernel_id,
+                shared_variables.program_artifacts.all_cores,
+                operation_attributes.num_links,
+                shared_variables.program_artifacts.num_directions_per_link,
+                shared_variables.program_artifacts.num_workers_per_direction,
+                shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
+                shared_variables.program_artifacts.num_cores_per_link,
+                shared_variables.program_artifacts.normalized_dim,
+                shared_variables.barrier_semaphore,
+                shared_variables.multidevice_semaphores,
+                tensor_args.input_tensor,
+                tensor_return_value.at(0),
+                tensor_return_value.at(1));
+        }
     }
 }
 

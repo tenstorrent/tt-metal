@@ -46,7 +46,8 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
               tensor whose page holds a whole chunk, so a chunk's tiles are contiguous at the
               destination. The writer sends each chunk as a single fused-unicast write instead of a
               scatter write, and the reader reads it back in one coalesced transaction instead of one
-              per tile. Requires a companion "shortcut" buffer; allocate both with
+              per tile. Requires a companion penult intermediate, which the op allocates alongside the
+              intermediate unless you pass persistent buffers; to pass your own, allocate both with
               reduce_scatter_minimal_async_create_intermediate_buffer.
             * Tiled. The intermediate mirrors the input tensor's shape and tiled addressing, one tile
               per page. This is the only layout available for Linear topology or scatter dim 0.
@@ -97,11 +98,11 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
 
         On this path the intermediate is a chunk-paged, row-major, interleaved-DRAM staging tensor rather
         than an input-shaped tensor, and the 2nd-last ring iteration stages one direction's contribution
-        into a second, smaller chunk-paged "shortcut" buffer instead of scatter-writing it into the tiled
-        output tensor. Both must be allocated with the exact layout the op expects. This helper reuses the
+        into a second, smaller chunk-paged "penult" intermediate instead of scatter-writing it into the
+        tiled output tensor. Both must be allocated with the exact layout the op expects. This helper reuses the
         op's own sizing so the returned tensors are guaranteed to match. Pass the result as
         persistent_output_buffers = [result[0], output_tensor, result[1]] (intermediate at index 0,
-        shortcut at index 2; output_tensor is the caller's own persistent output). The `dim`, `topology`,
+        penult intermediate at index 2; output_tensor is the caller's own persistent output). The `dim`, `topology`,
         `cluster_axis`, and `compute_kernel_config` arguments must match those passed to
         reduce_scatter_minimal_async.
 
@@ -112,10 +113,10 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
 
         Raises if the configuration cannot use the contiguous path at all (Linear topology, or scatter
         dim 0); there the intermediate has the input tensor's shape, can be allocated directly, and
-        needs no shortcut buffer.
+        needs no penult intermediate.
 
         Returns:
-            List[ttnn.Tensor]: [intermediate_buffer, shortcut_buffer], both allocated on the input
+            List[ttnn.Tensor]: [intermediate_buffer, penult_intermediate_buffer], both allocated on the input
             tensor's device.
         )doc",
         &ttnn::experimental::reduce_scatter_minimal_async_create_intermediate_buffer,

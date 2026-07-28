@@ -29,12 +29,6 @@ struct ReduceScatterProgramArtifacts {
     uint32_t num_mux_cores_per_direction_per_link;
     uint32_t num_cores_per_link;
     uint32_t normalized_dim;
-    // Ring contiguous fast path only: internally-owned "shortcut" staging buffer (see
-    // reduce_scatter_ring_shortcut_staging_spec). Allocated once when the program is first built and
-    // reused for the lifetime of the cached program; its address never changes, so
-    // override_runtime_arguments does not need to patch it on cache hits. Empty when not applicable
-    // (Linear topology, or Ring with scatter dim 0).
-    std::optional<Tensor> shortcut_tensor;
 };
 
 struct ReduceScatterMinimalAsyncParams {
@@ -94,9 +88,9 @@ struct ReduceScatterMinimalAsyncInputs {
     std::optional<Tensor> optional_intermediate_tensor;
     std::optional<Tensor> optional_output_tensor;
     // Ring contiguous fast path only (Ring topology, scatter dim != 0): caller-provided persistent
-    // "shortcut" staging buffer (see reduce_scatter_ring_shortcut_staging_spec). When absent and the
-    // contiguous path applies, the Ring program factory allocates one internally instead.
-    std::optional<Tensor> optional_shortcut_tensor;
+    // penult intermediate (see reduce_scatter_ring_penult_intermediate_staging_spec). When
+    // absent and the contiguous path applies, create_output_tensors allocates one and returns it at index 2.
+    std::optional<Tensor> optional_penult_intermediate_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

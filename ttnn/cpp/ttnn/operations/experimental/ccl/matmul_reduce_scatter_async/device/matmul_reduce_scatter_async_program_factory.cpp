@@ -16,8 +16,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -30,31 +28,8 @@ MatmulReduceScatterAsyncProgramFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
-    // Contiguous staging layout only: the "shortcut" buffer used by the 2nd-last iteration (see
-    // rs-contiguous-interm-design). Allocated once per program build and reused for the lifetime of
-    // the cached program via shared_variables_t (folded into reduce_scatter_artifacts); nullopt when
-    // the tiled layout is in use. Which layout applies is read off the persistent intermediate the
-    // caller supplied. compute_kernel_config matches the std::nullopt passed to the builder below.
-    std::optional<Tensor> shortcut_tensor;
-    if (ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
-            output_tensors.mm,
-            tensor_args.persistent_intermediate,
-            args.reduce_scatter_params.topology,
-            args.reduce_scatter_params.dim,
-            args.reduce_scatter_params.ring_size,
-            /*fp32_dest_acc_en=*/ttnn::get_fp32_dest_acc_en(std::nullopt))) {
-        shortcut_tensor = create_device_tensor(
-            *ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
-                output_tensors.mm,
-                args.reduce_scatter_params.topology,
-                args.reduce_scatter_params.dim,
-                args.reduce_scatter_params.ring_size,
-                /*fp32_dest_acc_en=*/ttnn::get_fp32_dest_acc_en(std::nullopt)),
-            output_tensors.mm.device());
-    }
-
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(args, coord, tensor_args, output_tensors, shortcut_tensor);
+        auto cached_program = create_at(args, coord, tensor_args, output_tensors);
         mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_vars.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -66,8 +41,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     const MatmulReduceScatterAsyncParams& args,
     const ttnn::MeshCoordinate& mesh_coord,
     const MatmulReduceScatterAsyncInputs& tensor_args,
-    MatmulReduceScatterAsyncResult& output_tensors,
-    const std::optional<Tensor>& shortcut_tensor) {
+    MatmulReduceScatterAsyncResult& output_tensors) {
     ttnn::ccl::Topology topology = args.reduce_scatter_params.topology;
 
     const auto& dim = args.reduce_scatter_params.dim;
@@ -111,7 +85,14 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         program,
         output_tensors.mm,
         tensor_args.persistent_intermediate,
-        shortcut_tensor,
+        // No penult intermediate: this op's intermediate is always caller-provided, and it has no
+        // output of its own to hang a staging buffer off (the penult intermediate is declared and
+        // allocated by ReduceScatterMinimalAsyncDeviceOperation, which is not the op running here).
+        // Every caller passes an input-shaped tiled intermediate, so the builder takes the tiled path
+        // and never reads this. Were a caller to pass a chunk-paged staging intermediate instead, the
+        // builder's "contiguous-interm path requires a penult intermediate staging tensor" TT_FATAL
+        // would reject it rather than silently mis-address.
+        /*penult_intermediate_tensor=*/std::nullopt,
         mesh_coord,
         forward_coord,
         backward_coord,
@@ -195,7 +176,9 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             args.reduce_scatter_params.semaphore,
             output_tensors.mm,
             tensor_args.persistent_intermediate,
-            output_tensors.reduce_scatter);
+            output_tensors.reduce_scatter,
+            // Matches the nullopt passed in create_at: tiled layout, nothing to re-publish.
+            /*penult_intermediate=*/std::nullopt);
     }
 }
 

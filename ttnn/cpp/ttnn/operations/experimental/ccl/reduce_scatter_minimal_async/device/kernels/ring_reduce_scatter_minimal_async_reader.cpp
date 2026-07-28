@@ -64,15 +64,15 @@ FORCE_INLINE uint32_t slice_base_tile_id(uint32_t slice_idx) {
 
 // The tensors a readback strategy may source from. Which ones it actually touches depends on the
 // staging layout; see IntermSource.
-template <typename IntermAcc, typename OutputAcc, typename ShortcutAcc>
+template <typename IntermAcc, typename OutputAcc, typename PenultIntermAcc>
 struct IntermTensors {
     const IntermAcc& interm;
     const OutputAcc& output;
-    const ShortcutAcc& shortcut;
+    const PenultIntermAcc& penult_interm;
 };
-template <typename IntermAcc, typename OutputAcc, typename ShortcutAcc>
-IntermTensors(const IntermAcc&, const OutputAcc&, const ShortcutAcc&)
-    -> IntermTensors<IntermAcc, OutputAcc, ShortcutAcc>;
+template <typename IntermAcc, typename OutputAcc, typename PenultIntermAcc>
+IntermTensors(const IntermAcc&, const OutputAcc&, const PenultIntermAcc&)
+    -> IntermTensors<IntermAcc, OutputAcc, PenultIntermAcc>;
 
 // Reads the partial sums staged by remote writers back into the compute CBs.
 //
@@ -90,7 +90,7 @@ IntermTensors(const IntermAcc&, const OutputAcc&, const ShortcutAcc&)
 //   separate NoC transaction, and the per-tile address counters must be advanced over skipped and
 //   non-reducing chunks to stay in lockstep with the slice.
 //
-// IntermSource<true> - chunk-paged layout. The intermediate (and a dedicated shortcut buffer for
+// IntermSource<true> - chunk-paged layout. The intermediate (and a dedicated penult intermediate for
 //   the 2nd-last iteration's contribution) store one whole chunk per page, so a chunk is read back
 //   in a single coalesced transaction and its address derives statelessly from tiles_read. See
 //   rs-contiguous-interm-design.
@@ -195,7 +195,7 @@ template <>
 struct IntermSource<true> {
     uint32_t interm_slice_chunk_base = 0;
     uint32_t interm_channel_chunk_base = 0;
-    uint32_t shortcut_channel_chunk_base = 0;
+    uint32_t penult_interm_channel_chunk_base = 0;
 
     // The per-worker row/column starts are meaningless here: chunk pages are addressed straight
     // from tiles_read, so nothing has to be tracked across chunks.
@@ -207,9 +207,9 @@ struct IntermSource<true> {
 
     void begin_channel(uint32_t c) {
         interm_channel_chunk_base = interm_slice_chunk_base + c * chunks_per_channel;
-        // The shortcut buffer has no slice_idx axis (each device receives exactly one such
+        // The penult intermediate has no slice_idx axis (each device receives exactly one such
         // contribution, from exactly one neighbor, at exactly one iteration).
-        shortcut_channel_chunk_base = c * chunks_per_channel;
+        penult_interm_channel_chunk_base = c * chunks_per_channel;
     }
 
     void skip_chunk(uint32_t) {}
@@ -229,7 +229,7 @@ struct IntermSource<true> {
         }
         // Whole chunk lives in one page; tile j sits at byte offset
         // ((tiles_read % tile_granularity) + j) * page_size within that page. Same scheme for the
-        // intermediate and the shortcut buffer, differing only in the channel base.
+        // intermediate and the penult intermediate, differing only in the channel base.
         const uint32_t chunk_in_channel = tiles_read / tile_granularity;
         const uint32_t chunk_page_base_off = (tiles_read % tile_granularity) * page_size;
 
@@ -247,10 +247,10 @@ struct IntermSource<true> {
 
         if (reduce_output) {
             noc.async_read(
-                tensors.shortcut,
+                tensors.penult_interm,
                 cb_interm2,
                 tiles_to_read * page_size,
-                {.page_id = shortcut_channel_chunk_base + chunk_in_channel, .offset_bytes = chunk_page_base_off},
+                {.page_id = penult_interm_channel_chunk_base + chunk_in_channel, .offset_bytes = chunk_page_base_off},
                 {.offset_bytes = 0});
         }
     }
@@ -277,7 +277,7 @@ void kernel_main() {
     // Chunk-paged layout only: staging buffer holding the 2nd-last iteration's direct-to-remote
     // contribution, read back as the 3rd term of the final iteration's local reduce. The tiled
     // layout reads that term from output_tensor instead and leaves this address at 0.
-    address_t shortcut_tensor_address = get_arg_val<address_t>(arg_idx++);
+    address_t penult_intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 0;
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
@@ -289,10 +289,12 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<interm_tensor_args.next_compile_time_args_offset()>();
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
-    constexpr auto shortcut_tensor_args = TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
-    auto shortcut_tensor_accessor = TensorAccessor(shortcut_tensor_args, shortcut_tensor_address);
+    constexpr auto penult_intermediate_tensor_args =
+        TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
+    auto penult_intermediate_tensor_accessor =
+        TensorAccessor(penult_intermediate_tensor_args, penult_intermediate_tensor_address);
 
-    IntermTensors interm_tensors{interm_tensor_accessor, output_tensor_accessor, shortcut_tensor_accessor};
+    IntermTensors interm_tensors{interm_tensor_accessor, output_tensor_accessor, penult_intermediate_tensor_accessor};
     IntermSource<contiguous_interm> interm_source(start_pages_read_in_row, start_row_offset, start_tiles_read);
 
     ReduceScatterOpReceiver matmul_receiver;

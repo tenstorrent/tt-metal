@@ -112,15 +112,15 @@ FORCE_INLINE uint32_t slice_base_tile_id(uint32_t slice_idx) {
 
 // The tensors a staging strategy may write to. Which ones it actually touches depends on the
 // staging layout; see IntermSink.
-template <typename IntermAcc, typename OutputAcc, typename ShortcutAcc>
+template <typename IntermAcc, typename OutputAcc, typename PenultIntermAcc>
 struct IntermTensors {
     const IntermAcc& interm;
     const OutputAcc& output;
-    const ShortcutAcc& shortcut;
+    const PenultIntermAcc& penult_interm;
 };
-template <typename IntermAcc, typename OutputAcc, typename ShortcutAcc>
-IntermTensors(const IntermAcc&, const OutputAcc&, const ShortcutAcc&)
-    -> IntermTensors<IntermAcc, OutputAcc, ShortcutAcc>;
+template <typename IntermAcc, typename OutputAcc, typename PenultIntermAcc>
+IntermTensors(const IntermAcc&, const OutputAcc&, const PenultIntermAcc&)
+    -> IntermTensors<IntermAcc, OutputAcc, PenultIntermAcc>;
 
 // Stages one chunk of partial sums, either on the next device over the fabric or locally.
 //
@@ -141,7 +141,7 @@ IntermTensors(const IntermAcc&, const OutputAcc&, const ShortcutAcc&)
 //   num_tiles_to_write_per_packet non-adjacent destinations and must be sent as a scatter write.
 //   The 2nd-last iteration's contribution is scattered straight into the remote output tensor.
 //
-// IntermSink<true> - chunk-paged layout. The remote intermediate (and a dedicated shortcut buffer
+// IntermSink<true> - chunk-paged layout. The remote intermediate (and a dedicated penult intermediate
 //   for the 2nd-last iteration's contribution) store one whole chunk per page, so a chunk's tiles
 //   are contiguous at the destination and each packet is a plain unicast write. See
 //   rs-contiguous-interm-design.
@@ -372,10 +372,10 @@ struct IntermSink<true> {
 
     uint32_t interm_slice_chunk_base = 0;
     uint32_t interm_channel_chunk_base = 0;
-    uint32_t shortcut_channel_chunk_base = 0;
+    uint32_t penult_interm_channel_chunk_base = 0;
 
-    // Headers for contiguous writes to the chunk-paged staging buffers (main intermediate and the
-    // 2nd-last-iteration shortcut region both use these). Their payload size is patched per packet.
+    // Headers for contiguous writes to the chunk-paged staging buffers (the main intermediate and the
+    // penult intermediate region both use these). Their payload size is patched per packet.
     PacketHeaderPtr pkt_interm_unicast_hdr = nullptr;
     PacketHeaderPtr pkt_interm_fused_hdr = nullptr;
 
@@ -413,9 +413,9 @@ struct IntermSink<true> {
 
     void begin_channel(uint32_t c) {
         interm_channel_chunk_base = interm_slice_chunk_base + c * chunks_per_channel;
-        // The shortcut buffer has no slice_idx axis (each device receives exactly one such
+        // The penult intermediate has no slice_idx axis (each device receives exactly one such
         // contribution, from exactly one neighbor, at exactly one iteration).
-        shortcut_channel_chunk_base = c * chunks_per_channel;
+        penult_interm_channel_chunk_base = c * chunks_per_channel;
         output_tile_id_start = output_batch_base + c * output_channel_num_pages;
         output_tiles_read = start_tiles_read;
     }
@@ -428,7 +428,7 @@ struct IntermSink<true> {
         }
     }
 
-    // Both write_to_interm (mid-ring hops) and the 2nd-last-iteration shortcut target a chunk-paged
+    // Both write_to_interm (mid-ring hops) and the penult intermediate target a chunk-paged
     // staging buffer with the same packetization: one page holds the whole chunk, so each fabric
     // packet is a single contiguous unicast write (no scatter). The packet that reaches
     // chunks_per_sync fuses the semaphore increment onto itself.
@@ -444,10 +444,11 @@ struct IntermSink<true> {
         bool write_to_interm,
         bool fuse_seminc,
         uint64_t sem_noc_addr) {
-        // The 2nd-last iteration stages this direction's contribution in the dedicated shortcut
-        // buffer instead of scatter-writing it into the remote tiled output tensor. The receiver's
+        // The 2nd-last iteration stages this direction's contribution in the dedicated penult
+        // intermediate instead of scatter-writing it into the remote tiled output tensor. The receiver's
         // final iteration reads it back as the 3rd term of its local 3-way reduce.
-        const uint32_t channel_chunk_base = write_to_interm ? interm_channel_chunk_base : shortcut_channel_chunk_base;
+        const uint32_t channel_chunk_base =
+            write_to_interm ? interm_channel_chunk_base : penult_interm_channel_chunk_base;
         const uint32_t chunk_page_id = channel_chunk_base + tiles_read / tile_granularity;
         const uint32_t in_chunk_offset = (tiles_read % tile_granularity) * page_size;
 
@@ -455,11 +456,11 @@ struct IntermSink<true> {
         for (uint32_t j = 0; j < tiles_to_read; j += interm_tiles_per_packet) {
             const uint32_t tiles_in_packet = std::min(tiles_to_read - j, interm_tiles_per_packet);
             const uint16_t payload_bytes = static_cast<uint16_t>(tiles_in_packet * page_size);
-            const uint64_t dst_noc_addr = write_to_interm
-                                              ? tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                    tensors.interm, chunk_page_id, in_chunk_offset + j * page_size)
-                                              : tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                    tensors.shortcut, chunk_page_id, in_chunk_offset + j * page_size);
+            const uint64_t dst_noc_addr =
+                write_to_interm ? tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                      tensors.interm, chunk_page_id, in_chunk_offset + j * page_size)
+                                : tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                      tensors.penult_interm, chunk_page_id, in_chunk_offset + j * page_size);
             const bool last_packet = (j + interm_tiles_per_packet >= tiles_to_read);
             if (fuse_seminc && last_packet) {
                 fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
@@ -541,7 +542,7 @@ void kernel_main() {
     // Chunk-paged layout only: staging buffer for the 2nd-last iteration's direct-to-remote
     // contribution. The tiled layout scatter-writes that contribution into the remote output tensor
     // instead and leaves this address at 0.
-    address_t shortcut_tensor_address = get_arg_val<address_t>(arg_idx++);
+    address_t penult_intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
 #ifdef USE_WORKER_MUX
     // The V2 mux client args are the last runtime args; FabricMuxV2Sender::build_from_args consumes
     // exactly what FabricMuxV2Config::append_client_connection_rt_args serialized on the host.
@@ -566,10 +567,12 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<interm_tensor_args.next_compile_time_args_offset()>();
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
-    constexpr auto shortcut_tensor_args = TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
-    auto shortcut_tensor_accessor = TensorAccessor(shortcut_tensor_args, shortcut_tensor_address);
+    constexpr auto penult_intermediate_tensor_args =
+        TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
+    auto penult_intermediate_tensor_accessor =
+        TensorAccessor(penult_intermediate_tensor_args, penult_intermediate_tensor_address);
 
-    IntermTensors interm_tensors{interm_tensor_accessor, output_tensor_accessor, shortcut_tensor_accessor};
+    IntermTensors interm_tensors{interm_tensor_accessor, output_tensor_accessor, penult_intermediate_tensor_accessor};
     IntermSink<contiguous_interm> interm_sink(start_pages_read_in_row, start_row_offset, start_tiles_read);
 
 #ifndef USE_WORKER_MUX
