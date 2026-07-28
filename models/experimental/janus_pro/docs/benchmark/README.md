@@ -113,7 +113,7 @@ Details: [`demo/README.md`](../../demo/README.md), numbers in [`PERF.md`](../../
 
 #### Authoritative path — tt-inference-server orchestration
 
-Target: `python run.py --model … --tt-device n150|p150 --workflow evals --docker-server` (or `--local-server`). Janus is registered for `mmbench_en_dev` (+ `mmmu_val`); gate = **65.81**. Needs a Janus vLLM backend (in progress).
+Target: `python run.py --model … --tt-device n150|p150 --workflow evals --docker-server` (or `--local-server`). Janus is registered for `mmbench_en_dev`; gate = **65.81**. `mmmu_val` is disabled until a comparable community, CPU, or GPU reference is available.
 
 ```mermaid
 flowchart TB
@@ -178,22 +178,28 @@ Direct `lmms-eval` against a TT generator (no server) is a fallback if the vLLM 
 
 Optional later: HF CPU (or GPU) parity under the same `lmms-eval` task, if we want TT↔HF delta in addition to TT↔community.
 
-### Observed N150 release report and determinism finding
+### N150 tt-inference release result and determinism finding
 
-tt-inference-server Release run `89723173754` on N150 produced:
+The [tt-inference-server N150 release run](https://github.com/tenstorrent/tt-shield/actions/runs/30313188599)
+ produced:
 
 | Result | Observed | Reference |
 |---|---:|---:|
-| `mmbench_en_dev` | **50.945** | Community `lmms-eval`: **65.81** |
-| `mmmu_val` | **35.444** | Paper: **41.0** |
-| ISL/OSL 127/128 | **118.342 ms TTFT**, **22.811 tok/s** | Concurrency 1 |
-| ISL/OSL 1023/128 | **283.547 ms TTFT**, **21.540 tok/s** | Concurrency 1 |
+| `mmbench_en_dev` | **68.3 — PASS** | Community `lmms-eval`: **65.81** |
+| `mmmu_val` | **36.67** | Paper-only reference: **41.0** |
+| ISL/OSL 127/128 | **120.9 ms TTFT**, **22.7 tok/s** | Concurrency 1 |
+| ISL/OSL 1023/128 | **286.2 ms TTFT**, **21.5 tok/s** | Concurrency 1 |
 
-The report failed both accuracy checks. Repeated greedy multimodal probes then
-showed valid answers alternating with punctuation and prose loops, while
-text-only probes were stable. This demonstrates why the determinism gate
-(≥3 identical runs with the same machine, configuration, and input) is required
-before interpreting an aggregate eval score as a numerics gap.
+The headline MMBench gate passes at 103.8% of the reproducible community
+reference. The MMMU comparison is informational: 41.0 comes from the paper,
+not a reproducible community, CPU, or GPU reference run.
+
+The earlier [pre-fix Release run](https://github.com/tenstorrent/tt-shield/actions/runs/30154128185)
+scored **50.945** on MMBench. Repeated greedy multimodal probes showed valid
+answers alternating with punctuation and decoder loops, while text-only probes
+were stable. This demonstrates why the determinism gate (≥3 identical runs
+with the same machine, configuration, and input) is required before interpreting
+an aggregate eval score as a numerics gap.
 
 Examples from the pre-fix MMBench predictions included `A!**!**!**!***…`,
 `B!轻盈轻盈轻盈…`. `轻盈` is a real tokenizer output repeated in a
@@ -226,10 +232,10 @@ physical blocks, so `paged_fill_cache` overwrote prompt K/V values with padding.
 The Janus bridge now slices the table to the real `prefill_len`; this removed
 the aliasing and produced `The answer` in all 20 repeated probes.
 
-These accuracy scores are therefore pre-fix diagnostics and the complete eval
-must be rerun. Separately, the chat adapter must still preserve Janus roles,
-image placeholders, EOS, and stop handling; community #205 did not publish that
-adapter, so template comparability remains an independent risk.
+The post-fix MMBench result validates the current end-to-end serving and scoring
+path against the community reference. The chat adapter must still preserve
+Janus roles, image placeholders, EOS, and stop handling; community #205 did not
+publish its adapter, so the protocols are comparable but not bit-exact.
 
 ---
 
