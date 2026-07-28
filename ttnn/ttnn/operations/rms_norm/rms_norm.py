@@ -94,7 +94,15 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    # Refinement 2: the cross-core W-split makes the two W-splitting placements
+    # native — each core's shard is consumed in place from its own L1 (a
+    # zero-copy CB, no NoC read) and the dependent reduce is combined across the
+    # shard's cores. HEIGHT_SHARDED is Refinement 4.
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 
@@ -110,6 +118,15 @@ SUPPORTED = {
 
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # A ROW_MAJOR shard is not a tile block: eval.sharding's RM granule is
+    # (1 row, L1_align/elem_bytes columns), so a shard is e.g. [1, 128] or
+    # [64, 8] — a single stick, or 8 of the 32 columns of a tile. The kernels
+    # tilize a 32-stick x 32-column block in place, which a core physically does
+    # not hold under those shards; forming one would need a cross-core stick
+    # gather, a different scheme from this refinement's W-split. Structural gap,
+    # refused rather than left failing.
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED},
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
 ]
 
 

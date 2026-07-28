@@ -1,0 +1,1 @@
+{"event":"read_files","details":"Read eval/sharding.py (auto_shard_config/shard_config), rms_norm golden helpers.py, feature_spec.py, axes.py, test_golden.py, eval/golden_harness.py, eval/feature_matrix.py to map exact sharded-tensor geometry handed to rms_norm.","ts":"2026-07-28T02:23:09+00:00"}

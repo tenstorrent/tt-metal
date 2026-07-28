@@ -46,6 +46,7 @@ chunks) — a follow-up could recover it with a padded tail on the TILE path.
 
 from __future__ import annotations
 
+import os
 import struct
 from pathlib import Path
 
@@ -68,6 +69,37 @@ L1_BLOCK_BUDGET_BYTES = 512 * 1024
 # Total per-core CB budget. Worker L1 is 1.5 MB; the remainder is
 # firmware/stack/kernel-args headroom.
 L1_CB_BUDGET_BYTES = 1_100_000
+
+# ---------------------------------------------------------------------------
+# Cross-core W-split knobs (Refinement 2; op_design.md Lamp L1 / §4.2)
+# ---------------------------------------------------------------------------
+#
+# The reduced W axis is *dependent*, so splitting it across cores costs a
+# partial-sum combine + a 1/rms broadcast per row-block. Three single-source
+# knobs govern when that trade is taken and how wide it goes.
+
+# Engage the W-split only when the INDEPENDENT row axis cannot even fill one
+# core per grid row -- i.e. the row split alone leaves >= (grid.x - 1)/grid.x of
+# the grid idle. Structural discriminator, not a tuned threshold.
+W_SPLIT_MAX_HT_FOR_SPLIT = None  # None => grid.y (derived at call time)
+
+# ... and only when the reduced axis is wide enough that a core still gets a
+# real chunk after the split. 8 tiles is the measured read-batch plateau
+# (examples/double_buffer): below it the combine handshake dominates the work.
+W_SPLIT_MIN_WT = 8
+
+# L1 the ROOT core may spend on the gathered partial-sum tiles
+# (CW * HT_BLOCK fp32 tiles). Caps how wide an *interleaved* W-split goes; a
+# sharded input's CW is pinned by its shard grid and is instead absorbed by the
+# halve-and-re-derive loop in _derive_blocking.
+L1_GATHER_BUDGET_BYTES = 256 * 1024
+
+# Semaphore ids. Disjoint combine groups reuse the SAME ids -- a semaphore id
+# resolves to a per-core L1 cell, so group {A,B} bumping id 0 on B is a
+# different cell from group {C,D} bumping id 0 on D
+# (references/cross_core_reduction_design.md §5).
+SEM_GATHER = 0  # workers -> group root: "my partial has landed" counter
+SEM_MCAST_BASE = 1  # Mcast2D takes SEM_MCAST_BASE (data_ready) and +1 (consumer_ready)
 
 # Buffer depths (§1.2). Phase-1 minimal = 2 (double buffer).
 X_DEPTH = 2
@@ -126,6 +158,11 @@ CB_GAMMA = 1
 CB_SCALER = 2
 CB_INPUT_RM = 3
 CB_GAMMA_RM = 4
+# --- cross-core W-split only (Refinement 2) ---
+CB_ONES = 5  # Float32 scaler for the combine reduce (root cores only)
+CB_GROUP_PARTIALS = 6  # gathered raw sum(x^2), CW slots per tile-row (root only)
+CB_RMS_MEAN = 7  # root's combined mean(x^2)  compute -> reader (mcast source)
+CB_PARTIAL_OUT = 8  # this core's raw sum(x^2)  compute -> writer (gather source)
 CB_OUTPUT_TILES = 16
 CB_OUTPUT_RM = 17
 CB_X_SQUARED = 24
@@ -156,18 +193,42 @@ def _coarsest_divisor(n: int, cap: int) -> int:
 
 
 class _Blocking:
-    """The derived blocking + CB plan for one (tensor, gamma, budget) triple."""
+    """The derived blocking + CB plan for one (tensor, gamma, budget) triple.
 
-    def __init__(self, input_tensor, gamma, l1_block_budget_bytes, grid_cores):
+    ``wt_core`` is the W-tile extent a SINGLE core owns. Without a W-split it is
+    the whole ``Wt``; under the cross-core W-split (Refinement 2) it is the
+    per-core slice, and every knob below (``WT_CHUNK``/``NW``/``HT_BLOCK``, the
+    residency predicates, every CB page count) derives from it exactly as
+    before — the split changes the *value* of the axis extent, not the model.
+    """
+
+    def __init__(
+        self,
+        input_tensor,
+        gamma,
+        l1_block_budget_bytes,
+        grid_cores,
+        wt_core=None,
+        rows_core_max=None,
+        cw=1,
+        sharded_in=False,
+        sharded_out=False,
+    ):
+        self.sharded_in = bool(sharded_in)
+        self.sharded_out = bool(sharded_out)
         self.is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
         self.has_gamma = gamma is not None
         self.is_rm_gamma = self.has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
 
         shape = list(input_tensor.shape)
         self.W = int(shape[-1])
-        self.Wt = _ceil_div(self.W, TILE_DIM)
-        self.w_valid_last = self.W - (self.Wt - 1) * TILE_DIM  # in [1, 32]
+        self.wt_global = _ceil_div(self.W, TILE_DIM)
+        self.w_valid_last = self.W - (self.wt_global - 1) * TILE_DIM  # in [1, 32]
         self.has_partial_w = (self.W % TILE_DIM) != 0
+        # Per-core W extent — the axis the block knobs are derived against.
+        self.Wt = self.wt_global if wt_core is None else int(wt_core)
+        self.cw = int(cw)
+        self.w_split = self.cw > 1
 
         # §5.1 tile geometry — alignment-aware, per image, ceil everywhere.
         if self.is_rm:
@@ -176,6 +237,7 @@ class _Blocking:
         else:
             self.total_sticks = 0
             self.ht_total = _prod(shape[:-2]) * _ceil_div(int(shape[-2]), TILE_DIM)
+        self._rows_core_max = self.ht_total if rows_core_max is None else int(rows_core_max)
 
         self.tile_bytes = ttnn.tile_size(input_tensor.dtype)
         self.elem_bytes = _row_elem_bytes(input_tensor)
@@ -241,7 +303,7 @@ class _Blocking:
             # correct when a resident block is one flat Wt-tile strip.
             self.ht_block = 1
         else:
-            self.ht_block = max(1, min(self.tile_block_budget // self.wt_chunk, self.ht_total))
+            self.ht_block = max(1, min(self.tile_block_budget // self.wt_chunk, self._rows_core_max))
 
         assert self.wt_last == self.wt_chunk, "chunk-uniformity invariant broken"
         assert not (self.nw > 1 and self.ht_block > 1), "R7: NW > 1 requires HT_BLOCK == 1"
@@ -267,14 +329,16 @@ class _Blocking:
         # row-block ahead only front-loads contention: measured 1.04x SLOWER on
         # (1,1,8192,1024) (103_238 -> 107_592 ns). Same structural discriminator
         # as the read-batch knob (see _x_read_chunks).
-        num_cores = min(grid_cores, self.ht_total)
+        num_cores = min(grid_cores, self.ht_total * self.cw)
         self.grid_full = num_cores >= grid_cores
         # Row-blocks a single core loops over. Both "hold it across row-blocks"
         # levers below are worth nothing when this is 1.
-        self.nh_core_max = _ceil_div(_ceil_div(self.ht_total, num_cores), self.ht_block)
+        self.nh_core_max = _ceil_div(self._rows_core_max, self.ht_block)
         base = self._cb_total(x_res_depth=0, gamma_resident=False)
 
-        self.x_res_depth = 1 if self._cb_total(1, False) <= L1_CB_BUDGET_BYTES else 0
+        # A sharded input is resident BY PLACEMENT — the shard is already in this
+        # core's L1, so the residency predicate is not a choice here.
+        self.x_res_depth = 1 if (self.sharded_in or self._cb_total(1, False) <= L1_CB_BUDGET_BYTES) else 0
         self.x_resident = self.x_res_depth > 0
 
         # Gamma residency removes (NH_core - 1) * Wt gamma re-reads per core — so
@@ -322,7 +386,11 @@ class _Blocking:
         B = H * C
         Wt = self.Wt
 
-        if x_depth > 0:
+        if self.sharded_in:
+            # Zero-copy: the CB *is* the resident shard, so its extent is the
+            # whole shard, not a block multiple.
+            input_tile_pages = self._rows_core_max * Wt
+        elif x_depth > 0:
             input_tile_pages = x_depth * H * Wt
         elif self.is_rm:
             input_tile_pages = B  # compute->compute (tilize -> square), one block
@@ -354,10 +422,22 @@ class _Blocking:
                 "cb_output_tiles",
                 CB_OUTPUT_TILES,
                 self.tile_bytes,
-                B if self.is_rm else OUT_DEPTH * B,
+                (self._rows_core_max * Wt) if self.sharded_out else (B if self.is_rm else OUT_DEPTH * B),
             ),
             ("cb_output_rm", CB_OUTPUT_RM, self.tile_bytes, (OUT_DEPTH * B) if self.is_rm else 0),
             ("cb_x_squared", CB_X_SQUARED, self.x_squared_tile_bytes, B),
+            # --- cross-core W-split (Refinement 2). Every page count is a
+            # function of the SAME knobs (HT_BLOCK and the group width CW),
+            # never of a whole-op dimension. Sized 1 (dummy) when CW == 1.
+            ("cb_ones", CB_ONES, self.fp32_tile_bytes, 1),
+            (
+                "cb_group_partials",
+                CB_GROUP_PARTIALS,
+                self.fp32_tile_bytes,
+                (H * self.cw) if self.w_split else 0,
+            ),
+            ("cb_rms_mean", CB_RMS_MEAN, self.fp32_tile_bytes, H if self.w_split else 0),
+            ("cb_partial_out", CB_PARTIAL_OUT, self.fp32_tile_bytes, H if self.w_split else 0),
             ("cb_partials", CB_PARTIALS, self.fp32_tile_bytes, 2 * H),
             ("cb_rms_sum", CB_RMS_SUM, self.fp32_tile_bytes, H),
             ("cb_rms_recip", CB_RMS_RECIP, self.fp32_tile_bytes, H),
@@ -369,13 +449,37 @@ class _Blocking:
         return sum(ps * np for (_, _, ps, np) in self.cb_plan(x_res_depth, gamma_resident))
 
 
-def _derive_blocking(input_tensor, gamma, grid_cores):
-    """Derive the blocking, halving the block budget until the CB total fits."""
+def _tile_geometry(input_tensor):
+    """(ht_total, wt_global) — the whole-op tile grid, before any core split."""
+    shape = list(input_tensor.shape)
+    wt_global = _ceil_div(int(shape[-1]), TILE_DIM)
+    if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
+        ht_total = _ceil_div(_prod(shape[:-1]), TILE_DIM)
+    else:
+        ht_total = _prod(shape[:-2]) * _ceil_div(int(shape[-2]), TILE_DIM)
+    return ht_total, wt_global
+
+
+def _derive_blocking(input_tensor, gamma, grid_cores, placement, sharded_in=False, sharded_out=False):
+    """Derive the blocking, halving the block budget until the CB total fits.
+
+    The halving loop also absorbs the ROOT core's gather buffer
+    (``HT_BLOCK * CW`` fp32 tiles): it is charged into ``cb_total_bytes`` for
+    every core, so an over-wide combine shrinks ``HT_BLOCK`` rather than
+    silently overflowing L1 on the roots.
+    """
+    kwargs = dict(
+        wt_core=placement.wt_core,
+        rows_core_max=placement.rows_core_max,
+        cw=placement.cw,
+        sharded_in=sharded_in,
+        sharded_out=sharded_out,
+    )
     budget = L1_BLOCK_BUDGET_BYTES
-    blk = _Blocking(input_tensor, gamma, budget, grid_cores)
+    blk = _Blocking(input_tensor, gamma, budget, grid_cores, **kwargs)
     while blk.cb_total_bytes > L1_CB_BUDGET_BYTES and budget > blk.unit_bytes:
         budget //= 2
-        blk = _Blocking(input_tensor, gamma, budget, grid_cores)
+        blk = _Blocking(input_tensor, gamma, budget, grid_cores, **kwargs)
     assert blk.cb_total_bytes <= L1_CB_BUDGET_BYTES, (
         f"rms_norm: per-core CB total {blk.cb_total_bytes} B exceeds "
         f"L1_CB_BUDGET_BYTES={L1_CB_BUDGET_BYTES} even at the minimum block size"
@@ -408,19 +512,73 @@ def _x_read_chunks(blk):
     cannot hold a multi-chunk batch, and the RM path's cb_input_tiles is filled
     by compute's tilize, not by the reader.
     """
-    if not (blk.x_resident and not blk.is_rm):
+    if blk.sharded_in or not (blk.x_resident and not blk.is_rm):
         return 1
     return blk.nw if blk.grid_full else 1
 
 
-def _core_assignment(grid, ht_total):
-    """§5: split the independent tile-row axis over the whole compute grid.
+class _CoreWork:
+    """What one core owns: a tile-row range x a W-tile slice, plus its combine role."""
 
-    `grid` is the ONE grid object the caller also sized the blocking against —
-    never re-derived here, so `grid_full` and the actual split can't disagree.
+    __slots__ = ("core", "start_row", "num_rows", "wt_start", "wt_real", "slot", "group")
+
+    def __init__(self, core, start_row, num_rows, wt_start, wt_real, slot, group):
+        self.core = core
+        self.start_row = start_row
+        self.num_rows = num_rows
+        self.wt_start = wt_start
+        self.wt_real = wt_real  # W-tiles that actually exist (rest is shard padding)
+        self.slot = slot  # index inside the combine group
+        self.group = group  # index into _Placement.groups (-1 == no group)
+
+
+class _Placement:
+    """Core assignment + cross-core combine topology (op_design.md §5 and §4.2).
+
+    Two axes are placed, not one:
+      * the INDEPENDENT tile-row axis, split across *groups* (zero traffic), and
+      * the DEPENDENT W axis, split across the ``cw`` cores INSIDE each group,
+        which therefore need a partial-sum combine + a 1/rms broadcast.
+
+    ``cw == 1`` degenerates to the phase-0 row-only split, and every W-split
+    structure below collapses out.
+
+    Invariant relied on by the broadcast: **every group is a rectangle**, so one
+    ``Mcast2D`` per group serves it. Groups the data placement hands us that are
+    ragged are padded up to their bounding box with zero-work filler cores.
     """
+
+    def __init__(self, all_cores, works, groups, cw, wt_core, rows_core_max):
+        self.all_cores = all_cores
+        self.works = works
+        self.groups = groups  # [(root_core, rect_CoreRangeSet, num_receivers)]
+        self.cw = cw
+        self.wt_core = wt_core
+        self.rows_core_max = rows_core_max
+
+    @property
+    def w_split(self):
+        return self.cw > 1
+
+    @property
+    def num_cores(self):
+        return len(self.works)
+
+
+def _rect(x0, y0, x1, y1):
+    return ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))
+
+
+def _rows_split(total, n):
+    """Split `total` tile-rows over `n` groups, biggest-first (like split_work_to_cores)."""
+    q, r = divmod(total, n)
+    return [q + 1 if i < r else q for i in range(n)]
+
+
+def _placement_rows(grid, ht_total):
+    """Phase-0 placement: the independent tile-row axis over the whole grid."""
     (
-        _split_num_cores,
+        _num,
         all_cores,
         group_1,
         group_2,
@@ -428,16 +586,155 @@ def _core_assignment(grid, ht_total):
         rows_g2,
     ) = ttnn.split_work_to_cores(grid, ht_total, row_wise=True)
 
-    assignment = []  # [(core, start_tile_row, num_tile_rows)]
+    works = []
     start = 0
     for group, per_core in ((group_1, rows_g1), (group_2, rows_g2)):
         if per_core == 0:
             continue
         for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append((core, start, per_core))
+            works.append(_CoreWork(core, start, per_core, 0, None, 0, -1))
             start += per_core
     assert start == ht_total, f"work split covered {start} of {ht_total} tile-rows"
-    return all_cores, assignment
+    rows_max = max((w.num_rows for w in works), default=1)
+    return _Placement(all_cores, works, [], 1, None, rows_max)
+
+
+def _w_split_rectangle(grid, band_h, wt_global, gather_tile_bytes):
+    """Widest core rectangle (cw_x <= grid.x, cw_y <= band_h) that DIVIDES `wt_global`.
+
+    Requiring the group size to divide `Wt` is what keeps every core's slice the
+    same width, so one compile-time `WT` / `WT_CHUNK` / `NW` serves the whole
+    grid (and the last core's last tile is still the tensor's last tile, so the
+    partial-W mask lands where it belongs).
+    """
+    cap = max(1, L1_GATHER_BUDGET_BYTES // gather_tile_bytes)
+    best = (1, 1)
+    for cy in range(1, band_h + 1):
+        for cx in range(1, grid.x + 1):
+            n = cx * cy
+            if n > cap or wt_global % n != 0:
+                continue
+            if n > best[0] * best[1]:
+                best = (cx, cy)
+    return best
+
+
+def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes):
+    """Cross-core W-split for an INTERLEAVED input whose row axis under-fills the grid.
+
+    Groups are stacked along the grid's y axis (one band of `cw_y` grid rows
+    each) and are rectangles by construction. Returns None when no split wider
+    than one core is available.
+    """
+    num_groups = min(ht_total, grid.y)
+    band_h = grid.y // num_groups
+    cw_x, cw_y = _w_split_rectangle(grid, band_h, wt_global, gather_tile_bytes)
+    cw = cw_x * cw_y
+    if cw < 2:
+        return None
+
+    wt_core = wt_global // cw
+    rows = _rows_split(ht_total, num_groups)
+
+    works = []
+    groups = []
+    ranges = []
+    start_row = 0
+    for g in range(num_groups):
+        y0 = g * band_h
+        rect = _rect(0, y0, cw_x - 1, y0 + cw_y - 1)
+        ranges.append(rect)
+        root = ttnn.CoreCoord(0, y0)
+        groups.append((root, ttnn.CoreRangeSet([rect]), cw - 1))
+        slot = 0
+        for yy in range(y0, y0 + cw_y):
+            for xx in range(cw_x):
+                works.append(
+                    _CoreWork(
+                        ttnn.CoreCoord(xx, yy),
+                        start_row,
+                        rows[g],
+                        slot * wt_core,
+                        wt_core,
+                        slot,
+                        g,
+                    )
+                )
+                slot += 1
+        start_row += rows[g]
+    assert start_row == ht_total
+    return _Placement(ttnn.CoreRangeSet(ranges), works, groups, cw, wt_core, max(rows))
+
+
+def _shard_geometry(tensor):
+    """(shard_ht_tiles, shard_wt_tiles, cores_row_major, grid) for a sharded tensor."""
+    spec = tensor.memory_config().shard_spec
+    sh, sw = int(spec.shape[0]), int(spec.shape[1])
+    grid = spec.grid
+    cores = ttnn.corerange_to_cores(grid, None, True)
+    return _ceil_div(sh, TILE_DIM), _ceil_div(sw, TILE_DIM), cores, grid
+
+
+def _bbox_cores(core_range_set):
+    bb = core_range_set.bounding_box()
+    return bb.start.x, bb.start.y, bb.end.x, bb.end.y
+
+
+def _placement_sharded(input_tensor, ht_total, wt_global):
+    """Placement pinned by the input's shard grid (WIDTH / BLOCK sharded).
+
+    WIDTH: one group over every shard core (each owns a W slice of ALL rows).
+    BLOCK: one group per grid row (each row owns a tile-row band, split by W).
+
+    A ragged shard grid (auto_shard_config emits full rows + a partial last row)
+    is padded up to its bounding box with zero-work filler cores so the group
+    stays the single rectangle a multicast can address.
+    """
+    layout = input_tensor.memory_config().memory_layout
+    ht_s, wt_s, cores, grid = _shard_geometry(input_tensor)
+    x0, y0, x1, y1 = _bbox_cores(grid)
+
+    works = []
+    groups = []
+    if layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        nx = x1 - x0 + 1
+        ny = y1 - y0 + 1
+        assert len(cores) == nx * ny, "BLOCK_SHARDED grid must be a full rectangle"
+        for gy in range(ny):
+            y = y0 + gy
+            groups.append((ttnn.CoreCoord(x0, y), ttnn.CoreRangeSet([_rect(x0, y, x1, y)]), nx - 1))
+            for gx in range(nx):
+                works.append(
+                    _CoreWork(
+                        ttnn.CoreCoord(x0 + gx, y),
+                        gy * ht_s,
+                        ht_s,
+                        gx * wt_s,
+                        max(0, min(wt_s, wt_global - gx * wt_s)),
+                        gx,
+                        gy,
+                    )
+                )
+        cw = nx
+        rows_max = ht_s
+    else:  # WIDTH_SHARDED — one group, every shard core owns a W slice of all rows
+        rect_set = ttnn.CoreRangeSet([_rect(x0, y0, x1, y1)])
+        cw = len(cores)  # combine width == real W slices (fillers do not contribute)
+        groups.append((cores[0], rect_set, cw - 1))
+        owned = {(int(c.x), int(c.y)) for c in cores}
+        for slot, core in enumerate(cores):
+            works.append(_CoreWork(core, 0, ht_total, slot * wt_s, max(0, min(wt_s, wt_global - slot * wt_s)), slot, 0))
+        # filler cores: inside the multicast rectangle, but outside the shard grid.
+        # Zero work, no gather contribution, no readiness ack — they only need
+        # the broadcast to land somewhere legal on them.
+        for yy in range(y0, y1 + 1):
+            for xx in range(x0, x1 + 1):
+                if (xx, yy) not in owned:
+                    works.append(_CoreWork(ttnn.CoreCoord(xx, yy), 0, 0, 0, 0, 0, 0))
+        rows_max = ht_total
+
+    all_cores = ttnn.CoreRangeSet([_rect(x0, y0, x1, y1)])
+    return _Placement(all_cores, works, groups, cw, wt_s, rows_max)
 
 
 def create_program_descriptor(
@@ -454,32 +751,75 @@ def create_program_descriptor(
         if device is not None
         else input_tensor.device().compute_with_storage_grid_size()
     )
-    blk = _derive_blocking(input_tensor, gamma, grid.x * grid.y)
+    ht_total, wt_global = _tile_geometry(input_tensor)
+    in_sharded = input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    out_sharded = output_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
 
-    all_cores, assignment = _core_assignment(grid, blk.ht_total)
+    placement = _select_placement(grid, input_tensor, ht_total, wt_global, in_sharded)
+    blk = _derive_blocking(
+        input_tensor, gamma, grid.x * grid.y, placement, sharded_in=in_sharded, sharded_out=out_sharded
+    )
+
+    all_cores = placement.all_cores
     x_read_chunks = _x_read_chunks(blk)
 
     # ---------- circular buffers ----------
-    cbs = [
-        ttnn.CBDescriptor(
-            total_size=page_size * num_pages,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=index,
-                    data_format=_cb_format(name, blk, input_tensor, gamma),
-                    page_size=page_size,
-                )
-            ],
+    # A sharded tensor's shard IS the per-core block and it is ALREADY in this
+    # core's L1, so its CB is placed straight on the buffer (zero-copy, no NoC
+    # read at all). Everything else is a normal program-allocated CB.
+    #
+    # Every non-sharded CB is declared over the WHOLE core set, at identical
+    # sizes. That uniformity is load-bearing for the combine: a worker derives
+    # the root's landing address for its partial from `get_write_ptr` on its OWN
+    # copy of cb_group_partials, which is only valid because the CB sits at the
+    # same L1 offset on every core.
+    cbs = []
+    for name, index, page_size, num_pages in blk.cb_plan():
+        if in_sharded and name == "cb_input_tiles":
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(index, input_tensor))
+            continue
+        if out_sharded and name == "cb_output_tiles":
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(index, output_tensor))
+            continue
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=page_size * num_pages,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=index,
+                        data_format=_cb_format(name, blk, input_tensor, gamma),
+                        page_size=page_size,
+                    )
+                ],
+            )
         )
-        for (name, index, page_size, num_pages) in blk.cb_plan()
-    ]
+
+    # ---------- cross-core combine wiring (Refinement 2) ----------
+    # One Mcast2D per combine group: the root broadcasts the finalized
+    # mean(x^2) tile back over its rectangle. Disjoint groups reuse the same
+    # semaphore ids, so the ids are created ONCE over the whole grid and every
+    # group adopts them.
+    semaphores = []
+    mcasts = {}  # group index -> Mcast2D
+    if placement.w_split:
+        semaphores = [
+            ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_MCAST_BASE, core_ranges=all_cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_MCAST_BASE + 1, core_ranges=all_cores, initial_value=0),
+        ]
+        cfg = ttnn.McastConfig(sem_ids=[SEM_MCAST_BASE, SEM_MCAST_BASE + 1])
+        for g, (root, rect_set, num_ack) in enumerate(placement.groups):
+            mcasts[g] = ttnn.Mcast2D(device, rect_set, root, cfg, num_ack)
 
     # ---------- shared compile-time knobs ----------
     chunk_row_bytes = blk.wt_chunk * TILE_DIM * blk.elem_bytes
-    last_row_bytes = (blk.W - (blk.nw - 1) * blk.wt_chunk * TILE_DIM) * blk.elem_bytes
+    # Real bytes in the FINAL chunk of the core that owns the tensor's last
+    # W-tile (every other core's final chunk is a full one).
+    last_elems = blk.W - (wt_global - blk.wt_chunk) * TILE_DIM
+    last_row_bytes = last_elems * blk.elem_bytes
     g_chunk_row_bytes = blk.wt_chunk * TILE_DIM * blk.gamma_elem_bytes
-    g_last_row_bytes = (blk.W - (blk.nw - 1) * blk.wt_chunk * TILE_DIM) * blk.gamma_elem_bytes
+    g_last_row_bytes = last_elems * blk.gamma_elem_bytes
 
     regime = [
         1 if blk.is_rm else 0,
@@ -491,10 +831,11 @@ def create_program_descriptor(
     ]
     knobs = [blk.Wt, blk.wt_chunk, blk.wt_last, blk.nw, blk.ht_block, x_read_chunks]
 
-    # The reader and the writer share ONE compile-time-arg layout (indices 0..17,
-    # TensorAccessorArgs from 18). Built once here so a knob added to either
-    # kernel cannot drift between the two — the CT index each kernel reads is
-    # then guaranteed to name the same quantity.
+    # The reader and the writer share ONE compile-time-arg layout (indices 0..23,
+    # the mcast block at 24..28, TensorAccessorArgs from 29). Built once here so
+    # a knob added to either kernel cannot drift between the two — the CT index
+    # each kernel reads is then guaranteed to name the same quantity.
+    mcast_ct = list(mcasts[0].compile_time_args()) if mcasts else [0, 0, 0, 0, 0]
     dataflow_ct_args = (
         regime
         + knobs
@@ -505,11 +846,18 @@ def create_program_descriptor(
             g_chunk_row_bytes,
             g_last_row_bytes,
             blk.total_sticks,
+            1 if placement.w_split else 0,
+            placement.cw,
+            wt_global,
+            1 if in_sharded else 0,
+            1 if out_sharded else 0,
+            SEM_GATHER,
         ]
+        + mcast_ct
     )
-    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<18>
-    assert DATAFLOW_ACCESSOR_ARG_BASE == 18, (
-        "rms_norm: reader/writer read TensorAccessorArgs<18>; the shared CT block "
+    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<29>
+    assert DATAFLOW_ACCESSOR_ARG_BASE == 29, (
+        "rms_norm: reader/writer read TensorAccessorArgs<29>; the shared CT block "
         f"is now {DATAFLOW_ACCESSOR_ARG_BASE} long — update both kernels together"
     )
 
@@ -530,10 +878,43 @@ def create_program_descriptor(
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
-    for core, start_row, num_rows in assignment:
-        reader_rt[core.x][core.y] = [src_addr, gamma_addr, start_row, num_rows]
-        writer_rt[core.x][core.y] = [dst_addr, start_row, num_rows]
-        compute_rt[core.x][core.y] = [num_rows, eps_bits]
+    for w in placement.works:
+        core = w.core
+        wt_real = blk.Wt if w.wt_real is None else min(w.wt_real, blk.Wt)
+        is_root = 0
+        root_v = (0, 0)
+        mcast_rt = [0, 0, 0, 0]
+        if placement.w_split:
+            root = placement.groups[w.group][0]
+            is_root = 1 if (int(core.x) == int(root.x) and int(core.y) == int(root.y)) else 0
+            rv = device.worker_core_from_logical_core(root)
+            root_v = (rv.x, rv.y)
+            mcast_rt = list(mcasts[w.group].runtime_args(core))
+        # The core whose slice ENDS on the tensor's last W-tile is the one that
+        # must mask the tile-padded columns of that tile.
+        is_last_w = 1 if (w.wt_start + wt_real == wt_global) else 0
+
+        reader_rt[core.x][core.y] = [
+            src_addr,
+            gamma_addr,
+            w.start_row,
+            w.num_rows,
+            w.wt_start,
+            w.slot,
+            is_root,
+            is_last_w,
+            wt_real,
+        ] + mcast_rt
+        writer_rt[core.x][core.y] = [
+            dst_addr,
+            w.start_row,
+            w.num_rows,
+            w.wt_start,
+            w.slot,
+            root_v[0],
+            root_v[1],
+        ]
+        compute_rt[core.x][core.y] = [w.num_rows, eps_bits, is_root, is_last_w]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -556,7 +937,16 @@ def create_program_descriptor(
     )
 
     # ---------- compute ----------
-    compute_ct_args = regime + knobs + [blk.w_valid_last, blk.W]
+    compute_ct_args = (
+        regime
+        + knobs
+        + [
+            blk.w_valid_last,
+            blk.W,
+            1 if placement.w_split else 0,
+            placement.cw,
+        ]
+    )
 
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -568,9 +958,33 @@ def create_program_descriptor(
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
-        semaphores=[],
+        semaphores=semaphores,
         cbs=cbs,
     )
+
+
+def _select_placement(grid, input_tensor, ht_total, wt_global, in_sharded):
+    """Pick the core assignment: data-pinned when sharded, else the §5 row split
+    optionally widened by the cross-core W-split (Lamp L1).
+
+    The W-split is engaged when the INDEPENDENT row axis under-fills the grid —
+    it cannot even put one core on every grid row — and the reduced axis is wide
+    enough to still hand each core a real chunk after the split. Both gates are
+    named constants at the top of this module, never inlined here.
+    """
+    if in_sharded:
+        return _placement_sharded(input_tensor, ht_total, wt_global)
+
+    ht_cap = grid.y if W_SPLIT_MAX_HT_FOR_SPLIT is None else W_SPLIT_MAX_HT_FOR_SPLIT
+    env = os.environ.get("RMS_NORM_W_SPLIT")
+    want_split = (ht_total <= ht_cap) and (wt_global >= W_SPLIT_MIN_WT)
+    if env is not None:
+        want_split = env != "0"
+    if want_split:
+        p = _placement_wsplit(grid, ht_total, wt_global, ttnn.tile_size(ttnn.float32))
+        if p is not None:
+            return p
+    return _placement_rows(grid, ht_total)
 
 
 def _cb_format(name, blk, input_tensor, gamma):
@@ -584,6 +998,14 @@ def _cb_format(name, blk, input_tensor, gamma):
         # Must match the format srcB is configured at inside the reduce, i.e.
         # cb_x_squared's; see _Blocking.x_squared_dtype for the full rationale.
         return blk.scaler_dtype
-    if name in ("cb_partials", "cb_rms_sum", "cb_rms_recip"):
+    if name in (
+        "cb_partials",
+        "cb_rms_sum",
+        "cb_rms_recip",
+        "cb_ones",
+        "cb_group_partials",
+        "cb_rms_mean",
+        "cb_partial_out",
+    ):
         return ttnn.float32
     return input_tensor.dtype

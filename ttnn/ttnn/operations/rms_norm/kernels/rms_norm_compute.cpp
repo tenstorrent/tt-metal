@@ -25,6 +25,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/debug/device_print.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
@@ -39,6 +40,10 @@ constexpr uint32_t cb_gamma = 1;
 constexpr uint32_t cb_scaler = 2;
 constexpr uint32_t cb_input_rm = 3;
 constexpr uint32_t cb_gamma_rm = 4;
+constexpr uint32_t cb_ones = 5;
+constexpr uint32_t cb_group_partials = 6;
+constexpr uint32_t cb_rms_mean = 7;
+constexpr uint32_t cb_partial_out = 8;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t cb_x_squared = 24;
@@ -72,6 +77,9 @@ void kernel_main() {
     // ---- geometry ----
     constexpr uint32_t W_VALID_LAST = get_compile_time_arg_val(12);
     constexpr uint32_t N_REDUCED = get_compile_time_arg_val(13);  // true element count == W
+    // ---- cross-core W-split (§4.2) ----
+    constexpr bool W_SPLIT = get_compile_time_arg_val(14) != 0;
+    constexpr uint32_t CW = get_compile_time_arg_val(15);  // cores per combine group
 
     static_assert(WT_LAST == WT_CHUNK, "compute assumes uniform chunk widths");
     static_assert(NW * WT_CHUNK == WT, "chunking must tile Wt exactly");
@@ -80,6 +88,13 @@ void kernel_main() {
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     const uint32_t eps_bits = get_arg_val<uint32_t>(1);
+    const uint32_t is_root = get_arg_val<uint32_t>(2);
+    const uint32_t is_last_w_core = get_arg_val<uint32_t>(3);
+
+    // Filler core (inside a group's multicast rectangle, owns no data).
+    if (num_tile_rows == 0) {
+        return;
+    }
 
     compute_kernel_hw_startup(cb_input_tiles, cb_scaler, cb_output_tiles);
 
@@ -96,8 +111,11 @@ void kernel_main() {
 
     // Non-tile-aligned W: the 0/1 mask tile the reader filled zeroes the padded
     // lanes of the LAST reduce-dim tile. n_reduced stays the true count (W).
-    constexpr auto partial =
-        HAS_PARTIAL_W ? ckl::ReducePartialScaler::partial_mask(W_VALID_LAST, 0) : ckl::ReducePartialScaler::none();
+    // Under a W-split only the core whose slice ENDS on the tensor's last
+    // W-tile owns that tile, so only it applies the mask.
+    const auto partial = (HAS_PARTIAL_W && (!W_SPLIT || is_last_w_core != 0))
+                             ? ckl::ReducePartialScaler::partial_mask(W_VALID_LAST, 0)
+                             : ckl::ReducePartialScaler::none();
 
     constexpr uint32_t cb_scale_out = HAS_GAMMA ? cb_scaled : cb_output_tiles;
     // A REDUCE_ROW result is column-shaped, so it broadcasts back across
@@ -164,18 +182,46 @@ void kernel_main() {
             }
 
             // ---- phase 3: chunked SUM -> mean on the finalizing chunk ----
+            //
+            // Under a W-split NO chunk finalizes: this core owns only a SLICE of
+            // W, so both the within-tile fold and the 1/N are premature. Every
+            // chunk therefore uses Accumulate::at (never at_last), which leaves
+            // cb_partials holding the RAW elementwise-accumulated x^2 tile — the
+            // exact object the cross-core combine needs. Shipping the *reduced*
+            // tile instead would be wrong: AccumulateViaAdd's finalize writes the
+            // row sum into column 0 and leaves the surviving x^2 lanes in columns
+            // 1..31, so a second REDUCE_ROW over such tiles double-counts them
+            // (measured: mean(x^2) of an all-ones W=64 came out 8.75, not 1.0).
             const auto rshape = ckl::ReduceInputBlockShape::of(ht, WT_CHUNK, 1);
+            const bool finalize_here = !W_SPLIT && (wc + 1 == NW);
             if constexpr (NW == 1) {
-                ckl::reduce_mean<
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_x_squared,
-                    cb_scaler,
-                    cb_rms_sum,
-                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                    rshape, N_REDUCED, ckl::ReduceInputMemoryLayout::contiguous(), ckl::NoAccumulation{}, partial);
-            } else if (wc + 1 == NW) {
+                if constexpr (W_SPLIT) {
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_x_squared,
+                        cb_scaler,
+                        cb_partials,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        rshape,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::Accumulate::at(cb_partials, wc),
+                        ckl::NoOp{},
+                        partial);
+                } else {
+                    ckl::reduce_mean<
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_x_squared,
+                        cb_scaler,
+                        cb_rms_sum,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        rshape, N_REDUCED, ckl::ReduceInputMemoryLayout::contiguous(), ckl::NoAccumulation{}, partial);
+                }
+            } else if (finalize_here) {
                 ckl::reduce_mean<
                     ckernel::ReduceDim::REDUCE_ROW,
                     cb_x_squared,
@@ -190,6 +236,10 @@ void kernel_main() {
                     ckl::Accumulate::at_last(cb_partials, wc),
                     partial);
             } else {
+                // Non-finalizing chunk. The partial-W mask rides the chunk that
+                // owns the tensor's last W-tile, which under a W-split is this
+                // core's last chunk (and only on the last-W core).
+                const bool last_chunk = (wc + 1 == NW);
                 ckl::reduce<
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_ROW,
@@ -202,19 +252,89 @@ void kernel_main() {
                     rshape,
                     ckl::ReduceInputMemoryLayout::contiguous(),
                     ckl::Accumulate::at(cb_partials, wc),
-                    ckl::NoOp{});
+                    ckl::NoOp{},
+                    last_chunk ? partial : ckl::ReducePartialScaler::none());
             }
         }
 
+        // Hand the raw accumulator to the writer's gather leg. cb_partials is a
+        // compute->compute read-modify-write across the chunk loop, so it cannot
+        // also be the writer's CB (single producer / single consumer); this copy
+        // publishes exactly one settled tile per tile-row.
+        if constexpr (W_SPLIT) {
+            ckl::copy<cb_partials, cb_partial_out>(ckl::EltwiseShape::tiles(ht));
+        }
+
+#ifdef RMS_DBG
+        if constexpr (W_SPLIT) {
+            cb_wait_front(cb_partial_out, ht);
+            DEVICE_PRINT("PARTIAL_OUT root={}\n", is_root);
+            DEVICE_PRINT("{}\n", TSLICE(cb_partial_out, 0, SliceRange::hw0_32_16()));
+        }
+#endif
+        // ========== phase 3b: cross-core combine (W-split only) ============
+        // The group ROOT folds the CW raw slice-accumulators its writers
+        // gathered into cb_group_partials into ONE mean(x^2) per tile-row. This
+        // is EXACTLY the local chunk accumulate, done across cores instead of
+        // across chunks: AccumulateViaAdd elementwise-adds the CW tiles into
+        // DEST, folds the result within the tile ONCE, and applies 1/n_reduced
+        // with n_reduced = W, the GRAND total (§4.2 "Finalize"). The gathered
+        // tiles are laid out h-major (tile h*CW + c), so of(ht, CW) reads them
+        // contiguously. The reader then multicasts the result back (see reader).
+        if constexpr (W_SPLIT) {
+            if (is_root) {
+#ifdef RMS_DBG
+                cb_wait_front(cb_group_partials, HT_BLOCK * CW);
+                DEVICE_PRINT("GATHERED slot0/slot1:\n");
+                DEVICE_PRINT("{}\n", TSLICE(cb_group_partials, 0, SliceRange::hw0_32_16()));
+                DEVICE_PRINT("{}\n", TSLICE(cb_group_partials, 1, SliceRange::hw0_32_16()));
+#endif
+                ckl::reduce_mean<
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    cb_group_partials,
+                    cb_ones,
+                    cb_rms_mean,
+                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                    ckl::ReduceInputBlockShape::of(ht, CW, 1),
+                    N_REDUCED,
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::NoAccumulation{},
+                    ckl::ReducePartialScaler::none());
+                // The reader publishes a fixed HT_BLOCK*CW block so the gather
+                // slots stay at a constant L1 offset; drop the unused tail.
+                if (ht < HT_BLOCK) {
+                    cb_pop_front(cb_group_partials, (HT_BLOCK - ht) * CW);
+                }
+            }
+        }
+
+#ifdef RMS_DBG
+        if constexpr (W_SPLIT) {
+            cb_wait_front(cb_rms_sum, ht);
+            DEVICE_PRINT("RMS_SUM (bcast) root={}\n", is_root);
+            DEVICE_PRINT("{}\n", TSLICE(cb_rms_sum, 0, SliceRange::hw0_32_16()));
+        }
+#endif
         // ================= phase 4: 1/sqrt(mean + eps) =====================
         // One dst-sync window for both SFPU ops; the FPU consumer in phase 5
         // reads it back from L1 (DEST reuse measures slower for an FPU consumer).
+        // Under a W-split cb_rms_sum is produced by the READER (the root's
+        // broadcast), not by phase 3 — every core then finalizes identically.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(ht),
             ckl::CopyTile<cb_rms_sum, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
             ckl::AddUnary<ckl::Dst::D0>{eps_bits},
             ckl::Rsqrt<>{},
             ckl::PackTile<cb_rms_recip, ckl::OutputLifecycle::Streaming>{});
+        if constexpr (W_SPLIT) {
+            // Same fixed-block contract as the gather: the reader publishes
+            // HT_BLOCK pages so the multicast lands at a constant L1 offset.
+            if (ht < HT_BLOCK) {
+                cb_pop_front(cb_rms_sum, HT_BLOCK - ht);
+            }
+        }
 
         // ================= pass B: scale (and gamma), then write ===========
         for (uint32_t wc = 0; wc < NW; ++wc) {
