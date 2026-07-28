@@ -500,7 +500,23 @@ def _roofline_lines(
     out = ["Roofline & utilization"]
     if throughput.get("is_llm_decode") and isinstance(theo, (int, float)) and theo > 0:
         band = throughput.get("band") or [None, None]
+        # THE LEDGER WINS. The throughput snapshot is rewritten from perf_target_inputs.json, which
+        # lives in the model directory the optimize loop restores -- so a 16-layer 3.33 GB vintage kept
+        # coming back and printing a 153.8 tok/s/u ceiling next to a full-model measurement. The
+        # ledger's anchor is keyed, append-only and outside that directory, so it is read first and the
+        # ceiling and band are recomputed from it rather than trusting the snapshot's arithmetic.
         active_bytes = throughput.get("active_bytes") or 0
+        try:
+            _led = _ledger()
+            _mb = _led.anchor_value(_led.KIND_ACTIVE_BYTES, depth="token", model=model, task=task)
+            if _mb and float(_mb) > 0:
+                active_bytes = int(round(float(_mb) * 1e6))
+                _pk = float((throughput or {}).get("peak_bw_gbps") or 0.0) * 1e9
+                if _pk > 0:
+                    theo = _pk / (active_bytes / max(1, int(throughput.get("tp_degree") or 1)))
+                    band = [0.60 * theo, 0.80 * theo]
+        except Exception:  # noqa: BLE001
+            pass
         tp = max(1, int(throughput.get("tp_degree") or 1))
         per_dev_bytes = (active_bytes / tp) if active_bytes else 0
         # THE UNIT MUST MATCH THE CEILING. This ceiling is per TOKEN (peak_BW / bytes-per-token), and
