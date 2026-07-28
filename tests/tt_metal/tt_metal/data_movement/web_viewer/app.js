@@ -690,7 +690,15 @@ function renderTestInfo(analysis) {
     for (const [key, value] of Object.entries(analysis.constants)) {
         const item = document.createElement("span");
         item.className = "info-item";
-        item.innerHTML = `<span class="info-label">${key}:</span> <span class="info-value">${value}</span>`;
+        const label = document.createElement("span");
+        label.className = "info-label";
+        label.textContent = `${key}:`;
+        const val = document.createElement("span");
+        val.className = "info-value";
+        val.textContent = value;
+        item.appendChild(label);
+        item.appendChild(document.createTextNode(" "));
+        item.appendChild(val);
         container.appendChild(item);
     }
 }
@@ -835,8 +843,15 @@ async function loadAndRender() {
 
         setupYAxisListeners();
     } catch (err) {
-        document.getElementById("test-info").innerHTML =
-            `<span class="info-item"><span class="info-value">Error loading CSV: ${err.message}</span></span>`;
+        const errContainer = document.getElementById("test-info");
+        errContainer.innerHTML = "";
+        const errItem = document.createElement("span");
+        errItem.className = "info-item";
+        const errValue = document.createElement("span");
+        errValue.className = "info-value";
+        errValue.textContent = `Error loading CSV: ${err.message}`;
+        errItem.appendChild(errValue);
+        errContainer.appendChild(errItem);
     }
 }
 
