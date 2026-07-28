@@ -127,6 +127,15 @@
   team: ttnn
   category: experimental
 
+- name: ttnn nightly experimental perf tests (blackhole p150)
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -v -k "ops_device_performance" --timeout=600'
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: ttnn
+  category: experimental_perf
+
 - name: ttnn nightly pool tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:

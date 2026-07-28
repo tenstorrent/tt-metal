@@ -96,7 +96,7 @@ def _perf_params():
 
 
 @pytest.mark.parametrize("command, expected_per_op, model_name", _perf_params())
-@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.ops_device_performance
 # Gate to P150 via tt-smi board telemetry (SMBus). This also skips Wormhole and any
 # other board. Do NOT use ttnn.cluster.get_cluster_type() here: it opens and locks the
 # chip, and since skipif is evaluated at collection time in the parent process, the
