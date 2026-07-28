@@ -126,11 +126,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
             }
         }
@@ -234,11 +234,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * num_blocks * tiles_in_block);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<true, false>(LOOP_FACTOR * num_blocks * tiles_in_block);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)

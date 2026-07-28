@@ -88,8 +88,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     // The strided reduce MOP emits one SrcB scale face and
                     // all SrcA data faces for each tile.
-                    _perf_unpack_loop_set_valid<false, true>(1);
-                    _perf_unpack_loop_set_valid<true, false>(num_faces);
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1 /*iterations*/);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(num_faces);
                 }
             }
         }
@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
                     {
                         const std::uint32_t l1_unpack_tilize_idx = offset + block_ct;
-                        _llk_unpack_reduce_col_tilizeA_strided_(tensor_shape, l1_unpack_tilize_idx, 0);
+                        _llk_unpack_reduce_col_tilizeA_strided_(tensor_shape, l1_unpack_tilize_idx, 0 /*start_l1_tile_idx_1*/);
                     }
                 }
             }
@@ -174,8 +174,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
-                    _perf_math_loop_clear_valid<true, false>(num_faces);
-                    _perf_math_loop_clear_valid<false, true>(1);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(num_faces);
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
                 }
             }
         }
@@ -271,14 +271,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }

@@ -234,7 +234,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst, ckernel::ReluConfig::none());
-        _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
+        _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/); // Use destination buffer descriptor for packing output
         PROFILER_SYNC();
     }
     {
@@ -247,14 +247,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0, 0);
+                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0, 0);
+                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }

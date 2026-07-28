@@ -72,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         tdma_descriptor_t td_val =
             ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
@@ -91,7 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -102,11 +102,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
             }
         }
@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, tensor_shape_A);
+                _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0 /*l1_tile_idx*/, tensor_shape_A);
                 if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -192,11 +192,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -268,7 +268,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         tdma_descriptor_t tdma_desc =
             ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
@@ -282,7 +282,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
@@ -292,14 +292,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(0, 0, tensor_shape_A);
+                _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, tensor_shape_A);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(0, 0, tensor_shape_A);
+                _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, tensor_shape_A);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }

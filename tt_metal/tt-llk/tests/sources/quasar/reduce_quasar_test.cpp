@@ -32,7 +32,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    const auto tensor_shape_A = tensor_shape_from_params(params);
+    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
 
     td_val_A = ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, buf_desc_id_a, formats.unpack_A_dst);
     td_val_B = ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src, buf_desc_id_b, formats.unpack_B_dst);
@@ -72,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool use_int32_dest_alu = is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32;
     const bool is_int_fpu_en      = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
 
-    const auto tensor_shape_A = tensor_shape_from_params(params);
+    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
 
     if (use_int32_dest_alu)
     {
@@ -123,7 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    const auto tensor_shape_A = tensor_shape_from_params(params);
+    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
 
     tdma_descriptor_t tdma_desc =
         ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);

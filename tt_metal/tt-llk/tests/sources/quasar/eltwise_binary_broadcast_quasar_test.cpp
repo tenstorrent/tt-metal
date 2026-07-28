@@ -78,13 +78,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // The SCALAR math MOP clears SrcAB only on the final outer-loop iteration,
             // so mock unpack must produce one SrcA/SrcB handshake per tile.
             const std::uint32_t dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT * dvalids_per_tile);
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * dvalids_per_tile);
         }
         else // UNPACK_ISOLATE, L1_CONGESTION, L1_TO_L1
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_binary_broadcast_operands_(0, 0);
+                _llk_unpack_binary_broadcast_operands_(0 /*start_l1_tile_idx_0*/, 0 /*start_l1_tile_idx_1*/);
             }
         }
         PROFILER_SYNC();
@@ -152,14 +152,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true, true>(src_handshake_iters);
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // Do exactly the handshakes produced by real unpack. An additional
             // synthetic SET/CLEAR pair races the final unpack and leaves an
             // unmatched clear token, causing the ~2048-cycle stall.
-            _perf_math_loop_clear_valid<true, true>(src_handshake_iters);
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
         }
         else
         {
@@ -246,14 +246,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }

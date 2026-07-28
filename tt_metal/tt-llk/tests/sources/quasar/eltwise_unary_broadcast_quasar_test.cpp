@@ -31,13 +31,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR          = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT             = params.TILE_CNT;
-    const std::uint32_t INPUT_NUM_BLOCKS     = params.INPUT_NUM_BLOCKS;
-    const std::uint32_t INPUT_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
-    const int num_faces_r_dim_A              = params.num_faces_r_dim_A;
-    const int num_faces_c_dim_A              = params.num_faces_c_dim_A;
-    const Operand& buffer_B                  = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT                 = params.TILE_CNT;
+    const std::uint32_t INPUT_NUM_BLOCKS         = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
+    const int num_faces_r_dim_A                  = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A                  = params.num_faces_c_dim_A;
+    const Operand& buffer_B                      = params.buffer_B;
 #endif
     tdma_descriptor_t td_val_A, td_val_B;
     const std::uint32_t buf_desc_id_a        = 0;
@@ -61,7 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
         }
 
-        const auto tensor_shape = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
         td_val_A = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src, buf_desc_id_a, formats.unpack_A_dst);
         td_val_B = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src, buf_desc_id_b, formats.unpack_A_dst);
@@ -94,11 +94,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_A, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(buf_desc_id_a, 1);
+            _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_A, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(
+                buf_desc_id_a, 1 /*num_tiles_per_unpack*/);
         }
         else
         {
-            _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(buf_desc_id_b, 1);
+            _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(
+                buf_desc_id_b, 1 /*num_tiles_per_unpack*/);
         }
         PROFILER_SYNC();
     }
@@ -113,7 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 const std::uint32_t dvalids_per_tile =
                     (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : static_cast<std::uint32_t>(num_faces_r_dim_A * num_faces_c_dim_A);
-                _perf_unpack_loop_set_valid<false, true>(LOOP_FACTOR * TILE_CNT * dvalids_per_tile);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * dvalids_per_tile);
             }
         }
         else if constexpr (unpack_to_dest)
@@ -122,9 +124,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < INPUT_NUM_BLOCKS; block++)
                 {
-                    for (std::uint32_t tile = 0; tile < INPUT_TILES_IN_BLOCK; tile++)
+                    for (std::uint32_t tile = 0; tile < INPUT_NUM_TILES_IN_BLOCK; tile++)
                     {
-                        const std::uint32_t input_tile_idx = (block * INPUT_TILES_IN_BLOCK) + tile;
+                        const std::uint32_t input_tile_idx = (block * INPUT_NUM_TILES_IN_BLOCK) + tile;
                         _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_A, unpack_to_dest>(input_tile_idx);
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -184,14 +186,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             DataFormat src_format = static_cast<DataFormat>(formats.math);
             _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
 
-            const auto tensor_shape = tensor_shape_from_params(params);
+            const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
             _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(tensor_shape);
             PROFILER_SYNC();
         }
         {
             ZONE_SCOPED("TILE_LOOP")
-            const auto tensor_shape = tensor_shape_from_params(params);
+            const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
             const std::uint32_t tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
             const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
@@ -202,7 +204,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
                 const std::uint32_t dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-                _perf_math_loop_clear_valid<false, true>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
@@ -279,19 +281,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto tensor_shape = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
         tdma_descriptor_t tdma_desc =
             ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
-        _llk_pack_init_(buf_desc_id, tensor_shape, 1);
+        _llk_pack_init_(buf_desc_id, tensor_shape, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
         const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
         const std::uint32_t output_tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
