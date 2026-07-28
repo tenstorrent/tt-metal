@@ -69,7 +69,7 @@ def test_all_gather_2d_fabric(
     indirect=True,
 )
 def test_all_gather_async_fabric_2d_folded_line(mesh_device):
-    """A logical four-device line folded onto QB's physical 2D cycle."""
+    """Stress a skewed logical 1x4 line folded onto QB's physical 2D cycle."""
     run_all_gather_impl(
         mesh_device,
         ag_output_shape=[1, 1, 128, 128],

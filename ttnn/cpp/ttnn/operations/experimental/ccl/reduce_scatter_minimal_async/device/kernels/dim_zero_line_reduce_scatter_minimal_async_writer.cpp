@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/common/kernels/fabric_2d_line_global_barrier.hpp"
 #include <cstdint>
 #include <utility>
 #include "api/tensor/noc_traits.h"
@@ -47,10 +48,9 @@ constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(13);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(14);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(15);
-constexpr uint32_t barrier_target_count = get_compile_time_arg_val(16);
-constexpr bool use_fabric_2d_chained_barrier = get_compile_time_arg_val(17);
+constexpr bool use_fabric_2d_chained_barrier = get_compile_time_arg_val(16);
 
-constexpr uint32_t num_ct_args = 18;
+constexpr uint32_t num_ct_args = 17;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -217,50 +217,18 @@ void kernel_main() {
 
     if (use_barrier_sem) {
         if constexpr (use_fabric_2d_chained_barrier) {
-            uint64_t same_direction_barrier_sem_noc_addr =
-                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-            uint64_t opposite_direction_barrier_sem_noc_addr =
-                safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-
-            if (num_targets_in_direction) {
-                ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
-                fabric_multicast_noc_unicast_atomic_inc_set_state<
-                    UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-                    pkt_hdr_seminc,
-                    static_cast<uint8_t>(multicast_route_info.start_distance_in_hops),
-                    static_cast<uint8_t>(multicast_route_info.range_hops),
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
-            }
-
-            auto signal_neighbor = [&](uint64_t destination) {
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    mux_connection_handle,
-                    pkt_hdr_seminc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{destination, 0});
-            };
-            auto wait_for = [&](uint32_t value) {
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), value);
-            };
-
-            if (is_forward) {
-                if (!is_first_device_in_direction) {
-                    wait_for(1);
-                }
-                if (num_targets_in_direction) {
-                    signal_neighbor(same_direction_barrier_sem_noc_addr);
-                    if (num_targets_in_direction == 1) {
-                        signal_neighbor(opposite_direction_barrier_sem_noc_addr);
-                    }
-                    wait_for(is_first_device_in_direction ? 1 : 2);
-                }
-            } else {
-                wait_for(1);
-                if (num_targets_in_direction) {
-                    signal_neighbor(same_direction_barrier_sem_noc_addr);
-                    signal_neighbor(opposite_direction_barrier_sem_noc_addr);
-                }
-            }
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+            ttnn::experimental::ccl::fabric_2d_line_global_barrier(
+                mux_connection_handle,
+                pkt_hdr_seminc,
+                multicast_route_info,
+                barrier_sem,
+                out_ready_sem_noc0_x,
+                out_ready_sem_noc0_y,
+                opposite_core_sem_noc0_x,
+                opposite_core_sem_noc0_y,
+                is_forward,
+                is_first_device_in_direction,
+                num_targets_in_direction);
         } else {
             if (num_targets_in_direction) {
                 ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
@@ -291,7 +259,7 @@ void kernel_main() {
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
             }
 
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_target_count);
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
         }
     }
