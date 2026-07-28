@@ -991,7 +991,9 @@ def denoise_and_commit_block(
         # every later block, which is what makes the degenerate state near-absorbing.
         degeneracy_stats, is_bad = degeneracy.evaluate(trajectory.committed, stop_token_ids=benign_ids)
         logger.info(
-            "DG_DEGENERACY start_pos={} attempt={} distinct={}/{} top_id={} top_frac={:.4f} max_run={}".format(
+            "DG_DEGENERACY start_pos={} attempt={} distinct={}/{} top_id={} top_frac={:.4f} max_run={} "
+            "stop_tail={} content_tokens={} content_top_id={} content_top_frac={} content_max_run={} "
+            "verdict={}".format(
                 start_pos,
                 attempt,
                 degeneracy_stats["distinct"],
@@ -999,6 +1001,15 @@ def denoise_and_commit_block(
                 degeneracy_stats["top_id"],
                 degeneracy_stats["top_frac"],
                 degeneracy_stats["max_run"],
+                # The content region is the decision basis; without it in the telemetry a later
+                # triage cannot tell a rejected collapse from a rejected normal completion, which
+                # is exactly what the 07-27 eval log could not answer.
+                degeneracy_stats.get("stop_tail", "na"),
+                degeneracy_stats.get("content_tokens", "na"),
+                degeneracy_stats.get("content_top_id", "na"),
+                degeneracy_stats.get("content_top_frac", "na"),
+                degeneracy_stats.get("content_max_run", "na"),
+                "degenerate" if is_bad else "ok",
             )
         )
         if not is_bad:

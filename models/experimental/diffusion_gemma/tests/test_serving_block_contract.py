@@ -83,6 +83,44 @@ def test_session_requires_vocab_size_source(expect_error):
         serving.BlockDiffusionServingSession(_M(), {}, gumbel_mode="argmax")
 
 
+# ── the guard's stop set is not the session's stop policy (2026-07-28) ──
+# The vLLM path sets stop_token_ids=[] on purpose ("vLLM owns the stop decision"). While the
+# degeneracy guard read that same field, it could not tell an answer's terminal <eos> padding from
+# a collapsed canvas, so it rejected the terminal block of 110 of 198 requests on tt-shield run
+# 30285823000 and each of those requests lost the block its answer was in.
+def _tokenizer(eos=1, specials=(0, 1, 2, 50, 106)):
+    return SimpleNamespace(eos_token_id=eos, all_special_ids=list(specials), vocab_size=262144)
+
+
+def test_vllm_empty_stop_policy_still_leaves_the_guard_a_stop_set():
+    ids = serving._resolve_degeneracy_stop_ids(None, stop_token_ids=[], tokenizer=_tokenizer())
+    assert ids, "an empty stop policy must not blind the guard"
+    assert 1 in ids and 106 in ids
+
+
+def test_explicit_degeneracy_stop_ids_win():
+    ids = serving._resolve_degeneracy_stop_ids([7, 8], stop_token_ids=[1], tokenizer=_tokenizer())
+    assert ids == {7, 8}
+
+
+def test_session_stop_policy_is_used_when_it_is_not_empty():
+    ids = serving._resolve_degeneracy_stop_ids(None, stop_token_ids=[1, 106], tokenizer=_tokenizer())
+    assert ids == {1, 106}
+
+
+def test_scalar_eos_from_a_bare_tokenizer_is_accepted():
+    tokenizer = SimpleNamespace(eos_token_id=1)
+    assert serving._resolve_degeneracy_stop_ids(None, stop_token_ids=None, tokenizer=tokenizer) == {1}
+
+
+def test_no_knowable_stop_ids_degrades_instead_of_raising():
+    # A partial tokenizer must not take generation down; the guard falls back to its whole-canvas
+    # rule and says so.
+    assert serving._resolve_degeneracy_stop_ids(None, stop_token_ids=[], tokenizer=SimpleNamespace()) is None
+    bad = SimpleNamespace(all_special_ids=["<eos>"], eos_token_id=None)
+    assert serving._resolve_degeneracy_stop_ids(None, stop_token_ids=[], tokenizer=bad) is None
+
+
 def test_session_reset_detaches_persistent_upfront_adapter_without_releasing():
     events = []
     controller = SimpleNamespace(

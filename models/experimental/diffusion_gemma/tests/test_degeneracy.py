@@ -194,3 +194,125 @@ def test_scalar_stop_token_id_is_accepted():
     stats = DG.block_degeneracy(torch.full((1, CANVAS), EOS_ID, dtype=torch.long))
     assert not DG.is_degenerate(stats, stop_token_ids=EOS_ID)
     assert DG.is_degenerate(stats, stop_token_ids=999)
+
+
+# ── the terminal-padding shape (2026-07-28) ──────────────────────────────────────────────────
+# What the tests above missed: the canvases the served run actually rejected were not walls of
+# <eos>, they were ANSWERS followed by <eos> padding. A block that finishes at position 149 pads
+# the remaining 107 -- top_frac 0.58 and max_run 107 over the whole canvas, both past the gate,
+# while the content region is ordinary prose. On tt-shield run 30285823000 that ended 110 of 198
+# requests and threw away the block holding the answer. Shapes below are taken from that run's
+# `ending request at block N` lines.
+
+
+def _answer_then_padding(content_len: int, *, seed: int = 0, pad_id: int = EOS_ID) -> torch.Tensor:
+    """A finished answer: healthy prose in the first ``content_len`` positions, then padding."""
+    ids = _prose_like(seed, length=content_len).flatten()
+    pad = torch.full((CANVAS - content_len,), pad_id, dtype=torch.long)
+    return torch.cat([ids, pad]).reshape(1, CANVAS)
+
+
+def test_answer_followed_by_eos_padding_is_not_degenerate():
+    tokens = _answer_then_padding(149)
+    whole = DG.block_degeneracy(tokens)
+    assert whole["top_frac"] >= DG.DEFAULT_TOP_FRAC or whole["max_run"] >= DG.DEFAULT_MAX_RUN
+    assert DG.is_degenerate(whole), "the whole-canvas view is what mis-rejected it"
+
+    stats = DG.block_degeneracy(tokens, stop_token_ids=[EOS_ID])
+    assert stats["stop_tail"] == CANVAS - 149
+    assert stats["content_tokens"] == 149
+    assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), stats
+
+
+def test_the_five_shapes_the_served_run_rejected(monkeypatch):
+    """Real (distinct, top_frac, max_run) tuples the 07-27 server log printed as degenerate."""
+    monkeypatch.delenv("DG_DEGENERACY_TOP_FRAC", raising=False)
+    for content_len, recorded_top_frac in ((18, 0.930), (98, 0.617), (68, 0.734), (73, 0.715), (107, 0.582)):
+        tokens = _answer_then_padding(content_len, seed=content_len)
+        whole = DG.block_degeneracy(tokens)
+        assert abs(whole["top_frac"] - recorded_top_frac) < 0.02, (content_len, whole["top_frac"])
+        assert DG.is_degenerate(whole), "reproduces the pre-fix rejection"
+        stats = DG.block_degeneracy(tokens, stop_token_ids=[EOS_ID])
+        assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), (content_len, stats)
+
+
+def test_padding_of_any_declared_stop_id_is_stripped():
+    """<end_of_turn> tails must count as padding too, not just <eos>."""
+    tokens = _answer_then_padding(120, pad_id=106)
+    stats = DG.block_degeneracy(tokens, stop_token_ids=[EOS_ID, 106, 50])
+    assert stats["stop_tail"] == CANVAS - 120
+    assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID, 106, 50])
+
+
+def test_mixed_stop_ids_in_the_tail_are_one_run():
+    ids = _prose_like(5, length=200).flatten()
+    tail = torch.tensor([EOS_ID] * 30 + [106] * 26, dtype=torch.long)
+    stats = DG.block_degeneracy(torch.cat([ids, tail]).reshape(1, CANVAS), stop_token_ids=[EOS_ID, 106])
+    assert stats["stop_tail"] == 56, "the tail is padding regardless of which stop id fills it"
+    assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID, 106])
+
+
+def test_content_collapse_with_an_eos_tail_is_still_degenerate():
+    """The 6 real trips on content ids: a short prefix, then a wall of content, then padding."""
+    collapsed = torch.cat(
+        [
+            _prose_like(9, length=39).flatten(),
+            torch.full((161,), CONTENT_ID, dtype=torch.long),
+            torch.full((56,), EOS_ID, dtype=torch.long),
+        ]
+    ).reshape(1, CANVAS)
+    stats = DG.block_degeneracy(collapsed, stop_token_ids=[EOS_ID])
+    assert stats["stop_tail"] == 56
+    assert DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), stats
+
+
+def test_full_content_wall_with_a_stop_set_is_still_degenerate():
+    """`尼` x 256 -- the 07-24 shape. Stripping must not empty the content region here."""
+    stats = DG.block_degeneracy(torch.full((1, CANVAS), 239054, dtype=torch.long), stop_token_ids=[EOS_ID])
+    assert stats["stop_tail"] == 0
+    assert stats["content_tokens"] == CANVAS
+    assert DG.is_degenerate(stats, stop_token_ids=[EOS_ID])
+
+
+def test_all_stop_token_canvas_has_no_content_region():
+    stats = DG.block_degeneracy(torch.full((1, CANVAS), EOS_ID, dtype=torch.long), stop_token_ids=[EOS_ID])
+    assert stats["stop_tail"] == CANVAS
+    assert stats["content_tokens"] == 0
+    assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID])
+
+
+def test_terminal_stop_run_only_counts_the_tail():
+    ids = torch.tensor([5, EOS_ID, EOS_ID, 7, EOS_ID, EOS_ID, EOS_ID], dtype=torch.long)
+    assert DG.terminal_stop_run(ids, {EOS_ID}) == 3, "a mid-canvas stop token is not padding"
+    assert DG.terminal_stop_run(torch.tensor([5, 7], dtype=torch.long), {EOS_ID}) == 0
+    assert DG.terminal_stop_run(torch.tensor([], dtype=torch.long), {EOS_ID}) == 0
+    assert DG.terminal_stop_run(ids, set()) == 0, "no declared stop set means nothing is padding"
+
+
+def test_whole_canvas_rule_is_unchanged_without_stop_ids():
+    """Callers that declare no stop set keep the old behaviour rather than a weakened gate."""
+    tokens = _answer_then_padding(149)
+    stats = DG.block_degeneracy(tokens)
+    assert "content_tokens" not in stats
+    assert DG.is_degenerate(stats)
+
+
+def test_stop_policy_commits_a_finished_answer(monkeypatch):
+    """End to end through the policy: the shape that lost 110 answers must now pass."""
+    monkeypatch.setenv("DG_DEGENERACY_POLICY", "stop")
+    stats = DG.check_committed_block(_answer_then_padding(149), block_idx=6, stop_token_ids=[EOS_ID])
+    assert stats["content_tokens"] == 149
+
+
+def test_describe_reports_the_content_region():
+    stats = DG.block_degeneracy(
+        torch.cat(
+            [
+                torch.full((200,), CONTENT_ID, dtype=torch.long),
+                torch.full((56,), EOS_ID, dtype=torch.long),
+            ]
+        ).reshape(1, CANVAS),
+        stop_token_ids=[EOS_ID],
+    )
+    message = DG.describe(stats, block_idx=3)
+    assert "content 200/256" in message and "stop tail 56" in message

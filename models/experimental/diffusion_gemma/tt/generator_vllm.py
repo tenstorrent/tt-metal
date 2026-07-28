@@ -660,6 +660,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # the whole 256-token committed canvas to vLLM, which trims at its own
         # stop point (block-diffusion #47488 scheduler-half contract). The
         # standalone ``serving_smoke`` driver keeps its own session-level stop.
+        #
+        # This does NOT disarm the degeneracy guard's stop set: the session resolves that
+        # separately from the tokenizer's special ids (``_resolve_degeneracy_stop_ids``). The two
+        # were one field until 2026-07-28, and emptying the stop policy here also blinded the guard,
+        # so it rejected the terminal block of 110 of 198 requests on the 07-27 eval.
         denoise_block_fn = upfront_traced_denoise_block if self._upfront else None
         _metric(
             "session_create",

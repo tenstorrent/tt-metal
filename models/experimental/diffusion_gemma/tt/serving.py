@@ -75,6 +75,41 @@ from models.experimental.diffusion_gemma.tt.generate import (
 GUMBEL_MODES = ("chunked", "argmax", "host", "device")
 
 
+def _resolve_degeneracy_stop_ids(explicit, *, stop_token_ids, tokenizer) -> set | None:
+    """Which ids the degeneracy guard may treat as terminal padding.
+
+    Preference order: what the caller declared, then the session's own stop policy, then every
+    special id the tokenizer knows. The tokenizer fallback is what makes the vLLM path correct
+    without hand-transcribing this checkpoint's ``eos_token_id`` list into the source: a canvas
+    tail made of <eos>/<end_of_turn>/<pad> is padding under any tokenizer, and no special id is
+    content the model is answering with. Returns ``None`` when nothing is knowable, which leaves
+    the guard on its whole-canvas rule.
+    """
+    for candidate in (explicit, stop_token_ids):
+        ids = _normalize_eos_token_ids(candidate, kind="stop_token_ids") if candidate is not None else None
+        if ids:
+            return set(ids)
+    special = set()
+    for attr in ("all_special_ids", "eos_token_id"):
+        value = getattr(tokenizer, attr, None)
+        if value is None:
+            continue
+        try:
+            special |= _normalize_eos_token_ids(value, kind="stop_token_ids") or set()
+        except ValueError:
+            # A mock/partial tokenizer can expose non-int specials; the guard must degrade, not
+            # take down generation.
+            continue
+    if special:
+        return special
+    logger.warning(
+        "[serving] degeneracy guard has no stop-token ids (no explicit set, no session stop policy, "
+        "no tokenizer specials): a terminal <eos> canvas cannot be told from a collapsed one, so "
+        "the whole-canvas rule applies and normal completions may be rejected"
+    )
+    return None
+
+
 def _validate_next_block_capacity(
     tt_model, *, start_pos: int, canvas_length: int, served_context_limit: int | None = None
 ) -> None:
@@ -148,6 +183,7 @@ class BlockDiffusionServingSession:
         gumbel_vocab_chunk_size: int = 1024,
         eos_token_id=None,
         stop_token_ids=None,
+        degeneracy_stop_token_ids=None,
         page_table=None,
         page_tables_per_layer=None,
         adapter_kwargs: dict | None = None,
@@ -183,6 +219,17 @@ class BlockDiffusionServingSession:
         self.stop_token_ids = stop_token_ids if stop_token_ids is not None else eos_token_id
         if self.stop_token_ids is not None:
             _normalize_eos_token_ids(self.stop_token_ids)
+        # The degeneracy guard needs to know which ids are stop tokens for a DIFFERENT reason than
+        # the stop policy does: to tell an answer's terminal <eos> padding from a collapsed canvas.
+        # Those two must not share one field. The vLLM path deliberately sets stop_token_ids=[]
+        # ("vLLM owns the stop decision") and that emptied the guard's knowledge too, so every
+        # terminal block looked like a wall of one token and was thrown away uncommitted -- 110 of
+        # 198 requests on the 2026-07-27 eval, each losing the block its answer was in.
+        self.degeneracy_stop_token_ids = _resolve_degeneracy_stop_ids(
+            degeneracy_stop_token_ids,
+            stop_token_ids=self.stop_token_ids,
+            tokenizer=tokenizer,
+        )
 
         mesh_device = tt_model.mesh_device
         self._init_canvas_fn = make_seeded_host_canvas_init_fn(
@@ -348,9 +395,10 @@ class BlockDiffusionServingSession:
                 page_tables_per_layer=self.page_tables_per_layer,
                 denoise_block_fn=self._denoise_block_fn,
                 timings=timings,
-                # Without this the degeneracy check cannot tell a terminating canvas (a wall of
-                # <eos>, which this session is about to stop on anyway) from a degenerate one.
-                stop_token_ids=self.stop_token_ids,
+                # The guard's stop set, NOT the session's stop policy (see __init__): this argument
+                # only tells the degeneracy check which ids are terminal padding. Passing
+                # self.stop_token_ids here is what broke the vLLM path, where it is empty by design.
+                stop_token_ids=self.degeneracy_stop_token_ids,
                 # Both are needed by DG_DEGENERACY_POLICY=retry: the noise factory so a retry can
                 # draw different noise, and the canvas factory because the denoise path consumes
                 # the canvas it is handed.

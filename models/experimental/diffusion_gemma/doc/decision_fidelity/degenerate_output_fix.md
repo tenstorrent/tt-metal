@@ -249,3 +249,101 @@ done
 DG_DEGENERACY_POLICY=warn  ...   # logs DG_DEGENERACY start_pos=... top_frac=... max_run=...
 DG_DEGENERACY_POLICY=stop  ...   # ends generation instead of committing a collapsed canvas
 ```
+
+---
+
+## 9. 2026-07-28: the guard was rejecting normal completions (the terminal-padding shape)
+
+**Status: fixed. The verdict is now taken on the canvas's CONTENT region, not the whole canvas.**
+
+Section 6 promised the gate sits far from healthy text, and the numbers there are right — but they
+were measured on canvases *not dominated by a stop token*, i.e. content-only. The served path never
+gave the guard the information it needed to make that same restriction, so it applied
+content-calibrated bounds to canvases that are half padding.
+
+### What went wrong
+
+Three correct-looking decisions composed into a wrong one:
+
+1. `is_degenerate()` exempts a canvas whose dominant id is a stop token — but only if the caller
+   passes `stop_token_ids`.
+2. `tt/serving.py` passed the session's **stop policy** into that argument.
+3. `tt/generator_vllm.py:_make_session()` deliberately sets `stop_token_ids=[]`, because vLLM owns
+   the stop decision (EOS / stop strings / `max_tokens` / `ignore_eos`) on the serving path.
+
+So on the vLLM path the exemption was dead code: `benign` was empty, `if benign and ...`
+short-circuited, and the whole-canvas rule ran unrestricted. And the whole-canvas rule cannot pass a
+finished answer: a block that ends at position 149 pads the remaining 107 positions with `<eos>`,
+which is `top_frac 0.58` **and** `max_run 107` — both past the gate. The terminal block of every
+answer shorter than the canvas is structurally degenerate under that rule.
+
+Because `stop` refuses to commit, the block holding `\boxed{...}` was discarded and the request
+ended at the previous 256-token boundary, mid-word.
+
+### The measurement (tt-shield run 30285823000, 2026-07-27, 198 GPQA-Diamond requests)
+
+| | |
+| --- | --- |
+| requests ended by the guard | **130** (66% of 198) |
+| ...whose dominant id is a stop token (1 / 106 / 50) | **110** (85% of trips) |
+| ...that were a *pure* `<eos>` canvas | 2 |
+| ...that were **answer + `<eos>` padding** | **108** — median 55 distinct ids in the discarded block |
+| real tokens thrown away | median **107** per block, **11135** total |
+| trips on a content id (true positives) | 20, of which 14 are a full 256-wide wall |
+| requests returning an empty string | 9 (guard tripped in the first block) |
+
+Score effect on that run: 65.15 → 48.99 on `gpqa_diamond_cot_zeroshot`. Responses that reach a
+final-answer statement fell 122/198 → 37/198, and `\boxed` presence 119 → 43, so the reported score
+came mostly from the harness's fallback extractor picking the last `(X)` out of a truncated
+response (66 of 97 correct answers, at 43% against a 25% random baseline).
+
+### The fix
+
+`block_degeneracy(tokens, stop_token_ids=...)` now also reports the same four statistics for the
+**content region** — the canvas with its terminal stop-token run removed — and `is_degenerate()`
+prefers those. Consequences:
+
+* answer + `<eos>` padding → content region is ordinary prose → committed;
+* all-stop canvas → no content region → benign termination;
+* wall of a content id → stripping removes nothing → still rejected;
+* short prefix then a content wall then padding → content region still collapsed → still rejected;
+* no stop ids declared → unchanged whole-canvas behaviour, and the serving layer logs why.
+
+The stop ids no longer come from the stop *policy*. `serving._resolve_degeneracy_stop_ids()` takes
+an explicit set, else the session's policy if non-empty, else **every special id the tokenizer
+knows** — a tail of `<eos>`/`<end_of_turn>`/`<pad>` is padding under any tokenizer, and this avoids
+hand-transcribing one checkpoint's `eos_token_id` list into the source.
+
+### Replaying the run against the fix
+
+`gate/replay_degeneracy_verdicts.py` re-decides every canvas the run measured, reconstructed from
+the `DG_DEGENERACY` telemetry (same length, dominant id, `top_frac`, `max_run`; `distinct` is not
+recoverable and the rule does not read it):
+
+```
+$ python replay_degeneracy_verdicts.py vllm_2026-07-27_..._evals.log
+canvases measured in the run:        1842
+  reconstruction mismatches:         0
+requests the run ended (guard trip): 130
+  now allowed to commit:             110  <- normal completions restored
+  still rejected:                    20  <- real content collapse
+newly rejected (regression check):   0
+  real tokens per restored block:    median 106, max 191, total 11136
+healthy blocks in the run:           1712
+  newly rejected among them:         0
+```
+
+The 20 survivors are the shape the guard exists for: `top_id` 239054 (11x), 63405, 107, 167, 1340,
+236743, 237808, 238408 — content ids at `top_frac` 0.55–1.00 over a full 256-token content region.
+
+**What this does not claim.** The replay proves the verdicts flip as intended on the real
+distribution; it does not predict the score. 110 requests keeping their terminal block is necessary
+for an answer to be extractable, not sufficient for it to be right — and the 07-27 outputs differ
+from 07-24 from the first ~120 characters (retention default, Gumbel layout, MoE HiFi2 revert all
+landed in the same window), so a re-run is the only way to separate the guard's contribution from
+the model's. That re-run is the gate for this fix.
+
+Unit coverage: `tests/test_degeneracy.py` pins the terminal-padding shapes measured above (the five
+real `(content_len, top_frac)` tuples), the mixed-stop-id tail, both still-degenerate collapses and
+the no-stop-ids fallback; `tests/test_serving_block_contract.py` pins that an empty stop policy
+still leaves the guard a stop set — the exact composition that caused this.
