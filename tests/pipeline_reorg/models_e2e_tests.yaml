@@ -852,11 +852,16 @@
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     # tt-run auto-allocation ("automapper"): --mesh-graph-descriptor + --hosts maps the MGD onto the
     # allocated hosts and generates the rank bindings/rankfile. Safe on bh_sc4 (Count) -- the MGD comes
-    # from the repo, so no ttop-staged /etc/ttop/mgd.textproto is needed (per CI-team guidance). No
-    # --tcp-interface: the CI runner has eth0 (not ens5f0np0); the MPI interface comes from the job env.
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --force-rediscovery \
+    # from the repo, so no ttop-staged /etc/ttop/mgd.textproto is needed (per CI-team guidance).
+    # --tcp-interface ens5f0np0 is REQUIRED: without it tt-run falls back to "--mca btl_tcp_if_exclude
+    # docker0,lo", which collides with the job env's OMPI_MCA_btl_tcp_if_include=ens5f0np0 (two mutually-
+    # exclusive MCA vars) -> OMPI drops the TCP BTL, leaving only "self", and generate_rank_bindings'
+    # MPI_Comm_dup aborts (MPI_ERR_INTERN). Passing the interface makes tt-run emit btl_tcp_if_include
+    # (no exclude) for both Phase 1 and the run. ens5f0np0 lives on the compute hosts (the ranks), not the
+    # launcher pod, so tt-run's local-only interface check just logs a harmless warning.
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --tcp-interface ens5f0np0 --force-rediscovery \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --force-rediscovery \
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --tcp-interface ens5f0np0 --force-rediscovery \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-t2v
   model_family: Wan
@@ -878,11 +883,11 @@
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    # tt-run auto-allocation ("automapper") -- see the T2V entry above for the rationale (safe on the
-    # bh_sc4 Count SKU; no --tcp-interface since the CI runner interface comes from the job env).
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --force-rediscovery \
+    # tt-run auto-allocation ("automapper") -- see the T2V entry above for the rationale, including why
+    # --tcp-interface ens5f0np0 is REQUIRED (avoids the btl_tcp_if_exclude/if_include MCA conflict).
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --tcp-interface ens5f0np0 --force-rediscovery \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and i2v"
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --force-rediscovery \
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --tcp-interface ens5f0np0 --force-rediscovery \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-i2v
   model_family: Wan
