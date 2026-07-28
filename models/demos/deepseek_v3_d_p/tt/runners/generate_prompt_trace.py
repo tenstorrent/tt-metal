@@ -32,15 +32,24 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 
 
 def _resolve_model_path(variant) -> Path:
-    """First of the variant's env var / local / shared path that holds an HF safetensors dir."""
-    candidates = [os.environ.get(variant.env_var), variant.default_local_path, variant.shared_path]
-    for c in candidates:
-        if c and Path(c).exists():
-            return Path(c)
+    """Resolve the same checkpoint the runner loads: ``PREFILL_HF_MODEL`` then the adapter's
+    ``hf_model_default`` (mirrors ``MLAPrefillAdapter.load_hf_config``), so the golden is generated
+    from the exact weights the device run validates against.
+
+    The runner reads only the config from this dir and pulls weights from the TTNN cache, so its
+    ``hf_model_default`` may be a config-only in-tree dir (kimi_k2_6, deepseek_v3). The golden runs
+    the torch/HF reference forward and needs real weights — require safetensors here and point the
+    user at PREFILL_HF_MODEL instead of failing deep in the weight load.
+    """
+    env = os.environ.get("PREFILL_HF_MODEL")
+    model_path = env or variant.hf_model_default
+    if model_path and Path(model_path).is_dir() and any(Path(model_path).glob("*.safetensors")):
+        return Path(model_path)
+    src = "PREFILL_HF_MODEL" if env else "hf_model_default"
     raise SystemExit(
-        f"No model dir found for {variant.name}: set {variant.env_var} to the HF safetensors dir "
-        f"(tried {variant.env_var}={os.environ.get(variant.env_var)!r}, "
-        f"{variant.default_local_path!r}, {variant.shared_path!r})"
+        f"No HF safetensors checkpoint for {variant.name} (tried {src}={model_path!r}): the "
+        f"prompt-trace golden needs real weights. Set PREFILL_HF_MODEL to an HF safetensors dir "
+        f"(hf_model_default may be a config-only in-tree dir whose weights live in the TTNN cache)."
     )
 
 
