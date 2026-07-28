@@ -59,3 +59,9 @@
 {"source":"tt-probe","pid":661206,"started_at_ms":1785202923579,"wait_ms":177,"run_ms":60116,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":662695,"started_at_ms":1785203026331,"wait_ms":179,"run_ms":62579,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":664812,"started_at_ms":1785203208054,"wait_ms":180,"run_ms":54575,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":667180,"started_at_ms":1785203324862,"wait_ms":2,"run_ms":13769,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":667855,"started_at_ms":1785203406900,"wait_ms":2,"run_ms":18040,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_matrix.py::test_partial_w_reduce_counts_every_element","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":668247,"started_at_ms":1785203429997,"wait_ms":2,"run_ms":45644,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_matrix.py::test_rms_norm_precision_matrix","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":669898,"started_at_ms":1785203486055,"wait_ms":2,"run_ms":36212,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":670597,"started_at_ms":1785203562102,"wait_ms":2,"run_ms":44364,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":671552,"started_at_ms":1785203615316,"wait_ms":2,"run_ms":22158,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
