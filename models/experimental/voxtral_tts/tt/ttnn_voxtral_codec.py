@@ -26,9 +26,28 @@ LAYOUT / OP NOTES (what the reference's torch ops map to here):
   * LayerScale multiplies each residual branch by a learned [1024] vector.
   * `norm_eps` is 1e-2 here (not 1e-5) — from params.json, and load-bearing.
 
-fp32 + fp32 accumulation (HiFi3): the XTTS-v2 HiFi-GAN port showed bf16 compounds through a deep
-conv stack to ~0.91-0.96 PCC even when every stage looks fine, because the final channel
-reduction does not cancel the accumulated error. Start accurate, optimize later.
+PRECISION: MEASURED, not inherited. fp32 accumulation (HiFi3 + fp32_dest_acc) is on throughout;
+activations outside attention are always fp32. The two dtypes that matter were swept on real
+weights (synthetic codes, which stress the numerics harder than real speech does -- same effect
+the XTTS-v2 speaker encoder saw):
+
+    weights  attention | mask@S=3752 | PCC T=64 / 256 / 469        | time T=64 / 256 / 469
+    fp32     fp32      |      450 MB | 0.999732 0.999762 0.999428  |  91 / 137 / 220 ms
+    bf16     fp32      |      450 MB | 0.999233 0.999503 0.998757  |  67 / 117 / 206 ms  <- FAILS 0.999
+    fp32     bf16      |      225 MB | 0.999746 0.999864 0.999768  |  94 / 131 / 190 ms  <- DEFAULT
+    bf16     bf16      |      225 MB | 0.999537 0.999665 0.999636  |  65 / 103 / 169 ms
+
+So bf16 ATTENTION is strictly good -- best PCC of all four, ~14% faster at length, and it halves
+the largest tensor -- hence the default. bf16 WEIGHTS buy a further ~20% but cost real accuracy
+(and on their own drop below the 0.999 gate at T=469), so they stay opt-in via weight_dtype.
+
+On REAL speech both bf16 variants are indistinguishable (PCC 0.999982, ASR WER 0.0%); the
+differences above only appear on random synthetic codes. Synthetic is kept as the gate because it
+is the conservative test.
+
+Not carried over: the XTTS-v2 HiFi-GAN result that bf16 costs 0.91-0.96 PCC. That was a 34-conv
+chain with bf16 ACTIVATIONS throughout; here attention output enters the residual scaled by
+LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
 
 Validate against the reference (bit-exact goldens for all 8 stages):
     TT_METAL_HOME=<repo> PYTHONPATH=<repo> python models/experimental/voxtral_tts/tt/ttnn_voxtral_codec.py
@@ -68,6 +87,9 @@ SCALE = CODEC_HEAD_DIM**-0.5
 # inf-inf -> NaN, so use a large finite negative instead: exp() underflows to exactly 0,
 # and it is unambiguous against real ALiBi values (which reach only about -16).
 MASK_NEG = -1e9
+# bf16 for the attention interior + its bias: measured best-PCC AND faster, and halves the
+# largest tensor. See the sweep in the module docstring.
+ATTN_DTYPE = ttnn.bfloat16
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -76,16 +98,20 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 class TtVoxtralCodecDecoder:
     """On-device codec decoder. __call__(codes [1,37,T] int64) -> waveform torch [1,1,T*1920]."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, weight_dtype=DTYPE, attn_dtype=ATTN_DTYPE):
+        """`weight_dtype` / `attn_dtype` exist so the precision question can be MEASURED rather
+        than inherited. Activations outside attention are always fp32."""
         self.device = device
+        self.weight_dtype = weight_dtype
+        self.attn_dtype = attn_dtype
         w = load_codec_state(ckpt_path)  # weight_norm already folded by the reference loader
 
-        dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
+        dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         vec = lambda t: dev(t.reshape(1, 1, -1))  # [C] -> [1,1,C] so it broadcasts over length
         lin = lambda t: dev(t.t())  # torch Linear [out,in] -> ttnn.linear wants [in,out]
         # conv weights stay HOST in PyTorch layout; ttnn.conv1d / conv_transpose2d move them
         # themselves and cache the device copy per call signature.
-        host = lambda t: ttnn.from_torch(t.contiguous(), dtype=DTYPE)
+        host = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype)
 
         self.semantic_host = w["semantic_embedding"].float()  # host gather; see quantizer_decode
 
@@ -122,7 +148,7 @@ class TtVoxtralCodecDecoder:
     # Attention bias: ALiBi + causal + sliding window, one additive [1,H,S,S] term
     # ----------------------------------------------------------------------------------
     def _attn_bias(self, S, window):
-        key = (S, window)
+        key = (S, window, self.attn_dtype)
         if key not in self._bias_cache:
             pos = torch.arange(S)
             rel = (pos.unsqueeze(0) - pos.unsqueeze(1)).float()  # rel[i,j] = j - i
@@ -130,7 +156,7 @@ class TtVoxtralCodecDecoder:
             bias = bias.masked_fill(rel.unsqueeze(0) > 0, MASK_NEG)  # causal
             bias = bias.masked_fill((rel < -window).unsqueeze(0), MASK_NEG)  # window
             self._bias_cache[key] = ttnn.from_torch(
-                bias.unsqueeze(0).contiguous(), dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device
+                bias.unsqueeze(0).contiguous(), dtype=self.attn_dtype, layout=ttnn.TILE_LAYOUT, device=self.device
             )
         return self._bias_cache[key]
 
@@ -192,10 +218,15 @@ class TtVoxtralCodecDecoder:
         does not cancel. Done as matmul + softmax in fp32 instead, which also lets us keep
         `numeric_stable=True` — XTTS-v2 Block 1 found the default softmax leaves a structured,
         dominant-aligned error that downstream layers amplify."""
+        if self.attn_dtype != DTYPE:
+            c = lambda t: ttnn.typecast(t, self.attn_dtype)
+            q, k, v = c(q), c(k), c(v)  # the BIAS is already cached in attn_dtype -- never cast the
+            #                            big tensor per call, which is what made an earlier A/B slower
         scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
         scores = ttnn.add(ttnn.multiply(scores, SCALE), bias)
         attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
-        return ttnn.matmul(attn, v, compute_kernel_config=COMPUTE_CONFIG)
+        out = ttnn.matmul(attn, v, compute_kernel_config=COMPUTE_CONFIG)
+        return ttnn.typecast(out, DTYPE) if self.attn_dtype != DTYPE else out
 
     # ----------------------------------------------------------------------------------
     # Transformer block
