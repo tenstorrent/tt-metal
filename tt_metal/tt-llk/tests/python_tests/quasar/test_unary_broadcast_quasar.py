@@ -50,7 +50,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
         return [DestAccumulation.Yes]
     return [
         DestAccumulation.No
-    ]  # 32bit dest is not supported for the non-unpack to dest case
+    ]  # 32bit dest is not supported for the unpack_to_dest=False case, ISSUE: #47560
 
 
 @pytest.mark.quasar
@@ -62,11 +62,12 @@ def get_valid_dest_acc_unary_broadcast(formats):
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+            DataFormat.Int32,
             DataFormat.MxInt8,
             DataFormat.MxInt4,
             DataFormat.MxInt2,
         ],
-        same=True,
+        same=True,  # input_fmt != output_fmt not tested, ISSUE: #47560
     ),
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
     broadcast_type=[
@@ -92,7 +93,10 @@ def test_unary_broadcast_quasar(
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
-    input_dimensions = [32, 96] if unpack_to_dest else [512, 32]
+    # Test fails when unpack_to_dest=False, DstSync::Half and Dest bank switching, ISSUE: #51329
+    input_dimensions = (
+        [32, 96] if unpack_to_dest and dest_sync_mode == DestSync.Half else [512, 32]
+    )
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -114,7 +118,17 @@ def test_unary_broadcast_quasar(
     )
 
     torch_format = format_dict[formats.input_format]
-    src_B = torch.randn(num_elements, dtype=torch_format)
+
+    if formats.input_format == DataFormat.Int32:
+        lo, hi = -1_000_000, 1_000_000
+        src_B = torch.randint(lo, hi, (num_elements,), dtype=torch.int32)
+    elif (
+        formats.input_format == DataFormat.Float32
+        and not formats.output_format.is_mx_format()
+    ):
+        src_B = torch.randn(num_elements, dtype=torch.float32) * 10000.0
+    else:
+        src_B = torch.randn(num_elements, dtype=torch_format)
 
     generate_broadcast_golden = get_golden_generator(BroadcastGolden)
     golden_tensor = generate_broadcast_golden(

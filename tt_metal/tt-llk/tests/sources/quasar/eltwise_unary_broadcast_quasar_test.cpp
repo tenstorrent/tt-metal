@@ -112,6 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
+    _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
     _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, unpack_to_dest>(tensor_shape);
 
     const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
