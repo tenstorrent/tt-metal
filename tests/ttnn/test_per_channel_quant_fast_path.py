@@ -94,3 +94,36 @@ def test_identical_fused_vs_composite():
     zp_tensor = torch.zeros(256, dtype=torch.float32)
     composite = (torch.round(x / scale) + zp_tensor) * scale
     assert torch.allclose(fused, composite, rtol=1e-5)
+
+@pytest.mark.parametrize('shape', [(32,64),(64,32),(256,256),(128,512),(512,128),(1024,64),(64,1024)])
+def test_varied_shapes(shape):
+    torch.manual_seed(77)
+    x=torch.rand(*shape)*6-3
+    s=_per_channel_scale(x,0)
+    z=0
+    q=torch.round(x/s)+z;dq=(q-z)*s
+    assert not torch.isnan(dq).any()
+    assert dq.shape==x.shape
+
+
+@pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16])
+def test_dtype_consistency(dtype):
+    torch.manual_seed(13)
+    x_f32=torch.rand(128,128)*4-2
+    x_dt=x_f32.to(dtype)
+    s=_per_channel_scale(x_f32,0)
+    z=0
+    r_f32=(torch.round(x_f32/s)+z)*s
+    r_dt=(torch.round(x_dt.float()/s)+z)*s
+    pcc=torch.corrcoef(torch.stack([r_f32.flatten(),r_dt.flatten()]))[0,1]
+    assert pcc>0.999
+
+@pytest.mark.parametrize('axis', [0,1,-1])
+def test_all_axes(axis):
+    torch.manual_seed(31)
+    x=torch.rand(64,128)*4-2
+    axis_n=(axis+2)%2
+    s=_per_channel_scale(x,axis_n)
+    z=0
+    q=torch.round(x/s)+z;dq=(q-z)*s
+    assert dq.shape==x.shape
