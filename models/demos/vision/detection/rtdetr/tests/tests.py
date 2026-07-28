@@ -43,7 +43,6 @@ from models.demos.vision.detection.rtdetr.tt.encoder import (
     TtRTDetrMLP,
     TtRTDetrRepVggBlock,
     TtRTDetrSelfAttention,
-    build_2d_sinusoidal_position_embedding,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -116,7 +115,7 @@ def test_rtdetr_2d_sinusoidal_position_embedding():
         device="cpu",
         dtype=torch.float32,
     )
-    output = build_2d_sinusoidal_position_embedding(
+    output = TtRTDetrAIFILayer._build_2d_sinusoidal_position_embedding(
         height=ENCODER_HEIGHT,
         width=ENCODER_WIDTH,
         embed_dim=torch_rtdetr.config.encoder_hidden_dim,

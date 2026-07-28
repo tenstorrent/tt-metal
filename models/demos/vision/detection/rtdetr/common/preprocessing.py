@@ -187,6 +187,42 @@ def preprocess_rtdetr_hybrid_encoder(torch_module, *_):
     }
 
 
+def preprocess_rtdetr_enc_output(torch_module, *_):
+    return {
+        0: {
+            "weight": torch_module[0].weight,
+            "bias": torch_module[0].bias,
+        },
+        1: {
+            "weight": torch_module[1].weight,
+            "bias": torch_module[1].bias,
+        },
+    }
+
+
+def preprocess_rtdetr_enc_score_head(torch_module, *_):
+    return {
+        "weight": torch_module.weight,
+        "bias": torch_module.bias,
+    }
+
+
+def preprocess_rtdetr_enc_bbox_head(torch_module, *_):
+    return {
+        "layers": ParameterList(
+            [
+                make_parameter_dict(
+                    {
+                        "weight": layer.weight,
+                        "bias": layer.bias,
+                    }
+                )
+                for layer in torch_module.layers
+            ]
+        ),
+    }
+
+
 def custom_preprocessor(torch_module, name):
     if torch_module.__class__.__name__ == "RTDetrHybridEncoder":
         return preprocess_rtdetr_hybrid_encoder(torch_module)
@@ -199,6 +235,18 @@ def custom_preprocessor(torch_module, name):
 
     if name.startswith("encoder_input_proj."):
         return preprocess_encoder_input_projection(torch_module)
+
+    if name.startswith("decoder_input_proj."):
+        return preprocess_encoder_input_projection(torch_module)
+
+    if name == "enc_output":
+        return preprocess_rtdetr_enc_output(torch_module)
+
+    if name == "enc_score_head":
+        return preprocess_rtdetr_enc_score_head(torch_module)
+
+    if name == "enc_bbox_head":
+        return preprocess_rtdetr_enc_bbox_head(torch_module)
 
     if name.startswith("encoder.aifi."):
         return preprocess_rtdetr_aifi_layer(torch_module)

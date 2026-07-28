@@ -307,17 +307,15 @@ class TtRTDetrResNetStage:
         self.layers = []
 
         for index in range(depth):
-            i_c = in_channels if index == 0 else out_channels
-            st = stride if index == 0 else (1, 1)
             self.layers.append(
                 TtRTDetrResNetBottleNeckLayer(
                     config=config,
                     parameters=parameters.layers[index],
                     device=device,
                     dtype=dtype,
-                    in_channels=i_c,
+                    in_channels=in_channels if index == 0 else out_channels,
                     out_channels=out_channels,
-                    stride=st,
+                    stride=stride if index == 0 else (1, 1),
                 )
             )
 
@@ -438,8 +436,7 @@ class TtRTDetrResNetBottleNeckLayer:
         else:
             shortcut = residual
 
-        x = ttnn.add(main, shortcut)
-        x = ttnn.relu(x)
+        x = ttnn.add(main, shortcut, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
 
         return x, main_height, main_width
 

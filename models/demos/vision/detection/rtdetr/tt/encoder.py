@@ -4,33 +4,6 @@ import ttnn
 from models.demos.vision.detection.rtdetr.tt.backbone import TtRTDetrResNetConvLayer
 
 
-def build_2d_sinusoidal_position_embedding(
-    height: int,
-    width: int,
-    embed_dim: int,
-    temperature: float,
-) -> torch.Tensor:
-    if embed_dim % 4 != 0:
-        raise ValueError(f"embed_dim must be divisible by 4, got {embed_dim}")
-
-    position_dim = embed_dim // 4
-    omega = torch.arange(position_dim, dtype=torch.float64) / position_dim
-    omega = 1.0 / temperature**omega
-
-    grid_h = torch.arange(height, dtype=torch.float64)
-    grid_w = torch.arange(width, dtype=torch.float64)
-    grid_h, grid_w = torch.meshgrid(grid_h, grid_w, indexing="ij")
-
-    embedding_h = grid_h.flatten().outer(omega)
-    embedding_w = grid_w.flatten().outer(omega)
-
-    position_embedding = torch.cat(
-        [embedding_h.sin(), embedding_h.cos(), embedding_w.sin(), embedding_w.cos()],
-        dim=-1,
-    )
-    return position_embedding.to(torch.float32).unsqueeze(0)
-
-
 class TtRTDetrConvNormLayer(TtRTDetrResNetConvLayer):
     def __init__(
         self,
@@ -45,9 +18,6 @@ class TtRTDetrConvNormLayer(TtRTDetrResNetConvLayer):
         padding: tuple[int, int],
         activation: str,
     ):
-        if activation not in ("silu", "identity"):
-            raise ValueError(f"Unsupported ConvNorm activation: {activation}")
-
         super().__init__(
             config=config,
             parameters=parameters,
@@ -136,11 +106,6 @@ class TtRTDetrHybridEncoder:
             self.downsample_convs.append(downsample_conv)
             self.pan_blocks.append(pan_block)
 
-    @staticmethod
-    def _to_dram_row_major(hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-
     def _upsample(
         self,
         hidden_states: ttnn.Tensor,
@@ -148,34 +113,24 @@ class TtRTDetrHybridEncoder:
         height: int,
         width: int,
     ) -> tuple[ttnn.Tensor, int, int]:
-        hidden_states = self._to_dram_row_major(hidden_states)
-        hidden_states = ttnn.reshape(
-            hidden_states,
-            (batch_size, height, width, self.encoder_hidden_dim),
-        )
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
+        hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, self.encoder_hidden_dim))
+
         hidden_states = ttnn.upsample(
             hidden_states,
             scale_factor=2,
             mode="nearest",
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
         height *= 2
         width *= 2
-        hidden_states = ttnn.reshape(
-            hidden_states,
-            (1, 1, batch_size * height * width, self.encoder_hidden_dim),
-        )
-        return hidden_states, height, width
 
-    def _concat(self, hidden_states_1: ttnn.Tensor, hidden_states_2: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.concat(
-            [
-                self._to_dram_row_major(hidden_states_1),
-                self._to_dram_row_major(hidden_states_2),
-            ],
-            dim=-1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        hidden_states = ttnn.reshape(hidden_states, (1, 1, batch_size * height * width, self.encoder_hidden_dim))
+
+        return hidden_states, height, width
 
     def __call__(
         self,
@@ -213,7 +168,17 @@ class TtRTDetrHybridEncoder:
                 height=top_height,
                 width=top_width,
             )
-            fused_feature_map = self._concat(top_feature_map, backbone_feature_map)
+
+            top_feature_map = ttnn.to_layout(top_feature_map, ttnn.ROW_MAJOR_LAYOUT)
+            top_feature_map = ttnn.to_memory_config(top_feature_map, ttnn.DRAM_MEMORY_CONFIG)
+            backbone_feature_map = ttnn.to_layout(backbone_feature_map, ttnn.ROW_MAJOR_LAYOUT)
+            backbone_feature_map = ttnn.to_memory_config(backbone_feature_map, ttnn.DRAM_MEMORY_CONFIG)
+            fused_feature_map = ttnn.concat(
+                [top_feature_map, backbone_feature_map],
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
             new_fpn_feature_map = fpn_block(
                 fused_feature_map,
                 batch_size=batch_size,
@@ -235,7 +200,17 @@ class TtRTDetrHybridEncoder:
                 input_height=top_height,
                 input_width=top_width,
             )
-            fused_feature_map = self._concat(downsampled_feature_map, fpn_feature_map)
+
+            downsampled_feature_map = ttnn.to_layout(downsampled_feature_map, ttnn.ROW_MAJOR_LAYOUT)
+            downsampled_feature_map = ttnn.to_memory_config(downsampled_feature_map, ttnn.DRAM_MEMORY_CONFIG)
+            fpn_feature_map = ttnn.to_layout(fpn_feature_map, ttnn.ROW_MAJOR_LAYOUT)
+            fpn_feature_map = ttnn.to_memory_config(fpn_feature_map, ttnn.DRAM_MEMORY_CONFIG)
+            fused_feature_map = ttnn.concat(
+                [downsampled_feature_map, fpn_feature_map],
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
             new_pan_feature_map = pan_block(
                 fused_feature_map,
                 batch_size=batch_size,
@@ -250,7 +225,9 @@ class TtRTDetrHybridEncoder:
 class TtRTDetrRepVggBlock:
     def __init__(self, config, parameters, device, dtype):
         hidden_channels = int(config.encoder_hidden_dim * config.hidden_expansion)
-        self.activation = config.activation_function
+
+        if config.activation_function == "silu":
+            self.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
 
         self.conv1 = TtRTDetrConvNormLayer(
             config=config,
@@ -286,12 +263,7 @@ class TtRTDetrRepVggBlock:
     ) -> tuple[ttnn.Tensor, int, int]:
         hidden_states_1, output_height, output_width = self.conv1(hidden_states, batch_size, input_height, input_width)
         hidden_states_2, _, _ = self.conv2(hidden_states, batch_size, input_height, input_width)
-        hidden_states = ttnn.add(hidden_states_1, hidden_states_2)
-
-        if self.activation == "silu":
-            hidden_states = ttnn.silu(hidden_states)
-        elif self.activation is not None:
-            raise ValueError(f"Unsupported RepVGG activation: {self.activation}")
+        hidden_states = ttnn.add(hidden_states_1, hidden_states_2, activations=[self.activation])
 
         return hidden_states, output_height, output_width
 
@@ -389,10 +361,37 @@ class TtRTDetrAIFILayer:
             for ix in range(config.encoder_layers)
         ]
 
+    @staticmethod
+    def _build_2d_sinusoidal_position_embedding(
+        height: int,
+        width: int,
+        embed_dim: int,
+        temperature: float,
+    ) -> torch.Tensor:
+        if embed_dim % 4 != 0:
+            raise ValueError(f"embed_dim must be divisible by 4, got {embed_dim}")
+
+        position_dim = embed_dim // 4
+        omega = torch.arange(position_dim, dtype=torch.float64) / position_dim
+        omega = 1.0 / temperature**omega
+
+        grid_h = torch.arange(height, dtype=torch.float64)
+        grid_w = torch.arange(width, dtype=torch.float64)
+        grid_h, grid_w = torch.meshgrid(grid_h, grid_w, indexing="ij")
+
+        embedding_h = grid_h.flatten().outer(omega)
+        embedding_w = grid_w.flatten().outer(omega)
+
+        position_embedding = torch.cat(
+            [embedding_h.sin(), embedding_h.cos(), embedding_w.sin(), embedding_w.cos()],
+            dim=-1,
+        )
+        return position_embedding.to(torch.float32).unsqueeze(0)
+
     def _build_sinusoidal_position_embedding(self, height: int, width: int) -> ttnn.Tensor:
         cache_key = (height, width)
         if cache_key not in self.position_embedding_cache:
-            position_embedding = build_2d_sinusoidal_position_embedding(
+            position_embedding = self._build_2d_sinusoidal_position_embedding(
                 height=height,
                 width=width,
                 embed_dim=self.encoder_hidden_dim,
@@ -445,19 +444,31 @@ class TtRTDetrEncoderLayer:
         self.layer_norm_eps = config.layer_norm_eps
 
         self.self_attn_layer_norm_weight = ttnn.from_torch(
-            parameters.self_attn_layer_norm.weight, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            parameters.self_attn_layer_norm.weight,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
 
         self.self_attn_layer_norm_bias = ttnn.from_torch(
-            parameters.self_attn_layer_norm.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            parameters.self_attn_layer_norm.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
 
         self.final_layer_norm_weight = ttnn.from_torch(
-            parameters.final_layer_norm.weight, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            parameters.final_layer_norm.weight,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
 
         self.final_layer_norm_bias = ttnn.from_torch(
-            parameters.final_layer_norm.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            parameters.final_layer_norm.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
 
     def __call__(self, hidden_states: ttnn.Tensor, position_embeddings: ttnn.Tensor = None) -> ttnn.Tensor:
@@ -485,31 +496,71 @@ class TtRTDetrEncoderLayer:
 
 
 class TtRTDetrSelfAttention:
-    def __init__(self, config, parameters, device, dtype):
-        self.embed_dim = config.encoder_hidden_dim
-        self.num_heads = config.encoder_attention_heads
+    def __init__(
+        self,
+        config,
+        parameters,
+        device,
+        dtype,
+        embed_dim=None,
+        num_heads=None,
+    ):
+        self.embed_dim = config.encoder_hidden_dim if embed_dim is None else embed_dim
+        self.num_heads = config.encoder_attention_heads if num_heads is None else num_heads
         self.head_dim = self.embed_dim // self.num_heads
         self.scale = self.head_dim**-0.5
 
         self.q_proj_weight = ttnn.from_torch(
-            parameters.q_proj.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            parameters.q_proj.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
-        self.q_proj_bias = ttnn.from_torch(parameters.q_proj.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.q_proj_bias = ttnn.from_torch(
+            parameters.q_proj.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
         self.k_proj_weight = ttnn.from_torch(
-            parameters.k_proj.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            parameters.k_proj.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
-        self.k_proj_bias = ttnn.from_torch(parameters.k_proj.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.k_proj_bias = ttnn.from_torch(
+            parameters.k_proj.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
         self.v_proj_weight = ttnn.from_torch(
-            parameters.v_proj.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            parameters.v_proj.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
-        self.v_proj_bias = ttnn.from_torch(parameters.v_proj.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.v_proj_bias = ttnn.from_torch(
+            parameters.v_proj.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
         self.o_proj_weight = ttnn.from_torch(
-            parameters.o_proj.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            parameters.o_proj.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
-        self.o_proj_bias = ttnn.from_torch(parameters.o_proj.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.o_proj_bias = ttnn.from_torch(
+            parameters.o_proj.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
     def __call__(self, hidden_states: ttnn.Tensor, position_embeddings: ttnn.Tensor = None) -> ttnn.Tensor:
         batch_size = hidden_states.shape[0]
@@ -546,14 +597,35 @@ class TtRTDetrSelfAttention:
 
 class TtRTDetrMLP:
     def __init__(self, config, parameters, device, dtype):
-        self.fc1_weight = ttnn.from_torch(parameters.fc1.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.fc1_bias = ttnn.from_torch(parameters.fc1.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.fc2_weight = ttnn.from_torch(parameters.fc2.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.fc2_bias = ttnn.from_torch(parameters.fc2.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.activation = config.encoder_activation_function
+        self.fc1_weight = ttnn.from_torch(
+            parameters.fc1.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        self.fc1_bias = ttnn.from_torch(
+            parameters.fc1.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        self.fc2_weight = ttnn.from_torch(
+            parameters.fc2.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        self.fc2_bias = ttnn.from_torch(
+            parameters.fc2.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        hidden_states = ttnn.linear(hidden_states, self.fc1_weight, bias=self.fc1_bias)
-        hidden_states = ttnn.gelu(hidden_states)
+        hidden_states = ttnn.linear(hidden_states, self.fc1_weight, bias=self.fc1_bias, activation=self.activation)
+
         hidden_states = ttnn.linear(hidden_states, self.fc2_weight, bias=self.fc2_bias)
 
         return hidden_states

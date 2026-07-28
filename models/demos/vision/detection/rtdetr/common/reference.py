@@ -11,7 +11,7 @@ DEFAULT_MODEL = MODELS[2]
 # Initializing a model (with random weights) from the configuration
 model = RTDetrForObjectDetection.from_pretrained(DEFAULT_MODEL)
 
-module = model.model.encoder.lateral_convs
+module = model.model.decoder.layers[0].encoder_attn_layer_norm
 
 for name, tensor in module.state_dict().items():
     print(name, tensor.shape)
