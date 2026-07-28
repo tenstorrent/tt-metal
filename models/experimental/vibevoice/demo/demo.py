@@ -71,11 +71,15 @@ def _write_wav(path: Path, audio_1d: torch.Tensor) -> None:
 def _split_script(script: str, n: int) -> list[str]:
     """Split a multi-speaker script into ``n`` roughly equal parts at speaker-turn boundaries.
 
-    Each part is prefilled and generated independently, so the AR position resets per part.  This
-    keeps long renders inside the range where output is verified clean: the loop degrades past
-    absolute position ~55k (single-pass 100-min collapses ~min 72, and the pre-rebase build garbles
-    in the same window), and a single pass is additionally truncated by max_position_embeddings.
+    Each part is prefilled and generated independently, so the AR position resets per part.  A
+    single pass is capped by max_position_embeddings (65536 - prefill frames, ~93 min for the
+    100-min script), so chunking is the way to render a script that needs longer than that.
     Balancing is by character count, so parts are only approximately equal in duration.
+
+    NOTE: chunking is no longer needed for output quality.  It was added when a single pass
+    collapsed around min 72; that collapse was a CFG bug (the negative branch was fed a constant
+    token embedding instead of the audio feedback) and is fixed — a single pass now renders 93 min
+    clean.  Each extra boundary costs ~1 garbled minute while the new prefill settles.
 
     Split on single newlines, not blank lines: ``load_script`` collapses the blank lines that
     separate turns in the resource .txt files, so by the time the script reaches here one turn is
@@ -165,9 +169,9 @@ def main() -> int:
         type=int,
         default=1,
         help="Render the script as N independently-prefilled chunks and concatenate (default 1). "
-        "The AR loop degrades past absolute position ~55k — a single-pass 100-min render collapses "
-        "around min 72 and is truncated by max_position_embeddings; splitting keeps each chunk in "
-        "the verified-clean range. Splits only at speaker-turn boundaries.",
+        "Only needed for scripts longer than one pass allows (max_position_embeddings - prefill, "
+        "~93 min for the 100-min script) — a single pass is quality-clean throughout. Each extra "
+        "boundary costs ~1 garbled minute. Splits only at speaker-turn boundaries.",
     )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--text", default=None, help="Custom script path (overrides --demo)")

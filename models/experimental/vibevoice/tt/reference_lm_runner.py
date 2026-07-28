@@ -74,11 +74,12 @@ class ReferenceLMRunner:
         self.past_neg = out.past_key_values
         return self._to_hidden_tt(out.last_hidden_state)
 
-    def neg_step_token(self, token_id: int) -> ttnn.Tensor:
-        ids = torch.tensor([[token_id]], dtype=torch.long)
+    def neg_step_embeds(self, embeds: torch.Tensor) -> ttnn.Tensor:
+        """Negative-CFG decode step on the positive branch's inputs_embeds (reference semantics:
+        the negative forward overrides input_ids with inputs_embeds)."""
         with torch.no_grad():
             out = self.ref(
-                inputs_embeds=self.embed(ids).to(torch.float32),
+                inputs_embeds=embeds,
                 past_key_values=self.past_neg,
                 use_cache=True,
                 return_dict=True,
