@@ -1003,15 +1003,14 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    TTRUN_DIR=/etc/ttop
-    PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
-    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
-      --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "$MGD" \
-      --hosts "$PIPELINE_HOSTS" \
-      --force-rediscovery \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and 14b-720p"
+    # Plain mpirun (no tt-run), following PR #50151. bh_sc4 (Count) doesn't stage /etc/ttop/mgd.textproto
+    # and ttrun new-mode discovery fails from the CI runner; set TT_MESH_* directly + repo descriptor.
+    # Per-rank TT_MESH_HOST_RANK = OMPI_COMM_WORLD_RANK; host/TCP/env-forwarding come from the job env.
+    export TT_MESH_ID=0 TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    export TT_VISIBLE_DEVICES="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31"
+    PIPELINE_HOSTS=$(grep . /etc/ttop/hostfile | sed "s/[[:space:]].*//" | paste -sd,)
+    MPIRUN="mpirun -np 4 --host $PIPELINE_HOSTS --map-by ppr:1:node --bind-to none --tag-output --wdir ${TT_METAL_HOME}"
+    $MPIRUN bash -c 'export TT_MESH_HOST_RANK=$OMPI_COMM_WORLD_RANK && python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and 14b-720p"'
   model: wan-2.2-t2v
   skus:
     bh_sc4:
