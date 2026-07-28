@@ -4,9 +4,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 FORCE_INLINE void zero_tile_at(uint32_t l1_write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
@@ -18,27 +19,23 @@ FORCE_INLINE void zero_tile_at(uint32_t l1_write_addr, uint32_t tile_bytes) {
 void kernel_main() {
     Noc noc;
 
-    uint32_t argrt = 0;
-    uint32_t dst_addr = get_arg_val<uint32_t>(argrt++);
-    uint32_t batch_start = get_arg_val<uint32_t>(argrt++);
-    uint32_t batch_end = get_arg_val<uint32_t>(argrt++);
-    uint32_t seq_t_start = get_arg_val<uint32_t>(argrt++);
-    uint32_t seq_t_end = get_arg_val<uint32_t>(argrt++);
+    auto batch_start = get_arg(args::batch_start);
+    auto batch_end = get_arg(args::batch_end);
+    auto seq_t_start = get_arg(args::seq_t_start);
+    auto seq_t_end = get_arg(args::seq_t_end);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_zero = get_compile_time_arg_val(1);
-    constexpr uint32_t n_heads = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t rotary_Ht = get_compile_time_arg_val(5);
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr auto n_heads = get_arg(args::n_heads);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
 
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const uint32_t zero_tile_bytes = get_tile_size(cb_id_zero);
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::output);
 
-    CircularBuffer cb_out(cb_id_out);
-    CircularBuffer cb_zero(cb_id_zero);
+    DataflowBuffer cb_out(dfb::out);
+    DataflowBuffer cb_zero(dfb::zero);
+
+    const uint32_t tile_bytes = cb_out.get_entry_size();
+    const uint32_t zero_tile_bytes = cb_zero.get_entry_size();
 
     cb_zero.reserve_back(Wt);
     uint32_t zero_l1_write_addr = cb_zero.get_write_ptr();
