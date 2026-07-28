@@ -164,8 +164,21 @@ class Qwen36DecoderLayer:
         chunk_start_idx_tensor=None,
         valid_len=None,
         gdn_collect=False,
+        gdn_recurrent=False,
+        decode_cfg=False,
+        exact_kv_pos=None,
+        exact_kv_pt=None,
     ):
-        _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
+        # decode_cfg: run a SHORT prefill-mode forward (spec verify, <=TILE_SIZE rows) with the DECODE
+        # matmul/norm configuration. Every matmul in the stack already selects decode-vs-prefill purely
+        # on `x.shape[-2] <= TILE_SIZE`, so at a 32-row bucket they all pick the DRAM-sharded decode
+        # kernels — which stream the weights ONCE per 32-row M-tile instead of re-blocking them for a
+        # padded prefill tile. The only thing that does not follow automatically is the norm: PREFILL
+        # norms leave the activation K-sharded for a fused AGMM that a <=TILE input never takes, so the
+        # decode matmuls would receive a dim/tp tensor. Mode.DECODE gathers PRE-norm and hands them the
+        # full-dim activation they expect. This is the weight-load amortization that makes verifying
+        # K+1 tokens cost ~one decode step instead of ~K+1.
+        _norm_mode = Mode.DECODE if (decode_cfg or mode != "prefill") else Mode.PREFILL
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -203,6 +216,8 @@ class Qwen36DecoderLayer:
                             chunk_page_table=chunk_page_table,
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
+                            exact_kv_pos=exact_kv_pos,
+                            exact_kv_pt=exact_kv_pt,
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
@@ -214,7 +229,13 @@ class Qwen36DecoderLayer:
                 # GDN carries its recurrent/conv state internally (capture_state on
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
                 if mode == "prefill":
-                    if gdn_collect:
+                    if gdn_recurrent:
+                        # Hybrid spec-decode verify: advance GDN recurrently (bit-exact to decode)
+                        # over valid_len tokens while the rest of the stack runs batched.
+                        attn_output = self.attention.forward_verify_recurrent(
+                            attn_input, valid_len, pre_gathered=decode_cfg
+                        )
+                    elif gdn_collect:
                         # Batched per-user prefill: stash this user's from-scratch state for
                         # assembly into row u of the batched buffers (finalize_pending later).
                         attn_output = self.attention.forward_prefill_collect(

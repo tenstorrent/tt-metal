@@ -13,6 +13,7 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+    fused_recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
@@ -20,7 +21,7 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
     create_chunk_masks_seq,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 
 
 def _softplus_add(a, bias):
@@ -202,8 +203,26 @@ class TPGatedDeltaNet:
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
         self.conv_states = None
         self.rec_state = None
+        # Spec-decode hybrid verify slot capture (set by SpeculativeDecoder): per-token recurrent-state
+        # snapshots buffered during a captured verify so commit is a slot-select, not a re-run.
+        self._capture_slots = False
+        self._verify_slots = None
+        self._verify_states = None  # per-token rec states from the last verify (token-major)
+        self._verify_states_buf = None  # same tensor; kept so traced replays can re-arm the handle
+        # Pre-allocated persistent slot buffers (rec_state + conv_states shaped). Verify copies state
+        # INTO these fixed addresses (trace-safe + no per-call alloc) instead of fresh ttnn.clone.
+        self._slot_bufs = None
+        # Batched-conv verify only: the [1, K-1+T, qkv_dim_tp] conv window stashed with ONE copy, from
+        # which commit_verify_slot slices the accepted slot's shift-register. None => per-token slots.
+        self._verify_win_buf = None
+        self._win_captured = False  # did THIS verify populate the window? (buffer is always allocated)
+        self._conv_taps_T = None  # conv taps expanded to T rows for the batched-conv path
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
         self._stable_state = False
+        # Spec decode only (set by SpeculativeDecoder): run the ONE fused recurrent device op in
+        # forward_decode instead of the composite, so decode and hybrid verify share GDN math.
+        # Full-batch (B == self.B) only — it has no bucketed B<Bmax state slice/writeback.
+        self.use_fused_recurrent_decode = False
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
         # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
         # Only used when valid_len is None (masked buckets keep the MAC FIR).
@@ -246,6 +265,14 @@ class TPGatedDeltaNet:
         if getattr(self, "_batched_conv_carry", None) is not None:
             ttnn.deallocate(self._batched_conv_carry)
         self._batched_conv_carry = None
+        # rec_state/conv_states got fresh addresses here, so any verify slot buffers cloned from the
+        # old ones are stale — drop them (re-allocated lazily on the next captured verify).
+        if self._slot_bufs is not None:
+            for rec, convs in self._slot_bufs:
+                ttnn.deallocate(rec)
+                for c in convs:
+                    ttnn.deallocate(c)
+            self._slot_bufs = None
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state in place (preserves trace buffer addresses).
@@ -295,7 +322,17 @@ class TPGatedDeltaNet:
         _dram = ttnn.DRAM_MEMORY_CONFIG
         Lin = (K - 1) + T
         # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
-        new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
+        # A chunk SHORTER than the register (T < K-1) has no K-1 rows of its own -- the spec-decode
+        # seed/commit calls this with T=1. Take the tail of [conv_state ; qkv] instead, which IS the
+        # register after T shifts; slicing qkv alone would ask for a negative start and TT_FATAL.
+        if T >= K - 1:
+            new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
+        else:
+            _w = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram) if conv_state is not None else qkv
+            _n = _w.shape[1]
+            new_state = ttnn.slice(_w, (0, max(0, _n - (K - 1)), 0), (1, _n, C))
+            if _w is not qkv:
+                ttnn.deallocate(_w)
         new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
         if conv_state is None:
             pad = ttnn.zeros(
@@ -1083,17 +1120,38 @@ class TPGatedDeltaNet:
 
         # fp32 decode step by default (QWEN35_GDN_DECODE_BF16=1 reverts)
         init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
-        o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
-            q,
-            k,
-            v,
-            beta,
-            g,
-            scale=self.scale,
-            initial_state=init_state,
-            device=self.mesh,
-            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
-        )
+        if self.use_fused_recurrent_decode:
+            # Spec-decode path. The whole recurrence (decay->k.S->delta->outer->q.S) is ONE fused
+            # device op rather than the ~13-op composite: 0.345 vs 0.541 ms, and closer to the FLA
+            # reference (PCC 0.999991 vs 0.999981). Decode runs under trace, so the dispatch saving
+            # is small — the reason spec decode selects it is CONSISTENCY. Spec verify advances GDN
+            # with this same op, so decode and verify must use identical math or every greedy
+            # near-tie flips between them and acceptance drops (measured 2.82 -> 2.00 /3 when the
+            # two paths disagreed at ~1e-5).
+            assert B == Bmax, "fused recurrent decode path supports full-batch only (spec decode, B=1)"
+            o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
+                q,
+                k,
+                v,
+                beta,
+                g,
+                scale=self.scale,
+                initial_state=self.rec_state,
+                device=self.mesh,
+                high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+            )
+        else:
+            o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
+                q,
+                k,
+                v,
+                beta,
+                g,
+                scale=self.scale,
+                initial_state=init_state,
+                device=self.mesh,
+                high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+            )
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
         if self._stable_state:
@@ -1128,3 +1186,441 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
+
+    def forward_verify_recurrent(self, x, valid_len, pre_gathered=False):
+        """Hybrid spec-decode verify for GDN: advance the recurrent state token-by-token over the
+        first ``valid_len`` rows of the bucket. This is BIT-EXACT to ``valid_len`` sequential
+        ``forward_decode`` steps (identical conv shift-register + recurrent kernel + in-place state
+        updates), so verify uses the SAME kernel as decode instead of the lossy chunk kernel.
+
+        Rows past ``valid_len`` are zero and are never read downstream: full attention is causal
+        (real queries < valid_len never attend to padded keys) and verify only row-selects rows
+        < valid_len. The rest of the layer stack (attn/MLP/norm/lm_head) still runs batched over the
+        bucket, so only the GDN recurrence is sequential — that is the whole point of the hybrid.
+
+        x : [1, 1, bucket, dim] prefill-normed input (same shape forward_prefill receives).
+        Returns [1, 1, bucket, dim] full-dim (matches forward_prefill's output for the layer add).
+
+        pre_gathered : the caller already handed us a FULL-dim activation (decode-config verify runs
+        the layer norms in Mode.DECODE, which gathers pre-norm), so skip the internal all-gather.
+        """
+        assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
+        return self._forward_verify_recurrent_batched(x, valid_len, pre_gathered=pre_gathered)
+
+    def _forward_verify_recurrent_batched(self, x, valid_len, pre_gathered=False):
+        """Batched hybrid verify — BIT-IDENTICAL to the per-token forward_decode loop, but with
+        valid_len x fewer matmul/all-reduce launches. Key fact: the decode matmul (matmul_1d_decode)
+        is row-independent and processes a full 32-row M-tile regardless of how many rows are real, so
+        packing all `valid_len` (<= TILE) tokens into ONE decode matmul gives per-row-identical results
+        while collapsing valid_len separate launches into one. Structure (cf. the reference's
+        fused_sigmoid_gating_delta_rule_update: project once, loop the recurrence, output once):
+
+          1. Gather the valid_len rows to full dim, then ONE decode qkvzab matmul (same kernel + weights
+             forward_decode uses per token -> per-row bit-identical q/k/v/z/a/b).
+          2. Per-token loop over valid_len: conv shift-register + fp32 recurrence step (the ONLY
+             sequential part; carries rec_state/conv_states, so slot capture is unchanged).
+          3. ONE gated-norm + out-proj (decode kernel) + all-reduce over the valid_len rows.
+
+        Because every matmul is the decode kernel and row-independent, this is numerically identical to
+        the per-token loop (verified: same accept rate + same trajectory), NOT an approximation. The
+        AGMM prefill projection was avoided precisely because it rounds differently and drifts the state.
+        """
+        tw, B, Nk, Nv, Dk, Dv = self.tw, self.B, self.Nk, self.Nv, self.Dk, self.Dv
+        _L1, mc, rm = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
+        if self.conv_states is None:
+            self.reset_state()
+        # Decode-config verify hands us the DECODE attn-norm output, which is L1 WIDTH-SHARDED.
+        # We slice valid rows out of it below, so interleave first (row-slicing a width-shard is not
+        # supported). We then own that copy and must free it.
+        _x_owned = False
+        if pre_gathered and x.is_sharded():
+            x = ttnn.to_memory_config(x, mc)
+            _x_owned = True
+        if len(x.shape) == 4:
+            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
+        bucket = x.shape[-2]  # x is K-sharded [1, bucket, dim/tp] (full-dim when pre_gathered)
+        T = valid_len
+        kd = self.key_dim_tp
+
+        # 1) Gather only the valid_len rows to full dim (like the per-token loop's gather, but over
+        #    valid_len rows not the whole bucket), then ONE decode qkvzab matmul. S=valid_len <= TILE
+        #    routes _project_qkvzab through matmul_1d_decode — the exact per-token decode projection.
+        x_valid = x if T == bucket else ttnn.slice(x, (0, 0, 0), (1, T, x.shape[-1]))
+        if pre_gathered:
+            # Decode-config verify: the layer already ran its norm in Mode.DECODE, which gathers
+            # PRE-norm, so x is already full-dim [1, bucket, dim]. Gathering again would quadruple
+            # the feature dim. Only free xg below if we own it (i.e. it is the slice, not the caller's x).
+            xg = x_valid
+        else:
+            # x is 3D [1, T, dim/tp] here (reshaped above), so gather the LAST (feature) dim = -1, not 3.
+            xg = tt_all_gather(
+                x_valid,
+                self.mesh,
+                self.tt_ccl,
+                cluster_axis=None,
+                dim=-1,
+                topology=self.args.ccl_topology(),
+                memory_config=mc,
+            )
+            if x_valid is not x:
+                ttnn.deallocate(x_valid)
+        qkv_all, z_all, a_all, b_all = self._project_qkvzab(xg, T, out_mc=mc)
+        if xg is not x:
+            ttnn.deallocate(xg)
+        if _x_owned:
+            ttnn.deallocate(x)
+
+        # 2) Sequential conv + recurrence per token — identical building blocks to forward_decode, so
+        #    self.conv_states / self.rec_state advance exactly as decode does (bit-exact slot capture).
+        capture = getattr(self, "_capture_slots", False)
+        if capture:
+            self._ensure_verify_slot_bufs(T)
+            self._verify_slots = self._slot_bufs
+        else:
+            self._verify_slots = None
+        # The recurrence is ALWAYS the fused device op now: the T sequential dispatches (~13 ops
+        # each) collapse into one. The conv shift-register (a cheap FIR) stays sequential — it
+        # produces per-token q/k/v that we collect, then run the whole recurrence in a single call
+        # that also emits the state AFTER every token (output_per_token_state) for slot acceptance.
+        # Measured: verify marginal 18.0 -> 15.2 ms/candidate (the recurrence is only ~15% of it).
+        # QWEN36_GDN_FULL_BATCH=1: eliminate the per-token loop ENTIRELY (marginal -> 2.3 ms). The
+        # ~18 ms/candidate is ~50 device ops per token per GDN layer at a few us each — launch-bound
+        # with no hot spot — so the only fix is to stop launching them. Three pieces make that
+        # possible without any sliding-window slicing:
+        #   conv    -> the NATIVE depthwise ttnn.conv1d (_conv1d_prefill), the same op prefill uses,
+        #              which takes all T rows at once and is trace-safe (weights prepared at warmup);
+        #   q/k/v   -> sliced out of the batched conv output on the FEATURE dim (contiguous columns,
+        #              not tiled rows) and repeat_interleaved once for all T;
+        #   beta/g  -> a_all/b_all are already [1,T,Nv], so the gating is one sigmoid / softplus pass;
+        #   recur.  -> the C++ fused_recurrent_gated_delta_rule kernel consumes [B,T,Nv,D] for all T
+        #              tokens in ONE dispatch and emits per-token state for slot acceptance.
+        if os.environ.get("QWEN36_GDN_FULL_BATCH", "0") == "1":
+            return self._verify_fullbatch(qkv_all, z_all, a_all, b_all, T, bucket, capture)
+        rf = Nv // Nk
+        out_f_rows = []
+        q_seq, k_seq, v_seq, beta_seq, g_seq = [], [], [], [], []
+        for t in range(T):
+            qkv_t = ttnn.reshape(ttnn.slice(qkv_all, (0, t, 0), (1, t + 1, self.qkv_dim_tp)), (1, B, self.qkv_dim_tp))
+            st = self.conv_states
+            for j in range(self.K - 1):
+                ttnn.copy(st[j + 1], st[j])
+            ttnn.copy(qkv_t, st[self.K - 1])
+            ttnn.deallocate(qkv_t)
+            conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
+            for j in range(1, self.K):
+                conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
+            conv = ttnn.silu(conv, memory_config=_L1)
+
+            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
+            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
+            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
+            ttnn.deallocate(conv)
+            q = ttnn.reshape(ttnn.repeat_interleave(q, rf, dim=1), (B, 1, Nv, Dk), memory_config=_L1)
+            k = ttnn.reshape(ttnn.repeat_interleave(k, rf, dim=1), (B, 1, Nv, Dk), memory_config=_L1)
+            v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
+
+            a_t = ttnn.reshape(ttnn.slice(a_all, (0, t, 0), (1, t + 1, Nv)), (1, B, Nv))
+            b_t = ttnn.reshape(ttnn.slice(b_all, (0, t, 0), (1, t + 1, Nv)), (1, B, Nv))
+            beta = ttnn.reshape(ttnn.sigmoid(b_t, memory_config=_L1), (B, 1, Nv))
+            ttnn.deallocate(b_t)
+            g = ttnn.reshape(
+                ttnn.multiply(tw["neg_exp_A"], _softplus_add(a_t, tw["dt_bias"]), memory_config=_L1), (B, 1, Nv)
+            )
+            ttnn.deallocate(a_t)
+
+            # Defer the recurrence: collect this token's inputs. conv_states slot capture stays
+            # per-token here (the shift-register is inherently sequential); rec_state slots come
+            # from the fused call's per-token output below.
+            q_seq.append(q)
+            k_seq.append(k)
+            v_seq.append(v)
+            beta_seq.append(beta)
+            g_seq.append(g)
+            if capture:
+                _, conv_bufs = self._slot_bufs[t]
+                for j, c in enumerate(self.conv_states):
+                    ttnn.copy(c, conv_bufs[j])
+
+        # ONE recurrence over all T tokens. q/k/v -> [B,T,Nv,D]; beta/g -> [B,T,Nv]. The wrapper
+        # applies the L2-norm + query scale + exp(g) internally (same contract as the per-token op).
+        def _stack(seq, d):
+            if T == 1:
+                return seq[0]
+            cat = ttnn.concat(seq, dim=1, memory_config=mc)
+            for x in seq:
+                ttnn.deallocate(x)
+            return cat
+
+        q_all = _stack(q_seq, Dk)
+        k_all = _stack(k_seq, Dk)
+        v_all = _stack(v_seq, Dv)
+        beta_all = _stack(beta_seq, Nv)
+        g_all = _stack(g_seq, Nv)
+        o_all, states = fused_recurrent_gated_delta_rule_ttnn(
+            q_all,
+            k_all,
+            v_all,
+            beta_all,
+            g_all,
+            scale=self.scale,
+            initial_state=self.rec_state,
+            device=self.mesh,
+            output_per_token_state=capture,
+            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+        )
+        ttnn.deallocate(q_all)
+        ttnn.deallocate(k_all)
+        ttnn.deallocate(v_all)
+        ttnn.deallocate(beta_all)
+        ttnn.deallocate(g_all)
+        # Advance durable rec_state to the last token's state; keep the per-token states for slot
+        # acceptance. The kernel writes them token-major, so slot t is a contiguous row block of
+        # `states` and NOTHING has to be copied here: hold the tensor and let commit_verify_slot
+        # slice the one accepted slot. The old code ran T x (slice + reshape + copy + dealloc) per
+        # layer — ~770 device ops per verify across 48 GDN layers, for state that is thrown away
+        # for every slot except the accepted one.
+        if capture:
+            self._verify_states = self._verify_states_buf = states  # [B,T,Nv,Dk,Dv]
+            if self._stable_state:
+                last = ttnn.reshape(ttnn.slice(states, (0, T - 1, 0, 0, 0), (B, T, Nv, Dk, Dv)), (B, Nv, Dk, Dv))
+                ttnn.copy(last, self.rec_state)
+                ttnn.deallocate(last)
+            else:
+                self.rec_state = ttnn.reshape(
+                    ttnn.slice(states, (0, T - 1, 0, 0, 0), (B, T, Nv, Dk, Dv)), (B, Nv, Dk, Dv)
+                )
+        else:
+            if self._stable_state:
+                ttnn.copy(states, self.rec_state)
+                ttnn.deallocate(states)
+            else:
+                self.rec_state = states
+        # Per-token gated-norm to build out_f_rows (identical to the sequential tail).
+        for t in range(T):
+            o_t = ttnn.reshape(ttnn.slice(o_all, (0, t, 0, 0), (B, t + 1, Nv, Dv)), (B, Nv, Dv))
+            out_n = ttnn.rms_norm(o_t, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
+            ttnn.deallocate(o_t)
+            out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
+            ttnn.deallocate(out_n)
+            out_f_rows.append(ttnn.to_layout(out_f, rm))
+            ttnn.deallocate(out_f)
+        ttnn.deallocate(o_all)
+
+        ttnn.deallocate(qkv_all)
+        ttnn.deallocate(a_all)
+        ttnn.deallocate(b_all)
+
+        # 3) Output tail: one gated SiLU + one out-proj + one all-reduce over the valid rows.
+        if T == 1:
+            out_f_b = ttnn.to_layout(out_f_rows[0], ttnn.TILE_LAYOUT)
+            for r in out_f_rows:
+                ttnn.deallocate(r)
+        else:
+            cat = ttnn.concat(out_f_rows, dim=1, memory_config=mc)  # [1, T, value_dim_tp] ROW_MAJOR
+            out_f_b = ttnn.to_layout(cat, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(cat)
+            for r in out_f_rows:
+                ttnn.deallocate(r)
+        # z_all is already [1, T, value_dim_tp] (projected over exactly the valid rows).
+        gated = _silu_mul(out_f_b, z_all, mc)
+        ttnn.deallocate(out_f_b)
+        ttnn.deallocate(z_all)
+        partial = self._row_proj(gated, tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
+        o_red = tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=mc,
+        )
+        # Pad the valid rows out to the full bucket (rows >= valid_len are never read downstream).
+        if T < bucket:
+            o_rm = ttnn.to_layout(o_red, rm)
+            ttnn.deallocate(o_red)
+            # Trace-safe pad: ttnn.zeros is a host write that TT_FATALs inside a captured trace, so use
+            # a PERSISTENT zero buffer (allocated once, fixed address) when verify is being traced. The
+            # values are identical to ttnn.zeros; only the allocation site differs.
+            pad = self._verify_pad_buf(bucket - T, o_rm.shape[-1], o_rm.dtype, rm, mc)
+            o_full = ttnn.concat([o_rm, pad], dim=2, memory_config=mc)
+            ttnn.deallocate(o_rm)
+            o_red = ttnn.to_memory_config(ttnn.to_layout(o_full, ttnn.TILE_LAYOUT), mc)
+            ttnn.deallocate(o_full)
+        return o_red
+
+    def _verify_fullbatch(self, qkv_all, z_all, a_all, b_all, T, bucket, capture):
+        """Fully-batched hybrid verify: NO per-token loop. See the QWEN36_GDN_FULL_BATCH note.
+
+        Inputs are the already-projected [1,T,*] tensors. Returns the same padded [1,1,bucket,dim]
+        the per-token path returns, and advances conv_states / rec_state identically.
+        """
+        tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
+        _L1, mc, rm = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
+        kd, C, rf = self.key_dim_tp, self.qkv_dim_tp, Nv // Nk
+
+        # 1) Causal conv over all T tokens in one native op. The carry is the shift register's
+        #    previous K-1 inputs, i.e. conv_states[1:] (conv_states[K-1] is the most recent input).
+        carry = ttnn.concat([self.conv_states[j] for j in range(1, self.K)], dim=1, memory_config=mc)
+        conv_all, _cnew = self._conv1d_prefill(qkv_all, T, carry)  # [1,T,C], SiLU applied
+        ttnn.deallocate(_cnew)  # the K-entry register is taken from the window below instead
+
+        # 2) q/k/v for all T: FEATURE-dim slices (contiguous columns) + one repeat_interleave each.
+        q_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
+        k_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
+        v_all = ttnn.reshape(ttnn.slice(conv_all, (0, 0, 2 * kd), (1, T, C)), (1, T, Nv, Dv))
+        ttnn.deallocate(conv_all)
+        if rf != 1:
+            q_all = ttnn.repeat_interleave(q_all, rf, dim=2)
+            k_all = ttnn.repeat_interleave(k_all, rf, dim=2)
+
+        # 3) Gating for all T at once (a_all/b_all are already [1,T,Nv]).
+        beta_all = ttnn.sigmoid(b_all, memory_config=_L1)
+        g_all = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a_all, tw["dt_bias"]), memory_config=_L1)
+
+        # 4) ONE recurrence dispatch over all T tokens, emitting per-token state when capturing.
+        o_all, states = fused_recurrent_gated_delta_rule_ttnn(
+            q_all,
+            k_all,
+            v_all,
+            beta_all,
+            g_all,
+            scale=self.scale,
+            initial_state=self.rec_state,
+            device=self.mesh,
+            output_per_token_state=capture,
+            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+        )
+        for t in (q_all, k_all, v_all, beta_all, g_all):
+            ttnn.deallocate(t)
+
+        # 5) State bookkeeping. rec_state slots come from the kernel's per-token output; conv slots
+        #    are rows [t, t+K) of the window E = [carry ; qkv_all], stashed with ONE copy.
+        E = ttnn.concat([carry, qkv_all], dim=1, memory_config=mc)  # [1, K-1+T, C]
+        ttnn.deallocate(carry)
+        if capture:
+            ttnn.copy(E, self._verify_win_buf)
+            self._win_captured = True
+            # Token-major kernel output: keep it and let commit_verify_slot slice the accepted slot.
+            self._verify_states = self._verify_states_buf = states
+            last = ttnn.reshape(ttnn.slice(states, (0, T - 1, 0, 0, 0), (self.B, T, Nv, Dk, Dv)), (self.B, Nv, Dk, Dv))
+            if self._stable_state:
+                ttnn.copy(last, self.rec_state)
+                ttnn.deallocate(last)
+            else:
+                self.rec_state = last
+        elif self._stable_state:
+            ttnn.copy(states, self.rec_state)
+            ttnn.deallocate(states)
+        else:
+            self.rec_state = states
+        # Durable shift register = the window's last K rows (what T sequential shifts would leave).
+        for j in range(self.K):
+            row = ttnn.slice(E, (0, T - 1 + j, 0), (1, T + j, C))
+            ttnn.copy(row, self.conv_states[j])
+            ttnn.deallocate(row)
+        ttnn.deallocate(E)
+
+        # 6) Batched output tail: rms_norm normalises over the last dim, so one call covers all T.
+        out_n = ttnn.rms_norm(ttnn.reshape(o_all, (T, Nv, Dv)), weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
+        ttnn.deallocate(o_all)
+        out_f_b = ttnn.reshape(out_n, (1, T, self.value_dim_tp))
+        ttnn.deallocate(out_n)
+        gated = _silu_mul(out_f_b, z_all, mc)
+        ttnn.deallocate(out_f_b)
+        ttnn.deallocate(z_all)
+        partial = self._row_proj(gated, tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
+        o_red = tt_all_reduce(
+            partial, self.mesh, self.tt_ccl, cluster_axis=0, dim=3, topology=self.args.ccl_topology(), memory_config=mc
+        )
+        ttnn.deallocate(qkv_all)
+        ttnn.deallocate(a_all)
+        ttnn.deallocate(b_all)
+        if T < bucket:
+            o_rm = ttnn.to_layout(o_red, rm)
+            ttnn.deallocate(o_red)
+            pad = self._verify_pad_buf(bucket - T, o_rm.shape[-1], o_rm.dtype, rm, mc)
+            o_full = ttnn.concat([o_rm, pad], dim=2, memory_config=mc)
+            ttnn.deallocate(o_rm)
+            o_red = ttnn.to_memory_config(ttnn.to_layout(o_full, ttnn.TILE_LAYOUT), mc)
+            ttnn.deallocate(o_full)
+        return o_red
+
+    def _verify_pad_buf(self, rows, width, dtype, layout, mc):
+        """Persistent zero pad for the trace-safe verify output (bucket - valid_len rows). Allocated
+        once per (rows,width,dtype) at a fixed address so the pad concat is trace-capturable; ttnn.zeros
+        allocates a fresh buffer each call, which is a host write that TT_FATALs inside a captured trace.
+        First call (verify warmup, before begin_trace_capture) allocates; later calls reuse the buffer."""
+        cache = getattr(self, "_verify_pad_cache", None)
+        if cache is None:
+            cache = self._verify_pad_cache = {}
+        key = (rows, width, dtype)
+        buf = cache.get(key)
+        if buf is None:
+            buf = ttnn.zeros([1, 1, rows, width], device=self.mesh, dtype=dtype, layout=layout, memory_config=mc)
+            cache[key] = buf
+        return buf
+
+    def _ensure_verify_slot_bufs(self, n):
+        """Lazily allocate n persistent per-token slot buffers (rec_state + conv_states shaped). Verify
+        copies state INTO these fixed addresses so a captured trace replays without allocating (clones
+        would mint new addresses each call). Reallocated only if fewer than n slots exist."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        # Conv window buffer, ONLY for the (experimental, off) batched-conv path: [1, K-1+n,
+        # qkv_dim_tp], matching the concat that builds E. Allocated HERE (before the trace warmup) so
+        # the warmup and captured passes take the identical ttnn.copy branch — a lazy allocate-then-
+        # copy makes capture hit an uncompiled program. Gated so the default path allocates nothing.
+        if os.environ.get("QWEN36_GDN_FULL_BATCH", "0") == "1":
+            _wrows = self.K - 1 + n
+            if self._verify_win_buf is None or self._verify_win_buf.shape[-2] != _wrows:
+                if self._verify_win_buf is not None:
+                    ttnn.deallocate(self._verify_win_buf)
+                self._verify_win_buf = ttnn.zeros(
+                    [1, _wrows, self.qkv_dim_tp],
+                    device=self.mesh,
+                    dtype=self.conv_states[0].dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=mc,
+                )
+        if self._slot_bufs is not None and len(self._slot_bufs) >= n:
+            return
+        if self._slot_bufs is not None:
+            for rec, convs in self._slot_bufs:
+                ttnn.deallocate(rec)
+                for c in convs:
+                    ttnn.deallocate(c)
+        self._slot_bufs = [
+            (ttnn.clone(self.rec_state, memory_config=mc), [ttnn.clone(c, memory_config=mc) for c in self.conv_states])
+            for _ in range(n)
+        ]
+
+    def commit_verify_slot(self, idx):
+        """Set the recurrent state to the buffered verify slot `idx` (state after consuming the
+        accepted-prefix's last token). Copies in place (preserves buffer addresses), so no commit
+        forward runs. Slot buffers are persistent (reused next verify), so they are NOT freed here.
+
+        The recurrent state comes straight out of the kernel's token-major per-token output, so only
+        the ONE accepted slot is ever touched — the verify no longer copies all T states aside."""
+        assert self._verify_states is not None, "commit_verify_slot called without a captured verify"
+        st = ttnn.reshape(
+            ttnn.slice(self._verify_states, (0, idx, 0, 0, 0), (self.B, idx + 1, self.Nv, self.Dk, self.Dv)),
+            (self.B, self.Nv, self.Dk, self.Dv),
+        )
+        ttnn.copy(st, self.rec_state)
+        ttnn.deallocate(st)
+        convs = self._slot_bufs[idx][1] if self._slot_bufs is not None else None
+        if self._win_captured:
+            # Batched-conv path: conv slots were not materialised per token. The shift-register as of
+            # token idx is rows [idx, idx+K) of the stashed window (see _forward_verify_recurrent_batched).
+            for j in range(self.K):
+                row = ttnn.slice(self._verify_win_buf, (0, idx + j, 0), (1, idx + j + 1, self.qkv_dim_tp))
+                ttnn.copy(row, self.conv_states[j])
+                ttnn.deallocate(row)
+        else:
+            for j, c in enumerate(convs):
+                ttnn.copy(c, self.conv_states[j])
+        self._verify_states = None

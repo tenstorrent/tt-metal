@@ -1,0 +1,438 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Speculative decoding for Qwen3.6-27B using the built-in MTP drafter head.
+
+The MTP head (models/demos/blackhole/qwen36/tt/mtp.py) drafts K tokens autoregressively; the base
+model verifies them in one masked-bucket chunk forward; accepted tokens are committed by pointing
+the GDN recurrent state at the accepted slot.
+
+Iteration shape (anchor p; the base has consumed through p and we hold its hidden h_p):
+
+    pending = argmax(base logits at p)      # the base's OWN next token: free, already confirmed
+    draft   : slot p+j fuses (hidden, token at slot+1) -> candidate for p+2+j, for j in 0..K-1
+    verify  : ONE chunk over [pending, d_0..d_K-1] at positions p+1..p+K+1
+    accept  : d_j's target is argmax(verify logits at p+1+j); commit [pending] + matching prefix
+
+Two measured properties fix the shape of that loop:
+
+* The head expects the DeepSeek-V3 / vLLM pairing (h_i, token_{i+1}) -> token_{i+2}, not the
+  same-index pairing (h_i, token_i): 0.78 vs 0.64 depth-1 top-1 on the real weights, and e2e
+  acceptance 2.82/3 vs 1.52/3.
+* Because `pending` is known before drafting, all K drafter steps propose new tokens. Spending the
+  first step re-predicting `pending` aborted 60% of iterations.
+
+The base model's Gated DeltaNet (GDN) recurrent state is the hard part: a speculative verify advances
+it through candidate positions, so a rejected draft must not leave it there. Verify buffers the state
+after every token and commit points the durable state at the accepted-prefix slot — the reference's
+`spec_state_indices` / `num_accepted_tokens` scheme, with no rollback and no commit forward. The
+full-attention layers' paged KV is corrected implicitly (rejected positions past the frontier are
+never attended and get overwritten next iteration).
+
+TP (P150x4) only, B=1, greedy (temperature==0).
+"""
+import os
+import time
+
+import torch
+from loguru import logger
+
+import ttnn
+
+
+class SpeculativeDecoder:
+    """Greedy MTP speculative decode. Reproduces the plain-decode greedy trajectory exactly.
+
+    Everything that is not a genuine tuning knob is fixed to its measured-best setting; the two
+    remaining env flags are QWEN36_SPEC_DRAFT_LEN (K) and QWEN36_SPEC_PROFILE (diagnostics).
+    """
+
+    def __init__(self, model, page_table_torch, draft_len=None, stop_tokens=None):
+        assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
+        assert model.num_devices > 1, "SpeculativeDecoder is TP-only for now"
+        self.model = model
+        self.mesh = model.mesh_device
+        self.args = model.args
+        self.vocab = model.args.vocab_size
+        self.page_table = page_table_torch  # torch [1, num_blocks]
+        # K=3 is the measured optimum at today's verify cost (~18 ms per candidate): K=3 gives
+        # 27.5 tok/s vs 27.0 at K=6, because the extra candidates cost more verify than the extra
+        # acceptance returns. K=6 becomes the right default once the fully-batched GDN verify lands
+        # (2.3 ms per candidate) — see the FULL_BATCH note in gdn/tp.py.
+        self.K = int(draft_len if draft_len is not None else os.environ.get("QWEN36_SPEC_DRAFT_LEN", 3))
+        # QWEN36_SPEC_PROFILE=1: per-phase wall-clock (synchronize-bracketed) to see where time goes.
+        self._prof = bool(int(os.environ.get("QWEN36_SPEC_PROFILE", "0")))
+        self._pt = {"draft": 0.0, "verify": 0.0, "commit": 0.0, "reseed": 0.0}
+        self.stop_tokens = set(stop_tokens or [])
+        self.mtp = model.mtp
+        # The MTP layer keeps its own paged KV cache with its own (identity) page table.
+        self.mtp_pt = ttnn.from_torch(
+            page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh
+        )
+        self._gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
+        for gdn in self._gdn:
+            # verify and decode must share GDN math or near-tie argmax flips reduce acceptance
+            gdn.use_fused_recurrent_decode = True
+        self._vfy_captured = False
+        self.total_drafted = 0
+        self.total_accepted = 0  # accepted DRAFT tokens (excludes the mandatory correction/bonus)
+        self.iters = 0
+        # --- instrumentation (mean acceptance alone hides where the drafts die) ---
+        self.accept_hist = [0] * (self.K + 1)  # how often exactly j drafts were accepted
+        self.depth_hits = [0] * self.K  # depth_hits[j] = iterations that accepted draft j
+        self.zero_accept = 0  # iterations where no draft was accepted (still commit the pending
+        # token, so they are worth 1 token, not 0)
+        self.mtp_extra_steps = 0  # drafter forwards spent on KV maintenance (reseed)
+        self.prefill_time = 0.0  # set by generate(): TTFT (prefill + MTP warm + seed)
+        self.decode_time = 0.0  # set by generate(): spec-loop wall-clock (excludes prefill)
+
+    # --------------------------------------------------------------------- #
+    # Draft
+    # --------------------------------------------------------------------- #
+    def _draft(self, pending_tok, anchor_hidden, p):
+        """Autoregressively draft K tokens from the MTP head, starting at slot ``p``.
+
+        The head is fused from (base hidden at slot s, embedding of the token at s+1) and predicts
+        the token at s+2 — the DeepSeek-V3 / vLLM convention. So:
+
+          step 0: (h_p, pending_tok) at slot p     -> candidate for position p+2
+          step j: (own hidden, previous draft)     -> candidate for position p+2+j
+
+        ``pending_tok`` is the base's OWN next token at p+1, already confirmed by the anchor logits.
+        Feeding it here is what makes all K drafts genuinely new.
+
+        The chain stays ON DEVICE: reading back the full 151k-vocab logits and argmaxing on host for
+        every step forces a host round-trip between steps (~12 ms/step against ~3 ms of device work).
+        Device argmax feeds the next step directly and defers the readback to K small ids at the end.
+
+        Returns the K drafted ids; drafts[j] is the candidate for position p+2+j.
+        """
+        tok_tt = ttnn.from_torch(
+            torch.tensor([[int(pending_tok)]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        owned_tok = [tok_tt]
+        h = anchor_hidden
+        for k in range(self.K):
+            logits, h_next = self.model.ttnn_mtp_decode_forward(h, tok_tt, p + k, self.mtp_pt)
+            idx = self._argmax_last(logits)  # [1,1,1] uint32 ROW_MAJOR
+            ttnn.deallocate(logits)
+            tok_tt = ttnn.reshape(idx, (1, 1))
+            owned_tok.append(tok_tt)
+            if h is not anchor_hidden:
+                ttnn.deallocate(h)
+            h = h_next
+        if h is not anchor_hidden:
+            ttnn.deallocate(h)
+        drafts = [self._id_to_host(t) for t in owned_tok[1:]]  # one sync, K ids
+        for t in owned_tok:
+            ttnn.deallocate(t)
+        return drafts
+
+    def _argmax_last(self, logits):
+        """argmax over the vocab dim for ONE row -> [1,1,1] uint32 ROW_MAJOR.
+
+        Two non-obvious constraints: ttnn.argmax needs ROW_MAJOR input -- a TILE tensor takes a
+        single-core internal-untilize path that is catastrophically slow on a 151k-wide vocab -- and
+        the fast multicore argmax is ROW-PARALLEL, returning garbage unless the row dim is exactly
+        one tile. So pad 1 -> 32 rows, untilize multicore, argmax, then slice row 0 back out.
+        """
+        vocab_rows = 32
+        padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, vocab_rows - 1), (0, 0)], value=0.0)
+        u = ttnn.untilize(padded, use_multicore=True)
+        ttnn.deallocate(padded)
+        idx = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,32] uint32 RM
+        ttnn.deallocate(u)
+        out = ttnn.slice(idx, [0, 0, 0], [1, 1, 1])
+        ttnn.deallocate(idx)
+        return out
+
+    def _id_to_host(self, id_tt):
+        """[*,1] uint32 device id -> python int. Reads only the device-0 replica: the logits are
+        replicated across the TP mesh, so a ConcatMeshToTensor would move 4x the bytes for nothing."""
+        t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0])
+        return int(t.reshape(-1)[0])
+
+    # --------------------------------------------------------------------- #
+    # MTP KV maintenance
+    # --------------------------------------------------------------------- #
+    def _warm_mtp_chunk(self, hidden, chunk_start, valid_len, prompt_ids):
+        """Warm the MTP drafter's KV over ONE prompt chunk, in one forward.
+
+        The drafter must see prompt context: with an empty cache at the first draft, acceptance
+        collapses (2.82/3 -> 1.10/3 measured). Slot i is fused from (base_hidden_i, token_{i+1}) —
+        the same shift pairing the draft loop uses.
+
+        Slot T-1 is deliberately NOT written here: its token is the base's own prediction for
+        position T, which is not known until the prefill logits exist. ``_warm_mtp_last`` writes it
+        afterwards.
+
+        The forward runs over the WHOLE bucket, not just the valid rows: the bucket is tile-aligned
+        (128..2048) and the prefill matmuls require that, whereas an arbitrary valid_len (5, 2047)
+        fails the matmul shape check. Rows past the prompt write junk MTP KV at slots >= T-1, which
+        is harmless — slot T-1 is overwritten by _warm_mtp_last, and every slot above it is
+        rewritten by the drafter before it is ever attended (draft step k writes slot p+k, then
+        attends to slots <= p+k).
+        """
+        T = len(prompt_ids)
+        if chunk_start >= T - 1:
+            return
+        bucket = hidden.shape[-2]
+        # Slot i is fused with the token at i+1 (shift pairing); 0-pad past the prompt.
+        toks = torch.zeros(1, bucket, dtype=torch.int32)
+        n = min(bucket, T - 1 - chunk_start)
+        toks[0, :n] = torch.tensor(
+            [int(t) for t in prompt_ids[chunk_start + 1 : chunk_start + 1 + n]], dtype=torch.int32
+        )
+        self.model.ttnn_mtp_prefill_forward(hidden, toks, chunk_start, self.page_table)
+
+    def _warm_mtp_last(self, last_hidden, first_tok, slot):
+        """Write the final prompt slot's MTP KV, whose token is the base's own first prediction.
+
+        Load-bearing: the first draft happens at slot T and attends to slots <= T-1, so leaving T-1
+        unwritten hands it stale KV. One decode step.
+        """
+        _, h_next = self.model.ttnn_mtp_decode_forward(
+            last_hidden, int(first_tok), slot, self.mtp_pt, need_logits=False
+        )
+        ttnn.deallocate(h_next)
+
+    def _reseed_mtp(self, slot0, vhidden, tokens):
+        """Refresh the MTP KV of the committed slots with the BASE hidden, replacing the drafter's
+        own chained hidden.
+
+        The drafter wrote those slots from its own chained hidden while drafting; the prompt warming
+        wrote base hiddens. Leaving the mismatch in place costs acceptance (2.00 -> 2.82 /3 measured),
+        so every committed slot is rewritten from the base hidden the verify forward already produced.
+        ``vhidden`` row i is the base hidden at slot0+i; tokens[i] is the token at slot0+i+1.
+
+        One drafter DECODE step per slot. The reference batches this into a single proposer forward
+        over all accepted tokens, and that does not port here: the drafter's prefill path needs a
+        genuine prefill shape, and neither candidate width works at an arbitrary mid-sequence slot0.
+        At one tile (32 rows) the stack silently picks DECODE matmuls — every matmul selects on
+        rows <= TILE_SIZE — while the norms still run in PREFILL mode, so the fused fc is handed a
+        fractured activation (width 1280 vs height 5120). At 128 rows the matmuls are right but the
+        drafter's SDPA rejects the unaligned chunk start (q_chunk_size % TILE_WIDTH). Batching this
+        is worth ~7% of the loop, so it needs a drafter decode path that takes N rows at once, not a
+        reshaped prefill. The LM head is already skipped here (need_logits=False), which is the
+        larger part of the per-step cost.
+        """
+        for i, tok in enumerate(tokens):
+            row = ttnn.slice(vhidden, (0, 0, i, 0), (1, 1, i + 1, vhidden.shape[-1]))
+            _, h_next = self.model.ttnn_mtp_decode_forward(row, int(tok), slot0 + i, self.mtp_pt, need_logits=False)
+            ttnn.deallocate(row)
+            ttnn.deallocate(h_next)
+            self.mtp_extra_steps += 1
+
+    # --------------------------------------------------------------------- #
+    # Accept (greedy)
+    # --------------------------------------------------------------------- #
+    def _accept_greedy(self, drafts, verify_logits):
+        """Greedy acceptance of the matching prefix; returns the number of accepted drafts.
+
+        The verify chunk ran p+1..p+K+1, so verify_logits[j] are the logits at p+1+j and predict
+        p+2+j — exactly drafts[j]'s position. No draft's target was known before drafting (that token
+        is ``pending``, committed unconditionally), so every rejection is a genuine drafter miss and
+        nothing extra needs committing: the correction arrives as the next iteration's ``pending``.
+        """
+        K = len(drafts)
+        m = K
+        for j in range(K):
+            if drafts[j] != int(verify_logits[j].argmax()):
+                m = j
+                break
+        self.accept_hist[m] += 1
+        for j in range(m):
+            self.depth_hits[j] += 1
+        if m == 0:
+            self.zero_accept += 1
+        return m
+
+    # --------------------------------------------------------------------- #
+    # Verify / commit
+    # --------------------------------------------------------------------- #
+    def _verify(self, tokens, p):
+        """Replay the captured verify trace over `tokens` = [pending] + drafts at positions p+1...
+
+        Advances GDN recurrently token by token (the SAME kernel decode uses, so it is
+        recurrent-faithful) while attention/MLP/norm/lm_head stay batched over the bucket. Buffers
+        the per-token GDN state so commit_verify_slot(m) can roll the durable state to the accepted
+        slot — no rollback, no commit forward.
+
+        Returns (per-position logits, per-position hidden rows [1,1,len,dim/tp]).
+        """
+        lt, vhidden = self.model.verify_traced(tokens, p + 1, self.page_table)
+        return [lt[i] for i in range(len(tokens))], vhidden
+
+    def _seed(self, first, p):
+        """Consume the prompt's first predicted token at position p -> (logits, hidden).
+
+        One eager recurrent verify forward. Runs once per request, so it is not on the hot path.
+        """
+        clogits, chidden = self.model.verify_forward([first], p + 1, self.page_table, gdn_recurrent=True)
+        row = ttnn.slice(chidden, (0, 0, 0, 0), (1, 1, 1, chidden.shape[-1]))
+        hidden = ttnn.clone(row, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(row)
+        ttnn.deallocate(chidden)
+        return clogits[0], hidden
+
+    def _phase(self, name, fn):
+        """Run fn, accumulating its synchronize-bracketed wall time under `name` when profiling."""
+        if not self._prof:
+            return fn()
+        ttnn.synchronize_device(self.mesh)
+        t = time.perf_counter()
+        r = fn()
+        ttnn.synchronize_device(self.mesh)
+        self._pt[name] += time.perf_counter() - t
+        return r
+
+    def log_profile(self, prefix="spec", tokens=None):
+        """Log the per-phase wall-clock breakdown gathered when QWEN36_SPEC_PROFILE=1."""
+        if not self._prof:
+            return
+        total = sum(self._pt.values())
+        logger.info(f"[{prefix}] phase profile ({total:.2f}s over {self.iters} iters):")
+        for k, v in sorted(self._pt.items(), key=lambda kv: -kv[1]):
+            per_tok = f", {v / tokens * 1e3:.1f} ms/tok" if tokens else ""
+            logger.info(f"[{prefix}]   {k:8s}: {v:.3f}s ({v / max(total, 1e-9):.0%}){per_tok}")
+
+    # --------------------------------------------------------------------- #
+    # Generate (greedy)
+    # --------------------------------------------------------------------- #
+    def generate(self, prompt_ids, max_new_tokens):
+        """Greedy speculative generation. Returns the list of generated token ids (excludes prompt).
+
+        Records self.prefill_time (prompt prefill + MTP warm + seed, i.e. TTFT) and self.decode_time
+        (the spec loop), both synchronize-bracketed, so callers can report ttft / decode tok/s.
+        """
+        model = self.model
+        T = len(prompt_ids)
+        _t_start = time.perf_counter()
+
+        # Chunked prompt prefill (2048-token chunks + masked tail — the same path the demo uses, so
+        # long prompts work). Each chunk's hidden warms the MTP drafter's KV in ONE forward before it
+        # is freed, so the drafter never sees an empty cache and TTFT stays flat in prompt length.
+        prompt = torch.tensor([list(prompt_ids)], dtype=torch.int32)
+        last_hidden = [None]  # the base hidden at slot T-1, kept for _warm_mtp_last
+
+        def _on_chunk(hidden, chunk_start, valid_len):
+            self._warm_mtp_chunk(hidden, chunk_start, valid_len, prompt_ids)
+            if chunk_start + valid_len >= T:  # the chunk holding slot T-1
+                i = T - 1 - chunk_start
+                row = ttnn.slice(hidden, (0, 0, i, 0), (1, 1, i + 1, hidden.shape[-1]))
+                last_hidden[0] = ttnn.clone(row, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(row)
+
+        logits_dev = model.prefill_for_spec(prompt, self.page_table, T, _on_chunk)
+        lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+        first = int(lt.reshape(-1)[: self.vocab].float().argmax())
+        out = [first]
+
+        # Slot T-1 pairs the base hidden at T-1 with `first`, which only exists now.
+        assert last_hidden[0] is not None, "prefill_for_spec never delivered the chunk holding T-1"
+        self._warm_mtp_last(last_hidden[0], first, T - 1)
+        ttnn.deallocate(last_hidden[0])
+
+        # One-time verify-trace capture (replayed every iteration), done AFTER prefill + MTP warm so
+        # every program those paths need is already compiled: a compile that happens once the trace
+        # is parked clobbers it. Its two throwaway passes write KV past the prompt frontier
+        # (warm_start=T) and restore the GDN state they advance. Counts toward TTFT, not decode_time.
+        if not self._vfy_captured:
+            model.capture_verify_trace(self.page_table, self.K + 1, warm_start=T, decode_cfg=True)
+            for dn in self._gdn:
+                dn._capture_slots = False  # trace baked the slot copies; the eager seed must skip them
+            self._vfy_captured = True
+
+        # Seed: consume `first` at position T -> (L_T, H_T); anchor p=T.
+        Lp, Hp = self._seed(first, T - 1)
+        p = T
+        # The base's own next token, confirmed by the anchor logits. It is committed unconditionally
+        # next iteration and is what seeds the drafter, so no drafter step re-predicts it.
+        pending = int(Lp.argmax())
+        ttnn.synchronize_device(self.mesh)
+        self.prefill_time = time.perf_counter() - _t_start  # TTFT: prefill + MTP warm + seed
+        _t_decode = time.perf_counter()
+
+        while len(out) < max_new_tokens:
+            drafts = self._phase("draft", lambda: self._draft(pending, Hp, p))
+
+            # Verify buffers per-token GDN state and keeps the hidden; commit = select the accepted
+            # slot (no re-run forward). committed = [pending] + drafts[:m].
+            vlogits, vhidden = self._phase("verify", lambda: self._verify([pending] + drafts, p))
+            m = self._accept_greedy(drafts, vlogits)
+            committed = [pending] + drafts[:m]
+            mi = len(committed) - 1  # accepted-prefix's last token index in the verify window
+            self._phase("commit", lambda: [dn.commit_verify_slot(mi) for dn in self._gdn])
+            ttnn.deallocate(Hp)
+            prev_p = p
+            Lp = vlogits[mi]
+            # The new anchor hidden is the accepted prefix's last row of the verify window.
+            _view = ttnn.slice(vhidden, (0, 0, mi, 0), (1, 1, mi + 1, vhidden.shape[-1]))
+            new_Hp = ttnn.clone(_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(_view)
+
+            # MTP KV maintenance over the slots just committed, in ONE drafter forward over the
+            # verify window (row i is the base hidden at slot prev_p+1+i, paired with the token at
+            # slot+1). Done before vhidden is freed.
+            self._phase("reseed", lambda: self._reseed_mtp(prev_p + 1, vhidden, committed[1:]))
+            ttnn.deallocate(vhidden)
+
+            p += len(committed)
+            Hp = new_Hp
+            pending = int(Lp.argmax())
+
+            out.extend(committed)
+            self.iters += 1
+            self.total_drafted += len(drafts)
+            self.total_accepted += m
+            assert p == prev_p + len(committed)
+
+            if committed[-1] in self.stop_tokens:
+                break
+
+        ttnn.deallocate(Hp)
+        ttnn.synchronize_device(self.mesh)
+        self.decode_time = time.perf_counter() - _t_decode  # spec loop wall-clock (excludes prefill)
+        self.log_profile(tokens=len(out[:max_new_tokens]))
+        return out[:max_new_tokens]
+
+    def accept_rate(self):
+        """Mean accepted DRAFT tokens per iteration (0..K); tokens/iter is this + 1."""
+        return self.total_accepted / max(1, self.iters)
+
+    def stats(self):
+        """Acceptance breakdown. Mean acceptance alone cannot distinguish 'the drafter is weak at
+        depth 3' from 'the first draft keeps aborting the iteration', which need different fixes."""
+        n = max(1, self.iters)
+        return {
+            "iters": self.iters,
+            "K": self.K,
+            "accept_rate": self.accept_rate(),
+            "committed_per_iter": self.accept_rate() + 1.0,
+            # depth_rate[j] = P(draft j accepted), cumulative: [0] >= [1] >= ...
+            "depth_rate": [h / n for h in self.depth_hits],
+            # conditional[j] = P(draft j accepted | drafts 0..j-1 accepted) — isolates per-depth
+            # drafter quality from the compounding of earlier rejections.
+            "conditional": [
+                self.depth_hits[j] / max(1, self.depth_hits[j - 1] if j else self.iters) for j in range(self.K)
+            ],
+            "hist": list(self.accept_hist),
+            "zero_accept_rate": self.zero_accept / n,
+            "mtp_extra_steps": self.mtp_extra_steps,
+        }
+
+    def log_stats(self, prefix="spec"):
+        s = self.stats()
+        logger.info(
+            f"[{prefix}] {s['iters']} iters, K={s['K']}: accept={s['accept_rate']:.2f}/{s['K']} "
+            f"-> {s['committed_per_iter']:.2f} committed tokens/iter"
+        )
+        logger.info(f"[{prefix}] per-depth accept   : {[f'{x:.2f}' for x in s['depth_rate']]}")
+        logger.info(f"[{prefix}] conditional accept : {[f'{x:.2f}' for x in s['conditional']]}")
+        logger.info(f"[{prefix}] accepted histogram : {s['hist']} (index j = exactly j drafts accepted)")
+        logger.info(f"[{prefix}] zero-accept iters  : {s['zero_accept_rate']:.1%} (still commit the pending token)")
+        logger.info(f"[{prefix}] MTP reseed forwards: {s['mtp_extra_steps']}")
+        return s

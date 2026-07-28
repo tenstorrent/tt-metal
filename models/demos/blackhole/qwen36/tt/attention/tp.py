@@ -200,6 +200,24 @@ class TPAttention:
         ttnn.deallocate(qkv)
         return qkv3, gate, None
 
+    def _kv_update_shard_cfg(self, n, HD):
+        """HEIGHT-sharded config for an n-row paged_update_cache input (one 32-row tile per core).
+        Cached per n; the framework's kv_update_shard_cfg is sized for the decode batch instead."""
+        cache = getattr(self, "_kvu_cfg_cache", None)
+        if cache is None:
+            cache = self._kvu_cfg_cache = {}
+        if n not in cache:
+            gx = self.mesh.compute_with_storage_grid_size().x
+            assert n <= gx, f"exact-KV write needs n({n}) <= grid width({gx}); use a smaller draft len"
+            cache[n] = ttnn.create_sharded_memory_config(
+                shape=(tpc.TILE_SIZE, HD),
+                core_grid=ttnn.CoreGrid(x=n, y=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        return cache[n]
+
     def _col_proj(self, x, weight, decode_progcfg):
         """Column-parallel projection; DRAM-sharded decode matmul when enabled."""
         if not self._dram_sharded:
@@ -676,8 +694,15 @@ class TPAttention:
         chunk_start_idx=0,
         chunk_start_idx_tensor=None,
         user_id=0,
+        exact_kv_pos=None,
+        exact_kv_pt=None,
     ):
         """Paged-KV prefill for one chunk: fill cache + chunked SDPA over prior chunks.
+
+        exact_kv_pos / exact_kv_pt: when given, write this chunk's K/V with paged_update_cache at
+        the EXACT absolute positions in exact_kv_pos ([n] int32, page table [n, blocks]) instead of
+        paged_fill_cache's block-aligned fill. Used by the spec verify, whose chunk_start is
+        arbitrary; see the note at the write site.
 
         x is K-sharded when the fused in-proj path is active (same contract as ``forward_prefill``).
         chunk_start_idx_tensor: optional device offset for FLEXIBLE chunked SDPA (one program
@@ -706,32 +731,79 @@ class TPAttention:
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
-        # bf8 SDPA: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
-        if self._sdpa_bf8:
-            _k8 = ttnn.typecast(k, ttnn.bfloat8_b)
-            ttnn.deallocate(k)
-            k = _k8
-            _v8 = ttnn.typecast(v, ttnn.bfloat8_b)
-            ttnn.deallocate(v)
-            v = _v8
-
-        # Fill this chunk into the paged cache
         k_paged, v_paged = self.paged_k, self.paged_v
         block_size = k_paged.shape[2]
-        fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
-        page_len = fill_page_table.shape[1] * block_size
-        if page_len < S:
-            k_fill = ttnn.slice(k, (0, 0, 0, 0), (1, NKV, page_len, HD))
-            v_fill = ttnn.slice(v, (0, 0, 0, 0), (1, NKV, page_len, HD))
+        if exact_kv_pos is not None:
+            # POSITION-EXACT KV write (spec verify). paged_fill_cache writes starting at logical
+            # position 0 of chunk_page_table, i.e. blk0*block_size — so for an unaligned chunk_start
+            # the tokens land chunk_start%block_size slots EARLY, while the chunked SDPA below reads
+            # the cache ABSOLUTELY (full page table + chunk_start_idx). That write/read mismatch
+            # corrupts recent history and costs draft accept. paged_update_cache instead writes each
+            # row at its own absolute index, exactly like decode does.
+            # k/v are [1,NKV,S,HD] here; the update op wants decode layout [1,B,NKV,HD] with B rows.
+            n = exact_kv_pos.shape[-1]
+            k_d = ttnn.permute(ttnn.slice(k, (0, 0, 0, 0), (1, NKV, n, HD)), (0, 2, 1, 3))
+            v_d = ttnn.permute(ttnn.slice(v, (0, 0, 0, 0), (1, NKV, n, HD)), (0, 2, 1, 3))
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            k_p = ttnn.pad(k_d, [1, n, 32, HD], [0, 0, 0, 0], 0.0)
+            v_p = ttnn.pad(v_d, [1, n, 32, HD], [0, 0, 0, 0], 0.0)
+            ttnn.deallocate(k_d)
+            ttnn.deallocate(v_d)
+            # Takes bf16 and casts to the cache dtype internally (unlike paged_fill_cache).
+            #
+            # The n "users" here all share ONE sequence, so their page-table rows are IDENTICAL and
+            # their consecutive positions land in the same physical block — unlike decode, where each
+            # user owns its own pages. paged_update_cache shards the users across cores and each core
+            # read-modify-writes a 32-row tile, so ONE batched call has several cores RMW-ing the SAME
+            # tile concurrently: last writer wins and the other rows are lost. That showed up as
+            # run-to-run nondeterminism (identical config, accept 2.82 vs 2.61, greedy trajectory
+            # forking at a different token each run). So issue one single-row call per candidate,
+            # which keeps exactly one core on each tile.
+            #
+            # Slice the row from the INTERLEAVED tensor and shard that, never the other way round:
+            # slicing a sharded tensor along the user dim is not supported and silently yields the
+            # wrong rows (deterministically wrong — it forked the trajectory at a CONFIDENT token,
+            # top-2 gap 4.1, which the near-tie gate in test_spec_decode_tp caught).
+            _sc1 = self._kv_update_shard_cfg(1, HD)
+            for i in range(n):
+                pos_i = ttnn.slice(exact_kv_pos, (i,), (i + 1,))
+                pt_i = ttnn.slice(exact_kv_pt, (i, 0), (i + 1, exact_kv_pt.shape[-1]))
+                for _cache, _src in ((k_paged, k_p), (v_paged, v_p)):
+                    row = ttnn.slice(_src, (0, i, 0, 0), (1, i + 1, 32, HD))
+                    row_sh = ttnn.to_memory_config(row, _sc1)
+                    ttnn.deallocate(row)
+                    ttnn.experimental.paged_update_cache(_cache, row_sh, update_idxs_tensor=pos_i, page_table=pt_i)
+                    ttnn.deallocate(row_sh)
+                ttnn.deallocate(pos_i)
+                ttnn.deallocate(pt_i)
+            ttnn.deallocate(k_p)
+            ttnn.deallocate(v_p)
         else:
-            k_fill, v_fill = k, v
-        ttnn.experimental.paged_fill_cache(k_paged, k_fill, fill_page_table, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(v_paged, v_fill, fill_page_table, batch_idx=user_id)
-        if page_len < S:
-            ttnn.deallocate(k_fill)
-            ttnn.deallocate(v_fill)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+            # bf8 SDPA: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
+            if self._sdpa_bf8:
+                _k8 = ttnn.typecast(k, ttnn.bfloat8_b)
+                ttnn.deallocate(k)
+                k = _k8
+                _v8 = ttnn.typecast(v, ttnn.bfloat8_b)
+                ttnn.deallocate(v)
+                v = _v8
+
+            # Fill this chunk into the paged cache
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            page_len = fill_page_table.shape[1] * block_size
+            if page_len < S:
+                k_fill = ttnn.slice(k, (0, 0, 0, 0), (1, NKV, page_len, HD))
+                v_fill = ttnn.slice(v, (0, 0, 0, 0), (1, NKV, page_len, HD))
+            else:
+                k_fill, v_fill = k, v
+            ttnn.experimental.paged_fill_cache(k_paged, k_fill, fill_page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(v_paged, v_fill, fill_page_table, batch_idx=user_id)
+            if page_len < S:
+                ttnn.deallocate(k_fill)
+                ttnn.deallocate(v_fill)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
 
         # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
         # makes the KV cache bf8 -> full bf8 matmul
@@ -748,6 +820,11 @@ class TPAttention:
         else:
             cap = 128 if S >= 2048 else 64  # 128 beats 256
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
+        # The chunk must not exceed the query length: the decode-config spec verify runs a 32-row
+        # bucket, where the default 128 over-runs Q (that is the bucket-32 capture crash). Keep q and k
+        # SYMMETRIC -- an asymmetric q<k mis-masks the causal tail and silently corrupts the first
+        # query rows (observed: row 0 -> argmax 0 at an unaligned chunk_start).
+        qk_chunk = min(qk_chunk, S)
         # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
