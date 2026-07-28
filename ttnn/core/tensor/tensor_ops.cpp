@@ -38,7 +38,6 @@ using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::PageConfig;
-using tt::tt_metal::raw_optional;
 using tt::tt_metal::Shape;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
