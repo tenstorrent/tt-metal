@@ -109,6 +109,39 @@ def test_final_stage_is_not_itself_lossy(pair):
     assert pcc(got, exp) > 0.9999, "stage 7 is lossy in isolation — this IS a bug in stage 7"
 
 
+@pytest.mark.parametrize(
+    "weight_dtype,attn_dtype,gate",
+    [
+        ("float32", "float32", 0.999),   # all-fp32 baseline
+        ("float32", "bfloat16", 0.999),  # the default
+        ("bfloat16", "bfloat16", 0.999), # opt-in faster variant
+    ],
+)
+def test_dtype_variants_hold_the_gate(device, weight_dtype, attn_dtype, gate):
+    """Pins the precision sweep. bf16 WEIGHTS with fp32 attention is deliberately absent: it
+    measured 0.998757 at T=469, below the gate, which is why weight_dtype defaults to fp32."""
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    gen = TtVoxtralCodecDecoder(device, weight_dtype=getattr(ttnn, weight_dtype),
+                                attn_dtype=getattr(ttnn, attn_dtype))
+    w = ref.load_codec_state()
+    codes = ref.make_synthetic_codes(64)
+    p = pcc(gen(codes), ref.reference_decode(codes, w))
+    assert p > gate, f"{weight_dtype}/{attn_dtype} PCC {p:.6f}"
+
+
+def test_bf16_weights_alone_is_below_gate(device):
+    """Documents WHY weight_dtype defaults to fp32: bf16 weights with fp32 attention is the one
+    combination that fails. If a future ttnn makes this pass, the default should be revisited."""
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    gen = TtVoxtralCodecDecoder(device, weight_dtype=ttnn.bfloat16, attn_dtype=ttnn.float32)
+    w = ref.load_codec_state()
+    codes = ref.make_synthetic_codes(469)
+    p = pcc(gen(codes), ref.reference_decode(codes, w))
+    assert p < 0.999, f"bf16 weights + fp32 attn now scores {p:.6f} (was 0.998757) — revisit the default"
+
+
 def test_causal_padding_matches_torch(pair):
     """replicate/reflect left-padding is built from slice+concat because ttnn.pad is
     constant-only and there is no flip. Easy to get backwards; compare against torch."""
