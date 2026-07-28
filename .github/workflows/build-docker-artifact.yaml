@@ -453,7 +453,7 @@ jobs:
           # See publish-release-image.yaml's "Build and push" step for why:
           # transient network blips against any external host, not a
           # specific-registry problem.
-          retries: "4"
+          retries: "2"
           retry-delay-seconds: "15"
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
@@ -539,7 +539,7 @@ jobs:
           harbor-prefix: ${{ inputs.harbor-prefix }}
           syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
           oras-image: ${{ steps.bake.outputs.oras-image }}
-          retries: "4"
+          retries: "2"
           retry-delay-seconds: "15"
 
   build-llk-images:

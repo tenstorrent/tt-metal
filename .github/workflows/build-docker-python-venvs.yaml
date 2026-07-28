@@ -137,5 +137,5 @@ jobs:
           python-version: ${{ steps.bake.outputs.python-version }}
           syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
           oras-image: ${{ steps.bake.outputs.oras-image }}
-          retries: "4"
+          retries: "2"
           retry-delay-seconds: "15"
