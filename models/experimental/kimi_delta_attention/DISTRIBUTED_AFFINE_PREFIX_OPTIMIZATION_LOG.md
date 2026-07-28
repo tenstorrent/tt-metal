@@ -67,3 +67,33 @@ The operation has no weight tensors: its five inputs are runtime affine/state
 tensors. Exact values do not affect the launched programs. The new isolated
 microbenchmark uses deterministic data with the verified production geometry
 `[1,48,128,128]` per device and profiles only this function.
+
+## Experiment 1: direct state relay
+
+Verdict: keep. The serial recurrence is correct and 2.450x faster.
+
+Implementation: only when `sp_size == 4 && tp_size == 2`, relay the recurrent state from rank to rank and preserve the generic Hillis--Steele implementation for every other shape. This reduces cross-device P2P calls from 38 to 12 and matmuls from six to four.
+
+Validation:
+
+- `./build_metal.sh`: PASS.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_distributed_affine_prefix.py -q -s`: 2 passed, `SAFE_PYTEST_RESULT: PASS`. Both TP-axis placements, repeated execution, and trace replay passed. Worst observed PCC was 0.999999; worst max absolute error was 1.904368e-4.
+- `PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_distributed_affine_prefix_perf.py -q -s`: 1 passed, `SAFE_PYTEST_RESULT: PASS`. Raw CSV: `generated/profiler/reports/2026_07_28_15_04_58/ops_perf_results_2026_07_28_15_04_58.csv`.
+
+Exact device time fell from 10,524.204 to 4,294.868 us (59.19% reduction, 2.450x speedup). Against the campaign floor of 696.180 us this is 16.21% efficiency; the fixed 60% target remains 1,160.300 us. The schedule-specific floor becomes smaller because the new algorithm performs less work, so it is not used to move the acceptance threshold.
+
+Next breakdown, sorted by potential gain to 60% of each stage floor:
+
+| Rank | Stage | Measured us | Stage floor us | Potential to 60% us |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | Final-state broadcast | 2,095.662 | 190.289 | 1,778.515 |
+| 2 | Relay rank 2 to 3 and apply rank 3 | 889.488 | 69.316 | 773.961 |
+| 3 | Relay rank 1 to 2 and apply rank 2 | 578.426 | 69.316 | 462.900 |
+| 4 | Relay rank 0 to 1 and apply rank 1 | 557.935 | 69.316 | 442.408 |
+| 5 | Initialize and apply rank 0 | 194.874 | 18.946 | 163.297 |
+
+Decision 1: target P2P implementation before matmul. Source evidence shows each P2P uses one worker core and one fabric link (`send_program_factory.cpp:36-40,124`; `receive_program_factory.cpp:35-40,123`) and serially sends one 4 KiB FP32 tile per packet (`writer_send.cpp:76-105`). The 3.146 MB Kimi state therefore cannot use the available parallel fabric links. First test a minimal multi-link P2P change patterned after the existing direct-send implementation; do not assume `ttnn::broadcast` is usable because its 2D API has one exact sender coordinate, while Kimi needs one root per TP lane.
+
+## Backlog
+
+- Test BF16 affine summaries/state transport. Hypothesis: halving each per-device tensor from 3.146 MB to 1.573 MB reduces both fabric and DRAM traffic and may improve matmul throughput. Required evidence: remove or specialize the current FP32 invariant only in the local fast path, validate serial/all-gather PCC and max absolute error over repeat and trace replay, then profile exact SP4xTP2. Reject if recurrent error is materially worse even when performance improves.

@@ -942,6 +942,42 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
             lhs, rhs, false, false, out_mem, DataType::FLOAT32, std::nullopt, std::nullopt, compute_kernel_config);
     };
 
+    // Kimi-K3 SP4xTP2 only needs the entry and final states. Relay the state
+    // directly instead of materializing the full affine-transform prefix.
+    if (sp_size == 4 && tp_size == 2) {
+        auto entry_state = ttnn::clone(initial_state, std::nullopt, out_mem, compute_kernel_config);
+        auto carry = matmul_fp32(transform_a, initial_state);
+        carry = ttnn::add(carry, transform_b, std::nullopt, out_mem);
+        for (uint32_t destination = 1; destination < sp_size; ++destination) {
+            for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
+                entry_state = ttnn::point_to_point(
+                    carry,
+                    coordinate(destination, tp_rank),
+                    coordinate(destination - 1, tp_rank),
+                    ttnn::ccl::Topology::Linear,
+                    entry_state,
+                    std::nullopt);
+            }
+            carry = matmul_fp32(transform_a, entry_state);
+            carry = ttnn::add(carry, transform_b, std::nullopt, out_mem);
+        }
+
+        auto final_state = ttnn::clone(zero_b, std::nullopt, out_mem, compute_kernel_config);
+        for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
+            const auto sender_coord = coordinate(sp_size - 1, tp_rank);
+            for (uint32_t destination = 0; destination < sp_size; ++destination) {
+                final_state = ttnn::point_to_point(
+                    carry,
+                    coordinate(destination, tp_rank),
+                    sender_coord,
+                    ttnn::ccl::Topology::Linear,
+                    final_state,
+                    std::nullopt);
+            }
+        }
+        return {entry_state, final_state};
+    }
+
     auto prefix_a = transform_a;
     auto prefix_b = transform_b;
     for (uint32_t distance = 1; distance < sp_size; distance *= 2) {
