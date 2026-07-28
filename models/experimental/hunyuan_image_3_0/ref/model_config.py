@@ -30,10 +30,9 @@ from here instead of hardcoding 4096 / 32 / 64 / scaling_factor / etc.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
-
-from models.experimental.hunyuan_image_3_0.ref.safe_paths import safe_join
 
 _PKG_ROOT = Path(__file__).resolve().parents[1]
 BUNDLED_CONFIG_PATH = _PKG_ROOT / "ref" / "tokenizer" / "assets" / "config.json"
@@ -56,7 +55,13 @@ def load_config(model_dir: Path | str | None = None) -> dict[str, Any]:
     copy (and cache it for subsequent calls).
     """
     if model_dir is not None:
-        with open(safe_join(model_dir, "config.json")) as f:
+        # Join + containment check written out here so the path reaching ``open`` is
+        # visibly constrained to the absolute checkpoint directory at this call site.
+        base_dir = os.path.abspath(str(model_dir))
+        path = os.path.abspath(os.path.join(base_dir, "config.json"))
+        if not path.startswith(base_dir + os.sep):
+            raise ValueError(f"refusing path {path!r}: outside checkpoint directory {base_dir!r}")
+        with open(path) as f:
             return json.load(f)
 
     global _cached_bundled
