@@ -20,8 +20,6 @@ from typing import List
 import torch
 import ttnn
 
-from models.experimental.vibevoice.tt.vibevoice_config import damp_weight
-
 
 _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -142,11 +140,8 @@ def preprocess_diffusion_head_weights(
         return hf_state[key].to(torch.bfloat16)
 
     def _w_tile(key: str) -> ttnn.Tensor:
-        # ttnn.linear computes x @ W (no transpose), so store weights transposed [in, out].
-        # Fold in the pre-#50250 K-reduction damping (see mm_damp): every head matmul uses an
-        # in0_block_w=2 program config, and K is the weight's input dim.
-        wt = damp_weight(hf_state[key], hf_state[key].shape[1], 2)
-        return _as_tile(wt.t().unsqueeze(0).unsqueeze(0), device)
+        # ttnn.linear computes x @ W (no transpose), so store weights transposed [in, out]
+        return _as_tile(w(key).t().unsqueeze(0).unsqueeze(0), device)
 
     def _norm_tile(w_1d: torch.Tensor) -> ttnn.Tensor:
         # ttnn.rms_norm requires gamma shape [1, 1, dim//32, 32] in ROW_MAJOR

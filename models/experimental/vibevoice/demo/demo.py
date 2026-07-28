@@ -68,37 +68,6 @@ def _write_wav(path: Path, audio_1d: torch.Tensor) -> None:
     sf.write(str(path), audio_1d.detach().to(torch.float32).numpy(), SR)
 
 
-def _split_script(script: str, n: int) -> list[str]:
-    """Split a multi-speaker script into ``n`` roughly equal parts at speaker-turn boundaries.
-
-    Each part is prefilled and generated independently, so the AR position resets per part.  This
-    keeps long renders inside the range where output is verified clean: the loop degrades past
-    absolute position ~55k (single-pass 100-min collapses ~min 72, and the pre-rebase build garbles
-    in the same window), and a single pass is additionally truncated by max_position_embeddings.
-    Balancing is by character count, so parts are only approximately equal in duration.
-
-    Split on single newlines, not blank lines: ``load_script`` collapses the blank lines that
-    separate turns in the resource .txt files, so by the time the script reaches here one turn is
-    one non-empty line.
-    """
-    if n <= 1:
-        return [script]
-    turns = [t for t in script.split("\n") if t.strip()]
-    if len(turns) < n:
-        raise ValueError(f"--chunks {n} requested but the script only has {len(turns)} speaker turns")
-    target = sum(len(t) for t in turns) / n
-    parts: list[list[str]] = [[]]
-    run = 0
-    for turn in turns:
-        # Start a new part once this one is past its share, while parts remain to be filled.
-        if run >= target and len(parts) < n:
-            parts.append([])
-            run = 0
-        parts[-1].append(turn)
-        run += len(turn)
-    return ["\n".join(p) for p in parts if p]
-
-
 def _demo_output_paths(out_dir: Path, demo_id: str) -> dict[str, Path]:
     """Per-demo output layout: ``{out_dir}/{demo_id}/{demo_id}_*.wav``."""
     demo_dir = out_dir / demo_id
@@ -159,15 +128,6 @@ def main() -> int:
         type=int,
         default=4,
         help="AR steps for --warmup generate (default: 4)",
-    )
-    ap.add_argument(
-        "--chunks",
-        type=int,
-        default=1,
-        help="Render the script as N independently-prefilled chunks and concatenate (default 1). "
-        "The AR loop degrades past absolute position ~55k — a single-pass 100-min render collapses "
-        "around min 72 and is truncated by max_position_embeddings; splitting keeps each chunk in "
-        "the verified-clean range. Splits only at speaker-turn boundaries.",
     )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--text", default=None, help="Custom script path (overrides --demo)")
@@ -276,26 +236,15 @@ def main() -> int:
     from processor.vibevoice_processor import VibeVoiceProcessor
 
     processor = VibeVoiceProcessor.from_pretrained(model_path)
-
-    def _build_inputs(text: str):
-        processor_kwargs = {
-            "text": [text],
-            "padding": True,
-            "return_tensors": "pt",
-            "return_attention_mask": True,
-        }
-        if voice_samples:
-            processor_kwargs["voice_samples"] = [voice_samples]
-        return processor(**processor_kwargs)
-
-    scripts = _split_script(script, max(1, args.chunks))
-    if len(scripts) > 1:
-        print(
-            f"[demo_ttnn] chunked render: {len(scripts)} parts "
-            f"({', '.join(f'{len(s)}ch' for s in scripts)}), each prefilled independently",
-            flush=True,
-        )
-    inputs = _build_inputs(scripts[0])
+    processor_kwargs = {
+        "text": [script],
+        "padding": True,
+        "return_tensors": "pt",
+        "return_attention_mask": True,
+    }
+    if voice_samples:
+        processor_kwargs["voice_samples"] = [voice_samples]
+    inputs = processor(**processor_kwargs)
     full_prefill_len = int(inputs["input_ids"].shape[1])
     if args.isl is not None:
         inputs = crop_processor_inputs_to_isl(inputs, args.isl)
@@ -386,61 +335,25 @@ def main() -> int:
             ttnn.synchronize_device(mesh)
             print("[demo_ttnn] warmup done; starting timed generate", flush=True)
 
-        speech_parts: list[torch.Tensor] = []
-        _stream_base = os.environ.get("VV_STREAM_AUDIO", "")
-        for chunk_idx, chunk_script in enumerate(scripts):
-            if chunk_idx > 0:
-                # Fresh prefill for this chunk.  generate() builds its own generator (and so its
-                # own KV caches + fused-frame trace) per call and releases the trace on exit, so
-                # nothing carries over between chunks except the loaded weights.
-                inputs = _build_inputs(chunk_script)
-                prefill_len = int(inputs["input_ids"].shape[1])
-                generate_kwargs["input_ids"] = inputs["input_ids"]
-                generate_kwargs["attention_mask"] = inputs["attention_mask"]
-                generate_kwargs["speech_input_mask"] = inputs["speech_input_mask"]
-                if voice_samples and inputs.get("speech_tensors") is not None:
-                    generate_kwargs["speech_tensors"] = inputs["speech_tensors"]
-                    generate_kwargs["speech_masks"] = inputs["speech_masks"]
-            if len(scripts) > 1:
-                print(
-                    f"[demo_ttnn] --- chunk {chunk_idx + 1}/{len(scripts)}: " f"prefill={prefill_len} tokens ---",
-                    flush=True,
-                )
-                # generate() opens VV_STREAM_AUDIO with "wb", so every chunk would truncate the
-                # previous one's samples.  The concatenated .wav below is unaffected (each chunk's
-                # audio is read back before the next call), but give each chunk its own .partN file
-                # so the on-disk stream stays complete and crash-safe.
-                if _stream_base:
-                    os.environ["VV_STREAM_AUDIO"] = f"{_stream_base}.part{chunk_idx}"
-            torch.manual_seed(args.seed)
-            _t_gen0 = _time.perf_counter()
-            tt_out = tt_model.generate(**generate_kwargs)
-            ttnn.synchronize_device(mesh)
-            _generate_wall = _time.perf_counter() - _t_gen0
-            print(f"[demo_ttnn] generate wall: {_generate_wall:.1f}s", flush=True)
-            speech_parts.append(tt_out.speech_outputs[0].to(torch.float32).reshape(-1))
-            tt_gen = tt_out.sequences[0, prefill_len:]
-            _ar_tokens = int(tt_gen.numel())
-            perf = summarize_generate_perf(
-                prefill_len=prefill_len,
-                ar_tokens=_ar_tokens,
-                prefill_wall_s=tt_out.prefill_wall_s,
-                decode_wall_s=tt_out.decode_wall_s,
-                generate_wall_s=_generate_wall,
-                steady_decode_s=tt_out.steady_decode_s,
-                steady_decode_frames=tt_out.steady_decode_frames,
-            )
-            print(f"[demo_ttnn] {format_perf_line(perf)}", flush=True)
-        tt_speech = speech_parts[0] if len(speech_parts) == 1 else torch.cat(speech_parts)
-        if len(speech_parts) > 1:
-            print(
-                f"[demo_ttnn] concatenated {len(speech_parts)} chunks → " f"{tt_speech.numel() / SR / 60:.2f} min",
-                flush=True,
-            )
-            if _stream_base:
-                # Also materialise the joined stream at the requested path; the per-chunk .partN
-                # files stay as the crash-safe copies.
-                tt_speech.numpy().tofile(_stream_base)
+        torch.manual_seed(args.seed)
+        _t_gen0 = _time.perf_counter()
+        tt_out = tt_model.generate(**generate_kwargs)
+        ttnn.synchronize_device(mesh)
+        _generate_wall = _time.perf_counter() - _t_gen0
+        print(f"[demo_ttnn] generate wall: {_generate_wall:.1f}s", flush=True)
+        tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
+        tt_gen = tt_out.sequences[0, prefill_len:]
+        _ar_tokens = int(tt_gen.numel())
+        perf = summarize_generate_perf(
+            prefill_len=prefill_len,
+            ar_tokens=_ar_tokens,
+            prefill_wall_s=tt_out.prefill_wall_s,
+            decode_wall_s=tt_out.decode_wall_s,
+            generate_wall_s=_generate_wall,
+            steady_decode_s=tt_out.steady_decode_s,
+            steady_decode_frames=tt_out.steady_decode_frames,
+        )
+        print(f"[demo_ttnn] {format_perf_line(perf)}", flush=True)
     finally:
         ttnn.close_device(mesh)
 
