@@ -3,7 +3,8 @@
 
 """TTNN port of the Voxtral Codec DECODER (Block 3): audio codes -> 24 kHz waveform.
 
-Mirrors reference/voxtral_codec_ref.py op-for-op, running entirely on device:
+Mirrors reference/voxtral_codec_ref.py op-for-op. All compute runs on device; the only
+host-side step is the semantic codebook gather (see _quantizer_host):
 
     codes [1,37,T] --quantizer--> [1,292,T] --conv(k3,replicate)--> [1,1024,T]
       --4x { Transformer(2 layers, ALiBi + causal + sliding window) [+ ConvTranspose(k4,s2)] }
@@ -28,19 +29,28 @@ LAYOUT / OP NOTES (what the reference's torch ops map to here):
   * `norm_eps` is 1e-2 here (not 1e-5) — from params.json, and load-bearing.
 
 PRECISION: MEASURED, not inherited. fp32 accumulation (HiFi3 + fp32_dest_acc) is on throughout;
-activations outside attention are always fp32. The two dtypes that matter were swept on real
-weights (synthetic codes, which stress the numerics harder than real speech does -- same effect
-the XTTS-v2 speaker encoder saw):
+activations outside attention are always fp32. Swept on real weights with synthetic codes, which
+stress the numerics harder than real speech does (the same effect the XTTS-v2 speaker encoder saw
+on random input):
 
-    weights  attention | mask@S=3752 | PCC T=64 / 256 / 469        | time T=64 / 256 / 469
-    fp32     fp32      |      450 MB | 0.999732 0.999762 0.999428  |  91 / 137 / 220 ms
-    bf16     fp32      |      450 MB | 0.999233 0.999503 0.998757  |  67 / 117 / 206 ms  <- FAILS 0.999
-    fp32     bf16      |      225 MB | 0.999746 0.999864 0.999768  |  94 / 131 / 190 ms  <- DEFAULT
-    bf16     bf16      |      225 MB | 0.999537 0.999665 0.999636  |  65 / 103 / 169 ms
+    weights  attention | PCC T=64 / 256 / 469        | warm T=64 / 256 / 469
+    fp32     fp32      | 0.999747 0.999761 0.999425  |  46 /  85 / 163 ms
+    bf16     fp32      | 0.999204 0.999505 0.998732  |  44 /  83 / 162 ms  <- FAILS the 0.999 gate
+    fp32     bf16      | 0.999800 0.999865 0.999795  |  44 /  81 / 155 ms  <- DEFAULT
+    bf16     bf16      | 0.999512 0.999661 0.999610  |  42 /  79 / 153 ms
 
-So bf16 ATTENTION is strictly good -- best PCC of all four, ~14% faster at length, and it halves
-the largest tensor -- hence the default. bf16 WEIGHTS buy a further ~20% but cost real accuracy
-(and on their own drop below the 0.999 gate at T=469), so they stay opt-in via weight_dtype.
+bf16 ATTENTION is strictly good: best PCC of all four, slightly faster, and it halves the largest
+tensor (the attention bias). Hence the default.
+
+bf16 WEIGHTS are now strictly BAD and the knob is kept only for experiments. They cost real
+accuracy -- on their own they fall below the gate at T=469 -- and they no longer buy speed: 44 vs
+46 ms. An earlier sweep showed them ~20% faster, but that gap was conv weight PREPARATION cost
+(which scales with weight bytes) being paid on every call. Once that was hoisted out of the
+per-call path the speed argument disappeared entirely.
+
+Also tested and made no difference: keeping the small per-channel tensors (RMSNorm weights,
+QK-norm weights, LayerScale vectors) in fp32 while the matmul weights are bf16 -- PCC 0.999512
+either way, so the bf16 loss is in the matmul weights, not the norms.
 
 On REAL speech both bf16 variants are indistinguishable (PCC 0.999982, ASR WER 0.0%); the
 differences above only appear on random synthetic codes. Synthetic is kept as the gate because it
@@ -50,11 +60,19 @@ Not carried over: the XTTS-v2 HiFi-GAN result that bf16 costs 0.91-0.96 PCC. Tha
 chain with bf16 ACTIVATIONS throughout; here attention output enters the residual scaled by
 LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
 
+CURRENT PERFORMANCE (warm, N150, defaults): 43.6 ms for 5.1 s of audio (RTF 0.0085, 117x
+real-time) up to 538 ms for 120 s (RTF 0.0045, 223x). For reference, upstream report RTF 0.103 for
+their WHOLE pipeline on an H200, so this block is a few percent of the total budget.
+
+MEMORY to be aware of: prepared conv weights are cached per (conv, length) and never evicted --
+60.8 MB per bucket, so ~730 MB if all 12 buckets are touched, plus 60.8 MB of host copies. That is
+~6.5% of an N150's DRAM and it grows monotonically. If memory gets tight (e.g. once the 3.4B
+backbone shares the device) this is the first thing to reclaim: cap the cache and re-prepare on
+miss, or drop the host copies once every bucket is warm.
+
 Validate against the reference (bit-exact goldens for all 8 stages):
     TT_METAL_HOME=<repo> PYTHONPATH=<repo> python models/experimental/voxtral_tts/tt/ttnn_voxtral_codec.py
 """
-
-import math
 
 import torch
 import ttnn
@@ -94,17 +112,16 @@ ATTN_DTYPE = ttnn.bfloat16
 # Chunked attention. `slab` must be TILE-ALIGNED: TILE_LAYOUT pads every dim to 32, so a slab of
 # 272 would silently become 288 and waste a row and column of tiles. Chunking turns attention from
 # O(S^2) into O(S*slab) -- the window is only 2..16, so an unchunked q@kT computes 382M scores per
-# head at S=12000 of which ~17 per row survive the mask. Measured at S=12000: warm 892 -> 497 ms,
-# cold 10580 -> 1178 ms (all attention shapes become identical, so kernels compile once ever),
-# mask 2304 -> 4.2 MB. Below chunk_min the full mask is already cheap and chunking loses a few
+# head at S=12000 of which ~17 per row survive the mask. Measured at S=12000 (before the conv
+# weight-prep fix, so absolute numbers are now lower): warm 892 -> 497 ms, cold 10580 -> 1178 ms
+# (all attention shapes become identical, so kernels compile once ever), mask 2304 -> 4.2 MB. Below chunk_min the full mask is already cheap and chunking loses a few
 # percent to dispatch (T=64: 89 -> 97 ms), hence the threshold.
 SLAB = 512
 CHUNK_MIN = 512
 # Length bucketing for the CONVS. Every conv's input length scales with T (T+2, T, 2T, 4T, 8T+6),
 # so each distinct utterance length compiles 5 new conv programs -- measured at 1-5 s each, and
 # T is whatever the model happens to generate, so a server never stops paying it (a ONE-frame
-# difference cost 5.5 s vs 181 ms warm). Rounding T up to a grid caps the shape count: at 64,
-# the model's ~1500-frame ceiling gives 24 buckets = 120 conv programs for the process lifetime.
+# difference cost 5.5 s vs 181 ms warm). Rounding T up to a grid caps the shape count.
 # The trade is measured: bucketing costs 7-25% on WARM steady-state (padded compute) but on a
 # realistic stream of 12 distinct lengths, total time went 120.93s (none) -> 25.47s (bucket 64)
 # -> 1.66s (bucket 128), i.e. 73x. Warm-only regression is the wrong thing to optimise here since
@@ -125,7 +142,6 @@ class TtVoxtralCodecDecoder:
         """`weight_dtype` / `attn_dtype` exist so the precision question can be MEASURED rather
         than inherited. Activations outside attention are always fp32."""
         self.device = device
-        self.weight_dtype = weight_dtype
         self.attn_dtype = attn_dtype
         # Chunked attention: process `slab` positions at a time, keeping the last (slab - window).
         # `slab` is TILE-ALIGNED on purpose -- TILE_LAYOUT pads every dim to 32, so a slab of 272
@@ -143,9 +159,7 @@ class TtVoxtralCodecDecoder:
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         vec = lambda t: dev(t.reshape(1, 1, -1))  # [C] -> [1,1,C] so it broadcasts over length
         lin = lambda t: dev(t.t())  # torch Linear [out,in] -> ttnn.linear wants [in,out]
-        # conv weights stay HOST in PyTorch layout; ttnn.conv1d / conv_transpose2d move them
-        # themselves and cache the device copy per call signature.
-        host = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype)
+        host = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype)  # conv weights, see below
 
         self.semantic_host = w["semantic_embedding"].float()  # host gather; see quantizer_decode
 
@@ -505,9 +519,14 @@ def main():
                     print(f"{tag} {f'after_up{ci}':22s} PCC {pcc(stages[f'after_up{ci}'], x):.6f}")
             print(f"{tag} {'WAVEFORM':22s} PCC {pcc(got_wav, exp_wav):.6f}  "
                   f"shapes {tuple(got_wav.shape)} vs {tuple(exp_wav.shape)}")
+            # the staged run above uses return_stages=True, which BYPASSES bucketing -- so also
+            # exercise the DEFAULT path (bucketed) that real callers get.
+            plain = gen(codes)
+            print(f"{tag} {'bucketed (default path)':22s} PCC {pcc(plain, exp_wav):.6f}  "
+                  f"shape {tuple(plain.shape)}")
             t0 = time.perf_counter()
             gen(codes)
-            print(f"[codec T={n_frames}] warm {time.perf_counter() - t0:.3f}s")
+            print(f"{tag} warm {(time.perf_counter() - t0) * 1000:.1f} ms")
     finally:
         ttnn.close_device(device)
 
