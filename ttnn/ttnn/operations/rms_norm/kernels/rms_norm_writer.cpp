@@ -38,12 +38,14 @@ void kernel_main() {
     constexpr uint32_t WT_LAST = get_compile_time_arg_val(8);
     constexpr uint32_t NW = get_compile_time_arg_val(9);
     constexpr uint32_t HT_BLOCK = get_compile_time_arg_val(10);
+    // arg 11 (X_READ_CHUNKS) is a read-side knob; the writer's granularity is
+    // set by the compute output CB, which always publishes one chunk at a time.
     // ---- geometry ----
-    constexpr uint32_t CHUNK_ROW_BYTES = get_compile_time_arg_val(12);
-    constexpr uint32_t LAST_ROW_BYTES = get_compile_time_arg_val(13);
-    constexpr uint32_t TOTAL_STICKS = get_compile_time_arg_val(16);
+    constexpr uint32_t CHUNK_ROW_BYTES = get_compile_time_arg_val(13);
+    constexpr uint32_t LAST_ROW_BYTES = get_compile_time_arg_val(14);
+    constexpr uint32_t TOTAL_STICKS = get_compile_time_arg_val(17);
 
-    constexpr auto out_args = TensorAccessorArgs<17>();
+    constexpr auto out_args = TensorAccessorArgs<18>();
 
     static_assert(WT_LAST == WT_CHUNK, "writer assumes uniform chunk widths");
 

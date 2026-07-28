@@ -74,6 +74,14 @@ X_DEPTH = 2
 OUT_DEPTH = 2
 GAMMA_DEPTH = 2
 
+# Depth of the RESIDENT input row-strip (§1.3's fast path). At depth 1 the strip
+# is single-buffered, so the reader (TILE) / tilize (RM) cannot begin row-block
+# hb+1 until compute has drained hb — read and compute serialize across
+# row-blocks. Depth 2 overlaps them. Predicate-guarded: the derivation walks
+# down from this value to 1 and then to the streaming path, taking the deepest
+# strip that fits L1_CB_BUDGET_BYTES.
+X_RESIDENT_DEPTH = 2
+
 # The tilize LLK always consumes a whole 32-row block from its row-page CB, so
 # the row-page CBs must be physically able to hold 32 rows even when only one
 # row carries data (the single-stick gamma tilize).
@@ -120,7 +128,7 @@ def _coarsest_divisor(n: int, cap: int) -> int:
 class _Blocking:
     """The derived blocking + CB plan for one (tensor, gamma, budget) triple."""
 
-    def __init__(self, input_tensor, gamma, l1_block_budget_bytes):
+    def __init__(self, input_tensor, gamma, l1_block_budget_bytes, grid_cores):
         self.is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
         self.has_gamma = gamma is not None
         self.is_rm_gamma = self.has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -186,25 +194,69 @@ class _Blocking:
         assert not (self.nw > 1 and self.ht_block > 1), "R7: NW > 1 requires HT_BLOCK == 1"
 
         # --- residency fast-path predicates (§1.3) ---------------------------
-        base = self._cb_total(x_resident=False, gamma_resident=False)
-        with_x = self._cb_total(x_resident=True, gamma_resident=False)
-        self.x_resident = with_x <= L1_CB_BUDGET_BYTES
+        #
+        # L1 is spent in strict order of how much DRAM TRAFFIC each step removes;
+        # a step that only buys pipelining comes last:
+        #
+        #   1. X_RESIDENT at depth 1  — removes an entire second read pass over x
+        #                               (ht_per_core * Wt tile-reads). Biggest win.
+        #   2. GAMMA_RESIDENT         — removes NH_core * Wt gamma re-reads.
+        #   3. extra resident depth   — removes NO traffic; it only lets the
+        #                               producer run a row-block ahead.
+        #
+        # §1.3 fixes the 1-before-2 order; 3 must come last for the same reason,
+        # and getting that wrong is expensive: buying depth 2 before gamma cost
+        # 1.20x on (1,1,8192,5120) (482_655 -> 577_752 ns) purely by evicting
+        # gamma from L1.
+        #
+        # Step 3 is additionally gated on there being latency to hide at all. With
+        # the grid full every core is queued on DRAM, so running the reader a
+        # row-block ahead only front-loads contention: measured 1.04x SLOWER on
+        # (1,1,8192,1024) (103_238 -> 107_592 ns). Same structural discriminator
+        # as the read-batch knob (see _x_read_chunks).
+        num_cores = min(grid_cores, self.ht_total)
+        self.grid_full = num_cores >= grid_cores
+        # Row-blocks a single core loops over. Both "hold it across row-blocks"
+        # levers below are worth nothing when this is 1.
+        self.nh_core_max = _ceil_div(_ceil_div(self.ht_total, num_cores), self.ht_block)
+        base = self._cb_total(x_res_depth=0, gamma_resident=False)
+
+        self.x_res_depth = 1 if self._cb_total(1, False) <= L1_CB_BUDGET_BYTES else 0
+        self.x_resident = self.x_res_depth > 0
+
+        # Gamma residency removes (NH_core - 1) * Wt gamma re-reads per core — so
+        # at NH_core == 1 it removes NOTHING: gamma is read exactly once either
+        # way, and holding it resident only converts an overlappable per-chunk
+        # read in pass B into a serial prologue that must complete before the
+        # first input tile is even requested. Measured on (1,1,32,5120), one
+        # core: resident gamma 47_571 ns vs streamed gamma 42_407 ns (1.12x).
         self.gamma_resident = False
-        if self.has_gamma:
-            with_g = self._cb_total(x_resident=self.x_resident, gamma_resident=True)
-            self.gamma_resident = with_g <= L1_CB_BUDGET_BYTES
-        self.cb_total_bytes = self._cb_total(self.x_resident, self.gamma_resident)
+        if self.has_gamma and self.nh_core_max > 1:
+            self.gamma_resident = self._cb_total(self.x_res_depth, True) <= L1_CB_BUDGET_BYTES
+
+        # Extra resident depth overlaps row-block hb+1's read with hb's compute,
+        # so it likewise needs NH_core > 1 — and needs spare latency to hide
+        # (see the grid_full note above).
+        if self.x_resident and not self.grid_full and self.nh_core_max > 1:
+            for depth in range(X_RESIDENT_DEPTH, self.x_res_depth, -1):
+                if self._cb_total(depth, self.gamma_resident) <= L1_CB_BUDGET_BYTES:
+                    self.x_res_depth = depth
+                    break
+
+        self.cb_total_bytes = self._cb_total(self.x_res_depth, self.gamma_resident)
         self.base_cb_total_bytes = base
 
     # -- CB plan ------------------------------------------------------------
-    def cb_plan(self, x_resident=None, gamma_resident=None):
+    def cb_plan(self, x_res_depth=None, gamma_resident=None):
         """[(name, index, page_size, num_pages)] for every CB.
+
+        `x_res_depth` is the resident-strip buffer depth (0 = streaming).
 
         Unused CBs are still declared (1 page) so that the compile-time CB
         descriptors the helpers read (tile size / tile dims / format) are valid
         even in `if constexpr`-discarded branches.
         """
-        x_res = self.x_resident if x_resident is None else x_resident
+        x_depth = self.x_res_depth if x_res_depth is None else x_res_depth
         g_res = self.gamma_resident if gamma_resident is None else gamma_resident
 
         H = self.ht_block
@@ -212,8 +264,8 @@ class _Blocking:
         B = H * C
         Wt = self.Wt
 
-        if x_res:
-            input_tile_pages = H * Wt
+        if x_depth > 0:
+            input_tile_pages = x_depth * H * Wt
         elif self.is_rm:
             input_tile_pages = B  # compute->compute (tilize -> square), one block
         else:
@@ -255,22 +307,52 @@ class _Blocking:
         ]
         return [(n, i, ps, max(1, np)) for (n, i, ps, np) in plan]
 
-    def _cb_total(self, x_resident, gamma_resident):
-        return sum(ps * np for (_, _, ps, np) in self.cb_plan(x_resident, gamma_resident))
+    def _cb_total(self, x_res_depth, gamma_resident):
+        return sum(ps * np for (_, _, ps, np) in self.cb_plan(x_res_depth, gamma_resident))
 
 
-def _derive_blocking(input_tensor, gamma):
+def _derive_blocking(input_tensor, gamma, grid_cores):
     """Derive the blocking, halving the block budget until the CB total fits."""
     budget = L1_BLOCK_BUDGET_BYTES
-    blk = _Blocking(input_tensor, gamma, budget)
+    blk = _Blocking(input_tensor, gamma, budget, grid_cores)
     while blk.cb_total_bytes > L1_CB_BUDGET_BYTES and budget > blk.unit_bytes:
         budget //= 2
-        blk = _Blocking(input_tensor, gamma, budget)
+        blk = _Blocking(input_tensor, gamma, budget, grid_cores)
     assert blk.cb_total_bytes <= L1_CB_BUDGET_BYTES, (
         f"rms_norm: per-core CB total {blk.cb_total_bytes} B exceeds "
         f"L1_CB_BUDGET_BYTES={L1_CB_BUDGET_BYTES} even at the minimum block size"
     )
     return blk
+
+
+def _x_read_chunks(blk):
+    """How many W-chunks the reader coalesces into ONE reserve/barrier/push.
+
+    This is the read-granularity knob, and it is measured, not guessed. The two
+    regimes want opposite values (blackhole_p150b, 110 cores, bf16 TILE gamma,
+    device kernel ns):
+
+      shape              cores   1 chunk/barrier   NW chunks/barrier
+      (1,1,32,5120)          1            42_407              51_434
+      (1,1,32,7168)          1            57_396              63_313
+      (1,1,8192,5120)      110           575_867             482_655
+      (1,1,8192,2304)      110           227_673             214_633
+
+    With only a few cores busy the op is LATENCY-bound: one chunk per barrier
+    lets compute start on chunk 0 while the NoC fetches chunk 1, worth up to
+    1.21x. With the grid full every core is already queued on DRAM, so the op is
+    THROUGHPUT-bound: there is no latency left to hide and each extra barrier
+    just exposes the (now much longer) NoC tail, costing up to 1.19x.
+
+    The discriminator is therefore structural, not a tuned threshold: has the
+    independent row axis already filled the grid? Only the resident TILE path is
+    affected — the streaming path's input CB is sized X_DEPTH*B and physically
+    cannot hold a multi-chunk batch, and the RM path's cb_input_tiles is filled
+    by compute's tilize, not by the reader.
+    """
+    if not (blk.x_resident and not blk.is_rm):
+        return 1
+    return blk.nw if blk.grid_full else 1
 
 
 def _core_assignment(device, ht_total):
@@ -294,7 +376,7 @@ def _core_assignment(device, ht_total):
             assignment.append((core, start, per_core))
             start += per_core
     assert start == ht_total, f"work split covered {start} of {ht_total} tile-rows"
-    return all_cores, assignment
+    return all_cores, assignment, len(assignment), grid.x * grid.y
 
 
 def create_program_descriptor(
@@ -306,10 +388,16 @@ def create_program_descriptor(
     compute_kernel_config=None,
     device=None,
 ) -> "ttnn.ProgramDescriptor":
-    blk = _derive_blocking(input_tensor, gamma)
+    grid = (
+        device.compute_with_storage_grid_size()
+        if device is not None
+        else input_tensor.device().compute_with_storage_grid_size()
+    )
+    blk = _derive_blocking(input_tensor, gamma, grid.x * grid.y)
     device = device if device is not None else input_tensor.device()
 
-    all_cores, assignment = _core_assignment(device, blk.ht_total)
+    all_cores, assignment, _num_cores, _grid_cores = _core_assignment(device, blk.ht_total)
+    x_read_chunks = _x_read_chunks(blk)
 
     # ---------- circular buffers ----------
     cbs = [
@@ -341,7 +429,7 @@ def create_program_descriptor(
         1 if blk.gamma_resident else 0,
         1 if blk.has_partial_w else 0,
     ]
-    knobs = [blk.Wt, blk.wt_chunk, blk.wt_last, blk.nw, blk.ht_block]
+    knobs = [blk.Wt, blk.wt_chunk, blk.wt_last, blk.nw, blk.ht_block, x_read_chunks]
 
     # ---------- reader (NCRISC / NoC0) ----------
     reader_ct_args = (

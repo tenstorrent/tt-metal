@@ -56,18 +56,24 @@ void kernel_main() {
     constexpr uint32_t WT_LAST = get_compile_time_arg_val(8);
     constexpr uint32_t NW = get_compile_time_arg_val(9);
     constexpr uint32_t HT_BLOCK = get_compile_time_arg_val(10);
+    // W-chunks coalesced into ONE reserve/barrier/push on the resident TILE
+    // path. 1 = pipeline read with compute (latency-bound, few cores);
+    // NW = one transfer per row-block (throughput-bound, grid full). Host-side
+    // rationale + measurements: rms_norm_program_descriptor._x_read_chunks.
+    constexpr uint32_t X_READ_CHUNKS = get_compile_time_arg_val(11);
     // ---- geometry ----
-    constexpr uint32_t W_VALID_LAST = get_compile_time_arg_val(11);
-    constexpr uint32_t CHUNK_ROW_BYTES = get_compile_time_arg_val(12);
-    constexpr uint32_t LAST_ROW_BYTES = get_compile_time_arg_val(13);
-    constexpr uint32_t G_CHUNK_ROW_BYTES = get_compile_time_arg_val(14);
-    constexpr uint32_t G_LAST_ROW_BYTES = get_compile_time_arg_val(15);
-    constexpr uint32_t TOTAL_STICKS = get_compile_time_arg_val(16);
+    constexpr uint32_t W_VALID_LAST = get_compile_time_arg_val(12);
+    constexpr uint32_t CHUNK_ROW_BYTES = get_compile_time_arg_val(13);
+    constexpr uint32_t LAST_ROW_BYTES = get_compile_time_arg_val(14);
+    constexpr uint32_t G_CHUNK_ROW_BYTES = get_compile_time_arg_val(15);
+    constexpr uint32_t G_LAST_ROW_BYTES = get_compile_time_arg_val(16);
+    constexpr uint32_t TOTAL_STICKS = get_compile_time_arg_val(17);
 
-    constexpr auto in_args = TensorAccessorArgs<17>();
+    constexpr auto in_args = TensorAccessorArgs<18>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     static_assert(WT_LAST == WT_CHUNK, "reader assumes uniform chunk widths");
+    static_assert(X_READ_CHUNKS >= 1 && NW % X_READ_CHUNKS == 0, "read batch must tile NW");
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
@@ -108,16 +114,21 @@ void kernel_main() {
 
     // ---- per-chunk readers -------------------------------------------------
 
-    // TILE: ht x WT_CHUNK whole tile pages, one barrier for the whole chunk.
-    auto read_input_chunk_tile = [&](uint32_t wc, uint32_t row0, uint32_t ht) {
-        const uint32_t n = ht * WT_CHUNK;
+    // TILE: `batch` W-chunks of ht x WT_CHUNK whole tile pages, one barrier for
+    // the whole batch. `batch > 1` requires HT_BLOCK == 1 (guaranteed by R7
+    // whenever NW > 1), so the tiles land in flat column order and the resident
+    // strip stays row-major.
+    auto read_input_batch_tile = [&](uint32_t wc0, uint32_t batch, uint32_t row0, uint32_t ht) {
+        const uint32_t n = ht * WT_CHUNK * batch;
         cb_reserve_back(cb_input_tiles, n);
         uint32_t addr = get_write_ptr(cb_input_tiles);
-        for (uint32_t h = 0; h < ht; ++h) {
-            const uint32_t base_tile = (row0 + h) * WT + wc * WT_CHUNK;
-            for (uint32_t t = 0; t < WT_CHUNK; ++t) {
-                noc_async_read_page(base_tile + t, in_acc, addr);
-                addr += in_tile_bytes;
+        for (uint32_t k = 0; k < batch; ++k) {
+            for (uint32_t h = 0; h < ht; ++h) {
+                const uint32_t base_tile = (row0 + h) * WT + (wc0 + k) * WT_CHUNK;
+                for (uint32_t t = 0; t < WT_CHUNK; ++t) {
+                    noc_async_read_page(base_tile + t, in_acc, addr);
+                    addr += in_tile_bytes;
+                }
             }
         }
         noc_async_read_barrier();
@@ -140,11 +151,19 @@ void kernel_main() {
         }
     };
 
-    auto read_input_chunk = [&](uint32_t wc, uint32_t row0, uint32_t ht, uint32_t valid_rows) {
+    // One pass over a row-block's whole W. On the resident TILE path the reads
+    // are grouped X_READ_CHUNKS at a time; every other path is per-chunk (the
+    // streaming input CB holds only X_DEPTH*B pages, and the RM path's
+    // cb_input_tiles is produced by compute's tilize, not by the reader).
+    auto read_input_pass = [&](uint32_t row0, uint32_t ht, uint32_t valid_rows) {
         if constexpr (IS_RM) {
-            read_input_chunk_rm(wc, row0, ht, valid_rows);
+            for (uint32_t wc = 0; wc < NW; ++wc) {
+                read_input_chunk_rm(wc, row0, ht, valid_rows);
+            }
         } else {
-            read_input_chunk_tile(wc, row0, ht);
+            for (uint32_t wc = 0; wc < NW; wc += X_READ_CHUNKS) {
+                read_input_batch_tile(wc, X_READ_CHUNKS, row0, ht);
+            }
         }
     };
 
@@ -184,32 +203,18 @@ void kernel_main() {
         }
 
         // pass A — feeds square -> chunked SUM.
-        if constexpr (X_RESIDENT && !IS_RM) {
-            // Resident strip: one coalesced ht x Wt read, a single barrier.
-            const uint32_t n = ht * WT;
-            cb_reserve_back(cb_input_tiles, n);
-            uint32_t addr = get_write_ptr(cb_input_tiles);
-            for (uint32_t h = 0; h < ht; ++h) {
-                const uint32_t base_tile = (row0 + h) * WT;
-                for (uint32_t t = 0; t < WT; ++t) {
-                    noc_async_read_page(base_tile + t, in_acc, addr);
-                    addr += in_tile_bytes;
-                }
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_tiles, n);
-        } else {
-            for (uint32_t wc = 0; wc < NW; ++wc) {
-                read_input_chunk(wc, row0, ht, valid_rows);
-            }
-        }
+        read_input_pass(row0, ht, valid_rows);
 
         // pass B — re-read x only when it is not resident; stream gamma when it
         // is not resident.
         if constexpr (!X_RESIDENT || (HAS_GAMMA && !GAMMA_RESIDENT)) {
             for (uint32_t wc = 0; wc < NW; ++wc) {
                 if constexpr (!X_RESIDENT) {
-                    read_input_chunk(wc, row0, ht, valid_rows);
+                    if constexpr (IS_RM) {
+                        read_input_chunk_rm(wc, row0, ht, valid_rows);
+                    } else {
+                        read_input_batch_tile(wc, 1, row0, ht);
+                    }
                 }
                 if constexpr (HAS_GAMMA && !GAMMA_RESIDENT) {
                     read_gamma_chunk(wc);

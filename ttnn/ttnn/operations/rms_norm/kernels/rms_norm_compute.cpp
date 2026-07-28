@@ -64,13 +64,19 @@ void kernel_main() {
     constexpr uint32_t WT_LAST = get_compile_time_arg_val(8);
     constexpr uint32_t NW = get_compile_time_arg_val(9);
     constexpr uint32_t HT_BLOCK = get_compile_time_arg_val(10);
+    // W-chunks the reader coalesces per push on the resident TILE path (see
+    // rms_norm_program_descriptor._x_read_chunks). The cumulative wait below has
+    // to be quantized to this, since that is the granularity data becomes
+    // visible at. Always 1 on the RM path (compute's own tilize is the producer).
+    constexpr uint32_t X_READ_CHUNKS = IS_RM ? 1u : get_compile_time_arg_val(11);
     // ---- geometry ----
-    constexpr uint32_t W_VALID_LAST = get_compile_time_arg_val(11);
-    constexpr uint32_t N_REDUCED = get_compile_time_arg_val(12);  // true element count == W
+    constexpr uint32_t W_VALID_LAST = get_compile_time_arg_val(12);
+    constexpr uint32_t N_REDUCED = get_compile_time_arg_val(13);  // true element count == W
 
     static_assert(WT_LAST == WT_CHUNK, "compute assumes uniform chunk widths");
     static_assert(NW * WT_CHUNK == WT, "chunking must tile Wt exactly");
     static_assert(!(NW > 1 && HT_BLOCK > 1), "R7: NW > 1 requires HT_BLOCK == 1");
+    static_assert(X_READ_CHUNKS >= 1 && NW % X_READ_CHUNKS == 0, "read batch must tile NW");
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     const uint32_t eps_bits = get_arg_val<uint32_t>(1);
@@ -109,22 +115,24 @@ void kernel_main() {
         const auto blk = ckl::EltwiseShape::grid(ht, WT_CHUNK);
 
         // ================= pass A: mean(x^2) over the whole W ==============
-        if constexpr (IS_RM && X_RESIDENT) {
-            // Fill the resident row-strip up front so pass B needs no re-tilize.
-            for (uint32_t wc = 0; wc < NW; ++wc) {
-                ckl::tilize<WT_CHUNK, cb_input_rm, cb_input_tiles>(ht, ht * 32u);
-            }
-        }
-        if constexpr (X_RESIDENT) {
-            // R8: CallerManaged — the chain neither waits nor pops; we do both.
-            cb_wait_front(cb_input_tiles, ht * WT);
-        }
-
         for (uint32_t wc = 0; wc < NW; ++wc) {
-            if constexpr (IS_RM && !X_RESIDENT) {
+            if constexpr (IS_RM) {
+                // Resident regime: this fills the strip in place, chunk by chunk,
+                // so pass B needs no re-tilize. Streaming: one block at a time.
                 ckl::tilize<WT_CHUNK, cb_input_rm, cb_input_tiles>(ht, ht * 32u);
             }
             const uint32_t x_base = wc * WT_CHUNK;
+            if constexpr (X_RESIDENT) {
+                // R8: CallerManaged — the chain neither waits nor pops; we do
+                // both. Waiting CUMULATIVELY (rather than for the whole strip
+                // upfront) is what lets the producer stay a batch ahead of
+                // compute. Rounded UP to the producer's push granularity:
+                // X_READ_CHUNKS == NW collapses to one wait for the full strip.
+                // NW > 1 => HT_BLOCK == 1 (R7), so the strip is one flat Wt
+                // strip and chunk wc occupies [wc*WT_CHUNK, +WT_CHUNK).
+                const uint32_t batches_ready = (wc / X_READ_CHUNKS) + 1u;
+                cb_wait_front(cb_input_tiles, batches_ready * X_READ_CHUNKS * ht * WT_CHUNK);
+            }
 
             // ---- phase 2: x^2 ----
             if constexpr (X_RESIDENT) {
