@@ -7,12 +7,6 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import EltwiseBinaryReuseDestType
 
 
-def is_datacopy_node(compute_node: FpuNode) -> bool:
-    from fuser.quasar.fpu.datacopy import DatacopyFpu
-
-    return isinstance(compute_node.fpu, DatacopyFpu)
-
-
 def is_unary_unpacker(compute_node: FpuNode) -> bool:
     from fuser.quasar.unpacker.unpack_a import UnpackerA
 
@@ -26,13 +20,15 @@ def _emit_configure(
     unpack_B_dst: DataFormat,
 ) -> str:
     is_unary = is_unary_unpacker(compute_node)
-    is_datacopy_dest_acc = is_datacopy_node(compute_node) and dest_acc == "true"
     has_reuse_dest = compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE
+    unpack_to_dest = compute_node.unpack_to_dest.value
 
     desc_a = compute_node.src_a.cpp_desc_name
     code = f"{desc_a}.reg_data_format = static_cast<std::uint8_t>({unpack_A_dst.cpp_underlying_value});\n"
+    if unpack_to_dest:
+        code += f"_llk_math_upk_to_dest_hw_configure_<false, {dest_acc}, false>();\n"
 
-    if is_unary and (is_datacopy_dest_acc or has_reuse_dest):
+    if is_unary and ((dest_acc == "true" and not unpack_to_dest) or has_reuse_dest):
         code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({desc_a}, {desc_a});\n"
     elif is_unary:
         code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>({desc_a});\n"

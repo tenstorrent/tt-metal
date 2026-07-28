@@ -22,6 +22,7 @@ operations:
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "HiFi2"
+        unpack_to_dest: true
       - type: "BinarySfpu"
         operation: "SfpuElwadd"
         approximation_mode: false

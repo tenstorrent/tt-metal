@@ -21,6 +21,7 @@ class DatacopyFpu(Fpu):
         return [
             "llk_math_common.h",
             "llk_math_eltwise_unary_datacopy.h",
+            "llk_sync.h",
         ]
 
     def golden(
@@ -53,6 +54,9 @@ class DatacopyFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            return ""
+
         stage = operation.stage_id
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
         num_faces = operation.tile_shape.total_num_faces()
@@ -73,6 +77,12 @@ class DatacopyFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            return (
+                "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
+                "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
+            )
+
         return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_block});\n"
 
     def uninit(
