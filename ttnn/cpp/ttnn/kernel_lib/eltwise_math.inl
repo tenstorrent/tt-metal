@@ -19,13 +19,8 @@
 namespace compute_kernel_lib {
 
 // ---- Exp ----
-// The second `fast` template parameter is part of the struct signature but is NOT
-// routed into the LLK template args. The LLK `exp_tile_init` second arg is
-// `uint32_t scale` (default 0x3F800000 = 1.0f) and `exp_tile` second arg is
-// `bool scale_en` (default false). Only `approx` is forwarded to the LLK; the
-// scale and scale_en arguments stay at their LLK defaults.
-template <Approx approx, Approx fast, Dst Slot>
-struct Exp : UnaryOp<Exp<approx, fast, Slot>, Slot> {
+template <Approx approx, Dst Slot>
+struct Exp : UnaryOp<Exp<approx, Slot>, Slot> {
     static ALWI void init() { exp_tile_init<approx == Approx::Fast>(); }
     static ALWI void exec_impl(uint32_t slot_offset) { exp_tile<approx == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
