@@ -559,7 +559,10 @@ def render_summary(
         sig = a.get("op_signature", "?")
         lvl = classify_level(a.get("kernel_kind", ""), a.get("note", ""), sig)
         ms = a.get("measured_ms")
-        won = bool(a.get("beat_baseline"))
+        # A win claim with no measured ms cannot be a speedup; older logs contain such rows from
+        # when any git_commit was recorded as a win, so refuse them here too rather than only at the
+        # writer -- otherwise every previously written kernel log keeps rendering inflated ✓ marks.
+        won = bool(a.get("beat_baseline")) and ms is not None
         op = by_op.setdefault(sig, {c: None for c in _ALL_COLS})
         cur = op.get(lvl)
         # 'win' beats 'try'; track best (lowest) measured ms per cell

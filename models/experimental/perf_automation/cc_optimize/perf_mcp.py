@@ -2510,6 +2510,16 @@ def _record_committed_win(message: str) -> None:
         if not op:
             return
         rung = str(t.get("rung") or t.get("next_rung") or "knob").split(":")[-1] or "knob"
+        if t.get("measured_ms") is None:
+            # A COMMIT IS NOT A MEASUREMENT. This marked beat_baseline=True on every successful
+            # git_commit, so housekeeping commits -- "refresh the generated RUN_REPORT", "checkpoint
+            # the perf test", a comment-only "record the measured dead ends" -- all rendered as ✓win.
+            # On llama3_1_8b_p150 that was 47 of 73 wins in one run, and it put a ✓ in the fidelity
+            # column while both real fidelity measurements showed no gain. The docstring on
+            # git_commit already promises "valid measure + ok pcc + faster"; enforce the measure part
+            # rather than trusting the commit as proof. The commit still succeeds; it just is not
+            # claimed as a speedup.
+            return
         _append_attempt(
             {
                 "op_signature": op,

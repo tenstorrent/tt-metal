@@ -26,7 +26,11 @@ def _capture_appends(monkeypatch):
 
 def test_record_committed_win_marks_current_target(monkeypatch):
     recs = _capture_appends(monkeypatch)
-    monkeypatch.setattr(perf_mcp, "_LAST_TARGET", {"op": "MatmulDeviceOperation 64 x 2048 x 4096", "rung": "knob:dtype"})
+    monkeypatch.setattr(
+        perf_mcp,
+        "_LAST_TARGET",
+        {"op": "MatmulDeviceOperation 64 x 2048 x 4096", "rung": "knob:dtype", "measured_ms": 12.34},
+    )
     perf_mcp._record_committed_win("perf(attn): bf8_b weights on qkv+o_proj")
     assert len(recs) == 1
     r = recs[0]
@@ -38,7 +42,7 @@ def test_record_committed_win_marks_current_target(monkeypatch):
 
 def test_git_commit_records_win_on_success(monkeypatch):
     recs = _capture_appends(monkeypatch)
-    monkeypatch.setattr(perf_mcp, "_LAST_TARGET", {"op": "MatmulDeviceOperation", "rung": "grid"})
+    monkeypatch.setattr(perf_mcp, "_LAST_TARGET", {"op": "MatmulDeviceOperation", "rung": "grid", "measured_ms": 12.34})
     monkeypatch.setattr(perf_mcp.gitio, "commit", lambda *a, **k: "sha1234")
     monkeypatch.setattr(perf_mcp.gitio, "repo_root", lambda p: perf_mcp._MODEL_ROOT)
     out = _git_commit("perf: full grid")
@@ -48,7 +52,7 @@ def test_git_commit_records_win_on_success(monkeypatch):
 
 def test_git_commit_no_win_when_commit_fails(monkeypatch):
     recs = _capture_appends(monkeypatch)
-    monkeypatch.setattr(perf_mcp, "_LAST_TARGET", {"op": "MatmulDeviceOperation", "rung": "grid"})
+    monkeypatch.setattr(perf_mcp, "_LAST_TARGET", {"op": "MatmulDeviceOperation", "rung": "grid", "measured_ms": 12.34})
     monkeypatch.setattr(perf_mcp.gitio, "commit", lambda *a, **k: "")
     monkeypatch.setattr(perf_mcp.gitio, "repo_root", lambda p: perf_mcp._MODEL_ROOT)
     out = _git_commit("perf: nothing staged")
