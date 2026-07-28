@@ -133,10 +133,11 @@ _LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
 )
 
-# kv_sdpa expert attention at HiFi2. On the 32x32 decode_all path this was ~1.3 ms faster than
-# HiFi4 with no precision loss (the kv_sdpa kernel's fp32 dest accumulation is un-gated, so math
-# fidelity is the only effective knob). NOT yet wired on the tiny-tile path -- the 16x32 SDPA
-# currently uses get_sdpa_compute_kernel_config(); re-A/B once tiny-tile PCC is green.
+# kv_sdpa expert attention at HiFi2 -- the pre-merge setting, restored. The kv_sdpa kernel's fp32 dest
+# accumulation is un-gated, so math fidelity is the only effective knob here; HiFi4 (what
+# get_sdpa_compute_kernel_config bakes, and what the tiny-tile branch used) costs ~1.3 ms on the
+# DECODE_ALL denoise for no measured precision gain. Wired on BOTH tile heights; the general-SDPA
+# fallback below deliberately stays on get_sdpa_compute_kernel_config().
 _KV_SDPA_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
 )
@@ -378,7 +379,7 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                 scale=self.scale,
                 past_k=past_k,
                 past_v=past_v,
-                compute_kernel_config=get_sdpa_compute_kernel_config(),
+                compute_kernel_config=_KV_SDPA_HIFI2,
                 max_kv_chunk_tiles=_KV_SDPA_MAX_CHUNK_TILES,
             )
             new_cache = None
@@ -395,7 +396,7 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                     v,
                     attn_mask=None,
                     scale=self.scale,
-                    compute_kernel_config=get_sdpa_compute_kernel_config(),
+                    compute_kernel_config=_KV_SDPA_HIFI2,
                     max_kv_chunk_tiles=_KV_SDPA_MAX_CHUNK_TILES,
                 )
             else:
