@@ -32,7 +32,12 @@
 // has two face-rows (Face0+Face2 -> VectorMode::C); a 16x32 tiny tile has a single face-row (Face0 only ->
 // VectorMode::None). Using VectorMode::C on a tiny tile would spill into the non-existent Face2, corrupting
 // the cross-chunk max/sum/output correction.
+// Guarded: compute_common.hpp defines the same constant, and several kernels (sdpa.cpp,
+// {exp_,}ring_joint_sdpa.cpp, sparse_sdpa{,_msa}_compute.cpp) include BOTH headers in one TU.
+#ifndef QK_COL_VECTOR_MODE_DEFINED
+#define QK_COL_VECTOR_MODE_DEFINED
 static constexpr VectorMode QK_COL_VECTOR_MODE = (QK_NUM_FACES == 2) ? VectorMode::None : VectorMode::C;
+#endif
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)

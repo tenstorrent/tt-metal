@@ -41,7 +41,12 @@
 // exp of max-diff, reciprocal of the row sum). VectorMode::C spans both face-rows (rows 0-31) of a full
 // 32x32 tile; VectorMode::None spans the single face-row (rows 0-15) of a 16x32 tiny tile. Using C on a
 // genuine 16x32 tile walks the non-existent second face-row and corrupts the correction (PCC ~0.5-0.9).
+// Guarded: compute_streaming.hpp defines the same constant, and several kernels (sdpa.cpp,
+// {exp_,}ring_joint_sdpa.cpp, sparse_sdpa{,_msa}_compute.cpp) include BOTH headers in one TU.
+#ifndef QK_COL_VECTOR_MODE_DEFINED
+#define QK_COL_VECTOR_MODE_DEFINED
 static constexpr VectorMode QK_COL_VECTOR_MODE = (QK_NUM_FACES == 2) ? VectorMode::None : VectorMode::C;
+#endif
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
