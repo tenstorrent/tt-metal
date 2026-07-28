@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import bf16_tensor, local_device_to_torch
+from ..utils.tensor import local_device_to_torch
 
 
 class CCLManager:
@@ -145,8 +145,23 @@ class CCLManager:
             intermediate_buffer_shape = list(shape)
             intermediate_buffer_shape = [2] + intermediate_buffer_shape
             for _ in range(2):
-                intermediate_buffer = bf16_tensor(torch.empty(intermediate_buffer_shape), device=self.mesh_device)
-                output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                # Device-native allocation: scratch ping-pong buffers are overwritten
+                # by the CCL op, so allocate on device (no host->device upload of a
+                # large buffer, which is slow and can hang for big shapes).
+                intermediate_buffer = ttnn.zeros(
+                    intermediate_buffer_shape,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
+                output_buffer = ttnn.zeros(
+                    output_buffer_shape,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
                 buffers.append([intermediate_buffer, output_buffer])
 
             self._ping_pong_buffer_cache[cache_key] = buffers
@@ -184,8 +199,10 @@ class CCLManager:
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
-                output_buffer = ttnn.from_torch(
-                    torch.empty(output_buffer_shape),
+                # Device-native allocation: the all-gather overwrites this buffer,
+                # so allocate on device rather than uploading a large host tensor.
+                output_buffer = ttnn.zeros(
+                    output_buffer_shape,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=dtype,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -352,8 +369,11 @@ class CCLManager:
             ttnn.synchronize_device(self.mesh_device)
             buffers = []
             for _ in range(2):
-                output_buffer = ttnn.from_torch(
-                    torch.zeros(output_shape),
+                # Device-native allocation: keeps the zero-init (neighbor_pad relies
+                # on zero boundary-pad regions) but builds it on device instead of
+                # uploading a large host tensor (slow / can hang for big shapes).
+                output_buffer = ttnn.zeros(
+                    output_shape,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     dtype=dtype,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
