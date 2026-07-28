@@ -21,6 +21,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/distributed/types.hpp"
 
@@ -341,6 +342,14 @@ L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t num_slots, uint32_t 
 // Per-coordinate program: for each of this device's fabric eth cores, ONE worker core running a
 // producer (writer RISC — owns that eth channel's single fabric connection) and a receiver (reader
 // RISC — no connection, since being a fabric destination requires none).
+// Index of a placement's worker within its device, i.e. the position of `eth_logical` in the
+// device's sorted by_eth_logical map. Used to give each worker its own page range in the DRAM output
+// buffer: worker i owns pages [i * num_tokens, (i+1) * num_tokens).
+uint32_t worker_index_of(const DevicePlacement& placement, const CoreCoord& eth_logical) {
+    return static_cast<uint32_t>(
+        std::distance(placement.by_eth_logical.begin(), placement.by_eth_logical.find(eth_logical)));
+}
+
 tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const CombineFabric2dParams& args,
     const ttnn::MeshCoordinate& coord,
@@ -349,11 +358,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const L1Layout& l1,
     uint32_t write_up_to_addr,
     uint32_t data_ready_addr,
-    uint32_t credits_addr) {
+    uint32_t credits_addr,
+    tt::tt_metal::Buffer* dram_buf,
+    uint32_t dram_addr) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* mesh = args.device;
     auto* dev = mesh->get_device(coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
+
+    // Phase 3 mode select (variant bits, see CombineFabric2dParams::variant). Only DRAM_DIRECT changes
+    // host wiring here (it drops the receiver kernel); DRAM_DRAIN is read kernel-side from `variant`.
+    const bool dram_direct = (args.variant & 32u) != 0;  // Approach #1: producer writes DRAM, no receiver
 
     const auto& self_placement = placements.get(coord);
     std::string summary;
@@ -389,6 +404,14 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             mesh->get_fabric_node_id(cit->second));
         const CoreCoord peer_virtual = pit->second.worker_virtual;
 
+        // DRAM page ranges (Phase 3). Approach #1's producer writes to the peer chip's buffer, into the
+        // page range owned by the peer worker it feeds. Approach #2's receiver drains into THIS chip's
+        // buffer, into its own worker's page range. Both are one page per token.
+        const uint32_t self_worker_idx = worker_index_of(self_placement, eth_logical);
+        const uint32_t peer_worker_idx = worker_index_of(peer_placement, far_eth_logical);
+        const uint32_t producer_dram_base_page = peer_worker_idx * args.num_tokens;  // page on the PEER chip
+        const uint32_t receiver_dram_base_page = self_worker_idx * args.num_tokens;  // page on THIS chip
+
         // ---- Producer (writer RISC). Owns the eth channel's single fabric connection: sends payload
         // ---- tokens AND forwards the co-located receiver's credit returns.
         tt::tt_metal::KernelDescriptor prod;
@@ -416,7 +439,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             args.stall_telemetry,
             args.variant,
             l1.pkt_hdr_ring,
+            producer_dram_base_page,  // 18: first DRAM page this producer writes (Approach #1)
+            dram_addr,                // 19: DRAM output buffer base address (uniform across the mesh)
         };
+        // 20+: TensorAccessorArgs describing the interleaved DRAM output buffer (compile-time config).
+        tt::tt_metal::TensorAccessorArgs(dram_buf).append_to(prod.compile_time_args);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -437,29 +464,38 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
 
         // ---- Receiver (reader RISC). No fabric connection: it polls its own L1 and hands credits to
-        // ---- the producer sharing its core.
-        tt::tt_metal::KernelDescriptor recv;
-        recv.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
-            "receiver_combine_fabric2d.cpp";
-        recv.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-        recv.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
-        recv.compile_time_args = {
-            args.num_tokens,
-            args.num_slots,
-            args.chunk_size_bytes,
-            l1.recv_buf,
-            data_ready_addr,
-            credits_addr,
-            static_cast<uint32_t>(wp.worker_virtual.x),
-            static_cast<uint32_t>(wp.worker_virtual.y),
-        };
-        recv.config = tt::tt_metal::DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            // Only used for a self-targeted atomic (cross-RISC visibility), so direction is moot.
-            .noc = tt::tt_metal::NOC::NOC_0,
-        };
-        desc.kernels.push_back(std::move(recv));  // no fabric connection => no rt args
+        // ---- the producer sharing its core. Approach #1 (dram_direct) has no receiver role at all —
+        // ---- the producer writes straight to the peer's DRAM, nothing consumes an L1 ring — so we
+        // ---- skip it entirely (a receiver would spin forever waiting on a data_ready that never comes).
+        if (!dram_direct) {
+            tt::tt_metal::KernelDescriptor recv;
+            recv.kernel_source =
+                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
+                "receiver_combine_fabric2d.cpp";
+            recv.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+            recv.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
+            recv.compile_time_args = {
+                args.num_tokens,
+                args.num_slots,
+                args.chunk_size_bytes,
+                l1.recv_buf,
+                data_ready_addr,
+                credits_addr,
+                static_cast<uint32_t>(wp.worker_virtual.x),
+                static_cast<uint32_t>(wp.worker_virtual.y),
+                args.variant,             // 8: mode select (DRAM_DRAIN bit)
+                receiver_dram_base_page,  // 9: first DRAM page this receiver drains to (Approach #2)
+                dram_addr,                // 10: DRAM output buffer base address
+            };
+            // 11+: TensorAccessorArgs for the interleaved DRAM output buffer (compile-time config).
+            tt::tt_metal::TensorAccessorArgs(dram_buf).append_to(recv.compile_time_args);
+            recv.config = tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                // Approach #2 uses NOC_0 for the L1->DRAM drain; baseline only self-atomics on it.
+                .noc = tt::tt_metal::NOC::NOC_0,
+            };
+            desc.kernels.push_back(std::move(recv));  // no fabric connection => no rt args
+        }
 
         summary += fmt::format(
             "{}[eth({},{}) phys_x {} link {} -> worker logical ({},{}) phys ({},{}){} peer {} virt ({},{})]",
@@ -556,7 +592,7 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
 tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_descriptor(
     const CombineFabric2dParams& operation_attributes,
     const CombineFabric2dInputs& /*tensor_args*/,
-    ttnn::Tensor& /*tensor_return_value*/,
+    ttnn::Tensor& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     auto* mesh_device = operation_attributes.device;
     const auto mesh_shape = mesh_device->shape();
@@ -619,6 +655,13 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
 
     PlacementCache placements(mesh_device, axis, operation_attributes.num_links, grid);
 
+    // Phase 3 DRAM output buffer. In the L1-only baseline this is the dummy {1,1} tensor (unused by the
+    // kernels); in DRAM modes it is the real interleaved landing buffer, whose base address is uniform
+    // across the mesh so a producer can address the same buffer on any chip by page.
+    auto* dram_buf = tensor_return_value.buffer();
+    TT_FATAL(dram_buf != nullptr, "combine_fabric2d: output tensor has no device buffer");
+    const uint32_t dram_addr = static_cast<uint32_t>(dram_buf->address());
+
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(write_up_to_sem);
     workload_descriptor.semaphores.push_back(data_ready_sem);
@@ -632,7 +675,9 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
             l1,
             write_up_to_addr,
             data_ready_addr,
-            credits_addr);
+            credits_addr,
+            dram_buf,
+            dram_addr);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;
