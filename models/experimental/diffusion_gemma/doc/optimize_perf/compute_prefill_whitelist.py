@@ -84,6 +84,18 @@ def main() -> int:
         f"{min(lengths)}/{sorted(lengths)[len(lengths)//2]}/{max(lengths)}"
     )
 
+    # A prompt whose raw length is already a 32-multiple has ZERO margin: one extra token from a
+    # template tweak, a tokenizer bump or a reworded task pushes it into the next tile, which is not
+    # in this list. On the 07-28 CoT set doc 127 tokenizes to exactly 2432 -- dead on the largest
+    # entry. That no longer aborts a run (the generator rejects the request and keeps serving) but it
+    # still silently costs that question, so it is worth knowing before the run rather than after.
+    exact = sorted(n for n in lengths if n % TILE == 0)
+    if exact:
+        print()
+        print(f"NOTE: {len(exact)} prompt(s) sit exactly on a {TILE}-token boundary: {exact}")
+        print("      A +1-token change to the template or tokenizer moves each into the next tile,")
+        print("      which this list does not contain. Recompute whenever either changes.")
+
     budget = args.max_model_len - args.canvas
     over = [n for n in padded if n > budget]
     if over:

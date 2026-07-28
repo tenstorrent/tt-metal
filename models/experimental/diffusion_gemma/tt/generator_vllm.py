@@ -192,6 +192,17 @@ def _metric(event: str, **fields) -> None:
     logger.info("DG_VLLM_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
 
 
+def _strict_prefill_lens() -> bool:
+    """Whether an unwarmed prefill length should kill the engine instead of the request.
+
+    Default OFF. A bit-exactness gate legitimately wants the run to stop, because an unwarmed shape
+    means the comparison is no longer the thing it claims to measure -- but a serving deployment
+    wants the server to survive one bad request. Since the raise is engine-fatal, that has to be a
+    choice rather than the default.
+    """
+    return os.environ.get("DG_UPFRONT_STRICT_PREFILL_LENS", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _committed_ids(tokens) -> list:
     """Flat python ids for one committed block, for the DG_VLLM_METRIC block_ids audit line.
 
@@ -538,6 +549,13 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                             f"prefill warmup length {prompt_len} leaves no canvas within p_max={self._upfront_pmax}"
                         )
                     warmup_lens.add(prompt_len)
+                # One tile is always warmed, whether or not the caller listed it. The capture phase
+                # below prefills a single BOS token to build its adapter, so the 32-aligned prefill
+                # program is compiled on every startup regardless -- listing it costs nothing and no
+                # extra bytes. Leaving it out is what let a 21-token out-of-band request (a `curl`
+                # smoke test against a live server) reach the rejection below and kill the engine
+                # 56 minutes into a 198-question eval.
+                warmup_lens.add(ttnn.TILE_SIZE)
                 self._upfront_prefill_warmup_lens = frozenset(warmup_lens)
                 for prompt_len in sorted(self._upfront_prefill_warmup_lens):
                     logger.info(f"[DiffusionGemma vLLM] warming prefill shape {prompt_len} before trace capture")
@@ -751,11 +769,53 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 cache_len = ((int(prompt_tokens.shape[1]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
                 warmed = getattr(self, "_upfront_prefill_warmup_lens", frozenset())
                 if cache_len not in warmed:
-                    raise RuntimeError(
-                        f"up-front capture cannot serve unseen aligned prefill length {cache_len}; "
-                        f"warm it before capture via DG_UPFRONT_PREFILL_WARMUP_LENS "
-                        f"(configured={sorted(warmed)})"
+                    # FAIL THIS REQUEST, NOT THE SERVER.
+                    #
+                    # This used to `raise`, and in vLLM V1 an exception out of ``execute_model`` is
+                    # unconditionally fatal: EngineCore exits, and every request already queued
+                    # behind it is answered with an empty completion and HTTP 200. On 2026-07-28 a
+                    # single out-of-band 21-token `curl` smoke test against a live server therefore
+                    # destroyed 135 of 198 answers, 56 minutes into the run, and the eval still
+                    # wrote a normal-looking 23.74% results file. One unservable request must cost
+                    # one request.
+                    #
+                    # Compiling the missing shape here instead is NOT the fallback: it is the
+                    # documented cause of a reproduced four-device AllBroadcast hang needing
+                    # `tt-smi -r` (doc/optimize_perf/upfront_earlyhalt_gpqa_20260722.md -- warming
+                    # the 160-token prefill before capture was the controlled fix). Padding up to
+                    # the nearest warmed length is not free either while
+                    # DG_DENOISE_HIDE_PREFILL_PADS is default OFF, since the extra pad keys are
+                    # decision-changing. So the request ends, loudly, with the same stop-id block
+                    # the degeneracy guard's terminal path already uses.
+                    logger.error(
+                        f"[DiffusionGemma vLLM] REJECTING request on row {row}: aligned prefill "
+                        f"length {cache_len} was not warmed before trace capture "
+                        f"(warmed={sorted(warmed)}). Ending this request with an empty answer; the "
+                        f"server stays up. Add {cache_len} to DG_UPFRONT_PREFILL_WARMUP_LENS to "
+                        f"serve prompts of this length."
                     )
+                    _metric("prefill_rejected", row=row, cache_len=cache_len, warmed=sorted(warmed))
+                    if _strict_prefill_lens():
+                        # Bit-exactness gates want the run to stop rather than silently lose a
+                        # sample, since an unwarmed shape invalidates the comparison.
+                        session.reset()
+                        raise RuntimeError(
+                            f"up-front capture cannot serve unseen aligned prefill length {cache_len}; "
+                            f"warm it before capture via DG_UPFRONT_PREFILL_WARMUP_LENS "
+                            f"(configured={sorted(warmed)}). This raise is FATAL to the vLLM engine "
+                            f"and is enabled by DG_UPFRONT_STRICT_PREFILL_LENS=1; unset it to reject "
+                            f"the request instead."
+                        )
+                    # Register the row as an ALREADY-FINISHED session rather than dropping it.
+                    # ``decode_forward`` raises when ``_sessions`` is empty, and that raise is just
+                    # as engine-fatal as the one being replaced here -- so a dropped row would move
+                    # the crash one step later instead of removing it. A finished session takes
+                    # decode_forward's existing stop-id branch, and release_request cleans it up and
+                    # emits the usual request_release line.
+                    session.finished = True
+                    self._sessions[row] = session
+                    blocks.append(self._stop_block(session))
+                    continue
             ttft_t0 = time.perf_counter()
             try:
                 cache_len = session.prefill(prompt_tokens)

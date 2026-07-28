@@ -428,8 +428,11 @@ def test_vllm_upfront_compile_phase_warms_configured_prefill_lengths(monkeypatch
     wrapper.warmup_model_prefill(None, False, True)
 
     assert wrapper._upfront_compile_phase_seen is True
-    assert wrapper._upfront_prefill_warmup_lens == frozenset({160, 192})
-    assert warmed == [(1, 160), (1, 192)]
+    # Duplicates collapse, and one tile is always present on top of whatever was configured -- the
+    # capture phase compiles a 32-aligned prefill anyway (see
+    # test_vllm_upfront_warmup_always_includes_one_tile).
+    assert wrapper._upfront_prefill_warmup_lens == frozenset({32, 160, 192})
+    assert warmed == [(1, 32), (1, 160), (1, 192)]
 
 
 def test_vllm_upfront_trace_phase_rejects_missing_prefill_warmups(expect_error):
@@ -447,14 +450,23 @@ def test_vllm_upfront_trace_phase_rejects_missing_prefill_warmups(expect_error):
         wrapper.warmup_model_prefill(None, True, True)
 
 
-def test_vllm_upfront_prefill_rejects_unseen_aligned_length(expect_error):
-    pytest.importorskip("vllm")
-    from models.experimental.diffusion_gemma.tt import generator_vllm
+class _RejectSession:
+    """Minimal session for the unwarmed-length rejection path."""
 
-    class _Session:
-        def attach_persistent_adapter(self, adapter):
-            assert adapter == "persistent"
+    stop_token_ids = [7]
 
+    def __init__(self):
+        self.reset_calls = 0
+        self.finished = False
+
+    def attach_persistent_adapter(self, adapter):
+        assert adapter == "persistent"
+
+    def reset(self):
+        self.reset_calls += 1
+
+
+def _reject_wrapper(generator_vllm, sessions_out):
     wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
     wrapper.data_parallel = 1
     wrapper.model = []
@@ -463,10 +475,103 @@ def test_vllm_upfront_prefill_rejects_unseen_aligned_length(expect_error):
     wrapper._persistent_adapter = "persistent"
     wrapper._upfront_compile_phase_seen = True
     wrapper._upfront_prefill_warmup_lens = frozenset({32})
-    wrapper._make_session = _Session
+    wrapper.canvas_length = 4
+
+    def _make():
+        session = _RejectSession()
+        sessions_out.append(session)
+        return session
+
+    wrapper._make_session = _make
+    return wrapper
+
+
+def test_vllm_upfront_prefill_rejects_the_request_not_the_engine():
+    """An unwarmed prefill length must cost ONE request, not the server.
+
+    In vLLM V1 an exception out of ``execute_model`` is fatal to EngineCore, so the old ``raise``
+    here meant a single out-of-band request emptied every request queued behind it while the eval
+    still wrote a normal-looking score. Regression test for that: the call returns a stop-id block,
+    frees the partially built session, and leaves no row registered.
+    """
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    sessions = []
+    wrapper = _reject_wrapper(generator_vllm, sessions)
+
+    out = wrapper.prefill_forward(torch.zeros((1, 33), dtype=torch.long))
+
+    assert out.shape == (1, 4), "a rejected row must still fill its slot in the emitted block"
+    assert torch.equal(out, torch.full((1, 4), 7, dtype=torch.long)), "expected the session's stop id"
+    # The row must stay REGISTERED and finished: decode_forward raises when _sessions is empty, and
+    # that raise is engine-fatal too, so dropping the row would just move the crash one step later.
+    assert wrapper._sessions == {0: sessions[0]}, "the rejected row must remain registered"
+    assert sessions[0].finished is True, "so decode_forward takes its stop-id branch"
+
+
+def test_vllm_decode_after_a_rejected_prefill_does_not_kill_the_engine():
+    """The step AFTER a rejection must survive too.
+
+    ``decode_forward`` raises when ``_sessions`` is empty, and that raise reaches EngineCore exactly
+    like the prefill one did -- so rejecting by dropping the row would only move the crash. If vLLM
+    asks for another block for the rejected request, it gets stop-id padding.
+    """
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    sessions = []
+    wrapper = _reject_wrapper(generator_vllm, sessions)
+    wrapper.prefill_forward(torch.zeros((1, 33), dtype=torch.long))
+
+    out = wrapper.decode_forward()
+
+    assert out.shape == (1, 4)
+    assert torch.equal(out, torch.full((1, 4), 7, dtype=torch.long))
+
+
+def test_vllm_upfront_prefill_strict_mode_still_raises(expect_error, monkeypatch):
+    """The engine-fatal behaviour stays reachable for bit-exactness gates, but only on request."""
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_UPFRONT_STRICT_PREFILL_LENS", "1")
+    sessions = []
+    wrapper = _reject_wrapper(generator_vllm, sessions)
 
     with expect_error(RuntimeError, match="unseen aligned prefill length 64"):
         wrapper.prefill_forward(torch.zeros((1, 33), dtype=torch.long))
+    assert sessions[0].reset_calls == 1, "even the fatal path must free its session"
+
+
+def test_vllm_upfront_warmup_always_includes_one_tile(monkeypatch):
+    """32 is warmed whether or not it was listed.
+
+    The capture phase prefills a single BOS token, so the 32-aligned program is compiled on every
+    startup anyway. Omitting it from the whitelist is what let a 21-token request reach the
+    rejection path at all.
+    """
+    pytest.importorskip("vllm")
+    import ttnn
+
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    compiled = []
+    monkeypatch.setattr(generator_vllm, "prefill_prompt_tokens", lambda model, toks: compiled.append(toks.shape[1]))
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_a, **_k: None)
+    monkeypatch.setenv("DG_UPFRONT_PREFILL_WARMUP_LENS", "128,160")
+
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper._upfront = True
+    wrapper.canvas_length = 256
+    wrapper._upfront_pmax = 4096
+    wrapper.model = [SimpleNamespace(mesh_device=object())]
+
+    wrapper.warmup_model_prefill(None, enable_trace=False, can_sample_on_device=False)
+
+    assert ttnn.TILE_SIZE in wrapper._upfront_prefill_warmup_lens
+    assert wrapper._upfront_prefill_warmup_lens == frozenset({32, 128, 160})
+    assert sorted(compiled) == [32, 128, 160], "every warmed length must actually be compiled"
 
 
 def test_vllm_destructor_releases_persistent_controller_then_adapter_exactly_once():

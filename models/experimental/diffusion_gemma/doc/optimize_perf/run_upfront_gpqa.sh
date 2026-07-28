@@ -114,6 +114,19 @@ case "${THINKING_MODE}" in
 esac
 PREFILL_WARMUP_LENS="${PREFILL_WARMUP_LENS:-${DEFAULT_PREFILL_WARMUP_LENS}}"
 
+# Pad the low end regardless of the task list. The task-derived lengths above cover the 198 eval
+# prompts exactly -- verified byte-exact against the server's own tokenization (63/63 served
+# prompt_len at offset 0) -- but they cover ONLY those prompts. Anything else that touches a live
+# server (a `curl` smoke test, a readiness ping, a hand-typed question) lands on a short length that
+# is not listed, and until the generator learned to reject per-request that meant the whole engine
+# died. Measured cost per extra short shape: 0.216-0.286 s of one-time compile, ZERO trace bytes
+# (across 710 trace-stat records the capture is one event at a single prompt_len of 32, replayed
+# 645 times) and low single-digit MiB of DRAM. ~1 s total to make the server robust to its own
+# operators is not a trade worth thinking about.
+LOW_END_WARMUP_LENS="32,64,96"
+PREFILL_WARMUP_LENS="$(printf '%s\n%s\n' "${LOW_END_WARMUP_LENS//,/$'\n'}" "${PREFILL_WARMUP_LENS//,/$'\n'}" \
+    | grep -E '^[0-9]+$' | sort -n -u | paste -sd, -)"
+
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/home/zni/dg_runs/diffusion_gemma/upfront_gpqa/${TIMESTAMP}}"
 SERVER_LOG="${OUTPUT_ROOT}/server.log"
