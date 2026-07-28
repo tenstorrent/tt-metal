@@ -78,12 +78,14 @@ private:
 
 // Internal SAT function declarations — implemented in topology_solver_sat.cpp.
 
+// quiet_mode suppresses the per-phase [topo-sat-profile] timing lines (they are logged at debug level otherwise).
 bool topology_sat_encode_hard_constraints(
     TopologySatSolver& solver,
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED);
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false);
 
 bool topology_sat_decode_hard_solution(
     TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out);
@@ -98,13 +100,15 @@ bool topology_sat_encode_hard_constraints(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false) {
     return topology_sat_encode_hard_constraints(
         solver,
         TopologySatGraphView(graph_data),
         TopologySatConstraintView(constraint_data),
         enc,
-        validation_mode);
+        validation_mode,
+        quiet_mode);
 }
 
 }  // namespace tt::tt_fabric::detail

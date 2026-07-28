@@ -2478,8 +2478,10 @@ TopologyMappingResult map_multi_mesh_to_physical(
         }
 
         // Use quiet mode for retry attempts (failures are expected during retries)
-        // Only log errors if this is the final attempt
-        bool quiet_mode = (retry_attempt < max_retry_attempts);
+        // Only log errors if this is the final attempt.
+        // First attempt runs NON-quiet so the [topo-sat-profile] phase breakdown of the (usually successful)
+        // inter-mesh solve is emitted at debug level for profiling.
+        bool quiet_mode = (retry_attempt > 1) && (retry_attempt < max_retry_attempts);
 
         log_trace(
             tt::LogFabric,
@@ -2491,8 +2493,19 @@ TopologyMappingResult map_multi_mesh_to_physical(
         }
 
         // Perform inter-mesh mapping (incremental: reuses prior SAT encoding across retries)
+        const auto _intermesh_solve_t0 = std::chrono::steady_clock::now();
         auto solver_result = ::tt::tt_fabric::solve_topology_mapping(
             mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
+        // Always-on timing of the inter-mesh (same-rank-group / minimal-host) solve — the phase we care about
+        // for profiling. Emitted unconditionally (not gated on quiet_mode) at info level.
+        log_info(
+            tt::LogFabric,
+            "[intermesh-solve] attempt {} : {:.1f} ms (success={}, logical_meshes={}, physical_meshes={})",
+            retry_attempt,
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - _intermesh_solve_t0).count(),
+            solver_result.success,
+            logical_meshes.size(),
+            physical_meshes.size());
 
         // If the solver fails, return error results for all meshes with detailed information
         if (!solver_result.success) {

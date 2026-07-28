@@ -454,7 +454,13 @@ assumption, because assumptions are cleared after each `solve()`.
 | `TT_TOPO_SAT_CONFLICT_BUDGET` | `1000000` | Cold hard cap + final full-packing lock conflict budget. |
 | `TT_TOPO_SAT_DESCENT_BUDGET` | `20000` | Per-step budget for the partial-packing descent (keep small). |
 | `TT_TOPO_SAT_HARDCAP_WARMSTART` | `1` | Phase-hint warm start for the cold `max`-only path (A/B toggle). |
-| `TT_TOPO_SAT_PROFILE` | `0` | Emit `[topo-sat-profile]` per-stage timing + CNF-size lines. |
 
-Set `TT_TOPO_SAT_PROFILE=1` to see `occupancy path:`, `minimize.warm_solve`,
-`minimize.descent[i]`, and `minimize.hardlock` lines — the exact traces quoted in §4.
+## 10. Phase profiling
+
+The `[topo-sat-profile]` per-stage timing and CNF-size lines are emitted unconditionally at
+**debug** level — there is no env var to enable them. Turn on debug logging for `LogFabric`
+to see `occupancy path:`, `minimize.warm_solve`, `minimize.descent[i]`, and
+`minimize.hardlock` — the exact traces quoted in §4.
+
+Callers that pass `quiet_mode=true` (auto-discovery probes, `map_multi_mesh_to_physical_n`)
+suppress the lines entirely, so a quiet solve stays silent even with debug logging on.

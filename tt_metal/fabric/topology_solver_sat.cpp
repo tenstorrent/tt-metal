@@ -40,33 +40,27 @@ struct TopologySatSession {
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
 namespace {
 
-// ── Phase profiling (opt-in via TT_TOPO_SAT_PROFILE=1) ────────────────────────
+// ── Phase profiling ───────────────────────────────────────────────────────────
 // Emits per-phase wall-clock timings for the SAT encode/solve pipeline so we can attribute where a slow ring solve
-// actually spends its time (domain build, AC-3, adjacency support, symmetry break, the solve itself, ...). Off by
-// default (single env lookup, cached) so it costs nothing in production.
-inline bool topology_sat_profile_enabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("TT_TOPO_SAT_PROFILE");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return enabled;
-}
-
+// actually spends its time (domain build, AC-3, adjacency support, symmetry break, the solve itself, ...). Always
+// collected: the lines go to DEBUG, so they cost nothing unless debug logging is on, and quiet_mode suppresses them
+// entirely (quiet callers such as auto-discovery probes must stay silent even at debug level).
 class TopologySatScopedTimer {
 public:
-    explicit TopologySatScopedTimer(std::string label) :
-        label_(std::move(label)), start_(std::chrono::steady_clock::now()) {}
+    TopologySatScopedTimer(std::string label, bool quiet_mode) :
+        label_(std::move(label)), start_(std::chrono::steady_clock::now()), quiet_(quiet_mode) {}
     ~TopologySatScopedTimer() {
-        if (!topology_sat_profile_enabled()) {
+        if (quiet_) {
             return;
         }
         const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_).count();
-        log_info(tt::LogFabric, "[topo-sat-profile] {} : {:.1f} ms", label_, ms);
+        log_debug(tt::LogFabric, "[topo-sat-profile] {} : {:.1f} ms", label_, ms);
     }
 
 private:
     std::string label_;
     std::chrono::steady_clock::time_point start_;
+    bool quiet_;
 };
 
 // Manual (non-RAII) elapsed helper for phases that don't map cleanly to a scope.
@@ -796,7 +790,8 @@ inline bool topology_sat_solve_minimize_groups(
     size_t hard_cap_k = 0,
     int hard_conflict_cap = 0,
     bool* hard_cap_met_out = nullptr,
-    bool make_cap_permanent = false) {
+    bool make_cap_permanent = false,
+    bool quiet_mode = false) {
     // make_cap_permanent: after settling on best_k, assert "<= best_k occupied" as a PERMANENT unit clause (not a
     // one-shot assumption) so the SAME solver can be reused for blocking-clause enumeration / incremental .next with
     // every subsequent solve() automatically bounded to best_k. Used by topology_sat_search_n and the session; the
@@ -812,7 +807,7 @@ inline bool topology_sat_solve_minimize_groups(
         solver, constraint_data, enc, /*all_or_nothing=*/false, occ, &used_per_group);
     const size_t num_present = occ.size();
 
-    if (topology_sat_profile_enabled()) {
+    if (!quiet_mode) {
         std::map<size_t, int> size_hist;
         for (const auto& upg : used_per_group) {
             ++size_hist[upg.size()];
@@ -821,7 +816,7 @@ inline bool topology_sat_solve_minimize_groups(
         for (const auto& [sz, cnt] : size_hist) {
             hist += fmt::format("{}x{} ", cnt, sz);
         }
-        log_info(
+        log_debug(
             tt::LogFabric,
             "[topo-sat-profile]   minimize.group_reachable_mesh_sizes : num_groups={} hist(count x reachable)={}",
             num_present,
@@ -861,11 +856,11 @@ inline bool topology_sat_solve_minimize_groups(
         return (need >= 1 && need - 1 < geq_unoccupied.size()) ? geq_unoccupied[need - 1] : 0;
     };
 
-    const bool profile = topology_sat_profile_enabled();
+    const bool profile = !quiet_mode;
     auto t_warm = std::chrono::steady_clock::now();
     if (solver.solve() != TopologySatSolver::kSat) {  // step 1: warm feasible model
         if (profile) {
-            log_info(
+            log_debug(
                 tt::LogFabric,
                 "[topo-sat-profile]   minimize.warm_solve : {:.1f} ms (UNSAT/unknown, num_present={})",
                 topology_sat_elapsed_ms(t_warm),
@@ -876,7 +871,7 @@ inline bool topology_sat_solve_minimize_groups(
     best_k_out = count_occupied();
     topology_sat_decode_hard_solution(solver, enc, best_mapping_out);
     if (profile) {
-        log_info(
+        log_debug(
             tt::LogFabric,
             "[topo-sat-profile]   minimize.warm_solve : {:.1f} ms (SAT, occupied={}, num_present={})",
             topology_sat_elapsed_ms(t_warm),
@@ -900,7 +895,7 @@ inline bool topology_sat_solve_minimize_groups(
             best_k_out = count_occupied();  // may drop by more than one
             topology_sat_decode_hard_solution(solver, enc, best_mapping_out);
             if (profile) {
-                log_info(
+                log_debug(
                     tt::LogFabric,
                     "[topo-sat-profile]   minimize.descent[{}] target<={} : {:.1f} ms (SAT, now occupied={})",
                     iter,
@@ -910,7 +905,7 @@ inline bool topology_sat_solve_minimize_groups(
             }
         } else {
             if (profile) {
-                log_info(
+                log_debug(
                     tt::LogFabric,
                     "[topo-sat-profile]   minimize.descent[{}] : {:.1f} ms (status={} -> stop, floor={})",
                     iter,
@@ -944,7 +939,7 @@ inline bool topology_sat_solve_minimize_groups(
             }
         }
         if (profile) {
-            log_info(
+            log_debug(
                 tt::LogFabric,
                 "[topo-sat-profile]   minimize.hardlock target<={} (full-packing) : {:.1f} ms (status={}, occupied={})",
                 hard_cap_k,
@@ -962,7 +957,7 @@ inline bool topology_sat_solve_minimize_groups(
             solver.add(bound);
             solver.add(0);
             if (profile) {
-                log_info(
+                log_debug(
                     tt::LogFabric,
                     "[topo-sat-profile]   minimize.permanent_cap : asserted <= {} occupied (unit clause)",
                     best_k_out);
@@ -1549,7 +1544,8 @@ bool topology_sat_encode_hard_constraints(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode) {
+    ConnectionValidationMode validation_mode,
+    bool quiet_mode) {
     enc = TopologySatHardEncoding{};
     const size_t nt = graph_data.n_target;
 
@@ -1560,7 +1556,7 @@ bool topology_sat_encode_hard_constraints(
     enc.allowed_global_idx.resize(nt);
     enc.assign_lit.resize(nt);
 
-    const bool profile = topology_sat_profile_enabled();
+    const bool profile = !quiet_mode;
     auto phase_start = std::chrono::steady_clock::now();
     size_t prev_clauses = solver.num_clauses();
     size_t prev_vars = solver.num_variables();
@@ -1568,7 +1564,7 @@ bool topology_sat_encode_hard_constraints(
         if (profile) {
             const size_t dc = solver.num_clauses() - prev_clauses;
             const size_t dv = solver.num_variables() - prev_vars;
-            log_info(
+            log_debug(
                 tt::LogFabric,
                 "[topo-sat-profile]   encode.{} : {:.1f} ms (+{} clauses, +{} vars)",
                 name,
@@ -1995,7 +1991,8 @@ bool topology_sat_search(
     };
 
     auto solve_hard_only = [&](TopologySatSolver& solver, TopologySatHardEncoding& enc) -> bool {
-        if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+        if (!topology_sat_encode_hard_constraints(
+                solver, graph_data, constraint_data, enc, validation_mode, quiet_mode)) {
             state.error_message = enc.trivial_reason.empty()
                                       ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
                                       : enc.trivial_reason;
@@ -2051,10 +2048,10 @@ bool topology_sat_search(
         // is unbounded. Overridable via TT_TOPO_SAT_LOCK_BUDGET (>0 to re-bound for A/B or CI safety).
         const int kGroupLockConflictBudget =
             static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
-        const bool profile = topology_sat_profile_enabled();
+        const bool profile = !quiet_mode;
         if (profile) {
             const auto info = topology_sat_detect_ring_or_snake(graph_data);
-            log_info(
+            log_debug(
                 tt::LogFabric,
                 "[topo-sat-profile] occupancy path: n_target={} n_global={} ring={} snake={} max_k={} minimize={}",
                 graph_data.n_target,
@@ -2093,10 +2090,10 @@ bool topology_sat_search(
                 TopologySatSolver solver;
                 TopologySatHardEncoding enc;
                 auto t_enc = std::chrono::steady_clock::now();
-                const bool enc_ok =
-                    topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode);
+                const bool enc_ok = topology_sat_encode_hard_constraints(
+                    solver, graph_data, constraint_data, enc, validation_mode, quiet_mode);
                 if (profile) {
-                    log_info(
+                    log_debug(
                         tt::LogFabric,
                         "[topo-sat-profile] hard-cap: encode_hard_constraints total : {:.1f} ms (ok={}); CNF so far "
                         "{} vars, {} clauses, {} literals",
@@ -2129,7 +2126,7 @@ bool topology_sat_search(
                             }
                         }
                         if (profile) {
-                            log_info(
+                            log_debug(
                                 tt::LogFabric,
                                 "[topo-sat-profile] hard-cap: warm soft-solve : {:.1f} ms (status={}, phase_hints={})",
                                 topology_sat_elapsed_ms(t_warm),
@@ -2142,7 +2139,7 @@ bool topology_sat_search(
                     const size_t pv = solver.num_variables();
                     amk_ok = topology_sat_encode_at_most_k_groups(solver, constraint_data, enc, K, full_packing);
                     if (profile) {
-                        log_info(
+                        log_debug(
                             tt::LogFabric,
                             "[topo-sat-profile] hard-cap: encode_at_most_k_groups (K={}, full_packing={}) : {:.1f} ms "
                             "(+{} clauses, +{} vars); CNF total {} vars, {} clauses, {} literals",
@@ -2161,7 +2158,7 @@ bool topology_sat_search(
                     const int solve_status =
                         solve_limited_with_symmetry_break(solver, enc, kGroupObjectiveConflictBudget);
                     if (profile) {
-                        log_info(
+                        log_debug(
                             tt::LogFabric,
                             "[topo-sat-profile] hard-cap: solve_limited (budget={}) : {:.1f} ms (status={})",
                             kGroupObjectiveConflictBudget,
@@ -2183,10 +2180,10 @@ bool topology_sat_search(
             TopologySatSolver solver;
             TopologySatHardEncoding enc;
             auto t_min_enc = std::chrono::steady_clock::now();
-            const bool min_enc_ok =
-                topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode);
+            const bool min_enc_ok = topology_sat_encode_hard_constraints(
+                solver, graph_data, constraint_data, enc, validation_mode, quiet_mode);
             if (profile) {
-                log_info(
+                log_debug(
                     tt::LogFabric,
                     "[topo-sat-profile] minimize: encode_hard_constraints total : {:.1f} ms (ok={})",
                     topology_sat_elapsed_ms(t_min_enc),
@@ -2213,9 +2210,11 @@ bool topology_sat_search(
                     best_k,
                     hard_cap_k,
                     kGroupLockConflictBudget,  // strict: unbounded by default (run lock until k_min proven / UNSAT)
-                    &hard_cap_met);
+                    &hard_cap_met,
+                    /*make_cap_permanent=*/false,
+                    quiet_mode);
                 if (profile) {
-                    log_info(
+                    log_debug(
                         tt::LogFabric,
                         "[topo-sat-profile] minimize: solve_minimize_groups : {:.1f} ms (ok={}, best_k={}, "
                         "hard_cap_k={}, hard_cap_met={})",
@@ -2269,7 +2268,8 @@ bool topology_sat_search(
 
     TopologySatSolver solver;
     TopologySatHardEncoding enc;
-    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+    if (!topology_sat_encode_hard_constraints(
+            solver, graph_data, constraint_data, enc, validation_mode, quiet_mode)) {
         state.error_message = enc.trivial_reason.empty() ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
                                                          : enc.trivial_reason;
         if (quiet_mode) {
@@ -2282,6 +2282,8 @@ bool topology_sat_search(
     std::vector<int> pref_hit_literals;
     topology_sat_append_preferred_hit_indicators(solver, enc, constraint_data, pref_hit_literals);
 
+    // Preferred minimization: the lower-bound search (exact DFS / greedy) can dominate on preferred-heavy inputs.
+    const auto t_pref_lb = std::chrono::steady_clock::now();
     if (!pref_hit_literals.empty()) {
         static constexpr size_t kExactPreferredLbMaxTargets = 10;
         static constexpr size_t kMidPreferredLbMaxTargets = 20;
@@ -2312,6 +2314,13 @@ bool topology_sat_search(
             }
         }
     }
+    if (!quiet_mode) {
+        log_debug(
+            tt::LogFabric,
+            "[topo-sat-profile] preferred.lower_bound : {:.1f} ms ({} preferred-hit literals)",
+            topology_sat_elapsed_ms(t_pref_lb),
+            pref_hit_literals.size());
+    }
 
     if (validation_mode == ConnectionValidationMode::RELAXED) {
         static constexpr size_t kMaxRelaxedChannelLiteralsSingleSolve = 256;
@@ -2332,7 +2341,15 @@ bool topology_sat_search(
                 kMaxRelaxedChannelLiteralsSingleSolve);
         }
     }
+    const auto t_pref_solve = std::chrono::steady_clock::now();
     const int status = solve_with_symmetry_break(solver, enc);
+    if (!quiet_mode) {
+        log_debug(
+            tt::LogFabric,
+            "[topo-sat-profile] preferred.solve : {:.1f} ms (status={})",
+            topology_sat_elapsed_ms(t_pref_solve),
+            status);
+    }
     if (status != TopologySatSolver::kSat) {
         state.error_message = fmt::format(
             "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} "
@@ -2384,8 +2401,21 @@ bool topology_sat_search_n(
     TopologySatSolver solver;
     solver.configure_for_blocking_clause_enumeration();
     TopologySatHardEncoding enc;
-    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+    // Top-level phase attribution for the enumeration path (encode / minimal-host prime / enumerate loop). The scoped
+    // timer emits search_n.total on every return; the manual subtotals below split it. DEBUG only, quiet_mode silent.
+    TopologySatScopedTimer search_n_total_timer("search_n.total", quiet_mode);
+    const auto t_encode = std::chrono::steady_clock::now();
+    if (!topology_sat_encode_hard_constraints(
+            solver, graph_data, constraint_data, enc, validation_mode, quiet_mode)) {
         return false;
+    }
+    if (!quiet_mode) {
+        log_debug(
+            tt::LogFabric,
+            "[topo-sat-profile] search_n.encode : {:.1f} ms (CNF {} clauses, {} vars)",
+            topology_sat_elapsed_ms(t_encode),
+            solver.num_clauses(),
+            solver.num_variables());
     }
 
     for (const auto& shape_key : initial_forbidden_shape_keys) {
@@ -2422,6 +2452,7 @@ bool topology_sat_search_n(
         size_t best_k = 0;
         bool hard_cap_met = false;
         solver.set_progress_phase("descent");  // minimal-host warm descent -- the long pre-first-solution phase
+        const auto t_prime = std::chrono::steady_clock::now();
         const bool primed = topology_sat_solve_minimize_groups(
             solver,
             enc,
@@ -2433,7 +2464,16 @@ bool topology_sat_search_n(
             hard_cap_k,
             kLockBudget,
             &hard_cap_met,
-            /*make_cap_permanent=*/true);
+            /*make_cap_permanent=*/true,
+            quiet_mode);
+        if (!quiet_mode) {
+            log_debug(
+                tt::LogFabric,
+                "[topo-sat-profile] search_n.prime_minimize : {:.1f} ms (primed={}, best_k={})",
+                topology_sat_elapsed_ms(t_prime),
+                primed,
+                best_k);
+        }
         if (primed && !first_mapping.empty()) {
             all_mappings_out.push_back(first_mapping);
             solver.set_progress_phase("enumerate");
@@ -2471,6 +2511,8 @@ bool topology_sat_search_n(
     // Eligible for an immediate first progress line, then at most once per kEnumProgressLogInterval.
     auto last_enum_progress_log = enum_clock::now() - kEnumProgressLogInterval;
 
+    const auto t_enum_loop = enum_clock::now();
+    const size_t enum_start_count = all_mappings_out.size();
     while (all_mappings_out.size() < max_solutions) {
         // Default (kEnumLoopConflictBudget==0): UNBOUNDED solve -- never give up on a budget, so we only stop on a
         // real kUnsat (genuine exhaustion), never on a kUnknown that would silently truncate. If a budget is set,
@@ -2489,9 +2531,8 @@ bool topology_sat_search_n(
         solver.set_solution_progress(
             static_cast<std::int64_t>(all_mappings_out.size()), static_cast<std::int64_t>(max_solutions));
 
-        // Progress: emit in non-quiet mode, and ALSO whenever profiling is on (so a long quiet enumeration -- e.g.
-        // map_multi_mesh_to_physical_n runs quiet -- still gives a live per-solution count under TT_TOPO_SAT_PROFILE).
-        if (!quiet_mode || topology_sat_profile_enabled()) {
+        // Progress: emit only in non-quiet mode. Quiet callers (e.g. map_multi_mesh_to_physical_n) stay silent.
+        if (!quiet_mode) {
             const auto now = enum_clock::now();
             const bool reached_cap = all_mappings_out.size() >= max_solutions;
             if (reached_cap || now - last_enum_progress_log >= kEnumProgressLogInterval) {
@@ -2507,6 +2548,15 @@ bool topology_sat_search_n(
         if (!topology_sat_add_blocking_clause_for_mapping(solver, enc, all_mappings_out.back(), unique_shapes)) {
             break;
         }
+    }
+
+    if (!quiet_mode) {
+        log_debug(
+            tt::LogFabric,
+            "[topo-sat-profile] search_n.enumerate_loop : {:.1f} ms ({} via blocking-clause loop, {} total)",
+            topology_sat_elapsed_ms(t_enum_loop),
+            all_mappings_out.size() - enum_start_count,
+            all_mappings_out.size());
     }
 
     if (!all_mappings_out.empty()) {
@@ -2530,11 +2580,13 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode) {
+    ConnectionValidationMode validation_mode,
+    bool quiet_mode) {
     auto session = std::unique_ptr<TopologySatSession, TopologySatSessionDeleter>(new TopologySatSession{});
     session->solver.configure_for_blocking_clause_enumeration();
     enc = {};
-    if (!topology_sat_encode_hard_constraints(session->solver, graph_data, constraint_data, enc, validation_mode)) {
+    if (!topology_sat_encode_hard_constraints(
+            session->solver, graph_data, constraint_data, enc, validation_mode, quiet_mode)) {
         return nullptr;
     }
     // Same minimal-host strategy as topology_sat_search_n: PRIME the solver with the warm descent + full-packing
@@ -2566,17 +2618,20 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
             hard_cap_k,
             kLockBudget,
             &hard_cap_met,
-            /*make_cap_permanent=*/true);
+            /*make_cap_permanent=*/true,
+            quiet_mode);
         if (primed && !first_mapping.empty()) {
             session->primed_first_mapping = std::move(first_mapping);
             session->has_primed_mapping = true;
-            log_info(
-                tt::LogFabric,
-                "Topology SAT enumeration session: primed minimal-host enumeration at {} occupied host group(s) "
-                "(hard_cap_k={}, met={})",
-                best_k,
-                hard_cap_k,
-                hard_cap_met);
+            if (!quiet_mode) {
+                log_info(
+                    tt::LogFabric,
+                    "Topology SAT enumeration session: primed minimal-host enumeration at {} occupied host group(s) "
+                    "(hard_cap_k={}, met={})",
+                    best_k,
+                    hard_cap_k,
+                    hard_cap_met);
+            }
         }
         // If priming failed, the session falls back to plain (unbounded, uncapped) enumeration.
     }

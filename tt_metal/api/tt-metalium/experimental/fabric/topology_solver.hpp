@@ -902,8 +902,14 @@ struct ConstraintIndexData {
 
 /** SAT encoder state (no CaDiCaL types in the public header). */
 struct TopologySatHardEncoding {
+    // Set during encoding (domain filtering / AC-3) when infeasibility is provable without ever calling the solver.
     bool trivial_unsat = false;
     std::string trivial_reason;
+
+    // Parallel arrays indexed [target_idx][k]: the conceptual n_target x n_global matrix of "target t placed on
+    // global g" variables, stored densely -- each row holds only the globals that survived pruning, so k is a slot
+    // in target t's candidate list, not a global index. allowed_global_idx[t][k] is the global it stands for;
+    // assign_lit[t][k] is its SAT variable.
     std::vector<std::vector<size_t>> allowed_global_idx;
     std::vector<std::vector<int>> assign_lit;
 };
@@ -984,11 +990,13 @@ struct TopologySatSessionDeleter {
 // Creates a new SAT session and encodes hard constraints into it.
 // On success, enc is populated and a non-null session is returned.
 // Returns nullptr if the constraint set is hard-infeasible (no encoding possible).
+// quiet_mode suppresses the encode/priming progress and [topo-sat-profile] timing lines.
 std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_session_create_and_encode(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED);
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false);
 
 // Appends a blocking clause for raw_mapping to session. Returns false on failure.
 bool topology_sat_session_add_blocking_clause(
