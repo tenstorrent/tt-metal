@@ -120,7 +120,8 @@
       --preserve-hostfile-order \
       --stage-size 4x2 \
       --worker-tt-metal-home "${TT_METAL_HOME}" \
-      --output-dir "${BINDINGS_DIR}"
+      --output-dir "${BINDINGS_DIR}" \
+      > "${PIPELINE_DIR}/launch-generate-bindings.log" 2>&1
 
     RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
     RF=blitz_decode_pipeline_rank_file_superpod_ci
@@ -172,7 +173,8 @@
       --preserve-hostfile-order \
       --stage-size 4x2 \
       --worker-tt-metal-home "${TT_METAL_HOME}" \
-      --output-dir "${BINDINGS_DIR}"
+      --output-dir "${BINDINGS_DIR}" \
+      > "${PIPELINE_DIR}/launch-generate-bindings.log" 2>&1
 
     RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
     RF=blitz_decode_pipeline_rank_file_superpod_ci
@@ -223,7 +225,8 @@
       --preserve-hostfile-order \
       --stage-size 4x2 \
       --worker-tt-metal-home "${TT_METAL_HOME}" \
-      --output-dir "${BINDINGS_DIR}"
+      --output-dir "${BINDINGS_DIR}" \
+      > "${PIPELINE_DIR}/launch-generate-bindings.log" 2>&1
 
     RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
     RF=blitz_decode_pipeline_rank_file_superpod_ci
