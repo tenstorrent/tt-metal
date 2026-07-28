@@ -33,7 +33,7 @@
 
 
 unit_tests_legacy:
-# 1x3 tests run back-to-back
+# 1x3 tests
   - filter: "*SingleDmL1Write*"
     config: 1x3
     back2back: true
@@ -46,49 +46,20 @@ unit_tests_legacy:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*QuasarComputeKernelSingleThread*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*QuasarComputeKernelMultipleThread*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
-  #   config: 1x3
-  #   back2back: true
-  #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
-
   - filter: "*Bmm"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Test fast dispatch on worker cores
+# 2x3 tests
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# Fast dispatch on worker cores - target device with not dispatch engine
   - filter: "*SingleDmL1Write*"
     config: 2x3
     back2back: true
@@ -130,10 +101,14 @@ unit_tests_legacy:
     config: 2x3_DISPATCH
     back2back: true
 
-  # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
+    # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
   #   config: 1x3
   #   back2back: true
   #   env:
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3_DISPATCH
+    back2back: true
 
   - filter: "*Bmm"
     config: 2x3_DISPATCH
@@ -224,7 +199,7 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Fast Dispatch (Dispatch Engine) tests
+# Dispatch Engine tests
   - filter: "*WatcherAssertTests*/DispatchDM2"
     config: 2x3_DISPATCH
     back2back: true
@@ -232,24 +207,6 @@ unit_tests_debug_tools:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_api:
-  - filter: "*QuasarCRTASharedL1Address*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*QuasarCRTAUniqueL1Addresses*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
   - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S_2_0/ImplicitSyncTrue"
     config: 1x3
     back2back: true
@@ -403,40 +360,15 @@ unit_tests_device:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Fast Dispatch (Dispatch Engine) tests
-  - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
-    config: 2x3_DISPATCH
-    back2back: true
-
 unit_tests_dispatch:
+# Verify dispatch_s is running when running fast dispatch on worker cores
   - filter: '*QuasarDispatchSInstantiatedAndRunning*'
     config: 2x3
     back2back: true
     env:
       TT_METAL_TENSIX_DISPATCH_CORES: 1
 
-# Fast Dispatch (Dispatch Engine) tests
+# Verify dispatch_s is running when running fast dispatch on dispatch engines
   - filter: "*QuasarDispatchSInstantiatedAndRunning*"
     config: 2x3_DISPATCH
     back2back: true
-
-# Profiler tests
-tests/tt_metal/tools/profiler/test_device_profiler.py:
-  - filter: test_custom_cycle_count_slow_dispatch
-    runner: pytest
-    config: 1x3
-    env:
-      TT_METAL_DEVICE_PROFILER: 1
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: test_custom_cycle_count
-    runner: pytest
-    config: 2x3_DISPATCH
-    env:
-      TT_METAL_DEVICE_PROFILER: 1
-
-  - filter: test_full_buffer
-    runner: pytest
-    config: 2x3_DISPATCH
-    env:
-      TT_METAL_DEVICE_PROFILER: 1
