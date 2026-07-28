@@ -293,13 +293,16 @@ def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
 def _param_is_sharded_on_axis(param, axis_index: int, name: str) -> bool:
     """True if ``param`` is Shard (not Replicate) on the given mesh axis.
 
-    Raises when the tensor reports no placement for the axis.
+    Raises when the topology could not be read.
     """
-    placements = ttml.Sharding.from_tensor(param).placements
-    if placements is None or axis_index >= len(placements):
+    sharding = ttml.Sharding.from_tensor(param)
+    placements = sharding.placements
+    if placements is None:
         raise RuntimeError(
-            f"{name}: no placement on mesh axis {axis_index}; cannot tell whether this parameter is sharded."
-        )
+            f"{name}: could not read mesh placements; cannot tell whether it is sharded."
+        ) from sharding.read_error
+    if axis_index >= len(placements):
+        return False  # short placements == fully replicated, not unknown
     return isinstance(placements[axis_index], ttnn.PlacementShard)
 
 
