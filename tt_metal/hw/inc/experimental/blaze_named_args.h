@@ -7,7 +7,7 @@
 // This header provides the device-side `blaze_rt_args::get<>()` accessor template
 // that works with the JIT-generated `named_args_generated.h` descriptors
 // (`blaze_rt_args::Arg` / `blaze_rt_args::ArrayArg`).  It is an opt-in header: Blaze
-// (and test) kernels must `#include "experimental/named_args.h"` explicitly.
+// (and test) kernels must `#include "experimental/blaze_named_args.h"` explicitly.
 // Core device headers (`dataflow_api.h`, `compute/common.h`) no longer pull
 // this template into every kernel's namespace.
 //
