@@ -137,3 +137,5 @@ hard-check gaps. It verified the current-source context sentinels/provenance,
 current-source batch-1/32 performance, normal-CI synthetic numerical coverage,
 and the narrowed QKV evidence claim. The local checkpoint SHA is recorded
 below after commit. No push is performed.
+
+Stage checkpoint commit: `b46b2396bd2` (`Add Gemma 4 26B functional decoder`).
