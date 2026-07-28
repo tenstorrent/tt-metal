@@ -27,6 +27,10 @@ constexpr uint8_t TC_TENSIX_POOL_START = NUM_TENSIX_TILE_COUNTERS_FOR_DM;  // = 
 constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
 constexpr uint8_t NUM_TXN_IDS = 4;
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 6;
+// Max tile counter ids that can be collected for one side (producer or consumer) of a DFB during
+// init, summed across that side's riscs. Bounded by TxnDFBDescriptor::tile_counters, the ISR
+// descriptor the collected ids are copied into, so the two must never diverge.
+constexpr uint8_t MAX_TILE_COUNTERS_PER_SIDE = 18;
 
 constexpr uint16_t TENSIX_RISC_OFFSET = 8; // First 8 represent DMs
 
