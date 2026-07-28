@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <type_traits>
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 namespace tt::tt_fabric::common::experimental {
@@ -425,9 +426,11 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
 FORCE_INLINE void open_connections(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
-    size_t& rt_arg_idx) {
+    size_t& rt_arg_idx,
+    uint8_t noc = tt::tt_fabric::get_fabric_worker_noc()) {
     connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
-        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx, num_connections_to_build);
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(
+        rt_arg_idx, num_connections_to_build, noc);
 }
 
 // clang-format off
