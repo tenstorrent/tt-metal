@@ -11,13 +11,13 @@ test_sdxl_op_unit_test_perf.py): a functional test runs the config; a perf test 
 run_device_perf_detailed and reads the real DEVICE KERNEL duration (ns) for "GenericOpDeviceOperation".
 
 WHY SWEEP N: a single small tile count is dominated by fixed per-launch overhead and is not
-representative — it can't show how a knob (blocking, init hoisting) scales. We measure SMALL,
-MEDIUM and LARGE n so the trend is visible and any conclusion is robust to per-launch jitter
-(the profiler value is already very stable: STD ~0.02% at n=512). Blocking uses a CHUNKED
-block-capable chain so the CB stays small and n can scale to thousands of tiles (the Bulk+Block
-variant is L1-bound to a few hundred). Hoisting is streaming, so n scales freely.
+representative. Blocking and hoisting retain the small/large endpoints; the lifecycle comparison
+also keeps the two-batch transition at n=128 because Bulk is explicitly batched in that workload.
+Blocking uses a CHUNKED block-capable chain so the CB stays small and n can scale to thousands of
+tiles. Hoisting is streaming, so n scales freely.
 
-Comparisons are A/B at each n (no hard-coded baseline). The op runs ITERS times per profile.
+Comparisons are A/B at each n and each measurement is checked against a recorded baseline.
+The op runs ITERS times per profile.
 """
 
 import pytest
@@ -32,9 +32,7 @@ ITERS = 20
 PERF = "tests/ttnn/unit_tests/kernel_lib/test_chain_perf.py"
 
 BLOCK_CHUNKED = "ttnn/cpp/ttnn/kernel_lib/tests/axes/block_exp_chunked.cpp"
-BLOCK_BULK = "ttnn/cpp/ttnn/kernel_lib/tests/axes/block_exp.cpp"  # Bulk + Block, block_size param
-HOIST_SINGLE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist_single_call.cpp"  # streaming per-tile
-HOIST_PERTILE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist_per_tile.cpp"
+HOIST = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist.cpp"
 FUSED = "ttnn/cpp/ttnn/kernel_lib/tests/axes/fused_chain.cpp"  # FPU add + Exp + DestReuse mul
 
 # Chunked-vs-Bulk comparison on a REALISTIC fused chain (out = exp(A+B)*C: FPU add + Exp + DestReuse
@@ -48,8 +46,8 @@ MAX_CHUNK = 8
 BULK_BATCH = 64  # Bulk window per chain call (bounded; CB = 2*BULK_BATCH pages, independent of N)
 
 # Tile-count sweep: small (overhead-dominated) -> large (work-dominated).
-HOIST_N = [64, 512, 4096]
-BLOCK_N = [64, 512, 2048]
+HOIST_N = [64, 4096]
+BLOCK_N = [64, 2048]
 BLOCK_SIZES = [1, 8]
 
 
@@ -76,20 +74,25 @@ def _run_block_chunked(device, n, block_size):
     assert torch.allclose(torch.exp(torch_in.to(torch.float32)), res, atol=0.1, rtol=0.1)
 
 
-def _run_hoist(device, n, kernel):
+def _run_hoist(device, n, mode, iters=ITERS):
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
     cg = lib.single_core_grid()
-    _, tt_in = lib.make_input(shape, dt, device, seed=2002)
+    torch_in, tt_in = lib.make_input(shape, dt, device, seed=2002)
     tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
     cbs = [lib.cb_descriptor(0, dt, 2, cg), lib.cb_descriptor(16, dt, 2, cg)]
     reader = lib.build_reader_kernel([tt_in], n, cg)
     writer = lib.build_writer_1out_kernel(tt_out, n, cg)
-    compute = lib.build_compute_kernel(kernel, [n], cg)
+    mode_id = {"single": 0, "pertile": 1, "caller": 2}[mode]
+    compute = lib.build_compute_kernel(HOIST, [n, mode_id], cg)
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
-    for _ in range(ITERS):
-        ttnn.generic_op([tt_in, tt_out], program)
+    out = None
+    for _ in range(iters):
+        out = ttnn.generic_op([tt_in, tt_out], program)
     ttnn.synchronize_device(device)
+    result = ttnn.to_torch(out).to(torch.float32)
+    assert torch.allclose(torch.exp(torch_in.to(torch.float32)), result, atol=0.1, rtol=0.1)
+    return result
 
 
 @pytest.mark.parametrize("n", BLOCK_N)
@@ -101,12 +104,20 @@ def test_func_block(device, n, block_size):
 @pytest.mark.parametrize("n", HOIST_N)
 @pytest.mark.parametrize("mode", ["single", "pertile"])
 def test_func_hoist(device, n, mode):
-    _run_hoist(device, n, HOIST_SINGLE if mode == "single" else HOIST_PERTILE)
+    _run_hoist(device, n, mode)
+
+
+def test_setup_placements_are_bit_identical(device):
+    """Hoisted, per-tile, and caller-owned setup must produce the same bits."""
+    single = _run_hoist(device, 16, "single", iters=1)
+    per_tile = _run_hoist(device, 16, "pertile", iters=1)
+    caller = _run_hoist(device, 16, "caller", iters=1)
+    assert torch.equal(single, per_tile), "hoisted and per-tile initialization produced different results"
+    assert torch.equal(single, caller), "hoisted and caller-owned initialization produced different results"
 
 
 def _run_lifecycle(device, mode, n):
-    """Fused chain out = exp(A+B)*C over n tiles; `mode` selects the lifecycle + block_size + CB sizing.
-    life 0=Bulk (whole window resident, pages=n), 1=Chunked (pages ~2*block_size)."""
+    """Fused chain out = exp(A+B)*C; `mode` selects lifecycle, block size, and CB sizing."""
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
     cg = lib.single_core_grid()
@@ -159,16 +170,12 @@ MARGIN = 0.08
 HOIST_BASELINE_NS = {
     (64, "single"): 47449,
     (64, "pertile"): 49030,
-    (512, "single"): 368649,
-    (512, "pertile"): 381460,
     (4096, "single"): 2938401,
     (4096, "pertile"): 3040781,
 }
 BLOCK_BASELINE_NS = {
     (64, 1): 47458,
     (64, 8): 52653,
-    (512, 1): 368676,
-    (512, 8): 375529,
     (2048, 1): 1469962,
     (2048, 8): 1482795,
 }
@@ -195,6 +202,9 @@ def test_perf_hoisting_device(n):
     )
     _check_baseline(ns_single, HOIST_BASELINE_NS[(n, "single")], f"hoist-single n={n}")
     _check_baseline(ns_pertile, HOIST_BASELINE_NS[(n, "pertile")], f"hoist-pertile n={n}")
+    assert (
+        ns_single < ns_pertile * 0.99
+    ), f"hoisting lost its expected device-side benefit: {ns_single:.0f} ns vs {ns_pertile:.0f} ns"
 
 
 @pytest.mark.models_device_performance_bare_metal
@@ -215,8 +225,8 @@ def test_perf_blocking_device(n):
 # Chunked-vs-Bulk baselines (ns), measured 2026-06-09. Findings:
 #   - blocking within Bulk does NOTHING: bulk1 ≈ bulk8 (x0.99-1.00) — upfront serialization is the
 #     bottleneck, not loop overhead.
-#   - the REAL gain is Chunked vs Bulk at the same block size: ~1.7x (n=64) -> ~1.9x (n=256) faster,
-#     because Chunked overlaps per-chunk read with compute; Bulk waits the whole window first.
+#   - the REAL gain is Chunked vs Bulk at the same block size because Chunked overlaps per-chunk
+#     reads with compute while Bulk waits for each bounded window first.
 # Bounded-CB fused chain out=exp(A+B)*C, batched Bulk (window=64) vs single-call Chunked, 2026-06-09.
 # KEY FINDING: when Bulk is used REALISTICALLY (batched with a bounded window, not whole-window
 # staging), the Chunked advantage shrinks sharply with N: x1.77 @ n=64 (1 batch = whole window) ->
@@ -238,9 +248,10 @@ LIFECYCLE_BASELINE_NS = {
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("n", LIFECYCLE_NS)
 def test_perf_lifecycle_compare(n):
-    """Same exp(x) over n tiles: Bulk(blk=1) vs Bulk(blk=max) vs Chunked(blk=max), real device-kernel ns.
-    bulk1->bulk8 isolates the blocking gain within the Bulk lifecycle; bulk8->chunk8 isolates the
-    Chunked-vs-Bulk lifecycle gain at the same block size. Compute is identical across all three."""
+    """Same exp(A+B)*C chain under Bulk(blk=1), Bulk(blk=max), and Chunked(blk=max).
+
+    bulk1->bulk8 isolates blocking within Bulk; bulk8->chunk8 isolates lifecycle at the same block size.
+    """
     modes = ("bulk1", "bulk8", "chunk8")
     ns = {}
     for mode in modes:

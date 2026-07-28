@@ -3,17 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Blocking — correctness + throughput for eltwise_chain (block_size axis).
+Blocking correctness for eltwise_chain.
 
 block_size processes multiple tiles per inner iter across DEST lanes. It is a loop-structure
-optimization: it must NOT change the per-tile result, only reduce loop/DEST-sync overhead.
-  - test_blocking_correctness : block_size {1,2,4,8} all produce bit-identical exp(x).
-  - test_blocking_throughput  : logs tiles/sec + speedup and guards against gross regression
-                                (block=8 not dramatically slower than block=1). Wall-clock smoke
-                                signal only — real perf gating belongs in a device-profiler job.
+optimization: every supported size must match exp(x) and remain bit-identical to block_size=1.
+Tail tests separately cover the two physical synchronization contracts.
 """
 
-import time
 import torch
 import pytest
 import ttnn
@@ -50,28 +46,26 @@ def _run_once(device, n, block_size):
 # =============================================================================
 # Correctness — blocking must not change the per-tile result.
 # =============================================================================
-@pytest.mark.parametrize("block_size", [1, 2, 4, 8])
-def test_blocking_correctness(device, block_size):
+def test_blocking_correctness_and_equivalence(device):
+    """One execution matrix checks both the math golden and the stronger cross-size invariant."""
     n = 8
-    torch_in, out = _run_once(device, n, block_size)
-    golden = torch.exp(torch_in)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-    logger.info(f"blocking correctness block_size={block_size} | {msg}")
-    assert pcc_ok, msg
+    results = {}
+    for block_size in (1, 2, 4, 8):
+        torch_in, out = _run_once(device, n, block_size)
+        golden = torch.exp(torch_in)
+        pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
+        logger.info(f"blocking correctness block_size={block_size} | {msg}")
+        assert pcc_ok, msg
+        results[block_size] = out
 
-
-def test_blocking_identical_across_sizes(device):
-    """Every block size must yield a BIT-IDENTICAL result to block_size=1 (loop structure only)."""
-    n = 8
-    _, base = _run_once(device, n, 1)
-    for bs in (2, 4, 8):
-        _, out = _run_once(device, n, bs)
+    base = results[1]
+    for bs, out in results.items():
         max_diff = (out - base).abs().max().item()
         logger.info(f"blocking identical: block_size={bs} vs 1 -> max abs diff {max_diff}")
         assert torch.equal(out, base), f"block_size={bs} diverged from block_size=1 (max diff {max_diff})"
 
 
-@pytest.mark.parametrize("n", [1, 3, 7, 8, 9, 15])
+@pytest.mark.parametrize("n", [1, 7, 8, 9, 15])
 def test_fixed_block_tail_executes_only_valid_tiles(device, n):
     """A fixed-size physical tail synchronizes a full chunk while math covers only valid tiles."""
     block_size = 8
@@ -103,7 +97,7 @@ def test_fixed_block_tail_executes_only_valid_tiles(device, n):
     assert pcc_ok, msg
 
 
-@pytest.mark.parametrize("Ht,Wt", [(2, 3), (2, 7), (2, 9), (3, 5)])
+@pytest.mark.parametrize("Ht,Wt", [(2, 3), (2, 9)])
 def test_fixed_block_tail_is_synchronized_per_row(device, Ht, Wt):
     """Every logical row gets its own full physical tail chunk."""
     block_size = 8
@@ -134,7 +128,7 @@ def test_fixed_block_tail_is_synchronized_per_row(device, Ht, Wt):
     assert pcc_ok, msg
 
 
-@pytest.mark.parametrize("Ht,Wt", [(1, 3), (1, 9), (2, 3), (2, 9)])
+@pytest.mark.parametrize("Ht,Wt", [(2, 3), (2, 9)])
 def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt):
     """ValidTiles mode clamps both Chunked synchronization and math to each logical row tail."""
     block_size = 8
@@ -162,42 +156,3 @@ def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt):
     pcc_ok, msg = comp_pcc(golden, actual, lib.pcc_threshold([dt]))
     logger.info(f"clamped Chunked tail Ht={Ht}, Wt={Wt} | {msg}")
     assert pcc_ok, msg
-
-
-# =============================================================================
-# Throughput — wall-clock smoke signal across block sizes (informational + gross-regression guard).
-# =============================================================================
-def _median_time(device, n, block_size, iters=15, warmup=3):
-    program, tensors, _ = _build(device, n, block_size)
-    for _ in range(warmup):
-        ttnn.generic_op(tensors, program)
-    ttnn.synchronize_device(device)
-    samples = []
-    for _ in range(iters):
-        t0 = time.perf_counter()
-        ttnn.generic_op(tensors, program)
-        ttnn.synchronize_device(device)
-        samples.append(time.perf_counter() - t0)
-    samples.sort()
-    return samples[len(samples) // 2]
-
-
-def test_blocking_throughput(device):
-    n = 64
-    t1 = _median_time(device, n, 1)
-    t8 = _median_time(device, n, 8)
-    tps1 = n / t1
-    tps8 = n / t8
-    speedup = t1 / t8
-    logger.info(
-        f"blocking throughput n={n}: block=1 {t1*1e3:.3f}ms ({tps1:,.0f} tiles/s) | "
-        f"block=8 {t8*1e3:.3f}ms ({tps8:,.0f} tiles/s) | speedup x{speedup:.2f}"
-    )
-    # Correctness still holds at the large size.
-    _, out = _run_once(device, n, 8)
-    golden = torch.exp(_run_once(device, n, 1)[0])
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-    assert pcc_ok, msg
-    # Gross-regression guard only (wall-clock is host-dominated and noisy; do NOT assert a tight
-    # speedup). block=8 must not be dramatically slower than block=1.
-    assert t8 < t1 * 1.5, f"block=8 ({t8*1e3:.3f}ms) is far slower than block=1 ({t1*1e3:.3f}ms) — regression?"

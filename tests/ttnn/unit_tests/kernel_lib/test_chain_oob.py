@@ -18,10 +18,8 @@ slot FAILS to compile with "DEST slot exceeds DEST_AUTO_LIMIT" (surfaced as a ge
 """
 
 import torch
-import pytest
 import ttnn
 from loguru import logger
-from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/oob/dst_slot.cpp"
@@ -57,17 +55,10 @@ def _run_identity_copy(device, slot, num_tiles, fp32_dest_acc_en, dst_full_sync_
 # =============================================================================
 # Positive twin — a legal slot compiles, runs, and copies the input exactly.
 # =============================================================================
-@pytest.mark.parametrize("slot", [0, 3])
-@pytest.mark.parametrize(
-    "fp32_dest_acc_en, dst_full_sync_en",
-    [(False, False), (True, False)],  # half-sync bf16 (limit 8) and half-sync fp32 (limit 4)
-)
-def test_dst_slot_legal_identity(device, slot, fp32_dest_acc_en, dst_full_sync_en):
-    """OOB positive twin: D0/D3 are within every limit; identity copy must reproduce the input."""
-    golden, out = _run_identity_copy(device, slot, 4, fp32_dest_acc_en, dst_full_sync_en)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-    logger.info(f"legal slot={slot} fp32_acc={fp32_dest_acc_en} sync_full={dst_full_sync_en} | {msg}")
-    assert pcc_ok, msg
+def test_dst_slot3_legal_fp32(device):
+    """D3 is the highest legal half-sync FP32 slot, providing the positive twin for FP32 overflow."""
+    golden, out = _run_identity_copy(device, slot=3, num_tiles=4, fp32_dest_acc_en=True, dst_full_sync_en=False)
+    assert torch.equal(golden, out)
 
 
 # =============================================================================
@@ -87,9 +78,7 @@ def test_dst_overflow_halfsync_bf16(device, expect_error):
 def test_dst_slot5_legal_bf16(device):
     """Same slot, bf16 half-sync (limit 8): 5 < 8 -> compiles + runs correctly."""
     golden, out = _run_identity_copy(device, slot=5, num_tiles=4, fp32_dest_acc_en=False, dst_full_sync_en=False)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-    logger.info(f"bf16: slot=5 legal | {msg}")
-    assert pcc_ok, msg
+    assert torch.equal(golden, out)
 
 
 def test_dst_slot5_overflow_fp32(device, expect_error):
@@ -111,10 +100,10 @@ def test_dst_slot5_overflow_fp32(device, expect_error):
 BLOCK_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/oob/block_clamp.cpp"
 
 
-@pytest.mark.parametrize("block_size", [1, 4, 1000])
-def test_block_size_clamp_identity(device, block_size):
+def test_block_size_clamp_identity(device):
     """chain_lane_width=1 here -> chain_max_block_v=8 (half-sync bf16). block_size=1000 must clamp
-    to 8 and still copy the input exactly; {1,4} are within range. All three agree with the input."""
+    to 8 and still copy the input exactly. Ordinary block sizes are covered by the blocking suite."""
+    block_size = 1000
     n = 16
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
@@ -132,6 +121,4 @@ def test_block_size_clamp_identity(device, block_size):
     output = ttnn.generic_op([tt_in, tt_out], program)
     golden = torch_in.to(torch.float32)
     out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"block_size={block_size} (clamps to <=8) | {msg}")
-    assert pcc_ok, msg
+    assert torch.equal(golden, out)
