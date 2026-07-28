@@ -12,6 +12,16 @@
 //   pass B (all NW chunks):  [tilize] -> mul<Col>(x, 1/rms) -> mul<Row>(., gamma)
 //                            -> [untilize]
 //
+// FUSE_SQ (Refinement 5) collapses pass A's two FPU passes into one whenever the
+// chunking allows it (NW == 1, no partial-W mask): the FPU's accumulate-into-DEST
+// mode turns `square` into `mul_tiles(x, x, acc_to_dest)` over a sticky D0, so
+// Sum_w x_w^2 falls out of the SAME pass that computed the squares and no x^2
+// block is ever staged through L1. What it publishes is the identical raw
+// elementwise accumulator the pairwise-add datapath publishes, so phase 4, the
+// finalize and the whole cross-core combine are untouched by it. Measured
+// motive: the sharded geometries are MATH-bound (BLOCK_SHARDED (1,1,8192,1024)
+// spends 63.0 of 85.2 us on TRISCs alone), so op count is the only lever left.
+//
 // Under the cross-core W-split (W_SPLIT, §4.2) this core owns only a SLICE of W,
 // so pass A stops one step earlier: no chunk finalizes, cb_partials keeps the
 // RAW elementwise x^2 accumulator, and a copy publishes it for the writer's
@@ -96,6 +106,17 @@ void kernel_main() {
     constexpr uint32_t CW2 = get_compile_time_arg_val(17);  // stage-2 fan-in (leaders -> root)
     constexpr bool TWO_STAGE = CW2 > 1;
     static_assert(CW1 * CW2 == CW, "combine stages must tile CW");
+    // ---- fused square-accumulate (Refinement 5) ----
+    // Collapses phases 2 and 3 into one FPU pass: mul_tiles(x, x, acc_to_dest)
+    // over a tile-row leaves Sum_w x_w^2 in DEST, which IS the raw elementwise
+    // accumulator the finalize (and the cross-core combine) already consume.
+    // The host owns the predicate — see FUSE_SQUARE_ACCUM in the program
+    // descriptor for the two structural preconditions it enforces (NW == 1, so
+    // the accumulator never has to survive a tile_regs_acquire; and no
+    // partial-W mask, which lives on the reduce helper's scaler hook).
+    constexpr bool FUSE_SQ = get_compile_time_arg_val(18) != 0;
+    static_assert(!FUSE_SQ || NW == 1, "fused square-accumulate requires NW == 1");
+    static_assert(!FUSE_SQ || !HAS_PARTIAL_W, "fused square-accumulate cannot apply the partial-W mask");
 
     static_assert(WT_LAST == WT_CHUNK, "compute assumes uniform chunk widths");
     static_assert(NW * WT_CHUNK == WT, "chunking must tile Wt exactly");
@@ -135,6 +156,26 @@ void kernel_main() {
                              : ckl::ReducePartialScaler::none();
 
     constexpr uint32_t cb_scale_out = HAS_GAMMA ? cb_scaled : cb_output_tiles;
+    // Where the fused square-accumulate publishes its raw Sum_w x^2. Under a
+    // W-split that tile is the writer's gather payload and goes straight to
+    // cb_partial_out (one producer, one consumer, exactly as the NW == 1
+    // pairwise path already did); otherwise it stays compute-internal and the
+    // fold below reads it back out of cb_partials.
+    constexpr uint32_t cb_accum = W_SPLIT ? cb_partial_out : cb_partials;
+
+    // Tiles per DEST-sync window (Refinement 5). `EltwiseShape`'s block_size
+    // defaults to 1, and at 1 the chain runs a WHOLE
+    // tile_regs_acquire/commit/wait/release round — plus a pack phase — around
+    // every single tile. examples/compute_block_size measures that fixed
+    // per-window cost at ~1.6 us per extra pass, 1.65x end to end.
+    //
+    // This is not a guessed constant: eltwise_chain clamps block_size to the
+    // chain's OWN compile-time DEST capacity (chain_max_block_v =
+    // DEST_AUTO_LIMIT / lane_width) and to 1 for any chain whose operand
+    // policies are per-tile, so asking for the register file's size is exactly
+    // "the coarsest block that fits DEST", re-derived per chain and per
+    // fp32_dest_acc_en / dst_full_sync_en setting.
+    constexpr uint32_t DEST_BLOCK = ckl::DEST_AUTO_LIMIT;
     // A REDUCE_ROW result is column-shaped, so it broadcasts back across
     // columns via BroadcastDim::Col (eltwise_chain.hpp:526-528).
     constexpr auto rms_kind = (HT_BLOCK > 1) ? ckl::OperandKind::Col : ckl::OperandKind::Scalar;
@@ -147,7 +188,7 @@ void kernel_main() {
         if (ht > HT_BLOCK) {
             ht = HT_BLOCK;
         }
-        const auto blk = ckl::EltwiseShape::grid(ht, WT_CHUNK);
+        const auto blk = ckl::EltwiseShape::grid(ht, WT_CHUNK, DEST_BLOCK);
 
         // ================= pass A: mean(x^2) over the whole W ==============
         for (uint32_t wc = 0; wc < NW; ++wc) {
@@ -169,69 +210,154 @@ void kernel_main() {
                 cb_wait_front(cb_input_tiles, batches_ready * X_READ_CHUNKS * ht * WT_CHUNK);
             }
 
-            // ---- phase 2: x^2 ----
-            if constexpr (X_RESIDENT) {
-                ckl::eltwise_chain(
-                    blk,
-                    ckl::BinaryFpu<
-                        cb_input_tiles,
-                        cb_input_tiles,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block,
-                        ckl::OperandKind::Block,
-                        ckl::TileOffset::Set,
-                        ckl::TileOffset::Set>{x_base, x_base},
-                    ckl::PackTile<cb_x_squared, ckl::OutputLifecycle::Streaming>{});
-            } else {
-                ckl::square<
-                    cb_input_tiles,
-                    cb_x_squared,
-                    ckl::InputLifecycle::Bulk,
-                    ckl::OutputLifecycle::Streaming,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
-                    ckl::OperandKind::Block>(blk);
-            }
-
-            // ---- phase 3: chunked SUM -> mean on the finalizing chunk ----
+            // ---- phases 2+3 FUSED: DEST-accumulated x^2 --------------------
             //
-            // Under a W-split NO chunk finalizes: this core owns only a SLICE of
-            // W, so both the within-tile fold and the 1/N are premature. Every
-            // chunk therefore uses Accumulate::at (never at_last), which leaves
-            // cb_partials holding the RAW elementwise-accumulated x^2 tile — the
-            // exact object the cross-core combine needs. Shipping the *reduced*
-            // tile instead would be wrong: AccumulateViaAdd's finalize writes the
-            // row sum into column 0 and leaves the surviving x^2 lanes in columns
-            // 1..31, so a second REDUCE_ROW over such tiles double-counts them
-            // (measured: mean(x^2) of an all-ones W=64 came out 8.75, not 1.0).
-            const auto rshape = ckl::ReduceInputBlockShape::of(ht, WT_CHUNK, 1);
-            const bool finalize_here = !W_SPLIT && (wc + 1 == NW);
-            if constexpr (NW == 1) {
-                if constexpr (W_SPLIT) {
-                    // Single chunk, so the accumulator is written ONCE and never
-                    // reloaded: pack it straight into the writer's gather CB and
-                    // skip the republishing copy below. cb_partial_out still has
-                    // exactly one producer (this) and one consumer (the writer).
-                    ckl::reduce<
-                        ckernel::PoolType::SUM,
+            // One pass instead of two. `DestAccumulation::Enabled` pins the
+            // BinaryFpu to a sticky D0 that eltwise_chain holds across an outer
+            // row's whole Wt, so the chunk's W-tiles accumulate in DEST and are
+            // packed ONCE per tile-row. What lands is the raw elementwise
+            // Sum_w x_w^2 — byte-for-byte the object the pairwise-add datapath
+            // publishes with `Accumulate::at` (never `at_last`), so neither the
+            // local finalize below nor the cross-core combine can tell the
+            // difference. Under a W-split that raw tile is the gather payload
+            // and NOTHING else is owed here; otherwise the within-tile fold and
+            // the 1/N still have to run, now over `ht` tiles instead of
+            // `ht * WT_CHUNK`.
+            if constexpr (FUSE_SQ) {
+                if constexpr (X_RESIDENT) {
+                    ckl::eltwise_chain(
+                        blk,
+                        ckl::BinaryFpu<
+                            cb_input_tiles,
+                            cb_input_tiles,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::None,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Block,
+                            ckl::OperandKind::Block,
+                            ckl::TileOffset::Set,
+                            ckl::TileOffset::Set,
+                            ckl::DestAccumulation::Enabled>{x_base, x_base},
+                        ckl::PackTile<cb_accum, ckl::OutputLifecycle::DestAccumulation>{});
+                } else {
+                    ckl::eltwise_chain(
+                        blk,
+                        ckl::BinaryFpu<
+                            cb_input_tiles,
+                            cb_input_tiles,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::None,
+                            ckl::InputLifecycle::Bulk,
+                            ckl::InputLifecycle::Bulk,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Block,
+                            ckl::OperandKind::Block,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Unset,
+                            ckl::DestAccumulation::Enabled>{},
+                        ckl::PackTile<cb_accum, ckl::OutputLifecycle::DestAccumulation>{});
+                }
+                if constexpr (!W_SPLIT) {
+                    // The fold the accumulate deliberately skipped: one
+                    // within-tile REDUCE_ROW per tile-row, then 1/n_reduced.
+                    // of(ht, 1, 1) — the W extent is already summed away.
+                    ckl::reduce_mean<
                         ckernel::ReduceDim::REDUCE_ROW,
-                        cb_x_squared,
+                        cb_partials,
                         cb_scaler,
-                        cb_partial_out,
+                        cb_rms_sum,
                         ckl::ReduceInputPolicy::BulkWaitBulkPop,
                         ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                         ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                        rshape,
+                        ckl::ReduceInputBlockShape::of(ht, 1, 1),
+                        N_REDUCED,
                         ckl::ReduceInputMemoryLayout::contiguous(),
-                        ckl::Accumulate::at(cb_partial_out, wc),
-                        ckl::NoOp{},
-                        partial);
+                        ckl::NoAccumulation{},
+                        ckl::ReducePartialScaler::none());
+                }
+            } else {
+                // ---- phase 2: x^2 ----
+                if constexpr (X_RESIDENT) {
+                    ckl::eltwise_chain(
+                        blk,
+                        ckl::BinaryFpu<
+                            cb_input_tiles,
+                            cb_input_tiles,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::None,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Block,
+                            ckl::OperandKind::Block,
+                            ckl::TileOffset::Set,
+                            ckl::TileOffset::Set>{x_base, x_base},
+                        ckl::PackTile<cb_x_squared, ckl::OutputLifecycle::Chunked>{});
                 } else {
+                    ckl::square<
+                        cb_input_tiles,
+                        cb_x_squared,
+                        ckl::InputLifecycle::Bulk,
+                        ckl::OutputLifecycle::Chunked,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::PackTileReconfig::Output,
+                        ckl::OperandKind::Block>(blk);
+                }
+
+                // ---- phase 3: chunked SUM -> mean on the finalizing chunk ----
+                //
+                // Under a W-split NO chunk finalizes: this core owns only a SLICE of
+                // W, so both the within-tile fold and the 1/N are premature. Every
+                // chunk therefore uses Accumulate::at (never at_last), which leaves
+                // cb_partials holding the RAW elementwise-accumulated x^2 tile — the
+                // exact object the cross-core combine needs. Shipping the *reduced*
+                // tile instead would be wrong: AccumulateViaAdd's finalize writes the
+                // row sum into column 0 and leaves the surviving x^2 lanes in columns
+                // 1..31, so a second REDUCE_ROW over such tiles double-counts them
+                // (measured: mean(x^2) of an all-ones W=64 came out 8.75, not 1.0).
+                const auto rshape = ckl::ReduceInputBlockShape::of(ht, WT_CHUNK, 1);
+                const bool finalize_here = !W_SPLIT && (wc + 1 == NW);
+                if constexpr (NW == 1) {
+                    if constexpr (W_SPLIT) {
+                        // Single chunk, so the accumulator is written ONCE and never
+                        // reloaded: pack it straight into the writer's gather CB and
+                        // skip the republishing copy below. cb_partial_out still has
+                        // exactly one producer (this) and one consumer (the writer).
+                        ckl::reduce<
+                            ckernel::PoolType::SUM,
+                            ckernel::ReduceDim::REDUCE_ROW,
+                            cb_x_squared,
+                            cb_scaler,
+                            cb_partial_out,
+                            ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                            ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                            rshape,
+                            ckl::ReduceInputMemoryLayout::contiguous(),
+                            ckl::Accumulate::at(cb_partial_out, wc),
+                            ckl::NoOp{},
+                            partial);
+                    } else {
+                        ckl::reduce_mean<
+                            ckernel::ReduceDim::REDUCE_ROW,
+                            cb_x_squared,
+                            cb_scaler,
+                            cb_rms_sum,
+                            ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                            ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                            rshape,
+                            N_REDUCED,
+                            ckl::ReduceInputMemoryLayout::contiguous(),
+                            ckl::NoAccumulation{},
+                            partial);
+                    }
+                } else if (finalize_here) {
                     ckl::reduce_mean<
                         ckernel::ReduceDim::REDUCE_ROW,
                         cb_x_squared,
@@ -240,41 +366,31 @@ void kernel_main() {
                         ckl::ReduceInputPolicy::BulkWaitBulkPop,
                         ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                         ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                        rshape, N_REDUCED, ckl::ReduceInputMemoryLayout::contiguous(), ckl::NoAccumulation{}, partial);
+                        rshape,
+                        N_REDUCED,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::Accumulate::at_last(cb_partials, wc),
+                        partial);
+                } else {
+                    // Non-finalizing chunk. The partial-W mask rides the chunk that
+                    // owns the tensor's last W-tile, which under a W-split is this
+                    // core's last chunk (and only on the last-W core).
+                    const bool last_chunk = (wc + 1 == NW);
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_x_squared,
+                        cb_scaler,
+                        cb_partials,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        rshape,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::Accumulate::at(cb_partials, wc),
+                        ckl::NoOp{},
+                        last_chunk ? partial : ckl::ReducePartialScaler::none());
                 }
-            } else if (finalize_here) {
-                ckl::reduce_mean<
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_x_squared,
-                    cb_scaler,
-                    cb_rms_sum,
-                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                    rshape,
-                    N_REDUCED,
-                    ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at_last(cb_partials, wc),
-                    partial);
-            } else {
-                // Non-finalizing chunk. The partial-W mask rides the chunk that
-                // owns the tensor's last W-tile, which under a W-split is this
-                // core's last chunk (and only on the last-W core).
-                const bool last_chunk = (wc + 1 == NW);
-                ckl::reduce<
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_x_squared,
-                    cb_scaler,
-                    cb_partials,
-                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                    rshape,
-                    ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(cb_partials, wc),
-                    ckl::NoOp{},
-                    last_chunk ? partial : ckl::ReducePartialScaler::none());
             }
         }
 
@@ -415,7 +531,7 @@ void kernel_main() {
                         rms_kind,
                         ckl::TileOffset::Set,
                         ckl::TileOffset::Unset>{x_base, 0},
-                    ckl::PackTile<cb_scale_out, ckl::OutputLifecycle::Streaming>{});
+                    ckl::PackTile<cb_scale_out, ckl::OutputLifecycle::Chunked>{});
             } else {
                 ckl::mul<
                     cb_input_tiles,
@@ -424,7 +540,7 @@ void kernel_main() {
                     ckl::BroadcastDim::Col,
                     x_life,
                     ckl::InputLifecycle::HeldBulk,
-                    ckl::OutputLifecycle::Streaming,
+                    ckl::OutputLifecycle::Chunked,
                     ckl::BinaryDataFormatReconfig::Input,
                     ckl::PackTileReconfig::Output,
                     ckl::OperandKind::Block,
@@ -452,7 +568,7 @@ void kernel_main() {
                             gamma_kind,
                             ckl::TileOffset::Unset,
                             ckl::TileOffset::Set>{0, x_base},
-                        ckl::PackTile<cb_output_tiles, ckl::OutputLifecycle::Streaming>{});
+                        ckl::PackTile<cb_output_tiles, ckl::OutputLifecycle::Chunked>{});
                 } else {
                     ckl::mul<
                         cb_scaled,
@@ -461,7 +577,7 @@ void kernel_main() {
                         ckl::BroadcastDim::Row,
                         ckl::InputLifecycle::Bulk,
                         ckl::InputLifecycle::Bulk,
-                        ckl::OutputLifecycle::Streaming,
+                        ckl::OutputLifecycle::Chunked,
                         ckl::BinaryDataFormatReconfig::Input,
                         ckl::PackTileReconfig::Output,
                         ckl::OperandKind::Block,

@@ -172,6 +172,42 @@ L1_GATHER_BUDGET_BYTES = 256 * 1024
 # flat everywhere; lower it to engage staging on narrower groups.
 COMBINE_MAX_FLAT_FANIN = 24
 
+# ---------------------------------------------------------------------------
+# Fused square-accumulate (Refinement 5)
+# ---------------------------------------------------------------------------
+#
+# Phases 2 and 3 are "x^2 into cb_x_squared" then "elementwise-accumulate the
+# chunk's W-tiles out of cb_x_squared". Both are FPU passes over the SAME
+# block, and the second one's operation is an add — so the FPU's accumulate-
+# into-DEST mode collapses them into one: `mul_tiles(x, x, acc_to_dest)` over a
+# tile-row leaves Sum_w x_w^2 sitting in DEST, which is EXACTLY the raw
+# elementwise accumulator both the local finalize and the cross-core combine
+# already consume (op_design.md's "the combine is literally the local chunk
+# accumulate"). `eltwise_chain`'s DestAccumulation walk expresses it directly:
+# D0 stays acquired across an outer row's Wt inputs and is packed once per row.
+#
+# It removes one FPU op per input tile out of four (square, accumulate, scale,
+# gamma), the whole cb_x_squared L1 round trip, and W-1 of every W packs.
+# Measured by ablation at the pinned perf config, the BLOCK_SHARDED
+# (1,1,8192,1024) geometry spends 63.0 of its 85.2 us purely on TRISCs (BRISC
+# 0.3 us, NCRISC 2.6 us) — it is MATH-bound, so removing FPU ops is the only
+# lever that reaches it.
+#
+# Two structural preconditions, both checked on the host so the kernel needs no
+# runtime branch:
+#
+#   NW == 1          the accumulator must not have to survive ACROSS chunks.
+#                    A DEST accumulator dies at the next tile_regs_acquire, and
+#                    eltwise_chain forbids composing DEST with L1 accumulation,
+#                    so a chunked reduce keeps the pairwise-add datapath.
+#   !HAS_PARTIAL_W   the 0/1 mask that zeroes a short last W-tile is applied by
+#                    the reduce helper's partial-scaler hook, which this path
+#                    does not go through. (R1: getting this wrong is invisible
+#                    to PCC — it only rescales each row.)
+#
+# Set False to A/B the pairwise-add datapath back (RMS_NORM_FUSE_SQ=0).
+FUSE_SQUARE_ACCUM = True
+
 # Semaphore ids. Disjoint combine groups reuse the SAME ids -- a semaphore id
 # resolves to a per-core L1 cell, so group {A,B} bumping id 0 on B is a
 # different cell from group {C,D} bumping id 0 on D
@@ -250,6 +286,12 @@ CB_PARTIALS = 25
 CB_RMS_SUM = 26
 CB_RMS_RECIP = 27
 CB_SCALED = 28
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """A boolean knob with an env A/B override, same style as RMS_NORM_W_SPLIT."""
+    v = os.environ.get(name)
+    return default if v is None else v != "0"
 
 
 def _ceil_div(a: int, b: int) -> int:
@@ -369,6 +411,9 @@ class _Blocking:
         # the worst case for 16-datum shared-exponent blocks.
         self.x_squared_dtype = input_tensor.dtype if input_tensor.dtype in _MASKABLE_DTYPES else ttnn.bfloat16
         self.x_squared_tile_bytes = ttnn.tile_size(self.x_squared_dtype)
+        # scaler_dtype is set below, once `fuse_sq` is known: the rule is "match
+        # the reduce's INPUT CB", and fusing moves that CB from cb_x_squared to
+        # the Float32 accumulator.
         self.scaler_dtype = self.x_squared_dtype
         self.scaler_tile_bytes = self.x_squared_tile_bytes
 
@@ -402,6 +447,24 @@ class _Blocking:
 
         assert self.wt_last == self.wt_chunk, "chunk-uniformity invariant broken"
         assert not (self.nw > 1 and self.ht_block > 1), "R7: NW > 1 requires HT_BLOCK == 1"
+
+        # --- fused square-accumulate (R5) ------------------------------------
+        # Decided here, between the block factors it depends on and the CB plan
+        # that depends on it: fusing retires cb_x_squared, and the L1 that frees
+        # is real and must be visible to the residency predicates below.
+        self.fuse_sq = (
+            bool(_env_flag("RMS_NORM_FUSE_SQ", FUSE_SQUARE_ACCUM)) and self.nw == 1 and not self.has_partial_w
+        )
+        if self.fuse_sq:
+            # Same single-source rule R1 established for the partial-W mask: the
+            # scaler CB's format must be the format the reduce programs srcB at,
+            # which is its INPUT CB's. Fusing moves that input from
+            # cb_x_squared to the Float32 accumulator (cb_partials /
+            # cb_partial_out), so the scaler follows it. Its *content* is unused
+            # here — fuse_sq implies no partial-W mask — but the format still
+            # drives the srcB reconfig, and R1 measured what a mismatch costs.
+            self.scaler_dtype = ttnn.float32
+            self.scaler_tile_bytes = self.fp32_tile_bytes
 
         # --- residency fast-path predicates (§1.3) ---------------------------
         #
@@ -522,7 +585,9 @@ class _Blocking:
                 (self._rows_core_max * Wt) if self.sharded_out else (B if self.is_rm else OUT_DEPTH * B),
             ),
             ("cb_output_rm", CB_OUTPUT_RM, self.tile_bytes, (OUT_DEPTH * B) if self.is_rm else 0),
-            ("cb_x_squared", CB_X_SQUARED, self.x_squared_tile_bytes, B),
+            # Retired by the fused square-accumulate: with the sum living in
+            # DEST there is no x^2 block to stage through L1 at all.
+            ("cb_x_squared", CB_X_SQUARED, self.x_squared_tile_bytes, 0 if self.fuse_sq else B),
             # --- cross-core W-split (Refinement 2). Every page count is a
             # function of the SAME knobs (HT_BLOCK and the group width CW),
             # never of a whole-op dimension. Sized 1 (dummy) when CW == 1.
@@ -1354,6 +1419,9 @@ def create_program_descriptor(
     )
 
     # ---------- compute ----------
+    # Compute carries its own tail after the shared regime+knobs prefix. New
+    # compute-only knobs go at the END, never inside `regime` — the reader and
+    # the writer hard-code their CT indices off that same prefix.
     compute_ct_args = (
         regime
         + knobs
@@ -1364,6 +1432,7 @@ def create_program_descriptor(
             placement.cw,
             placement.cw1,
             placement.cw2,
+            1 if blk.fuse_sq else 0,
         ]
     )
 
