@@ -362,9 +362,6 @@ class TTVibeVoiceGenerator:
         self._sf_warm = 0
         self._sf_hidden_buf: Optional[ttnn.Tensor] = None  # loop-carried cond_pos source
         self._sf_hidden_seed: Optional[ttnn.Tensor] = None  # segment-start hidden ([1,1,1,H], last pos)
-        # Loop-carried dither (VV_DITHER=<relative std>, default 0=off) — see _apply_hidden_dither.
-        self._dither_std = float(os.environ.get("VV_DITHER", "0"))
-        self._sf_dither_buf: Optional[ttnn.Tensor] = None
         self._sf_neg_embed: Optional[ttnn.Tensor] = None  # per-frame neg embed input buffer
         self._sf_neg_start: Optional[ttnn.Tensor] = None  # const embed(speech_start_id)
         self._sf_neg_diff: Optional[ttnn.Tensor] = None  # const embed(speech_diffusion_id)
@@ -771,35 +768,6 @@ class TTVibeVoiceGenerator:
             self._sf_noise,
         )
 
-    def _apply_hidden_dither(self, frame_idx: int) -> None:
-        """Multiply the loop-carried hidden by (1 + eps), eps ~ N(0, VV_DITHER^2) per element.
-
-        #50250 removed two things from every matmul: a -0.61% systematic bias and a 1.145%
-        per-element rounding NOISE (new build: 0.192%).  ``mm_damp`` restores the bias, but a static
-        weight scale only sets a fixed loop gain, and over the ~42k-step feedback loop a fixed gain
-        either runs away (undamped: clipping by min 7) or decays into the zero basin (damped: energy
-        ratio vs the old build falls 1.05 -> 0.36 and dies at min 72).  The old build sustained gain
-        ~1 for 94 min; the noise is the component that is missing.
-
-        Injected here because ``_sf_hidden_buf`` is the only loop-carried state the host can touch —
-        everything else lives inside the fused-frame trace.  The write lands on cq 0 after the
-        frame's traces and before the next frame reads the buffer, so no host sync is needed.
-
-        NOTE: ``_LoopBreaker``'s docstring records that perturbing this hidden was tried and was
-        worse.  That was a large one-off KICK during a detected loop episode; this is a small
-        continuous zero-mean dither at the magnitude the old build always had.  Different thing,
-        but the warning is why the default is OFF and the magnitude is an env knob.
-        Frame-local RNG -> deterministic, and the global draw order is untouched.
-        """
-        g = torch.Generator().manual_seed(0x0D17 ^ frame_idx)
-        eps = torch.randn([1, 1, 1, self.lm.cfg.hidden_size], generator=g, dtype=torch.float32)
-        eps = eps * self._dither_std + 1.0
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(eps, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT),
-            self._sf_dither_buf,
-        )
-        ttnn.multiply(self._sf_hidden_buf, self._sf_dither_buf, output_tensor=self._sf_hidden_buf)
-
     def _sf_set_inputs_b2(self, seg_frame_idx: int, start_pos: int, noise_2x) -> None:
         """Per-frame input writes for the CFG batch-2 path.  Sets ONLY the lm2/dp2 inputs — the
         neg row's embed (speech_diffusion) and neg RoPE are managed by _sf_boot at frame 0.  Frame 0
@@ -966,8 +934,6 @@ class TTVibeVoiceGenerator:
 
             self._sf_hidden_buf = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_hidden_seed = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
-            if self._dither_std > 0.0:
-                self._sf_dither_buf = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_neg_start = lm._embed(torch.tensor([[self.speech_start_id]], dtype=torch.long))
             self._sf_neg_diff = lm._embed(torch.tensor([[self.speech_diffusion_id]], dtype=torch.long))
             self._sf_neg_embed = _z([1, 1, 1, H], self._sf_neg_start.dtype, ttnn.TILE_LAYOUT)
@@ -1518,8 +1484,6 @@ class TTVibeVoiceGenerator:
                     audio_chunk, _tok_or_logits = self._run_segment_frame_traced(
                         seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg
                     )
-                if self._dither_std > 0.0:
-                    self._apply_hidden_dither(diffusion_frames)
                 neg_prev_diffusion_token = current_token
                 _frame_audio = ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)  # syncs frame
                 if loopbreaker is not None:
