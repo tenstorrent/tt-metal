@@ -1,0 +1,32 @@
+# Transposed view of single_bh_galaxy: declares the 32-chip BH galaxy as a
+# logical 4 (rows) x 8 (cols) MESH instead of the stock 8 x 4. A 4x8 grid graph
+# and an 8x4 grid graph are isomorphic (transpose), so this should map onto the
+# same physical wiring. Purpose: lets minimax_m2 run TP=8 along the 8-wide col
+# axis (tp_axis=1) -> 1 KV head per chip. Plain MESH only (no torus links exist
+# on this box); use FABRIC_1D + Linear topology for collectives.
+
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Pinnings ---------------------------------------------------------------
+
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 1
+    asic_location: 1
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
