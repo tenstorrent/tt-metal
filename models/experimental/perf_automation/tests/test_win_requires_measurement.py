@@ -138,3 +138,43 @@ def test_the_original_before_survives_committed_wins(tmp_path, monkeypatch):
         pm._record_committed_win("win")
     assert led.first(led.KIND_EAGER, led.PHASE_BEFORE)["value_ms"] == 2464.18
     assert led.last(led.KIND_EAGER, led.PHASE_AFTER)["value_ms"] == 615.69
+
+
+def test_both_sections_agree_on_what_a_win_is(tmp_path):
+    """THE DEFECT: the ladder matrix and the attempts table each decided 'is this a win' for
+    themselves, and only the matrix got the measurement check -- so one unmeasured commit rendered
+    '·try' in the matrix and '✓ win' in the attempts table of the SAME report.
+    """
+    sm = _summary()
+    kl = tmp_path / "kl.json"
+    kl.write_text(
+        json.dumps(
+            [
+                {
+                    "op_signature": "MatmulDeviceOperation",
+                    "kernel_kind": "dtype",
+                    "measured_ms": None,
+                    "beat_baseline": True,
+                    "note": "committed: write the prefill MLP intermediates as bf8_b",
+                }
+            ]
+        )
+    )
+    out = sm.render_summary(kl, model="m", task="main", finalized=True)
+    # the legend line explains what ✓win MEANS, so it is not a claim about an attempt
+    body = [l for l in out.splitlines() if not l.startswith("levels:")]
+    assert not [l for l in body if "✓win" in l or "✓ win" in l], "\n".join(body)
+    attempt_rows = [l for l in body if "committed: write the prefill" in l]
+    assert attempt_rows, out
+    assert "· no gain" in attempt_rows[0], attempt_rows[0]
+
+
+def test_is_win_is_the_only_definition(tmp_path):
+    """A zero or negative measured ms is not a speedup either."""
+    sm = _summary()
+    assert sm._is_win({"beat_baseline": True, "measured_ms": 648.17})
+    for bad in (None, 0, -1.0, "648", float("nan")):
+        assert not sm._is_win({"beat_baseline": True, "measured_ms": bad}), bad
+    assert not sm._is_win({"beat_baseline": False, "measured_ms": 648.17})
+    assert not sm._is_win({})
+    assert not sm._is_win(None)

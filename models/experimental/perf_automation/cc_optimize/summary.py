@@ -444,7 +444,38 @@ def _floor_basis(profile: dict | None) -> str:
     return base
 
 
-def _roofline_lines(throughput: dict | None, forward_ms: float | None, profile: dict | None = None) -> list:
+def _is_win(attempt) -> bool:
+    """Delegates to the ledger, which owns what a win is. Not a second implementation."""
+    try:
+        return _ledger().is_win(attempt)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _floor_anchor(current_ms, depth, model: str = "", task: str = ""):
+    """The pinned modeled floor for this (model, task, depth), or None if nothing is pinned yet.
+
+    READ-ONLY. The floor is a property of the IMPLEMENTATION, not a goal: halving a weight's dtype
+    halves the bytes it must move, so recomputing it each round makes the target retreat ahead of the
+    measurement and it is never reached. The pin therefore has to happen once, where the floor is
+    PRODUCED (perf_mcp._persist_throughput) -- not here, because rendering a report must not change
+    what the next report says.
+    """
+    try:
+        led = _ledger()
+        d = str(depth if depth not in (None, "") else "unknown")
+        return led.anchor_value(led.KIND_FLOOR, depth=d, model=model, task=task)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _roofline_lines(
+    throughput: dict | None,
+    forward_ms: float | None,
+    profile: dict | None = None,
+    model: str = "",
+    task: str = "",
+) -> list:
     """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
     at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
     target snapshot in `throughput` — so a stale measured can never leak in, and any missing/zero
@@ -482,13 +513,21 @@ def _roofline_lines(throughput: dict | None, forward_ms: float | None, profile: 
         else:
             out.append(f"  utilization         : {util * 100:.0f}%   (measured / ceiling)")
     else:
-        floor = throughput.get("modeled_floor_ms")
+        _current = throughput.get("modeled_floor_ms")
+        floor = _floor_anchor(_current, throughput.get("perf_layers"), model, task) or _current
         have_floor = isinstance(floor, (int, float)) and floor > 0
         out.append(
             f"  modeled floor       : {floor:.2f} ms   ({_floor_basis(profile)})"
             if have_floor
             else "  modeled floor       : n/a"
         )
+        if have_floor and isinstance(_current, (int, float)) and _current > 0 and abs(_current - floor) / floor > 0.05:
+            out.append(
+                f"  this build's floor  : {_current:.2f} ms   (recomputed from the CURRENT op mix; "
+                f"{'below' if _current < floor else 'above'} the pinned anchor because the ops now move "
+                "different bytes — new headroom, NOT a new target; the anchor above stays fixed so "
+                "at-floor% cannot retreat ahead of the measurement)"
+            )
         # The floor is NOT a goal: its compute term assumes the FULL grid even for an op that ran on
         # a few cores, and L1/sharded ops fall back to DRAM bandwidth for want of a calibrated L1
         # peak. No real kernel reaches it, so a bare "% of floor" invites chasing an unreachable
@@ -599,10 +638,7 @@ def render_summary(
         sig = a.get("op_signature", "?")
         lvl = classify_level(a.get("kernel_kind", ""), a.get("note", ""), sig)
         ms = a.get("measured_ms")
-        # A win claim with no measured ms cannot be a speedup; older logs contain such rows from
-        # when any git_commit was recorded as a win, so refuse them here too rather than only at the
-        # writer -- otherwise every previously written kernel log keeps rendering inflated ✓ marks.
-        won = bool(a.get("beat_baseline")) and ms is not None
+        won = _is_win(a)
         op = by_op.setdefault(sig, {c: None for c in _ALL_COLS})
         cur = op.get(lvl)
         # 'win' beats 'try'; track best (lowest) measured ms per cell
@@ -616,11 +652,7 @@ def render_summary(
         elif cur and ms is not None and cur[1] is not None and ms < cur[1] and cur[0] != "win":
             op[lvl] = (cur[0], ms)
 
-    win_ms = [
-        a.get("measured_ms")
-        for a in attempts
-        if isinstance(a, dict) and a.get("beat_baseline") and a.get("measured_ms") is not None
-    ]
+    win_ms = [a.get("measured_ms") for a in attempts if _is_win(a)]
     final_ms = final_override_ms if final_override_ms is not None else (min(win_ms) if win_ms else baseline_ms)
     # ANCHOR for the headline, most trustworthy first. Falling straight back to `baseline_ms` is
     # wrong: run.py passes the CURRENT committed ms in that slot, so refusing a stale original made a
@@ -656,7 +688,7 @@ def render_summary(
 
     if not isinstance(throughput, dict):
         throughput = _throughput_from_profile(baseline_profile)
-    lines.extend(_roofline_lines(throughput, final_ms, baseline_profile))
+    lines.extend(_roofline_lines(throughput, final_ms, baseline_profile, model, task))
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
     _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
@@ -718,7 +750,7 @@ def render_summary(
                 gain_s = f"{hdr_base - ms:+.2f} ms"
             else:
                 gain_s = "—"
-            res = "✓ win" if a.get("beat_baseline") else ("· wedged" if a.get("wedged") else "· no gain")
+            res = "✓ win" if _is_win(a) else ("· wedged" if a.get("wedged") else "· no gain")
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
             lines.append(f"{sig:<34} {lever:>12} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
 
@@ -735,7 +767,7 @@ def render_summary(
                 continue
             sig = _op_label(a.get("op_signature", "?"))
             lever = _disp_level(a.get("kernel_kind") or "?")
-            res = "win" if a.get("beat_baseline") else ("wedged" if a.get("wedged") else "no gain")
+            res = "win" if _is_win(a) else ("wedged" if a.get("wedged") else "no gain")
             ms = a.get("measured_ms")
             gain = f"  {hdr_base - ms:+.2f} ms" if (hdr_base and isinstance(ms, (int, float))) else ""
             lines.append("")
@@ -744,7 +776,7 @@ def render_summary(
                 lines.append("    " + dl)
 
     # --- Limitations / suggested manual next steps (#5c) ---
-    _won_ops = {a.get("op_signature") for a in attempts if isinstance(a, dict) and a.get("beat_baseline")}
+    _won_ops = {a.get("op_signature") for a in attempts if _is_win(a)}
     _no_gain = sorted({o for o in by_op} - {o for o in _won_ops if o})
     lines.append("")
     lines.append("Limitations / suggested manual next steps:")
@@ -753,7 +785,7 @@ def render_summary(
         lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
         lines.append("  -> inspect the per-op device report and consider a hand-written kernel or a structural change.")
     _measured = [a for a in attempts if isinstance(a, dict) and a.get("measured_ms") is not None]
-    _any_win = any(isinstance(a, dict) and a.get("beat_baseline") for a in attempts)
+    _any_win = any(_is_win(a) for a in attempts)
     if not _measured and attempts:
         _unmeasured = len(attempts)
         lines.append(

@@ -2617,6 +2617,9 @@ def record_kernel_attempt(
     op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = "", stages_json: str = ""
 ) -> dict:
     """Record that you AUTHORED and MEASURED a real custom kernel for an open op (tt-lang or C++).
+
+    A win claim is kept only when the measurement backs it, so the flag and the number can never
+    disagree once written and readers need no second opinion about which to trust.
     REQUIRED before termination_check() will let you stop on any op with material roofline gap — a
     measured attempt is the EMPIRICAL validation that REPLACES 'I reasoned a kernel won't help'.
     Even a measured kernel that does NOT beat ttnn clears the op as 'tried' (that's the proof it
@@ -2661,11 +2664,12 @@ def record_kernel_attempt(
         stages = [s for s in stages if isinstance(s, dict)] if isinstance(stages, list) else []
     except Exception:  # noqa: BLE001
         stages = []
+    _ms = round(float(measured_ms), 4)
     rec = {
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
-        "measured_ms": round(float(measured_ms), 4),
-        "beat_baseline": bool(beat_baseline),
+        "measured_ms": _ms,
+        "beat_baseline": _ledger().is_win({"beat_baseline": bool(beat_baseline), "measured_ms": _ms}),
         "note": note,
         "stages": stages,
         "kernel_detected_in_source": detected,
@@ -2922,7 +2926,7 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     # genuinely infeasible cache cannot loop forever: after N real kv-cache attempts the gate yields.
     _kv_kinds = ("structural-decode", "kv-cache")
     kv_clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kv_kinds]
-    kv_won = any(a.get("beat_baseline") for a in kv_clean)
+    kv_won = any(_ledger().is_win(a) for a in kv_clean)
     # A KV-cache attempt that WEDGED the device is auto-recorded (_autorecord_wedge) with
     # kernel_detected_in_source=False, so termination_check's detected-filter drops it from the
     # `attempts` passed here. Count those wedges from the full log toward the cap: a KV-cache that
@@ -3043,7 +3047,13 @@ def _persist_throughput(rep: dict) -> None:
     """Write a FRESH static roofline-target snapshot (theoretical ceiling / band / active_bytes /
     peak BW / floor) each time we profile. Deliberately stores NO measured number — the report
     computes measured tok/s + utilization from the exact ms it is reporting, so a stale measured can
-    never leak in (this is the fix for the old '+0.0%'-style stale readout). Best-effort; never raises."""
+    never leak in (this is the fix for the old '+0.0%'-style stale readout). Best-effort; never raises.
+
+    The snapshot tracks the CURRENT build, so the floor in it is deliberately recomputed every time.
+    The floor is ALSO pinned once into the measurement ledger here -- at the point it is produced,
+    which is the only place that knows it describes the state the run started from. The report reads
+    that anchor, so a later, faster build cannot lower its own target: llama3_1_8b_p150 read 83% ->
+    55% at-floor while measuring FASTER, purely because the floor was recomputed each round."""
     try:
         target, scope, is_llm = _select_perf_target(rep)
         snap = {
@@ -3061,31 +3071,16 @@ def _persist_throughput(rep: dict) -> None:
             # that produced the 832.93-vs-1088.15 headline, one section lower in the report.
             "perf_layers": (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all",
         }
-        # PIN THE FLOOR AT THE BASELINE. This write was unconditional, so every re-profile
-        # recomputed the floor from the already-optimized state and overwrote it -- the target chased
-        # the measurement down and "% at floor" could never converge. Any lever that REMOVES BYTES
-        # lowers the measurement and the floor together (bf8_b -> bf4_b halves a weight read; dropping
-        # a 128-token pad quarters the prefill), so the ratio stands still however much faster the
-        # model gets. llama3_1_8b_p150 went 537.23 -> 341.47 ms of floor between runs while measuring
-        # FASTER, and read as 83% -> 55% at-floor: a regression that never happened.
-        #
-        # The floor is physics -- bytes / bandwidth -- but only for a FIXED amount of work, so it has
-        # to be captured once, against the state the run started from, exactly like the measurement
-        # ledger's before-row. A later run on a genuinely different model re-pins it via the same
-        # first-write rule; what is refused is the silent per-profile overwrite.
-        _tp = _throughput_path()
-        _existing = None
-        try:
-            _existing = json.loads(_tp.read_text()) if _tp.is_file() else None
-        except Exception:  # noqa: BLE001
-            _existing = None
-        _same_depth = bool(_existing) and str(_existing.get("perf_layers")) == str(snap["perf_layers"])
-        if _existing and _same_depth and _existing.get("modeled_floor_ms") is not None:
-            snap["modeled_floor_ms"] = _existing["modeled_floor_ms"]
-            snap["floor_pinned_from"] = _existing.get("floor_pinned_from") or "baseline"
-        else:
-            snap["floor_pinned_from"] = "baseline"
-        _tp.write_text(json.dumps(snap))
+        _throughput_path().write_text(json.dumps(snap))
+        _f = rep.get("modeled_floor_ms") if isinstance(rep, dict) else None
+        if _f:
+            _ledger().anchor(
+                _ledger().KIND_FLOOR,
+                _f,
+                depth=str(snap.get("perf_layers") or "all"),
+                source="_persist_throughput",
+                model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+            )
     except Exception:  # noqa: BLE001
         pass
 

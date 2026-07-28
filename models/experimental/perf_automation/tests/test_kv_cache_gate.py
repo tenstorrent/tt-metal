@@ -24,8 +24,12 @@ def _prof(status="repeat_prefill", host_ms=200.0, per_token=12.0):
     }
 
 
-def _kv(beat, kind="kv-cache"):
-    return {"kernel_kind": kind, "beat_baseline": beat}
+def _kv(beat, kind="kv-cache", measured_ms=8.0):
+    """A win carries the MEASUREMENT that makes it one -- record_kernel_attempt takes measured_ms as a
+    required argument, so a real winning row always has it. This fixture used to omit it, which let
+    the gate be tested against a row production cannot produce, and hid that the gate cleared on the
+    flag alone despite its docstring promising 'ONLY on a MEASURED per-token reduction'."""
+    return {"kernel_kind": kind, "beat_baseline": beat, "measured_ms": measured_ms}
 
 
 def test_decode_gate_fires_on_repeat_prefill_with_no_attempts():
@@ -119,3 +123,28 @@ def test_wedge_of_a_different_rung_does_not_count(monkeypatch):
 def test_clean_win_clears_even_with_wedges(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_load_attempts", lambda: [_wedge()])
     assert perf_mcp._decode_gate(_prof(), [_kv(True)]) is None, "a measured win still clears immediately"
+
+
+def test_an_unmeasured_win_row_does_NOT_clear_the_gate():
+    """The gate's contract in its own words: it clears ONLY on a MEASURED per-token reduction. A
+    legacy row flagged as a win with nothing timed must not release the run from KV-cache work."""
+    attempts = [{"kernel_kind": "kv-cache", "beat_baseline": True, "measured_ms": None}]
+    assert perf_mcp._decode_gate(_prof(), attempts) is not None
+
+
+def test_the_gate_and_the_report_agree_about_one_row():
+    """Same row, same verdict, both sides -- the gate deciding differently from the report is how the
+    run acted on a win the report refused to show."""
+    import importlib.util as _ilu
+    from pathlib import Path as _P
+
+    _spec = _ilu.spec_from_file_location("sm_kv_ut", _P(__file__).resolve().parents[1] / "cc_optimize" / "summary.py")
+    _sm = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_sm)
+    for row, expect_win in (
+        (_kv(True), True),
+        (_kv(False), False),
+        ({"kernel_kind": "kv-cache", "beat_baseline": True}, False),
+    ):
+        gate_cleared = perf_mcp._decode_gate(_prof(), [row]) is None
+        assert gate_cleared == _sm._is_win(row) == expect_win, row

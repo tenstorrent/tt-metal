@@ -25,3 +25,20 @@ import pytest as _pytest
 def _no_live_agent_calls(monkeypatch):
     monkeypatch.setenv("PERF_MCP_NO_AGENT_CLASSIFY", "1")
     yield
+
+
+@_pytest.fixture(autouse=True)
+def _private_measurement_ledger(tmp_path_factory, monkeypatch):
+    """Every test gets its OWN ledger.
+
+    The ledger is deliberately durable and never truncated, so a test that writes to the real one
+    leaves a PERMANENT anchor behind -- and the next test to render a report reads it. Not
+    hypothetical: three `modeled_floor` rows leaked into the shared default file and made
+    test_roofline_report report 341.47 ms whatever floor it was handed, but ONLY when run as part of
+    the suite. An order-dependent failure in a report test is expensive to read, and a test that
+    silently anchors a developer's real ledger is worse.
+
+    Tests that exercise unkeyed/ambient behaviour delenv this themselves.
+    """
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path_factory.mktemp("ledger") / "measurements.jsonl"))
+    yield

@@ -22,6 +22,12 @@ Here a measurement is APPENDED when it is taken, with its provenance, and the re
 this. There is nowhere to fall back to, so a foreign or stale value cannot be promoted into an
 anchor; and two rows are subtracted only when they describe the same work.
 
+THE MODELLED FLOOR IS KEPT HERE TOO (KIND_FLOOR), for the same reason the measured numbers are: it
+is a value the report ANCHORS on, so it needs the earliest-reading-wins durability and the fitness
+checks in `record` rather than a second store beside them. Recomputing it each round let the
+optimized build lower its own target (537 -> 332 ms while measuring FASTER), so at-floor% fell during
+a run that improved.
+
 DURABILITY IS THE POINT. The ledger is keyed by (model, task) and is never truncated -- not by a
 rerun, not by a fresh ladder, not by clearing the kernel log. `first("eager_per_op", "before")` is
 the earliest before-reading ever taken for this model, so re-running optimize on an
@@ -46,8 +52,36 @@ KIND_EAGER = "eager_per_op"
 KIND_TRACE_PASS = "trace_pass"
 KIND_FULLPIPE = "fullpipe_e2e"
 
+KIND_FLOOR = "modeled_floor"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
+
+
+def is_win(attempt) -> bool:
+    """Did this attempt make the model measurably faster? THE ONE definition of a win.
+
+    Lives here, beside `record`, because it is the same kind of rule: what a claimed number must
+    carry before anything may act on it. A win requires a MEASUREMENT, not a commit -- and the
+    difference is not cosmetic:
+
+      * the report set a tick from `beat_baseline` alone, so housekeeping commits (once even a
+        comment-only one) rendered as wins: 48 of 75 "wins" in one report had never been timed;
+      * three renderers in summary.py and the KV-cache GATE in perf_mcp each re-derived this, so a
+        fix to one left the others claiming the opposite about the same attempt -- the gate's own
+        docstring promised "clears ONLY on a MEASURED reduction" while its code checked the flag.
+
+    Callers must not re-derive it. tests/test_single_source_of_truth.py fails if they do, because
+    every defect in this class came from a second site rather than a wrong rule.
+    """
+    if not isinstance(attempt, dict):
+        return False
+    if not attempt.get("beat_baseline"):
+        return False
+    ms = attempt.get("measured_ms")
+    if isinstance(ms, bool) or not isinstance(ms, (int, float)):
+        return False
+    return math.isfinite(ms) and ms > 0
 
 
 def ledger_path(model: str = "", task: str = "") -> Path:
@@ -144,6 +178,67 @@ def rows(kind: str = "", phase: str = "", model: str = "", task: str = "") -> li
             continue
         out.append(r)
     return out
+
+
+def is_identified(model: str = "", task: str = "") -> bool:
+    """Is the ledger being addressed a KNOWN one, rather than the unkeyed default?
+
+    An anchor is permanent, so reading one out of the shared unkeyed file is how another run's number
+    becomes this run's target -- the same defect that made a foreign 0.06 ms an anchor, one level up.
+    An explicit model, or an explicit ledger path, counts as identified; nothing else does.
+    """
+    if str(model or "").strip():
+        return True
+    return bool(
+        os.environ.get("PERF_MCP_LEDGER")
+        or os.environ.get("PERF_MCP_MODEL_NAME")
+        or os.environ.get("PERF_MCP_MODEL_ROOT")
+    )
+
+
+def anchor_value(kind: str, *, depth: str = "", model: str = "", task: str = ""):
+    """READ the pinned anchor for (kind, depth), or None. Never writes.
+
+    Split from `anchor` so RENDERING cannot mutate state. The renderer originally did the pinning,
+    which made producing the report a side effect: the first report written pinned a value that every
+    later report then inherited, whatever its own input said.
+    """
+    if not is_identified(model, task):
+        return None
+    d = str(depth)
+    for r in rows(kind, PHASE_BEFORE, model, task):
+        if str(r.get("depth")) == d:
+            try:
+                return float(r.get("value_ms"))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def anchor(
+    kind: str,
+    value_ms,
+    *,
+    depth: str = "",
+    mode: str = "roofline",
+    source: str = "",
+    model: str = "",
+    task: str = "",
+):
+    """Pin `value_ms` for (kind, depth) if nothing is pinned yet; return whatever is pinned.
+
+    Called by whoever PRODUCES the value, at the moment it is produced -- which is the only place
+    that knows it describes the state the run started from. `record` decides whether the value is fit
+    to be permanent, so this adds only the write-once rule.
+    """
+    if not is_identified(model, task):
+        return None
+    held = anchor_value(kind, depth=depth, model=model, task=task)
+    if held is not None:
+        return held
+    if record(kind, PHASE_BEFORE, value_ms, depth=depth, mode=mode, source=source, model=model, task=task):
+        return float(value_ms)
+    return None
 
 
 def first(kind: str, phase: str = PHASE_BEFORE, model: str = "", task: str = ""):
