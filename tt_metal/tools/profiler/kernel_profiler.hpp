@@ -278,7 +278,10 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
     profiler_control_buffer[PROFILER_DONE] = !condition;
 }
 
-inline __attribute__((always_inline)) bool get_profiler_zone_valid() {
+// True when PROFILER_DONE is set: either this iteration was marked invalid by
+// set_profiler_zone_valid(false), or the cycle has already been finished. Either way
+// there is nothing more to do for this iteration.
+inline __attribute__((always_inline)) bool get_profiler_zone_invalid() {
     return profiler_control_buffer[PROFILER_DONE] == 1;
 }
 
@@ -490,15 +493,18 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
 #endif
         return;
     }
+    // All workers get a GO regardless of whether they run a kernel. Skip if a worker does not run a kernel,
+    // otherwise this risc's end index is published while the ID stamping below is skipped, leaving markers
+    // with no identity for the consumer to attribute to the wrong core.
+    if (get_profiler_zone_invalid()) {
+        return;
+    }
     risc_finished_profiling();
 #if defined(COMPILE_FOR_DM)
     // Quasar DM0 additionally writes the per-risc ID words the host, then advances RUN_COUNTER and
     // marks PROFILER_DONE.
     // TODO: Quasar profiler is L1-only, no DRAM/NoC push. Can merge with logic below once DRAM path is supported.
     if (myRiscID != 0) {
-        return;
-    }
-    if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
@@ -511,9 +517,6 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
     profiler_control_buffer[PROFILER_DONE] = 1;
 #elif defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
-    if (profiler_control_buffer[PROFILER_DONE] == 1) {
-        return;
-    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
     bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
