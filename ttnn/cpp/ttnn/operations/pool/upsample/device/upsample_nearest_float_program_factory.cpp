@@ -8,20 +8,34 @@
 #include <cstdint>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <ttnn/operations/pool/pool_utils.hpp>
 
 namespace ttnn::prim {
 
-using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 constexpr uint32_t BUFFERING_FACTOR = 2;
 
-ProgramDescriptor UpsampleNearestFloatProgramFactory::create_descriptor(
+namespace {
+
+const KernelSpecName NEARFLOAT_READER{"upsample_nearfloat_reader"};
+const KernelSpecName NEARFLOAT_WRITER{"upsample_nearfloat_writer"};
+const DFBSpecName NEARFLOAT_OUT{"upsample_nearfloat_out"};
+const TensorParamName NEARFLOAT_INPUT{"upsample_nearfloat_input"};
+const TensorParamName NEARFLOAT_OUTPUT{"upsample_nearfloat_output"};
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input, Tensor& output_tensor) {
+    const auto& input_mesh = input.mesh_tensor();
+    const auto& output_mesh = output_tensor.mesh_tensor();
+
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     auto* const device = output_tensor.device();
 
@@ -48,7 +62,7 @@ ProgramDescriptor UpsampleNearestFloatProgramFactory::create_descriptor(
     // Work distribution - Total work units = N * H_out * W_out (one output stick per work unit)
     const uint32_t total_pages_in_output = output_tensor.buffer()->num_pages();
 
-    const Shape& output_shape = output_tensor.padded_shape();
+    const tt::tt_metal::Shape& output_shape = output_tensor.padded_shape();
 
     const uint32_t num_pages_across_width =
         total_pages_in_output / (output_shape[0] * output_shape[1] * output_shape[2]);
@@ -65,96 +79,106 @@ ProgramDescriptor UpsampleNearestFloatProgramFactory::create_descriptor(
         input_page_size,
         output_page_size);
 
-    const CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-            split_work_to_cores(compute_grid_size, total_pages_in_output);
+            tt::tt_metal::split_work_to_cores(compute_grid_size, total_pages_in_output);
 
-    const std::vector<CoreCoord> logical_cores = corerange_to_cores(all_cores, std::nullopt, true);
+    const std::vector<tt::tt_metal::CoreCoord> logical_cores =
+        tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, true);
 
     // Calculate stick sizes (aligned based on buffer type for efficient reads)
     const uint32_t num_cb_pages = BUFFERING_FACTOR;
-
-    uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_output_page_size;
 
-    ProgramDescriptor desc;
-
-    const uint32_t output_cb_index = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_page_size * num_cb_pages * BUFFERING_FACTOR,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = output_cb_page_size,
-        }}},
-    });
-
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        output_cb_index,
-        aligned_input_page_size,
-        input_height,
-        input_width,
-        output_height,
-        output_width,
-        num_pages_across_width,
-        static_cast<uint32_t>(reciprocal_scale_h_fixed),
-        static_cast<uint32_t>(reciprocal_scale_w_fixed),
+    DataflowBufferSpec out_dfb{
+        .unique_id = NEARFLOAT_OUT,
+        .entry_size = output_cb_page_size,
+        .num_entries = num_cb_pages * BUFFERING_FACTOR,
+        .data_format_metadata = output_cb_data_format,
     };
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
-    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
-        output_cb_index,
-        aligned_output_page_size,
+    KernelSpec reader{
+        .unique_id = NEARFLOAT_READER,
+        .source =
+            std::filesystem::path{
+                "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_upsample_nearest_float.cpp"},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = NEARFLOAT_OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = NEARFLOAT_INPUT, .accessor_name = "input"}},
+        .compile_time_args =
+            {
+                {"aligned_input_page_size", aligned_input_page_size},
+                {"input_height", input_height},
+                {"input_width", input_width},
+                {"output_height", output_height},
+                {"output_width", output_width},
+                {"num_pages_across_width", num_pages_across_width},
+                {"reciprocal_scale_h_fixed", static_cast<uint32_t>(reciprocal_scale_h_fixed)},
+                {"reciprocal_scale_w_fixed", static_cast<uint32_t>(reciprocal_scale_w_fixed)},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_upsample_nearest_float.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    KernelSpec writer{
+        .unique_id = NEARFLOAT_WRITER,
+        .source =
+            std::filesystem::path{
+                "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_nearest_float.cpp"},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = NEARFLOAT_OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = NEARFLOAT_OUTPUT, .accessor_name = "output"}},
+        .compile_time_args = {{"aligned_stick_nbytes", aligned_output_page_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_nearest_float.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    ProgramSpec spec{
+        .name = "upsample_nearest_float",
+        .kernels = {reader, writer},
+        .dataflow_buffers = {out_dfb},
+        .tensor_parameters =
+            {
+                {.unique_id = NEARFLOAT_INPUT, .spec = input_mesh.tensor_spec()},
+                {.unique_id = NEARFLOAT_OUTPUT, .spec = output_mesh.tensor_spec()},
+            },
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {NEARFLOAT_READER, NEARFLOAT_WRITER},
+            .target_nodes = all_cores,
+        }},
+    };
 
     // Set runtime arguments for each core
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = NEARFLOAT_READER};
+    KernelRunArgs writer_run_args{.kernel = NEARFLOAT_WRITER};
+
     uint32_t sticks_processed = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
-        const CoreCoord& core = logical_cores[i];
+        const tt::tt_metal::CoreCoord& core = logical_cores[i];
         const uint32_t num_sticks =
             core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
-        reader_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
             core,
-            {
-                input.buffer(),    // rt_arg[0]: input_buffer_address
-                num_sticks,        // rt_arg[1]: num_sticks
-                sticks_processed,  // rt_arg[2]: start_stick_id
-            });
-        writer_desc.emplace_runtime_args(
+            {{"num_sticks", num_sticks}, {"start_stick_id", sticks_processed}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
             core,
-            {
-                output_tensor.buffer(),  // rt_arg[0]: output_buffer_address
-                num_sticks,              // rt_arg[1]: num_sticks
-                sticks_processed,        // rt_arg[2]: start_stick_id
-            });
+            {{"num_sticks", num_sticks}, {"start_stick_id", sticks_processed}});
 
         sticks_processed += num_sticks;
     }
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {
+        {NEARFLOAT_INPUT, TensorArgument{input_mesh}},
+        {NEARFLOAT_OUTPUT, TensorArgument{output_mesh}},
+    };
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim
