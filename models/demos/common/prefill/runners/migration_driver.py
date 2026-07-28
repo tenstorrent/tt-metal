@@ -405,11 +405,26 @@ class MigrationDriver:
             pool = pools_by_trace[slot_traces[src]]
             last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
             slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
-        tmp = self.handoff_path + ".tmp"
+        # Safelist the configured directory and confirm both joined paths stay inside it before opening.
+        base_dir = os.path.abspath(os.path.dirname(self.handoff_path) or ".")
+        name = os.path.basename(self.handoff_path)
+        handoff_path = os.path.abspath(os.path.join(base_dir, name))
+        tmp = os.path.abspath(os.path.join(base_dir, name + ".tmp"))
+        if not (handoff_path.startswith(base_dir + os.sep) and tmp.startswith(base_dir + os.sep)):
+            raise ValueError(
+                f"PREFILL_MIGRATION_HANDOFF_PATH={self.handoff_path!r} escapes its own directory "
+                f"{base_dir!r} (resolved to {handoff_path!r}); give a path whose basename stays inside it."
+            )
+        if not os.path.isdir(base_dir):
+            raise ValueError(
+                f"PREFILL_MIGRATION_HANDOFF_PATH={self.handoff_path!r} needs directory {base_dir!r}, which "
+                f"does not exist. Create it before the run — for P->D it must also be visible to the DECODE "
+                f"side, so a missing directory here usually means the shared mount is absent."
+            )
         with open(tmp, "w") as f:
             json.dump({"slots": slots}, f)
-        os.replace(tmp, self.handoff_path)  # atomic: the decode side never reads a half-written handoff
-        logger.success(f"[migration_driver] wrote handoff {self.handoff_path} ({len(slots)} slot(s)): {slots}")
+        os.replace(tmp, handoff_path)  # atomic: the decode side never reads a half-written handoff
+        logger.success(f"[migration_driver] wrote handoff {handoff_path} ({len(slots)} slot(s)): {slots}")
 
     def _write_done_sentinel(self, triples: list) -> list:
         """Write the migration DONE sentinel — one ``src dst`` line per migrated pair — that the runner's
@@ -428,10 +443,23 @@ class MigrationDriver:
                 "(PREFILL_PRODUCER_ISSUE_MIGRATION=0 / migration.issue: false)."
             )
         pairs = [(src, dst) for (src, dst, _) in triples]
-        with open(self.done_file, "w") as f:
+        # Safelist the configured directory and confirm the joined path stays inside it before opening.
+        base_dir = os.path.abspath(os.path.dirname(self.done_file) or ".")
+        done_path = os.path.abspath(os.path.join(base_dir, os.path.basename(self.done_file)))
+        if not done_path.startswith(base_dir + os.sep):
+            raise ValueError(
+                f"MIGRATION_DONE_FILE={self.done_file!r} escapes its own directory {base_dir!r} "
+                f"(resolved to {done_path!r}); give a path whose basename stays inside it."
+            )
+        if not os.path.isdir(base_dir):
+            raise ValueError(
+                f"MIGRATION_DONE_FILE={self.done_file!r} needs directory {base_dir!r}, which does not exist. "
+                f"Create it before the run."
+            )
+        with open(done_path, "w") as f:
             for s, d in pairs:
                 f.write(f"{s} {d}\n")
-        logger.success(f"[migration_driver] wrote DONE sentinel {self.done_file} ({len(pairs)} pair(s)): {pairs}")
+        logger.success(f"[migration_driver] wrote DONE sentinel {done_path} ({len(pairs)} pair(s)): {pairs}")
         return pairs
 
 
@@ -469,7 +497,8 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
     head_dim = producer.ADAPTER.model_config.KV_LORA_RANK + producer.ADAPTER.model_config.QK_ROPE_HEAD_DIM
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     wanted = set(layers) if layers else set(range(producer.NUM_LAYERS))
-    os.makedirs(dump_dir, exist_ok=True)
+    base_dir = os.path.abspath(os.path.expanduser(dump_dir))
+    os.makedirs(base_dir, exist_ok=True)
 
     for slot_id, (chunks_pushed, actual_isl) in sorted(stats.resident.items()):
         real_len = min(chunks_pushed * producer.CHUNK_SIZE, actual_isl)
@@ -488,7 +517,11 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
                 decoded_rows.append(producer._decode_kv_chunk(raw, head_dim))
             device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (the table un-rotates)
             ref_kvpe_list[layer] = device_kv.unsqueeze(0).unsqueeze(0)
-        out = os.path.join(dump_dir, f"src_slot{slot_id}.pt")
+        # dump_dir is the safelisted base; only the derived basename varies. Confirm the join stays inside
+        # it before writing.
+        out = os.path.abspath(os.path.join(base_dir, f"src_slot{int(slot_id)}.pt"))
+        if not out.startswith(base_dir + os.sep):
+            raise ValueError(f"src-KV dump path {out!r} escapes its base directory {base_dir!r}")
         torch.save({"ref_kvpe_list": ref_kvpe_list}, out)
         logger.success(
             f"[migration_driver] slot {slot_id} src KV dumped -> {out} "
