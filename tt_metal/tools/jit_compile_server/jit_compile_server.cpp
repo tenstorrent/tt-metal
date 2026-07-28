@@ -78,6 +78,26 @@ constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
 std::string g_server_cache_root = kDefaultServerCacheRoot;
 
+// This server's own build root (TT_METAL_HOME, trailing-slash), set at startup. Used to re-root
+// client-shipped toolchain/link paths onto THIS server's tree. Empty => re-root disabled.
+std::string g_server_root;
+
+// Replace every occurrence of `client_root` with `g_server_root` in `s`. The client ships absolute
+// paths rooted at its TT_METAL_HOME (sfpi g++, linker script, hw link objects); when the server's
+// tree lives at a different path, those paths don't exist here, so we swap the root prefix to
+// resolve them against the server's own tree. No-op when the roots match, either is empty, or the
+// path is not under the client root (e.g. a machine-global toolchain present on the server too).
+void reroot_to_server(std::string& s, const std::string& client_root) {
+    if (client_root.empty() || g_server_root.empty() || client_root == g_server_root || s.empty()) {
+        return;
+    }
+    std::string::size_type pos = 0;
+    while ((pos = s.find(client_root, pos)) != std::string::npos) {
+        s.replace(pos, client_root.size(), g_server_root);
+        pos += g_server_root.size();
+    }
+}
+
 // Reject paths that could escape the cache root: absolute paths, ".." components, or
 // empty strings.  Throws on violation.
 void validate_safe_relative_path(const std::string& path, const char* field_name) {
@@ -389,14 +409,27 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             }
         }
 
+        // Re-root the client's toolchain path onto this server's tree (sfpi g++ lives under the
+        // client's TT_METAL_HOME, which is absent here when the client's tree is at a different
+        // path). No-op if the roots match or the toolchain is a machine-global /opt sfpi.
+        std::string gpp = request.gpp;
+        reroot_to_server(gpp, request.client_root);
+
         for (const auto& target : request.targets) {
             tt::tt_metal::jit_server::TargetRecipe resolved_target = target;
             if (!resolved_target.weakened_firmware_name.empty()) {
                 resolved_target.weakened_firmware_name =
                     resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
+            // Re-root the remaining client-absolute paths: the -T linker script (in lflags), the
+            // hw link objects, and any include dirs (the latter are cleared by the client under
+            // preprocess-and-ship, harmless otherwise).
+            reroot_to_server(resolved_target.includes, request.client_root);
+            reroot_to_server(resolved_target.lflags, request.client_root);
+            reroot_to_server(resolved_target.linker_script, request.client_root);
+            reroot_to_server(resolved_target.extra_link_objs, request.client_root);
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            build_target(request.gpp, resolved_target, out_dir, response);
+            build_target(gpp, resolved_target, out_dir, response);
         }
 
         response.success = true;
@@ -474,6 +507,15 @@ int main() {
     const char* cache_root_env = std::getenv(kServerCacheRootEnv);
     g_server_cache_root = normalize_cache_root(cache_root_env != nullptr ? cache_root_env : kDefaultServerCacheRoot);
 
+    // Server's own build root — the re-root target for client-shipped toolchain/link paths.
+    const char* home_env = std::getenv("TT_METAL_HOME");
+    if (home_env != nullptr && *home_env != '\0') {
+        g_server_root = home_env;
+        if (g_server_root.back() != '/') {
+            g_server_root.push_back('/');
+        }
+    }
+
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
 
@@ -481,6 +523,10 @@ int main() {
     server.start(endpoint);
     log_info(tt::LogMetal, "JIT compile server listening on {}", endpoint);
     log_info(tt::LogMetal, "JIT compile server cache root: {}", g_server_cache_root);
+    log_info(
+        tt::LogMetal,
+        "JIT compile server build root: {}",
+        g_server_root.empty() ? "<TT_METAL_HOME unset; re-root disabled>" : g_server_root);
 
     while (g_keep_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
