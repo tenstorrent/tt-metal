@@ -542,12 +542,13 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
-# MiniMax-M3 unit tests — mostly random-weight module PCC; HF_MODEL enables
-# test_msa_layer_vs_ref real-weights PCC on 1-card.
+# MiniMax-M3 unit tests — random-weight module PCC only (no HF_MODEL / M3_CKPT).
+# test_msa_layer_vs_ref is real-weights and opt-in locally; excluded from CI so Tier-1
+# does not silently skip. Synthetic MSA prefill coverage: test_msa_prefill_vs_ref.
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1"
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1 and not msa_layer"
   model: minimax-m3
   skus:
     bh_p150:
