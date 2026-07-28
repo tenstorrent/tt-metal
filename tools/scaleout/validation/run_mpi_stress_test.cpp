@@ -81,12 +81,13 @@ int main(int argc, char** argv) {
 
         uint8_t expected = static_cast<uint8_t>(previous & 0xff);
 
-        if (recvbuf[0] != expected || recvbuf[static_cast<std::size_t>(message_size) - 1] != expected) {
-            std::cerr << "Rank " << rank << ": corruption at iteration " << iteration
-                      << "; expected=" << static_cast<unsigned>(expected)
-                      << " first=" << static_cast<unsigned>(recvbuf[0])
-                      << " last=" << static_cast<unsigned>(recvbuf[static_cast<std::size_t>(message_size) - 1]) << "\n";
-            MPI_Abort(MPI_COMM_WORLD, 2);
+        for (std::size_t offset = 0; offset < recvbuf.size(); ++offset) {
+            if (recvbuf[offset] != expected) {
+                std::cerr << "Rank " << rank << ": corruption at iteration " << iteration << "; offset=" << offset
+                          << " expected=" << static_cast<unsigned>(expected)
+                          << " actual=" << static_cast<unsigned>(recvbuf[offset]) << "\n";
+                MPI_Abort(MPI_COMM_WORLD, 2);
+            }
         }
 
         if ((iteration % 1000) == 0) {

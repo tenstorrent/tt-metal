@@ -490,7 +490,10 @@ else
 fi
 
 # Step 0.5: MPI packet stress test — validates MPI transport between all hosts before recovery.
-if [[ "$SKIP_MPI_STRESS_TEST" == false ]]; then
+if [[ "$SKIP_VALIDATION" == true ]]; then
+    echo "Skipping MPI stress test (--skip-validation)"
+    echo ""
+elif [[ "$SKIP_MPI_STRESS_TEST" == false ]]; then
     echo "Running MPI stress test (1000 iterations, 1048576 bytes/message)..."
     MPI_STRESS_BIN="./build/tools/scaleout/run_mpi_stress_test"
     if [[ -n "$DOCKER_IMAGE" ]]; then
@@ -502,6 +505,7 @@ if [[ "$SKIP_MPI_STRESS_TEST" == false ]]; then
             --host "$HOSTS" \
             --map-by ppr:1:node \
             --bind-to none \
+            --timeout 3600 \
             "$MPI_STRESS_BIN" 1000 1048576
     else
         timeout --signal=TERM --kill-after=30s 1h mpirun \
