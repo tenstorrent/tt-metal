@@ -19,7 +19,7 @@ Useful overrides:
   MODEL_VENV=/home/zni/venvs/tt-diffusion-gemma
   DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it
   HOST=127.0.0.1 PORT=8010
-  MAX_MODEL_LEN=4096 MAX_GEN_TOKS=8192
+  MAX_MODEL_LEN=4096 MAX_GEN_TOKS=<derived: MAX_MODEL_LEN - 2432, floored to a canvas>
   THINKING_MODE=1                 # enable the checkpoint's server-side thinking template
   OUTPUT_ROOT=/home/zni/dg_runs/diffusion_gemma/upfront_gpqa/<timestamp>
   RESET_BEFORE=1 RESET_AFTER=1
@@ -56,11 +56,28 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8010}"
 MODEL_NAME="${MODEL_NAME:-google/diffusiongemma-26B-A4B-it}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
-# 1536 tokens is 6 canvases. A CoT answer that is still reasoning when the budget runs out cannot
-# emit its boxed conclusion, so the budget itself would cap the score. The A100 reference used
-# 126976; 8192 (32 canvases) is the compromise that fits MAX_MODEL_LEN=4096-class runs without
-# making a truncated chain the thing being measured.
-MAX_GEN_TOKS="${MAX_GEN_TOKS:-8192}"
+# DERIVED, not chosen. The server rejects max_tokens > max_model_len outright, and prompt + output
+# must also fit, so the budget is bounded by MAX_MODEL_LEN minus the longest whitelisted prompt.
+# Raising it to 8192 at MAX_MODEL_LEN=4096 made every one of the 198 requests fail with
+# "max_tokens=8192 cannot be greater than max_model_len=4096" -- the original 1536 was not an
+# arbitrary value, it was this bound rounded to a canvas multiple.
+#
+# This matters for interpreting a score: the A100 reference ran at max_model_len=262144 with
+# max_gen_toks=126976, i.e. ~496 canvases of room, while a 4096 run gets 6. A CoT chain truncated
+# before its conclusion cannot emit an extractable answer, so that budget asymmetry depresses the TT
+# number for reasons unrelated to whatever flag is under test. It is CONSTANT across arms, so
+# arm-to-arm comparison stays valid; comparing a 4096-class arm directly to the 70.45% bar does not.
+# Raise MAX_MODEL_LEN for a bar-comparable run -- on QB2 that competes with DRAM (concat-experts
+# weights alone are 7.8 GiB and the trace reservation grows with reveal_pmax).
+MAX_GEN_TOKS_DEFAULT=$(( MAX_MODEL_LEN - 2432 ))                       # longest whitelisted prompt
+MAX_GEN_TOKS_DEFAULT=$(( MAX_GEN_TOKS_DEFAULT / 256 * 256 ))           # whole canvases
+MAX_GEN_TOKS="${MAX_GEN_TOKS:-${MAX_GEN_TOKS_DEFAULT}}"
+if (( MAX_GEN_TOKS > MAX_MODEL_LEN - 2432 )); then
+    echo "ERROR: MAX_GEN_TOKS=${MAX_GEN_TOKS} leaves no room for the longest whitelisted prompt" >&2
+    echo "       (2432 padded tokens) inside MAX_MODEL_LEN=${MAX_MODEL_LEN}; the server would reject" >&2
+    echo "       every request. Lower it or raise MAX_MODEL_LEN." >&2
+    exit 1
+fi
 THINKING_MODE="${THINKING_MODE:-1}"
 TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB. Measured 2026-07-27: the 48 up-front traces need 3.04 GiB at reveal_pmax=4096 (3 GiB fails, 4 GiB is the floor), so the historical 12 GiB reserved ~8 GiB of DRAM that nothing could allocate. Scale this WITH reveal_pmax - it is not a universal constant. See doc/optimize_perf/bisect_trace_region.sh
 RESET_BEFORE="${RESET_BEFORE:-1}"
