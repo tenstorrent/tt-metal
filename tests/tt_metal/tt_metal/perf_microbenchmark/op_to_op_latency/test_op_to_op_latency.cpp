@@ -444,9 +444,9 @@ struct RealtimeProfilerSession {
 
     void register_callback() {
         handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-            [this](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+            [this](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
                 std::lock_guard<std::mutex> lock(mutex);
-                records.push_back(record);
+                records.insert(records.end(), batch.records.begin(), batch.records.end());
             });
     }
 
