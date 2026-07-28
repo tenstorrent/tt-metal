@@ -59,7 +59,6 @@ def read_db_run_id(db_path: Path | str) -> Optional[str]:
         # Path.as_uri() requires an absolute path. URI mode=ro refuses to create
         # a missing file (defence in depth).
         conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
-        
         try:
             cursor = conn.cursor()
             cursor.execute(
