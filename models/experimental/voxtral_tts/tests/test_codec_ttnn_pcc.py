@@ -198,6 +198,34 @@ def test_bucketing_pads_with_last_frame_not_zeros(device):
     assert pcc(bucketed, plain) > 0.999, "padding is leaking into the kept region"
 
 
+def test_real_speech_frames_decode_correctly(device):
+    """Decode REAL model output, not synthetic codes.
+
+    This exists because it was missing: the real-speech check (PCC 0.999987, ASR WER 0.0%) was
+    run against the FIRST working version, and then bf16 attention, chunked attention, length
+    bucketing and prepared conv weights all landed without it being re-run. Nothing caught that,
+    because every gate was synthetic-codes-vs-reference. Real codes have very different statistics
+    from uniform random ones, so they exercise the numerics differently.
+
+    The fixture is 64 frames of genuine Block 1+2 output (int16, ~5 KB), so this needs no backbone.
+    """
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    fx = os.path.join(os.path.dirname(__file__), "real_frames_fixture.pt")
+    if not os.path.exists(fx):
+        pytest.skip("real_frames_fixture.pt missing")
+    frames = torch.load(fx).long()
+    codes = ref.strip_offset_and_trim(frames)
+    exp = ref.reference_decode(codes, ref.load_codec_state())
+    got = TtVoxtralCodecDecoder(device)(codes)  # DEFAULT config, as callers get it
+    assert got.shape == exp.shape
+    p = pcc(got, exp)
+    assert p > 0.9999, f"real-speech PCC {p:.6f}"
+    # also bound the worst single sample, which PCC can hide
+    peak = exp.abs().max().item()
+    assert (got - exp).abs().max().item() < 0.02 * peak, "worst-sample error above 2% of peak"
+
+
 def test_slab_is_tile_aligned():
     """TILE_LAYOUT pads every dim to 32. A slab of 272 (= 256 chunk + 16 window) silently becomes
     288, wasting a row and a column of tiles — pick the SLAB aligned and derive the chunk from it."""
