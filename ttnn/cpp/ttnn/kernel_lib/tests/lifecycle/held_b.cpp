@@ -5,7 +5,7 @@
 // Lifecycle / CB-synchronization suite.
 //
 // out[i] = A[i] + B[0] over n tiles: A streams (chain owns wait+pop); B is a single held tile reused
-// every iter on a selectable InputLifecycle. The chain emits exactly the CB edges its lifecycle
+// every iter on a selectable wait/pop pair. The chain emits exactly the CB edges its pair
 // declares; this kernel supplies the rest. A miscount hangs (wait/pop never satisfied) or reads a
 // stale tile, so each case asserts BOTH no-hang and correct values.
 //
@@ -38,14 +38,14 @@ void kernel_main() {
     CircularBuffer cb_b_obj(cb_b);
 
     // A: streaming. B: held single tile (Scalar index, relative tile 0). Output: streaming.
-    auto pack = PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{};
+    auto pack = PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{};
 
     if constexpr (life == 0) {  // Bulk — chain owns both edges
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-                input(cb_b, InputLifecycle::Bulk, DataFormatReconfig::Disabled),
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
                 BroadcastDim::None>{},
             pack);
@@ -53,8 +53,8 @@ void kernel_main() {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-                input(cb_b, InputLifecycle::HeldBulk, DataFormatReconfig::Disabled),
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::None, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
                 BroadcastDim::None>{},
             pack);
@@ -63,8 +63,8 @@ void kernel_main() {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-                input(cb_b, InputLifecycle::HeldStream, DataFormatReconfig::Disabled),
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::PerTile, PopPolicy::None, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
                 BroadcastDim::None>{},
             pack);
@@ -74,8 +74,8 @@ void kernel_main() {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-                input(cb_b, InputLifecycle::CallerManaged, DataFormatReconfig::Disabled),
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::None, PopPolicy::None, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
                 BroadcastDim::None>{},
             pack);
@@ -85,8 +85,8 @@ void kernel_main() {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-                input(cb_b, InputLifecycle::DeferredPop, DataFormatReconfig::Disabled),
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::None, PopPolicy::AtEnd, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
                 BroadcastDim::None>{},
             pack);

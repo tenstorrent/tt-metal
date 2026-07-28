@@ -23,6 +23,9 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     constexpr uint32_t n = get_compile_time_arg_val(0);
+
+    using FastExpD1 = compute_kernel_lib::Exp<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D1>;
+    static_assert(FastExpD1::lane_width == 2);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
     constexpr uint32_t life = get_compile_time_arg_val(2);   // 0 = Bulk (batched), 1 = Chunked
     constexpr uint32_t batch = get_compile_time_arg_val(3);  // Bulk batch window (tiles per chain call)
@@ -35,30 +38,30 @@ void kernel_main() {
             eltwise_chain(
                 EltwiseShape::tiles(batch, blk),
                 BinaryFpu<
-                    input(cb_a, InputLifecycle::Bulk, OperandKind::Block),
-                    input(cb_b, InputLifecycle::Bulk, OperandKind::Block),
+                    input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+                    input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
                     BinaryFpuOp::Add,
                     BroadcastDim::None>{},
                 Exp<>{},
                 DestReuseBinary<
-                    input(cb_c, InputLifecycle::Bulk, OperandKind::Block),
+                    input(cb_c, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
                     BinaryFpuOp::Mul,
                     DestReuseType::DEST_TO_SRCA>{},
-                PackTile<output(cb_out, OutputLifecycle::Bulk)>{});
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
         }
     } else {  // Chunked: single call over all N, bounded CB via per-chunk wait/pop
         eltwise_chain(
             EltwiseShape::tiles(n, blk),
             BinaryFpu<
-                input(cb_a, InputLifecycle::Chunked, OperandKind::Block),
-                input(cb_b, InputLifecycle::Chunked, OperandKind::Block),
+                input(cb_a, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block),
+                input(cb_b, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block),
                 BinaryFpuOp::Add,
                 BroadcastDim::None>{},
             Exp<>{},
             DestReuseBinary<
-                input(cb_c, InputLifecycle::Chunked, OperandKind::Block),
+                input(cb_c, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block),
                 BinaryFpuOp::Mul,
                 DestReuseType::DEST_TO_SRCA>{},
-            PackTile<output(cb_out, OutputLifecycle::Chunked)>{});
+            PackTile<output(cb_out, ReservePolicy::PerChunk, PushPolicy::PerChunk)>{});
     }
 }
