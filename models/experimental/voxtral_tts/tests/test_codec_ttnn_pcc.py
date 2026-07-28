@@ -154,6 +154,23 @@ def test_chunked_matches_unchunked(device, n_frames):
     assert pcc(ch, un) > 0.9999, f"chunked diverges from unchunked at T={n_frames}"
 
 
+def test_bias_cache_does_not_grow_with_utterance_length(device):
+    """Every chunk is padded to `slab`, so above the threshold the cache holds exactly ONE bias
+    per window no matter how many different lengths are decoded. Before this, first/last chunk
+    lengths varied (the last with S mod C), so each new length added biases AND a kernel compile.
+
+    Stages whose S <= slab still run unchunked and get an SxS bias, so a few length-specific
+    entries remain -- that is the conv-side bucketing work, tracked separately."""
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    gen = TtVoxtralCodecDecoder(device)
+    for n in (700, 1000, 1200):  # all well above slab, so every stage chunks
+        gen(ref.make_synthetic_codes(n))
+    chunked = {(S, w) for (S, w, _) in gen._bias_cache if S == gen.slab}
+    assert len(chunked) <= 4, f"expected <=4 slab biases (one per window), got {sorted(chunked)}"
+    assert len(gen._bias_cache) <= 6, f"cache grew to {len(gen._bias_cache)} across 3 lengths"
+
+
 def test_slab_is_tile_aligned():
     """TILE_LAYOUT pads every dim to 32. A slab of 272 (= 256 chunk + 16 window) silently becomes
     288, wasting a row and a column of tiles — pick the SLAB aligned and derive the chunk from it."""
