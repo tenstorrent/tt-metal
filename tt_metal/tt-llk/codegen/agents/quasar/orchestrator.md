@@ -371,6 +371,10 @@ Agent tool:
     + simulator-consumer. Diagnose and fix between runs. On attempt 5's failure,
     return STUCK — the orchestrator will route to the refiner.
 
+    For an eligible runtime failure, follow the tester playbook's optional
+    waveform step. It is best-effort and fail-open: record unavailable or failed
+    tooling, then continue the normal loop without changing the tester outcome.
+
     If LOCK_TESTS=true (read it from state), run in test-locked mode per your
     playbook: treat the existing test as the immutable source of truth — never
     author, extend, register, or modify any test, golden, or input-prep; only run

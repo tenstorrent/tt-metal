@@ -276,6 +276,55 @@ Invoke `simulate` via the Bash tool **synchronously and in the foreground**, wit
 
 Feed the pattern — not one variant — into Step 3. When `--maxfail` truncated the run, "all failures share a signature" and format-class inferences hold if the sample agrees, but "only one variant fails" is unproven until you re-run with `--maxfail 0`.
 
+### 2.5 — Optional deterministic waveform evidence
+
+After a kernel-specific `HANG`/`TIMEOUT`, make one best-effort waveform call for
+that simulator attempt before choosing a fix. For `DATA_MISMATCH`, make the call
+when `LLK_DEBUG_FSDB` is set or `run.log` contains an existing `.fsdb` path.
+Never run it for a compile failure, pre-ready `ENV_ERROR`, or sibling-confirmed
+environment failure.
+
+The bridge uses the existing tester outputs:
+
+- it appends a short section to `{LOG_DIR}/agent_tester_cycle{N}.md`;
+- private raw evidence goes under
+  `{LOG_DIR}/test_logs_cycle{N}/wave_debug_attempt{ATTEMPT}/`;
+- it does not add a dashboard step, modify `run.json`, or create a new run-result
+  schema.
+
+Map the classified failure to `hang`, `timeout`, `mismatch`, or `unknown`, then
+run:
+
+```bash
+WAVE_FSDB_ARGS=()
+if [[ -n "${LLK_DEBUG_FSDB:-}" ]]; then
+  WAVE_FSDB_ARGS=(--fsdb "$LLK_DEBUG_FSDB")
+fi
+
+python "$WORKTREE_DIR/tt_metal/tt-llk/codegen/scripts/optional_wave_debug.py" \
+    --log-dir "$LOG_DIR" \
+    --cycle "$CYCLE" \
+    --attempt "$ATTEMPT" \
+    --failure-kind "{mapped failure kind}" \
+    "${WAVE_FSDB_ARGS[@]}" \
+  || {
+    printf '\n## Optional waveform debugging — attempt %s\n- Status: `unavailable`\n- Summary: optional waveform bridge could not be executed; continuing normal diagnosis.\n- Pipeline action: continue the normal tester/refiner flow.\n' \
+      "$ATTEMPT" >> "$LOG_DIR/agent_tester_cycle${CYCLE}.md"
+    true
+  }
+```
+
+This stage is strictly fail-open. A missing launcher, missing private checkout,
+missing FSDB, backend failure, timeout, invalid evidence file, or bridge error
+must be recorded and then ignored for control flow. It does not consume a
+simulator attempt and never changes `PASS`/`STUCK`/`ENV_ERROR`.
+
+When the status is `findings`, read the listed classification, summary, and
+`evidence.json` before Step 3. Treat it as deterministic positive evidence, but
+still apply the contradiction check. When status is `unavailable`, `failed`, or
+`inconclusive`, continue with R1–R6 exactly as before; absence of waveform
+evidence is not evidence about the kernel.
+
 ---
 
 ## Step 3: Diagnose
@@ -468,6 +517,7 @@ State the kernel and test paths literally so downstream steps / humans can inspe
 14. **Contradiction check before every hypothesis (§3.0.a).**
 15. **Harness-first on uniform failures (§3.0.b).**
 16. **Test-locked mode (`LOCK_TESTS=true`): the existing test is immutable** — author or modify no test, golden, or input-prep; missing test infrastructure is a terminal `STUCK` (§ Test-Locked Mode).
+17. **Waveform debugging is optional and fail-open (§2.5).** Record unavailable/failed/inconclusive status, then continue; it never consumes an attempt or changes the tester outcome.
 
 ---
 
@@ -524,6 +574,11 @@ At minimum: the 1D collection smoke, each `compile` run, each `simulate` run
 
 ## Open questions / handoffs
 Things the optimizer / refiner / human must verify. Write "none" if none.
+
+## Optional waveform debugging
+The deterministic bridge appends one subsection per attempted waveform
+diagnosis. Preserve those appended sections when filling this template. If no
+eligible runtime failure had an FSDB, write "not run".
 
 ## Final outcome
 - Result: PASS | STUCK | ENV_ERROR

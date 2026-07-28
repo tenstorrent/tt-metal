@@ -30,6 +30,29 @@ The MCP server is pre-configured in `.mcp.json`.
 | `Generate reduce for Quasar` | Generate math kernel |
 | `Generate pack_untilize for Quasar` | Generate pack kernel |
 
+### Deterministic waveform debugging
+
+Runtime failures can be inspected without putting FSDB mechanics into an agent
+prompt. `codegen/scripts/llk_debug.py` is a thin launcher for the implementation
+in the private `llk_code_gen` checkout on Weka. RTL paths, architecture profiles,
+detectors, detailed examples, and FSDB-derived artifacts remain private.
+
+The launcher uses `/proj_sw/user_dev/llk_code_gen` by default. Set
+`LLK_CODEGEN_PRIVATE_ROOT` when the private repository is mounted elsewhere:
+
+```bash
+LLK_CODEGEN_PRIVATE_ROOT=/path/to/llk_code_gen \
+python codegen/scripts/llk_debug.py --help
+```
+
+For eligible Quasar runtime failures, the tester invokes
+`codegen/scripts/optional_wave_debug.py`. The bridge appends its status and any
+deterministic findings to the existing `agent_tester_cycleN.md`; private command
+output and evidence stay below the existing `test_logs_cycleN/` directory. It
+does not add a dashboard step or modify `run.json`. Missing private tooling,
+missing FSDBs, backend errors, and timeouts are recorded and remain non-fatal,
+so normal code generation and refinement continue.
+
 ### Batch Generation
 
 ```bash

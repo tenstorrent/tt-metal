@@ -89,6 +89,11 @@ Read, in order:
    - **Repeating signatures** — a failure seen in ≥2 non-adjacent attempts after different targeted fixes is structural; the root is in the analysis.
    - **Exhausted fix patterns** — the fix *classes* the tester tried (LREG swap, approx-mode toggle, input clamp, `TTI_`→`TT_` downgrade, …). The refinement must not lead back into them.
    - **Final failure** (attempt 5) — the unresolved signature.
+   - **Optional waveform sections** — a `findings` status and its linked
+     `evidence.json` are deterministic positive evidence. Cross-check the
+     finding against the failed source and other attempts. `unavailable`,
+     `failed`, and `inconclusive` only record tool availability and must not
+     affect classification or cause escalation.
 2. **Writer log** — did the writer follow the analysis or improvise? Faithful writer + persistent failure = analysis bug. Either way the refined analysis must be explicit enough that no writer can improvise into the same hole.
 3. **Original analysis** — the thing under evaluation; read end-to-end.
 4. **Failed kernel** — diff-inspect against §6b pseudocode; find where it matched the plan and where it deviated.
@@ -118,7 +123,7 @@ If you cannot confidently pick ONE category after reading the logs twice, classi
 
 ### Positive-evidence requirement
 
-Before settling on a category, hold **at least one** as positive evidence: an authoritative source (ISA page, `assembly.yaml`, datasheet) confirming the mechanism; a minimal reproducer or isolation that exhibits the same failure and cannot be explained by another category; a sibling target kernel documenting the constraint; or (for `HARNESS_INCOMPATIBILITY`) a concrete list of foreign-arch symbols with a grep proving the target has no native definition.
+Before settling on a category, hold **at least one** as positive evidence: an authoritative source (ISA page, `assembly.yaml`, datasheet) confirming the mechanism; a minimal reproducer or isolation that exhibits the same failure and cannot be explained by another category; a deterministic waveform finding whose linked evidence directly identifies the failing boundary; a sibling target kernel documenting the constraint; or (for `HARNESS_INCOMPATIBILITY`) a concrete list of foreign-arch symbols with a grep proving the target has no native definition.
 
 If your Step 4 cross-check contradicts the category — e.g. you picked `WRONG_INSTRUCTION_MAPPING` and then confirm the instruction and mode are valid — reject it and reclassify. Do not rationalize with "emulator doesn't implement it", "non-deterministic behavior", or "spec is right but silicon differs" without a bug-tracker link or human-confirmed errata; those phrasings encode guesses as conclusions and poison v${N+1}.
 
