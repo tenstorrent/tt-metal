@@ -598,9 +598,8 @@
     # wh_n300:
     #   timeout: 15
     #   tier: 3
-    bh_p150:
-      timeout: 8
-      tier: 3
+    # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
+    # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
     bh_p300:
       timeout: 5
       tier: 3
@@ -690,10 +689,12 @@
   model: gemma-4-12b
   model_family: Gemma
   skus:
-    # Single Blackhole P150: short demo + unit PCC. Full ISL through 256k is
-    # supported via bounded sliding + chunked prefill (see README / policy).
+    # Single Blackhole P150: short demo + unit PCC. Cap at 6m so models
+    # e2e_tier2 bh_p150 stays within the 26m team budget (GPT-OSS 15 + UNet 5
+    # + this 6). f562aa60493's timeout:20 made requested=40 and failed
+    # load-test-matrix (see all-model-tests on arg/gemma4_1x8optiom).
     bh_p150:
-      timeout: 20
+      timeout: 6
       tier: 2
     bh_quietbox_2:
       timeout: 22
