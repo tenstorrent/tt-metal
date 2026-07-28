@@ -52,16 +52,42 @@ bash tt_metal/tt_rdma/gw/deploy_rdma_bridge.sh          # -> /tmp/doca_ttbridge
 ```
 RoCE setup: uplink ports have no GID; use SF `mlx5_2` (add IPv4 `10.99.0.1/24` to `enp3s0f0s0` → **GID idx 1**).
 Bridge env: `TTBRIDGE_IFACE=p0 TTBRIDGE_DMAC=02:00:00:00:00:02 TTBRIDGE_RKEY=0x00CAFE42 TTBRIDGE_PLEN TTBRIDGE_MAX`.
+**✅ B1 E2E COMPLETE + byte-exact verified (2026-07-28)** via the host-requester path (avoids the earlier
+same-SF UAR-exhaustion blocker). desktop-0 `mlx5_0` (full PF) is the RoCEv2 requester → DPU `mlx5_2` bridge →
+BH pool lands the RoCE payload byte-exact. Host↔DPU-SF RoCE just works: DPU **ovsbr1 already bridges pf0hpf +
+en3f0pf0sf0 + p0** on one L2 domain (no new eSwitch steering rule).
 ```
-# [DPU] bridge = RoCE-CM server + p0 egress:
-sudo env TTBRIDGE_IFACE=p0 TTBRIDGE_MAX=<n> TTBRIDGE_PLEN=<p> /tmp/doca_ttbridge -d mlx5_2 -g 1 -cm -lp 51000
-# requester = RoCE-CM client:
-sudo /tmp/doca_ttreq -d mlx5_2 -g 1 -cm -sa 10.99.0.1 -lp 51000 -sat ipv4 -w "<payload>"
+# host: give mlx5_0 a RoCEv2 IPv4 GID (⚠ re-add if flushed; GID index drifts -> re-check show_gids)
+sudo ip addr add 10.99.0.10/24 dev enp193s0f0np0
+show_gids mlx5_0 | grep 10.99          # note the v2 (RoCEv2) index
+# host: build the stock requester once (host has DOCA 3.4; uverbs/rdma_cm are world-rw -> no sudo needed)
+gcc ... /opt/mellanox/doca/samples/doca_rdma/rdma_write_immediate_requester/* -> /tmp/doca_ttreq_host
+# [DPU] bridge = RoCE-CM server + p0 egress. TTBRIDGE_BURST=N re-emits N TT frames per WRITE_IMM (validation
+#       knob; default 1 = real 1:1) so ONE RoCE write makes a DENSE stream the pool's ring accounting validates:
+sudo env TTBRIDGE_IFACE=p0 TTBRIDGE_MAX=1 TTBRIDGE_PLEN=256 TTBRIDGE_BURST=4096 /tmp/doca_ttbridge -d mlx5_2 -g 1 -cm -lp 51000
+# BH pool (stride 288 = 32B hdr + 256B payload); fire the requester EARLY (before the MR-invalidate at hold/2):
+bh1_rx_worker_test 1 ext 30 8 288 &
+/tmp/doca_ttreq_host -d mlx5_0 -g <v2idx> -cm -sa 10.99.0.1 -lp 51000 -sat ipv4 -w "<payload>"
 ```
-**Known blocker (open):** two RoCE processes on one SF → `Failed to create UAR` (per-SF UAR exhaustion); the
-two SFs are on different PFs (no loopback path). **Fix path:** use desktop-0 `mlx5_0` (full PF) as the
-requester → DPU `mlx5_2` bridge (real gateway topology; needs eSwitch host→SF steering). Verify: pool sees
-valid TT-RDMA WRITE landings byte-exact. Then B2 (MR federation via RISC1 doorbell), B3 (DPA line-rate egress).
+Result: processed==delivered==4096, valid>0, exactly-once HOLDS, drop=0; land zone == the exact RoCE string.
+(Pool "LAND FAIL" is a doca_ttblast-magic "TTWR" assertion, not a real failure.) A **single sparse frame**
+reads valid=0 (lands byte-exact per recv_probe, but the worker's `(index%nslots)*stride` slot map needs a
+dense stream) — hence TTBRIDGE_BURST.
+
+### B3 HW-TX egress (✅ prototype, 2026-07-28)
+The bridge can egress via **DOCA Eth-TX HW-TX** instead of raw AF_PACKET — the same datapath doca_ttblast
+proved at line rate, folded into the bridge process (RoCE responder on mlx5_2 + Eth-TX on mlx5_0, two PEs,
+one thread). Select with `TTBRIDGE_EGRESS=doca` (now the DEFAULT; `=raw` for the AF_PACKET fallback),
+`TTBRIDGE_TXDEV=mlx5_0`. Build now links `doca-eth doca-flow` + eth_common.c/eth_flow_common.c (see
+`deploy_rdma_bridge.sh`).
+```
+sudo env TTBRIDGE_EGRESS=doca TTBRIDGE_TXDEV=mlx5_0 TTBRIDGE_PLEN=4080 TTBRIDGE_MAX=1 TTBRIDGE_BURST=<n> \
+  /tmp/doca_ttbridge -d mlx5_2 -g 1 -cm -lp 51000
+```
+Correctness identical to B1 (byte-exact land, exactly-once, drop=0). **Perf: ~53 Gbps / 1.6 Mpps peak jumbo
+= ~4× the raw ~13 G.** Single-core-bound by per-frame memcpy + single-task submit. **B3.1 to reach line
+rate:** task batching (64/batch) + zero-copy scatter-gather (payload buf into the RDMA mmap, no memcpy).
+**Next:** B2 (MR federation via RISC1 doorbell 3.1e); B3.1 (batch + zero-copy line-rate egress).
 
 ## 4. Regression / perf gates (run every phase change)
 ```

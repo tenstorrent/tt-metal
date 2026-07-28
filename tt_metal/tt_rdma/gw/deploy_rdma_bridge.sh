@@ -33,14 +33,18 @@ sshdpu 'mkdir -p /tmp/gw'
 scpdpu "$SELF_DIR/rdma_bridge_sample.c" /tmp/gw/rdma_bridge_sample.c
 
 echo "== build /tmp/doca_ttbridge on the DPU =="
+# B3: the bridge now also owns a DOCA Eth-TX HW-TX egress leg, so it links the stock doca_eth helpers
+# (eth_common.c + eth_flow_common.c) and doca-eth/doca-flow, in addition to the doca_rdma responder sources.
 sshdpu '
   set -e
   export PKG_CONFIG_PATH=/opt/mellanox/doca/lib/aarch64-linux-gnu/pkgconfig
   S=/opt/mellanox/doca/samples/doca_rdma
   R=$S/rdma_write_immediate_responder
-  gcc -O2 -w -I$S -I/opt/mellanox/doca/samples $(pkg-config --cflags doca-rdma doca-common doca-argp) \
+  E=/opt/mellanox/doca/samples/doca_eth
+  gcc -O2 -w -I$S -I$E -I/opt/mellanox/doca/samples \
+    $(pkg-config --cflags doca-rdma doca-eth doca-flow doca-common doca-argp) \
     /tmp/gw/rdma_bridge_sample.c $R/rdma_write_immediate_responder_main.c $S/rdma_common.c \
-    /opt/mellanox/doca/samples/common.c \
-    $(pkg-config --libs doca-rdma doca-common doca-argp) -lpthread -o /tmp/doca_ttbridge
+    $E/eth_common.c $E/eth_flow_common.c /opt/mellanox/doca/samples/common.c \
+    $(pkg-config --libs doca-rdma doca-eth doca-flow doca-common doca-argp) -lpthread -o /tmp/doca_ttbridge
   ls -la /tmp/doca_ttbridge && echo "  BRIDGE BUILT"
 '
