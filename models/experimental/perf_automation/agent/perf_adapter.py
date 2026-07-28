@@ -178,7 +178,16 @@ class PipelineStageAdapter:
                 continue
             setup = getattr(p, "%s_trace_setup" % name, None)
             if callable(setup):
-                self._call_with_inputs(setup, None)
+                # Standard emit-e2e hook: <stage>_trace_inputs() returns exactly the args this stage's
+                # trace_setup takes (assembled by the pipeline from its captured reference tensors). This
+                # is the model-agnostic seam -- the adapter never has to know the shape or the model. Fall
+                # back to the generic None/prompt_ids path for pipelines that don't expose it (a stage
+                # whose trace_setup self-derives, or a text model driven by prompt_ids).
+                _tin = getattr(p, "%s_trace_inputs" % name, None)
+                if callable(_tin):
+                    setup(_tin())
+                else:
+                    self._call_with_inputs(setup, None)
             # Propagate self_traced: a pipeline that OWNS its capture must be timed natively, never
             # wrapped in a second begin_trace_capture. The decode fallback below already does this;
             # omitting it here meant declaring PIPELINE_STAGES turned a working self-traced pipeline

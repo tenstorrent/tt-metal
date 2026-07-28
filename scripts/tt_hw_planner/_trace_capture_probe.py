@@ -5,6 +5,7 @@ import re
 import sys
 from pathlib import Path
 
+
 _LADDER = [
     (
         "residency",
@@ -72,11 +73,20 @@ def _stage_names(src: str) -> list:
 
 
 def _stage_contract_ok(src: str, stage: str) -> bool:
+    # A named stage must expose the full trace contract: trace_setup (prime resident buffers OUTSIDE the
+    # capture), trace_step (the host-op-free traced step), AND trace_inputs (zero-arg, returns exactly the
+    # args trace_setup takes, assembled from the captured reference tensors). trace_inputs is the standard
+    # seam the perf engine binds so it can drive the stage with NO per-model input knowledge.
+    named = all(
+        bool(re.search(r"def\s+%s_%s\s*\(" % (re.escape(stage), suf), src))
+        for suf in ("trace_setup", "trace_step", "trace_inputs")
+    )
+    if named:
+        return True
+    # Legacy single-token AR decode contract (decode_step / decode_prefill), still accepted.
     if stage == "decode":
         return bool(re.search(r"def\s+decode_step\s*\(", src))
-    return all(
-        bool(re.search(r"def\s+%s_%s\s*\(" % (re.escape(stage), suf), src)) for suf in ("trace_setup", "trace_step")
-    )
+    return False
 
 
 def probe(demo_dir: Path) -> dict:

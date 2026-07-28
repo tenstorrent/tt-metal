@@ -1691,6 +1691,12 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf eng
     the golden exactly. Mask the padded positions so output on [0:real_len] is unchanged.
   <stage>_trace_step(): ONE host-op-free forward at the fixed shape reading ONLY those persistent
     buffers (NO from_torch / NO per-call ttnn.zeros/arange INSIDE the trace).
+  <stage>_trace_inputs(): ZERO-ARG. Returns EXACTLY the argument value <stage>_trace_setup takes,
+    assembled from the captured reference tensors under _captured/<name>/ (the same HF-or-local golden
+    inputs the e2e PCC test / demo uses). This is the STANDARD, model-agnostic seam the perf engine
+    calls to obtain the stage's inputs with NO per-model knowledge -- the model-specific assembly (which
+    captured tensors, in what order, plus any fixed extras) lives HERE, behind this fixed name. It MUST
+    exist for every stage that has _trace_setup/_trace_step, or the perf test cannot drive the stage.
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 
