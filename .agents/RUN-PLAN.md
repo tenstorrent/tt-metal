@@ -64,7 +64,7 @@ those, **stop and reconcile** — somebody moved a branch, and every completed r
 Nothing in `ttnn/`, `tt_metal/`, or `models/` changed, so an existing build of `aab03552379` is
 valid. Deliberately **not** used as base: `mvasiljevic/gpt-oss-trace-tracker`, whose skills are one
 commit fresher but which also merges a trace-allocation-tracker runtime change (30 files in
-`ttnn/`). Changing the runtime under a perf ablation is not worth one doc paragraph, and its skill
+`ttnn/`). Changing the runtime under a perf comparison is not worth one doc paragraph, and its skill
 delta only points at a checker that build would not have.
 
 ### 1.2 Codex runner
@@ -312,7 +312,7 @@ Under `models/autoports/<model_dir>/doc/`:
   `final_ir.mlir`, and a work_log line per advisor recommendation: applied, or rejected with
   before/after numbers.
 
-The numbers the ablation turns on: **warmed traced decode latency at batch 1 and at
+The numbers the comparison turns on: **warmed traced decode latency at batch 1 and at
 `DECODE_BATCH`, before and after the stage, from the same harness.** Batch 1 is the primary target
 (per `$optimize`); `DECODE_BATCH` must not regress. Report both for every arm — they are not
 substitutable, because shard params differ between a sub-tile and a full-tile activation.
@@ -324,7 +324,7 @@ substitutable, because shard params differ between a sub-tile and a full-tile ac
 - **Comms are tags plus your own status branch.** Run the monitor in tmux beside the run; it
   publishes to `mvasiljevic/qb2/skillexp/status/<machine>`, which only your machine writes, so there
   is never a merge. See the experiment record in agentic-research
-  (`pipeline-experiments/skillexp-fusing-advisor/`, branch
+  (`skill-contribution-experiments/skillexp-fusing-advisor/`, branch
   `mvasiljevic/skillexp-fusing-advisor`):
 
   ```bash

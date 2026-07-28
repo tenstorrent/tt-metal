@@ -1,6 +1,7 @@
 # skillexp — isolating the contribution of graph-fusing and shard-advise
 
-This branch family is a 2×2 ablation over the autoport bringup pipeline. It answers one question:
+This branch family is a 2×2 contribution experiment over the autoport bringup pipeline. It answers
+one question:
 **how much of the optimize stage's speedup comes from `$graph-fusing`, and how much from
 `$shard-advise`?**
 
@@ -27,7 +28,7 @@ de-referenced from `optimize/SKILL.md` on *every* arm, including the fuse arms (
 the "before knob tuning first use `$graph-fusing`" paragraph, and the evidence-checklist item).
 Those three were a second, weaker channel for the same work, added for multichip topology testing
 and worth nothing on a single chip where the 01b goal already owns the fusing contract. Leaving them
-would blur the ablation in both directions: a "no fusing" arm still reading *run `$graph-fusing`
+would blur the measurement in both directions: a "no fusing" arm still reading *run `$graph-fusing`
 first* is not a clean control, and a "with fusing" arm would get the work counted twice.
 
 - **fusing = yes** — `.agents/skills/graph-fusing/` and `01b-fused-decoder.txt` are present; the
@@ -97,4 +98,4 @@ across all four arms for a given model, by construction.
 
 Full run plan, machine split, exact commands and handoff protocol: `.agents/RUN-PLAN.md`.
 Live experiment record, results and the monitoring scripts: agentic-research branch
-`mvasiljevic/skillexp-fusing-advisor`, `pipeline-experiments/skillexp-fusing-advisor/`.
+`mvasiljevic/skillexp-fusing-advisor`, `skill-contribution-experiments/skillexp-fusing-advisor/`.
