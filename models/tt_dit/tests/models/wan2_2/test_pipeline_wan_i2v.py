@@ -192,15 +192,7 @@ def test_pipeline_inference(
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
             thresholds = vbench_thresholds_by_height[height]
-            try:
-                assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
-                logger.info("VBench i2v gate PASSED (subject/background consistency)")
-            except RuntimeError as e:
-                # vbench not installed in this env (e.g. a runner that shares this file without the
-                # vbench extra) -- skip rather than error. A genuine threshold miss is an
-                # AssertionError, which is intentionally NOT caught, so the gate IS enforced where
-                # vbench is available.
-                logger.warning(f"VBench not available; skipping i2v VBench gate: {e}")
+            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
 
     if no_prompt:
         run(prompt=prompt, number=0, seed=42)
