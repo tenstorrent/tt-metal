@@ -181,6 +181,9 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
         log_debug(tt::LogOp, "Topological dimension {}", ring_size);
         return ring_size;
     }
+    // Without a cluster_axis the CCL spans the tensor's own device list, and
+    // get_linearized_index_from_physical_coord indexes into that same list. Keep the two in sync:
+    // switching this to the global mesh size alone would let a ring index exceed the ring size.
     const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());

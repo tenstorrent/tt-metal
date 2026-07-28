@@ -87,14 +87,8 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 }
 
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
-    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto shape = input_tensor.logical_shape();
-    shape[args.dim] *= args.num_devices;
-    return tt::tt_metal::TensorSpec(
-        shape,
-        tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
+    const AllGatherParams& args, const AllGatherInputs& /*tensor_args*/) {
+    return args.output_spec;
 }
 
 AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
@@ -121,8 +115,7 @@ AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create
     if (tensor_args.persistent_output_tensor.has_value()) {
         return tensor_args.persistent_output_tensor.value();
     }
-    auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    return create_device_tensor(args.output_spec, tensor_args.input_tensor.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherDeviceOperation::tensor_return_value_t>
@@ -251,7 +244,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 // size squared, up to that 4MB floor. The boundary errs toward unicast: its downside
                 // (up to ~40% at scale) dwarfs multicast's ~5-17% upside.
                 const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
-                const uint64_t out_page = compute_output_specs(args, tensor_args).compute_page_size_bytes();
+                const uint64_t out_page = args.output_spec.compute_page_size_bytes();
                 const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
 
                 // per-link bytes on the gathered axis (same axis/links the unicast factory uses)
@@ -272,6 +265,24 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     }
 
     return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
+}
+
+tt::tt_metal::TensorSpec compute_output_specs_helper(
+    const Tensor& input_tensor,
+    int32_t gather_dim,
+    uint32_t num_devices,
+    const std::optional<MemoryConfig>& memory_config) {
+    auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
+    if (output_mem_config.created_with_nd_shard_spec()) {
+        // Forward only the nd_shard_spec: the legacy 2D spec that TensorSpec back-fills describes the
+        // *input* shape, and its one-shard-per-core rule rejects valid ND configs for the larger output.
+        output_mem_config = MemoryConfig(output_mem_config.buffer_type(), output_mem_config.nd_shard_spec());
+    }
+    auto shape = input_tensor.logical_shape();
+    shape[gather_dim] *= num_devices;
+    return tt::tt_metal::TensorSpec(
+        shape,
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
 }
 
 std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
@@ -323,7 +334,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     return {
         AllGatherParams{
             gather_dim,
-            memory_config.value_or(input_tensor.memory_config()),
+            compute_output_specs_helper(input_tensor, gather_dim, num_devices, memory_config),
             cluster_axis,
             fabric_config,
             axis_topology,
