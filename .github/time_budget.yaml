@@ -368,11 +368,8 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 150
     bh_galaxy: 470
-    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (was 485 before the
-    # kimi_chunked/glm_chunked/ring_joint_sdpa_perf jobs moved to the bh_sc1_high_power pool)
+    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 377
-    # Sum of the bh_sc1_high_power job timeouts: kimi_chunked (40) + glm_chunked (45)
-    # + ring_joint_sdpa_perf (23). Same single-galaxy hardware, high_power-labelled pool.
     bh_sc1_high_power: 108
     wh_n150: 500
     wh_n150_civ2: 300
