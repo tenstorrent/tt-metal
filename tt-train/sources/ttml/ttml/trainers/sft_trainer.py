@@ -56,6 +56,9 @@ class SFTConfig:
         gradient_checkpointing: Enable activation recomputation to reduce
             memory usage at the cost of ~30 % extra compute.  Sets the
             model's ``runner_type`` to ``MemoryEfficient``.
+        sequence_parallel: Sum the gradients of tp-replicated params (RMSNorm gammas)
+            over the ``tp`` axis each step, since each tp rank saw only its slice of
+            the sequence.  Requires a model built with ``sequence_parallel=True``.
     """
 
     # ---- loop ----
@@ -76,10 +79,6 @@ class SFTConfig:
     gradient_checkpointing: bool = False
     # If True, tqdm progress bar (and its loss/lr postfix) is suppressed.
     disable_progress_bar: bool = False
-    # Megatron sequence parallelism: when True, additionally SUM-reduce the gradients
-    # of tp-replicated params (RMSNorm gammas) over the "tp" axis each step, since each
-    # tp rank only saw its slice of the sequence. Requires a model built with
-    # sequence_parallel=True on a mesh with a "tp" axis.
     sequence_parallel: bool = False
 
 
@@ -269,9 +268,6 @@ class SFTTrainer:
             if self._grad_sync_axes:
                 ttml.sync_gradients(self.model.parameters(), axis_names=self._grad_sync_axes)
 
-            # Sequence parallelism: reconstruct full gradients for tp-replicated params
-            # (RMSNorm gammas) by summing over the tp axis. Orthogonal to the dp/fsdp
-            # mean-reduction above (disjoint axes); no-op if the mesh has no tp axis > 1.
             if cfg.sequence_parallel:
                 ttml.sync_sequence_parallel_gradients(self.model.parameters(), "tp")
 
