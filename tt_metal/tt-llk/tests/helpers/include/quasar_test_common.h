@@ -9,6 +9,15 @@
 #include "tensor_shape.h"
 
 /**
+ * @brief Disables the DEST DVALID handshake for PACK.
+ */
+inline void set_up_zero_dest_dvalid_handshake_for_pack()
+{
+    auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+    cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+}
+
+/**
  * @brief Populates TensorShape struct args from runtime test parameters.
  *
  * @param params: Runtime parameters passed through pytest.

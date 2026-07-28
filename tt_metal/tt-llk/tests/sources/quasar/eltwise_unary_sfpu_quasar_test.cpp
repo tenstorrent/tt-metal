@@ -161,7 +161,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_math_eltwise_sfpu_init_();
-    test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, APPROX_MODE>();
+    test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
 
     const DataFormat sfpu_format = static_cast<DataFormat>(formats.sfpu_math);
 

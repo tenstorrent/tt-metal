@@ -51,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
     gather_cache_tp0,
@@ -1109,15 +1110,16 @@ def run_chunked_transformer_no_pcc(
     def format_duration(seconds: float) -> str:
         return f"{seconds:7.3f}s"
 
-    def print_duration_table(iteration_chunk_times: list[list[float]]) -> list[str]:
+    def print_duration_table(iteration_chunk_times: list[list[float]]) -> tuple[list[str], list[str]]:
         """Log the per-chunk median/stddev table (and, when a baseline is set, the tolerance band +
-        PASS/FAIL). Returns the list of human-readable failure messages (empty if all chunks pass or if
-        there is no baseline) so the caller can assert after the table has been printed."""
+        PASS/FAIL). Returns (failures, table_lines): failures are the human-readable out-of-band messages
+        (empty if all chunks pass or there is no baseline) so the caller can assert after the table is
+        printed; table_lines is the rendered table for the caller to emit as a summary."""
         # Iteration 0 includes compile/JIT effects; exclude it from perf stats.
         samples = iteration_chunk_times[1:]
         if not samples:
             logger.warning("No post-warmup iterations available for chunk timing stats (need num_iters >= 2)")
-            return []
+            return [], []
 
         gated = baseline_chunk_times_s is not None
         if gated and len(baseline_chunk_times_s) != n_chunks:
@@ -1154,25 +1156,9 @@ def run_chunked_transformer_no_pcc(
                     )
             rows.append(row)
 
-        widths = [len(header) for header in headers]
-        for row in rows:
-            for idx, cell in enumerate(row):
-                widths[idx] = max(widths[idx], len(cell))
-
-        def render_row(values: list[str]) -> str:
-            return "| " + " | ".join(value.ljust(widths[idx]) for idx, value in enumerate(values)) + " |"
-
-        separator = "+-" + "-+-".join("-" * width for width in widths) + "-+"
-
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
         logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
-        logger.info("\n" + separator)
-        logger.info(render_row(headers))
-        logger.info(separator)
-        for row in rows:
-            logger.info(render_row(row))
-        logger.info(separator)
-        return failures
+        return failures, render_table(headers, rows)
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -1419,9 +1405,17 @@ def run_chunked_transformer_no_pcc(
     logger.success(
         f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
     )
-    perf_failures = print_duration_table(iteration_chunk_times)
-    for key in profiler.times:
-        logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+    perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
+    timing_lines = [f"  {key}: {profiler.get(key) * 1000:.2f} ms" for key in profiler.times]
+    if perf_table_lines:
+        emit_summary(
+            "perf",
+            f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}",
+            f"Chunk timing — {variant.name} (L{num_layers}, {n_chunks} chunks, {num_iters} iters, preload {preload_isl})",
+            perf_table_lines + ["", "phase timings:"] + timing_lines,
+        )
+    for line in timing_lines:
+        logger.info(line)
 
     # Rough per-layer MLA-vs-FFN split (TT_PREFILL_BLOCK_TIMING=1): host wall-clock, sync-bracketed, so
     # absolutes inflate (syncs serialize) — read the RATIO and per-layer shape, not the totals. Mean +/- std
