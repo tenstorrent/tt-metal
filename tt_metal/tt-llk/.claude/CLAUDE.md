@@ -41,6 +41,7 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | Architecture, instruction, or LLK questions | `arch-lookup` (`.claude/skills/arch-lookup/SKILL.md`) | Orchestrates sage agents in parallel, aggregates results |
 | Running tests | `run-test` (`.claude/skills/run-test/SKILL.md`) | Dispatches llk-test-runner with correct scenario flags |
 | Debugging kernel errors | `debug-kernel` (`.claude/skills/debug-kernel/SKILL.md`) | Dispatches llk-debugger with inferred arch/kernel type |
+| Inspecting VCS/FSDB waves for LLK runtime failures | `llk-wave-debug` (`.claude/skills/llk-wave-debug/SKILL.md`) | Runs deterministic private waveform diagnosis and reports evidence |
 | Porting kernels between architectures | `port-kernel` (`.claude/skills/port-kernel/SKILL.md`) | Launches source + target sages, reads test harness |
 
 Trigger examples for `arch-lookup`:

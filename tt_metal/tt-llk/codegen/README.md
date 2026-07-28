@@ -53,6 +53,11 @@ does not add a dashboard step or modify `run.json`. Missing private tooling,
 missing FSDBs, backend errors, and timeouts are recorded and remain non-fatal,
 so normal code generation and refinement continue.
 
+For interactive Claude Code use, invoke
+`/llk-wave-debug /path/to/failure.fsdb failure=hang`. The skill is defined in
+`.claude/skills/llk-wave-debug/SKILL.md` and uses the same deterministic tools
+and private-data boundary.
+
 ### Batch Generation
 
 ```bash
