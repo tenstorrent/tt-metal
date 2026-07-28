@@ -269,6 +269,32 @@ protected:
         return {result[0], result[1]};
     }
 
+    // Where the binding kernel is placed (defaults to the semaphore's node). Set wider to build the
+    // "a binder runs outside the semaphore's node" case for the cached-pool guard.
+    experimental::Nodes kernel_target_{core};
+
+    // Build (but do not run) a minimal ProgramSpec with a COMPUTE kernel binding the semaphore, to
+    // exercise the cached-pool "no compute binder" guard. Validation only; no JIT/kernel execution.
+    void make_program_with_compute_binder(SemaphoreScope scope) {
+        experimental::SemaphoreSpec sem{
+            .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
+        sem.scope = scope;
+        const experimental::KernelSpecName K{"compute_k"};
+        experimental::KernelSpec ks{
+            .unique_id = K,
+            .source = "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp",
+            .num_threads = 1,
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
+            .hw_config = experimental::ComputeGen2Config{},
+        };
+        experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
+        experimental::ProgramSpec spec{
+            .name = "sem_scope_compute_binder", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        (void)program;
+    }
+
     // Build (but do not run) a minimal ProgramSpec whose semaphore carries the given scope
     // intent on the given target, so ValidateProgramSpec's ResolveSemaphoreScope runs.
     // Throws (TT_FATAL) on a contradiction. No JIT/emu-kernel execution.
@@ -286,7 +312,7 @@ protected:
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
             .hw_config = experimental::DataMovementGen2Config{},
         };
-        experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
+        experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = kernel_target_};
         experimental::ProgramSpec spec{
             .name = "sem_scope_validate", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
         Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
@@ -446,6 +472,29 @@ TEST_F(SemScopeFixture, TestAutoSingleWriterResolvesLocal) {
 TEST_F(SemScopeFixture, TestForcedScopeSingleNodeAccepted) {
     EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::EXTERNAL, core));
     EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, core));
+}
+
+// The cached-only pool is in the DM cache domain, so a COMPUTE binder would read a different word
+// (the kernel_config ring) and the semaphore would silently split -> host FATAL at config time.
+TEST_F(SemScopeFixture, TestForcedDmLocalCachedComputeBinderFatal) {
+    EXPECT_ANY_THROW(make_program_with_compute_binder(SemaphoreScope::DM_LOCAL_CACHED));
+    // Sanity: the same compute binding is perfectly legal on the NoC-atomic path.
+    EXPECT_NO_THROW(make_program_with_compute_binder(SemaphoreScope::EXTERNAL));
+}
+
+// The pool is per-core, so a binder running on a node OTHER than the semaphore's node would
+// increment its own node's copy -> silent split -> host FATAL at config time.
+TEST_F(SemScopeFixture, TestForcedDmLocalCachedRemoteBinderFatal) {
+    const auto grid = mesh_device_->compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "needs >= 2 worker nodes to place a binder off the semaphore's node";
+    }
+    // Semaphore stays on a single node (core), but its binding kernel spans two nodes.
+    kernel_target_ = experimental::NodeRange{experimental::NodeCoord{0, 0}, experimental::NodeCoord{1, 0}};
+    EXPECT_ANY_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, core));
+    // Sanity: the same spread-out binding is fine on the NoC-atomic path.
+    EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::EXTERNAL, core));
+    kernel_target_ = experimental::Nodes{core};  // restore for other tests
 }
 
 // A forced DM_LOCAL_CACHED semaphore that spans >1 node is a contradiction -> host FATAL.
