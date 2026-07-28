@@ -231,7 +231,7 @@ def test_estimate_l1_basic_fits_bh():
     assert fp["in1_buf_bytes"] == 2 * 8 * 2 * 2048
 
 
-def test_estimate_l1_rmo_doubles_output():
+def test_estimate_l1_rmo_without_bias_adds_no_interm():
     cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
         in0_block_w=2,
@@ -244,11 +244,10 @@ def test_estimate_l1_rmo_doubles_output():
         tile_pack_row_major=True,
     )
     fp = at.estimate_l1_per_core(cfg)
-    # rmo ⇒ interm_buf same size as out_buf
-    assert fp["interm_buf_bytes"] == fp["out_buf_bytes"]
+    assert fp["interm_buf_bytes"] == 0
 
 
-def test_estimate_l1_fuse_bias_adds_interm():
+def test_estimate_l1_fuse_bias_reuses_compatible_out_storage():
     cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
         in0_block_w=2,
@@ -261,8 +260,8 @@ def test_estimate_l1_fuse_bias_adds_interm():
     )
     fp_no_bias = at.estimate_l1_per_core(cfg)
     fp_bias = at.estimate_l1_per_core(cfg, fuse_bias=True)
-    assert fp_bias["interm_buf_bytes"] == fp_no_bias["out_buf_bytes"]
-    assert fp_bias["estimated_bytes"] > fp_no_bias["estimated_bytes"]
+    assert fp_bias["interm_buf_bytes"] == 0
+    assert fp_bias["estimated_bytes"] == fp_no_bias["estimated_bytes"]
 
 
 def test_estimate_l1_oversized_does_not_fit():

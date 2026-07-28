@@ -235,14 +235,9 @@ uint32_t compute_l1_safety_margin(
     return output_per_core_bytes + kSecondaryCbFloor;
 }
 
-// Returns true iff the estimated CB footprint fits in available L1 with the given
-// adaptive margin. The matmul mcast factories share out_cb and interm0_cb L1 regions
-// by default (real use is max(out, interm) per core), but when the auto-config emits
-// tile_pack_row_major=true the Bug 3 fix forces them to separate regions - real use
-// becomes out + interm. get_estimated_size_of_cbs already sums both, so its return
-// value is the correct upper bound for the tile_pack_row_major=true path. Call this
-// BEFORE enabling tile_pack_row_major so L1-tight shapes fall back to the legacy
-// shared-CB layout automatically instead of failing at program.compile() time.
+// Returns true iff the conservative CB footprint estimate fits in available L1 with
+// the given adaptive margin. Compatible out/interm CBs share physical storage, but
+// get_estimated_size_of_cbs sums both, so this remains a safe upper bound.
 bool tile_pack_row_major_fits_in_l1(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -270,26 +265,6 @@ bool tile_pack_row_major_fits_in_l1(
         utilities::estimate_interm_tile_size(compute_kernel_config, output_dtype),
         bias_single_tile_size);
     return estimated_size + l1_safety_margin_bytes < max_l1_space;
-}
-
-// matmul_block helper deadlocks when last K-block packs row-major to interm with FUSE_BIAS
-// (pack_last_to_interm) + !packer_l1_acc + num_k_blocks > 1: the upfront
-// reserve_back(row_group_tiles) on the shared interm CB blocks because the previous
-// K-block's subblock-major spill still occupies the full out_block_tiles capacity, and the
-// in1_subblock loop's reload pop_front(1) calls — which would free space — happen AFTER
-// the reserve. The packer_l1_acc=true path has spill_row_major + L1_ACC drain + retire-
-// then-pack ordering that avoid the pre-reserve hazard, so it is safe. Auto-config gates
-// tile_pack_row_major off in the unsafe combination so the factory falls back to the
-// subblock-major path (per-pair reserve+pack+push at 1-tile granularity).
-bool tile_pack_row_major_kblock_reload_safe(
-    const uint32_t bias_single_tile_size,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    uint32_t Kt,
-    uint32_t in0_block_w) {
-    const bool fuse_bias = bias_single_tile_size > 0;
-    const bool packer_l1_acc = compute_kernel_config.has_value() ? compute_kernel_config->packer_l1_acc : false;
-    const bool num_k_blocks_gt_1 = (in0_block_w > 0) && (Kt > in0_block_w);
-    return !(fuse_bias && !packer_l1_acc && num_k_blocks_gt_1);
 }
 
 bool can_cbs_fit_in_l1(
@@ -393,26 +368,18 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
-    // Systolic config sets in0_block_w = k_tiles_per_core, so num_k_blocks per core is 1
-    // (compute does a single K-block matmul). Use k_tiles_per_core as the deadlock check's
-    // "Kt" so the gate sees Kt == in0_block_w and stays off — the deadlock requires
-    // num_k_blocks > 1.
-    const bool rmo_fits_systolic =
-        output_is_sharded &&
-        tile_pack_row_major_fits_in_l1(
-            input_tensor_a,
-            input_tensor_b,
-            transpose_a,
-            transpose_b,
-            bias_single_tile_size,
-            batch_and_m_tiles_per_core,
-            n_tiles_per_core,
-            k_tiles_per_core,
-            l1_safety_margin_bytes,
-            compute_kernel_config,
-            output_dtype) &&
-        tile_pack_row_major_kblock_reload_safe(
-            bias_single_tile_size, compute_kernel_config, k_tiles_per_core, k_tiles_per_core);
+    const bool rmo_fits_systolic = output_is_sharded && tile_pack_row_major_fits_in_l1(
+                                                            input_tensor_a,
+                                                            input_tensor_b,
+                                                            transpose_a,
+                                                            transpose_b,
+                                                            bias_single_tile_size,
+                                                            batch_and_m_tiles_per_core,
+                                                            n_tiles_per_core,
+                                                            k_tiles_per_core,
+                                                            l1_safety_margin_bytes,
+                                                            compute_kernel_config,
+                                                            output_dtype);
     auto_tune::SubblockTuneInputs subblock_inputs_systolic{
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs_systolic.per_core_M = out_block_h;
@@ -563,21 +530,18 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
-    const bool rmo_fits =
-        out_sharded &&
-        tile_pack_row_major_fits_in_l1(
-            input_tensor_a,
-            input_tensor_b,
-            transpose_a,
-            transpose_b,
-            bias_single_tile_size,
-            per_core_M,
-            per_core_N,
-            in0_block_w,
-            l1_safety_margin_bytes,
-            compute_kernel_config,
-            output_dtype) &&
-        tile_pack_row_major_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, Kt, in0_block_w);
+    const bool rmo_fits = out_sharded && tile_pack_row_major_fits_in_l1(
+                                             input_tensor_a,
+                                             input_tensor_b,
+                                             transpose_a,
+                                             transpose_b,
+                                             bias_single_tile_size,
+                                             per_core_M,
+                                             per_core_N,
+                                             in0_block_w,
+                                             l1_safety_margin_bytes,
+                                             compute_kernel_config,
+                                             output_dtype);
     auto_tune::SubblockTuneInputs subblock_inputs{
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs.per_core_M = out_block_h;
@@ -858,24 +822,18 @@ MatmulProgramConfig create_matmul_program_config(
         n_size / ttnn::TILE_SIZE,
         output_tile_size_bytes_2dmcast,
         num_l1_banks_2dmcast);
-    // Each core sees the full K dim in 2D mcast (in0 is mcasted along the row, in1 along
-    // the column), so num_k_blocks = Kt / k_tiles_per_core where in0_block_w = k_tiles_per_core.
-    const uint32_t Kt_2dmcast = k_size / ttnn::TILE_SIZE;
-    const bool rmo_fits = mem_config.is_sharded() &&
-                          tile_pack_row_major_fits_in_l1(
-                              input_tensor_a,
-                              input_tensor_b,
-                              transpose_a,
-                              transpose_b,
-                              bias_single_tile_size,
-                              m_tiles_per_core,
-                              n_tiles_per_core,
-                              k_tiles_per_core,
-                              l1_margin_2dmcast,
-                              compute_kernel_config,
-                              output_dtype) &&
-                          tile_pack_row_major_kblock_reload_safe(
-                              bias_single_tile_size, compute_kernel_config, Kt_2dmcast, k_tiles_per_core);
+    const bool rmo_fits = mem_config.is_sharded() && tile_pack_row_major_fits_in_l1(
+                                                         input_tensor_a,
+                                                         input_tensor_b,
+                                                         transpose_a,
+                                                         transpose_b,
+                                                         bias_single_tile_size,
+                                                         m_tiles_per_core,
+                                                         n_tiles_per_core,
+                                                         k_tiles_per_core,
+                                                         l1_margin_2dmcast,
+                                                         compute_kernel_config,
+                                                         output_dtype);
     auto_tune::SubblockTuneInputs subblock_inputs{
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs.per_core_M = out_block_h;
@@ -1017,21 +975,18 @@ MatmulProgramConfig get_matmul_program_config(
                 N,
                 output_tile_size_bytes_1dmc,
                 num_l1_banks_1dmc);
-            const bool rmo_fits =
-                output_mem_config.is_sharded() &&
-                tile_pack_row_major_fits_in_l1(
-                    input_tensor_a,
-                    input_tensor_b,
-                    transpose_a,
-                    transpose_b,
-                    bias_single_tile_size,
-                    per_core_M,
-                    per_core_N,
-                    in0_block_w,
-                    l1_margin_1dmc,
-                    compute_kernel_config,
-                    output_dtype) &&
-                tile_pack_row_major_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, K, in0_block_w);
+            const bool rmo_fits = output_mem_config.is_sharded() && tile_pack_row_major_fits_in_l1(
+                                                                        input_tensor_a,
+                                                                        input_tensor_b,
+                                                                        transpose_a,
+                                                                        transpose_b,
+                                                                        bias_single_tile_size,
+                                                                        per_core_M,
+                                                                        per_core_N,
+                                                                        in0_block_w,
+                                                                        l1_margin_1dmc,
+                                                                        compute_kernel_config,
+                                                                        output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
@@ -1131,21 +1086,18 @@ MatmulProgramConfig get_matmul_program_config(
                 N,
                 output_tile_size_bytes_2dmc,
                 num_l1_banks_2dmc);
-            const bool rmo_fits =
-                output_mem_config.is_sharded() &&
-                tile_pack_row_major_fits_in_l1(
-                    input_tensor_a,
-                    input_tensor_b,
-                    transpose_a,
-                    transpose_b,
-                    bias_single_tile_size,
-                    per_core_M,
-                    per_core_N,
-                    in0_block_w,
-                    l1_margin_2dmc,
-                    compute_kernel_config,
-                    output_dtype) &&
-                tile_pack_row_major_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, K, in0_block_w);
+            const bool rmo_fits = output_mem_config.is_sharded() && tile_pack_row_major_fits_in_l1(
+                                                                        input_tensor_a,
+                                                                        input_tensor_b,
+                                                                        transpose_a,
+                                                                        transpose_b,
+                                                                        bias_single_tile_size,
+                                                                        per_core_M,
+                                                                        per_core_N,
+                                                                        in0_block_w,
+                                                                        l1_margin_2dmc,
+                                                                        compute_kernel_config,
+                                                                        output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
@@ -1729,21 +1681,18 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 Nt,
                 output_tile_size_bytes_simple,
                 num_l1_banks_simple);
-            const bool rmo_fits =
-                mem_config.is_sharded() &&
-                tile_pack_row_major_fits_in_l1(
-                    input_tensor_a,
-                    input_tensor_b,
-                    transpose_a,
-                    transpose_b,
-                    bias_single_tile_size,
-                    per_core_M,
-                    per_core_N,
-                    in0_block_w,
-                    l1_margin_simple,
-                    compute_kernel_config,
-                    output_dtype) &&
-                tile_pack_row_major_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, Kt, in0_block_w);
+            const bool rmo_fits = mem_config.is_sharded() && tile_pack_row_major_fits_in_l1(
+                                                                 input_tensor_a,
+                                                                 input_tensor_b,
+                                                                 transpose_a,
+                                                                 transpose_b,
+                                                                 bias_single_tile_size,
+                                                                 per_core_M,
+                                                                 per_core_N,
+                                                                 in0_block_w,
+                                                                 l1_margin_simple,
+                                                                 compute_kernel_config,
+                                                                 output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;

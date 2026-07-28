@@ -316,7 +316,7 @@ struct NoIn1BaseOffset {
  *     the interm_buf runtime-param note).
  *   - SubblockMajor spill/reload: MAY share out's L1 region (the factory's "share buffer"
  *     layout) — the first-block full-block reserve keeps spills from clobbering output.
- *   - TileRowMajor: must be its OWN region (per-row-group reserve/push can't share).
+ *   - TileRowMajor spill/reload: MAY share out's L1 region when CB storage is compatible.
  *
  * tile_order picks the output-pack layout; packer_l1_acc picks K-accumulation (false =
  * software spill/reload via interm; true = hardware L1 accumulation). See OutputCBLayout

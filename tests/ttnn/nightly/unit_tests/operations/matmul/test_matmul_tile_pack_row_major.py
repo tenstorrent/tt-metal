@@ -14,13 +14,9 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 # is in place and the absolute-offset pack + row-group writer produce correct
 # output.
 #
-# Multi-row subblocks (out_subblock_h > 1) are exercised together with
-# in1_num_subblocks > 2 via the dedicated test_bug3_* case below: this was
-# previously broken (PCC ~0.9) because the 2D / 1D mcast and non-mcast
-# factories shared the out_cb and interm0_cb L1 region, and the row-major
-# per-row-group reserve on out_cb would overwrite interm0's unconsumed
-# partials. The factories now force separate regions when tile_pack_row_major
-# is set.
+# Multi-row subblocks (out_subblock_h > 1) are exercised together with more
+# than two N-subblocks below. Canonical TRM placement keeps shared physical
+# out/interm storage safe for both software reload and L1 accumulation.
 
 
 def _dtype_pcc(dtype, k_tiles):
@@ -162,8 +158,12 @@ def test_mcast_2d_tile_pack_row_major_no_bias(device, out_subblock_h, out_subblo
     ids=["subblk_2x2", "subblk_4x2", "subblk_1x4", "subblk_1x2"],
 )
 @pytest.mark.parametrize("out_sharded", [True], ids=["l1_sharded_out"])
-def test_mcast_2d_tile_pack_row_major_fuse_bias(device, out_subblock_h, out_subblock_w, out_sharded):
-    m_tiles, k_tiles, n_tiles = 8, 8, 8
+@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["software_reload", "l1_acc"])
+@pytest.mark.parametrize("k_tiles", [8, 16], ids=["two_k_blocks", "four_k_blocks"])
+def test_mcast_2d_tile_pack_row_major_fuse_bias(
+    device, out_subblock_h, out_subblock_w, out_sharded, packer_l1_acc, k_tiles
+):
+    m_tiles, n_tiles = 8, 8
     m, k, n = m_tiles * 32, k_tiles * 32, n_tiles * 32
     grid_xy = (2, 2)
     per_core_M = m_tiles // grid_xy[1]
@@ -212,7 +212,7 @@ def test_mcast_2d_tile_pack_row_major_fuse_bias(device, out_subblock_h, out_subb
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
-        packer_l1_acc=True,
+        packer_l1_acc=packer_l1_acc,
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -255,7 +255,11 @@ def test_mcast_2d_tile_pack_row_major_fuse_bias(device, out_subblock_h, out_subb
     ids=["subblk_2x2", "subblk_4x2", "subblk_1x4", "subblk_1x2"],
 )
 @pytest.mark.parametrize("out_sharded", [True], ids=["l1_sharded_out"])
-def test_mcast_1d_mcast_in0_tile_pack_row_major(device, out_subblock_h, out_subblock_w, out_sharded):
+@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["software_reload", "l1_acc"])
+@pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "bias"])
+def test_mcast_1d_mcast_in0_tile_pack_row_major(
+    device, out_subblock_h, out_subblock_w, out_sharded, packer_l1_acc, has_bias
+):
     # 1D mcast_in0: A is width-sharded, B comes via mcast.
     # out_sharded=True   → WIDTH_SHARDED L1 output (OUT_SHARDED short-wait path).
     # out_sharded=False  → DRAM-interleaved output (writer kernel's Phase-1
@@ -272,7 +276,10 @@ def test_mcast_1d_mcast_in0_tile_pack_row_major(device, out_subblock_h, out_subb
     torch.manual_seed(0)
     torch_a = torch.randn(1, 1, m, k).to(torch.float32)
     torch_b = torch.randn(1, 1, k, n).to(torch.float32)
+    torch_bias = torch.randn(1, 1, 1, n).to(torch.float32) if has_bias else None
     torch_out = torch_a @ torch_b
+    if torch_bias is not None:
+        torch_out += torch_bias
 
     in0_mem = ttnn.create_sharded_memory_config(
         (1, 1, m, k),
@@ -293,6 +300,17 @@ def test_mcast_1d_mcast_in0_tile_pack_row_major(device, out_subblock_h, out_subb
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    bias = (
+        ttnn.from_torch(
+            torch_bias.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if torch_bias is not None
+        else None
+    )
 
     out_mem = (
         ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1)
@@ -305,7 +323,7 @@ def test_mcast_1d_mcast_in0_tile_pack_row_major(device, out_subblock_h, out_subb
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
-        packer_l1_acc=True,
+        packer_l1_acc=packer_l1_acc,
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -321,24 +339,33 @@ def test_mcast_1d_mcast_in0_tile_pack_row_major(device, out_subblock_h, out_subb
         tile_pack_row_major=True,
     )
 
-    out_t = ttnn.matmul(
-        a,
-        b,
-        program_config=program_config,
-        memory_config=out_mem,
-        dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
-    )
+    if bias is None:
+        out_t = ttnn.matmul(
+            a,
+            b,
+            program_config=program_config,
+            memory_config=out_mem,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+        )
+    else:
+        out_t = ttnn.linear(
+            a,
+            b,
+            bias=bias,
+            program_config=program_config,
+            memory_config=out_mem,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+        )
     out = ttnn.to_torch(out_t)
     _check_matmul(torch_out, out, ttnn.bfloat16, k_tiles)
 
 
 # -------- Multi-row subblock + in1_num_subblocks > 2 regression guard -----
-# Previously produced PCC ~0.9 because out_cb and interm0_cb shared the same
-# L1 region in the mcast factories. Row-major's per-row-group reserve on
-# out_cb landed on top of interm0's unconsumed subblocks. Fixed by gating
-# the shared-region CB path on !tile_pack_row_major in 2D / 1D / non-mcast
-# factories; these cases must stay green as a regression guard.
+# Canonical TRM placement must remain correct for both packer L1 accumulation
+# and software reload. The latter reads and rewrites row-strided partials on
+# every K-block; four K-blocks exercise the intermediate rewrite path.
 
 
 @pytest.mark.parametrize(
@@ -349,10 +376,14 @@ def test_mcast_1d_mcast_in0_tile_pack_row_major(device, out_subblock_h, out_subb
     ],
     ids=["multi_row_h2w2_sb4", "control_h1w2_sb4"],
 )
-def test_multi_row_wide_n_shared_cb_guard(device, out_subblock_h, out_subblock_w, in1_num_subblocks_expected):
+@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["software_reload", "l1_acc"])
+@pytest.mark.parametrize("k_tiles", [8, 16], ids=["two_k_blocks", "four_k_blocks"])
+def test_multi_row_wide_n_shared_cb_guard(
+    device, out_subblock_h, out_subblock_w, in1_num_subblocks_expected, packer_l1_acc, k_tiles
+):
     # Doubled N vs the regular 2D mcast tests to push in1_num_subblocks > 2.
     # Per-core: M=4, N=8 → in1_num_subblocks = 8 / out_subblock_w.
-    m_tiles, k_tiles, n_tiles = 8, 8, 16
+    m_tiles, n_tiles = 8, 16
     m, k, n = m_tiles * 32, k_tiles * 32, n_tiles * 32
     grid_xy = (2, 2)
     per_core_M = m_tiles // grid_xy[1]
@@ -384,7 +415,7 @@ def test_multi_row_wide_n_shared_cb_guard(device, out_subblock_h, out_subblock_w
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
-        packer_l1_acc=True,
+        packer_l1_acc=packer_l1_acc,
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -414,16 +445,10 @@ def test_multi_row_wide_n_shared_cb_guard(device, out_subblock_h, out_subblock_w
     _check_matmul(torch_out, out, ttnn.bfloat16, k_tiles)
 
 
-# -------- 1D mcast_in0: untilize_out (helper's last-K-block to interm + Phase-3) --
-# Phase-A regression guard for the matmul_block helper. With untilize_out=True the
-# kernel routes the last K-block through LastBlockTarget::Interm and runs a
-# downstream reblock_and_untilize phase. Adding pack_untilize.h to the helper's .inl
-# (Phase A introduced LastBlockTarget::OutWithUntilize, which lives in the same
-# .inl) means a header-include or namespacing regression here would surface as a
-# JIT-compile failure on this kernel; PCC drift on the un-untilized reference
-# would surface a behavioral regression in the spill / reload / Phase-3 chain.
-# Single subblock (out_subblock_h=1) keeps it compatible with the 1D factory's
-# untilize_out constraints.
+# -------- 1D mcast_in0: untilize_out (last K-block targets interm + Phase 3) --
+# Canonical TRM partials are consumed directly by standard untilize. Cover both
+# software reload and packer L1 accumulation while retaining height-1 variants
+# for the 1D factory's untilize_out constraint.
 
 
 @pytest.mark.parametrize(
@@ -434,7 +459,8 @@ def test_multi_row_wide_n_shared_cb_guard(device, out_subblock_h, out_subblock_w
     ],
     ids=["subblk_1x4", "subblk_1x2"],
 )
-def test_mcast_1d_mcast_in0_tile_pack_row_major_untilize_out(device, out_subblock_h, out_subblock_w):
+@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["software_reload", "l1_acc"])
+def test_mcast_1d_mcast_in0_tile_pack_row_major_untilize_out(device, out_subblock_h, out_subblock_w, packer_l1_acc):
     m_tiles, k_tiles, n_tiles = 4, 8, 8
     m, k, n = m_tiles * 32, k_tiles * 32, n_tiles * 32
     grid_xy = (2, 1)
@@ -472,7 +498,7 @@ def test_mcast_1d_mcast_in0_tile_pack_row_major_untilize_out(device, out_subbloc
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
-        packer_l1_acc=True,
+        packer_l1_acc=packer_l1_acc,
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

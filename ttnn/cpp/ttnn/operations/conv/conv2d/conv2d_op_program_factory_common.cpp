@@ -73,9 +73,8 @@ std::vector<CBInfo> get_cb_info(
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
 
-    // Partials are now dedicated unconditionally (see MATMUL_PARTIALS CB below), so this no
-    // longer gates the partials alias; kept maybe_unused for any future per-layout sizing.
-    [[maybe_unused]] const bool untilize_out = conv_config.output_layout == Layout::ROW_MAJOR;
+    // Untilized output keeps tile-format partials physically distinct from the row-major output.
+    const bool untilize_out = conv_config.output_layout == Layout::ROW_MAJOR;
 
     // Tile dimensions and data formats
 
@@ -228,28 +227,6 @@ std::vector<CBInfo> get_cb_info(
     // per_core_out_matrix_width_ntiles), independent of how the block is split into subblocks.
     const uint32_t out_block_num_tiles = block_config.act_block_h_ntiles * per_core_out_matrix_width_ntiles;
     //
-    // M3 — close the last TileRowMajor quadrant (l1_acc OFF + ROW_MAJOR/untilize, multi-K). The one-block
-    // sizing above is REQUIRED ONLY for packer_l1_acc=TRUE: per-address L1_ACC accumulation needs the
-    // helper's non-pin FIFO to WRAP to a fixed base every K-block, which a one-block region guarantees.
-    // Do NOT grow the l1_acc-ON region — a multi-block region would let the FIFO advance and reintroduce
-    // the M1 multi-output-block L1_ACC mis-accumulation that the resnet50 bias+l1_acc canary catches.
-    //
-    // The ONE quadrant that needs more than one block is TileRowMajor + l1_acc-OFF + ROW_MAJOR/untilize
-    // (the factory's TRM eligibility: HEIGHT_SHARDED, no-bias, untilize_out, !packer_l1_acc). There the
-    // SOFTWARE spill/reload is a NORMAL FIFO (no fixed-base wrap requirement), and the last K-block must
-    // reserve_back one M-row-group in matmul_partials_cb WHILE a full output block of subblock-major spills
-    // from the prior K-block is still fronted (the reload pop is sequenced after the reserve) — peak
-    // occupancy out_block_num_tiles + row_group_tiles. A one-block region overflows → reserve_back self-
-    // deadlock (Watcher UPAW). Give that quadrant headroom of one extra block (2*out_block_num_tiles ≥
-    // out_block_num_tiles + row_group_tiles for any subblock split, since row_group_tiles =
-    // out_block_num_tiles/in0_num_subblocks ≤ out_block_num_tiles, and the relaxed subblock_h isn't visible
-    // here). OOM cost on L1-tight convs is accepted (features over perf; user directive on GH#45995).
-    //
-    // Every OTHER path keeps the one-block region byte-identical. Narrowing the headroom to !enable_bias
-    // keeps the SubblockMajor bias+untilize l1_acc-OFF path at one block. The plain-TILE l1_acc-OFF path
-    // (untilize_out=false) likewise stays one block — it never reserves a row-group on top of spills.
-    const bool needs_software_reload_headroom = untilize_out && !packer_l1_acc && !enable_bias;
-    //
     // M5 — recover the L1 that M1's unconditional dedicate cost on the fp32_accum extreme shapes
     // (GH#45995 OOM regression). The dedicate is REQUIRED only for MULTI-output-block convs: there the
     // helper's non-pin FIFO must wrap to a fixed base every K-block for per-address L1_ACC, which a
@@ -266,40 +243,17 @@ std::vector<CBInfo> get_cb_info(
     // staging buffer the untilize phase reads — cannot alias onto the RM output), and !is_1d_depthwise
     // (dest-reuse path, no partials CB).
     const bool single_output_block = (per_core_out_ntiles == out_block_num_tiles);
-    // caller_owns class: the deep-K packer_l1_acc + bias convs that pin used to capture now route
-    // through the matmul-helper caller_owns_pack_target + TileRowMajor path
-    // (conv2d_op_sharded_program_factory.cpp). That path packs the matmul into a DEDICATED partials
-    // region while bias-add reads partials and writes a DISTINCT OUT buffer; aliasing partials onto OUT
-    // would make bias-add read and write the same L1. So force partials dedicated for this class. The
-    // other pin-class members (untilize_out interm target; multi-output-block) are already dedicated by
-    // the !untilize_out / !single_output_block terms below — only the single-output-block TILE-out
-    // bias+l1_acc case (rn50 DS2/DS3/L3a/L3b/L4a/L4b) needed the alias suppressed.
-    const bool caller_owns_class_forces_dedicated = packer_l1_acc && enable_bias;
-    // TileRowMajor + software-reload (!packer_l1_acc) CANNOT alias partials onto OUT: the reload keeps
-    // partials subblock-major while the last K-block packs row-strided into the SAME L1, so the output
-    // write clobbers not-yet-reloaded partials (silent corruption). Mirrors the matmul factory's
-    // do_not_inplace_interm0_out_CB guard. SBM + !l1_acc and TRM + l1_acc stay aliasable (safe).
-    //
-    // The TileRowMajor decision is derived here (not plumbed in) via the SAME helper the sharded factory
-    // uses, so this alias decision is identical on the allocation path and the L1-usage prediction path
-    // (both call get_cb_info) — otherwise the post-op CB-size equality check would abort.
-    const bool tile_pack_row_major = ttnn::operations::conv::auto_select_tile_pack_row_major(
-                                         sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
-                                         enable_bias,
-                                         weights_df,
-                                         is_1d_depthwise_conv,
-                                         fp32_dest_acc_en,
-                                         block_config.act_block_h_ntiles,
-                                         per_core_out_matrix_width_ntiles)
-                                         .selected;
+    // Compatible TileRowMajor software reload and packer-L1-accumulate paths may keep MATMUL_PARTIALS
+    // and OUT as distinct logical CBs backed by the same physical one-block region. Fused bias consumes
+    // and produces each row group in lockstep, loading a subblock into DST before packing over its
+    // physical source positions. Multi-output-block, untilize, format-mismatch, and depthwise cases
+    // remain physically distinct through the independent conditions below.
     const bool can_alias_partials_onto_out =
-        single_output_block && (partial_dtype == output_datatype) && !untilize_out && !is_1d_depthwise_conv &&
-        !caller_owns_class_forces_dedicated && !(tile_pack_row_major && !packer_l1_acc);
+        single_output_block && (partial_dtype == output_datatype) && !untilize_out && !is_1d_depthwise_conv;
     const uint32_t matmul_partials_num_pages =
-        is_1d_depthwise_conv ? 0
-        : can_alias_partials_onto_out
-            ? per_core_out_ntiles  // aliased onto OUT (== one block here), 0 extra L1
-            : (needs_software_reload_headroom ? 2 * out_block_num_tiles : out_block_num_tiles);
+        is_1d_depthwise_conv          ? 0
+        : can_alias_partials_onto_out ? per_core_out_ntiles  // aliased onto OUT (== one block here), 0 extra L1
+                                      : out_block_num_tiles;
     // 1D depthwise dest-reuse scratch (main): a single height block reuses out_cb directly for the
     // read-back (0-page — matmul_partials_num_pages is already 0 for is_1d_depthwise_conv); multiple
     // non-coalesced height blocks need a DEDICATED scratch CB in the output data format, because

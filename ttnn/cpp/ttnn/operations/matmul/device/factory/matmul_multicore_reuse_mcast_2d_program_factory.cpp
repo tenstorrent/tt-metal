@@ -141,15 +141,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     // dram_sharded factory. No-op on Wormhole and for tiles already >= dram_alignment.
     uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
 
-    // TILE_PACK_ROW_MAJOR + NON-l1_acc: the software-reload path reserves/pushes per M-row-group
-    // (smaller than the full out_block), breaking the shared-L1 invariant (interm0 partials consumed
-    // before out_cb for that subblock is written) — force separate regions there. The in_place
-    // (packer_l1_acc) path instead does ONE reserve over the whole block with no reload, so TRM +
-    // l1_acc CAN alias interm onto out (recovering the interm buffer). The interm-creation format
-    // condition (interm0_data_format != output_data_format) + this gate's sharded-geometry term still
-    // force separate when the accumulation format differs from out or the shard geometry requires it.
-    bool do_not_inplace_interm0_out_CB =
-        (output_is_sharded && (per_core_M != out_block_h)) || (tile_pack_row_major && !packer_l1_acc_en);
+    // Canonical TileRowMajor software reload can share same-format out/interm storage,
+    // including when fused bias consumes the partials. Preserve the sharded-geometry gate.
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -1633,14 +1627,9 @@ create_program_mcast_in0_in1(
         B,
         per_core_M * per_core_N,
         B * per_core_M * per_core_N);
-    // TILE_PACK_ROW_MAJOR: compute packs the last K-block per M-row-group at absolute CB offsets.
-    // The helper reserves/pushes per row-group (smaller than the full out_block), so the
-    // shared out/interm0 L1 region assumption — that interm0 fully drains before out_cb is
-    // written — no longer holds. Force separate regions when tile_pack_row_major is on.
-    // TRM force-separate applies only to the non-l1_acc software-reload path (see the detailed note
-    // at the first occurrence); TRM + l1_acc does one reserve / no reload, so it can alias.
-    bool do_not_inplace_interm0_out_CB =
-        (output_is_sharded && (per_core_M != out_block_h)) || (tile_pack_row_major && !packer_l1_acc_en);
+    // Canonical TileRowMajor software reload can share same-format out/interm storage,
+    // including when fused bias consumes the partials. Preserve the sharded-geometry gate.
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;

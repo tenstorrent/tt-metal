@@ -125,11 +125,11 @@ L1FootprintEstimate estimate_l1_footprint(const L1EstimateInputs& inputs) {
     const uint64_t pm = inputs.per_core_M;
     const uint64_t pn = inputs.per_core_N;
     const uint64_t ibw = inputs.in0_block_w;
-    const uint64_t interm_bytes = inputs.interm_tile_bytes != 0 ? inputs.interm_tile_bytes : inputs.out_tile_bytes;
-
     L1FootprintEstimate fp;
     fp.out_buf_bytes = pm * pn * inputs.out_tile_bytes;
-    fp.interm_buf_bytes = (inputs.fuse_bias || inputs.tile_pack_row_major) ? pm * pn * interm_bytes : 0;
+    // Fused bias does not by itself require distinct physical intermediate storage.
+    // Factory-specific format, geometry, and untilize gates remain outside this estimate.
+    fp.interm_buf_bytes = 0;
     fp.in0_buf_bytes = static_cast<uint64_t>(inputs.num_buffered_blocks) * pm * ibw * inputs.in0_tile_bytes;
     fp.in1_buf_bytes = static_cast<uint64_t>(inputs.num_buffered_blocks) * pn * ibw * inputs.in1_tile_bytes;
     fp.estimated_bytes = fp.out_buf_bytes + fp.interm_buf_bytes + fp.in0_buf_bytes + fp.in1_buf_bytes;
@@ -179,11 +179,9 @@ uint32_t determine_largest_in0_block_w(const InBlockWTuneInputs& inputs) {
     if (inputs.Kt == 0 || inputs.max_in0_block_w == 0) {
         return 1;
     }
-    // Fixed L1 footprint — independent of in0_block_w.
-    const uint32_t interm_footprint =
-        inputs.fuse_bias ? (inputs.per_core_M * inputs.per_core_N * inputs.interm_single_tile_size) : 0;
-    const uint32_t fixed_footprint =
-        (inputs.per_core_M * inputs.per_core_N * inputs.out_single_tile_size) + interm_footprint;
+    // Fixed L1 footprint — independent of in0_block_w. Fused bias can reuse compatible
+    // output storage, so it does not add an intermediate block by itself.
+    const uint32_t fixed_footprint = inputs.per_core_M * inputs.per_core_N * inputs.out_single_tile_size;
 
     if (fixed_footprint >= inputs.l1_budget_bytes) {
         return 1;  // Budget already consumed by output/interm alone; be safe.

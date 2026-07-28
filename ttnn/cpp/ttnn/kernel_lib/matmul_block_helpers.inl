@@ -353,23 +353,6 @@ ALWI void matmul_block_impl(
     ASSERT(in0_cb_id != out_cb_id);
     ASSERT(in1_cb_id != out_cb_id);
     ASSERT(shape.out_subblock_h * shape.out_subblock_w <= compute_kernel_lib::DEST_AUTO_LIMIT);
-    // Unsupported (PR #47724): TileRowMajor + software-reload (non-l1_acc) with interm and out on the
-    // SAME physical L1. The multi-K reload keeps partials subblock-major in interm while the last
-    // K-block packs row-strided into out; sharing L1 lets the row-strided write clobber not-yet-
-    // reloaded partials (silent value corruption). TRM software-reload needs interm as its OWN region;
-    // packer_l1_acc TRM may alias (single reserve, no reload) and num_k_blocks == 1 has no reload.
-    // Compare PHYSICAL L1 bases (fifo_limit - fifo_size), NOT CB indices: a factory can bind two
-    // DISTINCT CB indices to the SAME globally-allocated address (e.g. conv's partials-onto-out alias),
-    // which an index compare misses. Debug-only tripwire — the real guard is the factory refusing to
-    // alias this combo (matmul do_not_inplace_interm0_out_CB / conv can_alias_partials_onto_out).
-    if constexpr (tile_order == OutputCBLayout::TileRowMajor && !packer_l1_acc) {
-        const uint32_t interm_l1_base =
-            get_local_cb_interface(interm_cb_id).fifo_limit - get_local_cb_interface(interm_cb_id).fifo_size;
-        const uint32_t out_l1_base =
-            get_local_cb_interface(out_cb_id).fifo_limit - get_local_cb_interface(out_cb_id).fifo_size;
-        ASSERT(shape.num_k_blocks == 1 || interm_l1_base != out_l1_base);
-    }
-
     // Reconfig and init are independent compile-time gates (see the InitMode /
     // DataFormatReconfig enums). The pack reconfig targets interm_cb_id (where non-last
     // K-blocks spill); the last-block in-loop reconfig swaps to out_cb_id. The init is
@@ -504,11 +487,10 @@ ALWI void matmul_block_impl(
                 }
             }
 
-            // Non-last K-blocks spill into interm_buf. With TileRowMajor + L1_ACC the spill must
-            // match the last block's row-strided layout (Interm accumulates in the same region;
-            // Out reloads from it row-strided), so per-address accumulation is correct. Otherwise
-            // keep subblock-major so the last-block per-subblock reload reads partials contiguously.
-            constexpr bool spill_row_grouped = (tile_order == OutputCBLayout::TileRowMajor) && packer_l1_acc;
+            // Every TileRowMajor K-block uses the same canonical row-strided placement. L1_ACC
+            // accumulates there directly; software accumulation gathers each subblock into DST and
+            // rewrites the same row-group before republishing it.
+            constexpr bool trm_row_grouped = tile_order == OutputCBLayout::TileRowMajor;
 
             // packer_l1_acc: the packer's output format (accum_cb_id) and l1_acc mode are
             // BLOCK-invariant — every subblock of this K-block packs to accum_cb_id with the same
@@ -525,11 +507,15 @@ ALWI void matmul_block_impl(
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < shape.in0_num_subblocks; in0_subblock++) {
                 if constexpr (tile_order == OutputCBLayout::TileRowMajor && !packer_l1_acc) {
-                    // Row-major path reserves per M-row-group (one row of all N-subblocks).
-                    // Smaller than full-block reserve, so shared out/interm buffers don't deadlock.
-                    if (last_out) {
+                    // Software reload consumes one fronted Interm row-group. A new destination
+                    // row-group reserves normal FIFO space; an Interm rewrite reuses its
+                    // already-fronted storage and therefore does not reserve it again.
+                    if (enable_reload) {
+                        interm_buf.wait_front(row_group_tiles);
+                    }
+                    if (last_out && !pack_last_to_interm) {
                         pack_target_buf.reserve_back(row_group_tiles);
-                    } else if constexpr (spill_row_grouped) {
+                    } else if (!enable_reload) {
                         interm_buf.reserve_back(row_group_tiles);
                     }
                 }
@@ -547,23 +533,15 @@ ALWI void matmul_block_impl(
 
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(in1_cb_id, interm_cb_id);
-                        if constexpr (spill_row_grouped) {
-                            // Spills landed row-strided, pushed per M-row-group. Front the whole row
-                            // group on the first in1 sub-block, gather this sub-block's row-strided
-                            // slice into contiguous DST, and pop the group after the last in1 sub-block
-                            // — matching the producer's per-row-group reserve/push so increments balance.
-                            if (in1_subblock == 0) {
-                                interm_buf.wait_front(row_group_tiles);
-                            }
+                        if constexpr (trm_row_grouped) {
+                            // The row-group was fronted at the row boundary. Gather this
+                            // subblock's row-strided slice into contiguous DST.
                             copy_subblock_row_strided(
                                 interm_cb_id,
                                 in1_subblock * shape.out_subblock_w,
                                 out_row_width,
                                 shape.out_subblock_h,
                                 shape.out_subblock_w);
-                            if (in1_subblock == shape.in1_num_subblocks - 1) {
-                                interm_buf.pop_front(row_group_tiles);
-                            }
                         } else {
                             interm_buf.wait_front(out_subblock_num_tiles);
                             copy_block(interm_cb_id, 0, 0, out_subblock_num_tiles);
@@ -660,15 +638,12 @@ ALWI void matmul_block_impl(
                                 alias_out ? 0u : (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_subblock_num_tiles;
                             pack_subblock_at_offset(0, pack_target_id, abs_off, out_subblock_num_tiles);
                         } else if constexpr (tile_order == OutputCBLayout::TileRowMajor) {
-                            // Absolute-offset per-tile pack into the row-group reserve; row stride
-                            // = out_row_width. The per-row-group reserve supplies the M-row-group
-                            // base, leaving only the in1 col offset.
+                            // Absolute-offset per-tile pack into the current row-group region;
+                            // row stride = out_row_width. The live write pointer supplies the
+                            // M-row-group base, leaving only the in1 column offset.
                             //
-                            // packer_l1_acc: there is no per-row-group reserve (the helper did ONE
-                            // reserve over the whole block, FIFO wr_ptr fixed at the base), so the
-                            // M-row-group base must be folded into the absolute offset here
-                            // (in0_subblock * row_group_tiles); otherwise every row group packs onto
-                            // row 0 (latent when in0_num_subblocks == 1, garbles when > 1).
+                            // L1_ACC keeps one fixed whole-block base. Every non-L1_ACC path
+                            // advances its write pointer by one row-group after this row.
                             const uint32_t row_base = packer_l1_acc ? in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
@@ -695,9 +670,9 @@ ALWI void matmul_block_impl(
                         }
 
                     } else {
-                        // Non-last K-block: spill partial to interm_buf. spill_row_grouped picks
-                        // row-major (to match the last block when accumulating in the same interm
-                        // region) or subblock-major (compatible with the software per-subblock reload).
+                        // Non-last K-block: spill partial to interm_buf. TileRowMajor uses the same
+                        // canonical row-strided positions for L1_ACC and software reload;
+                        // SubblockMajor keeps each subblock contiguous.
                         tile_regs_commit();
                         // packer_l1_acc hoists both pack reconfigs to once-per-K-block (above). Only the
                         // fp32-only (non-l1_acc) spill reconfig remains per-subblock; its pack-DF must
@@ -707,7 +682,7 @@ ALWI void matmul_block_impl(
                         if constexpr ((packer_l1_acc || get_fp32_dest_acc_enabled()) && !packer_l1_acc) {
                             PACK((pack_reconfig_data_format(accum_cb_id)));
                         }
-                        if constexpr (!spill_row_grouped && !packer_l1_acc) {
+                        if constexpr (!trm_row_grouped && !packer_l1_acc) {
                             interm_buf.reserve_back(out_subblock_num_tiles);
                         }
                         tile_regs_wait();
@@ -719,9 +694,9 @@ ALWI void matmul_block_impl(
                             const uint32_t abs_off =
                                 (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_subblock_num_tiles;
                             pack_subblock_at_offset(0, accum_cb_id, abs_off, out_subblock_num_tiles);
-                        } else if constexpr (spill_row_grouped) {
-                            // packer_l1_acc: fold the M-row-group base into the offset, same as the
-                            // last-block pack above.
+                        } else if constexpr (trm_row_grouped) {
+                            // L1_ACC keeps one fixed whole-block base. Software spill/reload
+                            // advances the Interm write pointer by one row-group after this row.
                             const uint32_t row_base = packer_l1_acc ? in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
@@ -730,7 +705,7 @@ ALWI void matmul_block_impl(
                             pack_tile_block(0, interm_cb_id, out_subblock_num_tiles);
                         }
                         tile_regs_release();
-                        if constexpr (!spill_row_grouped && !packer_l1_acc) {
+                        if constexpr (!trm_row_grouped && !packer_l1_acc) {
                             interm_buf.push_back(out_subblock_num_tiles);
                         }
                     }
@@ -739,9 +714,18 @@ ALWI void matmul_block_impl(
                 }
 
                 if constexpr (tile_order == OutputCBLayout::TileRowMajor && !packer_l1_acc) {
+                    if (enable_reload) {
+                        interm_buf.pop_front(row_group_tiles);
+                    }
+                    // A software-reload Interm rewrite packs into the still-fronted row before
+                    // UNPACK can release it. Re-establish the normal reserve/push producer credit
+                    // after that pop, so the next K-block observes a balanced FIFO generation.
+                    if (enable_reload && (!last_out || pack_last_to_interm)) {
+                        interm_buf.reserve_back(row_group_tiles);
+                    }
                     if (last_out) {
                         pack_target_buf.push_back(row_group_tiles);
-                    } else if constexpr (spill_row_grouped) {
+                    } else {
                         interm_buf.push_back(row_group_tiles);
                     }
                 }
@@ -751,10 +735,10 @@ ALWI void matmul_block_impl(
 
             if constexpr (packer_l1_acc) {
                 // Drain the L1_ACC partials in increments matching the producer's push
-                // granularity (row_group_tiles when spill_row_grouped, else subblock-sized);
+                // granularity (row_group_tiles when trm_row_grouped, else subblock-sized);
                 // the CB API requires uniform increments. Skipped in the packer_l1_acc path (the
                 // helper pushes nothing per block, so there is nothing to drain).
-                const uint32_t drain_step = spill_row_grouped ? row_group_tiles : out_subblock_num_tiles;
+                const uint32_t drain_step = trm_row_grouped ? row_group_tiles : out_subblock_num_tiles;
                 if constexpr (pack_last_to_interm) {
                     // No software reload: Interm accumulates in place (and SBM-contiguous reload
                     // offsets wouldn't match the row-strided spill anyway).

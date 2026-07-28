@@ -45,6 +45,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers_advanced.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 #ifdef FUSE_BIAS
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
@@ -500,21 +501,31 @@ void kernel_main() {
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif  // !FUSE_BIAS
-        // This kernel manages the srcA / pack data-format reconfig externally above
-        // (tangled with the FP32/PACKER_L1_ACC #ifdefs and the pack_reconfig_l1_acc
-        // ordering), so reblock is invoked with NoReconfigure — the helper adds no
-        // reconfig of its own. One call loops over all in0_num_subblocks internally.
-                    reblock_and_untilize<
-                        out_subblock_w,
-                        out_block_w,
-                        reblock_untilize_config::InitUninitMode::InitAndUninit,
-                        reblock_untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                        in0_num_subblocks,
-                        in1_num_subblocks,
-                        out_subblock_num_tiles,
-                        out_subblock_h,
-                        mm_partials_buf,
-                        out_buf);
+        // This kernel manages srcA / pack data-format reconfiguration externally.
+        // TileRowMajor partials are already in canonical tile-row order, so standard
+        // untilize consumes them directly. SubblockMajor still needs the gather helper.
+                    if constexpr (output_layout == OutputCBLayout::TileRowMajor) {
+                        untilize<
+                            out_block_w,
+                            mm_partials_cb_id,
+                            out_cb_id,
+                            untilize_config::InitUninitMode::InitAndUninit,
+                            untilize_config::WaitMode::WaitBlock,
+                            untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                            in0_num_subblocks * out_subblock_h);
+                    } else {
+                        reblock_and_untilize<
+                            out_subblock_w,
+                            out_block_w,
+                            reblock_untilize_config::InitUninitMode::InitAndUninit,
+                            reblock_untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                            in0_num_subblocks,
+                            in1_num_subblocks,
+                            out_subblock_num_tiles,
+                            out_subblock_h,
+                            mm_partials_buf,
+                            out_buf);
+                    }
                 }
 
                 // ── Reconfigure for next output block ───────────────────

@@ -132,10 +132,11 @@ struct L1EstimateInputs {
     uint32_t per_core_M = 0;
     uint32_t per_core_N = 0;
     uint32_t in0_block_w = 0;
-    // Optional: when true, helper sizes interm_buf same as out_buf.
+    // Retained as part of the tuning API. Fused bias does not by itself require a
+    // distinct physical intermediate allocation.
     bool fuse_bias = false;
-    // Set by upgrade_subblock when it flips tile_pack_row_major on; treated
-    // identically to fuse_bias for L1 sizing (interm_buf doubles output area).
+    // Retained as part of the current tuning API; canonical software reload means
+    // tile order alone does not add a physical intermediate allocation.
     bool tile_pack_row_major = false;
     uint32_t in0_tile_bytes = 2048;
     uint32_t in1_tile_bytes = 2048;
@@ -175,7 +176,7 @@ struct InBlockWTuneInputs {
     uint32_t in0_single_tile_size = 0;
     uint32_t in1_single_tile_size = 0;
     uint32_t out_single_tile_size = 0;
-    uint32_t interm_single_tile_size = 0;  // ignored when fuse_bias is false
+    uint32_t interm_single_tile_size = 0;  // retained for tuning API compatibility
 
     bool fuse_bias = false;
 

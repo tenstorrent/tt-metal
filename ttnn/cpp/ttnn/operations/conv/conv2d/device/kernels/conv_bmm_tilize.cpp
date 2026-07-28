@@ -372,27 +372,19 @@ void kernel_main() {
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(38) == 1;
 
-    // "Dedicate partials, match matmul" (GH#45995): the factory now sizes matmul_partials_cb to ONE
-    // output block and gives it its own L1 region (is_globally_allocated=false → partials_cb_uses_output
-    // is always false here). With a one-block dedicated region the helper's NON-pin FIFO wraps back to
-    // the same base every K-block, so packer_l1_acc (and the software spill/reload when l1_acc is off)
-    // operates at a fixed L1 base for multi-output-block convs too — exactly how matmul's dedicated
-    // single-block interm0 behaves. There is NO pin anywhere on this path.
+    // MATMUL_PARTIALS uses one output block. Compatible single-output-block TILE output may bind it to
+    // the same physical storage as OUT, including fused bias; the CBs remain logically distinct and
+    // bias consumes/produces matching row groups in lockstep. Untilize, format mismatch,
+    // multi-output-block, and depthwise cases keep it physically distinct.
     //
-    // M2 — re-enable TileRowMajor (TRM) on the NON-pin dedicated-partials base. The factory
+    // TileRowMajor (TRM) is enabled by the factory
     // (conv2d_op_sharded_program_factory.cpp) passes tile_pack_row_major=1 (compile arg 39) for eligible
     // HEIGHT_SHARDED no-bias convs whose per_core_N is stranded by the SubblockMajor
     // out_subblock_w == per_core_N constraint, and folds a LARGER (relaxed) out_subblock into the
     // compile args. TRM lifts that constraint, so a relaxed subblock with out_subblock_h > 1 (fewer
     // matmul_block_init / pack passes per output block) becomes legal. With the define:
-    //   • the matmul helper packs the LAST K-block row-major (pack_subblock_row_strided) instead of
-    //     subblock-major, on the SAME non-pin dedicated-partials FIFO. l1_acc ON accumulates per-address
-    //     across K-blocks (spill_row_grouped=true: non-last spills land row-strided, last-block reload
-    //     gathers via copy_subblock_row_strided). l1_acc OFF software-spills/reloads: non-last spills are
-    //     subblock-major and the reload is contiguous (copy_block_matmul_partials), but the LAST block's
-    //     reserve_back lands one M-row-group on top of a still-fronted full block of spills, so the factory
-    //     sizes matmul_partials_cb to 2*out_block_num_tiles for l1_acc-OFF (M3) — that headroom is what
-    //     keeps the ROW_MAJOR/untilize Interm-target path from self-deadlocking on reserve_back.
+    //   • every K-block uses canonical row-strided placement. l1_acc ON accumulates per-address;
+    //     l1_acc OFF gathers with copy_subblock_row_strided and rewrites the same row before republishing.
     //   • the untilize phase (ROW_MAJOR output) reads the row-major interm via plain `untilize` (the
     //     row strip is already contiguous tile-row order), NOT reblock_and_untilize (SubblockMajor only).
     //   • TILE output packs the last K-block straight to out_cb in row-major tile order (== the tiled
@@ -406,9 +398,10 @@ void kernel_main() {
     // want TileRowMajor:
     //   • the no-bias TRM-relaxed path (fuse_bias == false): a relaxed/taller subblock made legal by TRM;
     //   • the deep-K packer_l1_acc INTERM-target class (fuse_bias || untilize_out): the former "pin" /
-    //     caller_owns class. The matmul packs the last K-block to the DEDICATED matmul_partials_cb
-    //     (LastBlockTarget::Interm) and the bias-add / untilize phase reads it and writes a DISTINCT output
-    //     buffer (out_cb for TILE output; the dedicated UNTILIZE_STAGING CB for untilize_out — un-aliased
+    //     caller_owns class. The matmul packs the last K-block to matmul_partials_cb
+    //     (LastBlockTarget::Interm) and the bias-add / untilize phase reads it and writes the logical output
+    //     buffer (out_cb for TILE output, which may share physical storage with partials; the dedicated
+    //     UNTILIZE_STAGING CB for untilize_out — un-aliased
     //     off partials so the TileRowMajor reserve-before-pop runs against a fresh CB with free slack for
     //     ANY dtype, which is what lets fp32+bias+untilize use this path). The helper handles the in-place
     //     single-reserve/push and per-K-block L1_ACC accumulation for (TileRowMajor + packer_l1_acc +
@@ -419,7 +412,7 @@ void kernel_main() {
 
     // One full output block in tiles = per_core_M (act_block_h_ntiles = in0_num_subblocks*out_subblock_h)
     // × per_core_N (in1_block_w = in1_num_subblocks*out_subblock_w). The packs-in-place path reserves/
-    // pushes exactly this many tiles on the dedicated partials CB once per outer iter (= L4a's 4×2 = 8);
+    // pushes exactly this many tiles on the partials CB once per outer iter (= L4a's 4×2 = 8);
     // that reserve/push now lives INSIDE the matmul helper, so this is only referenced from comments here.
     [[maybe_unused]] constexpr uint32_t out_block_num_tiles = (in0_num_subblocks * out_subblock_h) * in1_block_w;
 
@@ -626,10 +619,10 @@ void kernel_main() {
             // packer_l1_acc==false convs main skips, a uniform per-call tax. matmul_block_init is
             // independent of the reconfig gate, so it still fires under None (matmul_block_helpers.inl).
             //
-            // matmul_partials_cb is normally a DEDICATED one-block region (the factory dropped the
-            // out_cb alias + sized it to one output block). The helper owns its FIFO lifecycle; the
-            // single-reserve L1_ACC path keeps a fixed accumulation region within the K-loop, while
-            // the software-reload path uses the live circular-buffer pointers.
+            // matmul_partials_cb is a one-block logical CB. Compatible single-block TILE output may
+            // back it with out_cb's physical region; otherwise it is dedicated. The helper owns its
+            // FIFO lifecycle; the single-reserve L1_ACC path keeps a fixed accumulation region within
+            // the K-loop, while the software-reload path uses the live circular-buffer pointers.
             // packs_in_place (TileRowMajor + packer_l1_acc + Interm): the helper does its own single
             // reserve_back over the whole output block before the K-loop + push_back after, manages the
             // per-K-block llk_pack_reconfig_l1_acc itself, and issues the closing pack_reconfig_l1_acc(0)
