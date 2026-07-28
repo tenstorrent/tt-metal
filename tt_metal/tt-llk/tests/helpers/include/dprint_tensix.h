@@ -58,7 +58,7 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     ckernel::tensix_sync();
 
     // Wait a bit before reading through the memory-mapped region for the write to be committed.
-    ckernel::wait(100);
+    ckernel::wait(1000);
 
     constexpr uint32_t ELT_PER_ROW = 16;
     const uint32_t tile_elt_base   = tile_id * NUM_ROWS_PER_TILE * ELT_PER_ROW;
