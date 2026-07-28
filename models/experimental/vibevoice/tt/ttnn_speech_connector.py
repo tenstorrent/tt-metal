@@ -17,6 +17,8 @@ from typing import Optional
 import torch
 import ttnn
 
+from models.experimental.vibevoice.tt.vibevoice_config import damp_weight
+
 
 @dataclass
 class ConnectorParameters:
@@ -41,8 +43,10 @@ def preprocess_connector_parameters(
     hf_state keys expected: fc1.weight, fc1.bias (opt), fc2.weight, fc2.bias (opt), norm.weight
     (stripped of module prefix by split_submodule_weights).
     """
-    fc1_w = hf_state["fc1.weight"].to(torch.bfloat16)  # [hidden, input]
-    fc2_w = hf_state["fc2.weight"].to(torch.bfloat16)  # [hidden, hidden]
+    # Fold in the pre-#50250 matmul K-reduction damping (see mm_damp) — the connector runs once
+    # per frame inside the AR feedback loop, so it needs the same treatment as the LM weights.
+    fc1_w = damp_weight(hf_state["fc1.weight"], hf_state["fc1.weight"].shape[1], 2)  # [hidden, input]
+    fc2_w = damp_weight(hf_state["fc2.weight"], hf_state["fc2.weight"].shape[1], 2)  # [hidden, hidden]
     norm_w = hf_state["norm.weight"].to(torch.bfloat16)  # [hidden]
 
     hidden_dim = fc1_w.shape[0]
