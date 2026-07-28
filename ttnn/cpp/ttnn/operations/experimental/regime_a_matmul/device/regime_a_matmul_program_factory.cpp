@@ -921,7 +921,10 @@ void balance_in0_ring_order_bg(
     // ---- Gate: keep production unless the predicted peak improves materially. ----
     const bool adopt = static_cast<double>(new_peak) <= static_cast<double>(prod_peak) * (1.0 - kMinGain);
     const std::vector<std::array<uint32_t, 8>>& use = adopt ? chosen : prod;
-    log_debug(
+    // log_info (not log_debug, which Release compiles out): this whole function only runs under the
+    // diagnostic bit, so production stays silent, and the corpus A/B needs the adopt/keep decision to tell
+    // "gate declined" (must be exactly neutral) from "gate adopted and gained nothing".
+    log_info(
         tt::LogOp,
         "regime_a_matmul ring balance: background peak {} B, production peak {} B, balanced peak {} B -> {}",
         bg_peak,

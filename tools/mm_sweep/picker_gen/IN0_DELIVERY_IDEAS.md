@@ -60,7 +60,12 @@ See `D1_RING_ATTRIBUTION.md`.
    8) and still removes ~2/3 of crossings. Extra constraint: mm-siblings must keep equal `ring_pos` (the
    in1 forward order depends on it) -> build the partition for mm=0 and mirror it.
    Expected: -5% to -12% on the deep Ns>=2 shapes.
-2. **Whole-op link-load-aware ring ordering — ✅ +6.1% on 512x6144x2304, neutral elsewhere (diag bit10).**
+2. **~~Whole-op link-load-aware ring ordering (bit10)~~ — CLOSED by the 63-shape corpus at DEPLOYED configs:
+   0 wins, 2 regressions (-13.7%, -10.6%), mean -0.28%. See `CORPUS_AB_RING_BALANCE.md`. The max-edge term is
+   ALWAYS on the ring's 7-step critical path, so production's aggmax-first objective is already correct and
+   every measured win came from violating it. Ring ORDERING is exhausted. The +6.1% below was at a
+   hand-specified config production does not run (and which is itself 22% slower than the picker's pick).**
+   Historical claim:
    See `RING_LINK_BALANCE.md`. Charging the FIXED traffic (in1 reads, in0 read, reduction, output) onto the
    link map first, plus worst-edge/hop budgets anchored on production and an adopt-only-if-better gate, turns
    bit9's mixed result into +6.1% (3 relaunches) with no regression on the four golden shapes. Recovers ~20%
