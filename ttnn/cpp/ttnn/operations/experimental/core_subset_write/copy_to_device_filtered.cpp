@@ -4,6 +4,7 @@
 
 #include "copy_to_device_filtered.hpp"
 
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/graph/graph_serialization.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -11,7 +12,6 @@
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/queue_id.hpp>
 
 #include <tracy/Tracy.hpp>
 
