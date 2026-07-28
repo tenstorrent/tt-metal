@@ -192,6 +192,19 @@ def _metric(event: str, **fields) -> None:
     logger.info("DG_VLLM_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
 
 
+def _committed_ids(tokens) -> list:
+    """Flat python ids for one committed block, for the DG_VLLM_METRIC block_ids audit line.
+
+    Token IDS rather than text on purpose: the generator does not own a detokenizer, and a text
+    field would couple this log line to whichever tokenizer the server happens to hold. The scorer
+    detokenizes from the checkpoint instead, so the log stays valid if the serving stack changes.
+    """
+    try:
+        return [int(v) for v in tokens.reshape(-1).tolist()]
+    except Exception:  # never let an audit line break a served request
+        return []
+
+
 def _dram_snapshot(mesh_device, *, synchronize: bool = True) -> dict:
     if synchronize:
         ttnn.synchronize_device(mesh_device)
@@ -777,6 +790,18 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 halted=emission.halted,
                 dram=dram,
             )
+            # Committed ids for every block, so accuracy is observable DURING a multi-hour eval.
+            # lm_eval writes its samples only at the end, and nothing else in the serving path
+            # carries the generated text, so a 4-hour run was previously unobservable until it
+            # finished. Scored by doc/decision_fidelity/gate/live_score.py.
+            _metric(
+                "block_ids",
+                row=row,
+                block_idx=emission.block_idx,
+                prompt_len=session.prompt_len,
+                start_pos=emission.start_pos,
+                ids=_committed_ids(emission.tokens),
+            )
             self._sessions[row] = session
             blocks.append(self._emission_block(emission, session, row))
         return torch.cat(blocks, dim=0)
@@ -849,6 +874,14 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 next_pos=emission.next_pos,
                 halted=emission.halted,
                 stop=emission.stop,
+            )
+            _metric(
+                "block_ids",
+                row=row,
+                block_idx=emission.block_idx,
+                prompt_len=session.prompt_len,
+                start_pos=emission.start_pos,
+                ids=_committed_ids(emission.tokens),
             )
             blocks.append(self._emission_block(emission, session, row))
         return torch.cat(blocks, dim=0)

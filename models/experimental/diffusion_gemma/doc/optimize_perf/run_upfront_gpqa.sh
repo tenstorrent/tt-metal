@@ -301,8 +301,9 @@ GEN_KWARGS="stream=false,max_gen_toks=${MAX_GEN_TOKS},until=[]"
 # task the A100 reference used, so the numbers are directly comparable to that 70.71% / 70.20% bar.
 # The gated Idavidrein/gpqa diamond split is already in the local HF cache, so HF_HUB_OFFLINE=1 is
 # fine; scoring reads exact_match,flexible-extract.
+EVAL_TASK="gpqa_diamond_cot_zeroshot"
 COMMON_EVAL_ARGS=(
-    --tasks gpqa_diamond_cot_zeroshot
+    --tasks "${EVAL_TASK}"
     --model local-chat-completions
     --model_args "${MODEL_ARGS}"
     --gen_kwargs "${GEN_KWARGS}"
@@ -316,7 +317,10 @@ COMMON_EVAL_ARGS=(
 )
 
 echo "Running two-sample smoke..."
-SMOKE_SAMPLES='{"r1_gpqa_diamond":[0,1]}'
+# Keyed on ${EVAL_TASK}, not a literal. --samples silently matches nothing when the key is not the
+# running task name, so the stale "r1_gpqa_diamond" key made the smoke stage run all 198 questions
+# and the run then did it again for the full stage -- double the device time, no error.
+SMOKE_SAMPLES="{\"${EVAL_TASK}\":[0,1]}"
 "${LM_EVAL}" \
     "${COMMON_EVAL_ARGS[@]}" \
     --output_path "${SMOKE_OUTPUT}" \
