@@ -259,10 +259,13 @@ def generate_slice_to_pcie_device_mapping(host_vector, mpi_user=None, worker_tt_
             logger.info("Please build with: ./build_metal.sh --build-tests")
             sys.exit(1)
 
+    # One rank per host. Use host:1 slots so OpenMPI does not treat hosts as
+    # oversubscribed when a default hostfile (e.g. /etc/ttop) is also in the env
+    # (exit 213). Prefer this over bare --host a,b,c which conflicts on SC16 CI.
     if mpi_user:
-        host_vector_str = ",".join(f"{mpi_user}@{h}" for h in host_vector)
+        host_vector_str = ",".join(f"{mpi_user}@{h}:1" for h in host_vector)
     else:
-        host_vector_str = ",".join(host_vector)
+        host_vector_str = ",".join(f"{h}:1" for h in host_vector)
 
     cmd = [
         "mpirun",
@@ -270,6 +273,8 @@ def generate_slice_to_pcie_device_mapping(host_vector, mpi_user=None, worker_tt_
         str(len(host_vector)),
         "--host",
         host_vector_str,
+        "--map-by",
+        "ppr:1:node",
         "--mca",
         "btl",
         "self,tcp",
@@ -294,8 +299,13 @@ def generate_slice_to_pcie_device_mapping(host_vector, mpi_user=None, worker_tt_
 
     logger.info(f"Running: {' '.join(cmd)}")
 
+    env = os.environ.copy()
+    # Avoid ttop default hostfile / rankfile fighting --host (common SC16 CI failure).
+    env.pop("PRTE_MCA_prte_default_hostfile", None)
+    env.pop("OMPI_MCA_orte_default_hostfile", None)
+
     try:
-        result = subprocess.run(cmd)
+        result = subprocess.run(cmd, env=env)
         if result.returncode != 0:
             logger.error(f"{cmd} Failed to generate device mapping")
             sys.exit(result.returncode)
