@@ -1,11 +1,6 @@
 # syntax=ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/dockerfile-frontend:1.25
-# (docker/dockerfile:1.25, the latest release - re-hosted on our own ghcr.io (see
-# dockerfile/Dockerfile.tools' dockerfile-frontend target) rather than mirror.gcr.io directly:
-# mirror.gcr.io timed out from self-hosted runners the same way docker.io previously did, and a
-# `# syntax=` line has no fallback if its one hardcoded reference is ever unreachable - ghcr.io
-# is the one external destination that's been reliable throughout this investigation. Every
-# syntax feature actually used across dockerfile/* only needs >=1.4 (COPY/ADD --link); since we
-# host our own copy there's no reason to pick an older minimum version)
+# (docker/dockerfile:1.25, re-hosted on our own ghcr.io - see
+# dockerfile/Dockerfile.tools' dockerfile-frontend target)
 # TT-Metalium Dockerfile
 # Optimized with multi-stage builds for tool and Python dependency caching.
 #

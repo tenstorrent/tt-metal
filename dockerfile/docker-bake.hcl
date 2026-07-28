@@ -169,9 +169,8 @@ target "oras" {
   tags       = ["tool-oras:local"]
 }
 
-# Single-stage passthrough re-hosting docker/buildkit-syft-scanner (see the
-# Dockerfile.tools comment on this target for why it isn't extracted/copied
-# like the other tools).
+# Single-stage passthrough re-hosting docker/buildkit-syft-scanner (see
+# Dockerfile.tools' comment on this target).
 target "syft-scanner" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile.tools"

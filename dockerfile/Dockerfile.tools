@@ -56,19 +56,13 @@ ARG OMPI_COMMIT_SHA=29341e55efaabf7a6968444b4bb6f1f1fb40d664
 ARG ORAS_VERSION=1.3.3
 ARG ORAS_SHA256=9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
 
-# Declared here (before the file's first FROM) so it's usable in the
-# syft-scanner FROM line further down. Pinned by digest, not tag, to guard
-# against supply-chain compromise; SYFT_SCANNER_VERSION is just a
-# human-readable label for the version this digest corresponds to.
+# Declared before the first FROM so it's usable there. Pinned by digest,
+# not tag, to guard against supply-chain compromise.
 ARG SYFT_SCANNER_VERSION=1.11.0
 ARG SYFT_SCANNER_DIGEST=sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68
 
-# Same reasoning as SYFT_SCANNER_VERSION/DIGEST above, for the Dockerfile
-# syntax frontend. Since we host our own re-published copy (rather than
-# referencing the mutable upstream tag directly), there's no reason to pick
-# an older minimum version for supply-chain safety - pinned to the latest
-# release instead. (COPY/ADD --link, the newest syntax feature actually
-# used anywhere in dockerfile/*, only needs >=1.4 - 1.25 covers it easily.)
+# Same as above. Pinned to latest (not the >=1.4 minimum COPY/ADD --link
+# needs) since we control the re-published copy either way.
 ARG DOCKERFILE_FRONTEND_VERSION=1.25
 ARG DOCKERFILE_FRONTEND_DIGEST=sha256:0adf442eae370b6087e08edc7c50b552d80ddf261576f4ebd6421006b2461f12
 
@@ -442,43 +436,20 @@ LABEL org.opencontainers.image.version="${ORAS_VERSION}"
 COPY --from=oras-builder /install/ /install/
 
 #############################################################
-# syft-scanner - BuildKit's SBOM attestation generator image,
-# re-hosted verbatim from upstream (Apache-2.0,
-# github.com/docker/buildkit-syft-scanner). Unlike every other tool above,
-# this is NOT extracted into a `scratch` layer via COPY: it's consumed
-# directly as a whole running container by buildx's
-# `attest=type=sbom,generator=<image>`, which invokes the image's own
-# ENTRYPOINT. This single-stage passthrough re-publishes the upstream image
-# byte-for-byte (same layers/config/entrypoint) under our own tag - no
-# rebuild, no COPY, so nothing about its runtime behavior can drift from
-# upstream. Sourced via mirror.gcr.io (Docker Hub's public Google mirror,
-# anonymous/unauthenticated) rather than docker.io directly, so this
-# tool-image build itself never depends on Docker Hub's anonymous-pull
-# rate limiting either - see manual-docker-bake.sh and
-# publish-release-image.yaml for why that limit matters here.
+# syft-scanner - BuildKit's SBOM attestation generator image, re-hosted
+# verbatim (Apache-2.0). Consumed as a whole running container by buildx's
+# generator=, not COPY-extracted, so this is a single-stage passthrough -
+# no rebuild, byte-identical to upstream. Via mirror.gcr.io, not docker.io.
 #############################################################
 
 FROM mirror.gcr.io/docker/buildkit-syft-scanner@${SYFT_SCANNER_DIGEST} AS syft-scanner
 
 #############################################################
-# dockerfile-frontend - the `# syntax=docker/dockerfile:...` frontend image
-# BuildKit pulls to parse a Dockerfile, re-hosted verbatim from upstream
-# (github.com/moby/buildkit, Apache-2.0 - same clean redistribution story as
-# syft-scanner). Same single-stage passthrough as syft-scanner, and for the
-# same reason: it's resolved by BuildKit itself as a literal `# syntax=`
-# image reference, not consumed via COPY, and must be byte-identical to
-# upstream. Sourced via mirror.gcr.io so this one-time tool-image build has
-# no docker.io dependency either.
-#
-# Referenced by our OWN ghcr.io tag (not mirror.gcr.io directly) from the
-# `# syntax=` line in dockerfile/Dockerfile, Dockerfile.manylinux, and
-# Dockerfile.disaggregated-prefill-worker: mirror.gcr.io itself timed out
-# from self-hosted runners (run 30311500019, job 90136329854) the same way
-# docker.io previously did, and unlike the SBOM generator, a `# syntax=`
-# line is resolved before any bake/Harbor-fallback logic runs, so it has no
-# retry path if its one hardcoded reference is ever unreachable. ghcr.io is
-# the one external destination that has been reliable throughout this
-# investigation (every job here already authenticates to it).
+# dockerfile-frontend - the `# syntax=` image BuildKit pulls to parse a
+# Dockerfile, re-hosted verbatim (Apache-2.0). Same passthrough treatment
+# as syft-scanner, same reason: resolved as a literal image reference, not
+# COPY-extracted. Referenced by our own ghcr.io tag, not mirror.gcr.io
+# directly - that also timed out from self-hosted runners.
 #############################################################
 
 FROM mirror.gcr.io/docker/dockerfile@${DOCKERFILE_FRONTEND_DIGEST} AS dockerfile-frontend
