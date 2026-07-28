@@ -4,6 +4,8 @@
 
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+
 namespace ttnn {
 
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
