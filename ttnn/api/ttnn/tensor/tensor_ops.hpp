@@ -32,8 +32,7 @@ Tensor create_device_tensor(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
 
-void copy_to_device(
-    const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(
     tt::tt_metal::distributed::MeshCommandQueue& queue,
@@ -52,9 +51,9 @@ void copy_to_host(
     const Tensor& device_tensor,
     Tensor& host_tensor,
     bool blocking = true,
-    std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
+    std::optional<QueueId> cq_id = std::nullopt);
 
-Tensor cpu(const Tensor& input_tensor, bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
+Tensor cpu(const Tensor& input_tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
 Tensor pad(
     const Tensor& input_tensor,

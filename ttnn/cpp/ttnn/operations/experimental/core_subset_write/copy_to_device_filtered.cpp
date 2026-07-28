@@ -21,7 +21,7 @@ void copy_to_device_filtered(
     const ttnn::Tensor& host_tensor,
     ttnn::Tensor& device_tensor,
     const tt::tt_metal::CoreRangeSet& logical_core_filter,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
+    std::optional<QueueId> cq_id) {
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "ttnn::experimental::core_subset_write::copy_to_device_filtered", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(tt::tt_metal::raw_optional(cq_id));
