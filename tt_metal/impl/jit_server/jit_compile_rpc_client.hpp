@@ -5,12 +5,24 @@
 #pragma once
 
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "impl/jit_server/types.hpp"
 
 namespace tt::tt_metal::jit_server {
+
+// Thrown when a remote compile cannot be delivered for transport reasons: the response
+// timed out (the connection wedged / went half-open under load) or the connection was
+// lost. Distinct from a *genuine* remote compile failure (CompileResponse::success ==
+// false, e.g. a real kernel source error), which is surfaced as a normal error and must
+// NOT be masked by a local retry. Callers should treat this as "remote unavailable" and
+// fall back to a local compile.
+class RemoteCompileTransportError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 class JitCompileRpcClient {
 public:

@@ -23,6 +23,8 @@ struct CompileRequest {
     std::string gpp;
     std::vector<TargetRecipe> targets;
     std::vector<GeneratedFile> generated_files;
+    // Client build root (TT_METAL_HOME). Server re-roots toolchain/link paths from this to its own.
+    std::string client_root;
 };
 
 struct ElfBlob {
