@@ -113,6 +113,13 @@ struct CollectedSpecData {
         // two-alternative variant (DataMovement | Compute) and ValidateProgramSpec already forbids
         // semaphore bindings on compute kernels outright, so every binder is necessarily DM.)
         NodeRangeSet binder_node_set;
+        // Distinct binder KERNELS (writers + readers, deduplicated). The cached pool slot is seeded by
+        // an init call that genfiles injects into EVERY binding kernel's entry, and that seed is an
+        // unsynchronised destructive store of the initial value -- so with two or more binder kernels a
+        // co-resident kernel (even an OBSERVE-only reader) can reset a counter its sibling is already
+        // incrementing. The cached path is therefore restricted to exactly ONE binder kernel, which is
+        // also the case it exists for: one multi-threaded kernel synchronising its own threads.
+        uint32_t binder_kernel_count = 0;
         // Derived in Pass 2 (needs kernel_node_set): sum over writers of
         // num_cores(kernel_node_set) * num_threads = the count of concurrent writer instances.
         uint32_t writer_instance_count = 0;
@@ -245,11 +252,29 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
             const uint32_t num_nodes = sem_nodes.num_cores();
             TT_FATAL(
+                is_gen2_arch(),
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED, which is a Gen2 (Quasar) mechanism: the "
+                "cached-only semaphore pool, its cache aliases and its seeding do not exist on Gen1 "
+                "(Wormhole/Blackhole), where the kernel would not even link. Use SemaphoreScope::EXTERNAL "
+                "(or AUTO, which resolves to EXTERNAL on Gen1).",
+                sem.unique_id);
+            TT_FATAL(
                 num_nodes == 1,
                 "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but spans {} nodes; a DM-local cached "
                 "semaphore must live on exactly one node (it must never be reachable via the NoC).",
                 sem.unique_id,
                 num_nodes);
+            // The pool slot is seeded by an init injected into EVERY binding kernel's entry, as an
+            // unsynchronised destructive store -- so a second binder kernel could reset a live counter.
+            TT_FATAL(
+                binders.binder_kernel_count <= 1,
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by {} kernels; the cached pool "
+                "slot is seeded at each binding kernel's entry by an unsynchronised store, so a second "
+                "binder kernel (even a read-only one) can reset a counter its sibling is already "
+                "incrementing. Bind a cached semaphore from exactly one kernel (its threads may be many), "
+                "or use SemaphoreScope::EXTERNAL.",
+                sem.unique_id,
+                binders.binder_kernel_count);
             // NOTE: no "binders must be DM kernels" check is needed -- ValidateProgramSpec already
             // forbids semaphore bindings on compute kernels outright, and hw_config has no third
             // alternative, so every binder is necessarily data-movement.
@@ -304,14 +329,22 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 sem.unique_id,
                 binders.writer_instance_count);
 
-            // Prefer the cached fast path when the semaphore is PROVABLY confined to one node: the pool
-            // is a per-core region in the DM cache domain, so every binder (writers AND readers) must
-            // live on that node -- a binder elsewhere would address its own node's pool copy and the
-            // semaphore would split. merge()-then-compare-count detects any binder outside.
-            // Not eligible => EXTERNAL, which is always correct.
+            // Prefer the cached fast path only when it is PROVABLY safe. All of:
+            //   - Gen2 (Quasar): the pool, its cached/uncached aliases and the injected seeding are all
+            //     ARCH_QUASAR-only, and Gen1 DM cores have no usable 32-bit AMO (Wormhole would not even
+            //     link). On Gen1 fall through to EXTERNAL, which is correct everywhere.
+            //   - the semaphore is a single L1 cell, and every binder (writers AND readers) lives on
+            //     that node: the pool is per-core, so a binder elsewhere would address its own node's
+            //     copy and the semaphore would split.
+            //   - exactly ONE binder kernel: the pool slot is seeded by an init call injected into every
+            //     binding kernel's entry, and that seed is an unsynchronised destructive store, so a
+            //     second binder kernel (even an OBSERVE-only reader) could reset a live counter. One
+            //     kernel is also the case the fast path exists for: its own threads synchronising.
+            // Anything unproven => EXTERNAL.
             const bool binders_confined_to_sem_node =
                 sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores();
-            if (single_node && binders_confined_to_sem_node) {
+            if (is_gen2_arch() && single_node && binders_confined_to_sem_node &&
+                binders.binder_kernel_count == 1) {
                 return SemScope::DM_LOCAL_CACHED;
             }
             return SemScope::EXTERNAL;
@@ -788,14 +821,18 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 sem_info.setting_instance_count += instances;
             }
         }
-        // Cached-pool eligibility: where do ALL binders run? Readers count too -- a reader on another
-        // node would read that node's pool copy, not the one the writers update.
+        // Cached-pool eligibility: where do ALL binders run, and how many distinct kernels are they?
+        // Readers count for both -- a reader on another node would read that node's pool copy, and a
+        // reader kernel also receives the injected pool seeder.
+        std::unordered_set<const KernelSpec*> binder_kernels;
         for (const auto* recs : {&sem_info.writers, &sem_info.readers}) {
             for (const auto& rec : *recs) {
                 sem_info.binder_node_set =
                     sem_info.binder_node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
+                binder_kernels.insert(rec.kernel);
             }
         }
+        sem_info.binder_kernel_count = static_cast<uint32_t>(binder_kernels.size());
     }
 
     // Derive each local DFB's allocation node set: union of binding-kernels' node sets.

@@ -59,8 +59,11 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        if (arch_ == tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "SemScope atomic paths target Quasar/Blackhole";
+        // Every spec in this file uses DataMovementGen2Config, so the whole suite is Gen2 (Quasar)
+        // only -- on Gen1 the specs themselves would be rejected, which would look like test failures
+        // rather than an unsupported configuration.
+        if (arch_ != tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its specs use DataMovementGen2Config";
         }
         mesh_device_ = devices_[0];
         device_ = mesh_device_->get_devices()[0];
@@ -290,8 +293,10 @@ protected:
         const experimental::Nodes& sem_target,
         const std::vector<CensusKernel>& kernels,
         SemaphoreScope scope = SemaphoreScope::AUTO) {
-        std::vector<uint32_t> zero(2, 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
+        // Prefill with a sentinel OUTSIDE the SemScope range: LOCAL_NONATOMIC == 0, so a zero prefill
+        // would be indistinguishable from "the probe never reported" (e.g. the reporter never ran).
+        std::vector<uint32_t> sentinel(3, kNoReport);
+        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord{0, 0};
@@ -354,15 +359,22 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
-        EXPECT_EQ(result.size(), 2u);
-        if (result.size() < 2) {
-            return {0xFFFFFFFFu, 0u};
+        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
+        EXPECT_EQ(result.size(), 3u);
+        if (result.size() < 3) {
+            return {kNoReport, 0u};
         }
+        census_ring_word_ = result[2];
+        // Catch "the probe never reported" instead of silently reading it as LOCAL_NONATOMIC(0).
+        EXPECT_NE(result[0], kNoReport) << "census probe never reported: the reporter kernel/thread did not run";
         return {result[0], result[1]};
     }
 
+    static constexpr uint32_t kNoReport = 0xDEADBEEFu;  // sentinel: outside every SemScope value
     static uint32_t scope_val(SemScope s) { return static_cast<uint32_t>(s); }
+    // The semaphore's RING slot as observed by the last run_census() (report word 2). For a cached
+    // semaphore this must stay at the initial value, proving the count lives in the pool.
+    uint32_t census_ring_word_{kNoReport};
 
     // Where the binding kernel is placed (defaults to the semaphore's node). Set wider to build the
     // "a binder runs outside the semaphore's node" case for the cached-pool guard.
@@ -516,10 +528,12 @@ TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
 
 // ---- S5: AUTO classifier behavior (auto-select LOCAL_NONATOMIC vs EXTERNAL) ----
 
-// AUTO on a MULTI-writer semaphore must auto-resolve to the atomic EXTERNAL path. All DMs
-// concurrently up() an AUTO-scoped semaphore; exact num_dms*iters proves the classifier picked
-// EXTERNAL (a wrong LOCAL_NONATOMIC pick would lose updates under contention -> short count).
-TEST_F(SemScopeFixture, TestAutoMultiWriterResolvesExternal) {
+// AUTO on a MULTI-writer semaphore must resolve to an ATOMIC mechanism. All DMs concurrently up() an
+// AUTO-scoped semaphore; exact num_dms*iters proves atomicity (a wrong LOCAL_NONATOMIC pick loses
+// updates under contention -> short count). Which atomic mechanism it picks depends on confinement --
+// here one multi-threaded kernel on one node, so it is the cached pool; TestCensus* assert the
+// specific decision. This test's job is the end-to-end atomicity guarantee.
+TEST_F(SemScopeFixture, TestAutoMultiWriterIsAtomic) {
     if (!is_quasar) {
         GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
     }
@@ -527,8 +541,8 @@ TEST_F(SemScopeFixture, TestAutoMultiWriterResolvesExternal) {
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "AUTO multi-writer up value(): {} (expected {})", observed, expected);
     EXPECT_EQ(observed, expected)
-        << "AUTO on a multi-writer semaphore did not resolve to the atomic EXTERNAL path (lost updates "
-           "=> classifier wrongly picked LOCAL_NONATOMIC).";
+        << "AUTO on a multi-writer semaphore did not resolve to an atomic mechanism (lost updates => the "
+           "classifier wrongly picked LOCAL_NONATOMIC).";
 }
 
 // AUTO on a SINGLE-writer semaphore resolves to the cheap LOCAL_NONATOMIC path (single-thread,
@@ -571,18 +585,35 @@ TEST_F(SemScopeFixture, TestCensusMultiThreadPicksCached) {
     EXPECT_EQ(count, expected) << "cached AMO lost updates under concurrency, or the pool was not initialised";
 }
 
-// Two separate kernels, both on the semaphore's node -> 2 writer instances, still confined -> cached.
-TEST_F(SemScopeFixture, TestCensusTwoKernelsSameNodePicksCached) {
+// RESIDENCY: a cached semaphore's count must live in the POOL, so its kernel_config RING slot must
+// still hold the untouched initial value. Every other cached assertion is count-only and would pass
+// even if the semaphore had silently fallen back to the ring -- this is the only test that can tell.
+TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
     if (!is_quasar) {
-        GTEST_SKIP() << "cached pool is Quasar-only";
+        GTEST_SKIP() << "the cached pool is Quasar-only";
     }
+    const auto [scope, count] =
+        run_census(core, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
+    ASSERT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED)) << "expected the cached pick for this shape";
+    EXPECT_EQ(count, num_dms_ * concurrent_iterations);
+    log_info(LogTest, "cached residency: count={} ring_slot={}", count, census_ring_word_);
+    EXPECT_EQ(census_ring_word_, 0u)
+        << "the ring slot changed (" << census_ring_word_
+        << "), so the cached semaphore is NOT living in the pool -- the pool routing silently fell back "
+           "to the kernel_config ring.";
+}
+
+// TWO binder kernels must NOT be cached, even on one node: the pool slot is seeded by an init
+// injected into each binding kernel's entry as an unsynchronised destructive store, so a co-resident
+// binder could reset a counter its sibling is incrementing. Must fall through to EXTERNAL.
+TEST_F(SemScopeFixture, TestCensusTwoKernelsSameNodePicksExternal) {
     const auto [scope, count] = run_census(
         core,
         {{.num_threads = 1, .increments = iterations, .reporter = true}, {.num_threads = 1, .increments = iterations}});
     (void)count;  // cross-kernel count is not barrier-synchronised; the decision is what matters here
     log_info(LogTest, "census two-kernels-same-node: scope={}", scope);
-    EXPECT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED))
-        << "two single-thread kernels on the semaphore's node are still confined -> cached";
+    EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL))
+        << "a second binder kernel would also seed (reset) the shared pool slot -> must not be cached";
 }
 
 // A semaphore spanning >1 node is >1 physical cell; the pool is per-core, so it must take the NoC
