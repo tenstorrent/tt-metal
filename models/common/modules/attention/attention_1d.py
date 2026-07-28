@@ -190,6 +190,16 @@ class Attention1DConfig:
     prefill_wo_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None  # f(seq_len)
     prefill_kv_memcfg: Callable[[int], ttnn.MemoryConfig] | None = None  # f(seq_len) for KV cache write
 
+    # WO-matmul prefill M-chunk cutoff. The folded [1,1,seq_len,dim] prefill activation (seq_len = B*S
+    # when batched) is reshaped into [1, seq_len//cutoff, cutoff, dim] so the WO matmul tiles at
+    # per_core_M = ceil(cutoff / 256). None → MAX_MM_SEQ_LEN (1024 = TTTv1 model_config.py parity);
+    # resolved+written back in _resolve_attention1d_config so forward and the prg config agree. A
+    # per-model override (e.g. 2048) regroups the folded batch-32 prefill into fewer/larger M-chunks —
+    # bit-identical, since only per_core_M / the chunk count change (the K-contraction, in0_block_w, and
+    # n_dim are all independent of M-tiling). Deliberately DECOUPLED from the fused all_gather_matmul
+    # n_dim, which stays on MAX_MM_SEQ_LEN so the fused output width / sharding is untouched.
+    wo_prefill_len_cutoff: int | None = None
+
     # Optional: use ttnn.experimental.minimal_matmul (instead of ttnn.linear) for the QKV prefill
     # matmul above seq_len > 128 — matches TTTv1's long-prefill path (attention.py L907-913), which is
     # ~2x faster on the large folded-batch QKV matmul. Default OFF so untouched models / decode stay
@@ -595,8 +605,11 @@ class Attention1D(LightweightModule):
             attn_output_concat = ttnn.reshape(attn_output_concat, [1, 1, seq_len, -1])
 
         # --- STAGE 12: Reshape for long sequences (to fit WO matmul on device) ---
-        if seq_len > MAX_MM_SEQ_LEN:
-            attn_output_concat = ttnn.reshape(attn_output_concat, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+        # wo_prefill_len_cutoff (resolved: None → MAX_MM_SEQ_LEN) sets the WO M-chunk size; a per-model
+        # override regroups the folded prefill into fewer/larger M-chunks (bit-identical M-reblocking).
+        wo_cutoff = cfg.wo_prefill_len_cutoff
+        if seq_len > wo_cutoff:
+            attn_output_concat = ttnn.reshape(attn_output_concat, [1, seq_len // wo_cutoff, wo_cutoff, -1])
 
         # --- STAGE 13: All-Gather for Ring topology ---
         # Method bound at construction based on use_fused_all_gather_matmul (see _bind_forward_methods)
@@ -613,7 +626,7 @@ class Attention1D(LightweightModule):
         )
 
         # --- STAGE 15: Reshape back (undo long sequence reshape) ---
-        if seq_len > MAX_MM_SEQ_LEN:
+        if seq_len > wo_cutoff:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         ttnn.deallocate(attn_output_concat)
@@ -1795,6 +1808,14 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
         to_set["prefill_sdpa_prg_config"] = sdpa_prg_config
 
+    # Resolve the WO-matmul prefill M-chunk cutoff (None → MAX_MM_SEQ_LEN = TTTv1 parity) and write it
+    # back, so prefill_forward's STAGE-12/15 reshape and the prg config below agree. Only the M-tiling
+    # reads it; the fused all_gather_matmul n_dim stays on MAX_MM_SEQ_LEN (decoupled — see the field doc).
+    wo_prefill_len_cutoff = config.wo_prefill_len_cutoff
+    if wo_prefill_len_cutoff is None:
+        wo_prefill_len_cutoff = MAX_MM_SEQ_LEN
+        to_set["wo_prefill_len_cutoff"] = wo_prefill_len_cutoff
+
     if config.prefill_wo_prg_config is None:
         use_fused = to_set.get("use_fused_all_gather_matmul", config.use_fused_all_gather_matmul)
         if use_fused is None:
@@ -1807,12 +1828,14 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             to_set["use_fused_all_gather_matmul"] = use_fused
 
         k_dim = (n_heads * head_dim) // num_devices
+        # n_dim intentionally stays on the MAX_MM_SEQ_LEN constant (NOT wo_prefill_len_cutoff): it drives
+        # the fused all_gather_matmul output width / sharding, which must be untouched by the M-cutoff.
         n_dim = MAX_MM_SEQ_LEN if use_fused and MAX_MM_SEQ_LEN % (dim // num_devices) == 0 else dim
         prefill_rows = 8
 
         @lru_cache
         def wo_prefill_prg_config(seq_len: int):
-            num_rows = min(seq_len, MAX_MM_SEQ_LEN)
+            num_rows = min(seq_len, wo_prefill_len_cutoff)
             grid_size = _find_prefill_grid(prefill_rows, k_dim // tile_size)
             return _matmul_config(
                 m=num_rows,
@@ -1820,7 +1843,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
                 n=n_dim,
                 grid_size=grid_size,
                 in0_block_w=1,
-                fuse_batch=seq_len <= MAX_MM_SEQ_LEN,
+                fuse_batch=seq_len <= wo_prefill_len_cutoff,
                 per_core_n=math.ceil(n_dim / (tile_size * dram_shard_grid_width)) if not use_fused else None,
             )
 

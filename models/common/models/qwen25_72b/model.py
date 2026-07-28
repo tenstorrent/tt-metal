@@ -409,6 +409,10 @@ def _build_decoder_layer(
             li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
+            # WO-matmul prefill M-chunk cutoff: regroup the folded batch-32 prefill WO matmul into
+            # 2 chunks of 2048 (per_core_M=8) instead of 4 chunks of 1024, halving the WO weight
+            # re-stream passes on the folded prefill. Bit-identical M-reblocking (see field doc).
+            wo_prefill_len_cutoff=2048,
         )
     )
 
