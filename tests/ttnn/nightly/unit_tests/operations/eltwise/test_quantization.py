@@ -674,3 +674,51 @@ def test_requant_uint8_mixed_dtype_per_tensor_2d(device, in_dtype, in_q_max, out
     result_tr = ttnn.to_torch(dequantized_tt)
     check_pcc(input_tr, result_tr, True)
     check_match_ratio(input_tr, result_tr, ttnn.float32)
+
+
+# uint8 input combined with a tensor zero-point used to abort with
+#   "Input tensor A dtype DataType::UINT8 is not supported for binary operation BinaryOpType::SUB"
+# because the per-tensor composite fallback subtracted the zero-point straight off the uint8
+# input, and SUB has no uint8 operand support. The scalar-zero-point paths feed the DEQUANT LLK
+# (which does take uint8) and the per-channel composite already widened to float32, so only this
+# combination was broken. Widening to int32 first makes it agree bit-for-bit with the same
+# quantized values presented as int32.
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("scale_dim", [0, 1])
+@pytest.mark.parametrize("zero_point", [0, 7, 255])
+def test_dequant_uint8_input_with_tensor_zero_point(device, output_dtype, scale_dim, zero_point):
+    torch.manual_seed(0)
+    scale = 0.02
+
+    q_tr = torch.randint(0, 256, (2, 3, 64, 96), dtype=torch.int32)
+    q_uint8 = ttnn.from_torch(q_tr.to(torch.uint8), dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    q_int32 = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    scale_arg = convert_scalar_to_ttnn_tensor(device, scale, scale_dim, ttnn.float32)
+    zero_point_tt = convert_scalar_to_ttnn_tensor(device, zero_point, 1, ttnn.int32)
+
+    from_uint8 = ttnn.to_torch(ttnn.dequantize(q_uint8, scale_arg, zero_point_tt, dtype=output_dtype))
+    from_int32 = ttnn.to_torch(ttnn.dequantize(q_int32, scale_arg, zero_point_tt, dtype=output_dtype))
+
+    assert torch.equal(from_uint8, from_int32)
+
+
+# requantize with a tensor zero-point falls through to the dequantize composite, so a uint8
+# input hit the same abort one level down.
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint8])
+def test_requant_uint8_input_with_tensor_zero_point(device, output_dtype):
+    torch.manual_seed(0)
+    in_scale, in_zero_point = 0.02, 7
+    out_scale, out_zero_point = 0.05, 3
+
+    q_tr = torch.randint(0, 256, (2, 3, 64, 96), dtype=torch.int32)
+    q_uint8 = ttnn.from_torch(q_tr.to(torch.uint8), dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    q_int32 = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    in_zp_tt = convert_scalar_to_ttnn_tensor(device, in_zero_point, 1, ttnn.int32)
+    out_zp_tt = convert_scalar_to_ttnn_tensor(device, out_zero_point, 1, ttnn.int32)
+
+    from_uint8 = ttnn.to_torch(ttnn.requantize(q_uint8, in_scale, in_zp_tt, out_scale, out_zp_tt, dtype=output_dtype))
+    from_int32 = ttnn.to_torch(ttnn.requantize(q_int32, in_scale, in_zp_tt, out_scale, out_zp_tt, dtype=output_dtype))
+
+    assert torch.equal(from_uint8, from_int32)

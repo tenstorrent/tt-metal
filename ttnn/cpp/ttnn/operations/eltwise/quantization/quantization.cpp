@@ -490,6 +490,16 @@ Tensor dequantize(
 
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
+    // The tensor-zero-point composite paths below subtract the zero-point straight off the input.
+    // BinaryOpType::SUB does not accept a uint8 operand (dtype_sets::arithmetic_fpu in
+    // binary_op_dtype_policy.hpp lists only bf16/f32/bfp8/bfp4/u32/u16/i32), so widen a uint8
+    // input to int32 first. The per-channel composite already widens to float32 for the same
+    // reason; only the per-tensor paths were missing it. The scalar-zero-point paths feed
+    // binary_ng's DEQUANT directly, which does accept uint8, so they must not pay for this cast.
+    const auto widen_uint8_input = [&]() -> Tensor {
+        return a_dtype == DataType::UINT8 ? ttnn::typecast(input_tensor, DataType::INT32) : input_tensor;
+    };
+
     const bool is_per_channel = axis.has_value();
     if (is_per_channel) {
         const Tensor* scale_p = std::get_if<Tensor>(&scale);
@@ -558,7 +568,7 @@ Tensor dequantize(
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
+                        widen_uint8_input(), zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                     c_dtype);
                 return ttnn::multiply(
                     input_shifted, scale, c_dtype, memory_config, optional_output_tensor, none, none, none);
@@ -568,7 +578,7 @@ Tensor dequantize(
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
+                        widen_uint8_input(), zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                     c_dtype);
                 return ttnn::multiply(
                     input_shifted,
