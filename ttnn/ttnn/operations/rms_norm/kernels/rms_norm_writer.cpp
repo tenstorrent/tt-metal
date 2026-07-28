@@ -67,7 +67,9 @@ void kernel_main() {
     constexpr bool SHARDED_OUT = get_compile_time_arg_val(22) != 0;
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(23);
 
-    constexpr auto out_args = TensorAccessorArgs<29>();
+    // 24..33 are the two multicast-family CT blocks (reader-side; the writer
+    // shares the layout so a knob cannot drift between them).
+    constexpr auto out_args = TensorAccessorArgs<34>();
 
     static_assert(WT_LAST == WT_CHUNK, "writer assumes uniform chunk widths");
 
@@ -152,5 +154,13 @@ void kernel_main() {
                 cb_pop_front(cb_output_tiles, n);
             }
         }
+    }
+
+    // noc_semaphore_inc issues a NON-POSTED atomic; leaving one outstanding at
+    // kernel exit leaves the core's NoC transaction counters unbalanced, which
+    // the dispatcher never sees drain (measured as a device hang on the sharded
+    // cells, whose writer has no trailing write barrier to absorb it).
+    if constexpr (W_SPLIT) {
+        noc_async_atomic_barrier();
     }
 }

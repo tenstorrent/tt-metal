@@ -12,8 +12,17 @@
 //   pass B (all NW chunks):  [tilize] -> mul<Col>(x, 1/rms) -> mul<Row>(., gamma)
 //                            -> [untilize]
 //
+// Under the cross-core W-split (W_SPLIT, §4.2) this core owns only a SLICE of W,
+// so pass A stops one step earlier: no chunk finalizes, cb_partials keeps the
+// RAW elementwise x^2 accumulator, and a copy publishes it for the writer's
+// gather leg. The group root then folds the CW gathered accumulators with the
+// SAME reduce — the local chunk-accumulate, done across cores instead of across
+// chunks — and n_reduced stays the grand total W. Phase 4 onwards is byte
+// identical on every core; only the producer of cb_rms_sum changes (the reader's
+// multicast receive instead of phase 3).
+//
 // Every loop trip count and every helper block shape is a function of the block
-// knobs (HT_BLOCK / WT_CHUNK / NW) — never of a whole-op dimension.
+// knobs (HT_BLOCK / WT_CHUNK / NW / CW) — never of a whole-op dimension.
 //
 // All compute goes through ttnn/cpp/ttnn/kernel_lib helpers. Phases 2, 5 and 6
 // drop from the `square`/`mul` convenience wrappers to `eltwise_chain` directly
@@ -25,7 +34,6 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/debug/device_print.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
@@ -265,13 +273,6 @@ void kernel_main() {
             ckl::copy<cb_partials, cb_partial_out>(ckl::EltwiseShape::tiles(ht));
         }
 
-#ifdef RMS_DBG
-        if constexpr (W_SPLIT) {
-            cb_wait_front(cb_partial_out, ht);
-            DEVICE_PRINT("PARTIAL_OUT root={}\n", is_root);
-            DEVICE_PRINT("{}\n", TSLICE(cb_partial_out, 0, SliceRange::hw0_32_16()));
-        }
-#endif
         // ========== phase 3b: cross-core combine (W-split only) ============
         // The group ROOT folds the CW raw slice-accumulators its writers
         // gathered into cb_group_partials into ONE mean(x^2) per tile-row. This
@@ -283,12 +284,6 @@ void kernel_main() {
         // contiguously. The reader then multicasts the result back (see reader).
         if constexpr (W_SPLIT) {
             if (is_root) {
-#ifdef RMS_DBG
-                cb_wait_front(cb_group_partials, HT_BLOCK * CW);
-                DEVICE_PRINT("GATHERED slot0/slot1:\n");
-                DEVICE_PRINT("{}\n", TSLICE(cb_group_partials, 0, SliceRange::hw0_32_16()));
-                DEVICE_PRINT("{}\n", TSLICE(cb_group_partials, 1, SliceRange::hw0_32_16()));
-#endif
                 ckl::reduce_mean<
                     ckernel::ReduceDim::REDUCE_ROW,
                     cb_group_partials,
@@ -310,13 +305,6 @@ void kernel_main() {
             }
         }
 
-#ifdef RMS_DBG
-        if constexpr (W_SPLIT) {
-            cb_wait_front(cb_rms_sum, ht);
-            DEVICE_PRINT("RMS_SUM (bcast) root={}\n", is_root);
-            DEVICE_PRINT("{}\n", TSLICE(cb_rms_sum, 0, SliceRange::hw0_32_16()));
-        }
-#endif
         // ================= phase 4: 1/sqrt(mean + eps) =====================
         // One dst-sync window for both SFPU ops; the FPU consumer in phase 5
         // reads it back from L1 (DEST reuse measures slower for an FPU consumer).

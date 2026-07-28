@@ -105,8 +105,16 @@ void kernel_main() {
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(23);
     (void)SHARDED_OUT;
 
-    constexpr auto mc = dkl::McastArgs</*CT=*/24, /*RT=*/9>();
-    constexpr auto in_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
+    // ONE multicast family per virtually-contiguous column run of the group. A
+    // NoC multicast addresses a VIRTUAL rectangle, and the logical compute grid
+    // is not virtually contiguous (blackhole_p150b: logical x 0..6 -> virtual
+    // 1..7, logical x 7..10 -> virtual 10..13), so a group that spans the seam
+    // must broadcast as two rectangles rather than one bounding box that would
+    // target non-worker endpoints. Family B is inactive (`active == 0`) whenever
+    // the group fits in one run, and then compiles away entirely.
+    constexpr auto mc_a = dkl::McastArgs</*CT=*/24, /*RT=*/10>();
+    constexpr auto mc_b = dkl::McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
+    constexpr auto in_args = TensorAccessorArgs<mc_b.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     static_assert(WT_LAST == WT_CHUNK, "reader assumes uniform chunk widths");
@@ -120,6 +128,7 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(6);
     const uint32_t is_last_w_core = get_arg_val<uint32_t>(7);
     const uint32_t wt_real = get_arg_val<uint32_t>(8);
+    const uint32_t mcast_family = get_arg_val<uint32_t>(9);
 
     // Filler core: inside the multicast rectangle so the broadcast lands
     // somewhere legal, but it owns no data and takes no part in the combine.
@@ -316,11 +325,25 @@ void kernel_main() {
             const uint32_t dst = get_write_ptr(cb_rms_sum);
             if (is_root) {
                 cb_wait_front(cb_rms_mean, ht);
-                auto pipe = mc.sender(noc);
-                pipe.send(get_read_ptr(cb_rms_mean), dst, ht * fp32_tile_bytes);
+                const uint32_t src = get_read_ptr(cb_rms_mean);
+                const uint32_t bytes = ht * fp32_tile_bytes;
+                // The root is inside exactly one family's rectangle, so that
+                // send() loops the data back into its OWN cb_rms_sum; the other
+                // family reaches the cores across the virtual seam.
+                if constexpr (mc_a.active) {
+                    auto pipe = mc_a.sender(noc);
+                    pipe.send(src, dst, bytes);
+                }
+                if constexpr (mc_b.active) {
+                    auto pipe = mc_b.sender(noc);
+                    pipe.send(src, dst, bytes);
+                }
                 cb_pop_front(cb_rms_mean, ht);
+            } else if (mcast_family == 0) {
+                auto pipe = mc_a.receiver(noc);
+                pipe.receive();
             } else {
-                auto pipe = mc.receiver(noc);
+                auto pipe = mc_b.receiver(noc);
                 pipe.receive();
             }
             cb_push_back(cb_rms_sum, HT_BLOCK);
@@ -342,5 +365,12 @@ void kernel_main() {
                 }
             }
         }
+    }
+
+    // ReceiverPipe's readiness ack is a NON-POSTED remote atomic; drain it
+    // before the kernel exits so the core's NoC transaction counters balance
+    // (an outstanding atomic at exit stalls dispatch completion).
+    if constexpr (W_SPLIT) {
+        noc_async_atomic_barrier();
     }
 }

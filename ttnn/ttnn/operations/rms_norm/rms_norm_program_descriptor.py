@@ -21,6 +21,13 @@ Work distribution (§5): the *independent* tile-row axis is spread over the
 whole compute grid via ``ttnn.split_work_to_cores(..., row_wise=True)``; each
 core owns whole rows and reduces the *dependent* W axis sequentially in-core.
 
+When that alone under-fills the grid — or the data is WIDTH/BLOCK sharded, which
+pins the split — the *dependent* W axis is ALSO split across cores (§4.2, Lamp
+L1): each core reduces its slice to a raw partial, a group root combines them
+and multicasts ``1/rms`` back. ``_Placement`` owns that topology; ``_Blocking``
+is unchanged by it, because the per-core W extent is simply the axis it derives
+against. Measured on the decode profiles: 1 busy core -> 32-56, 1.75-5.11x.
+
 --------------------------------------------------------------------------
 Chunk-uniformity invariant (implementation constraint, documented deviation)
 --------------------------------------------------------------------------
@@ -517,12 +524,46 @@ def _x_read_chunks(blk):
     return blk.nw if blk.grid_full else 1
 
 
+# A NoC multicast addresses a rectangle in VIRTUAL coordinates, and the logical
+# compute grid is not virtually contiguous: on blackhole_p150b logical x 0..6 map
+# to virtual 1..7 and logical x 7..10 to virtual 10..13, so virtual columns 8-9
+# are NOT worker cores. A rectangle straddling that seam multicasts into
+# non-worker endpoints — measured as a device hang on the WIDTH_SHARDED cells
+# whose shard grid is wider than one run. Every broadcast rectangle below is
+# therefore confined to ONE run; a combine group that spans the seam broadcasts
+# as one multicast family PER run instead of one over the bounding box.
+MAX_MCAST_FAMILIES = 2
+
+
+def _virtual_x_runs(device, grid):
+    """Logical-x ranges [(lo, hi), ...] whose virtual x is contiguous."""
+    vx = [int(device.worker_core_from_logical_core(ttnn.CoreCoord(x, 0)).x) for x in range(grid.x)]
+    runs = []
+    lo = 0
+    for x in range(1, grid.x):
+        if vx[x] != vx[x - 1] + 1:
+            runs.append((lo, x - 1))
+            lo = x
+    runs.append((lo, grid.x - 1))
+    return runs
+
+
+def _split_rect_by_runs(x0, y0, x1, y1, runs):
+    """The rectangle, cut into the per-run pieces a multicast may legally address."""
+    out = []
+    for lo, hi in runs:
+        a, b = max(x0, lo), min(x1, hi)
+        if a <= b:
+            out.append((a, y0, b, y1))
+    return out
+
+
 class _CoreWork:
     """What one core owns: a tile-row range x a W-tile slice, plus its combine role."""
 
-    __slots__ = ("core", "start_row", "num_rows", "wt_start", "wt_real", "slot", "group")
+    __slots__ = ("core", "start_row", "num_rows", "wt_start", "wt_real", "slot", "group", "family")
 
-    def __init__(self, core, start_row, num_rows, wt_start, wt_real, slot, group):
+    def __init__(self, core, start_row, num_rows, wt_start, wt_real, slot, group, family=0):
         self.core = core
         self.start_row = start_row
         self.num_rows = num_rows
@@ -530,6 +571,7 @@ class _CoreWork:
         self.wt_real = wt_real  # W-tiles that actually exist (rest is shard padding)
         self.slot = slot  # index inside the combine group
         self.group = group  # index into _Placement.groups (-1 == no group)
+        self.family = family  # which multicast family (per-run sub-rectangle) reaches it
 
 
 class _Placement:
@@ -543,15 +585,17 @@ class _Placement:
     ``cw == 1`` degenerates to the phase-0 row-only split, and every W-split
     structure below collapses out.
 
-    Invariant relied on by the broadcast: **every group is a rectangle**, so one
-    ``Mcast2D`` per group serves it. Groups the data placement hands us that are
-    ragged are padded up to their bounding box with zero-work filler cores.
+    Invariant relied on by the broadcast: **every group is a rectangle**, so a
+    ``Mcast2D`` per virtually-contiguous run of it serves it. Groups the data
+    placement hands us that are ragged are padded up to their bounding box with
+    zero-work filler cores.
     """
 
     def __init__(self, all_cores, works, groups, cw, wt_core, rows_core_max):
         self.all_cores = all_cores
         self.works = works
-        self.groups = groups  # [(root_core, rect_CoreRangeSet, num_receivers)]
+        # [{root, subrects: [(x0,y0,x1,y1), ...], acks: [n, ...]}]
+        self.groups = groups
         self.cw = cw
         self.wt_core = wt_core
         self.rows_core_max = rows_core_max
@@ -599,18 +643,21 @@ def _placement_rows(grid, ht_total):
     return _Placement(all_cores, works, [], 1, None, rows_max)
 
 
-def _w_split_rectangle(grid, band_h, wt_global, gather_tile_bytes):
-    """Widest core rectangle (cw_x <= grid.x, cw_y <= band_h) that DIVIDES `wt_global`.
+def _w_split_rectangle(max_run_w, band_h, wt_global, gather_tile_bytes):
+    """Widest core rectangle (cw_x <= max_run_w, cw_y <= band_h) that DIVIDES `wt_global`.
 
-    Requiring the group size to divide `Wt` is what keeps every core's slice the
-    same width, so one compile-time `WT` / `WT_CHUNK` / `NW` serves the whole
-    grid (and the last core's last tile is still the tensor's last tile, so the
-    partial-W mask lands where it belongs).
+    Two constraints, both structural:
+      * the rectangle must fit inside ONE virtually-contiguous column run, so the
+        1/rms broadcast never addresses a non-worker endpoint; and
+      * the group size must divide `Wt`, which keeps every core's slice the same
+        width — so one compile-time `WT` / `WT_CHUNK` / `NW` serves the whole grid,
+        and the last core's last tile is still the tensor's last tile (where the
+        partial-W mask belongs).
     """
     cap = max(1, L1_GATHER_BUDGET_BYTES // gather_tile_bytes)
     best = (1, 1)
     for cy in range(1, band_h + 1):
-        for cx in range(1, grid.x + 1):
+        for cx in range(1, max_run_w + 1):
             n = cx * cy
             if n > cap or wt_global % n != 0:
                 continue
@@ -619,18 +666,29 @@ def _w_split_rectangle(grid, band_h, wt_global, gather_tile_bytes):
     return best
 
 
-def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes):
+def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes, runs):
     """Cross-core W-split for an INTERLEAVED input whose row axis under-fills the grid.
 
-    Groups are stacked along the grid's y axis (one band of `cw_y` grid rows
-    each) and are rectangles by construction. Returns None when no split wider
-    than one core is available.
+    Group rectangles tile the grid inside the virtually-contiguous column runs,
+    y-band by y-band, so every group's broadcast is a single legal multicast.
+    Returns None when no split wider than one core is available.
     """
     num_groups = min(ht_total, grid.y)
     band_h = grid.y // num_groups
-    cw_x, cw_y = _w_split_rectangle(grid, band_h, wt_global, gather_tile_bytes)
+    max_run_w = max(hi - lo + 1 for lo, hi in runs)
+    cw_x, cw_y = _w_split_rectangle(max_run_w, band_h, wt_global, gather_tile_bytes)
     cw = cw_x * cw_y
     if cw < 2:
+        return None
+
+    # Every (run, y-band) slot that can hold a whole cw_x x cw_y rectangle.
+    slots = []
+    for band in range(grid.y // cw_y):
+        for lo, hi in runs:
+            for x0 in range(lo, hi - cw_x + 2, cw_x):
+                slots.append((x0, band * cw_y))
+    num_groups = min(num_groups, len(slots))
+    if num_groups < 1:
         return None
 
     wt_core = wt_global // cw
@@ -641,25 +699,19 @@ def _placement_wsplit(grid, ht_total, wt_global, gather_tile_bytes):
     ranges = []
     start_row = 0
     for g in range(num_groups):
-        y0 = g * band_h
-        rect = _rect(0, y0, cw_x - 1, y0 + cw_y - 1)
-        ranges.append(rect)
-        root = ttnn.CoreCoord(0, y0)
-        groups.append((root, ttnn.CoreRangeSet([rect]), cw - 1))
+        x0, y0 = slots[g]
+        ranges.append(_rect(x0, y0, x0 + cw_x - 1, y0 + cw_y - 1))
+        groups.append(
+            {
+                "root": ttnn.CoreCoord(x0, y0),
+                "subrects": [(x0, y0, x0 + cw_x - 1, y0 + cw_y - 1)],
+                "acks": [cw - 1],
+            }
+        )
         slot = 0
         for yy in range(y0, y0 + cw_y):
-            for xx in range(cw_x):
-                works.append(
-                    _CoreWork(
-                        ttnn.CoreCoord(xx, yy),
-                        start_row,
-                        rows[g],
-                        slot * wt_core,
-                        wt_core,
-                        slot,
-                        g,
-                    )
-                )
+            for xx in range(x0, x0 + cw_x):
+                works.append(_CoreWork(ttnn.CoreCoord(xx, yy), start_row, rows[g], slot * wt_core, wt_core, slot, g, 0))
                 slot += 1
         start_row += rows[g]
     assert start_row == ht_total
@@ -680,7 +732,40 @@ def _bbox_cores(core_range_set):
     return bb.start.x, bb.start.y, bb.end.x, bb.end.y
 
 
-def _placement_sharded(input_tensor, ht_total, wt_global):
+def _make_group(root, gx0, gy0, gx1, gy1, runs, real_cores):
+    """A combine group's broadcast plan: one multicast family per legal sub-rect.
+
+    `real_cores` is the set of (x, y) that will actually ack (filler cores inside
+    the bounding box receive the broadcast but never handshake, so they are
+    excluded from every family's ack count).
+    """
+    subrects = _split_rect_by_runs(gx0, gy0, gx1, gy1, runs)
+    assert len(subrects) <= MAX_MCAST_FAMILIES, (
+        f"rms_norm: combine group spans {len(subrects)} virtual column runs; the kernels "
+        f"carry {MAX_MCAST_FAMILIES} multicast families"
+    )
+    rx, ry = int(root.x), int(root.y)
+    acks = []
+    for x0, y0, x1, y1 in subrects:
+        n = sum(
+            1
+            for yy in range(y0, y1 + 1)
+            for xx in range(x0, x1 + 1)
+            if (xx, yy) in real_cores and not (xx == rx and yy == ry)
+        )
+        acks.append(n)
+    return {"root": root, "subrects": subrects, "acks": acks}
+
+
+def _family_of(core, subrects):
+    x, y = int(core.x), int(core.y)
+    for i, (x0, y0, x1, y1) in enumerate(subrects):
+        if x0 <= x <= x1 and y0 <= y <= y1:
+            return i
+    return 0
+
+
+def _placement_sharded(input_tensor, ht_total, wt_global, runs):
     """Placement pinned by the input's shard grid (WIDTH / BLOCK sharded).
 
     WIDTH: one group over every shard core (each owns a W slice of ALL rows).
@@ -696,41 +781,56 @@ def _placement_sharded(input_tensor, ht_total, wt_global):
 
     works = []
     groups = []
+    owned = {(int(c.x), int(c.y)) for c in cores}
     if layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
         nx = x1 - x0 + 1
         ny = y1 - y0 + 1
         assert len(cores) == nx * ny, "BLOCK_SHARDED grid must be a full rectangle"
         for gy in range(ny):
             y = y0 + gy
-            groups.append((ttnn.CoreCoord(x0, y), ttnn.CoreRangeSet([_rect(x0, y, x1, y)]), nx - 1))
+            grp = _make_group(ttnn.CoreCoord(x0, y), x0, y, x1, y, runs, owned)
+            groups.append(grp)
             for gx in range(nx):
+                core = ttnn.CoreCoord(x0 + gx, y)
                 works.append(
                     _CoreWork(
-                        ttnn.CoreCoord(x0 + gx, y),
+                        core,
                         gy * ht_s,
                         ht_s,
                         gx * wt_s,
                         max(0, min(wt_s, wt_global - gx * wt_s)),
                         gx,
                         gy,
+                        _family_of(core, grp["subrects"]),
                     )
                 )
         cw = nx
         rows_max = ht_s
     else:  # WIDTH_SHARDED — one group, every shard core owns a W slice of all rows
-        rect_set = ttnn.CoreRangeSet([_rect(x0, y0, x1, y1)])
         cw = len(cores)  # combine width == real W slices (fillers do not contribute)
-        groups.append((cores[0], rect_set, cw - 1))
-        owned = {(int(c.x), int(c.y)) for c in cores}
+        grp = _make_group(cores[0], x0, y0, x1, y1, runs, owned)
+        groups.append(grp)
         for slot, core in enumerate(cores):
-            works.append(_CoreWork(core, 0, ht_total, slot * wt_s, max(0, min(wt_s, wt_global - slot * wt_s)), slot, 0))
+            works.append(
+                _CoreWork(
+                    core,
+                    0,
+                    ht_total,
+                    slot * wt_s,
+                    max(0, min(wt_s, wt_global - slot * wt_s)),
+                    slot,
+                    0,
+                    _family_of(core, grp["subrects"]),
+                )
+            )
         # filler cores: inside the multicast rectangle, but outside the shard grid.
         # Zero work, no gather contribution, no readiness ack — they only need
         # the broadcast to land somewhere legal on them.
         for yy in range(y0, y1 + 1):
             for xx in range(x0, x1 + 1):
                 if (xx, yy) not in owned:
-                    works.append(_CoreWork(ttnn.CoreCoord(xx, yy), 0, 0, 0, 0, 0, 0))
+                    core = ttnn.CoreCoord(xx, yy)
+                    works.append(_CoreWork(core, 0, 0, 0, 0, 0, 0, _family_of(core, grp["subrects"])))
         rows_max = ht_total
 
     all_cores = ttnn.CoreRangeSet([_rect(x0, y0, x1, y1)])
@@ -746,16 +846,14 @@ def create_program_descriptor(
     compute_kernel_config=None,
     device=None,
 ) -> "ttnn.ProgramDescriptor":
-    grid = (
-        device.compute_with_storage_grid_size()
-        if device is not None
-        else input_tensor.device().compute_with_storage_grid_size()
-    )
+    if device is None:
+        device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
     ht_total, wt_global = _tile_geometry(input_tensor)
     in_sharded = input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
     out_sharded = output_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
 
-    placement = _select_placement(grid, input_tensor, ht_total, wt_global, in_sharded)
+    placement = _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharded)
     blk = _derive_blocking(
         input_tensor, gamma, grid.x * grid.y, placement, sharded_in=in_sharded, sharded_out=out_sharded
     )
@@ -801,16 +899,18 @@ def create_program_descriptor(
     # semaphore ids, so the ids are created ONCE over the whole grid and every
     # group adopts them.
     semaphores = []
-    mcasts = {}  # group index -> Mcast2D
+    mcasts = {}  # (group index, family) -> Mcast2D
     if placement.w_split:
-        semaphores = [
-            ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0),
-            ttnn.SemaphoreDescriptor(id=SEM_MCAST_BASE, core_ranges=all_cores, initial_value=0),
-            ttnn.SemaphoreDescriptor(id=SEM_MCAST_BASE + 1, core_ranges=all_cores, initial_value=0),
-        ]
-        cfg = ttnn.McastConfig(sem_ids=[SEM_MCAST_BASE, SEM_MCAST_BASE + 1])
-        for g, (root, rect_set, num_ack) in enumerate(placement.groups):
-            mcasts[g] = ttnn.Mcast2D(device, rect_set, root, cfg, num_ack)
+        semaphores = [ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0)]
+        for f in range(MAX_MCAST_FAMILIES):
+            base = SEM_MCAST_BASE + 2 * f
+            semaphores.append(ttnn.SemaphoreDescriptor(id=base, core_ranges=all_cores, initial_value=0))
+            semaphores.append(ttnn.SemaphoreDescriptor(id=base + 1, core_ranges=all_cores, initial_value=0))
+        for g, grp in enumerate(placement.groups):
+            for f, (rect, ack) in enumerate(zip(grp["subrects"], grp["acks"])):
+                cfg = ttnn.McastConfig(sem_ids=[SEM_MCAST_BASE + 2 * f, SEM_MCAST_BASE + 2 * f + 1])
+                rect_set = ttnn.CoreRangeSet([_rect(*rect)])
+                mcasts[(g, f)] = ttnn.Mcast2D(device, rect_set, grp["root"], cfg, ack)
 
     # ---------- shared compile-time knobs ----------
     chunk_row_bytes = blk.wt_chunk * TILE_DIM * blk.elem_bytes
@@ -835,7 +935,11 @@ def create_program_descriptor(
     # the mcast block at 24..28, TensorAccessorArgs from 29). Built once here so
     # a knob added to either kernel cannot drift between the two — the CT index
     # each kernel reads is then guaranteed to name the same quantity.
-    mcast_ct = list(mcasts[0].compile_time_args()) if mcasts else [0, 0, 0, 0, 0]
+    # One CT block per multicast family. Every group has the same run split (the
+    # shard grid / group rectangle is uniform), so family f's block is uniform.
+    mcast_ct = []
+    for f in range(MAX_MCAST_FAMILIES):
+        mcast_ct += list(mcasts[(0, f)].compile_time_args()) if (0, f) in mcasts else [0, 0, 0, 0, 0]
     dataflow_ct_args = (
         regime
         + knobs
@@ -855,9 +959,9 @@ def create_program_descriptor(
         ]
         + mcast_ct
     )
-    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<29>
-    assert DATAFLOW_ACCESSOR_ARG_BASE == 29, (
-        "rms_norm: reader/writer read TensorAccessorArgs<29>; the shared CT block "
+    DATAFLOW_ACCESSOR_ARG_BASE = len(dataflow_ct_args)  # kernels read TensorAccessorArgs<34>
+    assert DATAFLOW_ACCESSOR_ARG_BASE == 34, (
+        "rms_norm: reader/writer read TensorAccessorArgs<34>; the shared CT block "
         f"is now {DATAFLOW_ACCESSOR_ARG_BASE} long — update both kernels together"
     )
 
@@ -883,13 +987,16 @@ def create_program_descriptor(
         wt_real = blk.Wt if w.wt_real is None else min(w.wt_real, blk.Wt)
         is_root = 0
         root_v = (0, 0)
-        mcast_rt = [0, 0, 0, 0]
+        mcast_rt = [0, 0, 0, 0] * MAX_MCAST_FAMILIES
         if placement.w_split:
-            root = placement.groups[w.group][0]
+            root = placement.groups[w.group]["root"]
             is_root = 1 if (int(core.x) == int(root.x) and int(core.y) == int(root.y)) else 0
             rv = device.worker_core_from_logical_core(root)
             root_v = (rv.x, rv.y)
-            mcast_rt = list(mcasts[w.group].runtime_args(core))
+            mcast_rt = []
+            for f in range(MAX_MCAST_FAMILIES):
+                mc = mcasts.get((w.group, f))
+                mcast_rt += list(mc.runtime_args(core)) if mc is not None else [0, 0, 0, 0]
         # The core whose slice ENDS on the tensor's last W-tile is the one that
         # must mask the tile-padded columns of that tile.
         is_last_w = 1 if (w.wt_start + wt_real == wt_global) else 0
@@ -904,6 +1011,7 @@ def create_program_descriptor(
             is_root,
             is_last_w,
             wt_real,
+            w.family,
         ] + mcast_rt
         writer_rt[core.x][core.y] = [
             dst_addr,
@@ -913,6 +1021,7 @@ def create_program_descriptor(
             w.slot,
             root_v[0],
             root_v[1],
+            is_last_w,
         ]
         compute_rt[core.x][core.y] = [w.num_rows, eps_bits, is_root, is_last_w]
 
@@ -963,7 +1072,7 @@ def create_program_descriptor(
     )
 
 
-def _select_placement(grid, input_tensor, ht_total, wt_global, in_sharded):
+def _select_placement(device, grid, input_tensor, ht_total, wt_global, in_sharded):
     """Pick the core assignment: data-pinned when sharded, else the §5 row split
     optionally widened by the cross-core W-split (Lamp L1).
 
@@ -972,8 +1081,9 @@ def _select_placement(grid, input_tensor, ht_total, wt_global, in_sharded):
     enough to still hand each core a real chunk after the split. Both gates are
     named constants at the top of this module, never inlined here.
     """
+    runs = _virtual_x_runs(device, grid)
     if in_sharded:
-        return _placement_sharded(input_tensor, ht_total, wt_global)
+        return _placement_sharded(input_tensor, ht_total, wt_global, runs)
 
     ht_cap = grid.y if W_SPLIT_MAX_HT_FOR_SPLIT is None else W_SPLIT_MAX_HT_FOR_SPLIT
     env = os.environ.get("RMS_NORM_W_SPLIT")
@@ -981,7 +1091,7 @@ def _select_placement(grid, input_tensor, ht_total, wt_global, in_sharded):
     if env is not None:
         want_split = env != "0"
     if want_split:
-        p = _placement_wsplit(grid, ht_total, wt_global, ttnn.tile_size(ttnn.float32))
+        p = _placement_wsplit(grid, ht_total, wt_global, ttnn.tile_size(ttnn.float32), runs)
         if p is not None:
             return p
     return _placement_rows(grid, ht_total)

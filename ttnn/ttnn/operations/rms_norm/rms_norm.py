@@ -139,9 +139,12 @@ PROPERTIES = {
     # phase 1 (ttnn.split_work_to_cores over device.compute_with_storage_grid_size()).
     "multi_core": {"value": True, "source": "declared"},
     # Every CB page count is a function of the block knobs (HT_BLOCK / WT_CHUNK
-    # / the buffer depths), never of a whole-op dimension. The two Wt-sized CBs
-    # are predicate-guarded residents with a streaming fallback, and the host
-    # asserts the final per-core CB total against L1_CB_BUDGET_BYTES.
+    # / the combine width CW / the buffer depths), never of a whole-op dimension.
+    # The two Wt-sized CBs are predicate-guarded residents with a streaming
+    # fallback; the root's gather buffer (HT_BLOCK * CW) is capped by
+    # L1_GATHER_BUDGET_BYTES on the interleaved path and by the halve-and-
+    # re-derive loop on the sharded one; and the host asserts the final per-core
+    # CB total against L1_CB_BUDGET_BYTES.
     "bounded_cb": {"value": True, "source": "declared"},
     "math_fidelity": {"value": ["LoFi", "HiFi2", "HiFi3", "HiFi4"], "source": "declared"},
 }
