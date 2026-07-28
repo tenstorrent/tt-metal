@@ -200,42 +200,6 @@ def test_restore_stale_test_does_not_clobber_live(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_auto_iterate_consults_stale_brain_after_final_pytest() -> None:
-    """Pin: at final pytest, the loop must consult the brain for each
-    failed component and archive phantoms. Without this wiring, the
-    brain primitive exists but isn't used."""
-    src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "_cli_helpers" / "auto_iterate.py").read_text()
-    assert "from ..agentic.stale_tests import" in src, "auto_iterate must import the stale-test brain primitive"
-    assert "detect_stale_decomposed_test" in src
-    assert "archive_stale_test" in src
-    assert "PHANTOM-CLEANUP (brain G8)" in src, "auto_iterate must emit a visible banner when archiving phantoms"
-
-
-def test_phantom_handler_called_from_both_exit_paths() -> None:
-    """Pin: the phantom-failure handler must be invoked from BOTH the
-    early-exit path (every component already at cap → CPU fallback →
-    final pytest → check phantoms BEFORE concluding) AND the fall-
-    through path (loop ended normally → final pytest → check phantoms).
-
-    Without this, runs that exit early bypass the brain entirely —
-    exactly the SAM2 2026-05-30 regression where phantoms surfaced
-    in the early-exit final pytest but the brain's stale-test
-    detector at the bottom of the function was unreachable."""
-    src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "_cli_helpers" / "auto_iterate.py").read_text()
-    # The factored helper must exist
-    assert "_brain_handle_phantom_failures(" in src, (
-        "phantom handling must be in a factored helper so it can be "
-        "called from multiple exit paths without duplication"
-    )
-    # And must be CALLED at least twice (early-exit + fall-through)
-    call_count = src.count("_brain_handle_phantom_failures(")
-    # 1 def + at least 2 call sites = at least 3 occurrences
-    assert call_count >= 3, (
-        f"phantom handler must be called from BOTH early-exit and "
-        f"fall-through paths (found only {call_count - 1} call sites)"
-    )
-
-
 def test_decomposition_consumer_safety_net_still_present() -> None:
     """Pin: the mechanical safety net in decomposition_consumer remains.
     Brain detection covers stale tests from OLD decompositions; the

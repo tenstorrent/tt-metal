@@ -11,121 +11,48 @@ import json
 from pathlib import Path
 
 
-def test_run_skip_diagnoser_skips_when_disabled(tmp_path, monkeypatch):
-    """When the gate `enabled=False` is passed, the wiring must NOT
-    invoke the LLM and must NOT write skip_diagnosis.json."""
-    from scripts.tt_hw_planner._cli_helpers import auto_iterate
+def test_harness_skip_verdicts_are_persisted_for_the_banner(tmp_path, monkeypatch):
+    """REPOINTED. The loop-end wrapper this used to call
+    (auto_iterate._run_skip_diagnoser_at_loop_end) went with the retired engine; the live producer of
+    the same two artifacts is the MCP tool bringup_mcp.mark_harness_skipped, whose own docstring says
+    it writes "harness_skipped.json + skip_diagnosis.json (the SAME artifacts the fsm loop's
+    skip_diagnoser writes, which the OUTCOME banner surfaces)".
 
-    spawned = []
+    What is still worth pinning is the CONTRACT the banner depends on: every marked component ends up
+    in skip_diagnosis.json with a verdict, and harness_skipped.json lists it. The gating tests that
+    sat beside this one were deleted rather than repointed -- they asserted that an LLM spawn is
+    suppressed when disabled or when no agent binary is present, and no spawn happens at loop end any
+    more, so there is nothing left to suppress.
+    """
+    import importlib
 
-    def fake_diagnose(**kwargs):
-        spawned.append(True)
-        return [{"component": "x", "verdict": "fixed", "summary": "", "agent_stdout": "", "rc": 0}]
+    monkeypatch.setenv("TT_HW_PLANNER_DEMO_DIR", str(tmp_path))
+    mcp = importlib.import_module("scripts.tt_hw_planner.bringup_mcp")
+    monkeypatch.setattr(mcp, "_DEMO_DIR", tmp_path, raising=False)
 
-    monkeypatch.setattr(
-        "scripts.tt_hw_planner._cli_helpers.skip_diagnoser.diagnose_skips_in_demo",
-        fake_diagnose,
-    )
-
-    auto_iterate._run_skip_diagnoser_at_loop_end(
-        demo_dir=tmp_path,
-        harness_skipped={"x"},
-        skip_reasons={"x": "harness reason"},
-        agent_bin="/usr/bin/claude",
-        enabled=False,
-    )
-
-    assert spawned == [], "must not spawn diagnoser when enabled=False"
-    assert not (tmp_path / "skip_diagnosis.json").exists()
-
-
-def test_run_skip_diagnoser_skips_when_no_agent_bin(tmp_path, monkeypatch):
-    """No agent_bin → no LLM call. Common when the user runs without
-    --auto or before authenticating the CLI."""
-    from scripts.tt_hw_planner._cli_helpers import auto_iterate
-
-    spawned = []
-
-    def fake_diagnose(**kwargs):
-        spawned.append(True)
-        return []
-
-    monkeypatch.setattr(
-        "scripts.tt_hw_planner._cli_helpers.skip_diagnoser.diagnose_skips_in_demo",
-        fake_diagnose,
-    )
-
-    auto_iterate._run_skip_diagnoser_at_loop_end(
-        demo_dir=tmp_path,
-        harness_skipped={"x"},
-        skip_reasons={"x": "harness reason"},
-        agent_bin=None,
-    )
-
-    assert spawned == []
-    assert not (tmp_path / "skip_diagnosis.json").exists()
-
-
-def test_run_skip_diagnoser_skips_when_no_harness_skipped(tmp_path, monkeypatch):
-    """Empty harness_skipped → no LLM call (healthy run)."""
-    from scripts.tt_hw_planner._cli_helpers import auto_iterate
-
-    spawned = []
-
-    def fake_diagnose(**kwargs):
-        spawned.append(True)
-        return []
-
-    monkeypatch.setattr(
-        "scripts.tt_hw_planner._cli_helpers.skip_diagnoser.diagnose_skips_in_demo",
-        fake_diagnose,
-    )
-
-    auto_iterate._run_skip_diagnoser_at_loop_end(
-        demo_dir=tmp_path,
-        harness_skipped=set(),
-        skip_reasons={},
-        agent_bin="/usr/bin/claude",
-    )
-
-    assert spawned == []
-    assert not (tmp_path / "skip_diagnosis.json").exists()
-
-
-def test_run_skip_diagnoser_persists_verdicts(tmp_path, monkeypatch, capsys):
-    """When the LLM diagnoser runs, results must be persisted to
-    skip_diagnosis.json and a summary line printed."""
-    from scripts.tt_hw_planner._cli_helpers import auto_iterate
-
-    def fake_diagnose(**kwargs):
-        return [
-            {"component": "a", "verdict": "fixed", "summary": "x", "agent_stdout": "", "rc": 0},
-            {"component": "b", "verdict": "manual", "summary": "y", "agent_stdout": "", "rc": 0},
-            {"component": "c", "verdict": "fixed", "summary": "z", "agent_stdout": "", "rc": 0},
-        ]
-
-    monkeypatch.setattr(
-        "scripts.tt_hw_planner._cli_helpers.skip_diagnoser.diagnose_skips_in_demo",
-        fake_diagnose,
-    )
-
-    auto_iterate._run_skip_diagnoser_at_loop_end(
-        demo_dir=tmp_path,
-        harness_skipped={"a", "b", "c"},
-        skip_reasons={"a": "r1", "b": "r2", "c": "r3"},
-        agent_bin="/usr/bin/claude",
-    )
+    for comp, verdict in (("a", "manual"), ("b", "manual"), ("c", "manual")):
+        mcp.mark_harness_skipped(comp, verdict=verdict, reason="uncallable submodule")
 
     diag = tmp_path / "skip_diagnosis.json"
-    assert diag.is_file()
-    data = json.loads(diag.read_text())
-    diagnoses = data["diagnoses"]
-    verdicts = [d["verdict"] for d in diagnoses]
-    assert sorted(verdicts) == sorted(["fixed", "manual", "fixed"])
+    hs = tmp_path / "harness_skipped.json"
+    assert diag.is_file() and hs.is_file()
 
-    out = capsys.readouterr().out
-    assert "fixed=2" in out
-    assert "manual=1" in out
+    diagnoses = json.loads(diag.read_text())["diagnoses"]
+    assert {d["component"] for d in diagnoses} == {"a", "b", "c"}
+    assert all(d.get("verdict") for d in diagnoses)
+    assert json.loads(hs.read_text())["harness_skipped_components"] == ["a", "b", "c"]
+
+
+def test_marking_the_same_component_twice_does_not_duplicate_it(tmp_path, monkeypatch):
+    """The banner counts components; a duplicate entry would inflate the count."""
+    import importlib
+
+    mcp = importlib.import_module("scripts.tt_hw_planner.bringup_mcp")
+    monkeypatch.setattr(mcp, "_DEMO_DIR", tmp_path, raising=False)
+
+    mcp.mark_harness_skipped("a", verdict="manual", reason="r")
+    mcp.mark_harness_skipped("a", verdict="manual", reason="r")
+    assert json.loads((tmp_path / "harness_skipped.json").read_text())["harness_skipped_components"] == ["a"]
 
 
 # ─── OUTCOME banner surfaces skip_diagnosis.json ─────────────────────
