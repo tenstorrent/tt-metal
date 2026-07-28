@@ -28,6 +28,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/point_to_point/point_to_point.hpp"
 #include "ttnn/device.hpp"
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
@@ -89,6 +90,41 @@ ttnn::Tensor make_const_cc(const std::vector<float>& data, uint32_t C, MeshDevic
 struct ConstTiles {
     ttnn::Tensor eye, tril, ones, masks;
 };
+
+size_t chunk_gdn_prep_l1_bytes_per_bank(
+    uint32_t BH,
+    uint32_t NC,
+    uint32_t C,
+    uint32_t K,
+    uint32_t V,
+    bool vector_gate,
+    uint32_t output_bf16_mask,
+    MeshDevice* device) {
+    const auto spec = [&](const ttnn::Shape& shape, uint32_t output_index) {
+        const auto dtype = (output_bf16_mask & (1u << output_index)) ? DataType::BFLOAT16 : DataType::FLOAT32;
+        return tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+    };
+    const std::vector<tt::tt_metal::TensorSpec> specs = {
+        spec(ttnn::Shape({BH, NC, C, V}), 0),
+        spec(ttnn::Shape({BH, NC, C, K}), 1),
+        spec(ttnn::Shape({BH, NC, C, K}), 2),
+        spec(ttnn::Shape({BH, NC, C, C}), 3),
+        spec(ttnn::Shape({BH, NC, K, C}), 4),
+        spec(ttnn::Shape({BH, NC, vector_gate ? K : 1, 1}), 5),
+        spec(ttnn::Shape({BH, NC, C, C}), 6),
+    };
+    const auto num_banks = device->allocator()->get_num_banks(BufferType::L1);
+    const auto alignment = device->allocator()->get_alignment(BufferType::L1);
+    size_t bytes_per_bank = 0;
+    for (const auto& output_spec : specs) {
+        bytes_per_bank += tt::tt_metal::detail::calculate_bank_size_spread(
+            output_spec.compute_packed_buffer_size_bytes(),
+            output_spec.compute_page_size_bytes(),
+            num_banks,
+            alignment);
+    }
+    return bytes_per_bank;
+}
 
 ttnn::Tensor slice_group_axis(
     const ttnn::Tensor& tensor, uint32_t start, uint32_t end, const tt::tt_metal::MemoryConfig& memory_config) {
@@ -577,9 +613,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    // Keep prep outputs near the scan consumers; the private override preserves a DRAM A/B control.
-    const auto prep_mem = distributed_prefix || std::getenv("QWEN_KDA_PREP_DRAM") != nullptr ? ttnn::DRAM_MEMORY_CONFIG
-                                                                                             : ttnn::L1_MEMORY_CONFIG;
     const auto kernel_cfg = init_device_compute_kernel_config(
         dev->arch(),
         compute_kernel_config,
@@ -597,6 +630,16 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         prep_bf16_mask = static_cast<uint32_t>(parsed);
     }
     TT_FATAL((prep_bf16_mask & ~0x37u) == 0, "unsupported KDA prep BF16 mask 0x{:x}", prep_bf16_mask);
+    const auto prep_cb_bytes = ttnn::prim::chunk_gdn_prep_cb_size_bytes(C, K, V, true, g.dtype(), prep_bf16_mask);
+    const auto prep_output_bytes_per_bank =
+        chunk_gdn_prep_l1_bytes_per_bank(BH, NC, C, K, V, true, prep_bf16_mask, dev);
+    const auto l1_largest_free_block = dev->allocator()->get_statistics(BufferType::L1).largest_free_block_bytes;
+    const bool prep_fits_l1 = prep_cb_bytes + prep_output_bytes_per_bank <= l1_largest_free_block;
+    // L1 is faster for the retained small geometry, but prep tensors and the program's static CBs
+    // share each worker bank. Fall back to DRAM when their exact combined footprint cannot fit.
+    const bool force_prep_dram = std::getenv("QWEN_KDA_PREP_DRAM") != nullptr;
+    const auto prep_mem =
+        distributed_prefix || force_prep_dram || !prep_fits_l1 ? ttnn::DRAM_MEMORY_CONFIG : ttnn::L1_MEMORY_CONFIG;
     auto prep = ttnn::prim::chunk_gdn_prep(
         q,
         k,

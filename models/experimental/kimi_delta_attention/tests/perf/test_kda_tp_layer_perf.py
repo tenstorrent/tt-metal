@@ -4,6 +4,7 @@
 
 import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -11,7 +12,13 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.experimental.kimi_delta_attention.checkpoint import load_kda_layer_state_dict
 from models.experimental.kimi_delta_attention.config import KDAConfig
+from models.experimental.kimi_delta_attention.kimi_k3_config import (
+    KimiK3Config,
+    kimi_k3_kda_config,
+    kimi_k3_program_config,
+)
 from models.experimental.kimi_delta_attention.tests.test_factory import random_weights
 from models.experimental.kimi_delta_attention.tt.layer import KimiDeltaAttention
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -139,5 +146,69 @@ def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice, tensor_parallel_
     tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
     print(
         f"KDA SP{sp_size}xTP{tp_size} B=1 T={sequence}: "
+        f"wall={wall_seconds * 1e3:.3f} ms/replay over {repetitions} replays"
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("weight_source", ["random", "real"])
+def test_kimi_k3_layer_1_device_perf(mesh_device: ttnn.MeshDevice, weight_source: str) -> None:
+    """Compare TP8 device time for matched K3 geometry with random and layer-1 weights."""
+    checkpoint_value = os.getenv("KIMI_K3_CKPT")
+    if checkpoint_value is None:
+        pytest.skip("set KIMI_K3_CKPT to the pinned Kimi-K3 checkpoint subset")
+    checkpoint_dir = Path(checkpoint_value)
+    config = kimi_k3_kda_config()
+    if weight_source == "real":
+        state_dict = load_kda_layer_state_dict(checkpoint_dir, KimiK3Config.FIRST_KDA_LAYER, config)
+        tensor_cache_path = checkpoint_dir / "ttnn_cache" / "layer_1"
+        tensor_cache_path.mkdir(parents=True, exist_ok=True)
+    else:
+        state_dict = random_weights(config)
+        tensor_cache_path = None
+
+    sequence = int(os.getenv("KIMI_K3_PERF_SEQ", "672"))
+    if sequence % 32:
+        raise ValueError(f"KIMI_K3_PERF_SEQ must be divisible by 32, got {sequence}")
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(1607)).to(
+        torch.bfloat16
+    )
+    hidden_tt = ttnn.from_torch(
+        hidden,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(1, None),
+            mesh_shape=tuple(mesh_device.shape),
+        ),
+    )
+    layer = KimiDeltaAttention(
+        mesh_device,
+        config,
+        state_dict,
+        tensor_cache_path=tensor_cache_path,
+        tt_ccl=TT_CCL(mesh_device),
+        tensor_parallel_axis=1,
+        program_config=kimi_k3_program_config(),
+    )
+    layer.reset_state(batch_size=1)
+    assert layer.recurrent_state is not None
+    assert layer.convolution_state is not None
+    layer.set_external_state(layer.recurrent_state, layer.convolution_state)
+
+    warm_output = layer.forward(hidden_tt, mode="chunk")
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(warm_output)
+
+    repetitions = int(os.getenv("PERF_REPS", "10"))
+    if os.getenv("PERF_TRACE", "0") == "1":
+        wall_seconds = _profile_trace(mesh_device, layer, hidden_tt, repetitions)
+    else:
+        wall_seconds = _profile_eager(mesh_device, layer, hidden_tt, repetitions)
+    print(
+        f"Kimi-K3 KDA layer 1 weights={weight_source} TP8 B=1 T={sequence}: "
         f"wall={wall_seconds * 1e3:.3f} ms/replay over {repetitions} replays"
     )

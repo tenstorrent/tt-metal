@@ -433,7 +433,17 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype, topology, cluster_axis=No
 
 
 def matmul_reduce_scatter_prefill(
-    x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8), cluster_axis=None
+    x,
+    weight,
+    tt_ccl,
+    compute_cfg,
+    topology,
+    nd,
+    dtype,
+    grid=(8, 8),
+    rs_offset=(0, 8),
+    cluster_axis=None,
+    out_block_w_cap=None,
 ):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 
@@ -449,6 +459,9 @@ def matmul_reduce_scatter_prefill(
     # Use every link available on the selected mesh axis. The worker row starts below the 8x8 matmul grid.
     num_links = tt_ccl.get_num_links(cluster_axis)
     per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
+    out_block_w_limit = max(1, per_core_N // 2)
+    if out_block_w_cap is not None:
+        out_block_w_limit = min(out_block_w_limit, out_block_w_cap)
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=min(4, max(1, K_local // TILE_SIZE // grid[0])),
@@ -458,7 +471,7 @@ def matmul_reduce_scatter_prefill(
         out_subblock_w=1,
         per_core_M=max(1, math.ceil(M / TILE_SIZE / grid[1])),
         per_core_N=per_core_N,
-        out_block_w=_find_largest_divisor(per_core_N, max(1, per_core_N // 2)),
+        out_block_w=_find_largest_divisor(per_core_N, out_block_w_limit),
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=False,

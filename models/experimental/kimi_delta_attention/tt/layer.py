@@ -16,7 +16,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, build_fused_const_tiles
 from models.demos.blackhole.qwen36.tt.tp_common import matmul_reduce_scatter_prefill
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
-from models.experimental.kimi_delta_attention.config import KDAConfig
+from models.experimental.kimi_delta_attention.config import KDAConfig, KDAProgramConfig
 from models.experimental.kimi_delta_attention.tt.recurrence import chunk_kda_recurrence, fused_kda_recurrence
 from models.experimental.kimi_delta_attention.tt.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
@@ -41,10 +41,14 @@ class KimiDeltaAttention:
         tensor_cache_path: Path | None = None,
         tt_ccl: TT_CCL | None = None,
         tensor_parallel_axis: int = 1,
-        summary_group_chunks: int = 8,
+        program_config: KDAProgramConfig | None = None,
+        summary_group_chunks: int | None = None,
     ) -> None:
         if tensor_parallel_axis not in (0, 1):
             raise ValueError(f"tensor_parallel_axis must be 0 or 1, got {tensor_parallel_axis}")
+        program_config = program_config or KDAProgramConfig()
+        if summary_group_chunks is None:
+            summary_group_chunks = program_config.summary_group_chunks
         if summary_group_chunks <= 0:
             raise ValueError(f"summary_group_chunks must be positive, got {summary_group_chunks}")
         self.device = mesh_device
@@ -54,6 +58,7 @@ class KimiDeltaAttention:
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
         self.summary_group_chunks = summary_group_chunks
+        self.output_projection_out_block_w = program_config.output_projection_out_block_w
         self.weights: KDAWeights = load_kda_weights(
             mesh_device,
             config,
@@ -262,7 +267,10 @@ class KimiDeltaAttention:
                 self.convolution_state.layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        if sequence > 640:
+        # The generic depthwise conv exceeds Blackhole L1 at K3's 4608 local channels.
+        # Keep the large-width exception local until conv1d gains a suitable sliced config.
+        use_split_convolution = sequence > 640 or channels >= 4608
+        if use_split_convolution:
             q, k, v = ttnn.transformer.kda_causal_conv1d_split(
                 qkv_row_major,
                 state_row_major,
@@ -365,7 +373,7 @@ class KimiDeltaAttention:
             compute_kernel_config=self.compute_config,
         )
         qkv = _slice_width(projected, 0, self._convolution_width)
-        output_gate_width = config.v_dim if head_major else config.head_v_dim
+        output_gate_width = config.v_dim if head_major or weights.output_gate_is_direct else config.head_v_dim
         auxiliary_start = self._convolution_width
         if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
             q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
@@ -417,7 +425,6 @@ class KimiDeltaAttention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_config,
             )
-            gate_activations = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)]
         else:
             raw_gate = ttnn.linear(
                 decay_rank,
@@ -429,15 +436,23 @@ class KimiDeltaAttention:
             decay_bias = weights.decay_bias
             decay_scale = weights.decay_scale
             gate = ttnn.add(raw_gate, decay_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            gate = ttnn.softplus(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            gate_activations = []
-        gate = ttnn.multiply(
-            decay_scale,
-            gate,
-            input_tensor_b_activations=gate_activations,
-            dtype=ttnn.bfloat16 if head_major else ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if config.gate_lower_bound is None:
+            gate = ttnn.multiply(
+                decay_scale,
+                gate,
+                input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+                dtype=ttnn.bfloat16 if head_major else ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            gate = ttnn.multiply(
+                decay_scale,
+                gate,
+                dtype=ttnn.bfloat16 if head_major else ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate = ttnn.multiply(gate, config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         assert self.recurrent_state is not None
         # The long-context grouped-prefix path returns raw scan output; normalize it
@@ -478,7 +493,10 @@ class KimiDeltaAttention:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
         if head_major:
             output_gate = output_gate_rank
+        elif weights.output_gate_is_direct:
+            output_gate = ttnn.reshape(output_gate_rank, (batch, sequence, config.num_heads, config.head_v_dim))
         else:
+            assert weights.output_gate_projection is not None
             output_gate = ttnn.linear(
                 output_gate_rank,
                 weights.output_gate_projection,
@@ -527,6 +545,7 @@ class KimiDeltaAttention:
                 self.tensor_parallel_size,
                 output.dtype,
                 cluster_axis=None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis,
+                out_block_w_cap=self.output_projection_out_block_w,
             )
         else:
             output = ttnn.linear(
@@ -542,7 +561,7 @@ class KimiDeltaAttention:
                 output,
                 self.device,
                 self.tt_ccl,
-                cluster_axis=self.tensor_parallel_axis,
+                cluster_axis=None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis,
                 dim=3,
                 topology=ttnn.Topology.Linear,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

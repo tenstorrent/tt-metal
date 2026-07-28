@@ -55,6 +55,14 @@ struct ChunkGdnPrepParams {
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
+uint32_t chunk_gdn_prep_cb_size_bytes(
+    uint32_t chunk_size,
+    uint32_t key_dim,
+    uint32_t val_dim,
+    bool vector_gate,
+    DataType gate_dtype,
+    uint32_t output_bf16_mask);
+
 struct ChunkGdnPrepInputs {
     Tensor q;        // [BH, NC, C, K] bf16
     Tensor k;        // [BH, NC, C, K] bf16

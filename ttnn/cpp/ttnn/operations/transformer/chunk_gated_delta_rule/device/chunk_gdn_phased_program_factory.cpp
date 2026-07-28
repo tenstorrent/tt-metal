@@ -168,6 +168,65 @@ ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt, bool vect
 
 }  // namespace
 
+uint32_t chunk_gdn_prep_cb_size_bytes(
+    uint32_t chunk_size,
+    uint32_t key_dim,
+    uint32_t val_dim,
+    bool vector_gate,
+    DataType gate_dtype,
+    uint32_t output_bf16_mask) {
+    const uint32_t Ct = chunk_size / TILE_HEIGHT;
+    const uint32_t Kt = key_dim / TILE_WIDTH;
+    const uint32_t Vt = val_dim / TILE_WIDTH;
+    const uint32_t cc = Ct * Ct;
+    const uint32_t ck = Ct * Kt;
+    const uint32_t cv = Ct * Vt;
+    const uint32_t kv = Kt * Vt;
+    const uint32_t kc = Kt * Ct;
+    const uint32_t scr = std::max({cc, ck, cv, kv, kc});
+    const auto output_format = [&](uint32_t index) {
+        return (output_bf16_mask & (1u << index)) ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
+    };
+    uint32_t bytes = 0;
+    const auto add = [&](uint32_t tiles, uint32_t buffers = 1, tt::DataFormat format = tt::DataFormat::Float32) {
+        bytes += tiles * buffers * tt::tile_size(format);
+    };
+    constexpr auto bf16 = tt::DataFormat::Float16_b;
+    add(ck, 1, bf16);  // q
+    add(ck, 1, bf16);  // k
+    add(cv, 1, bf16);  // v
+    add(vector_gate ? ck : Ct, 1, tt::tt_metal::datatype_to_dataformat_converter(gate_dtype));
+    add(Ct);                                                        // beta
+    add(cc);                                                        // eye
+    add(cc);                                                        // tril
+    add(cc);                                                        // ones
+    add(kv, 2);                                                     // S
+    add(vector_gate ? ck : Ct);                                     // decay
+    add(vector_gate ? ck : Ct);                                     // decay_exp
+    add(vector_gate ? ck : Ct);                                     // decayfac
+    add(cc);                                                        // lmask
+    add(cc, 1, output_format(6));                                   // Tinv
+    add(cv, 1, output_format(0));                                   // vbeta
+    add(ck);                                                        // kbeta
+    add(cv, 2, bf16);                                               // out
+    add(std::max(cv, 3u));                                          // u
+    add(ck, 1, output_format(1));                                   // w
+    add(ck, 1, output_format(2));                                   // qdecay
+    add(cc, 1, output_format(3));                                   // intra
+    add(kv, 2);                                                     // s2
+    add(vector_gate ? std::max(cv, Kt) : cv, 1, output_format(5));  // vnew / dl
+    add(cv);                                                        // ointer
+    add(kc, 1, output_format(4));                                   // kdec_t
+    add(kv);                                                        // supd
+    add(kv);                                                        // stmp
+    add(kv);                                                        // final_s
+    add(scr);                                                       // scr1
+    add(scr);                                                       // scr2
+    add(scr);                                                       // scr3
+    add(kv, 2);                                                     // s3
+    return bytes;
+}
+
 // ---------------------------------------------------------------------------
 // PREP
 // ---------------------------------------------------------------------------
@@ -194,11 +253,14 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const CoreRangeSet& cores = dist.core_set;
     const uint32_t n_used = static_cast<uint32_t>(dist.cores.size());
 
+    uint32_t cb_size_bytes = 0;
     ProgramDescriptor desc;
     auto add_cb = [&](uint32_t idx, uint32_t n_tiles, uint32_t nbuf = 1, tt::DataFormat fmt = tt::DataFormat::Float32) {
         const uint32_t ts = tt::tile_size(fmt);
+        const uint32_t total_size = n_tiles * nbuf * ts;
+        cb_size_bytes += total_size;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = n_tiles * nbuf * ts,
+            .total_size = total_size,
             .core_ranges = cores,
             .format_descriptors = {
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
@@ -242,6 +304,15 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::scr2, scr);
     add_cb(pcb::scr3, scr);
     add_cb(pcb::s3, kv, 2);
+    TT_FATAL(
+        cb_size_bytes == chunk_gdn_prep_cb_size_bytes(
+                             attrs.chunk_size,
+                             attrs.key_dim,
+                             attrs.val_dim,
+                             attrs.vector_gate,
+                             in.g.dtype(),
+                             attrs.output_bf16_mask),
+        "KDA prep CB size estimator is out of sync with the program factory");
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};

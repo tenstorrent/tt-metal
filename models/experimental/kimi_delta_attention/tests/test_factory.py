@@ -29,7 +29,7 @@ def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
 
     hidden = config.hidden_size
     key_rank, value_rank = config.head_k_dim, config.head_v_dim
-    return {
+    weights = {
         "q_proj.weight": normal(config.q_dim, hidden),
         "k_proj.weight": normal(config.k_dim, hidden),
         "v_proj.weight": normal(config.v_dim, hidden),
@@ -41,8 +41,12 @@ def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
         "f_b_proj.weight": normal(config.num_heads * key_rank, key_rank),
         "dt_bias": normal(config.num_heads * key_rank),
         "b_proj.weight": normal(config.num_heads, hidden),
-        "g_a_proj.weight": normal(value_rank, hidden),
-        "g_b_proj.weight": normal(config.num_heads * value_rank, value_rank),
         "o_norm.weight": 1.0 + normal(value_rank),
         "o_proj.weight": normal(hidden, config.num_heads * value_rank),
     }
+    if config.use_full_rank_gate:
+        weights["g_proj.weight"] = normal(config.v_dim, hidden)
+    else:
+        weights["g_a_proj.weight"] = normal(value_rank, hidden)
+        weights["g_b_proj.weight"] = normal(config.num_heads * value_rank, value_rank)
+    return weights

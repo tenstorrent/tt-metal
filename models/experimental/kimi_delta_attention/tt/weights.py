@@ -11,8 +11,8 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.experimental.kimi_delta_attention.checkpoint import normalize_kda_state_dict
 from models.experimental.kimi_delta_attention.config import KDAConfig
-from models.experimental.kimi_delta_attention.reference import validate_reference_weights
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,8 @@ class KDAWeights:
     input_projection: ttnn.Tensor
     input_projection_prefill: ttnn.Tensor
     decay_output_projection: ttnn.Tensor
-    output_gate_projection: ttnn.Tensor
+    output_gate_projection: ttnn.Tensor | None
+    output_gate_is_direct: bool
     output_projection: ttnn.Tensor
     decay_scale: ttnn.Tensor
     decay_bias: ttnn.Tensor
@@ -41,7 +42,7 @@ def load_kda_weights(
     tensor_parallel_axis: int = 1,
 ) -> KDAWeights:
     """Fuse compatible projections and place whole-head shards on device."""
-    validate_reference_weights(state_dict, config)
+    state_dict = normalize_kda_state_dict(state_dict, config)
     if tensor_parallel_axis not in (0, 1):
         raise ValueError(f"tensor_parallel_axis must be 0 or 1, got {tensor_parallel_axis}")
     if isinstance(device, ttnn.MeshDevice):
@@ -91,32 +92,42 @@ def load_kda_weights(
             grouped.append(torch.cat(device_weights, dim=0))
         return torch.cat(grouped, dim=0)
 
-    input_projection = group_output_shards(
+    common_input_weights = (
         state_dict["q_proj.weight"],
         state_dict["k_proj.weight"],
         state_dict["v_proj.weight"],
         state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
-        state_dict["g_a_proj.weight"].repeat(tensor_parallel_size, 1),
-        state_dict["b_proj.weight"],
-    ).T
-
-    output_gate_projection = state_dict["g_b_proj.weight"].reshape(
-        config.num_heads, config.head_v_dim, config.head_v_dim
     )
-    output_gate_direct = torch.matmul(
-        output_gate_projection,
-        state_dict["g_a_proj.weight"],
-    ).reshape(config.v_dim, config.hidden_size)
-    input_projection_prefill = group_output_shards(
-        state_dict["q_proj.weight"],
-        state_dict["k_proj.weight"],
-        state_dict["v_proj.weight"],
-        state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
-        output_gate_direct,
-        state_dict["b_proj.weight"],
-    ).T
+    if config.use_full_rank_gate:
+        input_projection = group_output_shards(
+            *common_input_weights,
+            state_dict["g_proj.weight"],
+            state_dict["b_proj.weight"],
+        ).T
+        input_projection_prefill = input_projection
+        output_gate_projection = None
+    else:
+        input_projection = group_output_shards(
+            *common_input_weights,
+            state_dict["g_a_proj.weight"].repeat(tensor_parallel_size, 1),
+            state_dict["b_proj.weight"],
+        ).T
+        output_gate_projection = state_dict["g_b_proj.weight"].reshape(
+            config.num_heads, config.head_v_dim, config.head_v_dim
+        )
+        output_gate_direct = torch.matmul(
+            output_gate_projection,
+            state_dict["g_a_proj.weight"],
+        ).reshape(config.v_dim, config.hidden_size)
+        input_projection_prefill = group_output_shards(
+            *common_input_weights,
+            output_gate_direct,
+            state_dict["b_proj.weight"],
+        ).T
 
-    decay_scale = -state_dict["A_log"].float().exp()
+    decay_scale = state_dict["A_log"].float().exp()
+    if config.gate_lower_bound is None:
+        decay_scale = -decay_scale
     decay_bias = state_dict["dt_bias"].reshape(1, 1, config.num_heads, config.head_k_dim)
     decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
     decay_bias_flat = decay_bias.reshape(1, 1, config.q_dim)
@@ -145,19 +156,30 @@ def load_kda_weights(
         config.conv_kernel_size,
     )
 
+    input_projection_device = device_tensor(input_projection, "input_projection", shard_dim=-1)
+    input_projection_prefill_device = (
+        input_projection_device
+        if config.use_full_rank_gate
+        else device_tensor(input_projection_prefill, "input_projection_prefill", shard_dim=-1)
+    )
     return KDAWeights(
-        input_projection=device_tensor(input_projection, "input_projection", shard_dim=-1),
-        input_projection_prefill=device_tensor(input_projection_prefill, "input_projection_prefill", shard_dim=-1),
+        input_projection=input_projection_device,
+        input_projection_prefill=input_projection_prefill_device,
         decay_output_projection=device_tensor(
             state_dict["f_b_proj.weight"].T,
             "decay_output_projection",
             shard_dim=-1,
         ),
-        output_gate_projection=device_tensor(
-            state_dict["g_b_proj.weight"].T,
-            "output_gate_projection",
-            shard_dim=-1,
+        output_gate_projection=(
+            device_tensor(
+                state_dict["g_b_proj.weight"].T,
+                "output_gate_projection",
+                shard_dim=-1,
+            )
+            if output_gate_projection is not None
+            else None
         ),
+        output_gate_is_direct=config.use_full_rank_gate,
         output_projection=device_tensor(
             state_dict["o_proj.weight"].T,
             "output_projection",

@@ -10,6 +10,7 @@ from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_r
     recurrent_gated_delta_rule,
 )
 from models.experimental.kimi_delta_attention.config import KDAConfig
+from models.experimental.kimi_delta_attention.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.experimental.kimi_delta_attention.reference import (
     causal_depthwise_conv_reference,
     kda_forward_reference,
@@ -39,6 +40,17 @@ def test_target_config_mapping() -> None:
     assert config.head_k_dim == config.head_v_dim == 128
     assert config.q_dim == config.k_dim == config.v_dim == 4096
     assert config.conv_kernel_size == 4
+
+
+def test_kimi_k3_config_mapping() -> None:
+    config = kimi_k3_kda_config()
+
+    assert config.hidden_size == KimiK3Config.HIDDEN_SIZE == 7168
+    assert config.num_heads == KimiK3Config.KDA_NUM_HEADS == 96
+    assert config.head_k_dim == config.head_v_dim == 128
+    assert config.conv_kernel_size == 4
+    assert config.use_full_rank_gate
+    assert config.gate_lower_bound == -5.0
 
 
 @pytest.mark.parametrize("field", ["hidden_size", "num_heads", "head_k_dim", "head_v_dim"])
@@ -79,6 +91,18 @@ def test_gate_matches_authoritative_formula() -> None:
 
     assert torch.equal(actual, expected)
     assert torch.all(actual < 0)
+
+
+def test_bounded_gate_matches_kimi_k3_formula() -> None:
+    raw = torch.tensor([[[[-2.0, 0.5], [1.0, 3.0]]]])
+    a_log = torch.log(torch.tensor([[[[2.0], [4.0]]]]))
+    bias = torch.tensor([0.1, -0.2, 0.3, -0.4])
+
+    actual = kda_gate_reference(raw, a_log, bias, lower_bound=-5.0)
+    expected = -5.0 * torch.sigmoid(a_log.exp() * (raw + bias.reshape(1, 1, 2, 2)))
+
+    assert torch.equal(actual, expected)
+    assert torch.all((-5.0 <= actual) & (actual <= 0.0))
 
 
 def test_vector_decay_reduces_to_trusted_scalar_gdn() -> None:

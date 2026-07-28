@@ -57,8 +57,11 @@ def validate_reference_weights(weights: Mapping[str, torch.Tensor], config: KDAC
     _require_weight(weights, "f_b_proj.weight", (heads * key_rank, key_rank))
     _require_weight(weights, "dt_bias", (heads * key_rank,))
     _require_weight(weights, "b_proj.weight", (heads, hidden))
-    _require_weight(weights, "g_a_proj.weight", (value_rank, hidden))
-    _require_weight(weights, "g_b_proj.weight", (heads * value_rank, value_rank))
+    if config.use_full_rank_gate:
+        _require_weight(weights, "g_proj.weight", (heads * value_rank, hidden))
+    else:
+        _require_weight(weights, "g_a_proj.weight", (value_rank, hidden))
+        _require_weight(weights, "g_b_proj.weight", (heads * value_rank, value_rank))
     _require_weight(weights, "o_norm.weight", (value_rank,))
     _require_weight(weights, "o_proj.weight", (hidden, heads * value_rank))
 
@@ -95,6 +98,7 @@ def kda_gate_reference(
     raw_gate: torch.Tensor,
     a_log: torch.Tensor,
     dt_bias: torch.Tensor,
+    lower_bound: float | None = None,
 ) -> torch.Tensor:
     """Convert raw gate logits to negative per-key log decay."""
     heads, key_dim = raw_gate.shape[-2:]
@@ -104,7 +108,10 @@ def kda_gate_reference(
         raise ValueError(f"dt_bias has {dt_bias.numel()} values, expected {heads * key_dim}")
     scale = a_log.float().reshape(1, 1, heads, 1).exp()
     bias = dt_bias.float().reshape(1, 1, heads, key_dim)
-    return -scale * F.softplus(raw_gate.float() + bias)
+    gate_input = raw_gate.float() + bias
+    if lower_bound is not None:
+        return lower_bound * torch.sigmoid(scale * gate_input)
+    return -scale * F.softplus(gate_input)
 
 
 def l2_norm_reference(inputs: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -218,14 +225,18 @@ def kda_forward_reference(
         F.linear(hidden, weights["f_a_proj.weight"].float()),
         weights["f_b_proj.weight"].float(),
     ).reshape(batch, sequence, config.num_heads, config.head_k_dim)
-    gate = kda_gate_reference(raw_gate, weights["A_log"], weights["dt_bias"])
+    gate = kda_gate_reference(raw_gate, weights["A_log"], weights["dt_bias"], config.gate_lower_bound)
     beta = torch.sigmoid(F.linear(hidden, weights["b_proj.weight"].float()))
     output, recurrent = kda_recurrent_reference(q, k, v, gate, beta, state.recurrent)
 
-    output_gate = F.linear(
-        F.linear(hidden, weights["g_a_proj.weight"].float()),
-        weights["g_b_proj.weight"].float(),
-    ).reshape(batch, sequence, config.num_heads, config.head_v_dim)
+    if config.use_full_rank_gate:
+        output_gate = F.linear(hidden, weights["g_proj.weight"].float())
+    else:
+        output_gate = F.linear(
+            F.linear(hidden, weights["g_a_proj.weight"].float()),
+            weights["g_b_proj.weight"].float(),
+        )
+    output_gate = output_gate.reshape(batch, sequence, config.num_heads, config.head_v_dim)
     output = sigmoid_gated_rms_norm_reference(
         output,
         output_gate,
