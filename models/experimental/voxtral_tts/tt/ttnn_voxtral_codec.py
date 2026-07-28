@@ -69,7 +69,7 @@ only 8 distinct layouts across all 5 convs and all 12 buckets, so the cache hold
 than the 730 MB that keying by length alone produced -- 0.8% of an N150's DRAM instead of 6.5%.
 Plus 60.8 MB of host copies, kept so a new length can still be prepared.
 
-Validate against the reference (bit-exact goldens for all 8 stages):
+Validate against the reference (per-stage PCC bisect + the default bucketed path):
     TT_METAL_HOME=<repo> PYTHONPATH=<repo> python models/experimental/voxtral_tts/tt/ttnn_voxtral_codec.py
 """
 
@@ -115,8 +115,9 @@ ATTN_DTYPE = ttnn.bfloat16
 # O(S^2) into O(S*slab) -- the window is only 2..16, so an unchunked q@kT computes 382M scores per
 # head at S=12000 of which ~17 per row survive the mask. Measured at S=12000 (before the conv
 # weight-prep fix, so absolute numbers are now lower): warm 892 -> 497 ms, cold 10580 -> 1178 ms
-# (all attention shapes become identical, so kernels compile once ever), mask 2304 -> 4.2 MB. Below chunk_min the full mask is already cheap and chunking loses a few
-# percent to dispatch (T=64: 89 -> 97 ms), hence the threshold.
+# (all attention shapes become identical, so kernels compile once ever), mask 2304 -> 4.2 MB.
+# Below chunk_min the full mask is already cheap and chunking loses a few percent to dispatch
+# (T=64: 89 -> 97 ms), hence the threshold.
 SLAB = 512
 CHUNK_MIN = 512
 # Length bucketing for the CONVS. Every conv's input length scales with T (T+2, T, 2T, 4T, 8T+6),
@@ -162,17 +163,14 @@ class TtVoxtralCodecDecoder:
         lin = lambda t: dev(t.t())  # torch Linear [out,in] -> ttnn.linear wants [in,out]
         host = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype)  # conv weights, see below
 
-        self.semantic_host = w["semantic_embedding"].float()  # host gather; see quantizer_decode
+        self.semantic_host = w["semantic_embedding"].float()  # host gather; see _quantizer_host
 
         # --- convs ---
-        # Weights are kept on HOST and prepared per (conv, input length) on first use, then cached.
-        # WHY: ttnn.conv1d transforms and re-uploads its weights INSIDE the op, so without this it
-        # redid that work for all 5 convs on EVERY call. Hoisting it out was worth 2.6x at T=128
-        # (112.8 -> 43.7 ms) and dropped the host share of wall time from 88% to 24%.
-        # The cache is keyed by LENGTH because prepared weights are NOT length-independent: the
-        # prepared layout encodes the sharding/blocking scheme. Same shape at every length but
-        # different VALUES -- a 512-prepared weight used at L=128 computes PCC 0.19 against torch,
-        # so reusing one across lengths silently produces garbage.
+        # Weights stay on HOST here and are prepared on first use by `_prepared`, which also
+        # deduplicates them -- see that method for the layout table and the memory numbers.
+        # WHY at all: ttnn.conv1d transforms and re-uploads its weights INSIDE the op, so without
+        # this it redid that work for all 5 convs on EVERY call. Hoisting it out was worth 2.6x at
+        # T=128 (112.8 -> 43.7 ms) and cut the host share of wall time from 88% to 24%.
         self.conv_host = {
             "in": host(w["decoder_blocks.0.conv.weight"].unsqueeze(2)),      # [1024,292,1,3]
             "out": host(w["output_proj.conv.weight"].unsqueeze(2)),          # [240,1024,1,7]
@@ -284,7 +282,9 @@ class TtVoxtralCodecDecoder:
         )
 
     # ----------------------------------------------------------------------------------
-    # Attention bias: ALiBi + causal + sliding window, one additive [1,H,S,S] term
+    # Attention bias: ALiBi + causal + sliding window as ONE additive term.
+    # [1,H,S,S] on the unchunked path; [1,H,slab,slab] once chunking applies, which is the
+    # normal case and is why it stays small (4.2 MB) at any utterance length.
     # ----------------------------------------------------------------------------------
     def _attn_bias(self, S, window):
         key = (S, window, self.attn_dtype)
@@ -353,13 +353,17 @@ class TtVoxtralCodecDecoder:
         return ttnn.slice(out, [0, 0, 0, 0], [1, 1, out.shape[2] - trim, channels])
 
     def _attention_slab(self, q, k, v, bias):
-        """fp32 attention with an additive pre-softmax bias. [1,H,S,d] -> [1,H,S,d].
+        """Attention with an additive pre-softmax bias, in `attn_dtype`. [1,H,S,d] -> [1,H,S,d].
 
-        NOT ttnn.transformer.scaled_dot_product_attention: that op is bf16/bfp8-only, and this is
-        the front of a deep conv stack where the XTTS-v2 vocoder work showed accumulated error
-        does not cancel. Done as matmul + softmax in fp32 instead, which also lets us keep
-        `numeric_stable=True` — XTTS-v2 Block 1 found the default softmax leaves a structured,
-        dominant-aligned error that downstream layers amplify."""
+        Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention for two reasons.
+        First, sdpa has no ALiBi support and the tensor-free workaround (folding it into an extra k
+        column) needs magnitudes up to 42438 where bf16's spacing is 256 while the whole ALiBi
+        signal spans 192 -- it is unrepresentable. Second, doing it by hand keeps
+        `numeric_stable=True` on the softmax; XTTS-v2 Block 1 found the default leaves a
+        structured, dominant-aligned error that downstream layers amplify.
+
+        Note this runs in bf16 by DEFAULT (attn_dtype), which the sweep in the module docstring
+        showed is both more accurate and faster here. Activations elsewhere stay fp32."""
         if self.attn_dtype != DTYPE:
             c = lambda t: ttnn.typecast(t, self.attn_dtype)
             q, k, v = c(q), c(k), c(v)  # the BIAS is already cached in attn_dtype -- never cast the

@@ -101,8 +101,9 @@ def block2(gen, audio_args):
         our_frame = F.reference_frame(h, ours, cfg_alpha=1.2, x_0=x0)
         same = bool((up_frame == our_frame).all())
         RESULTS.append(("b2 full frame, 37 codes (EXACT ints)", 1.0 if same else 0.0, 0.0, same))
-        print(f"{'PASS' if same else 'FAIL'}  {'b2 full frame, 37 codes (EXACT ints)':52s} "
-              f"{'identical' if same else str((up_frame != our_frame).sum().item()) + ' of ' + str(up_frame.numel()) + ' codes differ'}")
+        detail = ("identical" if same else
+                  f"{(up_frame != our_frame).sum().item()} of {up_frame.numel()} codes differ")
+        print(f"{'PASS' if same else 'FAIL'}  {'b2 full frame, 37 codes (EXACT ints)':52s} {detail}")
         if not same:
             print("      upstream:", up_frame[0, :8].tolist())
             print("      ours    :", our_frame[0, :8].tolist())

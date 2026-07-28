@@ -346,7 +346,8 @@ def main():
         ("audio_tokenizer.quantizer.semantic_codebook.embedding_sum", (SEMANTIC_CODEBOOK_SIZE, SEMANTIC_DIM)),
         ("audio_tokenizer.decoder_blocks.0.conv.parametrizations.weight.original1", (CODEC_DIM, LATENT_DIM, 3)),
         ("audio_tokenizer.decoder_blocks.6.conv.parametrizations.weight.original1", (CODEC_DIM, CODEC_DIM, 4)),
-        ("audio_tokenizer.output_proj.conv.parametrizations.weight.original1", (PATCH_SIZE, CODEC_DIM, PATCH_PROJ_KERNEL)),
+        ("audio_tokenizer.output_proj.conv.parametrizations.weight.original1",
+         (PATCH_SIZE, CODEC_DIM, PATCH_PROJ_KERNEL)),
         ("audio_tokenizer.decoder_blocks.7.layers.1.attention.q_norm.weight", (CODEC_DIM,)),
         ("audio_tokenizer.decoder_blocks.7.layers.1.ffn_scale", (CODEC_DIM,)),
     ]
