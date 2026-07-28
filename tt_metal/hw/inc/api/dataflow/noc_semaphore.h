@@ -78,6 +78,16 @@ public:
     // instead of silently overriding the baked scope.
     template <uint32_t Id, SemScope TokenScope>
     explicit Semaphore(SemAccessor<Id, TokenScope>) : l1_offset_(sem_l1_offset(Id)) {
+#ifdef ARCH_QUASAR
+        // The cached-only pool is indexed by the semaphore's own id, so a high id must not run past
+        // the pool into whatever follows it. Checkable here (unlike on the host) because both the id
+        // and the pool size are visible.
+        if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
+            static_assert(
+                Id * L1_ALIGNMENT < MEM_DM_CACHED_SEM_SIZE,
+                "semaphore id does not fit the DM cached semaphore pool (grow MEM_DM_CACHED_SEM_SIZE)");
+        }
+#endif
         static_assert(
             TokenScope == Scope,
             "The sem:: accessor's baked SemScope does not match this Semaphore's Scope. Write "

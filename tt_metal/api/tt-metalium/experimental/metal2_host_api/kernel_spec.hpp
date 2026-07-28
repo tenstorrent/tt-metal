@@ -156,13 +156,22 @@ struct KernelSpec {
         //                                               check-then-decrement is single-consumer-only
         //   SET:       set() / set_multicast()       -- non-atomic destructive store under ALL scopes
         //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
+        //
+        // NOTE on NoC-reaching access: none of these classes says "this binding is reached over the
+        // NoC" (a remote up(), a multicast set/inc, or a relay). A cached (DM_LOCAL_CACHED) semaphore
+        // is incompatible with every such entry point -- the device Semaphore static_asserts on the
+        // remote methods -- so if you bind a semaphore you reach remotely, force
+        // SemaphoreScope::EXTERNAL rather than relying on AUTO, which classifies from node placement
+        // and cannot see that intent.
         enum class AccessType { INCREMENT, CONSUME, SET, OBSERVE };
 
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
         // Default INCREMENT (a writer): fail-safe for the AUTO classifier -- an unlabeled binding can
-        // only RAISE the writer count, i.e. push AUTO toward the always-correct EXTERNAL, never toward a
-        // wrong non-atomic LOCAL_NONATOMIC. Mark OBSERVE to opt a read-only binding into the cheap path.
+        // only RAISE the writer count, never lower it, so it can never leave a contended semaphore on
+        // the non-atomic LOCAL_NONATOMIC path. It pushes AUTO toward an ATOMIC mechanism (the cached
+        // pool when the semaphore is provably confined to one node with a single binder kernel, else
+        // EXTERNAL). Mark OBSERVE to opt a read-only binding out of the writer census.
         AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;

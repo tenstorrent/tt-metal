@@ -370,6 +370,18 @@ protected:
         return {result[0], result[1]};
     }
 
+    // A node other than `core`, on whichever axis the device actually exposes. The off-node shapes
+    // used to hardcode {1,0} and skip on grid.x < 2, which silently dropped their coverage on a
+    // 1-wide (but taller) grid.
+    bool has_second_node() const {
+        const auto grid = mesh_device_->compute_with_storage_grid_size();
+        return grid.x >= 2 || grid.y >= 2;
+    }
+    experimental::NodeCoord second_node() const {
+        const auto grid = mesh_device_->compute_with_storage_grid_size();
+        return grid.x >= 2 ? experimental::NodeCoord{1, 0} : experimental::NodeCoord{0, 1};
+    }
+
     static constexpr uint32_t kNoReport = 0xDEADBEEFu;  // sentinel: outside every SemScope value
     static uint32_t scope_val(SemScope s) { return static_cast<uint32_t>(s); }
     // The semaphore's RING slot as observed by the last run_census() (report word 2). For a cached
@@ -619,11 +631,10 @@ TEST_F(SemScopeFixture, TestCensusTwoKernelsSameNodePicksExternal) {
 // A semaphore spanning >1 node is >1 physical cell; the pool is per-core, so it must take the NoC
 // atomic instead.
 TEST_F(SemScopeFixture, TestCensusMultiNodeSemPicksExternal) {
-    const auto grid = mesh_device_->compute_with_storage_grid_size();
-    if (grid.x < 2) {
+    if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes for a multi-node semaphore";
     }
-    const experimental::NodeRange two_nodes{experimental::NodeCoord{0, 0}, experimental::NodeCoord{1, 0}};
+    const experimental::NodeRange two_nodes{experimental::NodeCoord{0, 0}, second_node()};
     const auto [scope, count] =
         run_census(two_nodes, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
     (void)count;
@@ -633,11 +644,10 @@ TEST_F(SemScopeFixture, TestCensusMultiNodeSemPicksExternal) {
 
 // A WRITER on another node means the semaphore is reachable from off-node -> cached would split it.
 TEST_F(SemScopeFixture, TestCensusOffNodeWriterPicksExternal) {
-    const auto grid = mesh_device_->compute_with_storage_grid_size();
-    if (grid.x < 2) {
+    if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a binder off the semaphore's node";
     }
-    const experimental::NodeCoord other{1, 0};
+    const experimental::NodeCoord other = second_node();
     const auto [scope, count] = run_census(
         core,
         {{.num_threads = 1, .increments = iterations, .reporter = true},
@@ -662,11 +672,10 @@ TEST_F(SemScopeFixture, TestCensusObserverNotCountedAsWriter) {
 // ...but an OBSERVE reader DOES count for node confinement: a reader on another node would read that
 // node's pool copy, so the semaphore must not be cached.
 TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
-    const auto grid = mesh_device_->compute_with_storage_grid_size();
-    if (grid.x < 2) {
+    if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a reader off the semaphore's node";
     }
-    const experimental::NodeCoord other{1, 0};
+    const experimental::NodeCoord other = second_node();
     const auto [scope, count] = run_census(
         core,
         {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true},
@@ -696,6 +705,62 @@ TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
     (void)loc_count;  // deliberately non-atomic here; the count may legitimately be short
 }
 
+// The two hazard FATALs are mechanism-independent: neither the NoC atomic nor the cached AMO can make
+// a multi-consumer down() or a racing set() atomic. Nothing in the tree labels CONSUME/SET today, so
+// without these tests both guards are dead code that could rot unnoticed.
+TEST_F(SemScopeFixture, TestCensusConsumeAndSetHonestyFatals) {
+    // Two concurrent CONSUME instances (one 2-thread kernel) -> check-then-decrement is unsafe.
+    EXPECT_ANY_THROW(run_census(
+        core,
+        {{.num_threads = 2, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true}}))
+        << "a multi-consumer down() must be rejected under every mechanism";
+
+    // A SET racing another writer -> set() is a non-atomic destructive store under every scope.
+    EXPECT_ANY_THROW(run_census(
+        core,
+        {{.num_threads = 1, .access = experimental::SemaphoreAccessType::SET, .increments = 1, .reporter = true},
+         {.num_threads = 1, .increments = 1}}))
+        << "a SET racing another writer must be rejected under every mechanism";
+
+    // A SINGLE consumer instance is fine: no concurrency, so it takes the cheap path.
+    EXPECT_NO_THROW(run_census(
+        core,
+        {{.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 0, .reporter = true}}))
+        << "a single consumer is safe and must not be rejected";
+
+    // The guards are AUTO-only: an explicitly forced scope is the user's call to make.
+    EXPECT_NO_THROW(run_census(
+        core,
+        {{.num_threads = 2, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true}},
+        SemaphoreScope::EXTERNAL))
+        << "forced scopes bypass the AUTO-only honesty guards";
+}
+
+// A kernel may bind a given semaphore only once -- a second binding would double-count that kernel's
+// instances in the census and so distort the mechanism choice.
+TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
+    experimental::SemaphoreSpec sem{
+        .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
+    const experimental::KernelSpecName K{"double_binder"};
+    experimental::KernelSpec ks{
+        .unique_id = K,
+        .source = kernel_path_census,
+        .num_threads = 1,
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
+             {.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter_again"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+    experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
+    experimental::ProgramSpec spec{
+        .name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
+    EXPECT_ANY_THROW({
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        (void)program;
+    }) << "binding the same semaphore twice in one kernel must be rejected (it double-counts the census)";
+}
+
 // ---- Phase-2 S2a: host-side scope resolution + contradiction FATALs ----
 
 // Explicit single-node scopes are accepted (ResolveSemaphoreScope validates, no throw).
@@ -712,12 +777,11 @@ TEST_F(SemScopeFixture, TestForcedScopeSingleNodeAccepted) {
 // The pool is per-core, so a binder running on a node OTHER than the semaphore's node would
 // increment its own node's copy -> silent split -> host FATAL at config time.
 TEST_F(SemScopeFixture, TestForcedDmLocalCachedRemoteBinderFatal) {
-    const auto grid = mesh_device_->compute_with_storage_grid_size();
-    if (grid.x < 2) {
+    if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a binder off the semaphore's node";
     }
     // Semaphore stays on a single node (core), but its binding kernel spans two nodes.
-    kernel_target_ = experimental::NodeRange{experimental::NodeCoord{0, 0}, experimental::NodeCoord{1, 0}};
+    kernel_target_ = experimental::NodeRange{experimental::NodeCoord{0, 0}, second_node()};
     EXPECT_ANY_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, core));
     // Sanity: the same spread-out binding is fine on the NoC-atomic path.
     EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::EXTERNAL, core));
@@ -726,11 +790,10 @@ TEST_F(SemScopeFixture, TestForcedDmLocalCachedRemoteBinderFatal) {
 
 // A forced DM_LOCAL_CACHED semaphore that spans >1 node is a contradiction -> host FATAL.
 TEST_F(SemScopeFixture, TestForcedDmLocalCachedMultiNodeFatal) {
-    const auto grid = mesh_device_->compute_with_storage_grid_size();
-    if (grid.x < 2) {
+    if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to form a multi-node semaphore range";
     }
-    const experimental::NodeRange two_nodes{experimental::NodeCoord{0, 0}, experimental::NodeCoord{1, 0}};
+    const experimental::NodeRange two_nodes{experimental::NodeCoord{0, 0}, second_node()};
     EXPECT_ANY_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, two_nodes));
 }
 
