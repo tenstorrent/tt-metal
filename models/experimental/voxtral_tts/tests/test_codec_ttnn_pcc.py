@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""On-device PCC for the TTNN codec decoder (Block 3) vs the CPU reference.
+
+The reference is itself validated against upstream (30/30, all 8 decoder stages bit-exact or
+PCC ~1.0), so matching it here is a real correctness statement, not a self-comparison.
+
+Skips cleanly without ttnn, a device, or the checkpoint.
+
+    pytest -svv models/experimental/voxtral_tts/tests/test_codec_ttnn_pcc.py
+"""
+
+import os
+
+import pytest
+import torch
+
+from models.experimental.voxtral_tts.reference import voxtral_codec_ref as ref
+from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, pcc
+
+ttnn = pytest.importorskip("ttnn", reason="ttnn not importable")
+pytestmark = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}")
+
+WAVE_PCC = 0.999  # the gate XTTS-v2's HiFi-GAN port shipped at (0.99946)
+STAGE_PCC = 0.996  # per-stage; the final window-16 stage amplifies inherited error (see below)
+
+
+@pytest.fixture(scope="module")
+def device():
+    d = ttnn.open_device(device_id=0, l1_small_size=65536)
+    yield d
+    ttnn.close_device(d)
+
+
+@pytest.fixture(scope="module")
+def pair(device):
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    return TtVoxtralCodecDecoder(device), ref.load_codec_state()
+
+
+@pytest.mark.parametrize("n_frames", [8, 24, 64])
+def test_waveform_pcc(pair, n_frames):
+    gen, w = pair
+    codes = ref.make_synthetic_codes(n_frames)
+    got = gen(codes)
+    exp = ref.reference_decode(codes, w)
+    assert got.shape == exp.shape == (1, 1, n_frames * 1920)
+    p = pcc(got, exp)
+    assert p > WAVE_PCC, f"waveform PCC {p:.6f} at T={n_frames}"
+
+
+def test_quantizer_is_exact(pair):
+    """The semantic gather runs on host precisely so this stays exact — a bf16 device embedding
+    would inject ~0.4% before a deep conv stack that does not cancel error."""
+    gen, w = pair
+    codes = ref.make_synthetic_codes(16)
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    got = TtVoxtralCodecDecoder._chw(gen.quantizer_decode(codes))
+    assert pcc(got, ref.quantizer_decode(codes, w)) > 0.99999
+
+
+def test_every_stage_matches(pair):
+    """Bisects the 8 decoder stages, so a regression localises to one conv or one 2-layer
+    transformer rather than 'the audio sounds wrong'."""
+    gen, w = pair
+    codes = ref.make_synthetic_codes(24)
+    _, stages = gen(codes, return_stages=True)
+    lat = ref.quantizer_decode(codes, w)
+    x = ref.causal_conv1d(lat, w["decoder_blocks.0.conv.weight"], 3, 1, "replicate")
+    assert pcc(stages["after_input_conv"], x) > 0.9999
+    for stage, tf_i in enumerate(ref.DEC_TF_BLOCKS):
+        x = ref.codec_transformer(x.permute(0, 2, 1), w, tf_i, 2,
+                                  ref.decoder_window_sizes()[stage]).permute(0, 2, 1)
+        p = pcc(stages[f"after_tf{tf_i}"], x)
+        assert p > STAGE_PCC, f"after_tf{tf_i} PCC {p:.6f}"
+        if stage < 3:
+            ci = ref.DEC_CONV_BLOCKS[stage + 1]
+            x = ref.causal_conv_transpose1d(x, w[f"decoder_blocks.{ci}.conv.weight"], 4, 2)
+            p = pcc(stages[f"after_up{ci}"], x)
+            assert p > 0.9999, f"after_up{ci} PCC {p:.6f}"
+
+
+def test_final_stage_is_not_itself_lossy(pair):
+    """The window-16 stage shows the lowest in-chain PCC, which could look like a bug in it.
+    Fed the REFERENCE's input it matches at ~0.99998 like every other stage, so the drop is
+    inherited error being amplified (the same effect XTTS-v2 found in the Perceiver), not a
+    defect in this stage. Guards against 'fixing' the wrong thing."""
+    gen, w = pair
+    codes = ref.make_synthetic_codes(24)
+    lat = ref.quantizer_decode(codes, w)
+    x = ref.causal_conv1d(lat, w["decoder_blocks.0.conv.weight"], 3, 1, "replicate")
+    for s, tf in enumerate((1, 3, 5)):
+        x = ref.codec_transformer(x.permute(0, 2, 1), w, tf, 2, ref.decoder_window_sizes()[s]).permute(0, 2, 1)
+        ci = ref.DEC_CONV_BLOCKS[s + 1]
+        x = ref.causal_conv_transpose1d(x, w[f"decoder_blocks.{ci}.conv.weight"], 4, 2)
+    exp = ref.codec_transformer(x.permute(0, 2, 1), w, 7, 2, 16)
+
+    L = x.shape[2]
+    xd = ttnn.from_torch(x.permute(0, 2, 1).reshape(1, L, 1024).contiguous(),
+                         dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=gen.device)
+    bias = gen._attn_bias(L, 16)
+    seq = xd
+    for li in range(2):
+        seq = gen._block(seq, gen.layers[(7, li)], bias)
+    got = ttnn.to_torch(seq).float().reshape(1, L, 1024)
+    assert pcc(got, exp) > 0.9999, "stage 7 is lossy in isolation — this IS a bug in stage 7"
+
+
+def test_causal_padding_matches_torch(pair):
+    """replicate/reflect left-padding is built from slice+concat because ttnn.pad is
+    constant-only and there is no flip. Easy to get backwards; compare against torch."""
+    import torch.nn.functional as F
+
+    gen, _ = pair
+    x = torch.randn(1, 1, 11, 32)
+    xd = ttnn.from_torch(x.contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=gen.device)
+    for mode, pad in (("replicate", 2), ("reflect", 6)):
+        got = ttnn.to_torch(gen._pad_causal(xd, pad, mode)).float()
+        exp = F.pad(x.permute(0, 3, 1, 2).reshape(1, 32, 11), (pad, 0), mode=mode)
+        exp = exp.reshape(1, 32, 1, 11 + pad).permute(0, 2, 3, 1)
+        assert torch.allclose(got, exp, atol=1e-6), f"{mode} pad mismatch"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main(["-svv", __file__]))
