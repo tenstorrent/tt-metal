@@ -411,7 +411,37 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        # lm_head 1D-mcast program config from matmul_sweep (per_core_N=64,
+        # out_subblock_w=4). Keep OUTPUT IN DRAM (default): forcing the huge
+        # [.,.,32,~262K] logits to L1 regressed wall-clock 2x (L1 pressure on the
+        # argmax tail), even though device matmul time dropped. Test config alone.
+        lm_pc = None
+        try:
+            M = hidden_states.shape[-2]
+            if M <= 32:
+                Nt = (self.lm_head_weight.shape[-1] + 31) // 32
+                per_core_N = 64
+                num_cores = (Nt + per_core_N - 1) // per_core_N
+                gx = min(13, num_cores)
+                gy = (num_cores + gx - 1) // gx
+                if 0 < gx * gy <= 130:
+                    lm_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                        in0_block_w=1,
+                        out_subblock_h=1,
+                        out_subblock_w=4,
+                        per_core_M=1,
+                        per_core_N=per_core_N,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=True,
+                    )
+        except Exception:
+            lm_pc = None
+        if lm_pc is not None:
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b, program_config=lm_pc)
+        else:
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
         # TP all-gather is deferred to process_output_prefill / process_output_decode
