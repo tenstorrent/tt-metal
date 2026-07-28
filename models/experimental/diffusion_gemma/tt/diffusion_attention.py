@@ -33,7 +33,6 @@ from models.demos.gemma4.tt.attention.operations import (
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
-    apply_rope,
     concat_heads,
     split_qkv_heads_prefill,
 )
@@ -68,26 +67,6 @@ def _largest_tile_divisor(length, preferred):
         if length % candidate == 0:
             return candidate
     return TILE_SIZE
-
-
-class CanvasTailWorkspace:
-    """Denoise K/V workspace holding ``[prefix span ; canvas]`` in ONE contiguous tensor.
-
-    Lives here (the consumer) so ``denoise_forward`` can import it without a cycle. Deliberately
-    not a tuple, so the ordinary ``prefix_k, prefix_v = prefix_kv`` unpack cannot consume it by
-    accident. ``denoise_attention`` writes the canvas into the tail at ``canvas_offset`` with
-    ``ttnn.fill_cache`` and passes the workspace straight to SDPA — no ``concat``, so the prefix
-    bytes never move per step. The prefix region is refreshed once per BLOCK, outside any trace.
-
-    The tensors are PERSISTENT and pre-capture allocated: nothing downstream may deallocate them.
-    """
-
-    __slots__ = ("k", "v", "canvas_offset")
-
-    def __init__(self, k, v, canvas_offset: int):
-        self.k = k
-        self.v = v
-        self.canvas_offset = int(canvas_offset)
 
 
 def _is_distinct_buffer(converted, source) -> bool:
@@ -176,11 +155,6 @@ def _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, *, device=None)
     )
 
 
-def _rope_fused_enabled() -> bool:
-    """Whether the denoise path uses the fused ``ttnn.experimental.rotary_embedding``."""
-    return os.environ.get("DG_ROPE_FUSED", "0").strip().lower() not in ("0", "false", "no", "off")
-
-
 def _slice_rope_cache(cache, start, length):
     if start % TILE_SIZE != 0:
         raise ValueError(f"RoPE cache start must be a multiple of {TILE_SIZE}, got {start}")
@@ -197,8 +171,6 @@ def _apply_rope_chunked(
     sin_cache,
     *,
     start_offset: int,
-    chunk_size: int = TILE_SIZE,
-    head_chunk_size: int = 1,
 ):
     def apply_rope_dram(chunk, token_index):
         half_dim = chunk.shape[-1] // 2
@@ -233,141 +205,55 @@ def _apply_rope_chunked(
             sin.deallocate(True)
         return out
 
+    # One pass over the whole ``[1, H, C, hd]`` tensor. ``apply_rope_dram`` is shape-agnostic, so
+    # this is bit-identical to the per-(seq,head)-chunk loop it replaced (verified torch.equal)
+    # while replacing ~H*(C/32) tiny slice/concat ops per call with one — a large trace-size and
+    # dispatch cut for the 256-token denoise canvas.
+    #
+    # OWNERSHIP: this CONSUMES ``tensor``. The deleted chunk loop had an early return for
+    # <=32-row/1-head inputs that did NOT deallocate, so collapsing the two blindly would have
+    # given small callers a different ownership contract than large ones — the exact shape of the
+    # two use-after-free paths this module shipped in 427450c6a25. All four live callers pass a
+    # 256-row canvas (``:531``, ``:536``, ``commit_batched.py:600``, ``:610``); the assert makes a
+    # future small caller fail loudly instead of silently double-freeing.
     seq_len = tensor.shape[-2]
-    num_heads = tensor.shape[1]
-
-    # Fused RoPE (DG_ROPE_FUSED, default off). ``apply_rope_dram`` spends 8 ops per call —
-    # 2 cache slices, 2 tensor slices, a negate, a concat and 2 multiplies plus an add — which is
-    # ~480 ops per denoise step across Q/K and 30 layers. ``ttnn.experimental.rotary_embedding`` is
-    # one op and is what the backbone's own prefill and our chunked prefill already use
-    # (chunked_prefill.py:369). It has no start-offset argument in sequence mode, so the cache is
-    # pre-sliced to the canvas positions first — the same trick chunked prefill uses. Off by default
-    # until the numerics are pinned against the hand-rolled path: the fused kernel very likely
-    # accumulates differently, and every denoise decision is committed as a clean argmax.
-    if _rope_fused_enabled():
-        cos = _slice_rope_cache(cos_cache, start_offset, seq_len)
-        sin = _slice_rope_cache(sin_cache, start_offset, seq_len)
-        out = apply_rope(tensor, cos, sin)
-        if cos is not cos_cache:
-            cos.deallocate(True)
-        if sin is not sin_cache:
-            sin.deallocate(True)
-        if out is not tensor:
-            tensor.deallocate(True)
-        return out
-
-    if seq_len <= chunk_size and num_heads <= head_chunk_size:
-        return apply_rope_dram(tensor, start_offset)
-
-    # Full-canvas RoPE in a single pass. ``apply_rope_dram`` is shape-agnostic, so
-    # applying it to the whole ``[1, H, C, hd]`` tensor is bit-identical to the
-    # per-(seq,head)-chunk path (verified torch.equal) while replacing ~H*(C/32)
-    # tiny slice/concat ops per call with one — a large trace-size + dispatch cut
-    # for the 256-token denoise canvas. Opt out with DG_ROPE_FULLCANVAS=0.
-    if os.environ.get("DG_ROPE_FULLCANVAS", "1").strip().lower() not in ("0", "false", "no", "off"):
-        out = apply_rope_dram(tensor, start_offset)
-        tensor.deallocate(True)
-        return out
-
-    chunks = []
-    for start in range(0, seq_len, chunk_size):
-        end = min(start + chunk_size, seq_len)
-        head_chunks = []
-        for head_start in range(0, num_heads, head_chunk_size):
-            head_end = min(head_start + head_chunk_size, num_heads)
-            chunk = ttnn.slice(
-                tensor,
-                [0, head_start, start, 0],
-                [tensor.shape[0], head_end, end, tensor.shape[3]],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            head_chunks.append(apply_rope_dram(chunk, start_offset + start))
-            chunk.deallocate(True)
-        if len(head_chunks) == 1:
-            chunks.append(head_chunks[0])
-        else:
-            chunks.append(ttnn.concat(head_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-            for chunk in head_chunks:
-                chunk.deallocate(True)
-    if len(chunks) == 1:
-        out = chunks[0]
-    else:
-        out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for chunk in chunks:
-            chunk.deallocate(True)
+    assert seq_len > TILE_SIZE, (
+        f"_apply_rope_chunked consumes its input; a {seq_len}-row caller would have relied on the "
+        "deleted early return that did not deallocate. Give it the tensor to own, or restore an "
+        "explicitly non-consuming path."
+    )
+    out = apply_rope_dram(tensor, start_offset)
     tensor.deallocate(True)
     return out
 
 
-def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: int = TILE_SIZE, layer_idx=None):
+def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, layer_idx=None):
     q_seq_len = tt_q.shape[-2]
     k_seq_len = tt_k.shape[-2]
-    # Single fused-SDPA call over the full canvas instead of ceil(C/32) python-level
-    # q-slices + per-chunk SDPA + concat. The SDPA op still chunks internally via its
-    # program_config, so the result is bit-identical while cutting the per-step op
-    # count / dispatch. Opt out with DG_SDPA_FULLCANVAS=0.
-    if q_seq_len > chunk_size and os.environ.get("DG_SDPA_FULLCANVAS", "1").strip().lower() not in (
-        "0",
-        "false",
-        "no",
-        "off",
-    ):
-        chunk_size = q_seq_len
-    if q_seq_len <= chunk_size:
-        program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, device=tt_q.device())
-        kwargs = {
-            "is_causal": False,
-            "scale": 1.0,
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "program_config": program_config,
-        }
-        if attn_mask is not None:
-            kwargs["attn_mask"] = attn_mask
-        try:
-            return ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs)
-        except RuntimeError as exc:
-            if attn_mask is None and _is_sdpa_l1_cb_clash(exc):
-                key = int(layer_idx) if layer_idx is not None else -1
-                _FALLBACK_COUNTS[key] = _FALLBACK_COUNTS.get(key, 0) + 1
-                _warn_sdpa_fallback_once()
-                return _manual_gqa_attention(tt_q, tt_k, tt_v)
-            raise
-
-    chunks = []
-    for start in range(0, q_seq_len, chunk_size):
-        end = min(start + chunk_size, q_seq_len)
-        q_chunk = ttnn.slice(
-            tt_q,
-            [0, 0, start, 0],
-            [tt_q.shape[0], tt_q.shape[1], end, tt_q.shape[3]],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        mask_chunk = None
-        if attn_mask is not None:
-            mask_chunk = ttnn.slice(
-                attn_mask,
-                [0, 0, start, 0],
-                [attn_mask.shape[0], attn_mask.shape[1], end, attn_mask.shape[3]],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        chunks.append(
-            _sdpa_q_chunked(
-                q_chunk,
-                tt_k,
-                tt_v,
-                attn_mask=mask_chunk,
-                head_dim=head_dim,
-                chunk_size=chunk_size,
-                layer_idx=layer_idx,
-            )
-        )
-        q_chunk.deallocate(True)
-        if mask_chunk is not None:
-            mask_chunk.deallocate(True)
-    out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    for chunk in chunks:
-        chunk.deallocate(True)
-    return out
+    # ONE fused-SDPA call over the full canvas. The deleted alternative was a python-level loop of
+    # ceil(C/32) q-slices + per-chunk SDPA + concat; the SDPA op already chunks Q internally via its
+    # program_config (``_largest_tile_divisor(256, 32)``), so the result was bit-identical and the
+    # loop only cost dispatch. Its stated justification — that small chunks avoid the L1 CB clash —
+    # was also wrong: the ``_manual_gqa_attention`` fallback below is guarded by ``attn_mask is
+    # None`` either way, and two independent probes measured 0/30 fallback layers.
+    program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, device=tt_q.device())
+    kwargs = {
+        "is_causal": False,
+        "scale": 1.0,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        "program_config": program_config,
+    }
+    if attn_mask is not None:
+        kwargs["attn_mask"] = attn_mask
+    try:
+        return ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs)
+    except RuntimeError as exc:
+        if attn_mask is None and _is_sdpa_l1_cb_clash(exc):
+            key = int(layer_idx) if layer_idx is not None else -1
+            _FALLBACK_COUNTS[key] = _FALLBACK_COUNTS.get(key, 0) + 1
+            _warn_sdpa_fallback_once()
+            return _manual_gqa_attention(tt_q, tt_k, tt_v)
+        raise
 
 
 def _is_sdpa_l1_cb_clash(exc: RuntimeError) -> bool:
@@ -538,20 +424,7 @@ def denoise_attention(
     # Persistent K/V that must survive this call (the canvas-tail workspace). Anything derived
     # from them may only be freed when it is provably a DIFFERENT buffer.
     persistent_kv = None
-    if isinstance(prefix_kv, CanvasTailWorkspace):
-        # Canvas-tail workspace (#51080 item 4): the prefix already sits in a persistent
-        # [1, nkv, span + C, hd] tensor, refreshed once per block. Write only the canvas into the
-        # tail and hand the whole thing to SDPA — no concat, so no prefix bytes move per step.
-        # The write is nkv * C/32 tile-rows (8-16), well inside fill_cache's safe region, and the
-        # destination was allocated before trace capture so its address is stable across replays.
-        canvas_k, canvas_v = tt_k, tt_v
-        ttnn.fill_cache(prefix_kv.k, canvas_k, 0, update_idx=prefix_kv.canvas_offset)
-        ttnn.fill_cache(prefix_kv.v, canvas_v, 0, update_idx=prefix_kv.canvas_offset)
-        tt_k, tt_v = prefix_kv.k, prefix_kv.v
-        persistent_kv = (prefix_kv.k, prefix_kv.v)
-        canvas_k.deallocate(True)
-        canvas_v.deallocate(True)
-    elif prefix_kv is not None:
+    if prefix_kv is not None:
         prefix_k, prefix_v = prefix_kv
         canvas_k, canvas_v = tt_k, tt_v
         prefix_k_concat = ttnn.to_memory_config(prefix_k, canvas_k.memory_config())

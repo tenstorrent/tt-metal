@@ -127,140 +127,6 @@ def _get_dispatch_constants(mesh, S, num_experts, capacity, top_k):
 
 
 # ---------------------------------------------------------------------------------------------
-# MEASUREMENT-ONLY ablation (DG_MOE_DISPATCH_ABLATE, default off): the ~18-op ``build_capacity_dispatch``
-# body is a DEPENDENT chain of small ops (topk -> typecast x2 -> scatter -> cumsum -> sub -> gather ->
-# mul/add -> ge -> where -> sub -> mul -> typecast -> scatter x2 -> slice x2) that runs once PER LAYER
-# PER STEP. In the traced denoise loop, independent ops overlap but a dependent chain cannot — its
-# dispatch latency serializes. To measure that serialized cost as a block-latency delta, this flag
-# skips the per-call chain entirely and returns a PERSISTENT constant disp/comb built ONCE (on the
-# first, eager, pre-capture call), reused for every layer/step. The gather/expert/combine matmuls
-# keep identical shapes (values-only difference), so the block-latency delta = the chain's serialized
-# replay cost. Output is intentionally WRONG (fixed routing) — this path is for latency evidence only,
-# never a committed change. ``sparse_experts_forward`` must NOT deallocate the returned const (guarded).
-# ---------------------------------------------------------------------------------------------
-_DISPATCH_ABLATE_CACHE = {}
-
-
-def _dispatch_ablate_enabled():
-    return os.environ.get("DG_MOE_DISPATCH_ABLATE", "0") != "0"
-
-
-def _ablation_const_dispatch(dense_routing, num_experts, capacity, top_k):
-    mesh = dense_routing.device()
-    S = dense_routing.shape[2]
-    key = (id(mesh), S, num_experts, capacity, top_k)
-    consts = _DISPATCH_ABLATE_CACHE.get(key)
-    if consts is None:
-        # First call is the eager warm step (outside any trace) -> build the real disp/comb once and
-        # keep them as persistent buffers reused for every subsequent layer/step call.
-        consts = _build_capacity_dispatch_impl(dense_routing, num_experts, capacity, top_k)
-        _DISPATCH_ABLATE_CACHE[key] = consts
-    return consts
-
-
-def build_capacity_dispatch(dense_routing, num_experts, capacity, top_k):
-    """Build dispatch + combine masks on-device from dense routing (GShard capacity dispatch).
-
-    Args:
-        dense_routing: [1, 1, S, E] on device — dense routing weights, exactly ``top_k`` non-zero
-            per token (the router output, including per-expert scale).
-        num_experts: E
-        capacity: C — max tokens per expert (must be a multiple of 32). Tokens beyond C for a hot
-            expert are dropped (their contribution is zeroed); pick C so the drop rate is ~0.
-        top_k: active experts per token.
-
-    Returns:
-        disp: [1, 1, S, E*C] bf16 — one-hot dispatch mask, disp[t, e*C+slot] = 1.
-        comb: [1, 1, S, E*C] bf16 — combine mask, comb[t, e*C+slot] = routing_weight(t, e).
-
-    The mapping token t, expert e -> column (e*C + slot) uses ``slot`` = number of earlier tokens
-    that also routed to e (an exclusive cumulative count), so each expert's tokens land in a
-    contiguous C-wide band. Trace-safe: constant/scratch buffers are preallocated (see
-    ``_get_dispatch_constants``); only device compute happens here.
-    """
-    if _dispatch_ablate_enabled():
-        return _ablation_const_dispatch(dense_routing, num_experts, capacity, top_k)
-    if _dispatch_fused2_enabled():
-        return _build_capacity_dispatch_fused2(dense_routing, num_experts, capacity, top_k)
-    if _dispatch_fused_enabled():
-        return _build_capacity_dispatch_fused(dense_routing, num_experts, capacity, top_k)
-    return _build_capacity_dispatch_impl(dense_routing, num_experts, capacity, top_k)
-
-
-def _dispatch_fused_enabled():
-    """DG_MOE_DISPATCH_FUSED (default OFF): shorter, BIT-IDENTICAL dispatch-build chain.
-
-    Step 1 (bench_dispatch_ablation.py) measured the full dependent chain at ~0.9 ms/layer/step
-    (12.7% of the @16 block), so shortening it is a real perf lever. This variant removes 4 ops from
-    the ~19-op chain WITHOUT changing the kept-column [0:EC] disp/comb values (verify_dispatch_fused.py
-    checks bit-exactness incl. capacity overflow):
-      * drop ``idx_u`` typecast — topk's uint16 ``idx`` is a legal scatter/gather index directly;
-      * drop ``mask_f`` typecast + the [S,E] ``excl`` sub — the exclusive slot is
-        ``gather(cum, idx) - 1`` (cum is inclusive; at an active expert cum = excl + 1), one [S,k] sub;
-      * drop ``valid`` + ``vals_valid`` — overflow columns are scattered into the dead column EC and
-        then sliced off, so pre-zeroing the dropped combine weight is redundant with the slice.
-    Default off so the shipped path stays byte-identical until device-validated bit-identical."""
-    return os.environ.get("DG_MOE_DISPATCH_FUSED", "0") != "0"
-
-
-def _build_capacity_dispatch_fused(dense_routing, num_experts, capacity, top_k):
-    """Shorter, bit-identical variant of ``_build_capacity_dispatch_impl`` (see ``_dispatch_fused_enabled``)."""
-    mesh = dense_routing.device()
-    S = dense_routing.shape[2]
-    EC = num_experts * capacity
-    k = _get_dispatch_constants(mesh, S, num_experts, capacity, top_k)
-    ones_sk, zeros_se, zeros_d, zeros_c, dead = (k["ones_sk"], k["zeros_se"], k["zeros_d"], k["zeros_c"], k["dead"])
-
-    # 1. per-token active experts + their routing weights. topk's uint16 idx is a legal
-    #    scatter/gather index directly (no uint32 typecast needed).
-    vals, idx = ttnn.topk(dense_routing, k=top_k, dim=-1)  # vals [1,1,S,k] bf16, idx uint16
-    idx_f = ttnn.typecast(idx, ttnn.float32)
-
-    # 2. active mask [1,1,S,E] + inclusive cumsum over the token dim.
-    mask = ttnn.scatter(zeros_se, dim=-1, index=idx, src=ones_sk)
-    cum = ttnn.cumsum(mask, dim=2, dtype=ttnn.float32)  # inclusive count of same-expert tokens 0..t
-
-    # 3. exclusive slot per (token, active-expert): at an active expert cum = exclusive + 1, so the
-    #    slot is gather(cum, idx) - 1 (one [S,k] sub; no [S,E] mask_f typecast + [S,E] sub).
-    pos = ttnn.sub(ttnn.gather(cum, dim=-1, index=idx), 1.0)  # [1,1,S,k] f32
-
-    # 4. dispatch column = e*C + slot; overflow (slot >= C) -> dead column EC (dropped).
-    col = ttnn.add(ttnn.mul(idx_f, float(capacity)), pos)  # f32 exact up to 2^24 >> EC
-    overflow = ttnn.ge(pos, float(capacity))
-    col = ttnn.where(overflow, dead, col)
-    col_u = ttnn.typecast(col, ttnn.uint32)
-
-    # 5. scatter into the E*C dispatch buffers (+1 dead column, then sliced off). Overflow rows land
-    #    in column EC for BOTH masks and are removed by the slice, so comb scatters vals directly
-    #    (no valid/vals_valid pre-zeroing) — the kept columns [0:EC] are identical to the impl path.
-    disp = ttnn.scatter(zeros_d, dim=-1, index=col_u, src=ones_sk)
-    comb = ttnn.scatter(zeros_c, dim=-1, index=col_u, src=vals)
-    disp = ttnn.slice(disp, [0, 0, 0, 0], [1, 1, S, EC])
-    comb = ttnn.slice(comb, [0, 0, 0, 0], [1, 1, S, EC])
-
-    for t in (vals, idx, idx_f, mask, cum, pos, col, overflow, col_u):
-        t.deallocate(True)
-    return disp, comb
-
-
-# ---------------------------------------------------------------------------------------------
-# DG_MOE_DISPATCH_FUSED2 (default OFF): a custom C++ device kernel (``dispatch_build.cpp``, run via
-# ``ttnn.generic_op``) that fuses the ENTIRE post-cumsum tail of ``_build_capacity_dispatch_impl``
-# into ONE dispatched device op. Step-1 ablation proved skipping the whole build chain drops the @16
-# block 3.46->3.02s (12.7%); the removable Python ops were off the critical path, so the *serialized*
-# cost lives in the dependent tail: gather(cum,idx) -> sub -> mul/add -> ge -> where -> typecast ->
-# scatter(disp) -> scatter(comb) -> slice -> slice. Each ttnn.scatter/gather additionally round-trips
-# TILE<->ROW_MAJOR internally, so that tail is many serialized device ops. This variant keeps only
-# topk -> scatter(mask) -> cumsum on the critical path and replaces the tail with a single kernel that
-# gathers the per-expert count, computes the capacity column, and scatters ones/weights into disp/comb.
-# BIT-IDENTICAL to the impl kept columns [0:EC] (verify_dispatch_fused.py). Kernel is JIT-compiled by
-# generic_op (no _ttnncpp.so change), so the C++ tree stays byte-identical when the flag is off.
-# ---------------------------------------------------------------------------------------------
-
-_FUSED2_KERNEL = "ttnn/cpp/ttnn/operations/data_movement/moe_dispatch_build/device/kernels/dispatch_build.cpp"
-_FUSED2_PLAN_CACHE = {}
-
-
 def _dispatch_fused2_enabled():
     # Default ON: bit-identical to the impl on the kept [0:EC] columns (verify_dispatch_fused.py),
     # denoise-only (S=256/E=128/C=256/top_k=8 — the sole DG shape; prefill uses the ragged path),
@@ -2034,15 +1900,11 @@ def sparse_experts_forward(
         else None
     )
 
-    # DG_MOE_DISPATCH_ABLATE returns a persistent constant disp/comb (measurement-only); it must be
-    # reused across layers/steps, so the two deallocates below are guarded off in that mode.
-    ablate_dispatch = _dispatch_ablate_enabled()
     disp, comb = build_capacity_dispatch(dense_routing, E, C, cfg.top_k)
 
     # gather: dispatched[EC, H] = disp^T @ hidden  ([1,1,EC,S] @ [1,1,S,H])
     disp_t = ttnn.transpose(disp, 2, 3)  # [1,1,EC,S]
-    if not ablate_dispatch:
-        disp.deallocate(True)
+    disp.deallocate(True)
     dispatched = ttnn.matmul(
         disp_t,
         hidden_states,
@@ -2073,8 +1935,7 @@ def sparse_experts_forward(
         compute_kernel_config=ckcfg,
         program_config=(tuned.get("combine") if tuned else None),
     )
-    if not ablate_dispatch:
-        comb.deallocate(True)
+    comb.deallocate(True)
     down_flat.deallocate(True)
 
     # all-reduce across TP after the row-parallel down projection

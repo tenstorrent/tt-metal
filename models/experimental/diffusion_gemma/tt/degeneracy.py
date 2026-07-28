@@ -161,7 +161,7 @@ def evaluate(tokens: torch.Tensor, *, stop_token_ids=None) -> tuple:
     degenerate = is_degenerate(
         stats,
         top_frac=_resolve_float("DG_DEGENERACY_TOP_FRAC", DEFAULT_TOP_FRAC),
-        max_run=_resolve_int("DG_DEGENERACY_MAX_RUN", DEFAULT_MAX_RUN),
+        max_run=DEFAULT_MAX_RUN,
         stop_token_ids=stop_token_ids,
     )
     return stats, degenerate
@@ -180,8 +180,14 @@ def check_committed_block(
 ) -> dict:
     """Apply ``DG_DEGENERACY_POLICY`` to a committed canvas. Returns the stats either way.
 
-    ``off`` (default) measures nothing and costs nothing. ``warn`` logs. ``stop`` raises
+    ``off`` measures nothing and costs nothing. ``warn`` logs. ``stop`` (the DEFAULT) raises
     :class:`DegenerateBlockError` so the caller can end the generation without committing.
+
+    NOTE: production does not call this — ``tt/generate.py`` inlines the same policy over
+    :func:`evaluate` + :func:`describe`. That duplication is real and the fix is to unify on one
+    of them, not to delete this one: the ten policy assertions in ``tests/test_degeneracy.py``
+    exercise this function, and moving them onto the generate.py branch would trade tested pure
+    logic for an untested integration path.
     """
     policy = resolve_policy()
     if policy == "off":
@@ -190,7 +196,7 @@ def check_committed_block(
     if not is_degenerate(
         stats,
         top_frac=_resolve_float("DG_DEGENERACY_TOP_FRAC", DEFAULT_TOP_FRAC),
-        max_run=_resolve_int("DG_DEGENERACY_MAX_RUN", DEFAULT_MAX_RUN),
+        max_run=DEFAULT_MAX_RUN,
         stop_token_ids=stop_token_ids,
     ):
         return stats

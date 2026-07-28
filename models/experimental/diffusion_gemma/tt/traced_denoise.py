@@ -29,7 +29,6 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     _layer_type_for_denoise,
     _sliding_window_for_denoise,
-    denoise_canvas_tail_enabled,
     denoise_sliding_span_enabled,
     denoise_sliding_window_enabled,
     sliding_read_span,
@@ -178,18 +177,8 @@ def _prepare_fixed_reveal(adapter, *, canvas_len: int) -> int:
         enforce_window=enforce_window,
         sliding_span=sliding_span,
     )
-    # Canvas-tail workspace (item 4): give EVERY layer a persistent [read_span + C] workspace so
-    # the per-step concat disappears. Layers already bounded by item 3 keep their bounded span;
-    # the rest (the 5 full-attention layers) get a p_max-sized one.
-    canvas_tail = 0
-    if denoise_canvas_tail_enabled():
-        canvas_tail = canvas_len
-        for layer_idx in range(len(adapter.tt_model.layers)):
-            window_layers.setdefault(layer_idx, sliding_span if sliding_span else p_max)
-            if _layer_type_for_denoise(adapter.tt_model, layer_idx) != "sliding_attention":
-                window_layers[layer_idx] = p_max
     if window_layers:
-        reader.prepare_window_buffers(window_layers, canvas_tail=canvas_tail)
+        reader.prepare_window_buffers(window_layers)
         reader.refresh_windows(prompt_len)
         # Derive the report from the ACTUAL per-layer spans. Counting "layers in window_layers" as
         # sliding was wrong once the canvas-tail path started adding the full-attention layers too,
@@ -199,18 +188,15 @@ def _prepare_fixed_reveal(adapter, *, canvas_len: int) -> int:
         key_rows_before = n_layers * (p_max + canvas_len)
         key_rows_after = sum(window_layers.get(i, p_max) + canvas_len for i in range(n_layers))
         # The engagement markers are a stable contract for the A/B harnesses in
-        # doc/optimize_perf/verify_sliding_span.sh and verify_canvas_tail.sh, which fail loudly if
+        # doc/optimize_perf/verify_sliding_span.sh, which fail loudly if
         # the candidate arm did not actually turn the feature on.
         markers = []
         if bounded:
             markers.append("DG_DENOISE_SLIDING_SPAN=1:")
-        if canvas_tail:
-            markers.append("DG_DENOISE_CANVAS_TAIL=1:")
         logger.info(
             f"[DiffusionGemma up-front] {' '.join(markers)} prefix spans: {bounded}/{n_layers} layers "
             f"bounded to {sliding_span}, rest at {p_max}; "
             f"SDPA key rows/step {key_rows_before} -> {key_rows_after}"
-            + (f"; canvas-tail workspace ON (+{canvas_tail} rows/layer)" if canvas_tail else "")
         )
     if enforce_window:
         logger.info(

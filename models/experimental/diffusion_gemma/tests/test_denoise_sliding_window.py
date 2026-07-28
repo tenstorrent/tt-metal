@@ -311,43 +311,6 @@ def test_prompt_source_is_owned_falls_back_for_plain_sources():
 # canvas-tail workspace (#51080 item 4)
 
 
-def test_canvas_tail_flag_defaults_off(monkeypatch):
-    monkeypatch.delenv("DG_DENOISE_CANVAS_TAIL", raising=False)
-    assert DF.denoise_canvas_tail_enabled() is False
-    monkeypatch.setenv("DG_DENOISE_CANVAS_TAIL", "1")
-    assert DF.denoise_canvas_tail_enabled() is True
-
-
-def test_workspace_marker_is_not_a_tuple():
-    """It must not be unpackable as (k, v), or denoise_attention would concat it by accident."""
-    from models.experimental.diffusion_gemma.tt.diffusion_attention import CanvasTailWorkspace
-
-    ws = CanvasTailWorkspace("k", "v", 1024)
-    assert not isinstance(ws, (tuple, list))
-    assert (ws.k, ws.v, ws.canvas_offset) == ("k", "v", 1024)
-
-
-def test_fill_cache_row_safety_matches_the_known_spill_bound():
-    """fill_cache silently mis-writes when nkv*rows/32 exceeds the core count (unless full-span)."""
-
-    class _T:
-        def __init__(self, nkv, seq):
-            self.shape = [1, nkv, seq, 64]
-
-    mesh = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=11, y=10))  # 110 cores
-
-    # 5 full-attention layers: nkv=1, span 4096 -> 128 tile-rows > 110 -> UNSAFE, must be chunked.
-    assert DF._fill_cache_rows_are_safe(_T(1, 4352), 4096, mesh) is False
-    # 3520 tokens -> 110 tile-rows -> exactly at the bound -> safe.
-    assert DF._fill_cache_rows_are_safe(_T(1, 4352), 3520, mesh) is True
-    # sliding layers: nkv=2, span 1024 -> 64 rows -> safe.
-    assert DF._fill_cache_rows_are_safe(_T(2, 1280), 1024, mesh) is True
-    # the per-step canvas write is tiny -> always safe.
-    assert DF._fill_cache_rows_are_safe(_T(2, 1280), 256, mesh) is True
-    # a write covering the WHOLE destination is safe at any size (one contiguous run).
-    assert DF._fill_cache_rows_are_safe(_T(1, 4096), 4096, mesh) is True
-
-
 def test_workspace_layers_cover_every_layer_with_its_own_span():
     """Item 4 applies to all layers: bounded span for sliding, p_max for full."""
     p_max, sliding_span = 4096, 1024

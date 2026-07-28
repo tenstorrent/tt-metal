@@ -23,7 +23,7 @@ from models.experimental.diffusion_gemma.reference.attention_mask import (
     build_canvas_reveal_denoise_mask,
     build_canvas_reveal_denoise_window_mask,
 )
-from models.experimental.diffusion_gemma.tt.diffusion_attention import CanvasTailWorkspace, denoise_attention
+from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
 from models.experimental.diffusion_gemma.tt.expert_operations import (
     shared_mlp_forward,
     use_tanh_expert_activations,
@@ -164,70 +164,6 @@ def build_device_canvas_reveal_window_mask(
         dtype=dtype,
         mesh_mapper=_replicate_mapper(mesh_device),
     )
-
-
-def denoise_canvas_tail_enabled() -> bool:
-    """Whether denoise K/V uses a canvas-tail workspace instead of a per-step concat (#51080 item 4).
-
-    The per-step ``concat([prefix, canvas])`` re-materialises the whole prefix every step, every
-    layer. With a workspace the prefix is written once per block and only the 256-row canvas tail
-    is written per step, so the remaining per-step prefix copy goes to zero.
-
-    Requires bounded spans to be resolved first (the workspace is sized ``read_span + canvas``).
-    Default OFF: it adds a persistent DG-owned scratch tensor per layer (~106 MB at p_max=4096,
-    ~1.3 GB at 128K), which is a real DRAM-for-bandwidth trade that must be measured against the
-    256K envelope before it is used at long context.
-    """
-    return os.environ.get("DG_DENOISE_CANVAS_TAIL", "0").lower() in ("1", "true", "yes", "on")
-
-
-def _fill_cache_rows_are_safe(dst, src_rows: int, mesh_device) -> bool:
-    """Whether one ``ttnn.fill_cache`` of ``src_rows`` tokens into ``dst`` avoids the spill bug.
-
-    ``ttnn.fill_cache``'s program factory splits ``nkv * rows/32`` tile-rows over the core grid and
-    each core writes its rows contiguously from one ``cache_start_id``, assuming no core's range
-    crosses a kv-head boundary. Above ``rows > cores`` it silently writes some rows to the wrong
-    head unless the write spans the whole destination. Mirrors the guard in
-    ``tt/commit_batched.py::_fill_write_unsupported_reason``.
-    """
-    tile = ttnn.TILE_SIZE
-    rows = int(dst.shape[1]) * (int(src_rows) // tile)
-    grid = mesh_device.compute_with_storage_grid_size()
-    return int(src_rows) == int(dst.shape[2]) or rows <= grid.x * grid.y
-
-
-def _fill_prefix_into_workspace(dst, cache, *, lo: int, span: int, mesh_device) -> None:
-    """Copy ``cache[lo : lo+span]`` into ``dst[0 : span]``, chunked to stay inside the safe region.
-
-    A single fill of the whole span would exceed the tile-row/core bound on the full-attention
-    layers (nkv=1, span=4096 -> 128 tile-rows > 110 cores), which is the silent head-boundary
-    spill. Chunking keeps every individual write at or under the bound.
-    """
-    tile = ttnn.TILE_SIZE
-    nkv = int(dst.shape[1])
-    grid = mesh_device.compute_with_storage_grid_size()
-    max_tiles = max(1, (grid.x * grid.y) // max(1, nkv))
-    chunk = max(tile, max_tiles * tile)
-    written = 0
-    while written < span:
-        rows = min(chunk, span - written)
-        rows = (rows // tile) * tile or tile
-        src = ttnn.slice(
-            cache,
-            [0, 0, lo + written, 0],
-            [cache.shape[0], cache.shape[1], lo + written + rows, cache.shape[3]],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        try:
-            if not _fill_cache_rows_are_safe(dst, rows, mesh_device):
-                raise RuntimeError(
-                    f"canvas-tail prefix fill of {rows} tokens would spill across kv-head "
-                    f"boundaries (nkv={nkv}); refusing to corrupt the workspace"
-                )
-            ttnn.fill_cache(dst, src, 0, update_idx=written)
-        finally:
-            src.deallocate(True)
-        written += rows
 
 
 def denoise_sliding_span_enabled() -> bool:
@@ -754,8 +690,7 @@ def _denoise_shared_mlp_forward(mlp, hidden_states):
 # ``DG_SKIP="attn,shared,moe"`` — comma-separated. Default empty (nothing skipped).
 #   attn    the whole denoise attention (QKV, RoPE, SDPA, o_proj, all-reduce)
 #   shared  the shared MLP
-#   moe     the router + expert path (see also DG_MOE_DISPATCH_ABLATE, which zeroes only the
-#           dispatch/combine chain and keeps the experts)
+#   moe     the router + expert path
 #
 # The output of a skipped run is garbage BY CONSTRUCTION — never feed a DG_SKIP run into a
 # committed_sha256 comparison or a quality gate. Note also that zeroing the MoE feeds an all-zero
@@ -781,7 +716,7 @@ def _denoise_layer_forward(
     skip = _skip_components()
     residual = hidden_states
     normed = _chunked_norm_forward(layer.input_layernorm, hidden_states)
-    prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list, CanvasTailWorkspace)) else None
+    prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list)) else None
     kv_hidden = None if prefix_kv is not None or "attn" in skip else ttnn.concat([prompt_source, normed], dim=2)
     # Cross-block-trace-reusable RoPE: when a canvas_rope_provider is supplied it returns a
     # CONSTANT-SHAPE [1,1,C,head_dim] buffer already holding cos/sin for the absolute canvas
@@ -1161,7 +1096,6 @@ class MutablePrefixKVReader:
         self.window_layers: dict[int, int] = {}
         self._window_bufs: dict[int, tuple] = {}
         self._window_lo: dict[int, int] = {}
-        self._canvas_tail = 0
 
     def set_read_span(self, p_max: int) -> None:
         p_max = int(p_max)
@@ -1198,23 +1132,17 @@ class MutablePrefixKVReader:
         return self.owns_result
 
     # --- bounded per-layer window buffers -------------------------------------------------
-    def prepare_window_buffers(self, window_layers: dict, *, canvas_tail: int = 0) -> None:
+    def prepare_window_buffers(self, window_layers: dict) -> None:
         """Allocate the block-resident K/V buffers OUTSIDE any trace (pre-capture).
 
         One persistent pair per listed layer. Their ADDRESSES are what the captured trace bakes;
         only their contents change per block (see :meth:`refresh_windows`).
 
-        ``canvas_tail == 0`` (item 3): ``[1, nkv, span, hd]``, just the bounded prefix window; the
-        canvas is still concatenated per step by ``denoise_attention``.
-
-        ``canvas_tail == C`` (item 4): ``[1, nkv, span + C, hd]`` — a canvas-tail workspace. The
-        prefix occupies ``[0:span]`` and the per-step canvas is written into ``[span:span+C]``, so
-        no prefix bytes move per step. Returned from ``__call__`` as a
-        :class:`CanvasTailWorkspace`.
+        Shape ``[1, nkv, span, hd]`` — just the bounded prefix window; the canvas is still
+        concatenated per step by ``denoise_attention``.
         """
         self.release_window_buffers()
         self.window_layers = {int(k): int(v) for k, v in dict(window_layers).items()}
-        self._canvas_tail = int(canvas_tail)
         if not self.window_layers:
             return
         p_max = self.read_span if self.read_span is not None else self.prompt_len
@@ -1222,31 +1150,11 @@ class MutablePrefixKVReader:
         for layer_idx, span in sorted(self.window_layers.items()):
             lo = sliding_read_offset(self.prompt_len, span, p_max)
             k_cache, v_cache = self.tt_model.tt_kv_cache[layer_idx]
-            if self._canvas_tail:
-                rows = span + self._canvas_tail
-                bufs = []
-                for cache in (k_cache, v_cache):
-                    host = torch.zeros(
-                        (1, int(cache.shape[1]), rows, int(cache.shape[3])),
-                        dtype=torch.bfloat16,
-                    )
-                    buf = ttnn.from_torch(
-                        host,
-                        device=mesh_device,
-                        layout=ttnn.TILE_LAYOUT,
-                        dtype=cache.dtype,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        mesh_mapper=_replicate_mapper(mesh_device),
-                    )
-                    _fill_prefix_into_workspace(buf, cache, lo=lo, span=span, mesh_device=mesh_device)
-                    bufs.append(buf)
-                self._window_bufs[layer_idx] = (bufs[0], bufs[1])
-            else:
-                # ``read_prompt_kv_cache_slice`` returns an owned copy for a partial slice, so
-                # these are already caller-owned and serve directly as the persistent buffers.
-                self._window_bufs[layer_idx] = read_prompt_kv_cache_slice(
-                    self.tt_model.tt_kv_cache[layer_idx], prompt_len=span, seq_len_start=lo
-                )
+            # ``read_prompt_kv_cache_slice`` returns an owned copy for a partial slice, so
+            # these are already caller-owned and serve directly as the persistent buffers.
+            self._window_bufs[layer_idx] = read_prompt_kv_cache_slice(
+                self.tt_model.tt_kv_cache[layer_idx], prompt_len=span, seq_len_start=lo
+            )
             self._window_lo[layer_idx] = lo
 
     def refresh_windows(self, prompt_len: int) -> None:
@@ -1262,21 +1170,15 @@ class MutablePrefixKVReader:
             lo = sliding_read_offset(int(prompt_len), span, p_max)
             k_buf, v_buf = self._window_bufs[layer_idx]
             k_cache, v_cache = self.tt_model.tt_kv_cache[layer_idx]
-            if self._canvas_tail:
-                # Refresh ONLY the prefix region; [span:span+C] is the canvas tail the traced
-                # fill_cache rewrites every step, so touching it here would be wasted work.
-                for buf, cache in ((k_buf, k_cache), (v_buf, v_cache)):
-                    _fill_prefix_into_workspace(buf, cache, lo=lo, span=span, mesh_device=mesh_device)
-            else:
-                k_src, v_src = read_prompt_kv_cache_slice(
-                    self.tt_model.tt_kv_cache[layer_idx], prompt_len=span, seq_len_start=lo
-                )
-                try:
-                    ttnn.copy(k_src, k_buf)
-                    ttnn.copy(v_src, v_buf)
-                finally:
-                    k_src.deallocate(True)
-                    v_src.deallocate(True)
+            k_src, v_src = read_prompt_kv_cache_slice(
+                self.tt_model.tt_kv_cache[layer_idx], prompt_len=span, seq_len_start=lo
+            )
+            try:
+                ttnn.copy(k_src, k_buf)
+                ttnn.copy(v_src, v_buf)
+            finally:
+                k_src.deallocate(True)
+                v_src.deallocate(True)
             self._window_lo[layer_idx] = lo
 
     def window_offset(self, layer_idx: int) -> int:
@@ -1293,15 +1195,10 @@ class MutablePrefixKVReader:
         self._window_bufs = {}
         self._window_lo = {}
         self.window_layers = {}
-        self._canvas_tail = 0
 
     def __call__(self, layer_idx: int):
         buffered = self._window_bufs.get(layer_idx)
         if buffered is not None:
-            if self._canvas_tail:
-                # The canvas goes into the tail, so hand back the workspace marker rather than a
-                # plain (k, v) prefix pair -- denoise_attention must not concat these.
-                return CanvasTailWorkspace(buffered[0], buffered[1], self.window_layers[layer_idx])
             return buffered
         n = self.read_span if self.read_span is not None else self.prompt_len
         extra = {"borrow_full_span": True} if self.borrow_full_span else {}

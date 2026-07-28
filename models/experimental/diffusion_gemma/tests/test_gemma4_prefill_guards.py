@@ -15,7 +15,6 @@ from types import SimpleNamespace
 
 from models.experimental.diffusion_gemma.tt import diffusion_attention as DA
 from models.experimental.diffusion_gemma.tt.diffusion_attention import (
-    _apply_rope_chunked,
     _sdpa_q_chunked,
     _slice_rope_cache,
     validate_q_rope_offset,
@@ -79,184 +78,6 @@ def test_slice_rope_cache_rejects_overflow(expect_error):
         _slice_rope_cache(cache, 262144, 32)
 
 
-def test_apply_rope_chunked_slices_tensor_and_cache(monkeypatch):
-    calls = []
-    monkeypatch.setenv("DG_ROPE_FULLCANVAS", "0")
-
-    class _Tensor:
-        def __init__(self, name, shape):
-            self.name = name
-            self.shape = shape
-            self.deallocated = False
-
-        def deallocate(self, force):
-            self.deallocated = force
-
-    class _FakeTtnn:
-        DRAM_MEMORY_CONFIG = "dram"
-
-        @staticmethod
-        def slice(tensor, starts, ends, *, memory_config=None):
-            calls.append(("slice", tensor.name, starts, ends, memory_config))
-            return _Tensor(
-                f"{tensor.name}[h{starts[1]}:{ends[1]},s{starts[2]}:{ends[2]},d{starts[3]}:{ends[3]}]",
-                [ends[idx] - starts[idx] for idx in range(4)],
-            )
-
-        @staticmethod
-        def concat(tensors, *, dim, memory_config):
-            calls.append(("concat", [tensor.name for tensor in tensors], dim, memory_config))
-            shape = list(tensors[0].shape)
-            shape[dim] = sum(tensor.shape[dim] for tensor in tensors)
-            return _Tensor("rope-out", shape)
-
-        @staticmethod
-        def mul(lhs, rhs):
-            calls.append(("mul", lhs.name, getattr(rhs, "name", rhs)))
-            return _Tensor(f"mul({lhs.name})", lhs.shape)
-
-        @staticmethod
-        def add(lhs, rhs):
-            calls.append(("add", lhs.name, rhs.name))
-            return _Tensor(f"add({lhs.name})", lhs.shape)
-
-    monkeypatch.setattr(DA, "ttnn", _FakeTtnn)
-
-    out = _apply_rope_chunked(
-        _Tensor("q", [1, 2, 64, 256]),
-        _Tensor("cos", [1, 1, 512, 256]),
-        _Tensor("sin", [1, 1, 512, 256]),
-        start_offset=32,
-    )
-
-    assert out.shape == [1, 2, 64, 256]
-    assert [call for call in calls if call[0] == "add"] == [
-        ("add", "mul(q[h0:1,s0:32,d0:256])", "mul(rope-out)"),
-        ("add", "mul(q[h1:2,s0:32,d0:256])", "mul(rope-out)"),
-        ("add", "mul(q[h0:1,s32:64,d0:256])", "mul(rope-out)"),
-        ("add", "mul(q[h1:2,s32:64,d0:256])", "mul(rope-out)"),
-    ]
-    cache_slices = [call for call in calls if call[0] == "slice" and call[1] in {"cos", "sin"}]
-    assert {tuple(call[2]) for call in cache_slices} == {(0, 0, 32, 0), (0, 0, 64, 0)}
-    assert calls[-1] == ("concat", ["rope-out", "rope-out"], 2, "dram")
-
-
-def test_apply_rope_chunked_keeps_single_sequence_chunk_allocated(monkeypatch):
-    calls = []
-    monkeypatch.setenv("DG_ROPE_FULLCANVAS", "0")
-
-    class _Tensor:
-        def __init__(self, name, shape):
-            self.name = name
-            self.shape = shape
-            self.deallocated = False
-
-        def deallocate(self, force):
-            self.deallocated = force
-
-    class _FakeTtnn:
-        DRAM_MEMORY_CONFIG = "dram"
-
-        @staticmethod
-        def slice(tensor, starts, ends, *, memory_config=None):
-            calls.append(("slice", tensor.name, starts, ends, memory_config))
-            return _Tensor(
-                f"{tensor.name}[h{starts[1]}:{ends[1]},s{starts[2]}:{ends[2]},d{starts[3]}:{ends[3]}]",
-                [ends[idx] - starts[idx] for idx in range(4)],
-            )
-
-        @staticmethod
-        def concat(tensors, *, dim, memory_config):
-            calls.append(("concat", [tensor.name for tensor in tensors], dim, memory_config))
-            shape = list(tensors[0].shape)
-            shape[dim] = sum(tensor.shape[dim] for tensor in tensors)
-            return _Tensor(f"concat-dim{dim}", shape)
-
-        @staticmethod
-        def mul(lhs, rhs):
-            return _Tensor(f"mul({lhs.name})", lhs.shape)
-
-        @staticmethod
-        def add(lhs, rhs):
-            return _Tensor(f"add({lhs.name})", lhs.shape)
-
-    monkeypatch.setattr(DA, "ttnn", _FakeTtnn)
-    source = _Tensor("k", [1, 2, 32, 256])
-
-    out = _apply_rope_chunked(
-        source, _Tensor("cos", [1, 1, 512, 256]), _Tensor("sin", [1, 1, 512, 256]), start_offset=32
-    )
-
-    assert out.shape == [1, 2, 32, 256]
-    assert out.name == "concat-dim1"
-    assert out.deallocated is False
-    assert source.deallocated is True
-    assert [call for call in calls if call[0] == "concat" and call[2] == 2] == []
-
-
-def test_sdpa_q_chunked_slices_q_and_mask(monkeypatch):
-    calls = []
-    monkeypatch.setenv("DG_SDPA_FULLCANVAS", "0")
-
-    class _Tensor:
-        def __init__(self, name, shape):
-            self.name = name
-            self.shape = shape
-            self.deallocated = False
-
-        def deallocate(self, force):
-            self.deallocated = force
-
-    class _FakeTtnn:
-        DRAM_MEMORY_CONFIG = "dram"
-
-        @staticmethod
-        def CoreCoord(x, y):
-            return ("grid", x, y)
-
-        @staticmethod
-        def SDPAProgramConfig(**kwargs):
-            calls.append(("program", kwargs))
-            return "program"
-
-        @staticmethod
-        def slice(tensor, starts, ends, *, memory_config=None):
-            calls.append(("slice", tensor.name, starts, ends, memory_config))
-            return _Tensor(
-                f"{tensor.name}[s{starts[2]}:{ends[2]}]",
-                [ends[idx] - starts[idx] for idx in range(4)],
-            )
-
-        @staticmethod
-        def concat(tensors, *, dim, memory_config):
-            calls.append(("concat", [tensor.name for tensor in tensors], dim, memory_config))
-            shape = list(tensors[0].shape)
-            shape[dim] = sum(tensor.shape[dim] for tensor in tensors)
-            return _Tensor("sdpa-out", shape)
-
-    class _FakeTransformer:
-        @staticmethod
-        def scaled_dot_product_attention(q, k, v, **kwargs):
-            calls.append(("sdpa", q.name, k.name, v.name, getattr(kwargs.get("attn_mask"), "name", None), kwargs))
-            return _Tensor(f"sdpa({q.name})", q.shape)
-
-    _FakeTtnn.transformer = _FakeTransformer
-    monkeypatch.setattr(DA, "ttnn", _FakeTtnn)
-
-    out = _sdpa_q_chunked(
-        _Tensor("q", [1, 4, 96, 256]),
-        _Tensor("k", [1, 2, 128, 256]),
-        _Tensor("v", [1, 2, 128, 256]),
-        attn_mask=_Tensor("mask", [1, 1, 96, 128]),
-        head_dim=256,
-    )
-
-    assert out.shape == [1, 4, 96, 256]
-    assert [call[1] for call in calls if call[0] == "sdpa"] == ["q[s0:32]", "q[s32:64]", "q[s64:96]"]
-    assert [call[4] for call in calls if call[0] == "sdpa"] == ["mask[s0:32]", "mask[s32:64]", "mask[s64:96]"]
-    assert calls[-1] == ("concat", ["sdpa(q[s0:32])", "sdpa(q[s32:64])", "sdpa(q[s64:96])"], 2, "dram")
-
-
 def test_sdpa_q_chunked_falls_back_to_manual_gqa_on_l1_clash(monkeypatch):
     calls = []
 
@@ -268,6 +89,12 @@ def test_sdpa_q_chunked_falls_back_to_manual_gqa_on_l1_clash(monkeypatch):
 
         def deallocate(self, force):
             self.deallocated = force
+
+        def device(self):
+            # ``_denoise_sdpa_program_config`` queries the device for the SDPA grid
+            # (``DG_SDPA_GRID=device``). A host-only fake has none; ``None`` is the documented
+            # input for that case and ``_resolve_sdpa_grid`` falls back to the historical pin.
+            return None
 
     class _FakeTtnn:
         DRAM_MEMORY_CONFIG = "dram"
@@ -357,7 +184,9 @@ def test_sdpa_q_chunked_warns_about_gqa_fallback_once(monkeypatch):
     monkeypatch.setattr(DA.ttnn.transformer, "scaled_dot_product_attention", raising_sdpa)
     monkeypatch.setattr(DA, "_denoise_sdpa_program_config", lambda *args, **kwargs: "program")
 
-    tt_q = SimpleNamespace(shape=[1, 4, 32, 256])
+    # ``device()`` returning None is what a host-only fake gives the SDPA grid resolver;
+    # ``_resolve_sdpa_grid`` falls back to the historical pin for it.
+    tt_q = SimpleNamespace(shape=[1, 4, 32, 256], device=lambda: None)
     tt_k = SimpleNamespace(shape=[1, 2, 288, 256])
     tt_v = SimpleNamespace(shape=[1, 2, 288, 256])
 
