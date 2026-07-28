@@ -336,22 +336,25 @@ class HunyuanSymmetricConv3d(Module):
         b, t, h, w, c = x_bthwc.shape
         kT, kH, kW = self.kernel_size
         grid = self.mesh_device.compute_with_storage_grid_size()
-        cfg_full = get_conv3d_config(
-            self.in_channels,
-            self.out_channels,
-            self.kernel_size,
-            self.dtype,
-            grid_size=grid,
-            h_factor=1,
-            w_factor=1,
-            T=t,
-            H=h,
-            W=w,
-        )
         im2col_elems = self.in_channels * t * h * w * kT * kH * kW
         h_chunk_override = getattr(self, "_h_chunk_override", None)
         # Only the valid-conv (halo-padded, conv_pH==0) case can be chunked cleanly.
         if (im2col_elems <= _CONV3D_CHUNK_ELEMS and h_chunk_override is None) or conv_pH != 0 or h <= kH:
+            # Resolve the full-height blocking only on the path that consumes it. When we
+            # chunk, the per-chunk lookups below are the ones that matter; probing the
+            # unchunked shape here logged a [fallback] warning for a config never used.
+            cfg_full = get_conv3d_config(
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                self.dtype,
+                grid_size=grid,
+                h_factor=1,
+                w_factor=1,
+                T=t,
+                H=h,
+                W=w,
+            )
             return self._conv(x_bthwc, (pT, conv_pH, conv_pW), cfg_full)
 
         h_out = h - (kH - 1)  # valid-conv output height (padding_h == 0)
