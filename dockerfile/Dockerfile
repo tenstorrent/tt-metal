@@ -41,6 +41,8 @@ ARG PYTHON_VERSION=""
 # The single source of truth is docker-bake.hcl variable "UV_IMAGE".
 # When upgrading uv, update docker-bake.hcl first, then sync this default.
 ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
+# Registry prefix for base Ubuntu image (used with FROM)
+ARG BASE_REGISTRY=mirror.gcr.io/
 
 #############################################################
 # Tool and venv layers (resolved by docker-bake.hcl contexts)
@@ -77,7 +79,6 @@ FROM ${UV_IMAGE} AS uv-layer
 # Base Ubuntu image with system dependencies
 #############################################################
 
-ARG BASE_REGISTRY=mirror.gcr.io/
 ARG UBUNTU_VERSION
 FROM ${BASE_REGISTRY}ubuntu:${UBUNTU_VERSION} AS base
 

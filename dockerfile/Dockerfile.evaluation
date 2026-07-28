@@ -7,6 +7,8 @@
 #############################################################
 
 ARG UBUNTU_VERSION=24.04
+# Registry prefix for base Ubuntu image (used with FROM)
+ARG BASE_REGISTRY=mirror.gcr.io/
 
 #############################################################
 # Tool layers (resolved by docker-bake.hcl contexts or --build-context)
@@ -28,7 +30,6 @@ FROM ${UV_IMAGE} AS uv-layer
 # Base image with system dependencies
 #############################################################
 
-ARG BASE_REGISTRY=mirror.gcr.io/
 ARG UBUNTU_VERSION
 FROM ${BASE_REGISTRY}ubuntu:${UBUNTU_VERSION} AS base
 
