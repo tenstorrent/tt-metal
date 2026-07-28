@@ -2611,6 +2611,12 @@ void DeviceProfiler::pushTracyDeviceResults(
             TracyTTPushStartMarker(device_tracy_contexts[device_core], marker_to_push);
         } else if (marker_to_push.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
             TracyTTPushEndMarker(device_tracy_contexts[device_core], marker_to_push);
+        } else if (
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_EVENT ||
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_DATA ||
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_DATA_16B) {
+            // Point-in-time device events; they render as markers on the RISC lane rather than zones.
+            TracyTTPushMarker(device_tracy_contexts[device_core], marker_to_push);
         }
     }
 #endif

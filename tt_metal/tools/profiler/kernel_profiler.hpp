@@ -169,14 +169,46 @@ struct ppfmt {
     static constexpr uint32_t TYPE_MASK = 0x1Fu;
     static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
     static constexpr uint32_t HASH16_MASK = 0xFFFFu;
-    static constexpr uint32_t T_STICKY_PROG = 8u;   // PP_STICKY_PROG
-    static constexpr uint32_t T_STICKY_TIMER = 9u;  // PP_STICKY_TIMER
+    // X280 wire type codes -- this wire's OWN space, NOT hostdevcommon PacketTypes values. The DRAM
+    // readback path never co-exists with this one and shares no decode, so the two numberings are
+    // independent. Passing a PacketTypes value straight through (the old 3-bit `>> 16 & 0x7`) is what
+    // made ZONE_TOTAL alias PP_X280_ZONE and TS_DATA_16B alias PP_BULK_CORE.
+    static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START
+    static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END
+    static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
+    static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
+    static constexpr uint32_t T_DATA = 10u;             // PP_DATA (compile-time tag, 2 + size words)
+    static constexpr uint32_t T_EVENT = 12u;            // PP_EVENT (RUNTIME id, otherwise identical to PP_DATA)
+    static constexpr uint32_t T_ZONE_TOTAL = 11u;       // PP_ZONE_TOTAL (word1 = accumulated sum)
+    static constexpr uint32_t DATA_ID_MASK = 0xFFFFFu;  // PP_DATA_ID_MASK  [19:0]
+    static constexpr uint32_t DATA_SIZE_SHIFT = 20u;    // PP_DATA_SIZE_SHIFT
+    static constexpr uint32_t DATA_SIZE_MASK = 0x7Fu;   // PP_DATA_SIZE_MASK [26:20]
     static inline uint32_t w0(uint32_t type, uint32_t low27) {
         return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
     }
-    // marker word0 from a get_const_id/get_id timer_id: type in bits 16-18 -> the 5-bit type field,
-    // 16-bit hash -> low27 (host later widens to the full 27 bits for a bigger id space).
-    static inline uint32_t marker_w0(uint32_t timer_id) { return w0((timer_id >> 16) & 0x7u, timer_id & HASH16_MASK); }
+    // Zone marker word0. The caller's timer_id still carries a PacketTypes value in bits 16-18 (it is
+    // also what keys the host name map), so map it EXPLICITLY to this wire's code -- never pass it
+    // through. Only the three zone kinds can appear here; data/event go through data_w0.
+    static inline uint32_t zone_w0(uint32_t timer_id) {
+        const uint32_t kind = (timer_id >> 16) & 0x7u;
+        uint32_t type = T_ZONE_START;
+        if (kind == 1u) {  // PacketTypes::ZONE_END
+            type = T_ZONE_END;
+        } else if (kind == 2u) {  // PacketTypes::ZONE_TOTAL
+            type = T_ZONE_TOTAL;
+        }
+        return w0(type, timer_id & HASH16_MASK);
+    }
+    // DATA/EVENT word0: size is in 32-bit words; 0 = a bare event. id is 20 bits (fed the 16-bit hash
+    // today, or the raw event id from DeviceRecordEvent).
+    static inline uint32_t data_w0(uint32_t id, uint32_t size_words) {
+        return w0(T_DATA, ((size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT) | (id & DATA_ID_MASK));
+    }
+    // Runtime-id event. Separate type because the id is NOT a source-location hash, so the host must not
+    // resolve a name for it -- see PP_EVENT in prof_packet.h.
+    static inline uint32_t event_w0(uint32_t runtime_id, uint32_t size_words) {
+        return w0(T_EVENT, ((size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT) | (runtime_id & DATA_ID_MASK));
+    }
 };
 
 // SPSC marker is now 2 words. The shared PROFILER_L1_MARKER_UINT32_SIZE stays 2 (L1 buffer SIZE
@@ -281,7 +313,7 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: 1 word (type | timer_hi)
         g_prev_timer_hi = hi;
     }
-    ring_write_word(ppfmt::marker_w0(timer_id));  // word0: type | zone srcloc (16-bit hash)
+    ring_write_word(ppfmt::zone_w0(timer_id));    // word0: X280 zone type | zone srcloc (16-bit hash)
     ring_write_word(lo);                          // word1: timer_low
     publish_tail();
 }
@@ -307,7 +339,7 @@ inline __attribute__((always_inline)) void mark_sticky_meta() {
 // region; not used by the default SPSC path). 2-word marker: word0 = type|hash, word1 = timer_low.
 inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    profiler_data_buffer[myRiscID].data[index] = ppfmt::marker_w0(timer_id);
+    profiler_data_buffer[myRiscID].data[index] = ppfmt::zone_w0(timer_id);
     profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
 }
 
@@ -408,7 +440,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
             ring_ensure_room(SPSC_MARKER_WORDS);
-            ring_write_word(ppfmt::marker_w0(get_id(sumIDs[i], ZONE_TOTAL)));  // word0: ZONE_TOTAL | hash
+            ring_write_word(ppfmt::zone_w0(get_id(sumIDs[i], ZONE_TOTAL)));  // word0: PP_ZONE_TOTAL | hash
             ring_write_word(sums[i]);  // word1: accumulated sum (host reads-as-sum by type, not a timer)
         }
     }
@@ -499,9 +531,11 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args..
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: 1 word (type | timer_hi)
         g_prev_timer_hi = hi;
     }
-    uint32_t marker_id = get_const_id(data_id, packet_type);
-    ring_write_word(ppfmt::marker_w0(marker_id));  // word0: packet_type | hash
-    ring_write_word(lo);                           // word1: timer_low
+    // One PP_DATA packet: the payload length is IN the header, so the host advances over it without a
+    // per-type length table and `packet_type` never reaches the wire (it only sizes the static_assert
+    // above and keys the host name map). 2 words/datum.
+    ring_write_word(ppfmt::data_w0(data_id, 2 * total_data_count));  // word0: PP_DATA | size | id
+    ring_write_word(lo);                                             // word1: timer_low
 
     ring_write_word(data >> 32);
     ring_write_word((data << 32) >> 32);
@@ -509,9 +543,33 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args..
     publish_tail();
 }
 
+// Shared body for the two payload-less point markers: they differ ONLY in the header word, i.e. in whether
+// the id is a compile-time source-location tag (PP_DATA, nameable) or a runtime value (PP_EVENT, not).
+inline __attribute__((always_inline)) void mark_point(uint32_t word0) {
+    ring_ensure_room(SPSC_MARKER_WORDS + 1);
+    uint32_t hi, lo;
+    read_wall_clock(hi, lo);
+    if (hi != g_prev_timer_hi) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
+        g_prev_timer_hi = hi;
+    }
+    ring_write_word(word0);
+    ring_write_word(lo);  // word1: timer_low
+    publish_tail();
+}
+
+// A compile-time-tagged marker with no payload -- has a source location and therefore a name on the host.
+template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
+inline __attribute__((always_inline)) void recordFlag() {
+    mark_point(ppfmt::data_w0(data_id, 0));
+}
+
+// A RUNTIME-id marker. Deliberately a different wire type from a compile-time tag: the id is an ordinary
+// kernel value, so no source location and no name exist, and the host must not look it up in the
+// hash->name map (a runtime id of 42 would otherwise borrow the name of whatever zone hashes to 42).
 template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
-inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
-    mark_time(get_id(event_id, TS_EVENT));
+inline __attribute__((always_inline)) void recordRuntimeEvent(uint32_t runtime_id) {
+    mark_point(ppfmt::event_w0(runtime_id, 0));
 }
 
 inline __attribute__((always_inline)) void increment_trace_count() { traceCount++; }
@@ -529,14 +587,24 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-#define DeviceTimestampedData(name, data)                                          \
+// The three point markers. DeviceData/DeviceFlag take a compile-time tag (string literal) and therefore
+// get a source location and a resolvable name; DeviceRuntimeEvent takes a runtime value and gets neither,
+// which is why it is a distinct wire type (see PP_EVENT in prof_packet.h).
+#define DeviceData(name, data)                                                     \
     {                                                                              \
         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
         auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
         kernel_profiler::timeStampedData<hash>(data);                              \
     }
 
-#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent(event_id);
+#define DeviceFlag(name)                                                           \
+    {                                                                              \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+        kernel_profiler::recordFlag<hash>();                                       \
+    }
+
+#define DeviceRuntimeEvent(runtime_id) kernel_profiler::recordRuntimeEvent(runtime_id);
 
 // Dispatch and enabled
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
@@ -547,23 +615,33 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
-#define DeviceTimestampedData(name, data)                                                            \
+#define DeviceData(name, data)                                                                       \
     {                                                                                                \
         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                 \
         auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                   \
         kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH_META>(data); \
     }
 
-#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<kernel_profiler::DoingDispatch::DISPATCH>(event_id);
+#define DeviceFlag(name)                                                               \
+    {                                                                                  \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                   \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));     \
+        kernel_profiler::recordFlag<hash, kernel_profiler::DoingDispatch::DISPATCH>(); \
+    }
+
+#define DeviceRuntimeEvent(runtime_id) \
+    kernel_profiler::recordRuntimeEvent<kernel_profiler::DoingDispatch::DISPATCH>(runtime_id);
 
 // Dispatch but disabled
 #else
 
 #define DeviceZoneScopedN(name) (void(sizeof(name)))
 
-#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
+#define DeviceData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
-#define DeviceRecordEvent(event_id) (void(sizeof(event_id)))
+#define DeviceFlag(data_id) (void(sizeof(data_id)))
+
+#define DeviceRuntimeEvent(runtime_id) (void(sizeof(runtime_id)))
 
 #endif
 
@@ -638,9 +716,11 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 #define DeviceZoneSetCounter(counter) (void(sizeof(counter)))
 
-#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
+#define DeviceData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
-#define DeviceRecordEvent(event_id) (void(sizeof(event_id)))
+#define DeviceFlag(data_id) (void(sizeof(data_id)))
+
+#define DeviceRuntimeEvent(runtime_id) (void(sizeof(runtime_id)))
 
 #define DeviceProfilerInit()
 
@@ -661,3 +741,12 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 #define RecordPerfCounters()
 
 #endif
+
+// ---- Back-compat aliases -------------------------------------------------------------------------
+// The point-marker macros were renamed to say what distinguishes them (compile-time tag vs runtime id).
+// Existing kernels still use the old spellings, so keep them as thin aliases. Defined once, outside the
+// enabled/disabled branches, so they hold in every configuration.
+//   DeviceTimestampedData -> DeviceData        (compile-time tag + payload)
+//   DeviceRecordEvent     -> DeviceRuntimeEvent (runtime id, no payload)
+#define DeviceTimestampedData(name, data) DeviceData(name, data)
+#define DeviceRecordEvent(runtime_id) DeviceRuntimeEvent(runtime_id)

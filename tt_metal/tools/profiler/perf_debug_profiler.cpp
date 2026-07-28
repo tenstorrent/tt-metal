@@ -43,6 +43,12 @@ namespace tt::tt_metal {
 
 namespace pz = tt::tt_metal::profiler;
 
+// Host-only record type for a PP_DATA payload continuation. Never appears on the wire, so it only has to
+// avoid the codes prof_packet.h actually uses (0,1,2,5..11); 31 is the top of the 5-bit type field.
+constexpr uint32_t kRecDataCont = 31u;
+// Largest payload the 7-bit wire size field can express, in uint64s -- bounds the consumer's scratch.
+constexpr uint32_t kMaxEventValues = 64;
+
 // pimpl so the BroadcastRing header stays out of perf_debug_profiler.hpp.
 struct RecRingHolder {
     tt::tt_metal::BroadcastRing<PerfDebugRec> ring;
@@ -496,11 +502,14 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
         ss.buf.size(),
         ctx.nl,
         [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t prog) {
-            if (type != kernel_profiler::ZONE_START && type != kernel_profiler::ZONE_END) {
-                return;  // only START/END for now (DeviceZoneScopedN)
+            // X280 wire codes, NOT hostdevcommon PacketTypes: the two sources never co-exist and share no
+            // decode, so never compare a wire type against a PacketTypes value (they agree at 0/1 only by
+            // history). PP_DATA events arrive on the emit_data sink below; PP_ZONE_TOTAL is not a duration.
+            if (type != PP_ZONE_START && type != PP_ZONE_END) {
+                return;
             }
             ss.emit++;
-            if (hash == 0x7FFFu && type == kernel_profiler::ZONE_START) {
+            if (hash == 0x7FFFu && type == PP_ZONE_START) {
                 ss.stall++;  // PROFILER_STALL_ZONE_ID: a producer RISC blocked on a FULL ring. Non-zero means
                              // the capture PERTURBED the workload (kernels elongated); still lossless.
             }
@@ -523,6 +532,40 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
         [&](uint32_t hart, uint32_t meta, uint64_t rdc) {
             if (hart < ctx.hz_raw.size()) {
                 ctx.hz_raw[hart].push_back(DeviceCtx::HZMark{rdc, meta});
+            }
+        },
+        // PP_DATA point events (DeviceTimestampedData / DeviceRecordEvent). The payload cannot fit in a
+        // 24-byte PerfDebugRec, and WIDENING the Rec would cost ~67% more ring bytes on a path that carries
+        // ~99M records for a single UFLD-v2 run -- so the payload rides CONTINUATION records instead: one
+        // primary (type PP_DATA, zone = id | size<<20) followed by one record per uint64. Events are rare
+        // next to zones, so the common path pays nothing and Rec stays byte-identical to the harness Rec.
+        [&](uint32_t lane,
+            uint32_t type,
+            uint32_t id,
+            uint64_t ts,
+            uint32_t prog,
+            const uint32_t* payload,
+            uint32_t n) {
+            ss.emit++;
+            if (lane / kNRisc >= ctx.core_virt.size()) {
+                return;
+            }
+            const uint32_t cont = (n + 1u) / 2u;  // 2 payload words == one uint64 == one continuation rec
+            if (bcur + 1 + cont > bend) {
+                return;  // batch full: drop this event rather than emit a primary with no payload
+            }
+            if (ctx.marker_ts_base == 0) {
+                ctx.marker_ts_base = ts;
+            }
+            // `type` (PP_DATA vs PP_EVENT) rides the record so the consumer knows whether the id is a
+            // compile-time tag it may name-resolve.
+            *bcur++ = PerfDebugRec{ts, (dev_idx << 24) | lane, type, id | (n << 20), prog};
+            for (uint32_t k = 0; k < cont; k++) {
+                // The producer writes each uint64 hi-word first (see timeStampedData), so recombine in
+                // that order and hand the consumer a finished value.
+                const uint64_t hi = payload[2 * k];
+                const uint64_t lo = (2 * k + 1 < n) ? payload[2 * k + 1] : 0u;
+                *bcur++ = PerfDebugRec{(hi << 32) | lo, (dev_idx << 24) | lane, kRecDataCont, 0, prog};
             }
         });
 
@@ -614,6 +657,19 @@ void PerfDebugProfiler::consumer_thread() {
     auto rd = ring_->ring.make_reader();
     std::vector<PerfDebugRec> scratch(read_chunk_recs_ ? read_chunk_recs_ : 65536);
     uint64_t cnt = 0;
+    // PP_DATA reassembly state. Locals (not members) because each consumer thread reads the whole ring
+    // independently, and because a primary record and its continuations can straddle a read batch.
+    struct PendingEvent {
+        bool active = false;
+        uint32_t lane_full = 0;
+        uint64_t ts = 0;
+        uint32_t id = 0;
+        uint32_t type = 0;
+        uint32_t prog = 0;
+        uint32_t want = 0;  // uint64s expected
+        uint32_t got = 0;
+        uint64_t vals[kMaxEventValues] = {};
+    } pend;
     auto emit_batch = [&](std::span<PerfDebugRec> b) {
         // Names are only resolvable once the workload's kernels have JIT-compiled, which has certainly
         // happened by the time records reach us.
@@ -630,7 +686,83 @@ void PerfDebugProfiler::consumer_thread() {
         ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch into Tracy -- the slow side (~0.8M
                                                // rec/s). When this saturates, the RING drops; it can no longer
                                                // back-pressure the device.
+        // Resolve a lane to its coords + name and push the reassembled event. Shares the coord/name
+        // resolution shape with the zone path below.
+        auto flush_event = [&]() {
+            if (!pend.active) {
+                return;
+            }
+            pend.active = false;
+            const uint32_t dev_idx = pend.lane_full >> 24;
+            const uint32_t lane = pend.lane_full & 0x00FFFFFFu;
+            if (dev_idx >= devices_.size()) {
+                return;
+            }
+            DeviceCtx& ctx = devices_[dev_idx];
+            const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
+            if (ci >= ctx.core_virt.size()) {
+                return;
+            }
+            const auto [vx, vy] = ctx.core_virt[ci];
+            uint32_t nx = vx, ny = vy;
+            if (auto it = ctx.virt_to_noc0.find((static_cast<uint64_t>(vx) << 32) | vy); it != ctx.virt_to_noc0.end()) {
+                nx = it->second.first;
+                ny = it->second.second;
+            }
+            perf_debug::WorkerEventPacket pkt;
+            pkt.chip_id = ctx.chip_id;
+            pkt.core_virtual_x = vx;
+            pkt.core_virtual_y = vy;
+            pkt.core_noc0_x = nx;
+            pkt.core_noc0_y = ny;
+            pkt.risc = risc;
+            pkt.id = pend.id;
+            pkt.runtime_id = (pend.type == PP_EVENT);
+            // A runtime id is NOT a source-location hash: looking it up would borrow an unrelated zone's
+            // name (id 42 vs whatever hashes to 42). Only compile-time tags get resolved.
+            if (!pkt.runtime_id) {
+                if (auto it = zone_names_.find(static_cast<uint16_t>(pend.id)); it != zone_names_.end()) {
+                    pkt.name = it->second;
+                }
+            }
+            const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;
+            pkt.timestamp = (pend.ts >= base) ? (pend.ts - base) : 0;
+            pkt.runtime_host_id = pend.prog;
+            pkt.values = pend.vals;
+            pkt.num_values = pend.got;
+            if (!tracy_push_disabled()) {
+                tracy_->HandleWorkerEvent(pkt);
+            }
+        };
+
         for (const auto& r : b) {
+            if (r.type == kRecDataCont) {
+                if (pend.active && pend.got < kMaxEventValues) {
+                    pend.vals[pend.got++] = r.ts;
+                }
+                if (pend.active && pend.got >= pend.want) {
+                    flush_event();
+                }
+                continue;
+            }
+            if (r.type == PP_DATA || r.type == PP_EVENT) {
+                flush_event();  // defensive: a truncated predecessor must not absorb this event's payload
+                pend = PendingEvent{};
+                pend.active = true;
+                pend.lane_full = r.lane;
+                pend.ts = r.ts;
+                pend.id = r.zone & 0xFFFFFu;
+                pend.type = r.type;
+                pend.prog = r.prog;
+                pend.want = ((r.zone >> 20) + 1u) / 2u;  // payload words -> uint64s
+                if (pend.want == 0) {
+                    flush_event();  // a bare event (DeviceRecordEvent) has no continuations
+                }
+                continue;
+            }
+            if (r.type != PP_ZONE_START && r.type != PP_ZONE_END) {
+                continue;  // e.g. PP_ZONE_TOTAL: an accumulated sum, not a duration on the timeline
+            }
             const uint32_t dev_idx = r.lane >> 24;
             const uint32_t lane = r.lane & 0x00FFFFFFu;
             if (dev_idx >= devices_.size()) {
@@ -665,7 +797,7 @@ void PerfDebugProfiler::consumer_thread() {
             // pair, so Tracy places it exactly. Unsynced: fall back to rebasing on the first marker seen.
             const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;
             pkt.timestamp = (r.ts >= base) ? (r.ts - base) : 0;
-            pkt.is_start = (r.type == kernel_profiler::ZONE_START);
+            pkt.is_start = (r.type == PP_ZONE_START);
             if (!tracy_push_disabled()) {
                 tracy_->HandleWorkerZone(pkt);
             }

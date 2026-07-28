@@ -41,6 +41,10 @@ public:
     // emission order per lane, so pushing in arrival order nests correctly.
     void HandleWorkerZone(const perf_debug::WorkerZonePacket& zone);
 
+    // Push one point-in-time event onto its core's Tracy lane. Unlike a zone this has no START/END pair,
+    // so it bypasses the lane_depth_ bookkeeping entirely -- it cannot orphan or unbalance a stack.
+    void HandleWorkerEvent(const perf_debug::WorkerEventPacket& event);
+
 private:
     static uint64_t ContextKey(uint32_t chip_id, uint32_t core_x, uint32_t core_y) {
         return (static_cast<uint64_t>(chip_id) << 40) | (static_cast<uint64_t>(core_x) << 20) |

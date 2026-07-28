@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
         }
         const auto& gpu = worker.GetGpuData();
         printf("=== GPU contexts: %zu ===\n", (size_t)gpu.size());
-        size_t idx = 0, total_zones = 0;
+        size_t idx = 0, total_zones = 0, total_markers = 0;
         for (auto* c : gpu) {
             const char* nm = c->name.Active() ? worker.GetString(c->name) : "(unnamed)";
             // Per-thread (RISC) max nesting depth; flag any thread deeper than 3 (staircase bug).
@@ -192,9 +192,41 @@ int main(int argc, char** argv) {
                     (unsigned long long)c->threadData.begin()->first);
                 sample_top_zones(worker, c->threadData.begin()->second.timeline, 12);
             }
+            // Device markers (point-in-time events: TS_EVENT / TS_DATA) live per lane alongside the zones.
+            size_t ctx_markers = 0;
+            for (const auto& td : c->threadData) {
+                ctx_markers += td.second.markers.size();
+            }
+            if (ctx_markers != 0) {
+                printf("  markers: %zu\n", ctx_markers);
+                int shown = 0;
+                for (const auto& td : c->threadData) {
+                    for (const auto& m : td.second.markers) {
+                        if (shown++ >= 4) {
+                            break;
+                        }
+                        const auto& sl = worker.GetSourceLocation(m->srcloc);
+                        printf(
+                            "    tid=%llu t=%lld type=%u name=%s meta=[%s]\n",
+                            (unsigned long long)td.first,
+                            (long long)m->gpuTime,
+                            (unsigned)m->markerType,
+                            worker.GetString(sl.name),
+                            m->meta.Active() ? worker.GetString(m->meta) : "");
+                    }
+                    if (shown >= 4) {
+                        break;
+                    }
+                }
+            }
+            total_markers += ctx_markers;
             total_zones += c->count;
         }
         printf("=== total gpu zones across contexts: %zu ===\n", total_zones);
+        printf(
+            "=== total device markers across contexts: %zu (worker: %llu) ===\n",
+            total_markers,
+            (unsigned long long)worker.GetGpuMarkerCount());
     } catch (const std::exception& e) {
         fprintf(stderr, "EXCEPTION: %s\n", e.what());
         return 2;

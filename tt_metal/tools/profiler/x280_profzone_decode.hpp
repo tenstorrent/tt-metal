@@ -60,14 +60,32 @@ struct ProfzoneIgnoreX280 {
     void operator()(uint32_t /*hart*/, uint32_t /*meta*/, uint64_t /*rdcycle*/) const {}
 };
 
-template <typename Emit, typename EmitX280 = ProfzoneIgnoreX280>
+// No-op default for the point-marker sink (PP_DATA / PP_EVENT), so a caller that only wants zones compiles
+// unchanged. `type` is the wire type: PP_DATA ids are compile-time tags and can be name-resolved, PP_EVENT
+// ids are runtime values and must NOT be.
+struct ProfzoneIgnoreData {
+    void operator()(
+        uint32_t /*lane*/,
+        uint32_t /*type*/,
+        uint32_t /*id*/,
+        uint64_t /*full_ts*/,
+        uint32_t /*prog*/,
+        const uint32_t* /*payload*/,
+        uint32_t /*n*/) const {}
+};
+
+// Largest PP_DATA payload the 7-bit size field can express; bounds the ring-unwrap scratch buffer.
+inline constexpr uint32_t kProfzoneMaxDataWords = 127;
+
+template <typename Emit, typename EmitX280 = ProfzoneIgnoreX280, typename EmitData = ProfzoneIgnoreData>
 inline void profzone_decode(
     ProfzoneDecodeState& st,
     const uint32_t* in,
     size_t in_n,
     uint32_t nl,
     Emit&& emit,
-    EmitX280&& emit_x280 = ProfzoneIgnoreX280{}) {
+    EmitX280&& emit_x280 = ProfzoneIgnoreX280{},
+    EmitData&& emit_data = ProfzoneIgnoreData{}) {
     // Prepend the carried residual so packets that straddled the previous read are decoded whole.
     std::vector<uint32_t>& buf = st.resid;
     const size_t rn = buf.size();
@@ -115,6 +133,26 @@ inline void profzone_decode(
                         break;  // partial trailing marker inside the run (shouldn't happen on a full frame)
                     }
                     const uint32_t rw1 = ring[(head_mod + i + 1) % kProfzoneRingCap];
+                    if (pp_is_point(rw0)) {
+                        // PP_DATA is VARIABLE length (2 + size). Its length is in the header, so the walk
+                        // stays in sync without a per-type table -- the whole point of the unified packet.
+                        const uint32_t n = pp_data_size(rw0);
+                        if (i + 2u + n > run) {
+                            break;  // payload not fully inside this frame -> carry via the next head
+                        }
+                        if (lane < nl) {
+                            // The payload can wrap the circular ring, so unwrap it into a flat scratch buffer
+                            // before handing it to the sink.
+                            uint32_t payload[kProfzoneMaxDataWords];
+                            for (uint32_t k = 0; k < n; k++) {
+                                payload[k] = ring[(head_mod + i + 2 + k) % kProfzoneRingCap];
+                            }
+                            const uint64_t ts = pp_full_ts(st.cur_hi[lane], rw1);
+                            emit_data(lane, pp_type(rw0), pp_data_id(rw0), ts, st.cur_prog, payload, n);
+                        }
+                        i += 2u + n;
+                        continue;
+                    }
                     if (pp_type(rw0) == PP_STICKY_PROG) {
                         st.cur_prog = rw1;
                     } else if (lane < nl) {
@@ -145,6 +183,21 @@ inline void profzone_decode(
             }
             emit_x280(pp_x280_hart(w0), pp_low27(w0), (static_cast<uint64_t>(w[p + 2]) << 32) | w[p + 1]);
             p += 3;
+        } else if (pp_is_point(w0)) {
+            // 2 + size words: the unified EVENT/DATA packet (size 0 == a bare event). Self-describing
+            // length, so an unknown payload shape can never desynchronize the walk.
+            if (p + 1 >= sz) {
+                break;  // need the timestamp word to know we have the whole header
+            }
+            const uint32_t n = pp_data_size(w0);
+            if (p + 2 + n > sz) {
+                break;  // partial payload -> carry
+            }
+            if (st.cur_lane < nl) {
+                const uint64_t ts = pp_full_ts(st.cur_hi[st.cur_lane], w[p + 1]);
+                emit_data(st.cur_lane, pp_type(w0), pp_data_id(w0), ts, st.cur_prog, &w[p + 2], n);
+            }
+            p += 2 + n;
         } else {  // 2-word: STICKY_PROG or a marker
             if (p + 1 >= sz) {
                 break;  // partial marker -> carry

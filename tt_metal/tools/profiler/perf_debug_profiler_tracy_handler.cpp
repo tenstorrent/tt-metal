@@ -171,4 +171,63 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
 #endif
 }
 
+void PerfDebugTracyHandler::HandleWorkerEvent([[maybe_unused]] const perf_debug::WorkerEventPacket& event) {
+#if defined(TRACY_ENABLE)
+    TracyTTCtx ctx = GetOrCreateContext(
+        event.chip_id,
+        event.core_noc0_x,
+        event.core_noc0_y,
+        fmt::format("Device: {} Physical ({},{})", event.chip_id, event.core_noc0_x, event.core_noc0_y));
+    if (!ctx) {
+        return;
+    }
+
+    static constexpr tracy::RiscType kRisc[5] = {
+        tracy::RiscType::BRISC,
+        tracy::RiscType::NCRISC,
+        tracy::RiscType::TRISC_0,
+        tracy::RiscType::TRISC_1,
+        tracy::RiscType::TRISC_2};
+
+    tracy::TTDeviceMarker marker;
+    marker.chip_id = event.chip_id;
+    marker.core_x = event.core_noc0_x;
+    marker.core_y = event.core_noc0_y;
+    marker.risc = kRisc[event.risc % 5];
+    marker.timestamp = event.timestamp;
+    marker.runtime_host_id = event.runtime_host_id;
+    // Three distinct kinds, by ID provenance and payload -- not one type with a size of zero:
+    //   RUNTIME_EVENT: runtime id, no name exists (DeviceRuntimeEvent)
+    //   DATA:          compile-time tag + payload (DeviceData)
+    //   FLAG:          compile-time tag, no payload (DeviceFlag)
+    if (event.runtime_id) {
+        marker.marker_type = tracy::TTDeviceMarkerType::RUNTIME_EVENT;
+    } else if (event.num_values != 0) {
+        marker.marker_type = tracy::TTDeviceMarkerType::DATA;
+    } else {
+        marker.marker_type = tracy::TTDeviceMarkerType::FLAG;
+    }
+    // A runtime event has no source location and so no harvested name; show the id rather than a blank.
+    marker.marker_name = event.name.empty() ? fmt::format("Event_{}", event.id) : std::string(event.name);
+    marker.file = "kernel_profiler";
+    marker.line = 0;
+
+    // The first two uint64s ride the marker's dedicated fields (the Tracy tooltip prints them as
+    // Data / Data high); any beyond that go into the metadata map so nothing is silently dropped.
+    if (event.num_values > 0) {
+        marker.data = event.values[0];
+    }
+    if (event.num_values > 1) {
+        marker.data_high = event.values[1];
+    }
+#ifdef TRACY_TT_HAS_FULL_DEPS
+    for (uint32_t i = 2; i < event.num_values; i++) {
+        marker.meta_data[fmt::format("value{}", i)] = event.values[i];
+    }
+#endif
+
+    TracyTTPushMarker(ctx, marker);
+#endif
+}
+
 }  // namespace tt::tt_metal
