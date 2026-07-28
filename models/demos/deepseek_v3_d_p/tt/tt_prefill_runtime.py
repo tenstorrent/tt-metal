@@ -148,7 +148,6 @@ class TtPrefillRuntime:
             topology=self.config.topology,
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
-            is_balanced=False,  # chunked prefill is block-cyclic (non-balanced)
             dispatch_buffer_capacity_factor=self.config.capacity_factor,
             gate_fallback_mode=self.config.gate_fallback_mode,
             routed_expert_activations_dtype=self.config.routed_expert_activations_dtype,
@@ -157,7 +156,6 @@ class TtPrefillRuntime:
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
             weight_cache_path=self.config.weight_cache_path,
             lm_head_is_column_parallel=True,
-            is_chunked=True,
             slot_num=self.config.num_users,
             kv_only_last_layer=self.config.kv_only_last_layer,
             routing_use_l1_small_for_semaphores=self.config.routing_use_l1_small_for_semaphores,
@@ -198,7 +196,6 @@ class TtPrefillRuntime:
                 token_ids,
                 self.mesh_device,
                 self.config.sp_factor,
-                False,  # chunked prefill is block-cyclic (non-balanced)
                 self.config.mesh_shape,
                 self.config.sp_axis,
             )
