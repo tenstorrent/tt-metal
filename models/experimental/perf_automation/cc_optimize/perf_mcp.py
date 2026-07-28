@@ -3176,7 +3176,14 @@ def termination_check() -> dict:
     blocking.sort(key=lambda b: -(b.get("gap_ms") or 0.0))
     can_stop = not blocking
     pt_status = _perf_target_status(rep, dev)
-    if pt_status and pt_status.get("status") == "IN_BAND":
+    # STOPPING IS ONLY ALLOWED AGAINST A REAL BANDWIDTH BAND. 60-80% of peak DRAM bandwidth is a
+    # hardware fact; 60-80% of 1000/modeled_floor is not -- the floor is a sum of per-op minimum times
+    # over one profiling window, so that rate has no hardware peak behind it. The fallback target used
+    # to manufacture such a band, and reaching 60% of it set can_stop=True and overrode every blocking
+    # op: a run could be declared done against a range never derived from the hardware. The fallback
+    # now carries no band (status NO_BAND) and the nonzero check keeps it that way.
+    _band = (pt_status or {}).get("band") or (0, 0)
+    if pt_status and pt_status.get("status") == "IN_BAND" and _band[0] and _band[1]:
         can_stop = True
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).

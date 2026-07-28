@@ -96,17 +96,37 @@ def test_prefers_agent_stages_when_present(tmp_path):
     assert "Block-level timing (per-stage trace) — latest lever on Matmul" in text
 
 
-def test_roofline_has_achievable_and_status(tmp_path):
+def test_a_floor_target_publishes_no_achievable_band(tmp_path):
+    """60-80% is a DRAM-BANDWIDTH statement. 60-80% of 1000/floor is not, and printing it put
+    "achievable 671.54 - 895.38 ms" beside a 534 ms measurement -- and the optimize stop gate read
+    that same band, so a run could be declared done against a range never derived from the hardware.
+    """
     sm = _summary()
     text = _render(sm, tmp_path, baseline_profile=_PROF, throughput=_tp(100.0), final_ms=200.0)
-    assert "achievable (60-80%)" in text
-    assert "BELOW_BAND" in text
+    assert "achievable (60-80%)" not in text
+    assert "NO_BAND" in text and "at-floor" in text
 
 
-def test_status_in_band(tmp_path):
+def test_a_bandwidth_ceiling_does_publish_the_band(tmp_path):
+    sm = _summary()
+    llm = {
+        "scope": "model",
+        "is_llm_decode": True,
+        "theoretical_tok_s": 64.0,
+        "band": [38.4, 51.2],
+        "active_bytes": int(8e9),
+        "peak_bw_gbps": 512.0,
+        "tp_degree": 1,
+        "perf_layers": "all",
+    }
+    text = _render(sm, tmp_path, baseline_profile={"per_token_ms": 19.4}, throughput=llm, final_ms=19.4)
+    assert "achievable (60-80%) : 38.4 - 51.2 tok/s/u" in text, text
+
+
+def test_status_has_no_band_verdict_for_a_floor_target(tmp_path):
     sm = _summary()
     text = _render(sm, tmp_path, baseline_profile=_PROF, throughput=_tp(100.0), final_ms=150.0)
-    assert "IN_BAND" in text
+    assert "NO_BAND" in text
 
 
 def test_status_above_band(tmp_path):

@@ -5,7 +5,8 @@ import importlib.util
 from pathlib import Path
 
 _S = importlib.util.spec_from_file_location(
-    "perf_mcp_ptterm", str(Path(__file__).resolve().parents[1] / "cc_optimize" / "perf_mcp.py"))
+    "perf_mcp_ptterm", str(Path(__file__).resolve().parents[1] / "cc_optimize" / "perf_mcp.py")
+)
 pm = importlib.util.module_from_spec(_S)
 _S.loader.exec_module(pm)
 
@@ -20,22 +21,25 @@ def test_per_module_scores_dev_against_floor_in_band(monkeypatch):
     monkeypatch.setenv("PERF_MCP_TARGET_BAND", "1")
     monkeypatch.setenv("TT_PERF_MODULE_LEVEL", "1")
     s = pm._perf_target_status({"modeled_floor_ms": 2.0}, 2.2)
-    assert s["scope"] == "module" and s["status"] == "IN_BAND"
+    # a floor-derived target has no band, so there is no IN_BAND verdict to reach
+    assert s["scope"] == "module" and s["status"] == "NO_BAND"
 
 
 def test_per_module_below_band(monkeypatch):
     monkeypatch.setenv("PERF_MCP_TARGET_BAND", "1")
     monkeypatch.setenv("TT_PERF_MODULE_LEVEL", "1")
-    assert pm._perf_target_status({"modeled_floor_ms": 2.0}, 3.5)["status"] == "BELOW_BAND"
+    assert pm._perf_target_status({"modeled_floor_ms": 2.0}, 3.5)["status"] == "NO_BAND"
 
 
 def test_unit_match_no_false_above_band(monkeypatch):
-    # the real regression: per-profile floor 1.913 vs per-profile dev 3.533 -> BELOW_BAND, never ABOVE.
-    # (the bug scored the per-token 0.197ms trace against this floor -> ABOVE_BAND every time.)
+    # the real regression: a per-profile floor scored against a per-token trace read ABOVE_BAND every
+    # time. Measuring SLOWER than the floor must never read ABOVE_BAND -- and a floor target has no
+    # band at all now, so the honest verdict is NO_BAND rather than a manufactured BELOW_BAND.
     monkeypatch.setenv("PERF_MCP_TARGET_BAND", "1")
     monkeypatch.setenv("TT_PERF_MODULE_LEVEL", "1")
     s = pm._perf_target_status({"modeled_floor_ms": 1000 / 522.821}, 3.533)
-    assert s["status"] == "BELOW_BAND", s
+    assert s["status"] != "ABOVE_BAND", s
+    assert s["status"] == "NO_BAND", s
 
 
 def test_full_model_falls_back_to_floor_scores_dev(monkeypatch):
@@ -43,7 +47,7 @@ def test_full_model_falls_back_to_floor_scores_dev(monkeypatch):
     monkeypatch.delenv("TT_PERF_MODULE_LEVEL", raising=False)
     monkeypatch.setattr(pm, "_load_perf_target_inputs", lambda: None)
     s = pm._perf_target_status({"modeled_floor_ms": 2.0}, 2.2)
-    assert s["scope"] == "model" and s["status"] == "IN_BAND"
+    assert s["scope"] == "model" and s["status"] == "NO_BAND"
 
 
 def test_fail_open_on_error(monkeypatch):

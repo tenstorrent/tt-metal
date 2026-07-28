@@ -26,10 +26,12 @@ def test_bytes_per_elem_bf8_is_1_0625():
 
 
 def test_dense_active_bytes_tensor_sum_dtype_aware():
-    mf = {"weight_tensors": [
-        {"numel": 1_000_000, "dtype": "bfloat16"},   # 2.0
-        {"numel": 1_000_000, "dtype": "bfloat8_b"},  # 1.0625
-    ]}
+    mf = {
+        "weight_tensors": [
+            {"numel": 1_000_000, "dtype": "bfloat16"},  # 2.0
+            {"numel": 1_000_000, "dtype": "bfloat8_b"},  # 1.0625
+        ]
+    }
     assert pt.active_bytes(mf) == int(round(1_000_000 * 2.0 + 1_000_000 * 1.0625))
 
 
@@ -40,8 +42,14 @@ def test_dense_active_bytes_from_param_count():
 
 def test_moe_uses_shared_plus_topk_not_all_experts():
     # 128 experts, top_k=8: only 8 experts' bytes count, not 128.
-    mf = {"is_moe": True, "num_experts": 128, "top_k": 8,
-          "shared_params": 1_000_000_000, "per_expert_params": 4_000_000, "dominant_dtype": "bfloat16"}
+    mf = {
+        "is_moe": True,
+        "num_experts": 128,
+        "top_k": 8,
+        "shared_params": 1_000_000_000,
+        "per_expert_params": 4_000_000,
+        "dominant_dtype": "bfloat16",
+    }
     got = pt.active_bytes(mf)
     expect = (1_000_000_000 + 8 * 4_000_000) * 2.0
     assert got == int(round(expect))
@@ -51,10 +59,9 @@ def test_moe_uses_shared_plus_topk_not_all_experts():
 
 
 def test_kv_term_off_by_default_on_when_seqlen():
-    mf = {"total_params": 1_000_000, "dominant_dtype": "bfloat16",
-          "layers": 32, "kv_heads": 8, "head_dim": 128}
-    base = pt.active_bytes(mf)                    # seq_len=0 -> weights only
-    withkv = pt.active_bytes(mf, seq_len=2048)    # + KV
+    mf = {"total_params": 1_000_000, "dominant_dtype": "bfloat16", "layers": 32, "kv_heads": 8, "head_dim": 128}
+    base = pt.active_bytes(mf)  # seq_len=0 -> weights only
+    withkv = pt.active_bytes(mf, seq_len=2048)  # + KV
     assert base == 2_000_000
     assert withkv == base + int(round(2.0 * 32 * 8 * 128 * 2048 * 2.0))
 
@@ -77,9 +84,9 @@ def test_compute_target_ceiling_and_band():
 def test_status_below_in_above():
     mf = {"total_params": 1_000_000_000, "dominant_dtype": "bfloat16"}
     t = pt.compute_target(mf, _BH)  # theo 256 tok/s ; band 153.6 - 204.8
-    below = pt.score(t, forward_ms=1000.0 / 100.0)   # 100 tok/s < 153.6
-    inb = pt.score(t, forward_ms=1000.0 / 200.0)     # 200 tok/s, >=153.6, <=256
-    above = pt.score(t, forward_ms=1000.0 / 300.0)   # 300 tok/s > 256 ceiling
+    below = pt.score(t, forward_ms=1000.0 / 100.0)  # 100 tok/s < 153.6
+    inb = pt.score(t, forward_ms=1000.0 / 200.0)  # 200 tok/s, >=153.6, <=256
+    above = pt.score(t, forward_ms=1000.0 / 300.0)  # 300 tok/s > 256 ceiling
     assert below["status"] == "BELOW_BAND"
     assert inb["status"] == "IN_BAND"
     assert above["status"] == "ABOVE_BAND"
@@ -92,28 +99,50 @@ def test_score_unknown_on_bad_inputs():
     assert pt.score(good, 0.0)["status"] == "UNKNOWN"  # no measurement
 
 
-def test_per_module_floor_band():
-    # module floor 2.0 ms -> theo 500 inv/s ; band 300-400
+def test_a_floor_target_carries_no_band():
+    """60-80% is a statement about DRAM BANDWIDTH. The floor is a sum of per-op minimum times over one
+    profiling window, so 1000/floor is an invocations-per-second figure with no hardware peak behind
+    it -- banding it produced "achievable 671.54 - 895.38 ms" beside a 534 ms measurement, and the
+    optimize stop gate consulted that same band, so a run could be declared done against a range
+    never derived from the hardware.
+    """
     t = pt.target_from_floor_ms(2.0)
     assert abs(t.theoretical_tok_s - 500.0) < 1e-6
-    # measured 3.5 ms -> 285.7 inv/s < 300 -> BELOW_BAND (headroom)
-    assert pt.score(t, 3.5)["status"] == "BELOW_BAND"
-    # measured 2.2 ms -> 454 inv/s, in band -> IN_BAND (near floor, done)
-    assert pt.score(t, 2.2)["status"] == "IN_BAND"
-    # measured 1.8 ms -> beat the 2.0ms floor -> ABOVE_BAND (floor suspect)
+    assert t.band == (0.0, 0.0)
+    # no band to be in, at any measurement -- and never a silent IN_BAND from `measured >= 0`
+    for ms in (3.5, 2.2, 2.05):
+        assert pt.score(t, ms)["status"] == "NO_BAND", ms
+    # beating the floor itself is still meaningful: one side of the pair is stale
     assert pt.score(t, 1.8)["status"] == "ABOVE_BAND"
 
 
+def test_only_a_bandwidth_ceiling_produces_a_band():
+    """The band must come from peak_BW / bytes-per-token, and then it is the published 60-80%."""
+    t = pt.compute_target({"weight_bytes": int(8e9)}, {"dram_bw_gbps": 512.0})
+    assert [round(b, 1) for b in t.band] == [38.4, 51.2]
+    assert pt.score(t, 19.4)["status"] == "IN_BAND"
+    assert pt.score(t, 40.0)["status"] == "BELOW_BAND"
+
+
 def test_list_topk_degrades_not_crashes():
-    mf = {"is_moe": True, "top_k": [8, 8, 8], "shared_params": 1_000_000, "per_expert_params": 1000,
-          "dominant_dtype": "bfloat16"}
+    mf = {
+        "is_moe": True,
+        "top_k": [8, 8, 8],
+        "shared_params": 1_000_000,
+        "per_expert_params": 1000,
+        "dominant_dtype": "bfloat16",
+    }
     got = pt.active_bytes(mf)  # top_k coerced to 8
     assert got == int(round((1_000_000 + 8 * 1000) * 2.0))
 
 
 def test_prefill_stub_raises():
-    import pytest
-    with pytest.raises(NotImplementedError):
-        pt.active_bytes({"total_params": 1}, regime="prefill")
-    with pytest.raises(NotImplementedError):
-        pt.prefill_ceiling()
+    """Explicit try/except: the repo prefers an error-context fixture that lives in the root
+    conftest, which this suite's rootdir does not reach."""
+    for call in (lambda: pt.active_bytes({"total_params": 1}, regime="prefill"), pt.prefill_ceiling):
+        raised = None
+        try:
+            call()
+        except NotImplementedError as exc:
+            raised = exc
+        assert raised is not None, call

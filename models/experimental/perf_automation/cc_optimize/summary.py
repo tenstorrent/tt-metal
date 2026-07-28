@@ -583,7 +583,10 @@ def _roofline_lines(
                 else:
                     out.append("  status              : PAST BASELINE FLOOR — keep optimizing")
             else:
-                _hint = "reached the achievable band — done" if status == "IN_BAND" else "keep optimizing"
+                _hint = {
+                    "IN_BAND": "reached the achievable band — done",
+                    "NO_BAND": "no bandwidth band for this pipeline — keep optimizing",
+                }.get(status, "keep optimizing")
                 out.append(
                     f"  at-floor            : {floor / fm * 100:.0f}%   ({fm - floor:.2f} ms reachable headroom)"
                 )

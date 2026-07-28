@@ -45,19 +45,19 @@ def test_module_floor_form_when_not_llm():
 
 
 def test_floor_form_shows_the_achievable_band_not_just_the_floor():
-    """The floor is unreachable BY CONSTRUCTION (full-grid compute term, DRAM fallback for L1), so
-    the non-decode table must publish the same 60-80% achievable band the decode branch does --
-    otherwise an operator reads a bare '% of floor' as a goal and chases a number no kernel hits.
-    Band is in ms and INVERTED relative to the rate band: slower ms = lower rate."""
+    """The floor is unreachable BY CONSTRUCTION (full-grid compute term, DRAM fallback for L1), and it
+    is NOT a bandwidth ceiling -- so it publishes no 60-80% band. Deriving one from 1000/floor made a
+    range the hardware has no peak behind, which the report showed as "achievable" and the stop gate
+    treated as done. What the operator gets instead is at-floor% with no fabricated goal."""
     out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 8.90}, 11.82))
-    # 8.90 / 0.80 = 11.125 ; 8.90 / 0.60 = 14.833
-    assert "achievable (60-80%) : 11.12 - 14.83 ms" in out
-    assert "status              : IN_BAND" in out  # 11.82 ms sits inside the band
+    assert "achievable (60-80%)" not in out
+    assert "status              : NO_BAND" in out
+    assert "at-floor            : 75%" in out  # 8.90 / 11.82
 
 
 def test_floor_form_below_band_keeps_optimizing():
     out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 8.90}, 40.0))
-    assert "status              : BELOW_BAND" in out and "keep optimizing" in out
+    assert "status              : NO_BAND" in out and "keep optimizing" in out
     assert "at-floor            : 22%" in out  # 8.90 / 40.0
 
 

@@ -187,12 +187,21 @@ def compute_target(model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, seq
 
 
 def target_from_floor_ms(modeled_floor_ms: float) -> PerfTarget:
-    """PER-MODULE target from the module's aggregate DRAM-bandwidth floor (roofline
-    residual_report.modeled_floor_ms). 'Rate' is invocations/s (1000/ms) — there is no decode
-    loop, so this is a relative achievable rate, scored the same way as the model-level ceiling."""
+    """Fallback target from a per-profile roofline floor. Carries NO BAND, deliberately.
+
+    The 60-80% band is a statement about DRAM BANDWIDTH: 60-80% of peak sustained against the bytes a
+    token must stream. Applying those fractions to 1000/floor produces a number that looks like the
+    same thing and is not -- the floor is a sum of per-op minimum times over one profiling window, so
+    1000/floor is an invocations-per-second figure for that window, not a rate the hardware has a peak
+    for. Doing it anyway printed "achievable (60-80%) : 671.54 - 895.38 ms" next to a 534 ms
+    measurement, and it is the SAME band the optimize stop gate consults -- so a run could be told it
+    had reached an achievable target that was never derived from the hardware's bandwidth at all.
+
+    Returning (0.0, 0.0) means "no band here". score() then reports the floor ratio without a verdict,
+    and the band stop cannot fire until a real ceiling exists (compute_target, from active_bytes).
+    """
     theo = (1000.0 / modeled_floor_ms) if modeled_floor_ms and modeled_floor_ms > 0 else 0.0
-    band = (_BAND_LO_FRAC * theo, _BAND_HI_FRAC * theo)
-    return PerfTarget(active_bytes=0, peak_bw_bytes_s=0.0, theoretical_tok_s=theo, band=band)
+    return PerfTarget(active_bytes=0, peak_bw_bytes_s=0.0, theoretical_tok_s=theo, band=(0.0, 0.0))
 
 
 def score(target: PerfTarget, forward_ms: float) -> dict:
@@ -210,6 +219,12 @@ def score(target: PerfTarget, forward_ms: float) -> dict:
     lo, _hi = target.band
     if measured > theo:
         status = "ABOVE_BAND"
+    elif not lo:
+        # NO BAND to be in. A zero band means the target carries no bandwidth-derived achievable
+        # range (target_from_floor_ms), and `measured >= 0` would otherwise read IN_BAND for every
+        # measurement ever taken -- declaring an arbitrary run "done" against a range that was never
+        # computed from the hardware.
+        status = "NO_BAND"
     elif measured >= lo:
         status = "IN_BAND"
     else:
