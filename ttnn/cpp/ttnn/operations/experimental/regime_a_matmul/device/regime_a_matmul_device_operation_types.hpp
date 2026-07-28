@@ -47,6 +47,10 @@ struct RegimeAMatmulParams {
     //                                       (MEASURED REFUTED: -4..-9%; compactness raises peak link load)
     //   bit9 (512) RING_BALANCED          - production ring membership, but order each ring to minimise the
     //                                       peak GLOBAL NoC link load instead of that ring's own hop cost
+    //                                       (in0-only, unbudgeted: +4.2% / -10% depending on shape)
+    //   bit10 (1024) RING_BALANCED_BG      - bit9 + the fixed background traffic (in1 reads, in0 read,
+    //                                       reduction, output) on the link map, + worst-edge and hop
+    //                                       budgets anchored on production, + adopt-only-if-better gate
     // Bits combine freely (pair-interaction matrix). bit0 dominates bit1 (normalize skip-all+redundant to
     // skip-all). Set from TT_REGIME_A_DIAG_MASK in invoke(); part of the reflection program-cache hash so
     // each mask is a distinct cached program. Diagnostic outputs are intentionally invalid; correctness is
