@@ -130,11 +130,14 @@ GROUP_NORM_NON_TILE_ALIGNED_PADDING_FRACTION_CASES = [
 # kernel's internal cancellation changes. `aligned_ref` is the measured error of the TILE-ALIGNED
 # H*W=224 control at the same shift -- the fused bf16 kernel degrades with a large mean even with
 # no padding at all, so the correction's real cost is the gap between the two columns.
-# (input_shift, max_abs_err, aligned_ref)
+# `max_ratio` bounds the correction's cost RELATIVE to the aligned control, which is the quantity
+# this test exists to pin. It is the portable half of the assertion: both columns move together
+# with arch and precision, so the ratio survives what the absolute numbers do not.
+# (input_shift, max_abs_err, aligned_ref, max_ratio)
 GROUP_NORM_NON_TILE_ALIGNED_SHIFT_CASES = [
-    (0.0, 0.08, 0.042),  # measured 0.040 non-aligned vs 0.042 aligned -- no measurable cost
-    (1.0, 0.16, None),  # measured 0.114
-    (4.0, 0.70, 0.158),  # measured 0.539 non-aligned vs 0.158 aligned -- 3.4x the baseline
+    (0.0, 0.08, 0.042, 2.0),  # measured 0.040 vs 0.042 aligned (ratio 0.95) -- no measurable cost
+    (1.0, 0.16, None, None),  # measured 0.114; no aligned control measured at this shift
+    (4.0, 0.70, 0.158, 6.0),  # measured 0.539 vs 0.158 aligned (ratio 3.4) -- the real cost
 ]
 
 SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
@@ -603,8 +606,10 @@ def test_group_norm_non_tile_aligned_no_input_mask_DRAM(device, N, C, H, W, num_
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("input_shift, max_err, aligned_ref", GROUP_NORM_NON_TILE_ALIGNED_SHIFT_CASES)
-def test_group_norm_non_tile_aligned_shifted_input_DRAM(device, input_shift, max_err, aligned_ref):
+@pytest.mark.parametrize(
+    "input_shift, max_err, aligned_ref, max_ratio", GROUP_NORM_NON_TILE_ALIGNED_SHIFT_CASES
+)
+def test_group_norm_non_tile_aligned_shifted_input_DRAM(device, input_shift, max_err, aligned_ref, max_ratio):
     # Characterizes the accuracy limit of the analytical padding correction (tt-metal #50682).
     #
     # group_norm is shift-invariant, so adding a constant to the input must not change the
@@ -631,7 +636,23 @@ def test_group_norm_non_tile_aligned_shifted_input_DRAM(device, input_shift, max
         )
         logger.info(
             f"input_shift={input_shift} non-aligned(H*W=200)={measured} "
-            f"tile-aligned control(H*W=224)={aligned} recorded_control={aligned_ref}"
+            f"tile-aligned control(H*W=224)={aligned} recorded_control={aligned_ref} "
+            f"ratio={measured / aligned if aligned > 0 else float('nan')}"
+        )
+        # The control is the op's own bfloat16 baseline at this mean-to-spread ratio. If it has
+        # drifted far from what was recorded, the comparison below is no longer measuring the
+        # correction -- it is measuring a change in the fused kernel, and the recorded numbers
+        # in this file need re-taking.
+        assert aligned < 2.0 * aligned_ref, (
+            f"tile-aligned control {aligned} at input_shift={input_shift} has regressed past 2x the "
+            f"recorded {aligned_ref}; the baseline moved, so re-measure this table (see #50682)"
+        )
+        # The point of this test: bound the correction's cost against that baseline, not in absolute
+        # terms. Unlike max_err this does not have to be re-tuned per arch.
+        assert measured < max_ratio * aligned, (
+            f"non-aligned error {measured} is more than {max_ratio}x the tile-aligned control "
+            f"{aligned} at input_shift={input_shift}; the analytical padding correction has become "
+            f"more expensive relative to the op's own bfloat16 baseline (see #50682)"
         )
     else:
         logger.info(f"input_shift={input_shift} non-aligned(H*W=200) max_abs_err={measured}")
