@@ -1489,7 +1489,9 @@ def run_chunked_transformer_no_pcc(
 
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
-# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
+# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL / KIMI_K2_7_HF_MODEL); the golden trace is optional.
+# K2.7 ("k27") is architecturally identical to K2.6 — only the checkpoint (and hence the
+# <cache_root>/<variant>_bh_32dev/ cache subdir) differs; see adapters/kimi_k2_7.py.
 @pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
@@ -1516,8 +1518,11 @@ def run_chunked_transformer_no_pcc(
         pytest.param(
             (8, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                # FABRIC_2D + Topology.Linear: the production transport, matching the GLM chunked-prefill
+                # perf measurement. RELAXED_INIT is required for FABRIC_2D bring-up on BH Galaxy.
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
                 "l1_small_size": 512,
             },
@@ -1529,12 +1534,12 @@ def run_chunked_transformer_no_pcc(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6", "kimi_k2_7"], indirect=True, ids=["kimi", "k27"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
-)
+# @pytest.mark.skipif(
+#     not is_high_power(),
+#     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+# )
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_no_pcc(
     variant,
