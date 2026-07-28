@@ -1897,7 +1897,10 @@ class DenoiseLogitsAdapter:
         tt_model = self.tt_model
         read_buf, write_buf = self._signal_read_write_bufs(step)
         canvas_hidden = embed_canvas_tokens(tt_model, canvas_tokens)
-        if self.self_conditioning is None:
+        if self.self_conditioning is None or "sc" in _skip_components():
+            # DG_SKIP=sc: price the self-conditioning soft-embedding (a [C,V] @ [V,H] matmul over the
+            # 262144 vocab) plus its gated MLP. Passing the raw canvas embedding through is exactly
+            # what step 0 does anyway, so the shape and the rest of the graph are untouched.
             conditioned = canvas_hidden
         else:
             # Uniform: forward over the persistent signal read buffer (zeroed for step 0).
