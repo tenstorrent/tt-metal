@@ -31,7 +31,7 @@ def hw_configure_pack(
     pack_mode: str = "PackMode::Default",
 ) -> str:
     code = _emit_pack_buf_desc(output, pack_src, pack_dst)
-    code += f"_llk_pack_hw_configure_<p_pacr::PACK0>(td_pack);\n"
+    code += f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>(td_pack, ckernel::ReluConfig::none());\n"
     return code
 
 
@@ -43,9 +43,13 @@ def configure_pack(
 ) -> str:
     code = "{\n"
     code += _emit_pack_buf_desc(output, pack_src, pack_dst)
-    code += f"_llk_pack_hw_configure_<p_pacr::PACK0>(td_pack);\n"
+    code += f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>(td_pack, ckernel::ReluConfig::none());\n"
     code += "}\n"
     return code
+
+
+def pack_reduce_mask_config(reduce_dim: str, tensor_shape: str) -> str:
+    return f"_llk_pack_reduce_mask_config_<{reduce_dim}>({tensor_shape});\n"
 
 
 def relu_config(relu_config_val: int, dest_acc: str) -> str:
@@ -58,15 +62,15 @@ def l1_accumulation_config(pack_l1_accumulation: L1Accumulation) -> str:
 
 
 def pack_dest_init(dest_sync: str, dest_acc: str) -> str:
-    return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+    return f"_llk_pack_dest_init_<p_pacr::PACK0, {dest_sync}>();\n"
 
 
 def packer_wait_for_math() -> str:
-    return ""
+    return "_llk_packer_wait_for_math_done_();\n"
 
 
 def packer_dest_section_done(dest_sync: str, dest_acc: str) -> str:
-    return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {dest_acc}>();\n"
+    return f"_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, {dest_sync}, {dest_acc}>();\n"
 
 
 def packer_sync_with_unpacker(stage_id: int, num_stages: int) -> str:

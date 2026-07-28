@@ -361,7 +361,8 @@ class ComputePipeline:
     def _pack_reduce_mask_config(self, operation: "FusedOperation") -> str:
         if operation.reduce_dim is not None:
             reduce_dim = operation.reduce_dim.cpp_enum_value
-            return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
+            tensor_shape = self.pack_nodes[0].output.tile_shape.cpp_value
+            return pack_common.pack_reduce_mask_config(reduce_dim, tensor_shape)
         return ""
 
     def _pack_reduce_mask_clear(self, operation: "FusedOperation") -> str:

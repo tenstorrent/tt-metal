@@ -7,6 +7,7 @@ from fuser.wormhole.packer.common import (  # noqa: F401
     configure_pack,
     l1_accumulation_config,
     pack_dest_init,
+    pack_reduce_mask_config,
     packer_dest_section_done,
     packer_sync_with_unpacker,
     packer_wait_for_math,

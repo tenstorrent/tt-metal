@@ -5,9 +5,8 @@
 """Quasar fuser config parser.
 
 Supports: eltwise binary (Elwadd/Elwmul/Elwsub), datacopy, matmul, reduce,
-unary SFPU, binary SFPU.
-Unsupported on Quasar: MatmulNoMop, ReduceBlockMax, ReduceBlockMaxRuntime,
-SubBcastColCustom.
+reduce block max, unary SFPU, binary SFPU.
+Unsupported on Quasar: MatmulNoMop, ReduceBlockMaxRuntime, SubBcastColCustom.
 No broadcast, no transpose.
 """
 
@@ -35,11 +34,13 @@ from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
+from .fpu.reduce_block_max import ReduceBlockMaxFpu
 from .packer.packer import Packer
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
+from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
 
@@ -120,6 +121,12 @@ _reduce_params = (
     "Reduce requires both reduce_pool and reduce_dim",
 )
 
+_only_32x32_or_16x32_tile = (
+    lambda s, a, b: (a.tile_shape.total_row_dim(), a.tile_shape.total_col_dim())
+    not in ((32, 32), (16, 32)),
+    "Only (32, 32) or (16, 32) tiles are supported for this operation",
+)
+
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(),
@@ -135,6 +142,10 @@ UNPACKER_MAP = {
     ),
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
+        None,
+    ),
+    "ReduceBlockMaxUnpacker": (
+        lambda s: ReduceBlockMaxUnpacker(),
         None,
     ),
 }
@@ -173,6 +184,14 @@ FPU_MAP = {
             _forced_unpacker("ReduceUnpacker"),
         ],
     ),
+    "ReduceBlockMax": (
+        lambda s: ReduceBlockMaxFpu(),
+        [
+            _no_reuse_dest,
+            _forced_unpacker("ReduceBlockMaxUnpacker"),
+            _only_32x32_or_16x32_tile,
+        ],
+    ),
 }
 
 _l1_acc_format = (
@@ -196,6 +215,7 @@ OUTPUT_DIMS = {
     "Datacopy": _src_a_dims,
     "Matmul": _matmul_dims,
     "Reduce": _src_a_dims,
+    "ReduceBlockMax": _src_a_dims,
 }
 
 

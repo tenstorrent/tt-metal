@@ -6,6 +6,7 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop
 from fuser.fused_operation import FusedOperation
 from fuser.fused_packer import Packer as BasePacker
@@ -47,10 +48,7 @@ class Packer(BasePacker):
     ) -> str:
         buf_desc_id = pack_node.output.buf_desc_id
         tensor_shape = pack_node.output.tile_shape.cpp_value
-        en_32bit_dest = config.dest_acc.cpp_enum_value
-        return (
-            f"_llk_pack_init_<{en_32bit_dest}>({buf_desc_id}, " f"{tensor_shape}, 1);\n"
-        )
+        return f"_llk_pack_init_({buf_desc_id}, {tensor_shape}, 1);\n"
 
     def pack(
         self,
@@ -59,4 +57,26 @@ class Packer(BasePacker):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        return f"_llk_pack_({block.tile_id_block}, {block.tile_id_global}, ckernel::DEFAULT_TENSOR_SHAPE);\n"
+        tensor_shape = pack_node.output.tile_shape.cpp_value
+        code = (
+            f"_llk_pack_({block.tile_id_block}, "
+            f"{block.tile_id_global}, "
+            f"{tensor_shape});\n"
+        )
+        final_fpu = next(
+            (
+                node
+                for node in reversed(operation.math.math_nodes)
+                if isinstance(node, FpuNode)
+            ),
+            None,
+        )
+        if final_fpu is None:
+            return code
+
+        condition = final_fpu.fpu.pack_tile_condition(
+            operation, config, final_fpu, block
+        )
+        if condition:
+            return f"if ({condition}) {{\n{code}}}\n"
+        return code

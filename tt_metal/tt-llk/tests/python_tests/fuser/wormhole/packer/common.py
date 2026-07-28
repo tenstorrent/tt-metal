@@ -34,6 +34,10 @@ def configure_pack(
     )
 
 
+def pack_reduce_mask_config(reduce_dim: str, tensor_shape: str) -> str:
+    return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
+
+
 def relu_config(relu_config_val: int, dest_acc: str) -> str:
     return f"_llk_pack_relu_config_(ReluConfig::from_packed({relu_config_val}));\n"
 

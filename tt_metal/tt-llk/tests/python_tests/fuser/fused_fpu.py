@@ -75,6 +75,21 @@ class Fpu:
         """
         return ""
 
+    def pack_tile_condition(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "FpuNode",
+        block: "BlockData",
+    ) -> str:
+        """Return a C++ condition selecting destination tiles produced by this FPU.
+
+        Most FPU operations produce every destination tile in a block and return
+        an empty condition. Sparse producers can override this so packers avoid
+        consuming destination tiles that math did not write.
+        """
+        return ""
+
     def uninit(
         self,
         operation: "FusedOperation",
