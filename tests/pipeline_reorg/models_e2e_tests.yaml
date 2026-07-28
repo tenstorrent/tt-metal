@@ -835,7 +835,7 @@
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
 
-# ── WAN 2.2 (Black Hole quad galaxy, bh_sc4) ───────────────────
+# ── WAN 2.2 (Black Hole quad galaxy, bh_sc4-mgd) ───────────────────
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -848,25 +848,27 @@
     export VBENCH_CACHE_DIR="${HOME}/.cache/vbench" TORCH_HOME="${HOME}/.cache/vbench/torch_hub"
     mkdir -p "${TORCH_HOME}"
     TTRUN_DIR=/etc/ttop
-    PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
-    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    # tt-run auto-allocation ("automapper"): --mesh-graph-descriptor + --hosts maps the MGD onto the
-    # allocated hosts and generates the rank bindings/rankfile. Safe on bh_sc4 (Count) -- the MGD comes
-    # from the repo, so no ttop-staged /etc/ttop/mgd.textproto is needed (per CI-team guidance).
-    # --tcp-interface ens5f0np0 is REQUIRED: without it tt-run falls back to "--mca btl_tcp_if_exclude
-    # docker0,lo", which collides with the job env's OMPI_MCA_btl_tcp_if_include=ens5f0np0 (two mutually-
-    # exclusive MCA vars) -> OMPI drops the TCP BTL, leaving only "self", and generate_rank_bindings'
-    # MPI_Comm_dup aborts (MPI_ERR_INTERN). Passing the interface makes tt-run emit btl_tcp_if_include
-    # (no exclude) for both Phase 1 and the run. ens5f0np0 lives on the compute hosts (the ranks), not the
-    # launcher pod, so tt-run's local-only interface check just logs a harmless warning.
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --tcp-interface ens5f0np0 --force-rediscovery \
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    # Legacy tt-run using the rank_bindings.yaml + rankfile that the bh_sc4-mgd SKU pre-stages on the
+    # shared /etc/ttop volume (its mgd_file is the 32x4 quad descriptor). We deliberately do NOT use the
+    # automapper (--mesh-graph-descriptor/--hosts): its Phase-1 generate_rank_bindings writes to the
+    # launcher cwd (/home/user/tt-metal/generated/ttrun) on rank 0's COMPUTE host, which the separate CI
+    # runner container cannot read back ("Phase 1 output not found"). Legacy mode has no Phase 1. Mirrors
+    # the proven fabric-multihost-exabox leg. --tcp-interface ens5f0np0 is still REQUIRED: the job env sets
+    # OMPI_MCA_btl_tcp_if_include=ens5f0np0, so without it tt-run adds the conflicting default
+    # btl_tcp_if_exclude docker0,lo (mutually-exclusive MCA vars -> TCP dropped -> MPI_Comm_dup abort).
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --skip-mgd-check --skip-executable-check \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
+      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --tcp-interface ens5f0np0 --force-rediscovery \
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --skip-mgd-check --skip-executable-check \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
+      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc4:
+    bh_sc4-mgd:
       timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
@@ -881,18 +883,22 @@
     export VBENCH_CACHE_DIR="${HOME}/.cache/vbench" TORCH_HOME="${HOME}/.cache/vbench/torch_hub"
     mkdir -p "${TORCH_HOME}"
     TTRUN_DIR=/etc/ttop
-    PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
-    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    # tt-run auto-allocation ("automapper") -- see the T2V entry above for the rationale, including why
-    # --tcp-interface ens5f0np0 is REQUIRED (avoids the btl_tcp_if_exclude/if_include MCA conflict).
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --tcp-interface ens5f0np0 --force-rediscovery \
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    # Legacy tt-run reading the bh_sc4-mgd pre-staged /etc/ttop bindings -- see the T2V entry above for the
+    # full rationale (automapper Phase-1 output isn't visible to the CI runner; --tcp-interface ens5f0np0
+    # still required to avoid the btl_tcp_if_exclude/if_include MCA conflict).
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --skip-mgd-check --skip-executable-check \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
+      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and i2v"
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --mesh-graph-descriptor "$MGD" --hosts "$PIPELINE_HOSTS" --tcp-interface ens5f0np0 --force-rediscovery \
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" --skip-mgd-check --skip-executable-check \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
+      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    bh_sc4:
+    bh_sc4-mgd:
       timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
