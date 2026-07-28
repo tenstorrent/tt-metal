@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Per-op test: ``ttnn.experimental.reduce_scatter_minimal_async``  (MULTI-DEVICE).
+
+Model call sites (modules/attention/attention_1d.py):
+  * L1121  _all_reduce_output_decode  — reduce-scatter of the WO output (decode)
+  * L1164  _all_reduce_output_prefill — reduce-scatter of the WO output (prefill)
+
+Kwarg structure copied from _all_reduce_output_decode (attention_1d.py:1121):
+    persistent_output_buffers=None, dim=3, multi_device_global_semaphore=<handle>,
+    barrier_semaphore=<handle>, num_links=..., memory_config=...,
+    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=...,
+    chunks_per_sync=..., num_workers_per_link=..., num_buffers_per_channel=...
+
+Semaphore handles come from a TT-CCL manager in the model
+(tt_ccl.get_and_cycle_rs_semaphore_handles / _barrier_semaphore_handle). Here we
+create them directly via ttnn.create_global_semaphore over the worker sub-device.
+reduce_scatter sums the replicated input across devices and scatters the result
+along dim 3, so the per-device output width is input_width / num_devices. We
+assert shape/dtype.
+
+# TODO: verify on device — semaphore/sub-device wiring and the exact
+# multi_device_global_semaphore argument type are copied from source and unverified.
+"""
+
+import pytest
+
+import ttnn
+from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+
+# CCL collective — multi-device Ring topology only (T3K/Galaxy). NOT called by the
+# model on a single-device N150 or the 2-node emulator (get_num_devices() == 1 takes
+# the plain non-CCL path). Skipped so it drops cleanly out of an emulator run.
+# Remove this mark to exercise it on a real multi-device Ring mesh.
+pytestmark = pytest.mark.skip(reason="CCL op: multi-device Ring only; not used on single-device N150/emulator")
+
+
+def _worker_crs(mesh):
+    grid = mesh.compute_with_storage_grid_size()
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 2)], indirect=True)
+def test_reduce_scatter_minimal_async(ttnn_mesh_device, reset_seeds):
+    mesh = ttnn_mesh_device
+    if tuple(mesh.shape) == (1, 1):
+        pytest.skip("multi-device op")
+
+    num_devices = max(tuple(mesh.shape))
+
+    # WO output replicated across devices (each device contributes a full-width partial).
+    shape = (1, 1, U.MAX_BATCH, U.DIM)
+    x_torch = U.torch_rand(shape)
+    x = U.to_tt(x_torch, mesh)  # replicated
+
+    crs = _worker_crs(mesh)
+    rs_semaphore = ttnn.create_global_semaphore(mesh, crs, 0)
+    barrier_semaphore = ttnn.create_global_semaphore(mesh, crs, 0)
+
+    reduced = ttnn.experimental.reduce_scatter_minimal_async(
+        x,
+        persistent_output_buffers=None,
+        dim=3,
+        multi_device_global_semaphore=rs_semaphore,
+        barrier_semaphore=barrier_semaphore,
+        num_links=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Linear,
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )
+
+    # reduce-scatter scatters the reduced result along dim 3 -> width / num_devices per device.
+    assert reduced.shape[-1] == U.DIM // num_devices, f"scattered width {reduced.shape[-1]} != {U.DIM // num_devices}"
+    U.assert_shape_dtype(reduced, dtype=ttnn.bfloat16, finite=False)
