@@ -142,7 +142,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
-            58_182_777,  # Re-centered 2026-07-30 for two stacked speedups now in the tree -- BOTH
+            56_147_080,  # Re-centered 2026-07-30 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (measured 64.30 ms alone) AND #47536
             # (update_padded_kv_cache RM/fp8; measured 64.80 ms alone). The combined 2x4-2link number
             # can't be measured on the galaxy, so the target is the midpoint of the plausible combined
