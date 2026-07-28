@@ -39,7 +39,8 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     static constexpr BroadcastDim Dim = Config.dim();
     static constexpr InputSpec Input = Config.input_spec(Cb);
     static constexpr Dst DstSlot = Config.dst();
-    static constexpr InputLifecycle Policy = Input.lifecycle;
+    static constexpr WaitPolicy Wait = Input.wait;
+    static constexpr PopPolicy Pop = Input.pop;
     static constexpr OperandKind IndexMode = Input.index;
     static constexpr TileOffset Offset = Input.offset;
     using Base = InputStream;
@@ -47,67 +48,43 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
-        is_legal_kind_lifecycle(IndexMode, Policy), "UnaryBcast: input lifecycle and operand kind are incompatible");
+        is_legal_input_policy_for_kind(IndexMode, Wait, Pop),
+        "UnaryBcast: input wait/pop pair is incompatible with operand kind");
     static_assert(
-        detail::valid_policy_mode_v<Policy, IndexMode>,
-        "UnaryBcast: Row and Col operand kinds require a non-streaming lifecycle");
+        Offset == TileOffset::Unset || is_legal_input_policy_with_base(Wait, Pop),
+        "UnaryBcast: TileOffset::Set requires an upfront, deferred-pop, or caller-managed input pair");
     static_assert(
-        Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
-        "UnaryBcast: TileOffset::Set requires a Bulk-family or CallerManaged lifecycle");
+        Offset != TileOffset::Strided || ((Wait == WaitPolicy::None) && (Pop == PopPolicy::None)),
+        "UnaryBcast: TileOffset::Strided requires caller-managed (None, None) input policies");
 
     static constexpr uint32_t dfb = Cb;
     static constexpr uint32_t dfb_a_id() { return Cb; }
-    static constexpr InputLifecycle a_policy() { return Policy; }
-    static constexpr bool is_upfront =
-        is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
+    static constexpr InputSpec a_input() { return Input; }
 
     static constexpr uint32_t reconfig_srca_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
     static constexpr uint32_t reconfig_srcb_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
 
     constexpr UnaryBcastImpl() noexcept = default;
     constexpr explicit UnaryBcastImpl(uint32_t base) noexcept : Base(base) {}
+    constexpr explicit UnaryBcastImpl(StridedTileRange range) noexcept : Base(range) {}
 
     static ALWI void init() {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-        const std::uint32_t dst_format = get_operand_dst_format(Cb);
-#ifndef ARCH_QUASAR
-        const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                           (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                           (dst_format == (std::uint32_t)DataFormat::Int32);
-        if (enable_unpack_to_dest) {
-            UNPACK((llk_unpack_A_init<bt, false, ckernel::EltwiseBinaryReuseDestType::NONE, true>(false, false, Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE, bt>(Cb)));
-        } else {
-            UNPACK((llk_unpack_A_init<bt, false, ckernel::EltwiseBinaryReuseDestType::NONE, false>(false, false, Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, bt>(Cb)));
-        }
-#else
-        const bool enable_unpack_to_dest =
-            (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-        if (enable_unpack_to_dest) {
-            ASSERT(false);
-            UNPACK((llk_unpack_A_init<false, true>(Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, true>(Cb)));
-        } else {
-            UNPACK((llk_unpack_A_init<false, false>(Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, false>(Cb)));
-        }
-#endif
-#endif
+        ::unary_bcast_init<bt>(Cb);
     }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
+        const uint32_t in_idx =
+            tile_base_value<Offset>(tile_base) + detail::idx<IndexMode, Offset>(i_flat, ht, wt, row_stride);
         ::unary_bcast<bt>(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 };
 
-template <BroadcastDim Dim, InputSpec Input, OutputSpec Output>
-ALWI void unary_bcast(EltwiseShape shape) {
+template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, EltwiseShapeKind Kind>
+ALWI void unary_bcast(TypedEltwiseShape<Kind> shape) {
     eltwise_chain(shape, UnaryBcast<Dim, Input>{}, PackTile<Output>{});
 }
 
