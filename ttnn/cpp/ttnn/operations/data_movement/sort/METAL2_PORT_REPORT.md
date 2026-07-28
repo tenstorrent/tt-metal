@@ -147,12 +147,28 @@ dataflow buffers.
   porter to narrow those ranges. Doing so is what exposes the bug, so **any op with genuinely
   node-dependent buffer sets will hit this**, not just sort.
 
-- **Suggested fix:** size the payload by `max_id + 1` over the buffers on the range (or renumber ids
-  per kernel group and emit the mapping the kernels use). Independently, promote the two
-  `TT_ASSERT`s at [dispatch.cpp:1394-1395](../../../../../../tt_metal/impl/program/dispatch.cpp#L1394-L1395)
-  and the transfer-overlap asserts in `BatchedTransferGenerator::assemble_commands` to `TT_FATAL`: a
-  Release-mode segfault with no diagnostic cost most of the debugging time on this port, and a Debug
-  build answered it in one run.
+- **Suggested fix, with a working reference implementation already in the tree.** This is a regression
+  against the legacy circular-buffer path, which computes the same quantity correctly:
+  `finalize_cbs` ([dispatch.cpp:307-320](../../../../../../tt_metal/impl/program/dispatch.cpp#L307-L320))
+  tracks a per-kernel-group *mask* of the slot indices in use, takes the position of the highest set
+  bit, and sizes the region from that. `finalize_dfbs` replaced that with a per-group *count* while
+  leaving the id-based addressing in place. Restoring the max-index basis is close to a copy of
+  `finalize_cbs`.
+
+  Note that the Gen2 branch of the same write loop
+  ([dispatch.cpp:1383-1391](../../../../../../tt_metal/impl/program/dispatch.cpp#L1383-L1391)) lays
+  buffers out sequentially with a running offset, which *is* consistent with a count-based size. The
+  count-based sizing looks correct for that layout and was applied to the Gen1 branch too, where the
+  offset is `id * slot_size`.
+
+- **Independently, make the bounds check unconditional.** Promote the two `TT_ASSERT`s at
+  [dispatch.cpp:1394-1395](../../../../../../tt_metal/impl/program/dispatch.cpp#L1394-L1395), and the
+  transfer-overlap asserts in `BatchedTransferGenerator::assemble_commands`, to `TT_FATAL`.
+  `TT_ASSERT` compiles to `(void)(condition)` outside a Debug build
+  ([assert.hpp:163-168](../../../../../../tt_stl/tt_stl/assert.hpp#L163-L168)), so in the build
+  everyone uses, this defect is a silent out-of-bounds `std::copy` followed by a segfault in
+  unrelated code. It cost most of the debugging time on this port; a Debug build answered it in one
+  run. These checks run once per buffer at program setup, so the cost of leaving them in is nil.
 
 - **What the port did instead.** Reverted `SortProgramFactorySingleRowMultiCore` and its four kernels
   to the legacy `ProgramDescriptor` concept, so the op keeps working on every shape. The two ported
