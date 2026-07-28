@@ -202,40 +202,40 @@ run_multi_host_tracy_smoke() {
 }
 
 run_llama8b_decode_profile() {
-    # Tracy op-by-op profile of a single Llama-3.1-8B decoder layer via the
-    # tt_transformers unit test (test_decoder_inference): one TransformerBlock,
-    # decode-only, NO prefill. The full demo overflows the device profiler marker
-    # buffer (op-to-op parsing fails); this unit test has few enough ops that the
-    # host<->device merge succeeds, yielding a named ops_perf_results.csv WITH
-    # "OP TO OP LATENCY" + per_core_op_to_op_times for the cross-host dispatch diff.
-    # A signpost wraps one warmed-up decode step (last iteration).
+    # Device-perf profile of a FULL Llama-3.1-8B decode step (10 layers + model-tail
+    # incl. sampling) via test_device_perf.py. This is the device-time-only measurement
+    # (excludes host) and, unlike the single-layer unit test, INCLUDES the sampling /
+    # LM-head path. Yields ops_perf_results.csv with per-op DEVICE KERNEL + OP TO OP
+    # LATENCY for the cross-host diff (batch 32 to match eval-32).
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    # Weights: the profiler (wh_llmbox) runner is not a ci-v2 env, so load from the
-    # shared HF cache offline (mirrors the working local capture).
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     export HF_HOME=/mnt/MLPerf/huggingface
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
     export MESH_DEVICE=T3K
+    # /mnt/MLPerf is mounted read-only on CI runners; the device-perf test writes the
+    # converted 10-layer weight cache, so point TT_CACHE_PATH at a writable location.
+    export TT_CACHE_PATH=/work/generated/ttt_cache
+    mkdir -p "$TT_CACHE_PATH"
 
-    python -m tracy -v -r -p -m pytest -s \
-        models/tt_transformers/tests/test_decoder.py::test_decoder_inference \
+    pytest -s --timeout 1200 \
+        models/tt_transformers/tests/test_device_perf.py \
+        -k "decode-llama3_8b-2-1024-2-10-1-32-False" \
         2>&1 | tee $PROFILER_ARTIFACTS_DIR/test_out.log || true
 
-    # Harvest: the workflow only uploads generated/test_reports/.
-    HARVEST=generated/test_reports/llama8b_decoder_profile
+    # Harvest the per-op device report(s).
+    HARVEST=generated/test_reports/llama8b_devperf_decode
     mkdir -p "$HARVEST"
-    find $PROFILER_OUTPUT_DIR -name "ops_perf_results_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
-    find $PROFILER_OUTPUT_DIR -name "per_core_op_to_op_times_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
+    find generated/profiler/ttt-device-perf-decode/reports -name "ops_perf_results_*.csv" \
+        -exec cp {} "$HARVEST/" \; 2>/dev/null || true
     cp $PROFILER_ARTIFACTS_DIR/test_out.log "$HARVEST/" 2>/dev/null || true
-    echo "Harvested profiler artifacts:"; ls -la "$HARVEST/" || true
+    echo "Harvested:"; ls -la "$HARVEST/" || true
 
-    # Guard: the decoder unit test must actually pass (else no valid capture).
-    if ! grep -q "decode iterations Passed" $PROFILER_ARTIFACTS_DIR/test_out.log; then
-        echo "ERROR: decoder unit test did not pass (see test_out.log)." 1>&2
+    # Guard: the device-perf test must pass.
+    if ! grep -qE "1 passed" $PROFILER_ARTIFACTS_DIR/test_out.log; then
+        echo "ERROR: device-perf decode test did not pass (see test_out.log)." 1>&2
         exit 1
     fi
 }
