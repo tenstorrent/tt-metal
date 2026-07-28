@@ -48,7 +48,8 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, output_tensor, barrier_sem);
+        auto cached_program = create_at(
+            operation_attributes, coord, tensor_args, output_tensor, barrier_sem, available_cores.num_cores());
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -61,7 +62,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const ttnn::MeshCoordinate& sender_device_coord,
     const AllGatherInputs& tensor_args,
     const Tensor& output_tensor,
-    const tt::tt_metal::GlobalSemaphore& barrier_sem) {
+    const tt::tt_metal::GlobalSemaphore& barrier_sem,
+    uint32_t num_available_cores) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
 
@@ -166,10 +168,26 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // go unused. If this is ever a real use-case, we need to allocate separate worker cores per axis.
     const uint32_t links0 = operation_attributes.axis_num_links[0];
     const uint32_t links1 = operation_attributes.axis_num_links[1];
-    const uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
+    uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
 
     // Get worker cores
     uint32_t num_workers_per_link = 1;
+    // Shrink core usage to fit available core grid.
+    if (min_num_links * num_workers_per_link > num_available_cores) {
+        const uint32_t fitted_links = num_available_cores / num_workers_per_link;
+        TT_FATAL(
+            fitted_links > 0,
+            "all_gather needs at least {} worker core(s) but only {} are available; provide a larger sub_core_grid.",
+            num_workers_per_link,
+            num_available_cores);
+        log_warning(
+            tt::LogOp,
+            "Using {} out of {} Fabric links due to limited {} worker cores. This may lead to performance loss.",
+            min_num_links,
+            fitted_links,
+            num_available_cores);
+        min_num_links = fitted_links;
+    }
     auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
         min_num_links,
         num_workers_per_link,
@@ -177,6 +195,14 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         operation_attributes.subdevice_id,
         /*core_grid_offset=*/CoreCoord{0, 0},
         operation_attributes.sub_core_grid);
+    TT_FATAL(
+        worker_cores.size() == static_cast<size_t>(min_num_links) * num_workers_per_link,
+        "all_gather needs {} worker cores ({} links x {} cores/link) but only {} are available; provide a larger "
+        "sub_core_grid.",
+        static_cast<size_t>(min_num_links) * num_workers_per_link,
+        min_num_links,
+        num_workers_per_link,
+        worker_cores.size());
 
     ////////////////////////////////////////////////////////////////
     // Page indexing

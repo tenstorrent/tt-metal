@@ -64,8 +64,14 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program =
-            create_at(operation_attributes, coord, tensor_args, output_tensor, barrier_sem, data_valid_sem);
+        auto cached_program = create_at(
+            operation_attributes,
+            coord,
+            tensor_args,
+            output_tensor,
+            barrier_sem,
+            data_valid_sem,
+            available_cores.num_cores());
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -79,7 +85,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const AllGatherInputs& tensor_args,
     const Tensor& output_tensor,
     const tt::tt_metal::GlobalSemaphore& barrier_sem,
-    const tt::tt_metal::GlobalSemaphore& data_valid_sem) {
+    const tt::tt_metal::GlobalSemaphore& data_valid_sem,
+    uint32_t num_available_cores) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
     auto* mesh_device = input_tensor.device();
@@ -145,7 +152,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
-    const uint32_t num_links = operation_attributes.axis_num_links[axis];
+    uint32_t num_links = operation_attributes.axis_num_links[axis];
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
     uint32_t workers_per_dir = 1;
@@ -174,6 +181,34 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         }
     }
 
+    // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
+    auto cores_per_link = [](uint32_t workers) { return 2u * (workers + (workers > 1u ? 1u : 0u)); };
+    const uint32_t wanted_workers = workers_per_dir;
+    const uint32_t wanted_links = num_links;
+    while (workers_per_dir > 1 && num_links * cores_per_link(workers_per_dir) > num_available_cores) {
+        --workers_per_dir;
+    }
+    if (num_links * cores_per_link(workers_per_dir) > num_available_cores) {
+        // Even one worker per direction per link does not fit; drop links (workers_per_dir is 1 by now).
+        num_links = num_available_cores / cores_per_link(workers_per_dir);
+        TT_FATAL(
+            num_links > 0,
+            "all_gather needs at least {} worker cores but only {} are available; provide a larger sub_core_grid.",
+            cores_per_link(workers_per_dir),
+            num_available_cores);
+    }
+    if (workers_per_dir != wanted_workers || num_links != wanted_links) {
+        log_warning(
+            tt::LogOp,
+            "all_gather scaled down from {} links x {} workers/direction to {} links x {} workers/direction to fit "
+            "the {} available worker cores. This may lead to performance loss.",
+            wanted_links,
+            wanted_workers,
+            num_links,
+            workers_per_dir,
+            num_available_cores);
+    }
+
     constexpr uint32_t num_directions = 2;  // 0 = forward, 1 = backward
     const bool use_mux = workers_per_dir > 1;
     const uint32_t mux_per_dir = use_mux ? 1u : 0u;
@@ -188,8 +223,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         operation_attributes.subdevice_id,
         /*core_grid_offset=*/CoreCoord{0, 0},
         operation_attributes.sub_core_grid);
-    // TODO below shouldn't be a TT_FATAL. choose_worker_cores() auto shrinks core usage with a warning, so we
-    // should gracefully handle that here.
     TT_FATAL(
         all_cores.size() == static_cast<size_t>(num_links) * num_cores_per_link,
         "all_gather needs {} worker cores ({} links x {} cores/link) but only {} are available; provide a larger "
