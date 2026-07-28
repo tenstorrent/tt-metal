@@ -1077,6 +1077,48 @@ void place_in1_optimal(plan::ExecutionPlan& P, IDevice* device, const plan::Geom
     }
 }
 
+// TEST-ONLY (diag bit13 PLACE_MESH): 2D (bank x slice) MESH placement, aimed at in0 ring traffic.
+// Host-only and correctness-preserving - writes only P.cores[i].coord.
+//
+// The structural point: two traffic classes want opposite groupings of the same 8 x preaders core array.
+// The in0 RING connects the 8 cores of one SLICE (one per bank), so it wants slice-compact clusters. The
+// split-K REDUCTION chain connects the Pk cores of one BANK, so it wants bank-compact clusters. Those are
+// orthogonal partitions, so no clustering makes both short - production picks bank-compact blobs (short
+// reduction, long ring). A 2D EMBEDDING escapes the tension: put banks along x and slices along y, and then a
+// ring step (bank -> bank) and a reduction step (kk -> kk+1) are each ONE hop, in different dimensions.
+//
+// Offline (in0_ring_place_search.py, exact route model): ring hops -70% AND reduction hops -19..-40%
+// simultaneously, whole-op peak link load -11..-15%, total link traffic -20..-36%. in1 read distance is
+// ~unchanged (+3%), which is acceptable because the in1 read was measured to be DRAM-bound (76-98% of peak
+// in isolation) and insensitive to distance - see IN1_PLACEMENT_AB.md.
+//
+// Layout: cores (bank b, slice p) -> (x=b, y=p) for p < grid.y; overflow slices each take their own column at
+// x >= 8 with the 8 banks down rows 0..7. Collision-free by construction. mm-siblings are consecutive in p,
+// so M-split slaves land adjacent to their reader, which keeps the in1 forward short without a separate pass.
+void place_mesh(plan::ExecutionPlan& P, const plan::Geometry& geo, const CoreCoord& grid) {
+    const uint32_t preaders = geo.num_cores / 8u;
+    const uint32_t overflow_cols = (grid.x > 8u) ? (grid.x - 8u) : 0u;
+    TT_FATAL(
+        grid.x >= 8u && preaders <= grid.y + overflow_cols,
+        "regime_a_matmul mesh placement does not fit: {} slices need <= {} (grid {}x{})",
+        preaders,
+        grid.y + overflow_cols,
+        grid.x,
+        grid.y);
+    for (uint32_t b = 0; b < 8u; ++b) {
+        for (uint32_t p = 0; p < preaders; ++p) {
+            const uint32_t i = b * preaders + p;
+            if (p < grid.y) {
+                P.cores[i].coord.x = b;  // banks along x, slices along y
+                P.cores[i].coord.y = p;
+            } else {
+                P.cores[i].coord.x = 8u + (p - grid.y);  // one spare column per overflow slice
+                P.cores[i].coord.y = b;
+            }
+        }
+    }
+}
+
 }  // namespace
 
 RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::create(
@@ -1174,7 +1216,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // ---- M-split worker PLACEMENT (Sm>1): IN1_NEAR. Overrides only P.cores[i].coord; MUST run BEFORE the ring
     // reorder so the ring order recomputes on the placed coords. No-op at Sm==1. ----
     const bool diag_place_in1 = (diag_mask & 0x1000u) != 0u;  // bit12: in1-read-optimal placement
-    if (diag_place_in1) {
+    const bool diag_place_mesh = (diag_mask & 0x2000u) != 0u;  // bit13: 2D bank x slice mesh (in0-ring-optimal)
+    if (diag_place_mesh) {
+        place_mesh(P, geo, device->compute_with_storage_grid_size());
+    } else if (diag_place_in1) {
         place_in1_optimal(P, device, geo, device->compute_with_storage_grid_size());
     } else if (Sm > 1u) {
         place_m_split_workers(P, device, geo);
