@@ -82,6 +82,16 @@ struct NamedKernelArgs {
 // Called from the Program constructor when `kernel_descriptor.blaze_named_args` is non-empty.
 void process_named_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_handle);
 
+// Re-applies the named runtime-arg VALUES of `kernel_descriptor` onto a program that was
+// constructed from a same-schema descriptor — the descriptor program-cache HIT path.
+// process_named_args merges named values into the program's runtime-arg vectors only at
+// construction, and the descriptor hashers intentionally exclude values from the cache key,
+// so without this a same-schema/different-values cache hit would silently execute with the
+// first invocation's named scalars and arrays.  Called from apply_descriptor_runtime_args();
+// `kernel_index` is the kernel's position in ProgramDescriptor::kernels, which doubles as its
+// KernelHandle (the existing apply_descriptor_runtime_args convention).
+void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index);
+
 // Hashes the named-RT-arg SCHEMA for the program cache: names + array lengths + dispatch kind
 // (common vs per-core) + order. Deliberately EXCLUDES runtime values — they are written per
 // enqueue and do not affect the JIT-generated header, so hashing them would cause needless

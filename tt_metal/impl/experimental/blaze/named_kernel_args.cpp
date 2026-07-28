@@ -29,27 +29,55 @@
 
 namespace tt::tt_metal::experimental::blaze {
 
+namespace {
+
+// The merged runtime-arg layout shared by construction (process_named_args) and
+// descriptor-cache-hit patching (apply_named_runtime_args).  Both MUST agree on
+// where each named value lands, so the merge lives in exactly one place:
+// positional values first, then named scalars, then named arrays, in declaration
+// order.  Only the VALUES are merged; the indices baked into the generated header
+// are computed separately in process_named_args.
+std::map<CoreCoord, std::vector<uint32_t>> merge_per_core_runtime_args(const KernelDescriptor& kernel_descriptor) {
+    const auto& named_args = kernel_descriptor.blaze_named_args;
+    std::map<CoreCoord, std::vector<uint32_t>> core_to_args;
+    for (const auto& [core, positional] : kernel_descriptor.runtime_args) {
+        core_to_args[core] = positional;
+    }
+    for (const auto& arg : named_args.named_per_core_runtime_args) {
+        for (const auto& [core, value] : arg.core_values) {
+            core_to_args[core].push_back(value);
+        }
+    }
+    for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
+        for (const auto& [core, values] : arg.core_values) {
+            core_to_args[core].insert(core_to_args[core].end(), values.begin(), values.end());
+        }
+    }
+    return core_to_args;
+}
+
+std::vector<uint32_t> merge_common_runtime_args(const KernelDescriptor& kernel_descriptor) {
+    const auto& named_args = kernel_descriptor.blaze_named_args;
+    std::vector<uint32_t> merged(
+        kernel_descriptor.common_runtime_args.begin(), kernel_descriptor.common_runtime_args.end());
+    for (const auto& arg : named_args.named_common_runtime_args) {
+        merged.push_back(arg.value);
+    }
+    for (const auto& arg : named_args.named_common_runtime_arg_arrays) {
+        merged.insert(merged.end(), arg.values.begin(), arg.values.end());
+    }
+    return merged;
+}
+
+}  // namespace
+
 void process_named_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_handle) {
     const auto& named_args = kernel_descriptor.blaze_named_args;
 
-    // Set per-core runtime args: positional values followed by named values.
-    // Build merged vectors per core, then set once.
+    // Set per-core runtime args: positional values followed by named values (see
+    // merge_per_core_runtime_args for the exact layout).
     if (!named_args.named_per_core_runtime_args.empty() || !named_args.named_per_core_runtime_arg_arrays.empty()) {
-        std::map<CoreCoord, std::vector<uint32_t>> core_to_args;
-        for (const auto& [core, positional] : kernel_descriptor.runtime_args) {
-            core_to_args[core] = positional;
-        }
-        for (const auto& arg : named_args.named_per_core_runtime_args) {
-            for (const auto& [core, value] : arg.core_values) {
-                core_to_args[core].push_back(value);
-            }
-        }
-        for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
-            for (const auto& [core, values] : arg.core_values) {
-                core_to_args[core].insert(core_to_args[core].end(), values.begin(), values.end());
-            }
-        }
-        for (const auto& [core, merged] : core_to_args) {
+        for (const auto& [core, merged] : merge_per_core_runtime_args(kernel_descriptor)) {
             SetRuntimeArgs(program, kernel_handle, core, merged);
         }
     } else {
@@ -60,18 +88,7 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
 
     // Set common runtime args: positional values followed by named scalars, then named arrays.
     if (!named_args.named_common_runtime_args.empty() || !named_args.named_common_runtime_arg_arrays.empty()) {
-        std::vector<uint32_t> merged_common_rt_args;
-        merged_common_rt_args.insert(
-            merged_common_rt_args.end(),
-            kernel_descriptor.common_runtime_args.begin(),
-            kernel_descriptor.common_runtime_args.end());
-        for (const auto& arg : named_args.named_common_runtime_args) {
-            merged_common_rt_args.push_back(arg.value);
-        }
-        for (const auto& arg : named_args.named_common_runtime_arg_arrays) {
-            merged_common_rt_args.insert(merged_common_rt_args.end(), arg.values.begin(), arg.values.end());
-        }
-        SetCommonRuntimeArgs(program, kernel_handle, merged_common_rt_args);
+        SetCommonRuntimeArgs(program, kernel_handle, merge_common_runtime_args(kernel_descriptor));
     } else {
         SetCommonRuntimeArgs(program, kernel_handle, kernel_descriptor.common_runtime_args);
     }
@@ -163,6 +180,33 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
             ct_ns_map[ns].emplace_back(field, value);
         }
         kernel->set_named_ct_arg_namespaces(ct_ns_map);
+    }
+}
+
+void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index) {
+    const auto& named_args = kernel_descriptor.blaze_named_args;
+
+    // Per-core runtime args: rewrite the full merged vector (positional + named values)
+    // over the slots process_named_args populated at construction.  In-place element
+    // writes via GetRuntimeArgs/GetCommonRuntimeArgs, re-fetched on every call so the
+    // post-first-enqueue retargeting of RuntimeArgsData is observed — the same
+    // constraint apply_descriptor_runtime_args works under for the positional args.
+    if (!named_args.named_per_core_runtime_args.empty() || !named_args.named_per_core_runtime_arg_arrays.empty()) {
+        for (const auto& [core, merged] : merge_per_core_runtime_args(kernel_descriptor)) {
+            auto& prog_args = GetRuntimeArgs(program, kernel_index, core);
+            for (uint32_t i = 0; i < static_cast<uint32_t>(merged.size()); ++i) {
+                prog_args[i] = merged[i];
+            }
+        }
+    }
+
+    // Common runtime args: same in-place update over the merged vector.
+    if (!named_args.named_common_runtime_args.empty() || !named_args.named_common_runtime_arg_arrays.empty()) {
+        const auto merged = merge_common_runtime_args(kernel_descriptor);
+        auto& common_args = GetCommonRuntimeArgs(program, kernel_index);
+        for (uint32_t i = 0; i < static_cast<uint32_t>(merged.size()); ++i) {
+            common_args[i] = merged[i];
+        }
     }
 }
 

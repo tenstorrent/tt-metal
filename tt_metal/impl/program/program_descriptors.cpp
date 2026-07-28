@@ -196,6 +196,20 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
                 common_args[i] = kernel.common_runtime_args[i];
             }
         }
+
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        // process_named_args merged the named VALUES into the program's runtime
+        // args at construction, but they live outside the descriptor-visible
+        // runtime_args/common_runtime_args copied above, and the descriptor
+        // hashers intentionally exclude them from the cache key.  Re-apply the
+        // current descriptor's named values or a same-schema/different-values
+        // cache hit silently executes with the first invocation's values.
+        if (!kernel.blaze_named_args.empty()) {
+            experimental::blaze::apply_named_runtime_args(program, kernel, k);
+        }
+        ////////////////////////////////////////////////////////////
     }
 
     auto program_cbs = program.circular_buffers();

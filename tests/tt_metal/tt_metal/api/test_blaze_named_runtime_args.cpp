@@ -433,3 +433,141 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
 
     EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel_bad_field}}), std::exception);
 }
+
+// ============================================================================
+// Descriptor program-cache HIT regression: named VALUES must not go stale.
+//
+// The descriptor hashers intentionally hash only the named-arg SCHEMA (see
+// test_blaze_named_args_hashing.cpp), so two invocations with the same schema
+// but different named values land on the SAME cached program.  On a hit the
+// framework re-applies runtime args via apply_descriptor_runtime_args()
+// (mesh_device_operation_adapter.hpp); before the fix that copied only the
+// positional KernelDescriptor::runtime_args/common_runtime_args, silently
+// keeping the first invocation's named scalars and arrays.
+//
+// Reproduced host-side (no device, plain TEST): Program{desc_v1} plays the
+// cache miss and apply_descriptor_runtime_args(program, desc_v2) plays the
+// hit; GetRuntimeArgs/GetCommonRuntimeArgs then expose exactly the values the
+// device would read on the second enqueue.
+// ============================================================================
+
+namespace {
+
+// One kernel on two cores with all four named-RT-arg variants plus positional
+// args.  The schema (names, array lengths, dispatch kinds, order) is fixed;
+// `base` shifts every runtime VALUE, so two invocations share a cache hash
+// but carry different data.
+KernelDescriptor blaze_cache_hit_kernel(const CoreCoord& core0, const CoreCoord& core1, uint32_t base) {
+    return KernelDescriptor{
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+        .core_ranges = CoreRangeSet(std::set<CoreRange>({CoreRange(core0, core1)})),
+        .runtime_args = {{core0, {base + 1}}, {core1, {base + 2}}},
+        .common_runtime_args = {base + 3},
+        .blaze_named_args =
+            {
+                .named_common_runtime_args = {{"my_kernel.marker", base + 4}},
+                .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core0, base + 5}, {core1, base + 6}}}},
+                .named_common_runtime_arg_arrays = {{"my_kernel.data", {base + 7, base + 8}}},
+                .named_per_core_runtime_arg_arrays =
+                    {{"my_kernel.weights", {{core0, {base + 9, base + 10}}, {core1, {base + 11, base + 12}}}}},
+            },
+        .config = DataMovementConfigDescriptor{},
+    };
+}
+
+// Asserts the merged layout for the descriptor built with `base`: positional
+// slots first, then named scalars, then named arrays.
+void blaze_expect_cache_hit_values(
+    const Program& program, const CoreCoord& core0, const CoreCoord& core1, uint32_t base) {
+    const auto& core0_args = GetRuntimeArgs(program, 0, core0);
+    const auto& core1_args = GetRuntimeArgs(program, 0, core1);
+    const auto& common_args = GetCommonRuntimeArgs(program, 0);
+    ASSERT_EQ(core0_args.size(), 4u);
+    ASSERT_EQ(core1_args.size(), 4u);
+    ASSERT_EQ(common_args.size(), 4u);
+
+    EXPECT_EQ(core0_args[0], base + 1) << "core0 positional per-core arg";
+    EXPECT_EQ(core0_args[1], base + 5) << "core0 named per-core scalar (after positional)";
+    EXPECT_EQ(core0_args[2], base + 9) << "core0 named per-core array[0]";
+    EXPECT_EQ(core0_args[3], base + 10) << "core0 named per-core array[1]";
+
+    EXPECT_EQ(core1_args[0], base + 2) << "core1 positional per-core arg";
+    EXPECT_EQ(core1_args[1], base + 6) << "core1 named per-core scalar (after positional)";
+    EXPECT_EQ(core1_args[2], base + 11) << "core1 named per-core array[0]";
+    EXPECT_EQ(core1_args[3], base + 12) << "core1 named per-core array[1]";
+
+    EXPECT_EQ(common_args[0], base + 3) << "positional common arg";
+    EXPECT_EQ(common_args[1], base + 4) << "named common scalar (after positional)";
+    EXPECT_EQ(common_args[2], base + 7) << "named common array[0]";
+    EXPECT_EQ(common_args[3], base + 8) << "named common array[1]";
+}
+
+}  // namespace
+
+TEST(NamedArgsDescriptorCacheHit, SameSchemaDifferentValuesShareProgramHash) {
+    // Premise of the staleness bug (and of the regression test below): the two
+    // invocations must land on the SAME cache entry.  Values are deliberately
+    // excluded from the schema hash; if that ever changes, this test fails first
+    // and the tests below lose their meaning.
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{1, 0};
+    ProgramDescriptor desc_v1{.kernels = {blaze_cache_hit_kernel(core0, core1, 0)}};
+    ProgramDescriptor desc_v2{.kernels = {blaze_cache_hit_kernel(core0, core1, 1000)}};
+    EXPECT_EQ(std::hash<ProgramDescriptor>{}(desc_v1), std::hash<ProgramDescriptor>{}(desc_v2))
+        << "Same named-arg schema with different values must share a program-cache hash";
+}
+
+TEST(NamedArgsDescriptorCacheHit, NamedValuesReappliedOnCacheHit) {
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{1, 0};
+    ProgramDescriptor desc_v1{.kernels = {blaze_cache_hit_kernel(core0, core1, 0)}};
+    ProgramDescriptor desc_v2{.kernels = {blaze_cache_hit_kernel(core0, core1, 1000)}};
+    ASSERT_EQ(std::hash<ProgramDescriptor>{}(desc_v1), std::hash<ProgramDescriptor>{}(desc_v2))
+        << "Test premise: both invocations target the same cache entry";
+
+    // "Cache miss": first invocation constructs the program; process_named_args
+    // merges the named values after the positional slots.
+    Program program{desc_v1};
+    blaze_expect_cache_hit_values(program, core0, core1, 0);
+
+    // "Cache hit": second invocation, same schema, new values — exactly the
+    // framework's slow cache-hit path.  The program must observe desc_v2's values.
+    apply_descriptor_runtime_args(program, desc_v2);
+    blaze_expect_cache_hit_values(program, core0, core1, 1000);
+}
+
+TEST(NamedArgsDescriptorCacheHit, NamedOnlyValuesReappliedOnCacheHit) {
+    // No positional args at all: before the fix, apply_descriptor_runtime_args had
+    // nothing to copy for this descriptor, so EVERY named value stayed frozen at the
+    // first invocation's.
+    const CoreCoord core{0, 0};
+    auto make_kernel = [&core](uint32_t prefix, uint32_t core_idx, uint32_t data0, uint32_t data1) {
+        return KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(std::set<CoreRange>({CoreRange(core)})),
+            .blaze_named_args =
+                {
+                    .named_common_runtime_args = {{"my_kernel.prefix", prefix}},
+                    .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, core_idx}}}},
+                    .named_common_runtime_arg_arrays = {{"my_kernel.data", {data0, data1}}},
+                },
+            .config = DataMovementConfigDescriptor{},
+        };
+    };
+    ProgramDescriptor desc_v1{.kernels = {make_kernel(10, 1, 100, 200)}};
+    ProgramDescriptor desc_v2{.kernels = {make_kernel(20, 2, 300, 400)}};
+    ASSERT_EQ(std::hash<ProgramDescriptor>{}(desc_v1), std::hash<ProgramDescriptor>{}(desc_v2))
+        << "Test premise: both invocations target the same cache entry";
+
+    Program program{desc_v1};
+    apply_descriptor_runtime_args(program, desc_v2);
+
+    const auto& per_core_args = GetRuntimeArgs(program, 0, core);
+    const auto& common_args = GetCommonRuntimeArgs(program, 0);
+    ASSERT_EQ(per_core_args.size(), 1u);
+    ASSERT_EQ(common_args.size(), 3u);
+    EXPECT_EQ(per_core_args[0], 2u) << "named per-core scalar must be desc_v2's value";
+    EXPECT_EQ(common_args[0], 20u) << "named common scalar must be desc_v2's value";
+    EXPECT_EQ(common_args[1], 300u) << "named common array[0] must be desc_v2's value";
+    EXPECT_EQ(common_args[2], 400u) << "named common array[1] must be desc_v2's value";
+}
