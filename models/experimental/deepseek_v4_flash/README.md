@@ -1,166 +1,198 @@
-# DeepSeek-V4-Flash Decode Demo
+# DeepSeek-V4-Flash
 
-Autoregressive decode demo for DeepSeek-V4-Flash on Tenstorrent hardware via TT-NN.
-It builds the full ttnn `DeepSeekV4Model`, “prefills” a chat prompt by replaying
-decode once per prompt token (seeding sliding K/V + compressor caches), then
-generates new tokens greedily (`S = 1`). All weights are loaded on device as
-`bfloat4_b`.
+Experimental TT-NN implementation of DeepSeek-V4-Flash for Tenstorrent Blackhole.
+There is no prefill op: a prompt is replayed one traced decode step per token, so
+follow-up turns only cost the tokens they add. KV caches are paged, so several
+independent conversations share one captured trace and one token budget.
 
-Entry point: [`tests/test_full_model_decode_demo.py`](tests/test_full_model_decode_demo.py).
+Three ways to run it:
 
-## Prerequisites
+| | Entry point |
+| --- | --- |
+| Single-shot demo test | `tests/test_full_model_decode_demo.py` |
+| Interactive chat REPL | `demo/chat_cli.py` |
+| OpenAI-compatible server | [tt-inference-server](https://github.com/tenstorrent/tt-inference-server) |
 
-- Cloned [tt-metal](https://github.com/tenstorrent/tt-metal) and a working
-  TT-Metalium / TT-NN install — see [`INSTALLING.md`](../../../INSTALLING.md)
-- Python venv activated:
-  ```bash
-  ./create_venv.sh
-  source python_env/bin/activate
-  ```
-- Tenstorrent device visible (`tt-smi`)
-- The demo opens the mesh with `FABRIC_2D` and `num_command_queues=2`
+## Setup
 
-## Download weights
-
-Download the checkpoint from Hugging Face:
-
-**https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-DSpark**
+Build tt-metal from the branch that carries this model
+(`smanoj/ds_v4_flash`), then activate its venv:
 
 ```bash
-# Example: Hugging Face CLI into the default cache layout the demo expects
+git clone git@github.com:tenstorrent/tt-metal.git && cd tt-metal
+git checkout smanoj/ds_v4_flash
+git submodule update --init --recursive
+./build_metal.sh
+./create_venv.sh
+source python_env/bin/activate
+export TT_METAL_HOME=$PWD
+export PYTHONPATH=$PWD
+```
+
+See [`INSTALLING.md`](../../../INSTALLING.md) for the full build instructions and
+dependencies. Check the device is visible with `tt-smi`.
+
+## Weights
+
+```bash
 hf download deepseek-ai/DeepSeek-V4-Flash-DSpark
 ```
 
-The demo looks for weights under:
+The default checkpoint path is the HF hub cache
+(`~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark`; the
+`snapshots/<hash>/` layout is resolved automatically). ~167 GB of fp8 weights,
+plus room for the converted tile cache — budget 300 GB.
 
-```text
-~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark
-```
+The first run converts every weight to `bfloat4_b` and can take over an hour.
+Point `DEEPSEEK_V4_CACHE_DIR` at a persistent directory so later runs reuse it.
 
-(HF cache `snapshots/<hash>/` layout is resolved automatically.) If the
-checkpoint is missing, the test is skipped.
+## Demo test
 
-## Environment variables
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `DEEPSEEK_V4_DECODE_LAYERS` | all layers (43) | Cap layer count. The full bf4 stack does not fit a single Blackhole 32 GB; start with a small `N` (e.g. `4`) for bringup. |
-| `DEEPSEEK_V4_CACHE_DIR` | `../cache` | Directory for converted ttnn weight tiles. Reuse across runs to avoid redoing the slow bf4 conversion. |
-| `DEEPSEEK_V4_MAX_NEW_TOKENS` | `1024` | Max tokens to generate after the prompt. |
-| `DEEPSEEK_V4_TRACED_DECODE` | `1` (on) | Set to `0` / `false` to use eager host-bound decode instead of captured ttnn traces. |
-| `DEEPSEEK_V4_POOL_EVERY_STEP` | `0` (off) | Re-pool the CSA/HCA compressors on *every* decode step instead of only on the steps that close a window. Slower, and only useful as an A/B reference — the two are bit-identical. See below. |
-| `DEEPSEEK_V4_SDPA_CAUSAL` | `1` (on) | Bound CSA/HCA attention with a causal `cur_pos` instead of an additive mask once the sliding ring is full. Set to `0` to force the mask everywhere. See below. |
-
-### Compressor pooling schedule
-
-A CSA/HCA compressor emits a new compressed entry once every `compress_rate`
-tokens (CSA 4, HCA 128), and the additive block-bias only ever exposes entries
-`w < (pos+1)//compress_rate` — a value that does not change between two window
-closures. The pool itself runs over the whole fixed `max_seq`-sized buffer, so
-its cost scales with `max_seq` rather than with the current position. Running it
-only on the steps that close a window is therefore bit-identical and
-`compress_rate` times cheaper. Measured on 4 layers, 2048 generated tokens:
-71.0 tok/s (`DEEPSEEK_V4_POOL_EVERY_STEP=1`) vs 84.0 tok/s, same token stream.
-
-A ttnn trace is a flat op sequence and cannot branch on the device-side
-position, so the traced path bakes the schedule into the capture: one trace
-variant per *window phase*, picked on host per step. Because the rates divide
-one another (4 | 128), an HCA closure always coincides with a CSA closure, so
-there are three phases — pool nothing / CSA / CSA+HCA — not four. Variants are
-deduplicated per submesh, so a submesh whose layers are all `sliding_attention`
-is still captured exactly once.
-
-**This costs trace memory**: a submesh hosting both a CSA and an HCA layer now
-holds three traces instead of one. If capture fails or hangs on the full
-43-layer stack, raise `trace_region_size` in the test's `device_params`, or set
-`DEEPSEEK_V4_POOL_EVERY_STEP=1` to collapse back to a single trace.
-
-### Causal SDPA instead of an additive mask
-
-A CSA/HCA layer's KV axis is `[sliding 0..127 | compressor 0..max_seq/cr)`, and
-the valid set at position `pos` is sliding slot `i <= pos` plus compressor window
-`j < (pos+1)//cr`. Once the ring is full (`pos + 1 >= sliding_window`) every
-sliding slot is valid, so the union is the contiguous prefix
-`[0, sliding_window + (pos+1)//cr)` — which a single SDPA-decode `cur_pos`
-describes exactly. That matters because an additive mask is *data*, not control
-flow: the kernel sets `cur_pos` to the end of the buffer in non-causal mode and
-walks every chunk regardless. In causal mode it derives its chunk range from the
-position and skips the rest, so attention cost tracks the actual position rather
-than `max_seq`. It also drops the per-step per-layer head-broadcast of the mask
-row. The kernel generates a partial mask for the final chunk, so this is exact
-even mid-chunk, not rounded to `k_chunk_size`.
-
-Note the `-1` in `sliding_window + (pos+1)//cr - 1`: `(pos+1)//cr` is the *count*
-of closed windows and `cur_pos` is inclusive. Using `sliding_window + pos//cr`
-instead agrees only at window boundaries and otherwise exposes the still-open
-window, which is a silent accuracy loss rather than an error.
-
-Below the sliding window the valid set has a hole (slots `pos+1 .. 127` are
-unwritten), which no single `cur_pos` can express, so those steps keep the mask.
-The op rejects an `attn_mask` in causal mode, so the two are exclusive branches
-and the traced path needs a variant per (SDPA mode, window phase) pair: five with
-the default rates (three causal phases plus the two phases reachable below the
-window — the HCA closure first lands at `pos == 127`, i.e. exactly at the switch,
-so `CSA+HCA` is causal-only). Same trace-memory caveat as above;
-`DEEPSEEK_V4_SDPA_CAUSAL=0` collapses it back to one family.
-
-Measured on the SDPA-decode op alone at the model's shapes (64 heads,
-`head_dim` 512, MQA, `k_chunk_size` 32) with the valid extent held at 136:
-
-| `Skv` | implied `max_seq` | masked | causal | speedup |
-| --- | --- | --- | --- | --- |
-| 640 | 2048 | 187 µs | 187 µs | 1.00x |
-| 2176 | 8192 | 216 µs | 197 µs | 1.10x |
-| 8320 | 32768 | 722 µs | 198 µs | 3.65x |
-
-Causal is flat in `Skv` (work follows the position); masked grows with the
-buffer. **End-to-end this is currently a wash**, and it is worth knowing why: at
-`max_seq` 8192 the per-op saving is only ~20 µs, and on a 4-layer stack (2 of
-which are compressor layers) that is well under 1% of a ~15 ms step. Measured
-69-76 tok/s in both modes at `max_seq` 8192, and 62-70 tok/s in both at 12288.
-Reaching the 3.65x regime needs `max_seq` ~32k, which is blocked by the
-compressor pooling path — see below. So treat the causal path as removing the
-`max_seq` sensitivity in attention, a prerequisite for long contexts, rather than
-as a speedup at today's runnable sizes.
-
-### What still limits `max_seq`
-
-`DeepSeekV4*Compressor._pool` recomputes *every* compressed window from the whole
-fixed cache capacity each time it fires, rather than pooling only the window that
-just closed. So its output is `max_seq // compress_rate` rows tall, and several
-per-row-scaled assumptions downstream break as `max_seq` grows:
-
-- `DeepSeekV4RMSNorm(sharded=True)` width-shards into L1 giving every core the
-  *full* height, so L1 use grows with the row count: ~2.8 MB against a 1.5 MB
-  budget by `max_seq` 32k. Now fixed — the shard is only applied while the tensor
-  is a single tile-row (the single-token decode activations it was written for);
-  taller tensors take the interleaved path, which is also measurably faster past
-  one tile-row (58 µs vs 88 µs at 512 rows).
-- `_apply_rope` shards one tile-row per core, so it caps at
-  `110 cores x 32 = 3520` rows — `fused_partial_rope` requires exactly one
-  tile-row per core, so this is an op-level contract, not a config choice. With
-  CSA's `compress_rate` 4 that puts the ceiling at `max_seq` ~14k
-  (`Target number of cores 257 is greater than total number of available cores
-  110`).
-
-The durable fix for all of these is incremental pooling: compute just the newly
-closed window, RoPE that single row, and write it at index `(pos+1)//cr - 1`.
-That is `O(1)` per closure instead of `O(max_seq)`, matches the HF reference's
-`torch.cat` semantics, and makes both row-count limits above disappear.
-
-## Run the demo
-
-From the tt-metal repo root, with the venv active:
-
-```
+```bash
 pytest -s models/experimental/deepseek_v4_flash/tests/test_full_model_decode_demo.py
 ```
 
-## Notes
+Builds the full ttnn `DeepSeekV4Model`, seeds the caches with a chat prompt, and
+greedily generates until EOS or the token cap. Throughput is logged every 10
+tokens. The test is skipped if the checkpoint is missing.
 
-- The first run converts every expert weight to `bfloat4_b` and can take a long
-  time; set `DEEPSEEK_V4_CACHE_DIR` so later runs reuse the tile cache.
-- Decode throughput is logged every 10 generated tokens (and once at the end).
-- Generation stops on EOS or when the precomputed RoPE span is exhausted.
-- Status: experimental bringup path — layer-capped runs are the supported way
-  to exercise the demo on limited DRAM.
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DEEPSEEK_V4_DECODE_LAYERS` | all (43) | Cap the layer count. The full bf4 stack does not fit one 32 GB Blackhole; start at `4` for bringup. |
+| `DEEPSEEK_V4_CACHE_DIR` | `../cache` | Converted ttnn weight tiles. Reuse across runs. |
+| `DEEPSEEK_V4_MAX_NEW_TOKENS` | `1024` | Generation cap. |
+| `DEEPSEEK_V4_TRACED_DECODE` | `1` | `0` for eager host-bound decode instead of captured traces. |
+| `DEEPSEEK_V4_POOL_EVERY_STEP` | `0` | Re-pool the CSA/HCA compressors every step instead of only on window closures. Bit-identical, slower, but collapses the traced path to one trace variant — use it if trace capture runs out of memory. |
+| `DEEPSEEK_V4_SDPA_CAUSAL` | `1` | Bound compressor attention with a causal `cur_pos` rather than an additive mask once the sliding ring is full. `0` forces the mask everywhere. |
+
+## Chat CLI
+
+An interactive multi-user REPL on the same decode engine
+([`demo/chat_cli.py`](demo/chat_cli.py)). The model, RoPE tables and traced
+buffers are built once; each turn feeds only the new tokens.
+
+```bash
+DEEPSEEK_V4_DECODE_LAYERS=4 DEEPSEEK_V4_CACHE_DIR=/path/to/cache \
+python models/experimental/deepseek_v4_flash/demo/chat_cli.py \
+    --num-users 4 --max-context 2048 --think \
+    --system-prompt "You are a terse assistant."
+```
+
+Startup runs one throwaway decode step so the kernel compile and trace capture
+(minutes of it) happen before the first prompt, and the reported per-turn
+timings stay honest.
+
+Each user is an independent conversation with its own messages, position, system
+prompt and thinking mode, backed by its own pages out of a shared block pool.
+Switching users rewrites a page table rather than the cache, so one trace serves
+everyone and the users share one `--total-context` token budget.
+
+```
+you[0]> what is the capital of France?
+bot> Paris.
+you[0]> /user 1
+[switched to user 1]
+you[1]> write me a haiku about cache coherence
+```
+
+Commands: `/user N`, `/users`, `/reset [N|all]`, `/system TEXT`,
+`/think [on|off]`, `/context`, `/help`, `/exit`.
+
+Key flags (`--help` for all): `--num-layers`, `--num-users`, `--max-context`
+(per user), `--total-context` (shared pool), `--max-new-tokens`, `--think`
+(streams a `<think>` reasoning block inline), `--no-trace` (eager, single user
+only), `--cache-dir`, `--model-dir`.
+
+## Inference server
+
+DeepSeek-V4-Flash is served through
+[tt-inference-server](https://github.com/tenstorrent/tt-inference-server) as an
+OpenAI-compatible endpoint. It is currently a **dev** model spec, so every
+command needs `--dev-mode`.
+
+### Branches
+
+| Repo | Branch |
+| --- | --- |
+| tt-metal | `smanoj/ds_v4_flash` (must contain `models/experimental/deepseek_v4_flash`) |
+| tt-inference-server | `smanoj/ds_v4_flash` |
+
+No tt-metal or vLLM commit is pinned in the dev spec — the server runs against
+whatever tt-metal tree you point it at.
+
+```bash
+git clone git@github.com:tenstorrent/tt-inference-server.git
+cd tt-inference-server
+git checkout smanoj/ds_v4_flash
+```
+
+The tt-metal venv also needs vLLM and the `vllm-tt-plugin` installed:
+
+```bash
+cd $TT_METAL_HOME/vllm && bash tt_metal/install-vllm-tt.sh
+```
+
+### Run
+
+```bash
+export HF_TOKEN=hf_...
+export TT_METAL_HOME=/path/to/tt-metal
+
+python3 run.py \
+  --dev-mode \
+  --model DeepSeek-V4-Flash-DSpark \
+  --workflow server \
+  --tt-device p150x8 \
+  --local-server \
+  --tt-metal-home $TT_METAL_HOME \
+  --no-auth
+```
+
+Use `--tt-device blackhole_galaxy` for a BH Galaxy. For a Docker run swap
+`--local-server` for `--docker-server --override-docker-image <image>`; the dev
+spec pins no image, so it must be one you built against the same tt-metal
+commit (`python3 scripts/build_docker_images.py --build-metal-commit <sha>`).
+
+### Tensor cache path
+
+The server sets the model's two cache env vars at startup, but only if they are
+not already set, so an explicit export wins:
+
+| Variable | Meaning |
+| --- | --- |
+| `DEEPSEEK_V4_HF_MODEL` | Checkpoint directory. Defaults to the weights symlink under `CACHE_ROOT`. |
+| `DEEPSEEK_V4_CACHE_DIR` | Converted `bfloat4_b` tile cache. Defaults to `TT_CACHE_PATH`. |
+
+By default `TT_CACHE_PATH` resolves to
+`$CACHE_ROOT/tt_metal_cache/cache_DeepSeek-V4-Flash-DSpark/<mesh_device>/`
+(e.g. `P150x8`). Set `CACHE_ROOT`, or pass `--host-volume /mnt/tt-cache`, to put
+it on a disk with room; pass `--host-hf-cache ~/.cache/huggingface` to reuse
+weights you already downloaded.
+
+To share the tile cache with the demo/CLI runs above, export it explicitly
+before launching:
+
+```bash
+export DEEPSEEK_V4_CACHE_DIR=/mnt/tt-cache/deepseek_v4_flash
+export DEEPSEEK_V4_HF_MODEL=/path/to/DeepSeek-V4-Flash-DSpark/snapshot
+```
+
+The spec allows 7200 s for the first-run conversion before timing out.
+
+### Query it
+
+The server listens on port 8000 (`--service-port` / `SERVICE_PORT`) and the
+model name is the HF repo id:
+
+```bash
+curl -s --no-buffer -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-ai/DeepSeek-V4-Flash-DSpark",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 256
+  }'
+```
+
+Without `--no-auth` the request needs an `Authorization: Bearer <jwt>` header
+signed with `JWT_SECRET`.
