@@ -200,6 +200,7 @@ class TtMoe(LightweightModule):
         """
         super().__init__()
         self.mesh_device = mesh_device
+        self.layer_idx = layer_idx  # for routing_capture (env-gated diagnostics)
         # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
         # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
         self.tt_ccl = get_tt_ccl(mesh_device)
@@ -505,6 +506,18 @@ class TtMoe(LightweightModule):
             num_experts_per_tok=self.num_experts_per_tok,
         )
 
+        # Env-gated (TT_DS_CAPTURE_ROUTING=1) routing capture; no-op otherwise.
+        from models.demos.deepseek_v3_d_p.utils import routing_capture
+
+        if routing_capture.enabled():
+            routing_capture.capture(
+                tt_expert_token_counts,
+                indices,
+                self.layer_idx,
+                self.mesh_device,
+                self.num_routed_experts,
+                self.num_dispatch_groups,
+            )
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates

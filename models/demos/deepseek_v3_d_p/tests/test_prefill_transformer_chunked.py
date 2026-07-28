@@ -450,9 +450,12 @@ def run_chunked_transformer_padded(
     mesh_device.enable_program_cache()
     layer_min_pcc = {i: 1.0 for i in range(num_layers)}
 
+    from models.demos.deepseek_v3_d_p.utils import routing_capture
+
     profiler.start("tt_forward")
     ka = 0
     for c, isl in enumerate(splits):
+        routing_capture.set_chunk(c)  # env-gated (TT_DS_CAPTURE_ROUTING=1); no-op otherwise
         kv_actual = ka
         valid_end = kv_actual + isl
         ka += isl
@@ -506,6 +509,12 @@ def run_chunked_transformer_padded(
                 logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD} (not asserted)")
         logger.info(f"  chunk {c} done (kv_actual={kv_actual} isl={isl}, {num_layers} layers)")
     profiler.end("tt_forward")
+
+    # Env-gated (TT_DS_CAPTURE_ROUTING=1) routing dump + safetensors write; no-op otherwise.
+    routing_capture.dump_top(4)
+    routing_capture.save_safetensors(
+        os.getenv("TT_DS_CAPTURE_ROUTING_OUT", "/home/nostojic/captured_expert_routing.safetensors")
+    )
 
     logger.info("Per-layer min PCC across chunks:")
     for i in range(num_layers):
