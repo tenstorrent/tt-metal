@@ -424,7 +424,7 @@ class UpfrontTracedDenoiseController:
         adapter.use_canvas_rope = True
         self.reveal_pmax = _prepare_fixed_reveal(adapter, canvas_len=canvas_len)
 
-    def _warm_persistent_outputs(self, adapter, init_canvas, sharded_terminal) -> None:
+    def _warm_persistent_outputs(self, adapter, init_canvas) -> None:
         cfg = self.config
         canvas_len = cfg.canvas_length
         adapter.reset_signal_buffer()
@@ -442,7 +442,6 @@ class UpfrontTracedDenoiseController:
             gumbel_noise=self.gumbel_buf,
             noise_tokens=self.noise_buf,
             constants=self.consts,
-            sharded_terminal=sharded_terminal,
         )
         _deallocate_logits_if_unowned(adapter, logits)
 
@@ -513,8 +512,7 @@ class UpfrontTracedDenoiseController:
                 canvas_len=cfg.canvas_length,
                 budget=cfg.entropy_budget,
             )
-        sharded_terminal = adapter.sharded_terminal_context()
-        self._warm_persistent_outputs(adapter, init_canvas, sharded_terminal)
+        self._warm_persistent_outputs(adapter, init_canvas)
 
         adapter.reset_signal_buffer()
         self.traces = []
@@ -540,7 +538,6 @@ class UpfrontTracedDenoiseController:
                         halt_bufs=self.halt_bufs,
                         canvas_len=cfg.canvas_length,
                         constants=self.consts,
-                        sharded_terminal=sharded_terminal,
                     )
                     _deallocate_logits_if_unowned(adapter, logits)
                     ttnn.copy(next_canvas, self.canvas_buf)

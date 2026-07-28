@@ -884,22 +884,13 @@ class Gemma4Model:
 
         return self._apply_lm_head(hidden_states, is_decode=is_decode)
 
-    def _apply_lm_head(self, hidden_states, is_decode=False, return_sharded=False):
+    def _apply_lm_head(self, hidden_states, is_decode=False):
         """Project post-norm hidden states to vocab logits, softcap, all-gather.
 
         Factored out of ``__call__`` so traced prefill can defer it (the trace
         returns post-norm hidden states and this runs on a 32-row last-token
         slice outside the trace; see ``process_logits_after_prefill_trace``).
 
-        - ``return_sharded`` (default ``False``): when set, the per-device vocab
-          shard ``[1,1,M,vocab/TP]`` is returned WITHOUT the final all-gather, so a
-          caller that consumes TP-sharded logits (the DiffusionGemma sharded denoise
-          terminal, ``DG_TERMINAL_SHARDED``) skips the ~128 MiB/step full-vocab
-          gather. The softcap already ran on the shard (element-wise, pre-gather),
-          and all-gather is pure replication with no arithmetic, so the shard is
-          bit-identical to the corresponding columns of the gathered tensor. Default
-          ``False`` keeps every existing caller (causal prefill, spec-decode)
-          byte-identical.
         - lm_head is column-parallel on the vocab dim when TP > 1.
         - Decode + prefill last-token both feed an M=32-row tile here (decode
           batch <=32 pads to a tile; prefill is sliced to 32 above), so the
@@ -943,7 +934,7 @@ class Gemma4Model:
             signpost(header=LM_HEAD_SIGNPOST)
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
-            if return_sharded or (self.sampling is not None and is_decode):
+            if self.sampling is not None and is_decode:
                 pass  # Caller consumes the TP-sharded [1,1,M,vocab/TP] logits directly
             else:
                 from models.demos.gemma4.tt.ccl import ccl_allgather

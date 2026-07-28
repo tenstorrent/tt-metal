@@ -11,7 +11,6 @@ tests and the real W2 denoise logits path.
 
 from __future__ import annotations
 
-import os
 from typing import Callable, List, NamedTuple, Optional
 
 import torch
@@ -25,97 +24,20 @@ TtLogitsFn = Callable[[ttnn.Tensor, int], ttnn.Tensor]
 TtNoiseFn = Callable[[int], ttnn.Tensor]
 
 
-class ShardedTerminalContext(NamedTuple):
-    """Preallocated TP-sharded-terminal constants threaded into :func:`denoise_step`.
-
-    Carries the per-device vocab index ``offsets`` plus the ``mesh_config`` / ``ccl_manager``
-    handles the sharded reductions (``denoise_terminal_reductions_sharded``) need. Built ONCE,
-    OUTSIDE trace capture, by :meth:`DenoiseLogitsAdapter.prepare_sharded_terminal` and surfaced
-    via :meth:`DenoiseLogitsAdapter.sharded_terminal_context`. ``None`` selects the replicated
-    full-vocab terminal (``DG_TERMINAL_SHARDED`` off) and keeps :func:`denoise_step` and the
-    trace controllers byte-identical.
-    """
-
-    offsets: ttnn.Tensor
-    mesh_config: object
-    ccl_manager: object
-
-
-def _sharded_terminal_context(logits_fn) -> "Optional[ShardedTerminalContext]":
-    """Return the ``logits_fn`` adapter's :class:`ShardedTerminalContext`, or ``None``.
-
-    Mirrors the ``owns_logits`` / ``reset`` duck-typing already used for ``logits_fn``: a plain
-    (non-adapter) callback has no ``sharded_terminal_context`` method, so the replicated terminal
-    is selected. The adapter itself only returns a context when it is emitting a vocab SHARD
-    (trace-safe self-cond + ``DG_TERMINAL_SHARDED`` on), keeping the reductions' input in lockstep
-    with ``denoise_step``'s routing.
-    """
-    getter = getattr(logits_fn, "sharded_terminal_context", None)
-    if callable(getter):
-        return getter()
-    return None
-
-
-def dedup_argmax_enabled() -> bool:
-    """Whether the opt-in argmax-sampling terminal dedup is on (``DG_DEDUP_ARGMAX``).
-
-    Off by default so the released terminal path is byte-for-byte unchanged. When
-    on, :func:`denoise_step` collapses the two redundant full-vocab argmax
-    reductions into one in the argmax-sampling (``gumbel_noise is None``) regime —
-    the opt-in greedy RUN-first mode (``"argmax"``; the serving default is now the
-    stochastic ``"chunked"`` Gumbel-max = the model's reference sampler, so this
-    dedup only fires when argmax is explicitly selected). See
-    :func:`_sample_and_argmax` for the bit-exactness argument and
-    ``doc/optimize_perf/verify_terminal_dedup.py`` for the device gate.
-    """
-    return os.environ.get("DG_DEDUP_ARGMAX", "0").lower() in ("1", "true", "yes", "on")
-
-
-def _sample_and_argmax(logits, temperature: float, gumbel_noise, *, dedup_argmax: bool):
+def _sample_and_argmax(logits, temperature: float, gumbel_noise):
     """Return ``(sampled, argmax)`` uint32 token-index tensors for one denoise step.
 
-    Default path (unchanged): an independent Gumbel-max draw and a clean argmax,
-    each a full-vocab (262144) reduction — two ~14 ms ROW_MAJOR argmaxes/step. In
-    the argmax regime the two reductions are over *different* tensors: ``sampled =
-    argmax_last_dim(logits / T)`` (``gumbel_max`` scales first) and ``argmax =
-    argmax_last_dim(logits)`` (raw).
+    An independent Gumbel-max draw and a clean argmax, each a full-vocab (262144) reduction. The
+    two returned tensors are distinct objects (independent ownership: callers deallocate
+    ``sampled`` while keeping ``argmax`` as the commit candidate), so the free/readback contract is
+    preserved with no aliasing.
 
-    Dedup fast path — taken only when ``dedup_argmax`` **and** ``gumbel_noise is
-    None`` **and** ``temperature > 0``. It computes the raw-logit argmax ONCE and
-    clones the tiny ``[B, 1, L, 1]`` index for ``sampled``, dropping the second
-    262144-wide reduction **and** the ``logits / T`` multiply.
-
-    Correctness:
-
-    * ``argmax`` (the committed clean-argmax token), ``entropy``, and the
-      entropy-budget ``accept`` mask are **bit-identical** to the default path by
-      construction — the dedup does not touch ``argmax_last_dim(logits)`` or
-      ``token_entropy``, and ``accept`` is a pure function of ``entropy``.
-    * In exact arithmetic ``argmax(logits / T) == argmax(logits)`` for any ``T > 0``
-      (positive scaling is order-preserving), so ``sampled`` is the same token.
-      On device the logits are **bf16**, so the default path's ``logits / T``
-      multiply can, at a position whose top-2 logits are adjacent bf16 values,
-      round them equal and flip that position's ``sampled`` index to the tie's
-      first index. The dedup takes ``sampled = argmax(logits)`` (the un-rescaled
-      ranking), so it differs from the default ``sampled`` **only at exactly those
-      temperature-rescale rounding ties** — positions where the default path's own
-      two argmaxes already disagree (``sampled != argmax``). There the dedup makes
-      ``sampled`` equal the committed ``argmax`` (more self-consistent, and within
-      the model's existing bf16 error). At ``T == 1.0`` the multiply is a no-op, so
-      the dedup is fully bit-identical.
-
-    The two returned tensors are distinct objects (independent ownership: callers
-    deallocate ``sampled`` while keeping ``argmax`` as the commit candidate), so
-    the free/readback contract is preserved with no aliasing.
+    A ``DG_DEDUP_ARGMAX`` fast path used to collapse these into one reduction in the
+    ``gumbel_noise is None`` regime. It was deleted 2026-07-28: it is structurally unreachable
+    under the shipped ``DG_UPFRONT_CAPTURE=1`` (the up-front controller rejects a ``None`` Gumbel
+    source in three places), it was not bit-identical by its own docstring, and it measured +0.5%
+    with an identical committed sha.
     """
-    if dedup_argmax and gumbel_noise is None and temperature > 0:
-        argmax = TS.argmax_last_dim(logits)
-        argmax = ttnn.typecast(argmax, ttnn.uint32)
-        # Clone the [B,1,L,1] index (not a second 262144-wide argmax). Preserve the
-        # ROW_MAJOR uint32 layout `gumbel_max`→`argmax_last_dim` would have emitted
-        # so `renoise`'s downstream multiply/add sees the same tensor shape/layout.
-        sampled = ttnn.clone(argmax, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return sampled, argmax
     sampled = TS.gumbel_max(logits, temperature, gumbel_noise)
     sampled = ttnn.typecast(sampled, ttnn.uint32)
     argmax = TS.argmax_last_dim(logits)
@@ -242,8 +164,6 @@ def denoise_step(
     gumbel_noise,
     noise_tokens,
     constants: "Optional[DenoiseConstants]" = None,
-    dedup_argmax: "Optional[bool]" = None,
-    sharded_terminal: "Optional[ShardedTerminalContext]" = None,
 ):
     """Run one device denoise decision step with injected noise.
 
@@ -257,39 +177,12 @@ def denoise_step(
     capture (no per-step ``ttnn.full``/``zeros_like`` host writes); ``None`` keeps
     the eager per-call allocation.
 
-    ``dedup_argmax`` opts into the argmax-sampling terminal dedup (one full-vocab
-    argmax instead of two); ``None`` consults ``DG_DEDUP_ARGMAX``. It is a no-op
-    unless ``gumbel_noise is None`` (argmax sampling); there the committed
-    ``argmax``, ``entropy``, and ``accept`` mask stay bit-identical and only
-    ``sampled``/``canvas`` can move, at bf16 temperature-rescale ties — see
-    :func:`_sample_and_argmax`.
-
-    ``sharded_terminal`` (``DG_TERMINAL_SHARDED``) routes the argmax/gumbel/entropy vocab
-    reductions through the TP-sharded ops (``denoise_terminal_reductions_sharded``) so ``logits``
-    is the per-device vocab SHARD ``[1,1,C,vocab/TP]`` and nothing all-gathers the full 262144
-    vocab. ``None`` (default) keeps the replicated full-vocab reductions byte-identical. The
-    accept-mask / renoise / commit downstream are vocab-agnostic and identical either way.
     """
-    if dedup_argmax is None:
-        dedup_argmax = dedup_argmax_enabled()
     budget_t = constants.budget_t if constants is not None else None
     accept_zeros = constants.accept_zeros if constants is not None else None
     renoise_ones = constants.renoise_ones if constants is not None else None
-    if sharded_terminal is not None:
-        from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_terminal_reductions_sharded
-
-        sampled, argmax, entropy = denoise_terminal_reductions_sharded(
-            logits,
-            temperature=temperature,
-            offsets=sharded_terminal.offsets,
-            mesh_config=sharded_terminal.mesh_config,
-            ccl_manager=sharded_terminal.ccl_manager,
-            gumbel_noise_shard=gumbel_noise,
-            dedup_argmax=dedup_argmax,
-        )
-    else:
-        sampled, argmax = _sample_and_argmax(logits, temperature, gumbel_noise, dedup_argmax=dedup_argmax)
-        entropy = TS.token_entropy(logits, temperature=temperature)
+    sampled, argmax = _sample_and_argmax(logits, temperature, gumbel_noise)
+    entropy = TS.token_entropy(logits, temperature=temperature)
     entropy_for_accept = ttnn.reshape(entropy, (entropy.shape[0] * entropy.shape[1], entropy.shape[2]))
     accept_flat = entropy_budget_accept(entropy_for_accept, entropy_budget, budget_t=budget_t, zeros=accept_zeros)
     accept_mask = ttnn.reshape(accept_flat, (entropy.shape[0], entropy.shape[1], 1, entropy.shape[2]))
@@ -315,8 +208,6 @@ def denoise_step_next_canvas(
     gumbel_noise,
     noise_tokens,
     constants: "Optional[DenoiseConstants]" = None,
-    dedup_argmax: "Optional[bool]" = None,
-    sharded_terminal: "Optional[ShardedTerminalContext]" = None,
 ):
     """One device denoise step returning only the device-resident feedback tensors.
 
@@ -326,8 +217,6 @@ def denoise_step_next_canvas(
     consumed by the next step and ``argmax`` is the clean-argmax commit candidate.
     The intermediate decision tensors (accept mask / entropy / sampled) are freed.
 
-    ``sharded_terminal`` forwards to :func:`denoise_step` (``DG_TERMINAL_SHARDED``); ``None``
-    keeps the replicated full-vocab terminal.
     """
     res = denoise_step(
         logits,
@@ -336,8 +225,6 @@ def denoise_step_next_canvas(
         gumbel_noise=gumbel_noise,
         noise_tokens=noise_tokens,
         constants=constants,
-        dedup_argmax=dedup_argmax,
-        sharded_terminal=sharded_terminal,
     )
     res.accept_mask.deallocate(True)
     res.entropy.deallocate(True)
@@ -451,8 +338,6 @@ def denoise_step_next_canvas_and_halt(
     halt_bufs: "HaltBuffers",
     canvas_len: int,
     constants: "Optional[DenoiseConstants]" = None,
-    dedup_argmax: "Optional[bool]" = None,
-    sharded_terminal: "Optional[ShardedTerminalContext]" = None,
 ):
     """:func:`denoise_step_next_canvas` + write the on-device halt scalars for this step.
 
@@ -461,8 +346,6 @@ def denoise_step_next_canvas_and_halt(
     side computation over ``argmax`` / ``entropy`` and never touch the canvas). The entropy
     (freed by :func:`denoise_step_next_canvas`) is consumed here for the mean-entropy scalar.
 
-    ``sharded_terminal`` forwards to :func:`denoise_step` (``DG_TERMINAL_SHARDED``); ``None``
-    keeps the replicated full-vocab terminal.
     """
     res = denoise_step(
         logits,
@@ -471,8 +354,6 @@ def denoise_step_next_canvas_and_halt(
         gumbel_noise=gumbel_noise,
         noise_tokens=noise_tokens,
         constants=constants,
-        dedup_argmax=dedup_argmax,
-        sharded_terminal=sharded_terminal,
     )
     write_halt_scalars(res.argmax, res.entropy, halt_bufs, canvas_len=canvas_len)
     res.accept_mask.deallocate(True)
@@ -508,110 +389,6 @@ def eval_halt(mean_entropy: float, mismatch: float, step: int, *, threshold: flo
     if step < n_stable:
         return False
     return bool(mismatch == 0.0 and mean_entropy < threshold)
-
-
-def run_fixed_denoise_steps(
-    logits_fn: TtLogitsFn,
-    init_canvas: ttnn.Tensor,
-    config: DiffusionConfig,
-    *,
-    gumbel_noise_fn: Optional[TtNoiseFn] = None,
-    noise_tokens_fn: Optional[TtNoiseFn] = None,
-    constants: "Optional[DenoiseConstants]" = None,
-    dedup_argmax: "Optional[bool]" = None,
-):
-    """Fixed-count, device-only denoise loop for trace-safe capture.
-
-    Chosen static/fixed-count scheme for the optimized loop: always run exactly
-    ``config.max_denoise_steps`` (≤48) steps and feed the accepted canvas from step
-    N straight into step N+1 **on device** — no host readback of the argmax/entropy/
-    cutoff, no ``torch.equal`` halt, no Python early-return. Early-halt is a
-    data-dependent decision that cannot shorten a static trace, so the trace-safe
-    shape runs the full step budget; the entropy-budget accept mask and the sorted
-    scatter indices stay device-resident tensors (see :func:`entropy_budget_accept`).
-    ``commit = clean argmax`` of the final step; because the argmax is stable after
-    convergence, running the remaining fixed steps does not change the commit.
-
-    Returns the device-resident committed argmax ``[B,1,L,1]``. ``init_canvas`` is
-    consumed. Intended to be called inside ``begin_trace_capture``/``end_trace_capture``
-    with a warmed program cache and device-resident per-step noise tensors.
-    """
-    canvas = init_canvas
-    committed: Optional[ttnn.Tensor] = None
-    # DG_TERMINAL_SHARDED: derived once from the adapter (None => replicated terminal). Constant
-    # across steps (persistent offsets/mesh/ccl); only present when logits_fn emits a vocab shard.
-    sharded_terminal = _sharded_terminal_context(logits_fn)
-    for step in range(config.max_denoise_steps):
-        temperature = temperature_at_step(
-            step, config.max_denoise_steps, config.temperature_start, config.temperature_end
-        )
-        gumbel_noise = gumbel_noise_fn(step) if gumbel_noise_fn else None
-        noise_tokens = noise_tokens_fn(step) if noise_tokens_fn else None
-        logits = logits_fn(canvas, step)
-        next_canvas, argmax = denoise_step_next_canvas(
-            logits,
-            temperature=temperature,
-            entropy_budget=config.entropy_budget,
-            gumbel_noise=gumbel_noise,
-            noise_tokens=noise_tokens,
-            constants=constants,
-            dedup_argmax=dedup_argmax,
-            sharded_terminal=sharded_terminal,
-        )
-        if gumbel_noise is not None and hasattr(gumbel_noise, "deallocate"):
-            gumbel_noise.deallocate(True)
-        if noise_tokens is not None and hasattr(noise_tokens, "deallocate"):
-            noise_tokens.deallocate(True)
-        _deallocate_logits_if_unowned(logits_fn, logits)
-        if committed is not None:
-            committed.deallocate(True)
-        committed = argmax
-        if canvas is not next_canvas:
-            canvas.deallocate(True)
-        canvas = next_canvas
-    if config.max_denoise_steps > 0 and canvas is not committed:
-        canvas.deallocate(True)
-    _reset_logits_fn(logits_fn)
-    return committed
-
-
-def device_loop_denoise_block(
-    logits_fn: TtLogitsFn,
-    init_canvas: ttnn.Tensor,
-    config: DiffusionConfig,
-    *,
-    gumbel_noise_fn: Optional[TtNoiseFn] = None,
-    noise_tokens_fn: Optional[TtNoiseFn] = None,
-    constants: "Optional[DenoiseConstants]" = None,
-) -> DenoiseTrajectory:
-    """``denoise_block``-compatible wrapper over the device-only fixed-step loop.
-
-    Same signature / return type as :func:`denoise_block`, but runs
-    :func:`run_fixed_denoise_steps` — the device-resident loop with **no per-step
-    host readback** and **no data-dependent early-halt** — then reads back only the
-    final committed argmax once. Removes the 5 host readbacks/step (argmax, entropy,
-    sampled, accept, canvas) + the ``torch.equal`` halt check that the eager
-    ``denoise_block`` pays every step (~179 ms/step of the 30L serving step).
-
-    Behaviourally identical to ``denoise_block`` **whenever early-halt does not fire**
-    (both commit the final step's clean argmax after the full budget). Early-halt is
-    currently a no-op on RUN-first output (mean entropy never clears the 0.005
-    threshold under #48291), so the committed tokens are bit-identical — verified by
-    comparing committed tokens with the eager path. Returns empty per-step records
-    (``num_steps = max`` steps, ``halted = False``); callers that need the trajectory
-    records must use the eager :func:`denoise_block`.
-    """
-    committed_dev = run_fixed_denoise_steps(
-        logits_fn,
-        init_canvas,
-        config,
-        gumbel_noise_fn=gumbel_noise_fn,
-        noise_tokens_fn=noise_tokens_fn,
-        constants=constants,
-    )
-    committed_host = _ids_to_torch(committed_dev)
-    committed_dev.deallocate(True)
-    return DenoiseTrajectory(committed_host, config.max_denoise_steps, False, [])
 
 
 def _to_host_torch(tensor: ttnn.Tensor) -> torch.Tensor:
@@ -665,7 +442,6 @@ def denoise_block(
     *,
     gumbel_noise_fn: Optional[TtNoiseFn] = None,
     noise_tokens_fn: Optional[TtNoiseFn] = None,
-    dedup_argmax: "Optional[bool]" = None,
 ) -> DenoiseTrajectory:
     """Run a device denoise trajectory and return host decision records.
 
@@ -682,8 +458,6 @@ def denoise_block(
     committed: Optional[torch.Tensor] = None
     argmax_history: List[torch.Tensor] = []
     n_stable = config.stable_steps_to_halt
-    # DG_TERMINAL_SHARDED: derived once from the adapter (None => replicated terminal).
-    sharded_terminal = _sharded_terminal_context(logits_fn)
 
     for step in range(config.max_denoise_steps):
         temperature = temperature_at_step(
@@ -698,8 +472,6 @@ def denoise_block(
             entropy_budget=config.entropy_budget,
             gumbel_noise=gumbel_noise,
             noise_tokens=noise_tokens,
-            dedup_argmax=dedup_argmax,
-            sharded_terminal=sharded_terminal,
         )
         if gumbel_noise is not None and hasattr(gumbel_noise, "deallocate"):
             gumbel_noise.deallocate(True)

@@ -30,7 +30,6 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_generation_logits_fn_builder_from_checkpoint_state,
 )
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as tt_denoise_block
-from models.experimental.diffusion_gemma.tt.denoise_loop import device_loop_denoise_block
 from models.experimental.diffusion_gemma.tt import sampling as TS
 
 
@@ -913,18 +912,6 @@ def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> C
     return select_commit_fn()
 
 
-def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
-    """Pick eager denoise, or the optional non-Metal device-only loop."""
-    if os.environ.get("DG_DENOISE_DEVICE_LOOP", "0").lower() in ("1", "true", "yes", "on"):
-        return device_loop_denoise_block
-    return tt_denoise_block
-
-
-def select_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
-    """Public eager/device-loop selector; Metal tracing is not dispatched here."""
-    return _resolve_default_denoise_block_fn()
-
-
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -957,7 +944,7 @@ def denoise_and_commit_block(
     if commit_fn is None:
         commit_fn = _resolve_default_commit_fn(page_table, page_tables_per_layer)
     if denoise_block_fn is None:
-        denoise_block_fn = _resolve_default_denoise_block_fn()
+        denoise_block_fn = tt_denoise_block
     _set_q_rope_offset(logits_fn, start_pos)
     benign_ids = None if stop_token_ids is None else _normalize_eos_token_ids(stop_token_ids, kind="stop_token_ids")
     policy = degeneracy.resolve_policy()

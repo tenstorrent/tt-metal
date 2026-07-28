@@ -54,9 +54,7 @@ class _RecordingDenoiseAttention:
 
 
 def test_denoise_adapter_reset_releases_all_trace_persistent_buffers():
-    tensors = {
-        name: _FakeTensor((name,)) for name in ("prev", "signal-a", "signal-b", "cos", "sin", "offsets", "embed")
-    }
+    tensors = {name: _FakeTensor((name,)) for name in ("prev", "signal-a", "signal-b", "cos", "sin")}
     adapter = object.__new__(DenoiseLogitsAdapter)
     adapter.prev_logits = tensors["prev"]
     adapter.signal_buf = tensors["signal-a"]
@@ -65,9 +63,6 @@ def test_denoise_adapter_reset_releases_all_trace_persistent_buffers():
     adapter.signal_ping_pong = True
     adapter._canvas_rope_bufs = {"sliding_attention": (tensors["cos"], tensors["sin"])}
     adapter.use_canvas_rope = True
-    adapter._vocab_offsets = tensors["offsets"]
-    adapter._embedding_weight_sharded = tensors["embed"]
-    adapter.sharded_terminal = True
 
     adapter.reset()
 
@@ -79,9 +74,6 @@ def test_denoise_adapter_reset_releases_all_trace_persistent_buffers():
     assert adapter.signal_ping_pong is False
     assert adapter._canvas_rope_bufs == {}
     assert adapter.use_canvas_rope is False
-    assert adapter._vocab_offsets is None
-    assert adapter._embedding_weight_sharded is None
-    assert adapter.sharded_terminal is False
 
 
 def test_denoise_adapter_advances_mutable_prefix_after_commit():
