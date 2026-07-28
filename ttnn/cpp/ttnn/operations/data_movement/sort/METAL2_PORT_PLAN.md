@@ -519,5 +519,8 @@ with its "unused - for future improvements" comment intact.
   - A kernel cannot query tile metadata off a buffer it does not bind in the active configuration; the cross-core
     reader needs two such sizes and receives them as named compile-time args.
   - `unpack_modes` entries must be gated on the same condition as their binding.
-  - **The blocker**: node-dependent dataflow-buffer sets are serialized out of bounds by the dispatch layer. This is
-    what stopped `SingleRowMultiCore`. Details in `METAL2_PORT_REPORT.md`.
+  - **The blocker**: when a program declares more dataflow buffers than any single kernel group uses, the dispatch
+    layer serializes the high-numbered ones out of bounds. This factory crosses that line because the same-kind
+    endpoint rule forces legacy's two coordinator/worker-shared CBs to split in two, taking the TILE spec from 6
+    buffers to 8 against a busiest group of 6. This is what stopped `SingleRowMultiCore`. Details in
+    `METAL2_PORT_REPORT.md`.

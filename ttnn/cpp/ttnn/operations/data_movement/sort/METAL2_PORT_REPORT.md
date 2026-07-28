@@ -141,11 +141,23 @@ dataflow buffers.
   "All KernelSpecs bound to the same DFB role must be of the same kind"
   ([program_spec.cpp:1289-1295](../../../../../../tt_metal/impl/metal2_host_api/program_spec.cpp#L1289-L1295)).
 
-- **Note on how the port provoked it.** Legacy sidestepped this by over-allocating: it declared
-  c_0-c_5 on `all_core_set`, so every node carried the same buffer set. Metal 2.0 requires the
-  opposite (an unbound buffer on a node is a validator error), and the brief correctly instructed the
-  porter to narrow those ranges. Doing so is what exposes the bug, so **any op with genuinely
-  node-dependent buffer sets will hit this**, not just sort.
+- **Exposure is narrower than "node-dependent buffer sets".** Uneven sets alone are harmless. The
+  triggering condition is that **the program declares more distinct buffers than any single kernel
+  group uses**, so no group covers the whole id range. Legacy sort satisfies the safe case by
+  accident: in TILE it declares 6 CBs (c_0-c_5) on `all_core_set`, the worker group uses all 6, and
+  the highest id in play is 5, which fits a 6-slot region even though the coordinator only touches
+  c_0/c_1.
+
+- **What pushed this port over the line.** Legacy *shared* c_0 and c_1 between the two roles: the
+  coordinator used them as DRAM-to-DRAM staging, the workers used the same indices as sort input.
+  That sharing is not expressible in Metal 2.0, because the consumer side would hold the coordinator
+  (a data-movement kernel) on one node and the compute kernel on the others, and all KernelSpecs on
+  one role must be the same kind
+  ([program_spec.cpp:1289-1295](../../../../../../tt_metal/impl/metal2_host_api/program_spec.cpp#L1289-L1295)).
+  Splitting each of the two into a coordinator-scoped and a worker-scoped spec takes the program from
+  6 buffers to 8 while the busiest group still uses 6, which is exactly the unsafe case. The same
+  arithmetic holds in ROW_MAJOR: 10 legacy indices become 12 specs against a busiest group of 10.
+  So the forcing constraint is the same-kind rule, not the narrowing of core ranges per se.
 
 - **Suggested fix, with a working reference implementation already in the tree.** This is a regression
   against the legacy circular-buffer path, which computes the same quantity correctly:
