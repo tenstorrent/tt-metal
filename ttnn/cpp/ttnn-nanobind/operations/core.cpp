@@ -264,6 +264,8 @@ void py_module(nb::module_& mod) {
 
             Limitations:
                 -  tensor must be on the host.
+                -  INT8 (like UINT8) is host-only: device typecast/tilize are not yet supported for it,
+                   so INT8 conversions run on host.
         )doc",
         &ttnn::to_dtype,
         nb::arg("tensor"),
