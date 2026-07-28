@@ -49,7 +49,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
 # widened gate admits the generic SFPU-ROW path beyond mul/div. divide (non-commutative) also guards
 # against an operand swap, and its reciprocal-approx bf16 PCC uses the same relaxed 0.99 threshold as the
 # no-broadcast divide sweep; add/subtract/multiply/maximum keep the default (standard bf16 PCC).
-@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide", "maximum"])
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide", "maximum", "minimum"])
 @pytest.mark.parametrize(
     "a_shape,b_shape,bcast",
     [
@@ -78,7 +78,7 @@ def test_bcast_row_interleaved(device, op_name, a_shape, b_shape, bcast):
 # compute kernel); multiply/divide/maximum are bf16-SFPU (SFPU COL compute kernel). subtract/divide
 # (non-commutative) guard against an lhs/rhs (BCAST_INPUT) operand swap; divide keeps the relaxed 0.99
 # bf16 threshold.
-@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide", "maximum"])
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide", "maximum", "minimum"])
 @pytest.mark.parametrize(
     "a_shape,b_shape,bcast",
     [
@@ -108,7 +108,7 @@ def test_bcast_col_interleaved(device, op_name, a_shape, b_shape, bcast):
 # kernel); multiply/divide/maximum are bf16-SFPU (SFPU SCALAR compute kernel). subtract/divide
 # (non-commutative) guard against an lhs/rhs (BCAST_INPUT) operand swap; divide keeps the relaxed 0.99
 # bf16 threshold.
-@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide", "maximum"])
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide", "maximum", "minimum"])
 @pytest.mark.parametrize(
     "a_shape,b_shape,bcast",
     [
@@ -140,7 +140,7 @@ def test_bcast_scalar_interleaved(device, op_name, a_shape, b_shape, bcast):
 # multiply/divide/maximum are bf16-SFPU (eltwise_binary_sfpu_row_col_bcast_dfb.cpp). subtract/divide
 # (non-commutative) guard against an lhs/rhs (BCAST_INPUT) operand swap; divide keeps the relaxed 0.99 bf16
 # threshold. maximum (always-SFPU) proves the widened gate admits the generic SFPU mixed path.
-@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide", "maximum"])
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide", "maximum", "minimum"])
 @pytest.mark.parametrize(
     "a_shape,b_shape,bcast",
     [

@@ -57,8 +57,10 @@ def _width_sharded_config(shard_shape, core_grid):
 
 # Op table: name -> (ttnn fn, torch golden). add/subtract take the FPU compute kernel; multiply and
 # divide route the SFPU compute kernel by default (is_binary_sfpu_op is true unless fast-approx mode),
-# as does any fp32 op. maximum is ALWAYS-SFPU (no FPU form) and its ckernel (binary_max_min.h) is ported
-# to Quasar, so it exercises the generic SFPU path beyond mul/div. SFPU builds+runs on Wormhole and Quasar
+# as does any fp32 op. maximum/minimum are ALWAYS-SFPU (no FPU form) and share one ckernel
+# (binary_max_min.h), ported to Quasar, so they exercise the generic SFPU path beyond mul/div. Both are
+# carried so the pair stays symmetric: they are the same route and the same gate treatment, so covering
+# only one would leave the other gate-admitted-but-unvalidated. SFPU builds+runs on Wormhole and Quasar
 # (fp32 add/sub SFPU ported to Quasar in #49883).
 _OPS = {
     "add": (lambda: ttnn.experimental.quasar.add, torch.add),
@@ -66,6 +68,7 @@ _OPS = {
     "multiply": (lambda: ttnn.experimental.quasar.multiply, torch.multiply),
     "divide": (lambda: ttnn.experimental.quasar.divide, torch.divide),
     "maximum": (lambda: ttnn.experimental.quasar.maximum, torch.maximum),
+    "minimum": (lambda: ttnn.experimental.quasar.minimum, torch.minimum),
 }
 
 # PCC thresholds. NEVER weakened below what the descriptor path achieves for the same config.

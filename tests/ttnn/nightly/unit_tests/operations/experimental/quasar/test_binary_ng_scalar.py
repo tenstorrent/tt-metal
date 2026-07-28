@@ -11,11 +11,16 @@ plain cacheable fill would leave the consumer reading zeros (out ~ a / ~ 0) or c
 
 add/subtract are bf16-FPU. The metal_v2 / DFB tensor-scalar path is arch-portable -- CB-backed on
 Wormhole/Blackhole, overlay-backed on Quasar -- and the is_scalar gate admits interleaved + sharded
-scalar ops to it with no arch check, so these tests run on all three. On Quasar the descriptor path
-throws (a pass implicitly proves v2 routing); on WH/BH the descriptor path also runs, so
-test_scalar_v2_routing_distinct_cache_entries asserts v2 routing EXPLICITLY via the scalar-in-hash cache
-signature (the metal_v2 compute_program_hash folds the packed scalar; the descriptor path and
-operation_attributes_t::to_hash() exclude it).
+scalar ops to it with no arch check, so these tests run on all three.
+
+Routing: on Quasar a PASS implicitly proves v2 routing, because the descriptor path cannot run at all
+(DataMovementKernel/ComputeKernel hard-throw on Quasar). On WH/BH both factories run, and nothing here
+asserts which one was chosen -- there is no Python-visible factory signal. In particular the program-cache
+test below does NOT distinguish them: this op's operation_attributes_t::attribute_values() already
+includes `scalar` (unlike production binary_ng, which excludes it and patches it as a runtime arg), and
+the adapter's default compute_program_hash folds the whole attribute tuple, so a distinct scalar mints a
+distinct program on EITHER factory. What that test does guard is the property that makes the v2 path safe:
+the packed scalar is baked into the program, so it must participate in the cache key.
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
@@ -115,19 +120,22 @@ def test_scalar_lhs_activation(device, op_name, lhs_act):
     _run_scalar(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, _SCALAR_LHS_SHAPE, 3.5, lhs_act=lhs_act)
 
 
-# --- Explicit metal_v2 / DFB routing proof (replaces the Quasar-only "descriptor throws" implicit proof) --
-def test_scalar_v2_routing_distinct_cache_entries(device):
-    # On WH/BH the descriptor path also runs, so a passing PCC no longer implies the op took the DFB
-    # (metal_v2) factory. Assert routing EXPLICITLY via the metal_v2 tensor-scalar cache signature: the v2
-    # compute_program_hash folds the packed scalar (binary_ng_device_operation.cpp, the `if (metal_v2)`
-    # branch), while operation_attributes_t::to_hash() and the descriptor path deliberately EXCLUDE it.
-    # So, on the SAME shape:
+# --- The packed scalar must participate in the program-cache key ----------------------------------------
+def test_scalar_participates_in_program_cache_key(device):
+    # The DFB tensor-scalar path BAKES the packed scalar into the program (the writer's packed_scalar arg,
+    # filled once into in1), and the metal_v2 cache-hit adapter refreshes only tensor bindings -- it does
+    # not re-emit that arg. So a cached program is only reusable for the scalar it was built with, and the
+    # scalar MUST be part of the cache key or a second call with a different scalar would silently reuse
+    # the stale baked value. Assert exactly that, on the SAME shape:
     #   - repeating the SAME scalar   -> program-cache HIT   (+0 entries)
     #   - a DISTINCT scalar           -> a distinct program  (+1 entry)
-    # A distinct scalar adding 0 entries would mean the op routed to the DESCRIPTOR path (scalar not
-    # hashed), not the DFB factory. Mirrors test_binary_ng_descriptor_cache_hit.py's cross-shape check
-    # and doubles as a regression guard on the scalar-in-hash fold. Requires the program cache (the
-    # `device` fixture enables it, as in test_binary_ng_resnet_add.py / test_binary_ng_descriptor_cache_hit.py).
+    # This holds because operation_attributes_t::attribute_values() includes `scalar` and the adapter's
+    # default compute_program_hash folds the whole tuple (binary_ng_device_operation.hpp). Note this is
+    # NOT a factory-routing assertion: the descriptor path hashes the same attributes, so both factories
+    # satisfy it. Routing is proven on Quasar by the fact that the descriptor path throws there; on WH/BH
+    # it is not observable from Python. Requires the program cache (the `device` fixture enables it, as in
+    # test_binary_ng_resnet_add.py / test_binary_ng_descriptor_cache_hit.py). _run_scalar PCC-checks every
+    # call, so a stale-scalar reuse would fail on the value, not just the count.
     shape = [1, 1, 32, 32]
     mem = ttnn.DRAM_MEMORY_CONFIG
 
@@ -143,7 +151,7 @@ def test_scalar_v2_routing_distinct_cache_entries(device):
     _run_scalar(device, "add", mem, ttnn.bfloat16, shape, -2.0)  # same shape, DISTINCT scalar
     n2 = device.num_program_cache_entries()
     assert n2 - n1 == 1, (
-        f"a distinct scalar must create a distinct metal_v2 cache entry (the packed scalar is folded into "
-        f"the v2 program hash) -- got {n2 - n1} new; 0 would mean the op routed to the descriptor path, "
-        f"not the DFB/metal_v2 factory"
+        f"a distinct scalar must create a distinct program-cache entry (the packed scalar is baked into the "
+        f"program and folded into the hash via attribute_values()) -- got {n2 - n1} new; 0 would mean the "
+        f"scalar dropped out of the cache key, so a cache hit could reuse a stale baked scalar"
     )

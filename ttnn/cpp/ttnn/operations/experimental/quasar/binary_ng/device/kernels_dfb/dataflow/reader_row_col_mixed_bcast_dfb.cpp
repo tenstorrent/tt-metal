@@ -37,6 +37,23 @@
 // (the JIT compile has the ttnn root on its include path); the single-operand DFB readers did not need it.
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
+// TODO(#51291) -- KNOWN, UNMITIGATED: the uncached-alias COL fill below is COHERENT but not ORDERED
+// against the DFB credit that publishes it. dev_mem_map.h states "only plain loads/stores WITH FENCES work
+// uncached", and DataflowBuffer::push_back bumps the consumer's tile counter through an overlay register
+// write, issuing no fence of its own -- so on silicon the credit can be observed before the fill lands in
+// TL1 and the compute consumer unpacks a stale/partial column. Both the fill stores and the credit post are
+// volatile, so this is a HARDWARE store-ordering hazard, not a compiler one; the NoC read feeding the fill
+// is already ordered by async_read_barrier(), so only the RISC stores are exposed.
+//
+// Not fixed here, deliberately: (1) craq-sim applies every store synchronously and has no store-buffer state,
+// so the hazard cannot be reproduced or regression-tested on the only substrate available; (2) it is a
+// platform-wide contract gap, not ours -- Semaphore::up() (api/dataflow/noc_semaphore.h) publishes through the
+// same uncached alias with no fence, and DFB sites that publish BEFORE filling (DFB-as-L1-scratch) mean a
+// fence inside push_back would order the wrong side. Stopgap if this reaches HW before the platform fix: one
+// `fence` before each push_back below -- bare `fence` = iorw,iorw; __atomic_thread_fence(RELEASE) emits only
+// `fence rw,w`, which does NOT order I/O-region accesses such as the overlay write. Not free on craq-sim: a
+// bare fence there maps to a full DM L1 D$ flush-all.
+
 void kernel_main() {
     const uint32_t start_tile_id = get_arg(args::start_tile_id);
     const uint32_t src_num_tiles = get_arg(args::src_num_tiles);
@@ -124,11 +141,14 @@ void kernel_main() {
                         // over the neighbor llk_post DFB, corrupting it. So the fill MUST use a coherent store.
                         // Here we write through the NON-CACHEABLE L1 alias (MEM_L1_UNCACHED_BASE): the stores
                         // (and the col-0 reads) bypass the D$/L2 and go straight to TL1, so the consumer sees
-                        // the fill and no dirty line can clobber a neighbor -- no flush needed. (An L2 flush,
-                        // flush_l2_cache_range(get_write_ptr(), get_entry_size()) before push_back, is the
-                        // equivalent alternative -- cf. ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl.)
-                        // WH/BH DFB is CB-backed shared L1 with no incoherent write-back D$, so the plain fill
-                        // is already visible there -- the alias offset is 0 (compiled out).
+                        // the fill and no dirty line can clobber a neighbor -- no cache flush needed. (An L2
+                        // flush, flush_l2_cache_range(get_write_ptr(), get_entry_size()) before push_back, is
+                        // the equivalent alternative and additionally fences internally -- flush_l2_cache_line
+                        // brackets its flush-register write with `fence`, internal/tt-2xx/risc_common.h.)
+                        // WH/BH DFB is CB-backed shared
+                        // L1 with no incoherent write-back D$, so the plain fill is already visible there --
+                        // the alias offset is 0 (compiled out). Coherent but UNORDERED vs. the credit post --
+                        // see the TODO(#51291) at the top of this file.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
                         const uint32_t col_uncached_off = MEM_L1_UNCACHED_BASE;
 #else
@@ -142,7 +162,7 @@ void kernel_main() {
                         noc.async_read_barrier();
                         FILL_TILE_WITH_FIRST_COLUMN(dfb_in0.get_write_ptr() + col_uncached_off);
 #endif
-                        dfb_in0.push_back(onetile);
+                        dfb_in0.push_back(onetile);  // TODO(#51291): unordered vs. the fill -- see top
 #else  // b (in1) is the COL operand
                         dfb_in1.reserve_back(onetile);
 #if !SRC_SHARDED_B
@@ -151,7 +171,7 @@ void kernel_main() {
                         noc.async_read_barrier();
                         FILL_TILE_WITH_FIRST_COLUMN_B(dfb_in1.get_write_ptr() + col_uncached_off);
 #endif
-                        dfb_in1.push_back(onetile);
+                        dfb_in1.push_back(onetile);  // TODO(#51291): unordered vs. the fill -- see top
 #endif
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {

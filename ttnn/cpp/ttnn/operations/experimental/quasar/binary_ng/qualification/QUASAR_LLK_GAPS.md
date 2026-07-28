@@ -45,8 +45,11 @@ itself lacks.
   every op `unary_op_utils.cpp::get_op_init_and_func` handles (nearly the whole enum).
 - **Broadcast rows** (Table 3) = the `unary_bcast<BroadcastType>` primitive `binary_ng`'s Quasar DFB
   factory uses to realize `SubtileBroadcastType != NONE` for a **single** operand
-  (`SCALAR`/`ROW`/`COL`); the mixed types (`ROW_A_COL_B`/`ROW_B_COL_A`) aren't op-wired yet, so they have
-  no row here (tracked in `../QUASAR_PARITY_GAPS.md`).
+  (`SCALAR`/`ROW`/`COL`). The mixed types need **no new primitive** — `ROW_B_COL_A` is op-wired and
+  sim-certified using the same ROW body plus a reader software-fill for the COL operand, so it adds no row
+  here. `ROW_A_COL_B` is carved out **op-side** (gate `return false`) over an intermittent craq-sim race,
+  **not** for a missing LLK primitive — do not read its absence from Table 3 as an LLK gap. Both tracked in
+  `../QUASAR_PARITY_GAPS.md` §6.
 - **Which `tt_llk_quasar` tree is authoritative** — there are **two** and they disagree. The build uses
   **`tt_metal/tt-llk/tt_llk_quasar/`** (on the kernel `-I` path — `tt_metal/hw/CMakeLists.txt`). The other,
   `tt_metal/third_party/tt_llk/tt_llk_quasar/`, is **NOT** on the include path (IDE glob only) and is
@@ -258,6 +261,12 @@ All three dimensions lower to the same Quasar LLK path — the MOVB2D srcB→des
 `add_tiles_bcast_rows`/`mul_tiles_bcast_cols`/etc. shorthand family further down `bcast.h` (`ELWADD`-style,
 `llk_unpack_AB<BroadcastType>`), which is WH/BH-only and not used by the Quasar DFB kernels.
 
+**Mixed broadcast types need no row of their own.** `ROW_B_COL_A` is op-wired and sim-certified on the DFB
+path using the ROW row above — its COL half is a reader software-fill, not a second `unary_bcast` pass (a
+deliberate reader/compute load-balance that keeps compute at 2 LLK passes). Its mirror `ROW_A_COL_B` is
+gate-rejected **op-side** for an intermittent craq-sim race in the `llk_post`-as-srcA path (#205), not for a
+missing primitive: the LLK side is `✓*` for both directions.
+
 - **32-bit formats are gated off:** the Quasar branch's `enable_unpack_to_dest` check omits
   `DataFormat::UInt32` — Quasar has no uint32 device format (its 32-bit formats are `Float32`/`Int32`; the
   enum slot WH/BH use for `UInt32` is `MxFp4_2x_B` on Quasar) — and asserts if a 32-bit format would need
@@ -265,7 +274,9 @@ All three dimensions lower to the same Quasar LLK path — the MOVB2D srcB→des
 - `reconfigure_unary_bcast` (mid-program bcast-type/format switch) is `#ifndef ARCH_QUASAR`-only; Quasar
   re-`init`s per broadcast type instead.
 - No sim/LLK bug surfaced while certifying SCALAR/ROW/COL through the op — all 112 broadcast cases in
-  `test_binary_ng_bcast.py` pass on the QSR sim alongside the 88-case no-bcast regression suite.
+  `test_binary_ng_bcast.py` pass on the QSR sim alongside the 88-case no-bcast regression suite. The one
+  race that DID surface is in the mixed `ROW_A_COL_B` composition (`llk_post` as binary srcA), not in any
+  single-operand dimension above; see the mixed-type note under Table 3.
 
 ## Priorities (by model impact)
 
@@ -278,8 +289,8 @@ All three dimensions lower to the same Quasar LLK path — the MOVB2D srcB→des
 **Already done — no LLK work:** `relu` (ResNet50), `silu` (Llama SwiGLU), `sigmoid`, `tanh`, `square`, `gelu`
 — all sim-certified — plus the arithmetic/`where`/compare-to-zero core (bf16/fp32 add/sub/mul/div now
 sim-certified through both `binary_ng`'s tensor-tensor no-broadcast path AND its tensor-scalar path, the
-latter via a writer-filled RHS tile) and single-operand subtile broadcast `unary_bcast` SCALAR/ROW/COL
-(Table 3), sim-certified through `binary_ng` itself.
+latter via a writer-filled RHS tile) and subtile broadcast `unary_bcast` SCALAR/ROW/COL — single-operand
+plus the mixed `ROW_B_COL_A` composition (Table 3) — sim-certified through `binary_ng` itself.
 
 ## Closing a gap — the pattern
 
