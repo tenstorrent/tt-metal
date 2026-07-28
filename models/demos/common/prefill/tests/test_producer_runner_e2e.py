@@ -33,7 +33,6 @@ _REPORT_DIR = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), "genera
 
 _RUNNER_MODULE = "models.demos.common.prefill.runners.prefill_runner"
 _PRODUCER_MODULE = "models.demos.common.prefill.runners.prefill_producer"
-_GEN_TRACE_MODULE = "models.demos.deepseek_v3_d_p.tt.runners.generate_prompt_trace"
 
 _READY_TIMEOUT_S = int(os.environ.get("PREFILL_CI_RUNNER_READY_TIMEOUT_S", "1200"))  # 20 min for load + JIT
 _PRODUCER_TIMEOUT_S = int(os.environ.get("PREFILL_CI_PRODUCER_TIMEOUT_S", "900"))
@@ -241,35 +240,14 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int, **extra):
 
 
 def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str, model: str) -> None:
-    """Host-only pre-step: build a reference-KV trace dir from a prompt (no device). Raises with the
-    generator's output on failure so a bad reference is not silently mistaken for a device PCC failure."""
-    os.makedirs(_REPORT_DIR, exist_ok=True)
-    log_path = os.path.join(_REPORT_DIR, "ci_gen_trace.log")
-    with open(log_path, "w") as log:
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                _GEN_TRACE_MODULE,
-                "--model",
-                model,
-                "--prompt-file",
-                prompt_file,
-                "--isl",
-                str(isl),
-                "--num-layers",
-                str(NUM_LAYERS),
-                "--out",
-                out_dir,
-            ],
-            env=dict(os.environ),
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            timeout=_PRODUCER_TIMEOUT_S,
-        )
-    _emit_log_group("reference trace generation", log_path)
-    if result.returncode != 0:
-        raise RuntimeError(f"reference trace generation failed (rc={result.returncode}):\n{_tail(log_path)}")
+    """Host-only pre-step: build a reference-KV trace dir from a prompt. The generator is device-free,
+    so it runs in-process — no subprocess / OS command. A bad prompt or model surfaces as the
+    generator's own exception, so a bad reference is never mistaken for a device PCC failure."""
+    # Lazy import: the generator pulls in torch / transformers / the reference model, which must not
+    # load at test-collection time.
+    from models.demos.deepseek_v3_d_p.tt.runners.generate_prompt_trace import _load_prompt_text, generate
+
+    generate(model, _load_prompt_text(None, prompt_file), isl, NUM_LAYERS, out_dir)
 
 
 @pytest.mark.timeout(_READY_TIMEOUT_S + 2 * _PRODUCER_TIMEOUT_S + 300)
