@@ -15,11 +15,12 @@ from typing import Optional, Tuple
 import ttnn
 
 from .._module import DeviceArch, StatelessTTNNModule, run_on_devices
+from .bs import matmul_pcfg
 from .common import create_sinusoidal_pos_embedding
 from .gemma import _linear_weight_to_tt
 
 from models.experimental.pi0_5.common.configs import SuffixConfig
-from models.experimental.pi0_5.tt.tile_config import from_torch_pi05
+from models.experimental.pi0_5.tt.tile_config import TILE_WIDTH, from_torch_pi05
 
 TT_METAL_COMMIT = "58672b47cfd304195798bcf34d44f5dbcbcf5189"
 
@@ -35,18 +36,29 @@ def _bias_to_tt(b: Optional["ttnn.Tensor"]) -> Optional[ttnn.Tensor]:
     return from_torch_pi05(b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16)
 
 
-def _linear_kwargs(x: ttnn.Tensor) -> dict:
+def _linear_kwargs(x: ttnn.Tensor, w: ttnn.Tensor) -> dict:
     """Extra ``ttnn.linear`` kwargs needed for a tiny-tile activation.
 
-    With no program_config/core_grid, matmul picks the generic MatmulMultiCore factory, which
-    rejects a tiny outer tile outright ("matmul with non-optimized program config does not support
-    tiny tile"). Supplying core_grid routes to an optimized multi-core-reuse factory, which is
-    tiny-tile aware. Returns {} at the standard tile so the 32x32 path is byte-identical.
+    Two non-tile-aware paths have to be avoided at a tiny tile:
+      * With NO program_config/core_grid, matmul picks the generic MatmulMultiCore factory, which
+        rejects a tiny outer tile outright ("non-optimized program config does not support tiny
+        tile").
+      * Passing only ``core_grid`` routes to the 1D-systolic AUTO config generator, which computes
+        ``m_tiles = (batch * M) / ttnn::TILE_SIZE`` against the global 32 -- so M=16 fails its
+        "must be a multiple of tile size" check (and would give m_tiles == 0).
+    So build the 1D-mcast program config explicitly with tile-aware m_tiles; the matmul FACTORY is
+    tile-aware, only the auto-generator is not. Returns {} at the standard tile so the 32x32 path is
+    byte-identical.
     """
-    if int(x.get_tile().tile_shape[0]) == 32:
+    tile_h = int(x.get_tile().tile_shape[0])
+    if tile_h == 32:
         return {}
     grid = x.device().compute_with_storage_grid_size()
-    return {"core_grid": ttnn.CoreGrid(y=1, x=min(8, grid.x))}
+    m_tiles = max(1, (int(x.padded_shape[-2]) + tile_h - 1) // tile_h)
+    k_tiles = max(1, int(x.padded_shape[-1]) // TILE_WIDTH)
+    n_tiles = max(1, int(w.padded_shape[-1]) // TILE_WIDTH)
+    pc = matmul_pcfg(m_tiles, k_tiles, n_tiles, grid.x, grid.y)
+    return {"program_config": pc} if pc is not None else {}
 
 
 class TTNNPi05SuffixEmbedding(StatelessTTNNModule):
@@ -99,7 +111,7 @@ class TTNNPi05SuffixEmbedding(StatelessTTNNModule):
         """(B, action_horizon, action_dim) -> (B, action_horizon, expert_width)."""
         return ttnn.linear(
             noisy_actions, self.tt_action_in_w, bias=self.tt_action_in_b, memory_config=_L1,
-            **_linear_kwargs(noisy_actions),
+            **_linear_kwargs(noisy_actions, self.tt_action_in_w),
         )
 
     @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)
@@ -110,13 +122,13 @@ class TTNNPi05SuffixEmbedding(StatelessTTNNModule):
         )
         x = ttnn.linear(
             sincos, self.tt_time_mlp_in_w, bias=self.tt_time_mlp_in_b, memory_config=_L1,
-            **_linear_kwargs(sincos),
+            **_linear_kwargs(sincos, self.tt_time_mlp_in_w),
         )
         ttnn.deallocate(sincos)
         x = ttnn.silu(x, memory_config=_L1)
         x = ttnn.linear(
             x, self.tt_time_mlp_out_w, bias=self.tt_time_mlp_out_b, memory_config=_L1,
-            **_linear_kwargs(x),
+            **_linear_kwargs(x, self.tt_time_mlp_out_w),
         )
         return ttnn.silu(x, memory_config=_L1)
 
@@ -125,7 +137,7 @@ class TTNNPi05SuffixEmbedding(StatelessTTNNModule):
         """(B, action_horizon, expert_width) -> (B, action_horizon, action_dim)."""
         return ttnn.linear(
             expert_output, self.tt_action_out_w, bias=self.tt_action_out_b, memory_config=_L1,
-            **_linear_kwargs(expert_output),
+            **_linear_kwargs(expert_output, self.tt_action_out_w),
         )
 
     @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)

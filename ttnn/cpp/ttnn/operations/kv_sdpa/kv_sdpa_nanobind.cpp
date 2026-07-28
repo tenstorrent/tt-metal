@@ -26,6 +26,11 @@ void bind_kv_sdpa_operation(nb::module_& mod) {
 
         Q: [1, NQH, 32, DH]; K/V: [1, NKH, KV, DH] with NKH dividing NQH. Output: [1, NQH, 32, DH].
         attn_mask (optional, [1,1,Sq,KV] bf16 additive mask over the full folded KV) is applied when provided; omit it for the fast unmasked path.
+
+        max_kv_chunk_tiles (default 128) bounds tiles per flash K/V chunk (Sk_chunk_t * DHt). Larger
+        means fewer chunks and less per-chunk overhead, but the double-buffered per-chunk K/V CBs grow
+        linearly -- at DH=256 (DHt=8) the default yields 256-tile prefix CBs (~272 KB each). Lower it
+        when the caller pins significant L1, or the CBs clash with those buffers.
         )doc",
         &ttnn::kv_sdpa,
         nb::arg("q"),
@@ -36,7 +41,8 @@ void bind_kv_sdpa_operation(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("past_k") = nb::none(),
         nb::arg("past_v") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("max_kv_chunk_tiles") = 128);
 }
 
 }  // namespace ttnn::operations::kv_sdpa

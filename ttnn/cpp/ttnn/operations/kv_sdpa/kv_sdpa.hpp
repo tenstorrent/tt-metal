@@ -30,6 +30,7 @@ Tensor kv_sdpa(
     std::optional<float> scale = std::nullopt,
     const std::optional<Tensor>& past_k = std::nullopt,
     const std::optional<Tensor>& past_v = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    uint32_t max_kv_chunk_tiles = 128);
 
 }  // namespace ttnn

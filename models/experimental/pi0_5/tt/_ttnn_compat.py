@@ -88,7 +88,10 @@ def concat_heads_matmul_decode(
     return out
 
 
-def kv_sdpa(q, k, v, *, attn_mask=None, scale=None, past_k=None, past_v=None, compute_kernel_config=None):
+def kv_sdpa(
+    q, k, v, *, attn_mask=None, scale=None, past_k=None, past_v=None, compute_kernel_config=None,
+    max_kv_chunk_tiles=None,
+):
     # The tiny-tile kv_sdpa dropped the mask path our earlier version had (cb_mask_in + a
     # use_provided_mask compile-time gate) and now hard-fails:
     #   TT_FATAL: kv_sdpa FlashFused two-source path does not support an attention mask
@@ -104,6 +107,8 @@ def kv_sdpa(q, k, v, *, attn_mask=None, scale=None, past_k=None, past_v=None, co
             kwargs["past_v"] = past_v
         if compute_kernel_config is not None:
             kwargs["compute_kernel_config"] = compute_kernel_config
+        if max_kv_chunk_tiles is not None:
+            kwargs["max_kv_chunk_tiles"] = max_kv_chunk_tiles
         return ttnn.kv_sdpa(q, k, v, **kwargs)
 
     if past_k is not None and past_v is not None:

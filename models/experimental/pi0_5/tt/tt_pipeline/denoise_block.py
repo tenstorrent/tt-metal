@@ -119,6 +119,14 @@ _KV_FOLD = True
 
 _K_BLOCKS = 2
 _RESHARD_CORES = 2
+# Cap on tiles per kv_sdpa flash K/V chunk. The op's default (128) maximizes chunk size to minimize
+# per-chunk overhead, which at DH=256 (DHt=8) gives 256-tile prefix K/V CBs -- ~272 KB EACH, ~544 KB
+# together. That is fine on a single chip but clashes with the resident denoise weights on the
+# 16-chip path (2-3 layers pinned per chip), which is exactly the
+# "Statically allocated circular buffers ... clash with L1 buffers" failure. 32 gives a prefix chunk
+# of 4 tiles -> ~68 KB per CB (~136 KB together), matching the footprint the 16-chip path was tuned
+# against, at the cost of more (cheaper) chunks.
+_KV_SDPA_MAX_CHUNK_TILES = 32
 _QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = 40, 32, 32
 
 _LOFI = ttnn.WormholeComputeKernelConfig(
@@ -371,6 +379,7 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                 past_k=past_k,
                 past_v=past_v,
                 compute_kernel_config=get_sdpa_compute_kernel_config(),
+                max_kv_chunk_tiles=_KV_SDPA_MAX_CHUNK_TILES,
             )
             new_cache = None
         else:
@@ -387,6 +396,7 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                     attn_mask=None,
                     scale=self.scale,
                     compute_kernel_config=get_sdpa_compute_kernel_config(),
+                    max_kv_chunk_tiles=_KV_SDPA_MAX_CHUNK_TILES,
                 )
             else:
                 kv_seq = k.shape[-2]

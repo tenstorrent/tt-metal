@@ -74,7 +74,7 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     // E.g. Kt=33 now picks 11 (3 chunks) instead of the old {4,3,2}-capped 3 (11 chunks).
     // Cap chunk tiles so cb_k_in/cb_v_in (each Sk_chunk_t*DHt*2 tiles, double-buffered) stay bounded in
     // L1 regardless of head_dim: keep Sk_chunk_t*DHt <= 128 tiles per (single-buffered) K/V chunk.
-    const uint32_t max_chunk_tiles = std::max<uint32_t>(1u, 128u / DHt);
+    const uint32_t max_chunk_tiles = std::max<uint32_t>(1u, attrs.max_kv_chunk_tiles / DHt);
     auto pick_chunk = [&](uint32_t kt) -> uint32_t {
         uint32_t sc = 1;
         for (uint32_t cand = std::min(kt, max_chunk_tiles); cand >= 1; --cand) {

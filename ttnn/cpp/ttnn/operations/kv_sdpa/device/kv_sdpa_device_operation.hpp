@@ -28,6 +28,13 @@ struct KvSdpaDeviceOperation {
     struct operation_attributes_t {
         uint32_t scale_bits;  // fp32 bit-pattern of the softmax scale
         std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+        // Upper bound on tiles per flash K/V chunk (Sk_chunk_t * DHt). Bigger chunks mean fewer
+        // chunks and less per-chunk fixed overhead, but the double-buffered per-chunk K/V CBs grow
+        // linearly: at DHt=8 a cap of 128 yields 256-tile prefix CBs (~272 KB each). Callers that
+        // pin a lot of L1 (e.g. the pi0.5 16-chip denoise, which holds several layers of weights
+        // resident) must lower this or the CBs clash with those buffers. Default keeps the
+        // fewest-chunks behaviour for callers with spare L1.
+        uint32_t max_kv_chunk_tiles = 128;
     };
 
     struct tensor_args_t {
@@ -73,5 +80,6 @@ ttnn::operations::kv_sdpa::KvSdpaDeviceOperation::tensor_return_value_t kv_sdpa(
     uint32_t scale_bits,
     std::optional<Tensor> past_k,
     std::optional<Tensor> past_v,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t max_kv_chunk_tiles = 128);
 }  // namespace ttnn::prim

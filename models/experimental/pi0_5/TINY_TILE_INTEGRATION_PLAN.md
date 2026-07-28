@@ -255,6 +255,47 @@ A/B must hold the fusion state identical on both sides.**
   **Report upstream** with the `QK_COL_VECTOR_MODE` and bf8-mask bugs.
 - `_build_fused_gate_ws` itself hardcoded a 32-row replicate; now uses `TILE_HEIGHT`.
 
+### Stage 7 (revisited after re-fusion) — 16-chip path GREEN at both tile heights
+
+`test_perf_16_socket_traced_2cq`, `PERF_ITERS=20`:
+
+| 16-chip e2e | pre-merge (fused) | tile-32 | **tile-16** |
+|---|---|---|---|
+| 2 cams | 25.31 ms | 27.21 ms | **25.80 ms** |
+| 3 cams | 28.52 ms | 30.33 ms | **28.79 ms** |
+
+- **Tiny tile is −5.1%/−5.2% vs tile-32 on the same build** (consistent with the −8.6% single-layer
+  result, diluted by the unchanged vision/prefill stages).
+- **tile-16 reaches rough parity with pre-merge** (+1.9% / +0.9%), i.e. tiny tile offsets an
+  as-yet-unexplained ~7% regression that the tile-32 build carries vs pre-merge.
+
+**OPEN: the ~7% tile-32 vs pre-merge regression.** Not the kv_sdpa chunk cap — `_KV_SDPA_MAX_CHUNK_TILES
+= 32` reproduces pre-merge's effective pick exactly (both land on a 4-tile prefix chunk for
+`prefix_Kt = 32`). Remaining suspects: the ~2 weeks of upstream main drift the merge pulled in, or the
+re-fused wiring not being byte-identical to the pre-merge block. Needs its own bisect.
+
+Two more blockers had to be cleared beyond re-fusion:
+
+1. **kv_sdpa L1 footprint.** Their chunk picker maximizes chunk size to minimize per-chunk overhead;
+   at `DH=256` (`DHt=8`) `max_chunk_tiles = 128/8 = 16` gives 256-tile prefix K/V CBs, ~272 KB EACH
+   (~544 KB together) vs ~136 KB for our pre-merge `{4,3,2,…}` picker. That **+408 KB** is exactly the
+   `Statically allocated circular buffers ... clash with L1 buffers` failure (observed CB region
+   638 KB, and it grew with camera count as the longer prefix changed the divisor). Added a
+   `max_kv_chunk_tiles` parameter (public API → prim → attributes → factory → nanobind), **default 128
+   so single-chip behaviour is unchanged**; the denoise block passes 32. The attributes struct is
+   hashed by default, so cap variants cannot collide in the program cache.
+2. **The suffix-embedding linears.** An earlier fix here was wrong: passing only `core_grid` routes to
+   the 1D-systolic AUTO config generator, which computes
+   `m_tiles = (batch * M) / ttnn::TILE_SIZE` against the global 32 — so M=16 fails its
+   "must be a multiple of tile size" check and would yield `m_tiles == 0`. Trading the generic
+   MatmulMultiCore factory for that generator swapped one non-tile-aware path for another. Now builds
+   the 1D-mcast `program_config` explicitly with `m_tiles = div_up(M, tile_h)` via `matmul_pcfg`; the
+   matmul FACTORY is tile-aware, only the auto-generator is not. Returns `{}` at tile-32 so that path
+   stays byte-identical.
+
+Eight tiny-tile gaps were found in the multi-stage path in total, none of them reachable from the
+source branch's single-stage reference test.
+
 ## Conflict resolution notes
 
 All 18 resolved as follows.
