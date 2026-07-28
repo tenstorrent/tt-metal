@@ -106,7 +106,14 @@ require_path "${MODEL_PYTHON}"
 require_path "${LM_EVAL}"
 require_path "${DG_CKPT}/config.json"
 
-for command in curl flock setsid timeout "${TT_SMI_BIN}"; do
+REQUIRED_COMMANDS=(curl flock setsid timeout)
+# Only require the reset tool when a reset is actually going to be run. It was required
+# unconditionally, which made the whole runner unusable on a host that has no tt-smi on PATH even
+# with RESET_BEFORE=0 RESET_AFTER=0 — the two flags that exist precisely to skip it.
+if [[ "${RESET_BEFORE}" == "1" || "${RESET_AFTER}" == "1" ]]; then
+    REQUIRED_COMMANDS+=("${TT_SMI_BIN}")
+fi
+for command in "${REQUIRED_COMMANDS[@]}"; do
     if ! command -v "${command}" >/dev/null 2>&1; then
         echo "ERROR: command not found: ${command}" >&2
         exit 1

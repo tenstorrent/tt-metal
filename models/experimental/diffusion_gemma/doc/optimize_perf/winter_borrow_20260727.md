@@ -80,6 +80,14 @@ Reading:
   `reveal_pmax = 1024`; this sweep runs 4096, i.e. 4352 key rows per layer instead of 1280. The
   span-proportional attention term is exactly what makes the grid lever matter, so the larger span
   is the right vehicle for it — but the absolute number is span-specific.
+* **These are `host`-Gumbel numbers and they overstate the shipped step cost.** `--upfront` needs a
+  materialized Gumbel source, and `host` was chosen for reproducibility across arms. The shipped
+  serving default is `device`. The same concat build measured through the real vLLM path with
+  device Gumbel reports `denoise_latency_s / denoise_steps` = 3.337/15 and 5.768/26 — **222
+  ms/step**, against the 463 ms/step this sweep reports for the same configuration. Every
+  *relative* comparison here holds (all arms share the mode); every *absolute* ms/step is a
+  host-Gumbel figure and roughly 2× the served one. The same log also puts commit at 2.02 s/block,
+  i.e. 26–38% of a served block — larger than the ~1 s previously assumed.
 
 ## 3. The tuned MoE configs had been inert on the production path for 12 days
 
@@ -195,9 +203,16 @@ projected ~−3% at 30 layers. The real answer is −30%. At small layer counts 
 self-conditioning cost dominates and the DRAM/L1 pressure is different, so the MoE is simply not
 the bottleneck being measured. Measure the lever at the depth it ships at.
 
+**It serves.** The concat build runs end-to-end through the real vLLM path
+(`run_upfront_gpqa.sh smoke`, device Gumbel, thinking mode): 2/2 exact match, block latency
+5.38 s / 7.79 s, denoise 15 and 26 steps, commit 2.02 s. Two samples carry no statistical weight,
+but they do prove the path is wired, not just the microbenchmark.
+
 **Still default off.** −30% is worth having, but this changes the committed tokens by more than any
 other lever here, and the model is already in a decision-fidelity hole (#48291). It needs the
-absolute GPQA arm against the CUDA bar in §11 before the default flips.
+absolute GPQA arm against the CUDA bar in §11 before the default flips. Both arms — current
+defaults with `DG_MOE_CONCAT=0`, and `DG_MOE_CONCAT=1` — are running as
+`/home/zni/dg_runs/gpqa_{base,concat}_20260728` at `TRACE_REGION_SIZE=4 GiB`, `RESET_BEFORE=0`.
 
 ## 6. `DG_SKIP` — pricing a component's traced cost
 
