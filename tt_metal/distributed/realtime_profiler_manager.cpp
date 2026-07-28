@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -117,6 +118,13 @@ struct RealtimeProfilerEligibility {
 // Checks: not mock/emulated, MMIO-capable, IOMMU if 64-bit PCIe, fabric tensix datamover off, a tensix reserved and
 // in-grid, kernels not nullified, L1 bank fits the layout.
 RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device, ContextId context_id) {
+    // TT_METAL_DISABLE_RT_PROFILER keeps the profiler off while leaving every other device setting alone, so its
+    // runtime cost can be measured without also changing the dispatch core type. A value of "0" or an empty string
+    // leaves the profiler enabled, so a workflow that always defines the variable can still select either behaviour.
+    if (const char* disable_rt_profiler = std::getenv("TT_METAL_DISABLE_RT_PROFILER");
+        disable_rt_profiler != nullptr && disable_rt_profiler[0] != '\0' && disable_rt_profiler[0] != '0') {
+        return {};
+    }
     auto device_id = device->id();
     auto& metal = MetalContext::instance(context_id);
     const auto& hal = metal.hal();

@@ -77,6 +77,15 @@
   team: ttnn
   category: reduction
 
+- name: ttnn nightly reduction tests (rt profiler disabled)
+  cmd: 'TT_METAL_DISABLE_RT_PROFILER=1 pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  category: reduction
+
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
