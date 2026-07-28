@@ -148,7 +148,11 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    bool is_sender = coord == operation_attributes.sender_coord;
+    // A cluster-axis collective runs independently on every orthogonal mesh line.
+    const bool is_sender =
+        operation_attributes.cluster_axis.has_value()
+            ? ring_index == operation_attributes.sender_coord[operation_attributes.cluster_axis.value()]
+            : coord == operation_attributes.sender_coord;
 
     // KERNEL CREATION
     // Reader

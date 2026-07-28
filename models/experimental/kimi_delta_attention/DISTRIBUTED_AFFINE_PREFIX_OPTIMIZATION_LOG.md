@@ -161,4 +161,18 @@ Median exact device time over measured sessions 2--11 is 1,901.893 us, down from
 
 Diagnosis: L1 exposes that steady P2P payload movement is no longer the primary limit. Most sender kernels are approximately 119.6--120.3 us for 1.573 MB (about 13.1 GB/s), while receiver program durations grow to 0.59--0.82 ms because they are queued early and wait for dependent relay computation or earlier sends. The next highest-gain target is redundant final-state broadcast work: rank 3 currently sends the same tensor independently to ranks 0, 1, and 2 on each TP line. Survey an existing fabric line-multicast primitive before implementing a dedicated broadcast.
 
+## Experiment 6: per-TP-line hardware multicast
+
+Verdict: keep. Replace the three independent final-state P2P sends on each TP lane with the existing two-link CCL line-multicast. Correct `BroadcastProgramFactory` sender selection for cluster-axis collectives: every orthogonal mesh line now selects the rank matching the sender coordinate on the collective axis, consistent with the already per-line topology and neighbor calculation. This lets one operation broadcast from SP rank 3 independently on both TP lanes.
+
+Validation:
+
+- `./build_metal.sh`: PASS.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_distributed_affine_prefix.py -q -s`: 2 passed, `SAFE_PYTEST_RESULT: PASS`; both sequence-parallel axis placements exercise the corrected 2D per-line sender semantics, and repeat plus trace passed. Precision remains unchanged: TP-axis 0 worst PCC 0.999996 and max absolute error 3.162287e-4; TP-axis 1 PCC 1.000000 and max absolute error 9.099394e-5.
+- `PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_distributed_affine_prefix_perf.py -q -s`: 1 passed, `SAFE_PYTEST_RESULT: PASS`. Raw CSV: `generated/profiler/reports/2026_07_28_15_44_53/ops_perf_results_2026_07_28_15_44_53.csv`.
+
+Median exact device time over sessions 2--11 is 1,604.297 us, down from 1,901.893 us (15.65%) and from the original 10,524.204 us (6.560x, 84.75%). Fixed-floor efficiency is 43.40%; reaching 1,160.300 us still requires 1.383x. Per-device medians are 1,603.805, 1,602.502, 1,604.208, 1,603.226, 1,602.240, 1,601.054, 1,602.811, and 1,601.486 us.
+
+Diagnosis: multicast removes five composite P2P launches and redundant payload sends per invocation. The two physical source devices execute the broadcast in approximately 68 us; longer 0.18--0.66 ms receiver durations are time queued behind the dependent relay and do not represent multicast bandwidth. The critical arithmetic remains four FP32 matmuls at a 154.525 us median, four adds at 22.253 us, three approximately 120 us steady P2P sends, and dtype/launch boundaries. Next test a BF16 recurrence fast path: retain FP32 public inputs and outputs, but typecast transforms once, compute and relay carry in BF16, and validate recurrent error before making a performance claim.
+
 ## Backlog

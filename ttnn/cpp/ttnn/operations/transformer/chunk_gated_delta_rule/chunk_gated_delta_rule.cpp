@@ -14,6 +14,7 @@
 #include "device/chunk_gated_delta_rule_device_operation.hpp"
 #include "device/chunk_gdn_phased.hpp"
 
+#include "ttnn/operations/ccl/broadcast/broadcast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -965,20 +966,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
             carry = ttnn::add(carry, transform_b, std::nullopt, out_mem);
         }
 
-        auto final_state_transport = ttnn::typecast(zero_b, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
         const auto final_carry_transport = ttnn::typecast(carry, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
-        for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
-            const auto sender_coord = coordinate(sp_size - 1, tp_rank);
-            for (uint32_t destination = 0; destination < sp_size; ++destination) {
-                final_state_transport = ttnn::point_to_point(
-                    final_carry_transport,
-                    coordinate(destination, tp_rank),
-                    sender_coord,
-                    ttnn::ccl::Topology::Linear,
-                    final_state_transport,
-                    std::nullopt);
-            }
-        }
+        auto final_state_transport = ttnn::broadcast(
+            final_carry_transport,
+            coordinate(sp_size - 1, 0),
+            2,
+            ttnn::L1_MEMORY_CONFIG,
+            ttnn::ccl::Topology::Linear,
+            sequence_parallel_axis);
         auto final_state = ttnn::typecast(final_state_transport, DataType::FLOAT32, out_mem);
         return {entry_state, final_state};
     }
