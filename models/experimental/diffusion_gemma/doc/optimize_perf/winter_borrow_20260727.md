@@ -50,7 +50,7 @@ prefix every canvas, which is O(P²) and worse for us.
 | 1 | denoise SDPA no longer pinned to an 8-core grid | **default flipped**, bit-exact | −8.8% traced block, `arm_sweep_30L` |
 | 2 | OPT-004 tuned MoE geometry made L1-legal at any capacity; the stale `C == 32` gate removed | **default-on** (was silently inert since 2026-07-15) | −0.8% traced block; decision-changing |
 | 3 | encoder `layer_scalar` divergence guard | added, fail-loud | checkpoint measured tied (max\|Δ\| = 0.0 over 30 layers) |
-| 4 | `DG_ROPE_FUSED` — fused `ttnn.experimental.rotary_embedding` on the denoise path | added, **default off** | −0.2% (noise) and decision-changing ⇒ not worth flipping |
+| 4 | `DG_ROPE_FUSED` — fused `ttnn.experimental.rotary_embedding` on the denoise path | added, then **DELETED 2026-07-28** | −0.2% (noise) and decision-changing ⇒ zero benefit; see `flag_triage_20260728.md` |
 | 5 | `DG_SDPA_EXP_APPROX` — ttnn's own SDPA softmax default, which we had hard-coded off | added, **default off** | decision-changing; unswept before today |
 | 6 | `DG_MOE_CONCAT` — concat-experts MoE | added, **default off** pending the quality gate | **−29.9%** traced block at 30L; see §5 |
 | 6b | `DG_TRACE_REGION_SIZE` 12 GiB → 6 GiB in the harness/gate scripts | done | 48 traces measure 3.04 GiB, not the 1.44 GiB our own doc claimed; see §8 |
@@ -395,7 +395,8 @@ arm has to beat before a difference means anything.
   spread measured at ~1.1 pp over three repetitions, so the gate cannot resolve differences below
   ~1–2 pp.
 * Concat-experts MoE measurement (§5), after the trace region is right-sized (§8).
-* `DG_SDPA_EXP_APPROX` has never been swept.
+* ~~`DG_SDPA_EXP_APPROX` has never been swept.~~ Swept 2026-07-28: **+6.8%** and the committed sha
+  changes. Hard-coding it off was right.
 
 ---
 
@@ -429,7 +430,7 @@ bit-identity flip gate rejected it. The denoise step runs 7 `rms_norm` calls per
 each chunked into 32-row pieces for a 256-row canvas — on the order of 1,700 norm ops per step.
 Decision-changing, so it needs the same absolute quality gate as concat.
 
-**`DG_TERMINAL_SHARDED=1` — −0.3%, i.e. nothing, and the reason matters.** This is winter's
+**`DG_TERMINAL_SHARDED=1` — −0.3%, i.e. nothing, and the reason matters. (Deleted 2026-07-28.)** This is winter's
 reduce-sharding (compute the terminal on the pre-all-gather `[256, V/tp]` shard) and V-sharded
 self-conditioning, which is exactly the right shape for the 124 ms residual. It does nothing here
 because **`prepare_sharded_terminal` has zero callers**: the consumers
@@ -467,8 +468,13 @@ the top table was derived (34.642 s/block host ÷ 1.94).
 
 ### 13.4 What is left
 
-1. **Wire `prepare_sharded_terminal`** — the 124 ms residual is now the dominant bucket and this is
-   the lever built for it.
+1. ~~**Wire `prepare_sharded_terminal`**~~ — **DONE, negatively, 2026-07-28.** The apparatus was
+   deleted instead. Two reasons the "obvious next lever" framing above was wrong: the one live
+   measurement of the idea puts the win at ~0 (the terminal all-gather and reductions are already
+   overlap-hidden under trace), and `gumbel_max_sharded` needed a `noise_shard` producer that does
+   not exist. Wiring the producer would have been 560 lines of work to reach a measured nothing.
+   The residual it targeted was also mis-sized here: with `DG_NORM_FULLCANVAS` on, the step is
+   195.7 ms and the non-layer share is ~81 ms, not 124.
 2. **The 2.02 s/block commit** — 26–38% of a served block, untouched.
 3. **Quality gate for the two decision-changing defaults** (`DG_MOE_CONCAT`, `DG_NORM_FULLCANVAS`,
    together ~1.9×) against the CUDA bar of 70.71% / 70.20% GPQA-Diamond.
