@@ -955,14 +955,14 @@ static void run_quasar_tilize_untilize_test(
     tt::DataFormat input_data_format,
     tt::DataFormat output_data_format,
     std::uint32_t num_faces = 4,
-    std::uint32_t face_r_dim = 16) {
+    std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
     IDevice* dev = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
-    constexpr std::uint32_t face_c_dim = 16;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
     const bool tiny_tile = (num_faces != 4 || face_r_dim != 16);
 
     bool is_8bit_integer = (input_data_format == tt::DataFormat::Int8 || input_data_format == tt::DataFormat::UInt8);

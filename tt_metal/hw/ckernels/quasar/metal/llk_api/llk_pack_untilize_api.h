@@ -39,7 +39,7 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
 
     LLK_ASSERT(
         tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
-            (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2),
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
 
     if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
@@ -88,7 +88,7 @@ inline void llk_pack_untilize(
 
     LLK_ASSERT(
         tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
-            (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2),
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
 
     const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
