@@ -819,6 +819,7 @@ jobs:
             # structured prompts regardless of vLLM version or sampling temperature,
             # so an exact-100% gate is a coin flip. Allow up to 2 of 32 to fail:
             # 30/32 = 93.75%.
+            # TODO: Remove this once we pass 100% again (maybe https://github.com/tenstorrent/tt-metal/pull/51148)
             python3 -c "import json,sys; r=float(json.load(open('output/vllm_result_structured.json'))['correct_rate(%)']); print(f'correct_rate(%)={r}'); sys.exit(0 if r>=93.75 else 1)" \
               || { echo '❌ Structured output below 93.75% (more than 2/32 failed)'; exit 1; }
             echo '✅ Structured output passed (correct_rate >= 93.75%)'
