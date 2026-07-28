@@ -272,8 +272,6 @@ def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str, model: str)
         raise RuntimeError(f"reference trace generation failed (rc={result.returncode}):\n{_tail(log_path)}")
 
 
-# The in-test waits (reference-trace gen + runner startup + producer) run to _READY_TIMEOUT_S +
-# two _PRODUCER_TIMEOUT_S, far past pytest.ini's global 300s; override so those bounds govern instead.
 @pytest.mark.timeout(_READY_TIMEOUT_S + 2 * _PRODUCER_TIMEOUT_S + 300)
 @pytest.mark.parametrize("scenario", list(SCENARIOS))
 def test_producer_runner_pcc(scenario, tmp_path):
@@ -283,22 +281,13 @@ def test_producer_runner_pcc(scenario, tmp_path):
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
     trace_env = {}
     if "prompt_file" in sc:
-        # The reference forward is memory-bounded only for a model whose reference uses chunked-SDPA;
-        # deepseek_v3_d_p's reference OOMs past one chunk, so default this scenario to Kimi. Pin it into
-        # trace_env so the runner + producer select the SAME adapter that generated the golden.
         model = os.environ.get("PREFILL_MODEL", "kimi_k2_7")
         trace_env["PREFILL_MODEL"] = model
-        # A pre-built reference (PREFILL_REUSE_TRACE_DIR) lets an A/B across device builds compare the
-        # device KV against one byte-identical golden — the host reference is device-independent, so
-        # regenerating it per build would only add float-order noise to the comparison.
         reuse_dir = os.environ.get("PREFILL_REUSE_TRACE_DIR")
         if reuse_dir and os.path.exists(os.path.join(reuse_dir, "metadata.json")):
             trace_dir = reuse_dir
         else:
             trace_dir = str(tmp_path / "prompt_trace")
-            # Generate the host reference at exactly the pushed depth (isl == chunks * CHUNK_SIZE). The
-            # reference forward is chunked-SDPA so RAM stays bounded at any depth; runtime is still O(seq^2),
-            # which the per-test timeout accounts for.
             _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"], model)
         trace_env["PREFILL_TRACE_DIR"] = trace_dir
     with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_log:

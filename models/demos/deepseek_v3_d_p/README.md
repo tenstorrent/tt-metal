@@ -7,7 +7,7 @@ This directory will contain the implementation of prefill stage for DeepSeek V3 
 The prefill runner is a model-agnostic engine in the common package
 (`models/demos/common/prefill/`). It drives any model through a `PrefillModelAdapter`; the
 DeepSeek-V3 family's concrete adapters live here in `tt/runners/adapters/`, selected by the
-**`PREFILL_MODEL`** env var (default `kimi_k2_7`; DeepSeek-V3 is `deepseek_v3_d_p`). To integrate a new
+**`PREFILL_MODEL`** env var (default `kimi_k2_7`). To integrate a new
 model, see
 [models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md](../common/prefill/docs/ADDING_A_PREFILL_MODEL.md).
 
