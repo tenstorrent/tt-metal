@@ -321,7 +321,7 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
             "emule: host-facing NOC address 0x{:x} on chip {} has no SimulationSysmemManager.",
             noc_addr,
             device_id);
-        return static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr, /*size=*/1));
+        return static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr));
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
