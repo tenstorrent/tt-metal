@@ -290,13 +290,23 @@ public:
     }
 
     uint32_t num_links() const { return nlinks_; }
+    // Relative-frame coordinates. physical == (px+1, py+2) on BH; the DRAM columns are therefore at
+    // relative x = px(0)-1 (banks 0-3, physical x=0) and px(5)+3 (banks 4-7, physical x=9) — both confirmed
+    // by the bank-adjacent worker assignment and blackhole_140_arch.yaml.
+    uint32_t rx(uint32_t lx) const { return px_[lx]; }
+    uint32_t ry(uint32_t ly) const { return py_[ly]; }
+    uint32_t dram_rx(uint32_t bank) const { return (bank < 4u) ? ((px_[0] + wx_ - 1u) % wx_) : (px_[5] + 3u); }
 
     // Distinct links traversed from `s` to `d` on `noc`, charging BOTH dimension orders.
     void links(const plan::PlanXY& s, const plan::PlanXY& d, uint32_t noc, std::vector<uint32_t>& out) const {
+        links_rel(px_[s.x], py_[s.y], px_[d.x], py_[d.y], noc, out);
+    }
+
+    void links_rel(uint32_t sx0, uint32_t sy0, uint32_t tx, uint32_t ty, uint32_t noc, std::vector<uint32_t>& out)
+        const {
         out.clear();
         for (uint32_t order = 0; order < 2u; ++order) {
-            uint32_t x = px_[s.x], y = py_[s.y];
-            const uint32_t tx = px_[d.x], ty = py_[d.y];
+            uint32_t x = sx0, y = sy0;
             const uint32_t sx = (noc == 0u) ? 1u : (wx_ - 1u);  // +1 / -1 modulo the torus extent
             const uint32_t sy = (noc == 0u) ? 1u : (wy_ - 1u);
             auto walk_x = [&](uint32_t& x, uint32_t y) {
@@ -645,6 +655,292 @@ void balance_in0_ring_order(
     }
 }
 
+// TEST-ONLY (diag bit10 RING_BALANCED_BG): whole-op link-load-aware in0 ring ordering. Host-only,
+// correctness-preserving; production ring MEMBERSHIP, only the visiting order changes.
+//
+// This is bit9 with the two corrections its measurements demanded (see IDEA1_RING_TOPOLOGY.md):
+//
+// (1) BACKGROUND TRAFFIC. bit9 balanced the ring against itself, which regressed 512x6144x4608 while
+//     winning on 512x6144x2304 even though the two have IDENTICAL ring problems (same placement, same
+//     128 KB shard, same chosen order) and differ only in in1 volume. Modelling all traffic shows why: on
+//     4608 the busiest link is already at 10.52 MB of in1 read traffic and the ring adds only 0.16 MB, so
+//     there was no headroom to win — the ring order was paying hops for nothing. So the in1 reads, the in0
+//     own-shard read, the reduction chain and the output writes are all charged onto the link map FIRST
+//     (they are fixed by the placement); the ring is then routed through that background's valleys.
+//
+// (2) LATENCY BUDGETS. bit9 minimized peak with only a total-hops tie-break, which cost -10% on
+//     256x2048x2048 — a 24 KB shard, where the ring is LATENCY-bound (7 serial hops of a small payload) and
+//     the worst directed edge sets the per-step time. Candidates are therefore constrained to never worsen
+//     the group's worst edge (aggmax) and to stay within (1+kHopBudget) of production's total hops. Both
+//     budgets are anchored on the order PRODUCTION would pick, so production's own order is always feasible
+//     => the search can never be worse than production on either latency metric, only on link choice.
+//
+// Finally a GATE: the reordering is adopted only if it lowers the predicted peak by >= kMinGain; otherwise
+// production's exact orders are kept. Combined, an unhelpful shape gets production behaviour rather than a
+// regression.
+void balance_in0_ring_order_bg(
+    plan::ExecutionPlan& P,
+    IDevice* device,
+    const plan::Geometry& geo,
+    uint32_t Pk,
+    uint32_t Sm,
+    const CoreCoord& grid) {
+    namespace expd = tt::tt_metal::experimental::Device;
+    constexpr double kHopBudget = 0.10;         // allow 10% more ring hops than production's order
+    constexpr double kMinGain = 0.02;           // adopt only if the predicted peak drops by >= 2%
+    constexpr uint64_t kLatencyShardBytes = 64u * 1024u;  // below this the ring is latency-, not bandwidth-bound
+    const uint32_t preaders = geo.num_cores / 8u;
+    const uint32_t ngroups = preaders / Sm;
+    const RingLinkModel lm(device, grid.x, grid.y);
+
+    // ---- Byte weights per traffic class (whole kernel, per core). ----
+    const uint32_t kb_g = geo.K_slice_capacity / geo.K_num_blocks_eff;  // kb
+    const uint64_t shard_bytes =
+        static_cast<uint64_t>(geo.W) * geo.M_block_capacity * kb_g * kTileBytesBf16;  // W blocks of [M_block, kb]
+    const uint64_t ring_edge_bytes = 7ull * shard_bytes;  // every ring edge carries 7 shards over the gather
+    const uint64_t in1_bytes =
+        static_cast<uint64_t>(geo.K_slice_capacity) * geo.N_sub * geo.N_bpc * kTileBytesBf16;
+    const uint64_t red_bytes = static_cast<uint64_t>(geo.N_bpc) * geo.M_block_capacity * geo.N_sub * kTileBytesBf16;
+    const uint64_t out_bytes = static_cast<uint64_t>(geo.M_block_capacity) * geo.N_sub * geo.N_bpc * kTileBytesBf16;
+
+    std::vector<uint64_t> load(lm.num_links(), 0u);
+    std::vector<uint32_t> ls;
+    auto charge = [&](uint32_t sx, uint32_t sy, uint32_t tx, uint32_t ty, uint32_t noc, uint64_t b) {
+        lm.links_rel(sx, sy, tx, ty, noc, ls);
+        for (const uint32_t l : ls) {
+            load[l] += b;
+        }
+    };
+
+    // ---- Static background: everything the ring must share links with. ----
+    for (uint32_t i = 0; i < geo.num_cores; ++i) {
+        const plan::CorePlan& cp = P.cores[i];
+        const uint32_t cx = lm.rx(cp.coord.x), cy = lm.ry(cp.coord.y);
+        const uint32_t rnoc = cp.noc;                       // in1 reader NoC
+        const uint32_t wnoc = (cp.noc == 0u) ? 1u : 0u;     // writer NoC (in0 ring / reduction / output)
+        // in1: from this core's own bank (M-split slaves receive it from their mm==0 reader instead).
+        if (Sm == 1u || cp.mm == 0u) {
+            charge(lm.dram_rx(cp.bank), lm.ry(cp.coord.y), cx, cy, rnoc, in1_bytes);
+            // NOTE: the DRAM endpoint row is the bank-adjacent worker's row; using this core's row is a
+            // one-hop approximation only when the core was displaced by find_near.
+        } else {
+            const auto& rc = P.cores[i - cp.mm].coord;
+            charge(lm.rx(rc.x), lm.ry(rc.y), cx, cy, rnoc, in1_bytes);
+        }
+        for (uint32_t b = 0; b < 8u; ++b) {  // in0 own shard: interleaved DRAM, spread over all banks
+            charge(lm.dram_rx(b), lm.ry(P.cores[b * preaders].coord.y), cx, cy, wnoc, shard_bytes / 8u);
+        }
+        if (Pk > 1u && !cp.is_top) {
+            const auto& nc = P.cores[cp.red_next_idx].coord;
+            charge(cx, cy, lm.rx(nc.x), lm.ry(nc.y), wnoc, red_bytes);
+        }
+        if (Pk == 1u || cp.is_top) {  // output: core -> interleaved DRAM
+            for (uint32_t b = 0; b < 8u; ++b) {
+                charge(cx, cy, lm.dram_rx(b), lm.ry(P.cores[b * preaders].coord.y), wnoc, out_bytes / 8u);
+            }
+        }
+    }
+    const uint64_t bg_peak = *std::max_element(load.begin(), load.end());
+
+    // ---- Per-group tables: edge -> links / hop cost, per mm-ring. ----
+    struct GroupTables {
+        uint32_t base{};
+        NOC wnoc{};
+        uint32_t wnoc_idx{};
+        std::vector<std::array<std::array<std::vector<uint32_t>, 8>, 8>> lk;
+        std::vector<std::array<std::array<uint32_t, 8>, 8>> hp;
+    };
+    std::vector<GroupTables> gt(ngroups);
+    for (uint32_t g = 0; g < ngroups; ++g) {
+        const uint32_t base = g * Sm;
+        gt[g].base = base;
+        gt[g].wnoc = (P.cores[base].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+        gt[g].wnoc_idx = (gt[g].wnoc == NOC::NOC_0) ? 0u : 1u;
+        gt[g].lk.resize(Sm);
+        gt[g].hp.resize(Sm);
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            for (uint32_t a = 0; a < 8u; ++a) {
+                const auto& ca = P.cores[a * preaders + base + mm].coord;
+                for (uint32_t b = 0; b < 8u; ++b) {
+                    if (a == b) {
+                        gt[g].hp[mm][a][b] = 0u;
+                        continue;
+                    }
+                    const auto& cb = P.cores[b * preaders + base + mm].coord;
+                    lm.links(ca, cb, gt[g].wnoc_idx, gt[g].lk[mm][a][b]);
+                    gt[g].hp[mm][a][b] = expd::get_worker_noc_hop_distance(
+                        device, CoreCoord{ca.x, ca.y}, CoreCoord{cb.x, cb.y}, gt[g].wnoc);
+                }
+            }
+        }
+    }
+    auto agg = [&](uint32_t g, const std::array<uint32_t, 8>& ord) {
+        uint32_t mx = 0, tot = 0;
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            for (uint32_t p = 0; p < 8u; ++p) {
+                const uint32_t e = gt[g].hp[mm][ord[p]][ord[(p + 1u) % 8u]];
+                tot += e;
+                mx = std::max(mx, e);
+            }
+        }
+        return std::pair<uint32_t, uint32_t>{mx, tot};
+    };
+    auto apply = [&](uint32_t g, const std::array<uint32_t, 8>& ord, bool add) {
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            for (uint32_t p = 0; p < 8u; ++p) {
+                for (const uint32_t l : gt[g].lk[mm][ord[p]][ord[(p + 1u) % 8u]]) {
+                    load[l] = add ? (load[l] + ring_edge_bytes) : (load[l] - ring_edge_bytes);
+                }
+            }
+        }
+    };
+
+    // ---- Production reference orders. This MUST reproduce optimize_in0_ring_order EXACTLY (the same
+    // two-pass PARETO: pass 1 minimizes the mm==0 ring's (max, total) to establish the aggtot budget, pass 2
+    // minimizes (aggmax, aggtot) subject to it) — otherwise the "keep production" fallback silently installs
+    // a different order and the whole A/B is invalid. A single-pass min(aggmax, aggtot) is NOT the same for
+    // Sm>1 and cost this experiment a spurious -6% on the Sm=3 shape.
+    auto metrics4 = [&](uint32_t g, const std::array<uint32_t, 8>& ord) {
+        struct M {
+            uint32_t r0max, r0tot, aggmax, aggtot;
+        } m{0, 0, 0, 0};
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            uint32_t mx = 0, tot = 0;
+            for (uint32_t p = 0; p < 8u; ++p) {
+                const uint32_t e = gt[g].hp[mm][ord[p]][ord[(p + 1u) % 8u]];
+                tot += e;
+                mx = std::max(mx, e);
+            }
+            if (mm == 0u) {
+                m.r0max = mx;
+                m.r0tot = tot;
+            }
+            m.aggmax = std::max(m.aggmax, mx);
+            m.aggtot += tot;
+        }
+        return m;
+    };
+    auto lt2 = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) { return a0 < b0 || (a0 == b0 && a1 < b1); };
+    std::vector<std::array<uint32_t, 8>> prod(ngroups);
+    for (uint32_t g = 0; g < ngroups; ++g) {
+        const std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
+        std::array<uint32_t, 8> opt_mm0 = bank;
+        auto b_mm0 = metrics4(g, bank);
+        b_mm0.r0max = ~0u;
+        b_mm0.r0tot = ~0u;
+        auto cand_of = [](const std::array<uint32_t, 7>& t) {
+            std::array<uint32_t, 8> c{};
+            c[0] = 0u;
+            for (uint32_t i = 0; i < 7u; ++i) {
+                c[i + 1u] = t[i];
+            }
+            return c;
+        };
+        std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
+        do {
+            const auto cand = cand_of(tail);
+            const auto m = metrics4(g, cand);
+            if (lt2(m.r0max, m.r0tot, b_mm0.r0max, b_mm0.r0tot)) {
+                b_mm0 = m;
+                opt_mm0 = cand;
+            }
+        } while (std::next_permutation(tail.begin(), tail.end()));
+        std::array<uint32_t, 8> opt = opt_mm0;
+        auto b_pa = b_mm0;
+        const uint32_t budget = b_mm0.aggtot;
+        std::array<uint32_t, 7> tail2 = {1, 2, 3, 4, 5, 6, 7};
+        do {
+            const auto cand = cand_of(tail2);
+            const auto m = metrics4(g, cand);
+            if (m.aggtot <= budget && lt2(m.aggmax, m.aggtot, b_pa.aggmax, b_pa.aggtot)) {
+                b_pa = m;
+                opt = cand;
+            }
+        } while (std::next_permutation(tail2.begin(), tail2.end()));
+        prod[g] = opt;
+        apply(g, opt, true);
+    }
+    const uint64_t prod_peak = *std::max_element(load.begin(), load.end());
+
+    // ---- Balanced search under both latency budgets, two sequential passes. ----
+    // Per-step ring time ~ max(worst_edge_hops * hop_latency, shard_bytes / link_bw). For a SMALL shard the
+    // hop term dominates, so the worst edge must not grow (unbudgeted bit9 cost -10% on a 24 KB shard); for a
+    // LARGE shard the bandwidth term dominates and that freedom is exactly what buys the win (+4.2% at 128 KB).
+    const bool cap_edge = shard_bytes < kLatencyShardBytes;
+    std::vector<std::array<uint32_t, 8>> chosen = prod;
+    std::vector<uint32_t> touched;
+    for (uint32_t pass = 0; pass < 2u; ++pass) {
+        for (uint32_t g = 0; g < ngroups; ++g) {
+            apply(g, chosen[g], false);
+            const auto pm = agg(g, prod[g]);
+            const uint32_t max_hops = static_cast<uint32_t>(pm.second * (1.0 + kHopBudget));
+            std::array<uint32_t, 8> best = prod[g];
+            uint64_t best_peak = ~0ull;
+            uint32_t best_hops = ~0u;
+            std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
+            do {
+                std::array<uint32_t, 8> cand{};
+                cand[0] = 0u;
+                for (uint32_t i = 0; i < 7u; ++i) {
+                    cand[i + 1u] = tail[i];
+                }
+                const auto m = agg(g, cand);
+                if ((cap_edge && m.first > pm.first) || m.second > max_hops) {
+                    continue;  // (conditionally) never worsen the worst edge; always respect the hop budget
+                }
+                touched.clear();
+                for (uint32_t mm = 0; mm < Sm; ++mm) {
+                    for (uint32_t p = 0; p < 8u; ++p) {
+                        for (const uint32_t l : gt[g].lk[mm][cand[p]][cand[(p + 1u) % 8u]]) {
+                            touched.push_back(l);
+                        }
+                    }
+                }
+                std::sort(touched.begin(), touched.end());
+                uint64_t peak = 0;
+                for (size_t i = 0; i < touched.size();) {
+                    size_t j = i;
+                    while (j < touched.size() && touched[j] == touched[i]) {
+                        ++j;
+                    }
+                    peak = std::max(peak, load[touched[i]] + static_cast<uint64_t>(j - i) * ring_edge_bytes);
+                    i = j;
+                }
+                if (peak < best_peak || (peak == best_peak && m.second < best_hops)) {
+                    best_peak = peak;
+                    best_hops = m.second;
+                    best = cand;
+                }
+            } while (std::next_permutation(tail.begin(), tail.end()));
+            chosen[g] = best;
+            apply(g, best, true);
+        }
+    }
+    const uint64_t new_peak = *std::max_element(load.begin(), load.end());
+
+    // ---- Gate: keep production unless the predicted peak improves materially. ----
+    const bool adopt = static_cast<double>(new_peak) <= static_cast<double>(prod_peak) * (1.0 - kMinGain);
+    const std::vector<std::array<uint32_t, 8>>& use = adopt ? chosen : prod;
+    log_debug(
+        tt::LogOp,
+        "regime_a_matmul ring balance: background peak {} B, production peak {} B, balanced peak {} B -> {}",
+        bg_peak,
+        prod_peak,
+        new_peak,
+        adopt ? "ADOPT balanced" : "keep production");
+    for (uint32_t g = 0; g < ngroups; ++g) {
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            const uint32_t jj = gt[g].base + mm;
+            for (uint32_t pos = 0; pos < 8u; ++pos) {
+                const uint32_t ci = use[g][pos] * preaders + jj;
+                P.cores[ci].ring_pos = pos;
+                P.cores[ci].ring_next_idx = use[g][(pos + 1u) % 8u] * preaders + jj;
+                P.cores[ci].ring_prev_idx = use[g][(pos + 7u) % 8u] * preaders + jj;
+            }
+        }
+    }
+}
+
 }  // namespace
 
 RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::create(
@@ -750,6 +1046,8 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t Ns_cfg = cfg.n_slices ? cfg.n_slices : 1u;
     if ((diag_mask & 0x100u) != 0u && Ns_cfg > 1u) {
         regroup_in0_rings(P, device, geo, Pk, Ns_cfg, Sm);
+    } else if ((diag_mask & 0x400u) != 0u) {
+        balance_in0_ring_order_bg(P, device, geo, Pk, Sm, device->compute_with_storage_grid_size());
     } else if ((diag_mask & 0x200u) != 0u) {
         balance_in0_ring_order(P, device, geo, Sm, device->compute_with_storage_grid_size());
     } else {

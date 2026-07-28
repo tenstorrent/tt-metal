@@ -60,7 +60,12 @@ See `D1_RING_ATTRIBUTION.md`.
    8) and still removes ~2/3 of crossings. Extra constraint: mm-siblings must keep equal `ring_pos` (the
    in1 forward order depends on it) -> build the partition for mm=0 and mirror it.
    Expected: -5% to -12% on the deep Ns>=2 shapes.
-2. **Crossing/link-load-aware ring ordering — PARTIALLY VALIDATED (diag bit9), not yet shippable.**
+2. **Whole-op link-load-aware ring ordering — ✅ +6.1% on 512x6144x2304, neutral elsewhere (diag bit10).**
+   See `RING_LINK_BALANCE.md`. Charging the FIXED traffic (in1 reads, in0 read, reduction, output) onto the
+   link map first, plus worst-edge/hop budgets anchored on production and an adopt-only-if-better gate, turns
+   bit9's mixed result into +6.1% (3 relaunches) with no regression on the four golden shapes. Recovers ~20%
+   of the entire ring-forward cost from ordering alone. Needs the 60-shape corpus before promotion to mask 0.
+   Superseded first attempt (bit9, in0-only, unbudgeted):
    `optimize_in0_ring_order` searches each ring's 5040 permutations *independently*, so all rings converge
    on the same corridors — self-inflicted contention. Replacing that with a joint objective minimizing peak
    link load (exact route model, `ring_topology_probe.py`) cuts the busiest link 28->21 and measures
