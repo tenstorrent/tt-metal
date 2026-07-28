@@ -944,6 +944,139 @@ void balance_in0_ring_order_bg(
     }
 }
 
+// TEST-ONLY (diag bit12 PLACE_IN1_OPT): in1-read-optimal core PLACEMENT. Host-only and
+// correctness-preserving - it only writes P.cores[i].coord, exactly like place_m_split_workers.
+//
+// Why the production placement is bad for in1: the read response travels DRAM endpoint -> core on the
+// READER's NoC, dimension-ordered and strictly unidirectional with torus wrap (NOC_0 = +x/+y, NOC_1 =
+// -x/-y). So each (bank, noc) has a cheap DOWNSTREAM region and everything else costs most of a lap.
+// build_plan places every reader of a bank in one find_near spiral around opt[bank] - which is chosen "to the
+// right of the DRAM controller", i.e. downstream for NOC_0 only. Worse, IDevice::
+// get_optimal_dram_bank_to_logical_worker_assignment CACHES its result without keying on the NoC
+// (device.cpp: `if (optimal_dram_bank_to_logical_worker_assignment_.empty())`), so opt1 == opt0 in practice
+// and the noc==1 readers are placed at the NOC_0-optimal core. Measured consequence: NOC_0 readers average
+// 9.0 hops, NOC_1 readers 17.2, and NOC_1 carries 66% of in1 read hop-bytes with half the readers.
+//
+// This installs the CROSS layout instead: each (bank, noc) group is placed in the region downstream of THAT
+// endpoint on THAT NoC (nearest-first), so a bank's NOC_0 readers sit on one side of its DRAM column and its
+// NOC_1 readers on the other. Offline (in1_place_search.py, exact route model): in1 read hops -69..-78%,
+// peak in1 link load exactly at the endpoint-egress floor (-50..-57%), whole-op peak -36..-50%, and the in0
+// ring gets 13-23% cheaper as a side effect. An exact min-cost assignment (Hungarian) over the same cost
+// matrix beats this deterministic heuristic by only 0-2% on in1 hops and is WORSE on whole-op peak, so the
+// heuristic is what is implemented.
+void place_in1_optimal(plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo, const CoreCoord& grid) {
+    namespace expd = tt::tt_metal::experimental::Device;
+    const uint32_t preaders = geo.num_cores / 8u;
+    const RingLinkModel lm(device, grid.x, grid.y);
+    const auto opt0 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
+
+    // Per-(bank, noc) DRAM endpoint PHYSICAL row, from blackhole_140_arch.yaml `dram` x `dram_views.
+    // worker_endpoint` (subchannel per NoC). BH-specific static data because no IDevice accessor exposes the
+    // per-NoC endpoint (dram_core_from_dram_channel is on Device, not IDevice) - on promotion this must come
+    // from an API. The NOC_0 column is ASSERTED against the device below, which validates the indexing.
+    constexpr uint32_t kEpRow[8][2] = {{11, 1}, {2, 10}, {9, 4}, {5, 7}, {11, 1}, {3, 10}, {8, 4}, {6, 7}};
+    constexpr uint32_t kPhysYOff = 2u;  // physical y of logical row 0
+    for (uint32_t b = 0; b < 8u; ++b) {
+        TT_FATAL(
+            kEpRow[b][0] == opt0[b].y + kPhysYOff,
+            "regime_a_matmul in1 placement: DRAM endpoint table is stale for this device (bank {} expects "
+            "physical row {}, device's NOC_0-optimal worker is at logical row {})",
+            b,
+            kEpRow[b][0],
+            opt0[b].y);
+    }
+    // Endpoint position in the model's relative frame. x: the DRAM column, derived from which side the
+    // bank-adjacent worker sits on (left column => one step upstream of logical x=0; right column => inside
+    // the middle gap). y: the table above.
+    auto ep_rel = [&](uint32_t b, uint32_t noc) {
+        const uint32_t rx = lm.dram_rx(b);
+        const uint32_t ry = lm.ry(0) + kEpRow[b][noc] - kPhysYOff;  // rel y == logical row for BH
+        return std::pair<uint32_t, uint32_t>{rx, ry % 12u ? (ry % 12u) : 0u};
+    };
+
+    // ---- CROSS placement of the DRAM readers (mm == 0) ----
+    std::set<std::pair<uint32_t, uint32_t>> used;
+    std::vector<uint32_t> links;
+    auto resp_hops = [&](uint32_t b, uint32_t noc, uint32_t x, uint32_t y) {
+        const auto e = ep_rel(b, noc);
+        lm.links_rel(e.first, e.second, lm.rx(x), lm.ry(y), noc, links);
+        return static_cast<uint32_t>(links.size());
+    };
+    for (uint32_t b = 0; b < 8u; ++b) {
+        for (uint32_t noc = 0; noc < 2u; ++noc) {
+            // slots of this (bank, noc): the mm==0 cores whose reader NoC is `noc`
+            std::vector<uint32_t> slots;
+            for (uint32_t p = 0; p < preaders; ++p) {
+                const uint32_t i = b * preaders + p;
+                if (P.cores[i].mm == 0u && P.cores[i].noc == noc) {
+                    slots.push_back(i);
+                }
+            }
+            if (slots.empty()) {
+                continue;
+            }
+            // candidate cells, nearest-first in RESPONSE distance on this NoC (ties by y then x => rows fill)
+            std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>> cand;
+            for (uint32_t y = 0; y < grid.y; ++y) {
+                for (uint32_t x = 0; x < grid.x; ++x) {
+                    cand.push_back({resp_hops(b, noc, x, y), {x, y}});
+                }
+            }
+            std::stable_sort(cand.begin(), cand.end(), [](const auto& a, const auto& c) {
+                if (a.first != c.first) {
+                    return a.first < c.first;
+                }
+                return a.second.second != c.second.second ? a.second.second < c.second.second
+                                                          : a.second.first < c.second.first;
+            });
+            size_t ci = 0;
+            for (const uint32_t i : slots) {
+                while (ci < cand.size() && used.count(cand[ci].second)) {
+                    ++ci;
+                }
+                if (ci >= cand.size()) {
+                    break;
+                }
+                used.insert(cand[ci].second);
+                P.cores[i].coord.x = cand[ci].second.first;
+                P.cores[i].coord.y = cand[ci].second.second;
+                ++ci;
+            }
+        }
+    }
+
+    // ---- M-split slaves: IN1_NEAR, same rule as place_m_split_workers (they never read DRAM) ----
+    for (uint32_t b = 0; b < 8u; ++b) {
+        for (uint32_t p = 0; p < preaders; ++p) {
+            const uint32_t i = b * preaders + p;
+            if (P.cores[i].mm == 0u) {
+                continue;
+            }
+            const CoreCoord rc{P.cores[i - P.cores[i].mm].coord.x, P.cores[i - P.cores[i].mm].coord.y};
+            const NOC rnoc = P.cores[i].noc ? NOC::NOC_1 : NOC::NOC_0;
+            CoreCoord best{};
+            uint32_t bestd = 0xffffffffu;
+            bool found = false;
+            for (uint32_t y = 0; y < grid.y; ++y) {
+                for (uint32_t x = 0; x < grid.x; ++x) {
+                    if (used.count(std::make_pair(x, y))) {
+                        continue;
+                    }
+                    const uint32_t dd = expd::get_worker_noc_hop_distance(device, rc, CoreCoord{x, y}, rnoc);
+                    if (!found || dd < bestd) {
+                        bestd = dd;
+                        best = CoreCoord{x, y};
+                        found = true;
+                    }
+                }
+            }
+            used.insert(std::make_pair(best.x, best.y));
+            P.cores[i].coord.x = best.x;
+            P.cores[i].coord.y = best.y;
+        }
+    }
+}
+
 }  // namespace
 
 RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::create(
@@ -1040,7 +1173,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
 
     // ---- M-split worker PLACEMENT (Sm>1): IN1_NEAR. Overrides only P.cores[i].coord; MUST run BEFORE the ring
     // reorder so the ring order recomputes on the placed coords. No-op at Sm==1. ----
-    if (Sm > 1u) {
+    const bool diag_place_in1 = (diag_mask & 0x1000u) != 0u;  // bit12: in1-read-optimal placement
+    if (diag_place_in1) {
+        place_in1_optimal(P, device, geo, device->compute_with_storage_grid_size());
+    } else if (Sm > 1u) {
         place_m_split_workers(P, device, geo);
     }
 
