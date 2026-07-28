@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp.
-// The legacy fold DRAM (tiled) factory file-path-instantiated the untilize op's compute kernel. That
-// kernel is shared with the untilize op (still on the legacy API), so it cannot be Metal-2.0-ified in
-// place without breaking untilize. This fold-owned fork carries the Metal 2.0 rewrite (named args +
-// DFB bindings) for fold's use only. See METAL2_PORT_REPORT.md (Open items for downstream).
+// Metal 2.0 fork of untilize.cpp (beside it). Carries the Metal 2.0 rewrite (named args + DFB
+// bindings) so ops ported to Metal 2.0 can bind the untilize compute kernel without converting the
+// legacy original in place (which would break its many still-legacy binders). Created by the
+// data_movement/fold port (the first Metal 2.0 consumer); other Metal 2.0 consumers reuse it.
+// Its binding names (dfb::src / dfb::out) and named args are the shared interface — do not rename.
 
 #include <cstdint>
 

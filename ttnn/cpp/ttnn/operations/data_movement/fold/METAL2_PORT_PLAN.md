@@ -96,7 +96,7 @@ None. Both input and output reach the kernel through borrowed-memory CBs (raw `g
 `c_0`: reader(P) + writer(C) → legal 1:1. `c_1`: writer-only raw `get_write_ptr` (sync-free, sole toucher) → **self-loop**; conditional (allocated only `!is_l1_aligned`).
 
 ### Cross-op kernels
-- `untilize/device/kernels/compute/untilize.cpp` — donor compute kernel from the **untilize** op, file-path instantiated by the tiled sub-program. Shared top-level entry point → cannot be Metal-2.0-ified in place without breaking untilize. **Decision: FORK** into a fold-owned copy (`fold/device/kernels/compute/untilize.cpp`); point the tiled factory at the fork. Recorded in the port report under Open items. Thin wrapper over `compute_kernel_lib::untilize` (kernel_lib, unchanged).
+- `untilize/device/kernels/compute/untilize.cpp` — donor compute kernel from the **untilize** op, file-path instantiated by the tiled sub-program ("borrowed" shared kernel). Cannot be Metal-2.0-ified in place without breaking untilize's still-legacy binders. **Census** (binders of the original, all still legacy): untilize `single_core` / `multi_core_parallelize_column` / `multi_core_sub_core_grids` / `multi_core_input_and_output_shard_type_and_shard_spec_identical`; untilize_with_unpadding `single_core` / `multi_core_interleaved` / `multi_core_sharded`; `pool/upsample`. No existing production `_metal2` fork beside the original at audit time → **rung 2: create the fork beside the original** as `untilize/device/kernels/compute/untilize_metal2.cpp` (+ pointer comment in the original), bind the tiled factory to it. Thin wrapper over `compute_kernel_lib::untilize` (kernel_lib, unchanged). Recorded in the port report under Handoff points / Open items.
 
 ### Flags
 - `writer_cb2dram_for_rm_input.cpp:33` calls `cb_in1.get_write_ptr()` **unconditionally**, but `c_1` is allocated only when `!is_l1_aligned`. In Metal 2.0 a kernel cannot touch an unbound DFB — the touch must match the binding. **Resolution: `#ifdef`-gate (conditional binding)** — bind `c_1` and emit its use only when `!is_l1_aligned`, and gate the `get_write_ptr()` behind the same condition (dead in the aligned config anyway). See Applied Patterns.
@@ -112,7 +112,7 @@ None. Both input and output reach the kernel through borrowed-memory CBs (raw `g
 ### Variant: MultiCore (sharded)
 - **KernelSpecs (2):** `WRITER_INST` (WriterGen1 DM config, `is_reader`=1), `READER_INST` (ReaderGen1 DM config, `is_reader`=0). Same source, opt_level **Os**. 13 named CTAs each (drop the `is_reader` CTA — it becomes a per-instance literal value; the two magic CB-index CTAs become DFB bindings).
 - **DataflowBufferSpecs (2):** `SRC0` (borrowed_from `INPUT`, entry `aligned_pixel_size`, num `num_pixels`), `DST0` (borrowed_from `OUTPUT`, entry `aligned_dst_pixel_size`, num `num_dst_pixels`). `data_format_metadata = cb_data_format`.
-- **TensorParameters (2):** `INPUT` (input spec), `OUTPUT` (output spec). No `TensorBinding`s — `borrowed_from` satisfies the parameter-binding requirement (verified against `interleaved_to_sharded` sharded branch).
+- **TensorParameters (2):** `INPUT` (input spec), `OUTPUT` (output spec). No `TensorBinding`s — a borrowed-memory DFB draws its backing L1 address from the paired `TensorArgument` via `borrowed_from` (`dataflow_buffer_spec.hpp`; migration guide — *Borrowed-memory DFBs*), which the spec validator accepts as the parameter's binding. The audit's causal-link gate already classified these bindings **clean** (borrowed-DFB, no `TensorAccessor`). Confirmed at runtime (tests pass with no `TensorBinding` on the borrowed tensors).
 - **SemaphoreSpecs:** none.
 - **WorkUnitSpecs (1):** `{WRITER_INST, READER_INST}` over `all_cores`.
 - No RTAs → no `KernelRunArgs`.
@@ -167,7 +167,7 @@ No page-size 3rd-argument CTAs (audit confirmed no 3rd arg anywhere). No semapho
 - **[Sync-free / single-ended → self-loop DFB](port_patterns.md):** RM `SRC1` scratch — writer is the sole toucher (raw `get_write_ptr`), bind it PRODUCER + CONSUMER.
 - **[Conditional / optional DFB bindings](port_patterns.md):** RM `SRC1` exists only when `!is_l1_aligned`; conditionally bind + emit a `NOT_L1_ALIGNED` define, and `#ifdef`-gate the kernel's `dfb::src1` alias and its `get_write_ptr()` use (which was unconditional in legacy — a latent no-op in the aligned config; gating makes the touch match the allocation).
 - **[Multi-variant factory]:** `MultiCoreDRAMFold::create_program_artifacts` selects tiled vs row-major sub-program by input layout (runtime), same as legacy.
-- **Cross-op fork:** donor `untilize.cpp` forked into fold's `device/kernels/compute/`.
+- **[Caution: Porting a shared kernel] (rung 2, borrowed):** donor `untilize.cpp` forked *beside the original* as `untilize/device/kernels/compute/untilize_metal2.cpp` (not copied into fold's tree); tiled factory binds the fork.
 
 ## Deferred / Flagged
 - **Compute unpack_modes (tiled):** the untilize compute consumes SRC0. When input dtype is `Float32`, `fp32_dest_acc_en` (→ `enable_32_bit_dest`) is true and SRC0 carries a Float32 format → the validator requires an explicit `unpack_modes` entry for SRC0. Legacy set no unpack mode (default) → `UnpackMode::UnpackToSrc`. Add `{{SRC0, UnpackToSrc}}` gated on that condition. (SRC1 is produced, not consumed → no entry.)
