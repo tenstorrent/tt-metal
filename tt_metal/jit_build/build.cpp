@@ -92,7 +92,6 @@ DiskCacheConfig make_disk_cache_config(const tt::llrt::RunTimeOptions& rtoptions
     DiskCacheConfig config;
     config.root = cache_root;
     config.max_size_bytes = rtoptions.get_cache_max_size_bytes();
-    config.trim_enabled = rtoptions.get_cache_trim_enabled();
     return config;
 }
 
@@ -360,7 +359,6 @@ void JitBuildEnv::init(
     // candidate at all -- an entry with no .inuse file is invisible to every trimmer -- and it
     // must happen before we ask anyone to trim, so a trimmer in another process can never pick
     // the tree we are about to compile into. See internal/disk_cache.hpp.
-    disk_cache_initialize_root(this->out_root_);
     disk_cache_hold_entry_for_process(entry_root);
     disk_cache_touch(entry_root);
     disk_cache_trim_in_background(make_disk_cache_config(rtoptions, this->out_root_));

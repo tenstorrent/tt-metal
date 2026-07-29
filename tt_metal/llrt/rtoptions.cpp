@@ -52,7 +52,6 @@ enum class EnvVarID {
 
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_CACHE_MAX_SIZE,                  // Size cap on the kernel cache directory
-    TT_METAL_CACHE_TRIM,                      // Enable/disable automatic kernel cache trimming
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
@@ -449,21 +448,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // tuning knob) govern both the runtime and the tt-metal-cache CLI.
         case EnvVarID::TT_METAL_CACHE_MAX_SIZE: {
             tt::tt_metal::DiskCacheConfig parsed;
-            tt::tt_metal::disk_cache_apply_env(parsed, value, nullptr);
+            tt::tt_metal::disk_cache_apply_env(parsed, value);
             this->cache_max_size_bytes_ = parsed.max_size_bytes;
-            break;
-        }
-
-        // TT_METAL_CACHE_TRIM
-        // Set to 0 to never trim the kernel cache automatically. CI wants this, as does
-        // anything that deliberately runs against an isolated cache. `tt-metal-cache clear`
-        // still works. Accepts 0/1, true/false, yes/no, on/off.
-        // Default: true (trimming enabled, though a size cap is still required to evict)
-        // Usage: export TT_METAL_CACHE_TRIM=0
-        case EnvVarID::TT_METAL_CACHE_TRIM: {
-            tt::tt_metal::DiskCacheConfig parsed;
-            tt::tt_metal::disk_cache_apply_env(parsed, nullptr, value);
-            this->cache_trim_enabled_ = parsed.trim_enabled;
             break;
         }
 

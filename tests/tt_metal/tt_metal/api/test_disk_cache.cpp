@@ -34,7 +34,6 @@ protected:
             fs::temp_directory_path() / ("tt_disk_cache_test_" + std::to_string(::getpid()) + "_" +
                                          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         fs::create_directories(root_);
-        disk_cache_initialize_root(root_);
     }
 
     void TearDown() override {
@@ -98,12 +97,9 @@ protected:
         DiskCacheConfig cfg;
         cfg.root = root_;
         cfg.max_size_bytes = max_size_bytes;
-        // Tests drive recency explicitly, so the safety grace period would only mask the
-        // policy under test. Its own behaviour is covered by TrimRespectsMinEvictionAge.
+        // Tests drive recency explicitly, so the grace period would only mask the policy under
+        // test. Its own behaviour is covered by TrimRespectsMinEvictionAge.
         cfg.min_eviction_age = std::chrono::seconds{0};
-        // The temp directory is local, but say so explicitly so the suite does not depend on
-        // where the machine puts /tmp.
-        cfg.require_trusted_locks = false;
         return cfg;
     }
 
@@ -237,16 +233,14 @@ TEST_F(DiskCacheTest, StatOrdersLeastRecentlyUsedFirst) {
 
     const DiskCacheStats stats = disk_cache_stat(config(0));
     EXPECT_EQ(entry_names(stats), (std::vector<std::string>{"oldest", "middle", "newest"}));
-    for (const auto& entry : stats.entries) {
-        EXPECT_TRUE(entry.has_stamp);
-    }
 }
 
 TEST_F(DiskCacheTest, StatFallsBackToMtimeWithoutStamp) {
     make_entry("unstamped");
     const DiskCacheStats stats = disk_cache_stat(config(0));
     ASSERT_EQ(stats.entries.size(), 1u);
-    EXPECT_FALSE(stats.entries[0].has_stamp);
+    // No .last_used stamp, so recency came from mtime -- which must be a usable time, not the
+    // epoch floor, or the nanosecond difference against now() would overflow.
     EXPECT_GT(stats.entries[0].last_used, std::chrono::system_clock::time_point{});
 }
 
@@ -391,21 +385,7 @@ TEST_F(DiskCacheTest, ClearStillEmptiesASingleEntryCache) {
     EXPECT_FALSE(entry_exists("only_one"));
 }
 
-TEST_F(DiskCacheTest, TrimIsSkippedWhenDisabled) {
-    make_entry("keep");
-    set_idle_for("keep", std::chrono::hours{50});
-
-    DiskCacheConfig cfg = config(1);
-    cfg.trim_enabled = false;
-
-    const DiskCacheTrimResult result = disk_cache_trim(cfg);
-
-    EXPECT_TRUE(result.skipped);
-    EXPECT_EQ(result.entries_removed, 0u);
-    EXPECT_TRUE(entry_exists("keep"));
-}
-
-TEST_F(DiskCacheTest, TrimIsSkippedWithoutAnyLimit) {
+TEST_F(DiskCacheTest, TrimIsSkippedWithoutASizeLimit) {
     make_entry("keep");
     set_idle_for("keep", std::chrono::hours{50});
 
@@ -505,17 +485,6 @@ TEST_F(DiskCacheTest, ClearRemovesEverythingNotInUse) {
     EXPECT_TRUE(entry_exists("held"));
 }
 
-TEST_F(DiskCacheTest, ClearRunsEvenWhenTrimmingIsDisabled) {
-    make_entry("a");
-    DiskCacheConfig cfg = config(0);
-    cfg.trim_enabled = false;
-
-    const DiskCacheTrimResult result = disk_cache_clear(cfg);
-
-    EXPECT_FALSE(result.skipped);
-    EXPECT_FALSE(entry_exists("a"));
-}
-
 TEST_F(DiskCacheTest, TouchCreatesStampThenRateLimitsRewrites) {
     const fs::path entry = make_entry("stamped");
     const fs::path stamp = entry / ".last_used";
@@ -564,7 +533,7 @@ TEST_F(DiskCacheTest, EntryLockIsSharedBetweenConcurrentUsers) {
 // The .inuse-presence rule is what makes automatic eviction deployable: a binary predating
 // the locking protocol never creates that file, so a trimmer cannot mistake its live tree for
 // garbage -- and never considers it at all.
-TEST_F(DiskCacheTest, UnmanagedTreesAreNeverTouchedAutomatically) {
+TEST_F(DiskCacheTest, TreesWithoutAnInUseFileAreNeverTouched) {
     make_entry("managed_a");
     make_entry("managed_b");  // two, so trim can evict one without hitting the working-set rule
     make_unmanaged_entry("old_build_key");
@@ -600,103 +569,17 @@ TEST_F(DiskCacheTest, TrimAndClearDeleteNothingInADirectoryThatIsNotACache) {
     fs::remove_all(stranger, ec);
 }
 
-// Existing caches are adopted by use rather than by a migration: claiming a tree creates
-// .inuse, which is what promotes it into the managed set.
-TEST_F(DiskCacheTest, ClaimingAnUnmanagedTreeMakesItManaged) {
-    make_unmanaged_entry("adopt_me");
-    EXPECT_EQ(disk_cache_stat(config(0)).entries.size(), 0u);
-    EXPECT_EQ(disk_cache_stat_unmanaged(config(0)).entries.size(), 1u);
-
-    ASSERT_TRUE(disk_cache_hold_entry_for_process(root_ / "adopt_me"));
-
-    const DiskCacheStats managed = disk_cache_stat(config(0));
-    ASSERT_EQ(managed.entries.size(), 1u);
-    EXPECT_EQ(managed.entries[0].name, "adopt_me");
-    EXPECT_TRUE(managed.entries[0].managed);
-    EXPECT_EQ(disk_cache_stat_unmanaged(config(0)).entries.size(), 0u);
-}
-
 // Scanning must never create .inuse, or merely looking at a cache would promote every
 // unmanaged tree into an eviction candidate.
-TEST_F(DiskCacheTest, ScanningDoesNotPromoteUnmanagedTrees) {
+TEST_F(DiskCacheTest, ScanningNeverCreatesAnInUseFile) {
     make_unmanaged_entry("untouched");
     set_idle_for("untouched", std::chrono::hours{100});
 
     disk_cache_stat(config(0));
-    disk_cache_stat_unmanaged(config(0));
     disk_cache_trim(config(1));
 
     EXPECT_FALSE(fs::exists(root_ / "untouched" / ".inuse"));
     EXPECT_TRUE(entry_exists("untouched"));
-}
-
-TEST_F(DiskCacheTest, StatSeparatesManagedFromUnmanagedEntries) {
-    make_entry("managed_a");
-    make_entry("managed_b");
-    make_unmanaged_entry("old_a");
-
-    EXPECT_EQ(disk_cache_stat(config(0)).entries.size(), 2u);
-
-    const DiskCacheStats unmanaged = disk_cache_stat_unmanaged(config(0));
-    ASSERT_EQ(unmanaged.entries.size(), 1u);
-    EXPECT_EQ(unmanaged.entries[0].name, "old_a");
-    EXPECT_FALSE(unmanaged.entries[0].managed);
-    EXPECT_GE(unmanaged.total_size_bytes, kEntryFileBytes);
-    EXPECT_LT(unmanaged.total_size_bytes, 2 * kEntryFileBytes);
-}
-
-TEST_F(DiskCacheTest, PruneUnmanagedRemovesOnlyUnclaimedTrees) {
-    make_entry("managed");
-    make_unmanaged_entry("old_a");
-    make_unmanaged_entry("old_b");
-    set_idle_for("managed", std::chrono::hours{50});
-
-    const DiskCacheTrimResult result = disk_cache_prune_unmanaged(config(0));
-
-    EXPECT_FALSE(result.skipped);
-    EXPECT_EQ(result.entries_removed, 2u);
-    EXPECT_FALSE(entry_exists("old_a"));
-    EXPECT_FALSE(entry_exists("old_b"));
-    EXPECT_TRUE(entry_exists("managed"));
-}
-
-// prune-unmanaged's candidates are the entries WITHOUT .inuse, so it cannot use that file as
-// its guard and needs the root marker instead.
-TEST_F(DiskCacheTest, PruneUnmanagedRefusesADirectoryThatIsNotACacheRoot) {
-    const fs::path stranger = root_ / "not_a_cache";
-    fs::create_directories(stranger / "precious_data");
-
-    DiskCacheConfig cfg = config(0);
-    cfg.root = stranger;
-    ASSERT_FALSE(disk_cache_root_is_initialized(stranger));
-
-    const DiskCacheTrimResult result = disk_cache_prune_unmanaged(cfg);
-
-    EXPECT_TRUE(result.skipped);
-    EXPECT_EQ(result.entries_removed, 0u);
-    EXPECT_TRUE(fs::exists(stranger / "precious_data"));
-}
-
-TEST_F(DiskCacheTest, InitializeRootIsIdempotentAndMarksTheRoot) {
-    EXPECT_TRUE(disk_cache_root_is_initialized(root_));
-    disk_cache_initialize_root(root_);
-    EXPECT_TRUE(disk_cache_root_is_initialized(root_));
-
-    const fs::path fresh = root_ / "fresh_root";
-    EXPECT_FALSE(disk_cache_root_is_initialized(fresh));
-    disk_cache_initialize_root(fresh);
-    EXPECT_TRUE(disk_cache_root_is_initialized(fresh));
-}
-
-TEST_F(DiskCacheTest, ParseBoolAcceptsTheUsualSpellings) {
-    for (const char* yes : {"1", "true", "TRUE", "yes", "On", " on "}) {
-        EXPECT_EQ(parse_disk_cache_bool(yes), true) << yes;
-    }
-    for (const char* no : {"0", "false", "FALSE", "no", "Off"}) {
-        EXPECT_EQ(parse_disk_cache_bool(no), false) << no;
-    }
-    EXPECT_FALSE(parse_disk_cache_bool("").has_value());
-    EXPECT_FALSE(parse_disk_cache_bool("maybe").has_value());
 }
 
 // One parser, one error policy: a malformed cache knob must never stop a process running, and
@@ -704,48 +587,23 @@ TEST_F(DiskCacheTest, ParseBoolAcceptsTheUsualSpellings) {
 TEST_F(DiskCacheTest, ApplyEnvIsForgivingAndConsistent) {
     {  // Unset and exported-empty are the same thing, and neither disturbs the defaults.
         DiskCacheConfig cfg;
-        disk_cache_apply_env(cfg, nullptr, nullptr);
+        disk_cache_apply_env(cfg, nullptr);
         EXPECT_EQ(cfg.max_size_bytes, 0u);
-        EXPECT_TRUE(cfg.trim_enabled);
 
-        disk_cache_apply_env(cfg, "", "  ");
+        disk_cache_apply_env(cfg, "");
         EXPECT_EQ(cfg.max_size_bytes, 0u);
-        EXPECT_TRUE(cfg.trim_enabled);
     }
     {  // Garbage keeps the default rather than aborting the process.
         DiskCacheConfig cfg;
         cfg.max_size_bytes = 123;
-        disk_cache_apply_env(cfg, "not-a-size", "not-a-bool");
+        disk_cache_apply_env(cfg, "not-a-size");
         EXPECT_EQ(cfg.max_size_bytes, 123u);
-        EXPECT_TRUE(cfg.trim_enabled);
-    }
-    {  // A truthy spelling must not silently disable trimming.
-        DiskCacheConfig cfg;
-        disk_cache_apply_env(cfg, nullptr, "true");
-        EXPECT_TRUE(cfg.trim_enabled);
-        disk_cache_apply_env(cfg, nullptr, "0");
-        EXPECT_FALSE(cfg.trim_enabled);
     }
     {  // Real values still land.
         DiskCacheConfig cfg;
-        disk_cache_apply_env(cfg, "2G", "1");
+        disk_cache_apply_env(cfg, "2G");
         EXPECT_EQ(cfg.max_size_bytes, 2ull * 1024 * 1024 * 1024);
-        EXPECT_TRUE(cfg.trim_enabled);
     }
-}
-
-TEST_F(DiskCacheTest, AutomaticTrimIsOffUntilALimitIsConfigured) {
-    DiskCacheConfig cfg = config(0);
-    auto blocker = disk_cache_automatic_trim_blocker(cfg);
-    ASSERT_TRUE(blocker.has_value());
-    EXPECT_NE(blocker->find("no size limit"), std::string::npos);
-
-    cfg.max_size_bytes = 1024;
-    EXPECT_FALSE(disk_cache_automatic_trim_blocker(cfg).has_value());
-
-    cfg.trim_enabled = false;
-    ASSERT_TRUE(disk_cache_automatic_trim_blocker(cfg).has_value());
-    EXPECT_NE(disk_cache_automatic_trim_blocker(cfg)->find("disabled"), std::string::npos);
 }
 
 // Device init calls this while holding a build mutex, so it must never wait on the filesystem.

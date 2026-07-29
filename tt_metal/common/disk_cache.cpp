@@ -32,33 +32,23 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#ifdef __linux__
-#include <sys/vfs.h>
-#else
-#include <sys/mount.h>
-#include <sys/param.h>
-#endif
-
 namespace fs = std::filesystem;
 
 namespace tt::tt_metal {
 
 namespace {
 
-constexpr const char* kMarkerName = ".tt_metal_cache";
 constexpr const char* kTrimLockName = ".trim.lock";
 constexpr const char* kLastTrimName = ".last_trim";
 constexpr const char* kTrashName = ".trash";
 constexpr const char* kInUseName = ".inuse";
 constexpr const char* kLastUsedName = ".last_used";
 
-// Bounded, non-blocking acquisition of the shared entry lock. A conflicting exclusive lock is
-// held only across a rename, so a handful of short retries covers real contention while
-// guaranteeing device init cannot stall on the filesystem.
+// A conflicting exclusive lock is held only across a rename, so a few short retries cover real
+// contention while guaranteeing device init cannot stall on the filesystem.
 constexpr int kEntryLockAttempts = 20;
 constexpr std::chrono::milliseconds kEntryLockRetryDelay{25};
 
-// Cache bookkeeping lives in dot-prefixed names so it can never collide with a build_key.
 bool is_reserved_name(std::string_view name) { return name.empty() || name.front() == '.'; }
 
 std::optional<struct ::stat> lstat_or_none(const fs::path& path) {
@@ -73,15 +63,14 @@ std::chrono::system_clock::time_point mtime_of(const struct ::stat& st) {
     return std::chrono::system_clock::from_time_t(st.st_mtime);
 }
 
-// Compare recency in whole seconds. Subtracting two system_clock points yields nanoseconds,
-// and promoting a configured age of, say, a million days into nanoseconds overflows int64 and
-// wraps negative -- which would make every entry look over-age and wipe the cache.
+// Compare recency in whole seconds. Subtracting two system_clock points yields nanoseconds, and
+// a large duration promoted to nanoseconds overflows int64 and wraps negative.
 std::chrono::seconds idle_for(std::chrono::system_clock::time_point now, std::chrono::system_clock::time_point last) {
     return std::chrono::duration_cast<std::chrono::seconds>(now - last);
 }
 
-// Set a file's mtime to now, creating it if absent. futimens with a null spec is what moves
-// mtime without writing a byte; opening alone would leave an existing stamp untouched.
+// futimens with a null spec is what moves mtime without writing a byte; opening alone would
+// leave an existing stamp untouched.
 void stamp_now(const fs::path& path) {
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
     if (fd < 0) {
@@ -94,16 +83,13 @@ void stamp_now(const fs::path& path) {
     ::close(fd);
 }
 
-// Disk usage as the filesystem accounts for it. st_blocks is in 512-byte units by
-// definition, independent of the filesystem's own block size, and it is what makes a
-// sparse file cost less than its apparent length and a one-byte file cost a whole block.
-// Since the point of this cache is to stop filling disks, that is the number that matters.
+// st_blocks is in 512-byte units by definition, and is what makes a sparse file cost less than
+// its apparent length and a one-byte file cost a whole block -- the number `du` reports.
 uint64_t allocated_bytes(const struct ::stat& st) { return static_cast<uint64_t>(st.st_blocks) * 512ULL; }
 
-// Sum of allocated bytes under `root`, following no symlinks. A file reachable by several
-// hard links inside one tree must be counted once; tracking only nlink>1 files keeps the
-// dedup set empty in the common case, since the build unlinks its temporaries after linking
-// them and almost every file at rest has a single link.
+// Sum of allocated bytes under `root`, following no symlinks. The build hard-links artifacts,
+// so a file reachable by several links inside one entry must be counted once; tracking only
+// nlink>1 files keeps the dedup set empty in the common case.
 uint64_t measure_tree_bytes(const fs::path& root) {
     uint64_t total = 0;
     std::set<std::pair<uint64_t, uint64_t>> multi_link_seen;
@@ -126,7 +112,7 @@ uint64_t measure_tree_bytes(const fs::path& root) {
     const fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
         if (ec) {
-            // A concurrent writer or a vanishing entry is expected here; keep the partial sum.
+            // A concurrent writer or a vanishing entry is expected; keep the partial sum.
             log_debug(tt::LogMetal, "Disk cache: walk of {} interrupted: {}", root.string(), ec.message());
             break;
         }
@@ -145,22 +131,14 @@ uint64_t measure_tree_bytes(const fs::path& root) {
     return total;
 }
 
-struct LastUsed {
-    std::chrono::system_clock::time_point when;
-    // False when there was no .last_used stamp and the time came from mtime instead.
-    bool from_stamp = false;
-};
-
-// Recency for one entry. A .last_used stamp is authoritative. Without one, fall back to the
-// newest mtime among the entry directory and its immediate children, which at least moves
-// when firmware/ or kernels/ gains a subdirectory. A couple of extra stats, not a walk.
-LastUsed entry_last_used(const fs::path& entry_path) {
+// A .last_used stamp is authoritative. Without one, fall back to the newest mtime among the
+// entry and its immediate children, which at least moves when kernels/ gains a subdirectory.
+// Epoch rather than time_point::min() as the floor: min() overflows the nanosecond difference,
+// and "unknown recency" should mean "oldest", which epoch already does.
+std::chrono::system_clock::time_point entry_last_used(const fs::path& entry_path) {
     if (auto stamp = lstat_or_none(entry_path / kLastUsedName)) {
-        return {mtime_of(*stamp), true};
+        return mtime_of(*stamp);
     }
-
-    // Epoch, not time_point::min(): subtracting min() from now overflows the nanosecond
-    // difference, and "unknown recency" should mean "oldest", which epoch already does.
     auto newest = std::chrono::system_clock::time_point{};
     if (auto st = lstat_or_none(entry_path)) {
         newest = mtime_of(*st);
@@ -170,11 +148,11 @@ LastUsed entry_last_used(const fs::path& entry_path) {
             newest = std::max(newest, mtime_of(*st));
         }
     }
-    return {newest, false};
+    return newest;
 }
 
-// RAII flock. `shared` picks LOCK_SH over LOCK_EX. Non-blocking: every caller here would
-// rather skip work, or retry on its own terms, than wait on another process.
+// RAII flock, always non-blocking: every caller here would rather skip work, or retry on its
+// own terms, than wait on another process.
 class ScopedFlock {
 public:
     ScopedFlock(const fs::path& path, bool shared, bool create) {
@@ -198,13 +176,12 @@ public:
     ScopedFlock(ScopedFlock&&) = delete;
     ScopedFlock& operator=(ScopedFlock&&) = delete;
 
-    // The file exists and could be opened, whether or not the lock was granted. Separate
-    // from held() so callers can tell "nobody is announcing use" from "somebody holds it".
+    // Distinguishes "no such file, so nobody is announcing use" from "somebody holds it".
     bool opened() const { return opened_; }
     bool held() const { return fd_ >= 0; }
 
-    // Drop the lock early. Used to bound how long an evicting trimmer blocks a waiter: the
-    // lock covers the rename into .trash, not the recursive delete that follows.
+    // Drop early, to bound how long an evicting trimmer blocks a waiter: the lock covers the
+    // rename into .trash, not the recursive delete that follows.
     void release() {
         if (fd_ >= 0) {
             ::flock(fd_, LOCK_UN);
@@ -218,10 +195,9 @@ private:
     bool opened_ = false;
 };
 
-// Entries this process has claimed. Consulted by this process's own trimmer so it cannot
-// evict a tree the process is using, and by disk_cache_hold_entry_for_process to retry a
-// claim that failed earlier. Intentionally never destroyed: the locks must outlive every
-// static destructor that might still touch the cache.
+// Entries this process has claimed. Consulted by this process's own trimmer, since flock would
+// grant our own probe the exclusive lock. Never destroyed: the locks must outlive every static
+// destructor that might still touch the cache.
 struct HeldLocks {
     std::mutex mutex;
     std::map<std::string, std::unique_ptr<DiskCacheEntryLock>> by_path;
@@ -239,8 +215,7 @@ bool claimed_by_this_process(const fs::path& entry_path) {
     return it != locks.by_path.end() && it->second->held();
 }
 
-// A trash name no other process can pick: pid plus a process-local counter plus the wall
-// clock. Collisions would only cost a retry, but a stable-looking name would invite one.
+// A name no other process can pick: pid, a process-local counter, and the wall clock.
 fs::path make_trash_path(const fs::path& trash_dir, const std::string& entry_name) {
     static std::atomic<uint64_t> counter{0};
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
@@ -252,11 +227,9 @@ fs::path make_trash_path(const fs::path& trash_dir, const std::string& entry_nam
                            entry_name);
 }
 
-// Move `entry_path` out of the lookup namespace. Returns where it was staged, or nullopt if
-// it could not be moved at all. Must be called while holding the entry's exclusive lock.
-//
-// Uses a raw rename rather than tt::filesystem::safe_rename because a cross-device failure
-// here is expected and handled below, not worth a warning.
+// Move the entry out of the lookup namespace. Returns where it was staged, or nullopt if it
+// could not be moved. Must hold the entry's exclusive lock. Uses a raw rename because a
+// cross-device failure here is expected and handled below, not worth a warning.
 std::optional<fs::path> stage_for_deletion(const fs::path& entry_path, const fs::path& trash_dir) {
     const fs::path staged = make_trash_path(trash_dir, entry_path.filename().string());
     std::error_code ec;
@@ -264,14 +237,9 @@ std::optional<fs::path> stage_for_deletion(const fs::path& entry_path, const fs:
     if (!ec) {
         return staged;
     }
-
-    // The trash landed on a different filesystem. Removing in place reintroduces the
-    // torn-entry window, so it is a fallback and not the path.
-    log_debug(
-        tt::LogMetal,
-        "Disk cache: cannot stage {} for deletion ({}), removing in place",
-        entry_path.string(),
-        ec.message());
+    // Trash landed on another filesystem. Removing in place reintroduces the torn-entry window,
+    // so it is a fallback and not the path.
+    log_debug(tt::LogMetal, "Disk cache: cannot stage {} ({}), removing in place", entry_path.string(), ec.message());
     if (tt::filesystem::safe_remove_all(entry_path)) {
         return entry_path;  // already gone; nothing left to purge
     }
@@ -290,10 +258,8 @@ uint64_t drain_trash(const fs::path& trash_dir) {
     return reclaimed;
 }
 
-// Collect entries from `root`. `want_managed` selects between entries that carry an .inuse
-// file (eviction candidates) and those that do not (trees only ever written by builds
-// predating the locking protocol, which no automatic path may touch).
-DiskCacheStats scan_entries(const fs::path& root, bool want_managed) {
+// Collect eviction candidates: direct child directories carrying .inuse.
+DiskCacheStats scan_entries(const fs::path& root) {
     DiskCacheStats stats;
     if (!tt::filesystem::safe_is_directory(root).value_or(false)) {
         return stats;
@@ -305,40 +271,31 @@ DiskCacheStats scan_entries(const fs::path& root, bool want_managed) {
             continue;
         }
         std::error_code dir_ec;
-        // directory_entry caches the type readdir already reported, so this is usually free.
+        // directory_entry caches the type readdir reported, so this is usually free.
         if (!child.is_directory(dir_ec) || dir_ec) {
             continue;
         }
 
-        // create=false is load bearing twice over: it must not conjure an .inuse file, which
-        // would silently promote an unmanaged tree into an eviction candidate, and its
-        // opened() result is exactly the managed/unmanaged test.
+        // create=false is load bearing: it must not conjure an .inuse file, which would promote
+        // a tree written by an older binary into an eviction candidate. opened() is also
+        // exactly the "is this a candidate at all" test.
         const ScopedFlock probe(child.path() / kInUseName, /*shared=*/false, /*create=*/false);
-        const bool managed = probe.opened();
-        if (managed != want_managed) {
+        if (!probe.opened()) {
             continue;
         }
 
         DiskCacheEntry entry;
         entry.name = name;
         entry.path = child.path();
-        entry.managed = managed;
         entry.size_bytes = measure_tree_bytes(child.path());
-
-        const LastUsed last_used = entry_last_used(child.path());
-        entry.last_used = last_used.when;
-        entry.has_stamp = last_used.from_stamp;
-
-        // A claim this process holds counts too: flock would grant our own probe the exclusive
-        // lock, so the file alone cannot tell us.
-        entry.in_use = (managed && !probe.held()) || claimed_by_this_process(child.path());
+        entry.last_used = entry_last_used(child.path());
+        entry.in_use = !probe.held() || claimed_by_this_process(child.path());
 
         stats.total_size_bytes += entry.size_bytes;
         stats.entries.push_back(std::move(entry));
     }
 
-    // Least recently used first, which is eviction order. Ties broken by name so the order
-    // is deterministic and the CLI output is stable.
+    // Least recently used first. Ties broken by name so the order is deterministic.
     std::sort(stats.entries.begin(), stats.entries.end(), [](const DiskCacheEntry& a, const DiskCacheEntry& b) {
         if (a.last_used != b.last_used) {
             return a.last_used < b.last_used;
@@ -355,17 +312,13 @@ DiskCacheTrimResult skipped_result(std::string reason) {
     return result;
 }
 
-bool has_size_limit(const DiskCacheConfig& config) { return config.max_size_bytes > 0; }
-
-// Shared body of trim, clear and prune-unmanaged. `want_managed` selects which half of the
-// root's entries are candidates; `honor_limits` false means "evict everything not in use".
-DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool want_managed, bool honor_limits) {
+DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool honor_limits) {
     if (!tt::filesystem::safe_is_directory(config.root).value_or(false)) {
         return skipped_result("cache root does not exist");
     }
 
-    // One trimmer per root. Losing the race is the normal case on a busy machine and is not
-    // worth a warning: the process that holds the lock is doing the same work.
+    // One trimmer per root. Losing the race is normal on a busy machine and not worth a
+    // warning: the process holding the lock is doing the same work.
     const ScopedFlock trim_lock(config.root / kTrimLockName, /*shared=*/false, /*create=*/true);
     if (!trim_lock.held()) {
         return skipped_result("another process is trimming this cache");
@@ -375,13 +328,13 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool want_managed, b
     const fs::path trash_dir = config.root / kTrashName;
     result.bytes_reclaimed += drain_trash(trash_dir);
 
-    const DiskCacheStats stats = scan_entries(config.root, want_managed);
+    const DiskCacheStats stats = scan_entries(config.root);
     result.bytes_before = stats.total_size_bytes;
     uint64_t live_bytes = stats.total_size_bytes;
+    size_t entries_remaining = stats.entries.size();
 
     const auto now = std::chrono::system_clock::now();
     bool trash_dir_ready = false;
-    size_t entries_remaining = stats.entries.size();
 
     for (const auto& entry : stats.entries) {
         const DiskCacheEviction decision =
@@ -404,12 +357,12 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool want_managed, b
 
         std::optional<fs::path> staged;
         {
-            // Hold the entry's exclusive lock across the rename and nothing more. Without it
-            // a process could take a shared lock between our in-use probe and the rename and
-            // believe its tree is protected while we move it away. Holding it across the
-            // recursive delete instead would block that process for the whole delete.
+            // Hold the exclusive lock across the rename and nothing more. Without it a process
+            // could take a shared lock between our probe and the rename and believe its tree is
+            // protected; holding it across the delete instead would block that process for the
+            // whole delete. create=false so an unclaimed tree stays unclaimed.
             ScopedFlock entry_lock(entry.path / kInUseName, /*shared=*/false, /*create=*/false);
-            if (entry.managed && !entry_lock.held()) {
+            if (!entry_lock.held()) {
                 result.entries_skipped_in_use++;
                 continue;
             }
@@ -424,22 +377,18 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool want_managed, b
             continue;
         }
 
-        // Gone from the lookup namespace either way; the bytes are only reclaimed if the
-        // recursive removal completes.
+        // Gone from the lookup namespace either way; bytes count only if the removal completed.
         result.entries_removed++;
         entries_remaining--;
         live_bytes -= std::min(live_bytes, entry.size_bytes);
         if (*staged == entry.path || tt::filesystem::safe_remove_all(*staged)) {
             result.bytes_reclaimed += entry.size_bytes;
-        } else {
-            result.entries_pending_deletion++;
         }
     }
 
     if (honor_limits) {
-        // Records that this root has been swept, so the automatic path can skip the walk
-        // until the interval elapses. Written on every completed pass, including one that
-        // evicted nothing: the expensive part was the scan, and its answer stays good.
+        // Lets the automatic path skip the walk until the interval elapses. Written even when
+        // nothing was evicted: the expensive part was the scan, and its answer stays good.
         stamp_now(config.root / kLastTrimName);
     }
 
@@ -447,9 +396,8 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool want_managed, b
     return result;
 }
 
-// Split "50G" into 50 and 'g'. Returns nullopt unless `text` is a run of digits followed by
-// at most one unit character. One redundant trailing 'b' is dropped first, so "50GB" reads as
-// "50G". `unit` is '\0' for a bare count, lowercase otherwise.
+// Split "50G" into 50 and 'g'. nullopt unless `text` is digits followed by at most one unit
+// character; one redundant trailing 'b' is dropped first, so "50GB" reads as "50G".
 struct ScaledValue {
     uint64_t count = 0;
     char unit = '\0';
@@ -467,10 +415,9 @@ std::string_view trim_spaces(std::string_view text) {
 
 std::optional<ScaledValue> split_scaled_value(std::string_view text) {
     text = trim_spaces(text);
-
     ScaledValue scaled;
     const char* const end = text.data() + text.size();
-    // from_chars takes digits only: no sign, no whitespace, no radix prefix, and it reports
+    // from_chars takes digits only -- no sign, whitespace or radix prefix -- and reports
     // overflow rather than wrapping.
     const auto parsed = std::from_chars(text.data(), end, scaled.count);
     if (parsed.ec != std::errc{}) {
@@ -491,32 +438,6 @@ std::optional<ScaledValue> split_scaled_value(std::string_view text) {
     return scaled;
 }
 
-// True on filesystems where flock may be advisory to one client only, so a lock cannot be
-// relied on to exclude a process on another host.
-bool filesystem_locks_are_local_only(const fs::path& path) {
-#ifdef __linux__
-    // Linux does not expose "are locks local" directly. NFS is the case that matters: with
-    // local_lock or nolock, flock never reaches the server's lock manager, and even without
-    // them the guarantee depends on a working NLM. Treat NFS as untrustworthy.
-    struct ::statfs sfs{};
-    if (::statfs(path.c_str(), &sfs) != 0) {
-        return false;  // cannot tell; do not block on a guess
-    }
-    // NFS_SUPER_MAGIC, spelled out because <linux/magic.h> is not present in every toolchain.
-    // f_type's type varies across libc and architecture (__fsword_t, long, unsigned), so take
-    // it from the object -- `decltype(::statfs{}...)` does not parse, since on Linux `statfs`
-    // names both a struct and a function and the unqualified name resolves to the function.
-    constexpr decltype(sfs.f_type) kNfsSuperMagic = 0x6969;
-    return sfs.f_type == kNfsSuperMagic;
-#else
-    struct ::statfs sfs{};
-    if (::statfs(path.c_str(), &sfs) != 0) {
-        return false;
-    }
-    return std::strncmp(sfs.f_fstypename, "nfs", 3) == 0;
-#endif
-}
-
 }  // namespace
 
 DiskCacheEviction disk_cache_decide_eviction(
@@ -526,59 +447,23 @@ DiskCacheEviction disk_cache_decide_eviction(
     size_t entries_remaining,
     std::chrono::system_clock::time_point now,
     bool honor_limits) {
-    const std::chrono::seconds idle = idle_for(now, entry.last_used);
     if (honor_limits) {
         if (!(config.max_size_bytes > 0 && live_bytes > config.max_size_bytes)) {
-            // Under budget. Entries arrive least recently used first, and evicting only shrinks
-            // live_bytes, so nothing after this one can be over budget either. This must be
-            // checked before the working-set rule below, or a cache that has just been trimmed
-            // down to one entry would be reported as stuck over its bound when it is not.
+            // Under budget. Must be checked before the working-set rule below, or a cache just
+            // trimmed down to one entry would report itself as stuck over its bound.
             return DiskCacheEviction::StopScan;
         }
         if (entries_remaining <= 1) {
-            // Still over budget with one entry left, so the bound is unreachable: evicting
-            // would only have the next run regenerate the tree and land us right back here.
             return DiskCacheEviction::KeepWorkingSet;
         }
     }
     if (entry.in_use) {
         return DiskCacheEviction::KeepInUse;
     }
-    if (honor_limits && idle < config.min_eviction_age) {
+    if (honor_limits && idle_for(now, entry.last_used) < config.min_eviction_age) {
         return DiskCacheEviction::KeepTooYoung;
     }
     return DiskCacheEviction::Evict;
-}
-
-void disk_cache_initialize_root(const fs::path& root) {
-    if (!tt::filesystem::safe_create_directories(root)) {
-        return;
-    }
-    const fs::path marker = root / kMarkerName;
-    if (!tt::filesystem::safe_exists(marker).value_or(false)) {
-        stamp_now(marker);
-    }
-}
-
-bool disk_cache_root_is_initialized(const fs::path& root) {
-    return tt::filesystem::safe_exists(root / kMarkerName).value_or(false);
-}
-
-bool disk_cache_locking_is_trustworthy(const fs::path& path) { return !filesystem_locks_are_local_only(path); }
-
-std::optional<std::string> disk_cache_automatic_trim_blocker(const DiskCacheConfig& config) {
-    if (!config.trim_enabled) {
-        return "trimming disabled by TT_METAL_CACHE_TRIM";
-    }
-    if (!has_size_limit(config)) {
-        return "no size limit configured (set TT_METAL_CACHE_MAX_SIZE to enable)";
-    }
-    if (config.require_trusted_locks && !disk_cache_locking_is_trustworthy(config.root)) {
-        // Evicting here could delete a tree another host is compiling into, because its
-        // .inuse lock would be invisible to us.
-        return "file locking on this filesystem cannot exclude other hosts";
-    }
-    return std::nullopt;
 }
 
 fs::path default_kernel_cache_root() {
@@ -590,53 +475,27 @@ fs::path default_kernel_cache_root() {
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0' && fs::exists(home)) {
         return fs::path(home) / ".cache" / "tt-metal-cache" / "";
     }
-    // Per-uid, because /tmp is shared: a common root would have one user's trimmer sizing and
-    // trying to evict another user's entries, which it cannot even read.
+    // Per-uid, because /tmp is shared and a common root would have one user's trimmer sizing
+    // and trying to evict another user's entries.
     return fs::path("/tmp") / fmt::format("tt-metal-cache-{}", static_cast<unsigned>(::getuid())) / "";
 }
 
-void disk_cache_apply_env(DiskCacheConfig& config, const char* max_size, const char* trim) {
-    // An unset variable and one exported empty are the same thing. Anything unparseable warns
-    // and leaves the default in place: a cache tuning knob must not stop a process running.
-    const auto given = [](const char* value) -> std::optional<std::string_view> {
-        if (value == nullptr) {
-            return std::nullopt;
-        }
-        const std::string_view text = trim_spaces(value);
-        if (text.empty()) {
-            return std::nullopt;
-        }
-        return text;
-    };
-
-    if (auto text = given(max_size)) {
-        if (auto parsed = parse_disk_cache_size(*text)) {
-            config.max_size_bytes = *parsed;
-        } else {
-            log_warning(
-                tt::LogMetal,
-                "Disk cache: ignoring TT_METAL_CACHE_MAX_SIZE='{}' (expected a byte count, optionally suffixed "
-                "K/M/G/T)",
-                std::string(*text));
-        }
+void disk_cache_apply_env(DiskCacheConfig& config, const char* max_size) {
+    if (max_size == nullptr) {
+        return;
     }
-    if (auto text = given(trim)) {
-        if (auto parsed = parse_disk_cache_bool(*text)) {
-            config.trim_enabled = *parsed;
-        } else {
-            log_warning(
-                tt::LogMetal,
-                "Disk cache: ignoring TT_METAL_CACHE_TRIM='{}' (expected 0/1, true/false, yes/no or on/off)",
-                std::string(*text));
-        }
+    const std::string_view text = trim_spaces(max_size);
+    if (text.empty()) {
+        return;  // exported empty is the same as unset
     }
-}
-
-DiskCacheConfig kernel_disk_cache_config_from_env() {
-    DiskCacheConfig config;
-    config.root = default_kernel_cache_root();
-    disk_cache_apply_env(config, std::getenv("TT_METAL_CACHE_MAX_SIZE"), std::getenv("TT_METAL_CACHE_TRIM"));
-    return config;
+    if (auto parsed = parse_disk_cache_size(text)) {
+        config.max_size_bytes = *parsed;
+    } else {
+        log_warning(
+            tt::LogMetal,
+            "Disk cache: ignoring TT_METAL_CACHE_MAX_SIZE='{}' (expected a byte count, optionally suffixed K/M/G/T)",
+            std::string(text));
+    }
 }
 
 std::optional<uint64_t> parse_disk_cache_size(std::string_view text) {
@@ -644,7 +503,6 @@ std::optional<uint64_t> parse_disk_cache_size(std::string_view text) {
     if (!scaled.has_value()) {
         return std::nullopt;
     }
-
     uint64_t multiplier = 0;
     switch (scaled->unit) {
         case '\0':
@@ -661,21 +519,6 @@ std::optional<uint64_t> parse_disk_cache_size(std::string_view text) {
     return scaled->count * multiplier;
 }
 
-std::optional<bool> parse_disk_cache_bool(std::string_view text) {
-    std::string lowered;
-    lowered.reserve(text.size());
-    for (const char c : trim_spaces(text)) {
-        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    }
-    if (lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on") {
-        return true;
-    }
-    if (lowered == "0" || lowered == "false" || lowered == "no" || lowered == "off") {
-        return false;
-    }
-    return std::nullopt;
-}
-
 std::string format_disk_cache_size(uint64_t bytes) {
     static constexpr std::array<const char*, 5> kUnits = {"B", "KiB", "MiB", "GiB", "TiB"};
     if (bytes < 1024) {
@@ -690,46 +533,24 @@ std::string format_disk_cache_size(uint64_t bytes) {
     return fmt::format("{:.1f} {}", value, kUnits[unit]);
 }
 
-DiskCacheStats disk_cache_stat(const DiskCacheConfig& config) {
-    DiskCacheStats stats = scan_entries(config.root, /*want_managed=*/true);
-    // Only the human-facing report cares about debris; a trim already knows what it drained.
-    stats.trash_size_bytes = measure_tree_bytes(config.root / kTrashName);
-    return stats;
-}
-
-DiskCacheStats disk_cache_stat_unmanaged(const DiskCacheConfig& config) {
-    return scan_entries(config.root, /*want_managed=*/false);
-}
+DiskCacheStats disk_cache_stat(const DiskCacheConfig& config) { return scan_entries(config.root); }
 
 DiskCacheTrimResult disk_cache_trim(const DiskCacheConfig& config) {
-    if (auto blocker = disk_cache_automatic_trim_blocker(config)) {
-        return skipped_result(*blocker);
+    if (config.max_size_bytes == 0) {
+        return skipped_result("no size limit configured (set TT_METAL_CACHE_MAX_SIZE to enable)");
     }
-    return run_trim(config, /*want_managed=*/true, /*honor_limits=*/true);
+    return run_trim(config, /*honor_limits=*/true);
 }
 
-DiskCacheTrimResult disk_cache_clear(const DiskCacheConfig& config) {
-    return run_trim(config, /*want_managed=*/true, /*honor_limits=*/false);
-}
-
-DiskCacheTrimResult disk_cache_prune_unmanaged(const DiskCacheConfig& config) {
-    // Every other path is guarded by requiring an .inuse file on the entry. This one's
-    // candidates are precisely the entries without it, so it needs a different guard or a
-    // mistyped --root would put arbitrary directories in scope.
-    if (!disk_cache_root_is_initialized(config.root)) {
-        return skipped_result("not a tt-metal cache root (no " + std::string(kMarkerName) + " marker)");
-    }
-    return run_trim(config, /*want_managed=*/false, /*honor_limits=*/false);
-}
+DiskCacheTrimResult disk_cache_clear(const DiskCacheConfig& config) { return run_trim(config, /*honor_limits=*/false); }
 
 void disk_cache_trim_in_background(const DiskCacheConfig& config) {
-    if (auto blocker = disk_cache_automatic_trim_blocker(config)) {
-        log_debug(tt::LogMetal, "Disk cache: not trimming {} ({})", config.root.string(), *blocker);
+    if (config.max_size_bytes == 0) {
         return;
     }
 
-    // Cheapest gate first: after the first device, later ones cost a mutex and a string
-    // compare instead of a stat.
+    // Cheapest gate first: after the first device, later ones cost a mutex and a string compare
+    // instead of a stat.
     {
         static std::mutex mutex;
         static std::set<std::string> trimmed_roots;
@@ -739,28 +560,23 @@ void disk_cache_trim_in_background(const DiskCacheConfig& config) {
         }
     }
 
-    // One stat, on the hot startup path, standing in for a walk of the whole cache. Without
-    // this every process start would re-size a cache that may hold hundreds of thousands of
-    // files. Racing processes may both get past here; only one wins the trim lock.
+    // One stat standing in for a walk of the whole cache. Racing processes may both get past
+    // here; only one wins the trim lock.
     if (auto stamp = lstat_or_none(config.root / kLastTrimName)) {
         if (idle_for(std::chrono::system_clock::now(), mtime_of(*stamp)) < kDiskCacheTrimInterval) {
             return;
         }
     }
 
-    // Detached on purpose. Trimming must never sit on the compile path, and a joinable
-    // thread would either delay process teardown behind a large remove_all or need an owner
-    // with a well-defined lifetime relative to static destruction. Everything the thread
-    // touches is copied in, and eviction renames before removing, so an abrupt exit leaves
-    // only .trash debris for the next process to drain.
+    // Detached on purpose. Trimming must never sit on the compile path, and a joinable thread
+    // would either delay teardown behind a large remove_all or need an owner with a defined
+    // lifetime relative to static destruction. Everything it touches is copied in, and eviction
+    // renames before removing, so an abrupt exit leaves only .trash debris.
     try {
         std::thread worker([config]() {
             try {
                 const DiskCacheTrimResult result = disk_cache_trim(config);
-                if (result.skipped) {
-                    log_debug(
-                        tt::LogMetal, "Disk cache: skipped trim of {} ({})", config.root.string(), result.skip_reason);
-                } else if (result.entries_removed > 0 || result.bytes_reclaimed > 0) {
+                if (result.entries_removed > 0 || result.bytes_reclaimed > 0) {
                     log_info(
                         tt::LogMetal,
                         "Disk cache: trimmed {} to {} (limit {}), evicted {} entries, reclaimed {}",
@@ -809,16 +625,14 @@ DiskCacheEntryLock::DiskCacheEntryLock(const fs::path& entry_path) {
             log_debug(tt::LogMetal, "Disk cache: cannot open {}: {}", lock_path.string(), ::strerror(errno));
             continue;
         }
-        // Non-blocking: a conflicting exclusive lock is held only across a rename, so
-        // retrying beats waiting, and device init can never hang on the filesystem.
         if (::flock(fd, LOCK_SH | LOCK_NB) != 0) {
             ::close(fd);
             continue;
         }
 
-        // Confirm the file we locked is still the one at lock_path. A trimmer that renamed
-        // the entry away between our open and our lock would otherwise leave us holding a
-        // lock on a file inside .trash while believing the tree is protected.
+        // Confirm the file we locked is still the one at lock_path: a trimmer that renamed the
+        // entry between our open and our lock would otherwise leave us holding a lock on a file
+        // inside .trash while believing the tree is protected.
         struct ::stat locked{};
         struct ::stat current{};
         if (::fstat(fd, &locked) == 0 && ::stat(lock_path.c_str(), &current) == 0 && locked.st_dev == current.st_dev &&
@@ -850,15 +664,13 @@ bool disk_cache_hold_entry_for_process(const fs::path& entry_path) {
         return true;
     }
 
-    // Replaces any earlier failed attempt, so a caller that retries gets a real try rather
-    // than the memory of a failure.
+    // Replaces any earlier failed attempt, so a caller that retries gets a real try.
     auto claim = std::make_unique<DiskCacheEntryLock>(entry_path);
     const bool held = claim->held();
     locks.by_path[key] = std::move(claim);
     if (!held) {
-        // The tree will be built but not announced, so another process's trimmer may remove
-        // it underneath us. Worth saying out loud: it is the one case where this component
-        // can lose work.
+        // The tree will be built but not announced, so another process's trimmer may remove it.
+        // The one case where this component can lose work, so say it out loud.
         log_warning(
             tt::LogMetal,
             "Disk cache: could not claim {}; it is not protected from eviction by other processes",
