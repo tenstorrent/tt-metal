@@ -1,0 +1,13 @@
+Qwen3.6-27B optimized-decoder runner-derived prefill performance
+COMMAND python tests/full_attention_synthetic_pcc.py --mode prefill --sequence 33 --batch 1 --decoder optimized --candidate default --perf-only
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+PREFILL_PERF_ONLY batch=1 sequence=33 median_ms=2.495279 min_ms=2.416920 iterations=5
+COMMAND python tests/full_attention_synthetic_pcc.py --mode prefill --sequence 33 --batch 32 --decoder optimized --candidate default --perf-only
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+PREFILL_PERF_ONLY batch=32 sequence=33 median_ms=42.279556 min_ms=42.255329 iterations=5
+COMMAND python tests/linear_attention_synthetic_pcc.py --mode prefill --sequence 5 --batch 1 --decoder optimized --candidate default --perf-only
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+PREFILL_PERF_ONLY batch=1 sequence=5 median_ms=10.371300 min_ms=10.246502 iterations=5
+COMMAND python tests/linear_attention_synthetic_pcc.py --mode prefill --sequence 5 --batch 32 --decoder optimized --candidate default --perf-only
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+PREFILL_PERF_ONLY batch=32 sequence=5 median_ms=290.853394 min_ms=290.808674 iterations=5

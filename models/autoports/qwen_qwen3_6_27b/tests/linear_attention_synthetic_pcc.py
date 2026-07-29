@@ -5,6 +5,7 @@
 
 import argparse
 import math
+import time
 
 import torch
 from tracy import signpost
@@ -14,6 +15,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, FunctionalDecoder, _to_device
 from models.autoports.qwen_qwen3_6_27b.tt.fused_decoder import FusedDecoder
+from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import OptimizedDecoder
 from models.common.utility_functions import comp_pcc
 
 LAYER = 0
@@ -64,7 +66,7 @@ def _hf_layer(config, state):
 
 
 @torch.no_grad()
-def run(mode, sequence, capacity_only=False, batch=1, decoder_kind="fused", perf_only=False):
+def run(mode, sequence, capacity_only=False, batch=1, decoder_kind="fused", perf_only=False, candidate="default"):
     ttnn.CONFIG.throw_exception_on_fallback = True
     print("FALLBACK_AUDIT", f"throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
     torch.manual_seed(20260729)
@@ -84,8 +86,13 @@ def run(mode, sequence, capacity_only=False, batch=1, decoder_kind="fused", perf
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder_cls = FusedDecoder if decoder_kind == "fused" else FunctionalDecoder
+        decoder_cls = {
+            "functional": FunctionalDecoder,
+            "fused": FusedDecoder,
+            "optimized": OptimizedDecoder,
+        }[decoder_kind]
         print("DECODER_PATH", decoder_cls.__module__, decoder_cls.__name__)
+        decoder_kwargs = {"candidate": candidate} if decoder_kind == "optimized" else {}
         decoder = decoder_cls.from_state_dict(
             state,
             hf_config=config,
@@ -94,6 +101,7 @@ def run(mode, sequence, capacity_only=False, batch=1, decoder_kind="fused", perf
             batch=batch,
             max_context=max(64, logical_sequence),
             page_size=64,
+            **decoder_kwargs,
         )
         hidden_tt = _to_device(hidden.unsqueeze(0), mesh_device=mesh)
         unused_page_table = _to_device(
@@ -131,10 +139,21 @@ def run(mode, sequence, capacity_only=False, batch=1, decoder_kind="fused", perf
         ttnn.synchronize_device(mesh)
         if perf_only:
             signpost("PERF_PREFILL")
-            output = forward()
-            ttnn.synchronize_device(mesh)
+            timings = []
+            for _ in range(5):
+                start = time.perf_counter()
+                output = forward()
+                ttnn.synchronize_device(mesh)
+                timings.append((time.perf_counter() - start) * 1000)
             signpost("PERF_PREFILL_END")
-            print("PREFILL_PERF_ONLY", f"batch={batch}", f"sequence={logical_sequence}")
+            print(
+                "PREFILL_PERF_ONLY",
+                f"batch={batch}",
+                f"sequence={logical_sequence}",
+                f"median_ms={torch.tensor(timings).median().item():.6f}",
+                f"min_ms={min(timings):.6f}",
+                f"iterations={len(timings)}",
+            )
             return
         actual = ttnn.to_torch(ttnn.get_device_tensors(output)[0]).squeeze(0)
         if capacity_only:
@@ -163,7 +182,8 @@ if __name__ == "__main__":
     parser.add_argument("--sequence", type=int, default=5)
     parser.add_argument("--capacity-only", action="store_true")
     parser.add_argument("--batch", type=int, choices=(1, 32), default=1)
-    parser.add_argument("--decoder", choices=("functional", "fused"), default="fused")
+    parser.add_argument("--decoder", choices=("functional", "fused", "optimized"), default="optimized")
     parser.add_argument("--perf-only", action="store_true")
+    parser.add_argument("--candidate", default="default")
     args = parser.parse_args()
-    run(args.mode, args.sequence, args.capacity_only, args.batch, args.decoder, args.perf_only)
+    run(args.mode, args.sequence, args.capacity_only, args.batch, args.decoder, args.perf_only, args.candidate)

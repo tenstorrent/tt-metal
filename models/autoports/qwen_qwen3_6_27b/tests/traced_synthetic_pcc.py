@@ -27,6 +27,7 @@ from models.autoports.qwen_qwen3_6_27b.tests.linear_attention_synthetic_pcc impo
 from models.autoports.qwen_qwen3_6_27b.tests.linear_attention_synthetic_pcc import _state as linear_state
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, FunctionalDecoder, _to_device
 from models.autoports.qwen_qwen3_6_27b.tt.fused_decoder import FusedDecoder
+from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import OptimizedDecoder
 from models.common.utility_functions import comp_pcc
 
 
@@ -64,7 +65,7 @@ def _reference_steps(kind, layer, config, tokens):
 
 
 @torch.no_grad()
-def run(kind, batch, decoder_kind="functional", perf_iterations=10):
+def run(kind, batch, decoder_kind="functional", perf_iterations=10, candidate="default"):
     # Make any Python/host fallback in the measured TTNN path a hard failure.
     ttnn.CONFIG.throw_exception_on_fallback = True
     print("FALLBACK_AUDIT", f"throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
@@ -91,8 +92,13 @@ def run(kind, batch, decoder_kind="functional", perf_iterations=10):
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     trace_id = None
     try:
-        decoder_cls = FusedDecoder if decoder_kind == "fused" else FunctionalDecoder
+        decoder_cls = {
+            "functional": FunctionalDecoder,
+            "fused": FusedDecoder,
+            "optimized": OptimizedDecoder,
+        }[decoder_kind]
         print("DECODER_PATH", decoder_cls.__module__, decoder_cls.__name__)
+        decoder_kwargs = {"candidate": candidate} if decoder_kind == "optimized" else {}
         decoder = decoder_cls.from_state_dict(
             state,
             hf_config=config,
@@ -101,6 +107,7 @@ def run(kind, batch, decoder_kind="functional", perf_iterations=10):
             batch=batch,
             max_context=64,
             page_size=64,
+            **decoder_kwargs,
         )
         hidden_device = _to_device(tokens[0].reshape(1, 1, batch, -1), mesh_device=mesh)
         page_values = torch.arange(batch, dtype=torch.int32).reshape(batch, 1).flip(0)
@@ -132,7 +139,15 @@ def run(kind, batch, decoder_kind="functional", perf_iterations=10):
         decode()
         ttnn.synchronize_device(mesh)
         for name in cache_names:
-            cache_dtype = ttnn.float32 if name == "recurrent" else ttnn.bfloat16
+            cache_dtype = (
+                ttnn.float32
+                if name == "recurrent"
+                else (
+                    getattr(getattr(decoder, "policy", None), "cache_dtype", ttnn.bfloat16)
+                    if name in ("key", "value")
+                    else ttnn.bfloat16
+                )
+            )
             _copy_host(initial_cache[name], decoder.caches[name], dtype=cache_dtype)
         ttnn.synchronize_device(mesh)
 
@@ -192,7 +207,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--kind", choices=("full", "linear"), required=True)
     parser.add_argument("--batch", type=int, choices=(1, 32), required=True)
-    parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
+    parser.add_argument("--decoder", choices=("functional", "fused", "optimized"), default="functional")
     parser.add_argument("--perf-iterations", type=int, default=10)
+    parser.add_argument("--candidate", default="default")
     args = parser.parse_args()
-    run(args.kind, args.batch, args.decoder, args.perf_iterations)
+    run(args.kind, args.batch, args.decoder, args.perf_iterations, args.candidate)

@@ -1,0 +1,181 @@
+Qwen3.6-27B optimized-decoder runner-derived decode sweep
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate default --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.999004129392073
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995812883783348
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.198133 min_ms=1.196399 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate default --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995852546745455
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9998168098920803
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.384728 min_ms=1.382414 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate default --kind linear --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9999858743480033
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9999866200780992
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=2.225711 min_ms=2.220300 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate default --kind linear --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9999666012462245
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=2 0.999989548778239
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=20.526403 min_ms=20.500774 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_hifi2 --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9990071963251399
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995819471723294
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.737712 min_ms=1.736609 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_hifi2 --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995796533187268
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9998155868393755
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.922754 min_ms=1.922183 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_hifi2 --kind linear --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9999858743480033
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9999866200780992
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=2.634581 min_ms=2.632005 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_hifi2 --kind linear --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9999666012462245
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=2 0.999989548778239
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=20.960503 min_ms=20.928090 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate packed_interleaved --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.999004129392073
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995812883783348
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.470324 min_ms=1.468709 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate packed_interleaved --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995819659947024
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9998145408400972
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.654744 min_ms=1.650547 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate split_default --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.999004129392073
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995812883783348
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.587125 min_ms=1.584620 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate split_default --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995819659947024
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9998145408400972
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.781055 min_ms=1.769432 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate gate_up_ds_iw2 --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.999004129392073
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995812883783348
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.211789 min_ms=1.211409 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate gate_up_ds_iw2 --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995860678953266
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.999816866693478
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.398746 min_ms=1.395619 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate geometry_down_iw17_n2 --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.999004129392073
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995812883783348
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.168217 min_ms=1.166834 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate geometry_down_iw17_n2 --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995852546745455
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9998168098920803
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.353902 min_ms=1.350724 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate gate_up_ds_iw5 --kind full --batch 1
+2026-07-29 21:08:47.376 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1585408 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1585408 B which is beyond max L1 size of 1572864 B
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate gate_up_ds_iw5 --kind full --batch 32
+2026-07-29 21:08:55.325 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1585408 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1585408 B which is beyond max L1 size of 1572864 B
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate geometry_qkv_iw10_n7 --kind full --batch 1
+2026-07-29 21:09:03.244 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2094848 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2094848 B which is beyond max L1 size of 1572864 B
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate geometry_qkv_iw10_n7 --kind full --batch 32
+2026-07-29 21:09:11.158 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2094848 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2094848 B which is beyond max L1 size of 1572864 B
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate geometry_o_iw24_n2 --kind full --batch 1
+2026-07-29 21:09:19.081 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1819392 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1819392 B which is beyond max L1 size of 1572864 B
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate geometry_o_iw24_n2 --kind full --batch 32
+2026-07-29 21:09:27.024 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1819392 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1819392 B which is beyond max L1 size of 1572864 B
+FINAL_REPRO COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate default --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.999004129392073
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995812883783348
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.168046 min_ms=1.166345 iterations=10
+FINAL_REPRO COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate default --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995852546745455
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9998168098920803
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.354522 min_ms=1.353228 iterations=10
+FINAL_REPRO COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate default --kind linear --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9999858743480033
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9999866200780992
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=2.196347 min_ms=2.191829 iterations=10
+FINAL_REPRO COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate default --kind linear --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9999666012462245
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=2 0.999989548778239
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=20.497374 min_ms=20.480922 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate geometry_o_iw24_n2 --kind full --batch 1
+2026-07-29 21:10:18.973 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1819392 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1819392 B which is beyond max L1 size of 1572864 B
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate geometry_o_iw24_n2 --kind full --batch 32
+2026-07-29 21:10:26.810 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1819392 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1819392 B which is beyond max L1 size of 1572864 B
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_down_final --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9990050290327179
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995817284502312
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.207291 min_ms=1.205358 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_down_final --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995855000337063
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9998171869664653
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.394629 min_ms=1.393217 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_down_final --kind linear --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9999867967865151
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9999872342177963
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=2.233669 min_ms=2.230402 iterations=10
+COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_down_final --kind linear --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=1 0.999967587243771
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9999904528425421
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=20.531796 min_ms=20.500725 iterations=10
+FINAL_LAYOUT COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_hifi2 --kind full --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9990071963251399
+FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995819471723294
+FULL_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=1.707306 min_ms=1.706454 iterations=10
+FINAL_LAYOUT COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_hifi2 --kind full --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995796533187268
+FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9998155868393755
+FULL_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=1.896968 min_ms=1.893301 iterations=10
+FINAL_LAYOUT COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_hifi2 --kind linear --batch 1
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9999858743480033
+LINEAR_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9999866200780992
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=1 median_ms=2.605761 min_ms=2.604508 iterations=10
+FINAL_LAYOUT COMMAND python tests/traced_synthetic_pcc.py --decoder optimized --candidate bfp8_hifi2 --kind linear --batch 32
+DECODER_PATH models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder OptimizedDecoder
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9999666012462245
+LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=2 0.999989548778239
+LINEAR_TRACED_SYNTHETIC_LATENCY batch=32 median_ms=20.914902 min_ms=20.883079 iterations=10

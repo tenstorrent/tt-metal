@@ -3,6 +3,8 @@
 
 """Nonzero paged-cache regression across the 64-token page boundary."""
 
+import argparse
+
 import torch
 from transformers import AutoConfig, DynamicCache
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
@@ -11,11 +13,12 @@ import ttnn
 from models.autoports.qwen_qwen3_6_27b.tests.full_attention_synthetic_pcc import LAYER, _hf_layer, _state
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, _to_device
 from models.autoports.qwen_qwen3_6_27b.tt.fused_decoder import FusedDecoder
+from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import OptimizedDecoder
 from models.common.utility_functions import comp_pcc
 
 
 @torch.no_grad()
-def run():
+def run(*, decoder_kind="optimized", candidate="default"):
     ttnn.CONFIG.throw_exception_on_fallback = True
     print("FALLBACK_AUDIT", f"throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
     torch.manual_seed(20260729)
@@ -51,7 +54,9 @@ def run():
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder = FusedDecoder.from_state_dict(
+        decoder_cls = OptimizedDecoder if decoder_kind == "optimized" else FusedDecoder
+        kwargs = {"candidate": candidate} if decoder_cls is OptimizedDecoder else {}
+        decoder = decoder_cls.from_state_dict(
             state,
             hf_config=config,
             layer_idx=LAYER,
@@ -59,6 +64,7 @@ def run():
             batch=1,
             max_context=128,
             page_size=64,
+            **kwargs,
         )
         page_table = _to_device(
             torch.tensor([[1, 0]], dtype=torch.int32),
@@ -113,4 +119,8 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--decoder", choices=("optimized", "fused"), default="optimized")
+    parser.add_argument("--candidate", default="default")
+    args = parser.parse_args()
+    run(decoder_kind=args.decoder, candidate=args.candidate)
