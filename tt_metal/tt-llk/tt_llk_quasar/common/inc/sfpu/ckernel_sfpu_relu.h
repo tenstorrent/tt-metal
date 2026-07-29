@@ -64,7 +64,7 @@ inline void _calculate_lrelu_(const std::uint32_t slope)
         _calculate_lrelu_sfp_rows_();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
-    TTI_SFPENCC(0, 2); // disable cc
+    TTI_SFPENCC(0x3, 0xA);
 }
 
 // Calculates RELU MIN for number of rows of output SFPU ops (Quasar = 2 rows)
@@ -95,7 +95,7 @@ inline void _relu_min_(const std::uint32_t threshold)
         _calculate_relu_min_sfp_rows_();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
-    TTI_SFPENCC(0, 2); // disable cc
+    TTI_SFPENCC(0x3, 0xA);
 }
 
 // Calculates RELU MAX for number of rows of output SFPU ops (Quasar = 2 rows)
@@ -131,7 +131,7 @@ inline void _relu_max_(const std::uint32_t threshold)
         _calculate_relu_max_sfp_rows_();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
-    TTI_SFPENCC(0, 2); // disable cc
+    TTI_SFPENCC(0x3, 0xA);
 }
 
 } // namespace sfpu
