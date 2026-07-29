@@ -2683,6 +2683,7 @@ ALWI void elem_apply_compute(
         }
         if constexpr (!eltwise_chain_skip_compute_v) {
             constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
+#pragma GCC unroll 0
             for (uint32_t j = 0; j < inner_count; ++j) {
                 if constexpr (per_side) {
                     // Per-side path: chain hands both indices; element picks per operand.
@@ -2762,6 +2763,7 @@ ALWI void elem_apply_pack(
         elem.configure_relu();
     }
     if constexpr (!eltwise_chain_skip_compute_v) {
+#pragma GCC unroll 0
         for (uint32_t j = 0; j < inner_count; ++j) {
             const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
             elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
@@ -3065,10 +3067,9 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              ...);
             tile_regs_acquire();
         }
-        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
+        for (uint32_t wt_base = 0; wt_base < Wt;) {
             const uint32_t inner_count = (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
-            const uint32_t chunk_sync_count =
-                synchronize_full_blocks && inner_count < block_size ? block_size : inner_count;
+            const uint32_t chunk_sync_count = synchronize_full_blocks ? block_size : inner_count;
             const uint32_t i_flat = row_base + wt_base;
             if constexpr (!dest_accumulation) {
                 tile_regs_acquire();
@@ -3128,6 +3129,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                 }
                 tile_regs_release();
             }
+            wt_base += inner_count;
         }
         if constexpr (per_row_dest_accumulation) {
             tile_regs_commit();
