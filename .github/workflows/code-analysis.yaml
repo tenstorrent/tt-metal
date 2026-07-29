@@ -91,6 +91,18 @@ jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
   # This workflow only needs to pass the platform string.
 
+  notify-workflow-start:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comment on issue 51444
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh issue comment 51444 --body "@Aswinmcw Hello! This is from the GitHub Actions bot."
+
   determine-scan-type:
     runs-on: ubuntu-latest
     outputs:
