@@ -197,6 +197,17 @@ void kernel_main() {
         }
     }
 
+    // Mirror the writer's split-forwarding (see ring_attention_all_gather_writer.cpp): on an even ring
+    // the diametric slice is relayed in halves across both links. Direction 1 receives one extra slice
+    // (its own diametric shard's second half, signaled but never relayed) and relays one extra (the
+    // second half of its downstream neighbor's diametric shard). Gated on ring geometry only so the
+    // writer and the SDPA op receiver make the identical decision.
+    const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    if (split_forwarding_enabled && direction == 1) {
+        slices_expected++;
+        writes_expected++;
+    }
+
     while (slices_received < slices_expected) {
         // Do i expect more from the backward direction?
         // In the linear case, I expect num_targets_backward_direction slices from the left
@@ -236,16 +247,34 @@ void kernel_main() {
         // In the ring case, if I have received on the right less than my targets on the left, forward
         if ((topology == Topology::Linear && writes_expected > 0) ||
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
+            // The last slice we relay is the diametric shard of our downstream neighbor; relay only
+            // this link's half so the paired writer pops a matching cb_output count.
+            const bool is_split_forwarded_slice = split_forwarding_enabled && (slices_received == writes_expected);
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                uint32_t tiles_read = input_tile_id_start[input_idx];
-                uint32_t tiles_to_read = input_tile_id_end[input_idx];
-
-                uint32_t output_tile_id_start = 0;
-                uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                uint32_t row_offset =
-                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
                 uint32_t slice_Wt = input_tensor_Wt[input_idx];
                 uint32_t stride_Wt = output_tensor_Wt[input_idx];
+
+                // Packet-aligned midpoint of this input's per-batch-head page range (matches the
+                // writer). Direction 0 relays [start, mid); direction 1 relays [mid, end).
+                const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
+                const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
+                const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
+                const bool split_this_input = is_split_forwarded_slice;
+                uint32_t relay_start = input_tile_id_start[input_idx];
+                uint32_t relay_end = input_tile_id_end[input_idx];
+                if (split_this_input) {
+                    if (direction == 0) {
+                        relay_end = input_tile_id_start[input_idx] + first_half_pages;
+                    } else {
+                        relay_start = input_tile_id_start[input_idx] + first_half_pages;
+                    }
+                }
+
+                uint32_t tiles_read = relay_start;
+                uint32_t tiles_to_read = relay_end;
+                uint32_t output_tile_id_start = 0;
+                uint32_t pages_read_in_row = relay_start % slice_Wt;
+                uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
                 if (gather_dim == 3) {
                     output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
                 } else {
@@ -270,11 +299,10 @@ void kernel_main() {
                             }
                             return pid;
                         });
-                    pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                    row_offset =
-                        (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
-                    tiles_read = input_tile_id_start[input_idx];
-                    tiles_to_read = input_tile_id_end[input_idx];
+                    pages_read_in_row = relay_start % slice_Wt;
+                    row_offset = (relay_start / slice_Wt) * stride_Wt;
+                    tiles_read = relay_start;
+                    tiles_to_read = relay_end;
                     output_tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
                 }
             }

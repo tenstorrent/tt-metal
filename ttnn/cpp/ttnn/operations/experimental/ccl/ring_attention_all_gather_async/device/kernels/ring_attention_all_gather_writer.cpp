@@ -254,6 +254,17 @@ void kernel_main() {
         }
     }
 
+    // On an even ring the terminal relayed slice (its receiver's diametric shard, N/2 hops away on
+    // both links) would otherwise traverse its final hop on one link while the other idles. Relay its
+    // first half on direction 0 and its second half on direction 1 so both links share that hop;
+    // direction 1 gains one relay to carry the second half. Gated on ring geometry only so the paired
+    // reader and the SDPA op receiver make the identical decision without shape info; a single-packet
+    // range degenerates to first_half_pages == 0 (direction 0 relays nothing).
+    const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    if (split_forwarding_enabled && direction == 1) {
+        writes_expected++;
+    }
+
     while (slice_writes < writes_expected) {
         // Direction == backward
         // Did I get something from my left to send to my right?
@@ -275,6 +286,7 @@ void kernel_main() {
             slice_chip_id = my_chip_id - slice_writes - 1;
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
         }
+        const bool is_split_forwarded_slice = split_forwarding_enabled && (slice_writes == writes_expected - 1);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             uint32_t tiles_read = input_tile_id_start[input_idx];
             uint32_t tiles_to_read = input_tile_id_end[input_idx];
@@ -290,47 +302,65 @@ void kernel_main() {
             } else {
                 tile_id_start = actual_slice_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
             }
+
+            // Packet-aligned midpoint of this input's per-batch-head page range. On the split slice
+            // direction 0 relays [start, mid) and direction 1 relays [mid, end); the skipped half's
+            // cursor still advances so cb_output pops match the pages the paired reader pushed.
+            const uint32_t total_pages = tiles_to_read - input_tile_id_start[input_idx];
+            const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
+            const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
+            const bool split_this_input = is_split_forwarded_slice;
+
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                    cb_output.wait_front(packet_size_in_pages);
-                    size_t l1_read_addr = cb_output.get_read_ptr();
+                    uint32_t page_in_bh = tiles_read - input_tile_id_start[input_idx];
+                    bool relay_this_packet =
+                        !split_this_input ||
+                        (direction == 0 ? (page_in_bh < first_half_pages) : (page_in_bh >= first_half_pages));
+
                     uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
                         row_offset += stride_Wt;
                         pages_read_in_row = 0;
                     }
-
+                    uint32_t second_tile_id = 0;
                     if (num_pages_to_read == 2) {
-                        uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
+                        second_tile_id = tile_id_start + row_offset + pages_read_in_row;
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
                             row_offset += stride_Wt;
                             pages_read_in_row = 0;
                         }
+                    }
 
-                        scatter_fabric_write_unidir(
-                            first_tile_id,
-                            second_tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
-                    } else {
-                        ASSERT(num_pages_to_read == 1);
-                        fabric_write_unidir(
-                            first_tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
+                    if (relay_this_packet) {
+                        cb_output.wait_front(packet_size_in_pages);
+                        size_t l1_read_addr = cb_output.get_read_ptr();
+                        if (num_pages_to_read == 2) {
+                            scatter_fabric_write_unidir(
+                                first_tile_id,
+                                second_tile_id,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                l1_read_addr,
+                                output_page_size);
+                        } else {
+                            ASSERT(num_pages_to_read == 1);
+                            fabric_write_unidir(
+                                first_tile_id,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                l1_read_addr,
+                                output_page_size);
+                        }
+                        cb_output.pop_front(packet_size_in_pages);
                     }
 
                     tiles_read += num_pages_to_read;
-                    cb_output.pop_front(packet_size_in_pages);
                 }
                 tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
                 tiles_read = input_tile_id_start[input_idx];

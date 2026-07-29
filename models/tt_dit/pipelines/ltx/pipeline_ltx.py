@@ -682,6 +682,8 @@ class LTXPipeline:
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
         video = self.vae_decoder(latent_spatial, output_type=output_type)
+        if output_type == "yuv":
+            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
         if output_type != "float":
             return video.numpy()
         return video
