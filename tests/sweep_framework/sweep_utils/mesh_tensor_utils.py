@@ -1296,6 +1296,29 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     return None
 
 
+_LOGGED_MESH_SHAPE = None
+
+
+def _log_resolved_mesh_shape(shape, source):
+    """Log the resolved model-traced mesh shape once per process, then return it.
+
+    Nothing else in a sweep run records which mesh shape was opened, so a job whose
+    vectors were traced across several topologies gave no way to tell from the logs which
+    one they actually ran on (verified against Galaxy job 90192732565: MESH_DEVICE_SHAPE
+    never appears, and neither does any opened-shape line). Logged once, not per vector,
+    to keep it out of the per-vector noise.
+    """
+    global _LOGGED_MESH_SHAPE
+    entry = (tuple(shape), source)
+    if _LOGGED_MESH_SHAPE != entry:
+        _LOGGED_MESH_SHAPE = entry
+        try:
+            logger.info(f"SWEEPS: model-traced mesh shape resolved to {tuple(shape)} via {source}.")
+        except Exception:
+            pass  # logging must never break device setup
+    return shape
+
+
 def get_model_traced_mesh_shape() -> Tuple[int, int]:
     """Get mesh shape for model-traced sweep modules.
 
@@ -1304,11 +1327,28 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     only reproduced when the sweep re-executes on a mesh device.
 
     Priority: MESH_DEVICE_SHAPE env var > master JSON > auto-detect.
+
+    NOTE the priority list is misleading: get_mesh_shape() ALREADY falls back to hardware
+    auto-detect, so it returns non-None on any host with >= 2 devices and the master-JSON
+    and auto-detect blocks below are unreachable there. They only run on a single-device
+    host (or before ttnn is initialised). On Galaxy the answer is therefore always (4, 8),
+    from auto-detect -- the master JSON never influences it.
+
+    Only ttnn-model-trace-sweep-validation-impl.yaml sets MESH_DEVICE_SHAPE (per matrix
+    batch); ttnn-run-sweeps-impl.yaml does not, and never downloads the master JSON either
+    (the sweep job pulls only the 'sweeps-vectors' artifact). So a lead-model Galaxy job
+    runs every vector on (4, 8) even though its vectors were traced across several
+    topologies (4x8: 1138, 4x4: 413, 8x4: 366, 1x32: 38, 1x1: 37). The 404 traced at
+    (8, 4)/(1, 32) fail create_tensor_on_mesh's actual_rows/cols >= traced_rows/cols test
+    and fall back to ReplicateTensorToMesh. The result is logged (once per process)
+    because nothing else in a run records it -- verified absent from Galaxy job
+    90192732565's log, which is why this was invisible in CI.
     """
     # Env var takes priority — CI sets this per batch to match traced topology.
     shape = get_mesh_shape()
     if shape:
-        return shape
+        _src = "MESH_DEVICE_SHAPE env" if os.environ.get("MESH_DEVICE_SHAPE", "").strip() else "hardware auto-detect"
+        return _log_resolved_mesh_shape(shape, _src)
 
     # Fall back to master JSON, filtering by current arch AND card count.
     try:
@@ -1339,6 +1379,15 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
 
             with open(_master_path) as _f_ms:
                 _m_ms = _json_ms.load(_f_ms)
+            # Tally EVERY matching config's shape and take the most common one rather
+            # than returning the first hit. The scan walks ALL ops, so "first" was
+            # whichever op happened to lead the JSON, not the op being run: with the
+            # 32-card master JSON it yields ttnn.add's (8, 4) even when running softmax,
+            # although (4, 8) is the majority (1138 vectors vs 366). This branch is only
+            # reachable on a single-device host (see the docstring), so this is a
+            # correctness/consistency fix rather than a behaviour change on Galaxy --
+            # majority-wins now agrees with what auto-detect picks.
+            _shape_votes = {}
             for _op_ms in _m_ms.get("operations", {}).values():
                 for _cfg_ms in _op_ms.get("configurations", []):
                     _mi_ms = _cfg_ms.get("traced_machine_info") or {}
@@ -1367,7 +1416,11 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         if isinstance(_ms_val, str):
                             _ms_val = _ast_ms.literal_eval(_ms_val)
                         if isinstance(_ms_val, list) and len(_ms_val) == 2:
-                            return tuple(_ms_val)
+                            _key_ms = tuple(_ms_val)
+                            _shape_votes[_key_ms] = _shape_votes.get(_key_ms, 0) + 1
+            if _shape_votes:
+                _best = max(_shape_votes.items(), key=lambda kv: kv[1])[0]
+                return _log_resolved_mesh_shape(_best, f"master JSON majority of {_shape_votes}")
     except Exception:
         pass  # Intentionally ignored: master config parsing is best-effort, fall through to auto-detect
     # Auto-detect mesh shape from available hardware.
@@ -1376,16 +1429,16 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy
+            return _log_resolved_mesh_shape((4, 8), f"auto-detect ({num_devices} devices, Galaxy)")
         elif num_devices >= 8:
-            return (1, 8)  # T3000
+            return _log_resolved_mesh_shape((1, 8), f"auto-detect ({num_devices} devices, T3000)")
         elif num_devices >= 2:
-            return (1, num_devices)
+            return _log_resolved_mesh_shape((1, num_devices), f"auto-detect ({num_devices} devices)")
     except Exception:
         # ttnn may not be initialized yet (env var path is preferred).
         # Fall through to a 1x1 default for non-mesh runs.
         pass
-    return (1, 1)
+    return _log_resolved_mesh_shape((1, 1), "default (no mesh detected)")
 
 
 def _replicated_single_copy(device_tensors, to_torch_fn):
