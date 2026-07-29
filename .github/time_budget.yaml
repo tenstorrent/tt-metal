@@ -277,6 +277,9 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
+  bit_exact:
+    wh_n150_civ2: 90
+    bh_p150b_civ2: 180
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
@@ -337,7 +340,7 @@ models:
     wh_galaxy_perf: 45
     bh_p150: 20
     bh_quietbox_2: 260
-    bh_galaxy: 550  # incl. 4 LTX-2.3 pipeline legs @120 (Pro/Fast x T2V/I2V); provisional, tune from CI
+    bh_galaxy: 550
     bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
   unit_tier2:
     wh_llmbox: 114
@@ -369,7 +372,7 @@ models:
     wh_galaxy_perf: 150
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
-    bh_sc1: 377
+    bh_sc1: 437
     bh_sc1_high_power: 108
     wh_n150: 500
     wh_n150_civ2: 300
