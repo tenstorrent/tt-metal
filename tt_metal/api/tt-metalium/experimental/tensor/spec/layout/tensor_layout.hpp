@@ -9,8 +9,10 @@
 
 #include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -20,7 +22,7 @@ namespace tt::tt_metal {
 // Returns true if the configuration is valid, false otherwise.
 bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, const Tile& tile = Tile{});
 
-class IDevice;
+class TensorLayoutImpl;
 
 using Strides = std::vector<size_t>;
 
@@ -35,6 +37,12 @@ public:
         const MemoryConfig& memory_config,
         const Alignment& alignment = {});
 
+    ~TensorLayout();
+    TensorLayout(const TensorLayout& other);
+    TensorLayout& operator=(const TensorLayout& other);
+    TensorLayout(TensorLayout&& other) noexcept;
+    TensorLayout& operator=(TensorLayout&& other) noexcept;
+
     // static method makes it easy to find and remove all of its usages in the codebase - that's why it is not a
     // constructor
     [[deprecated("Use of Padded Shape is deprecated")]] static TensorLayout fromPaddedShape(
@@ -44,23 +52,12 @@ public:
         const tt::tt_metal::Shape& logical_shape,
         const tt::tt_metal::Shape& padded_shape);
 
-    Layout get_layout() const { return page_config_.get_layout(); }
-    Tile get_tile() const { return page_config_.get_tile(); }
-    PageConfig get_page_config() const { return page_config_; }
-    DataType get_data_type() const { return dtype_; }
-    const MemoryConfig& get_memory_config() const { return memory_config_; }
-    const Alignment& get_alignment() const { return alignment_; }
-
-    Strides compute_strides(const tt::tt_metal::Shape& shape) const;
-
-    BufferShardingArgs compute_buffer_sharding_args(const tt::tt_metal::Shape& shape) const;
-
-    size_t compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const;
-    size_t compute_page_size_bytes(const tt::tt_metal::Shape& shape) const;
-
-    size_t compute_consumed_memory_bytes_per_bank(const tt::tt_metal::Shape& shape, const IDevice& device) const;
-    size_t compute_consumed_memory_bytes_per_bank(
-        const tt::tt_metal::Shape& shape, size_t page_alignment, size_t num_banks) const;
+    Layout get_layout() const;
+    Tile get_tile() const;
+    PageConfig get_page_config() const;
+    DataType get_data_type() const;
+    const MemoryConfig& get_memory_config() const;
+    const Alignment& get_alignment() const;
 
     // This method is deprecated and should be replaced with get_strides() / get_physical_size()
     // It computes padded shape on the fly from shape and alignment
@@ -69,41 +66,28 @@ public:
         tt_metal::Shape
         compute_padded_shape(const tt::tt_metal::Shape& shape) const;
 
-    // Flattens input shape into height and width
-    // - Height is accumulated over all dims except last
-    // - Width is equal to the last dim
-    Shape2D compute_logical_2d_shape(const tt::tt_metal::Shape& shape) const;
+    TensorLayout with_memory_config(MemoryConfig memory_config) const;
 
-    // Returns number of elements laid out in physically memory across H:W dimensions
-    //  W is row width aligned to page width and shard width, depends on data type
-    //  H is all dimensions except W multiplied and aligned to tile and shard height
-    Shape2D compute_physical_shape(const tt::tt_metal::Shape& shape) const;
+    bool operator==(const TensorLayout& other) const;
+    bool operator!=(const TensorLayout& other) const;
 
-    // Returns logical shard shape from shard spec shape
-    Shape2D get_logical_shard_shape() const;
-
-    // Returns physical shard shape based on shard shape and alignment
-    Shape2D get_physical_shard_shape() const;
-
-    Shape2D compute_page_shape(const Shape2D& physical_size) const;
-    size_t compute_page_size_bytes(const Shape2D& page_size) const;
-
-    bool operator==(const TensorLayout&) const = default;
-    bool operator!=(const TensorLayout&) const = default;
 
     static constexpr auto attribute_names = std::forward_as_tuple("dtype", "page_config", "memory_config", "alignment");
-    auto attribute_values() const { return std::forward_as_tuple(dtype_, page_config_, memory_config_, alignment_); }
+    std::tuple<const DataType&, const PageConfig&, const MemoryConfig&, const Alignment&> attribute_values() const;
 
     static TensorLayout restore_from_serialized(
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
-private:
-    void initialize_alignment();
+    // Access to the implementation, which carries the internal layout-computation API.
+    //
+    // pre-condition: the TensorLayout must not be in a moved-from state.
+    TensorLayoutImpl& impl();
+    const TensorLayoutImpl& impl() const;
 
-    DataType dtype_ = DataType::BFLOAT16;
-    PageConfig page_config_;
-    MemoryConfig memory_config_;
-    Alignment alignment_;
+private:
+    // impl_ may be nullptr if the TensorLayout is in a moved-from state.
+    // Avoid using impl_ directly; use the impl() accessor instead.
+    std::unique_ptr<TensorLayoutImpl> impl_;
 };
 
 }  // namespace tt::tt_metal

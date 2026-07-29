@@ -199,13 +199,14 @@ def kv_cache_pcc_check(
     kv_lora = pipeline.hf_config.kv_lora_rank
     kvpe_dim = pipeline.hf_config.qk_rope_head_dim + kv_lora
 
-    # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
-    cache_full = ttnn.to_torch(
-        kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[
-        :, :1
-    ]  # [num_users*num_layers, 1, seq_len_cache, kvpe]
+    # Gather the persistent representation and reconstruct scaled FP8 only on the host. This keeps
+    # validation compatible with both cache formats without allocating a BF16 cache on device.
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+
+    def _to_host(tensor):
+        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+
+    cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
     p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
     logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")

@@ -988,7 +988,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_SingleNodePinned_RespectsPinning) {
     const AsicPosition pos{tray, loc};
 
     TopologyMappingConfig config;
-    config.pinnings.emplace_back(pos, nodes[0]);
+    config.pinnings.push_back({{nodes[0]}, {pos}});
     config.asic_positions[asics[0]] = pos;
     config.asic_positions[asics[1]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
 
@@ -1014,7 +1014,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_InvalidPosition_Fails) {
     const AsicPosition invalid_pos{nonexistent_tray, nonexistent_loc};
 
     TopologyMappingConfig config;
-    config.pinnings.emplace_back(invalid_pos, nodes[0]);
+    config.pinnings.push_back({{nodes[0]}, {invalid_pos}});
     config.asic_positions[asics[0]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}};
     config.asic_positions[asics[1]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
 
@@ -1024,7 +1024,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_InvalidPosition_Fails) {
     EXPECT_THAT(result.error_message, ::testing::HasSubstr("not found"));
 }
 
-TEST_F(TopologyMapperUtilsTest, Pinning_DuplicatePinningsSameNode_Fails) {
+TEST_F(TopologyMapperUtilsTest, Pinning_ManyToMany_OneNodeTwoPositions_Succeeds) {
     const auto nodes = make_nodes(2);
     const auto asics = make_asics(2);
 
@@ -1034,20 +1034,19 @@ TEST_F(TopologyMapperUtilsTest, Pinning_DuplicatePinningsSameNode_Fails) {
     const auto node_ranks = make_uniform_node_ranks(nodes, rank0_);
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
 
-    // Pin the same node to two different positions
     const AsicPosition pos1{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}};
     const AsicPosition pos2{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
 
     TopologyMappingConfig config;
-    config.pinnings.emplace_back(pos1, nodes[0]);
-    config.pinnings.emplace_back(pos2, nodes[0]);  // Same node, different position
+    config.pinnings.push_back({{nodes[0]}, {pos1, pos2}});
     config.asic_positions[asics[0]] = pos1;
     config.asic_positions[asics[1]] = pos2;
 
     const auto result = map_mesh_to_physical(mesh_id_, logical_adj, physical_adj, node_ranks, asic_ranks, config);
 
-    EXPECT_FALSE(result.success);
-    EXPECT_THAT(result.error_message, ::testing::HasSubstr("multiple"));
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_TRUE(
+        result.fabric_node_to_asic.at(nodes[0]) == asics[0] || result.fabric_node_to_asic.at(nodes[0]) == asics[1]);
 }
 
 TEST_F(TopologyMapperUtilsTest, Pinning_NodeNotInMesh_Fails) {
@@ -1065,7 +1064,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_NodeNotInMesh_Fails) {
     const AsicPosition pos{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}};
 
     TopologyMappingConfig config;
-    config.pinnings.emplace_back(pos, nonexistent_node);
+    config.pinnings.push_back({{nonexistent_node}, {pos}});
     config.asic_positions[asics[0]] = pos;
     config.asic_positions[asics[1]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
 
@@ -1139,7 +1138,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
     // Logical mesh 0 has no pinnings. It will be placed on the first available physical mesh, if the pinnings are
     // applied only at the intra-mesh level. Pin logical mesh 1, such that it has to land on physical mesh 0. This
     // will make sure we apply mesh-level pinnings before inter-mesh mapping.
-    config.pinnings.emplace_back(pos100, ln1[0]);
+    config.pinnings.push_back({{ln1[0]}, {pos100}});
 
     const auto result =
         map_multi_mesh_to_physical(logical, physical, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
@@ -4365,8 +4364,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
+    for (const auto& group : pinnings) {
+        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
     }
 
     if (!config.pinnings.empty()) {
@@ -4495,8 +4494,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
+    for (const auto& group : pinnings) {
+        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
     }
 
     if (!config.pinnings.empty()) {
@@ -4625,8 +4624,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
+    for (const auto& group : pinnings) {
+        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
     }
 
     if (!config.pinnings.empty()) {

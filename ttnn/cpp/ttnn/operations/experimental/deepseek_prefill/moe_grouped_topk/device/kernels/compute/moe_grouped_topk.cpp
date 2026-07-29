@@ -13,6 +13,8 @@ void kernel_main() {
     constexpr uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
     constexpr uint32_t cb_scores_fp32 = get_named_compile_time_arg_val("cb_scores_fp32");
     constexpr uint32_t cb_bias_fp32 = get_named_compile_time_arg_val("cb_bias_fp32");
+    constexpr uint32_t cb_biased_dump = get_named_compile_time_arg_val("cb_biased_dump");
+    constexpr uint32_t dump_biased_scores = get_named_compile_time_arg_val("dump_biased_scores");
     constexpr uint32_t cb_sigmoid_scores = get_named_compile_time_arg_val("cb_sigmoid_scores");
     constexpr uint32_t cb_biased_scores = get_named_compile_time_arg_val("cb_biased_scores");
     constexpr uint32_t cb_out_weights = get_named_compile_time_arg_val("cb_out_weights");
@@ -68,7 +70,8 @@ void kernel_main() {
         blocks::apply_score_func<score_func>(cb_scores_fp32, cb_sigmoid_scores, width_tiles);
 
         // Perform add bias on activated scores
-        blocks::add_bias(cb_sigmoid_scores, cb_bias_fp32, cb_biased_scores, width_tiles);
+        blocks::add_bias<dump_biased_scores != 0>(
+            cb_sigmoid_scores, cb_bias_fp32, cb_biased_scores, width_tiles, cb_biased_dump);
         // Note: cb_sigmoid_scores is NOT popped here - writer will pop it after gather
 
         if constexpr (n_groups == 1) {
