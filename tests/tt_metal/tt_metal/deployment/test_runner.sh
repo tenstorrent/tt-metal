@@ -5,6 +5,7 @@ set -e
 LOGDIR="."
 LOGFILE="deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 ITERS="${ITERS:-5}"
+PYTHON="$(command -v python3 || command -v python)"
 
 usage() {
 	echo "Usage: $0 [-l logdir]"
@@ -71,10 +72,10 @@ run_test() {
 }
 
 MESSAGE='Ethernet tests\t'
-run_test python tests/tt_metal/tt_metal/deployment/eth/test_runner.py
+run_test $PYTHON tests/tt_metal/tt_metal/deployment/eth/test_runner.py
 
 MESSAGE='DRAM tests\t'
-run_test python tests/tt_metal/tt_metal/deployment/dram/test_runner.py
+run_test $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py
 
 MESSAGE='PCIe read test\t'
 run_test ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0
