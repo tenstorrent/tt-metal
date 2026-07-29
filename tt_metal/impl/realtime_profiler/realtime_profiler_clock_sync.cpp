@@ -340,9 +340,17 @@ bool RealtimeProfilerClockSync::calibrate() {
     constexpr auto kRunSyncSettleDelay = std::chrono::milliseconds(50);
     constexpr auto kRunSyncSampleInterval = std::chrono::milliseconds(5);
     constexpr uint32_t kRunSyncMaxConsecutiveTimeouts = 3;
+    // A slow handshake places its sample badly rather than merely late, so spending one of the kFitSamples slots on
+    // it costs a real sample. Probe again instead, up to this many attempts, which is what keeps a degraded link from
+    // stretching bring-up: worst case is this many intervals rather than kFitSamples of them.
+    constexpr uint32_t kMaxProbeAttempts = kFitSamples * 3 / 2;
+    // Bar for accepting a probe, against the tightest round trip seen so far on this device. Same idea as resync's
+    // burst, which keeps probing until one matches the standing anchor.
+    constexpr int kProbeRttOutlierFactor = 2;
     const auto host_start_time = std::chrono::steady_clock::now();
 
     std::vector<ClockSyncSample> samples;
+    uint32_t rejected_probes = 0;
     if (ack_host_ptr_ == nullptr) {
         log_warning(
             tt::LogMetal,
@@ -351,8 +359,10 @@ bool RealtimeProfilerClockSync::calibrate() {
     } else {
         std::this_thread::sleep_for(kRunSyncSettleDelay);
 
+        samples.reserve(kFitSamples);
         uint32_t consecutive_timeouts = 0;
-        for (uint32_t i = 0; i < kFitSamples + 1; i++) {
+        auto best_rtt = std::chrono::nanoseconds::max();
+        for (uint32_t attempt = 0; attempt < kMaxProbeAttempts && samples.size() < kFitSamples; attempt++) {
             std::this_thread::sleep_for(kRunSyncSampleInterval);
 
             const auto p = probe(kCalibrateProbeTimeout);
@@ -370,34 +380,64 @@ bool RealtimeProfilerClockSync::calibrate() {
             }
             consecutive_timeouts = 0;
 
-            // The first probe pays the cold PCIe path.
-            if (i > 0) {
-                samples.push_back(*p);
+            // The first probe pays the cold PCIe path, so it sets no precedent for what a good round trip looks like.
+            if (attempt == 0) {
+                continue;
             }
+            best_rtt = std::min(best_rtt, p->rtt);
+            if (p->rtt > best_rtt * kProbeRttOutlierFactor) {
+                ++rejected_probes;
+                continue;
+            }
+            samples.push_back(*p);
         }
     }
 
     // configure() already seeded the commanded AICLK, which the model keeps if the fit has too few samples.
     const std::optional<ClockModel::FitResidual> residual = model_.fit(samples, host_start_time);
+    // Unconditional: records can be drained before calibration finishes, so a mapping has to be readable even when
+    // the fit is judged below not worth keeping.
     publish_mapping();
-    if (residual.has_value()) {
-        rt_profiler_frequency_cache().put(chip_id_, model_.frequency(), std::chrono::steady_clock::now());
-        log_info(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} sync complete: {} samples, frequency={:.6f} GHz, "
-            "fit residual rms={:.0f} ns max={:.0f} ns",
-            chip_id_,
-            samples.size(),
-            model_.frequency(),
-            residual->rms_ns,
-            residual->max_ns);
-    } else {
+    if (!residual.has_value()) {
         log_warning(
             tt::LogMetal,
             "[Real-time profiler] Device {} sync failed - not enough samples, using the commanded AICLK",
             chip_id_);
+        return false;
     }
-    return residual.has_value();
+
+    // Measured against kFitSamples rather than what was collected, so this catches both a link that exhausted the
+    // probe budget without filling the batch and one whose samples were scattered enough for the model to cut them.
+    // Half still fits a slope well -- the span is unchanged and the count only enters under a square root -- but
+    // below that another pass is likely to beat this one. Returning false re-runs the whole calibration through
+    // calibrate_device's existing retry budget, which is what bounds the cost of a chip that keeps failing.
+    if (residual->num_samples_fitted * 2 < kFitSamples) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] Device {} fit only {} of {} wanted sync samples ({} probes re-taken); retrying "
+            "rather than fitting a frequency from what is left",
+            chip_id_,
+            residual->num_samples_fitted,
+            kFitSamples,
+            rejected_probes);
+        return false;
+    }
+
+    // Cached only once the fit is worth reusing: try_restore_calibration hands the cached frequency to a later
+    // MeshDevice without re-fitting, so a bad one would outlive the run that produced it.
+    rt_profiler_frequency_cache().put(chip_id_, model_.frequency(), std::chrono::steady_clock::now());
+    log_info(
+        tt::LogMetal,
+        "[Real-time profiler] Device {} sync complete: fit {} of {} collected samples, {} probes re-taken for a slow "
+        "round trip, frequency={:.6f} GHz, fit residual rms={:.0f} ns max={:.0f} ns",
+        chip_id_,
+        residual->num_samples_fitted,
+        residual->num_samples_offered,
+        rejected_probes,
+        model_.frequency(),
+        residual->rms_ns,
+        residual->max_ns);
+    return true;
 }
 
 bool RealtimeProfilerClockSync::try_restore_calibration(std::chrono::steady_clock::time_point now) {

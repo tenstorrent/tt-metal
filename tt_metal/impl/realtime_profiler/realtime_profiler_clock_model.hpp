@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -27,11 +28,13 @@ struct ClockSyncSample {
 // held fixed; device_cycle_offset is re-anchored continuously to absorb the chip's drift away from that fixed slope.
 class ClockModel {
 public:
-    // How far the fitted line sat from the samples it was fit to, in nanoseconds of device time. Reported so bring-up
-    // can log it; the model itself does not act on it.
+    // How far the fitted line sat from the samples it was fit to, in nanoseconds of device time, and how many of the
+    // offered samples those were. Reported so bring-up can log it; the model itself does not act on it.
     struct FitResidual {
         double rms_ns = 0.0;
         double max_ns = 0.0;
+        size_t num_samples_fitted = 0;   // regressed after discarding slow round trips
+        size_t num_samples_offered = 0;  // handed to fit()
     };
 
     // Establishes the commanded clock frequency (AICLK) as the starting mapping, before any handshake has happened.

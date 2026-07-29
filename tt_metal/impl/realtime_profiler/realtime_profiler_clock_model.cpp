@@ -23,6 +23,12 @@ constexpr double kClockDriftPpm = 10.0;
 // Half the round trip: the anchor could have landed anywhere inside it.
 constexpr std::chrono::nanoseconds placement_error(std::chrono::nanoseconds rtt) { return rtt / 2; }
 
+// How far above the median round trip a bring-up sample may sit and still be regressed. A handshake's round trip
+// bounds how far its device timestamp could be from the host time it is paired with, so a slow one is a badly placed
+// point rather than merely a late one. Chosen loose enough that ordinary spread survives and only the handshakes that
+// were serviced late are cut.
+constexpr int kFitRttOutlierFactor = 2;
+
 }  // namespace
 
 void ClockModel::seed_frequency(double frequency) {
@@ -47,17 +53,42 @@ std::optional<ClockModel::FitResidual> ClockModel::fit(
         return std::nullopt;
     }
 
+    // Round trips first, because they decide which samples are worth regressing. Every sample is paired with the host
+    // time taken before its handshake, so a sample serviced late sits that much further right than the pair implies.
+    // Regressed with equal weight, a handful of those tilts the slope by tens of ppm -- which the servo then spends
+    // the whole session correcting as though the chip were drifting.
+    std::vector<std::chrono::nanoseconds> rtts;
+    rtts.reserve(samples.size());
+    for (const auto& s : samples) {
+        rtts.push_back(s.rtt);
+    }
+    const auto median = rtts.begin() + static_cast<ptrdiff_t>(rtts.size() / 2);
+    std::nth_element(rtts.begin(), median, rtts.end());
+    const std::chrono::nanoseconds median_rtt = *median;
+
+    std::vector<ClockSyncSample> tight;
+    tight.reserve(samples.size());
+    for (const auto& s : samples) {
+        if (s.rtt <= median_rtt * kFitRttOutlierFactor) {
+            tight.push_back(s);
+        }
+    }
+    // If the round trips were scattered enough that filtering leaves too few to regress, the scatter is what the link
+    // is doing; fit everything and let the residual report it rather than inventing a slope from two points.
+    const std::span<const ClockSyncSample> fitted_samples =
+        tight.size() >= 2 ? std::span<const ClockSyncSample>(tight) : samples;
+
     // Host times are mean-centered on host_start: regressing at absolute-timestamp magnitudes loses most of the
     // significant digits of the sums to catastrophic cancellation. Differencing two time_points yields a signed
     // duration, which is what the centering needs.
-    const double n = static_cast<double>(samples.size());
+    const double n = static_cast<double>(fitted_samples.size());
     const auto centered_host = [host_start](const ClockSyncSample& s) {
         return static_cast<double>((s.host_time - host_start).count());
     };
 
     double host_mean = 0.0;
     double device_mean = 0.0;
-    for (const auto& s : samples) {
+    for (const auto& s : fitted_samples) {
         host_mean += centered_host(s);
         device_mean += static_cast<double>(s.device_ticks);
     }
@@ -66,7 +97,7 @@ std::optional<ClockModel::FitResidual> ClockModel::fit(
 
     double num = 0.0;
     double den = 0.0;
-    for (const auto& s : samples) {
+    for (const auto& s : fitted_samples) {
         const double dx = centered_host(s) - host_mean;
         const double dy = static_cast<double>(s.device_ticks) - device_mean;
         num += dx * dy;
@@ -89,26 +120,23 @@ std::optional<ClockModel::FitResidual> ClockModel::fit(
     // Intercept via means: the device tick count at centered host time 0, i.e. at host_start.
     set_anchor(host_start, static_cast<uint64_t>(device_mean - frequency_ * host_mean));
 
+    // Reported over the samples actually regressed, so it says how well the line describes what it was fit to rather
+    // than how far the rejected handshakes were.
     FitResidual residual;
     double residual_sumsq_ns = 0.0;
-    for (const auto& s : samples) {
+    for (const auto& s : fitted_samples) {
         const double predicted = device_mean + frequency_ * (centered_host(s) - host_mean);
         const double residual_ns = (static_cast<double>(s.device_ticks) - predicted) / frequency_;
         residual_sumsq_ns += residual_ns * residual_ns;
         residual.max_ns = std::max(residual.max_ns, std::abs(residual_ns));
     }
     residual.rms_ns = std::sqrt(residual_sumsq_ns / n);
+    residual.num_samples_fitted = fitted_samples.size();
+    residual.num_samples_offered = samples.size();
 
-    // Without an anchor time and a round trip, mapping() would report zero error until the first resync. The line is
-    // fit from every sample, so the median of their round trips represents its uncertainty.
-    std::vector<std::chrono::nanoseconds> rtts;
-    rtts.reserve(samples.size());
-    for (const auto& s : samples) {
-        rtts.push_back(s.rtt);
-    }
-    const auto median = rtts.begin() + static_cast<ptrdiff_t>(rtts.size() / 2);
-    std::nth_element(rtts.begin(), median, rtts.end());
-    rtt_ = *median;
+    // Without an anchor time and a round trip, mapping() would report zero error until the first resync. The median
+    // over every offered sample, not just the regressed ones, keeps this the conservative of the two.
+    rtt_ = median_rtt;
     last_reanchor_at_ = samples.back().host_time;
     return residual;
 }
