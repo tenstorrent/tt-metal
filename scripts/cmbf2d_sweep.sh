@@ -4,11 +4,10 @@
 # and token size are compile-time kernel args, so each point is a fresh JIT build anyway.
 #
 # Usage:
-#   scripts/cmbf2d_sweep.sh out_tokens 32 100 256 1000
-#   CMBF2D_OUT_TOKENS=4000 scripts/cmbf2d_sweep.sh in_tokens 8 16 32 64
+#   scripts/cmbf2d_sweep.sh tokens 32 100 256 1000
 #   scripts/cmbf2d_sweep.sh label <tag>          # single point, current env, tagged <tag>
 #
-# Env passthrough: CMBF2D_OUT_TOKENS / CMBF2D_IN_TOKENS / CMBF2D_TOKEN_BYTES set the axes
+# Env passthrough: CMBF2D_TOKENS / CMBF2D_TOKEN_BYTES set the axes
 # that are NOT being swept. Results land in generated/cmbf2d/bwinfo_<tag>.txt; a one-line summary per
 # point is appended to generated/cmbf2d/sweep_<axis>.log.
 
@@ -25,7 +24,7 @@ mkdir -p generated/cmbf2d
 
 run_point() {
     local tag="$1"
-    echo "=== [$(date +%H:%M:%S)] point ${tag}: out_tokens=${CMBF2D_OUT_TOKENS:-100} in_tokens=${CMBF2D_IN_TOKENS:-32} token=${CMBF2D_TOKEN_BYTES:-14336} stall=${CMBF2D_STALL:-0}"
+    echo "=== [$(date +%H:%M:%S)] point ${tag}: tokens=${CMBF2D_TOKENS:-100} token=${CMBF2D_TOKEN_BYTES:-14336} stall=${CMBF2D_STALL:-0}"
     CMBF2D_TAG="$tag" scripts/run_safe_pytest.sh "$TEST" -k "$FILTER" -s \
         >"generated/cmbf2d/run_${tag}.log" 2>&1
     local rc=$?
@@ -50,26 +49,21 @@ run_point() {
 }
 
 case "$AXIS" in
-    out_tokens)
+    tokens)
         for n in "$@"; do
-            CMBF2D_OUT_TOKENS="$n" run_point "out${n}"
-        done
-        ;;
-    in_tokens)
-        for n in "$@"; do
-            CMBF2D_IN_TOKENS="$n" run_point "in${n}"
+            CMBF2D_TOKENS="$n" run_point "tok${n}"
         done
         ;;
     token)
         for n in "$@"; do
-            CMBF2D_TOKEN_BYTES="$n" run_point "slot${n}"
+            CMBF2D_TOKEN_BYTES="$n" run_point "tokb${n}"
         done
         ;;
     label)
         run_point "$1"
         ;;
     *)
-        echo "usage: $0 {out_tokens|in_tokens|token|label} <values...>"
+        echo "usage: $0 {tokens|token|label} <values...>"
         exit 3
         ;;
 esac
