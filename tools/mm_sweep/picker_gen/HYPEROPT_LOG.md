@@ -1019,3 +1019,34 @@ have NO structural discriminator against the Pk=6 shapes that were neutral-or-wo
 64x2048x1024 -0.1%, 128x2048x2048 +0.8%, 256x2048x2048 +2.0%). Per the lesson already recorded in this log,
 2 stable shapes without a structural trigger is not enough to ship. Kept behind default-off bits 27-28 with
 zones and DPRINT markers both opt-in via env vars, so production is byte-identical. 111/111 tests pass.
+
+### Reverted the direct-exchange and striped-owner-gather CODE (evidence retained)
+
+Decision (2026-07-29): stick with the two reduction topologies that ship -- the linear CHAIN and the ring
+REDUCE-SCATTER. The experimental alternatives (F12 direct exchange, F13/F14 S-way striped owner-gather) never
+beat the chain where the chain wins, and against the ring they were a wash on the adopted corpus, so carrying
+them as dead code in the op was not worth it.
+
+Restored the four op source files to commit `3a229f8c5dc` (the commit immediately before direct exchange began),
+removing 581 lines: the RS_DIRECT and RS_STRIPED kernel paths, `rsd_reduce_slots` / `rss_reduce_stripe`, the
+striped owner-selection pass, the extra arrival/credit semaphores, the c_4/c_5/c_6 sizing for those modes, the
+opt-in zone and DPRINT instrumentation, and diag bits 26-28 (kMaxDiagMask back to 0x3FFFFFF).
+
+What REMAINS shipped and untouched: the chain, the ring reduce-scatter with its full gate (S7/S8/S9), the 2D
+mesh placement, the subblock enlargement, the picker entry, and the default-off in1 NoC diagnostics bits 24-25.
+
+Verified after the revert:
+- working tree byte-identical to `3a229f8c5dc` for all four files (`git diff` empty);
+- no residual `RS_DIRECT` / `RS_STRIPED` / `rs_striped` / `rs_direct` / zone / DPRINT symbols anywhere in the op;
+- diag bits 26 and 27 are now correctly REJECTED as out of range (the aliasing guard from `0a6c55660fa` doing
+  its job -- a silently-ignored stale mask is exactly the failure mode that invalidated four experiments);
+- 111/111 correctness tests pass;
+- production perf at mask 0 matches the pre-experiment measurements: 512x6144x4608 179.96 (was 180.2),
+  256x6144x6144 186.62 (186.8), 256x6144x1536 61.00 (60.6), 256x2048x1024 19.32 (19.8), 256x2048x512 13.63
+  (13.8) -- every shape within the +-2.4% noise floor, and the two reduce-scatter shapes still show their
+  reduce-scatter walls, confirming the gate still selects the ring where it should.
+
+The negative results themselves (F12, F13, F14) are kept above: they contain the message-count/serialization/
+load-imbalance model of the reduction, the four flow-control bugs, and the zone breakdown showing that at Pk=12
+the reduction cost is load imbalance rather than messaging. That model is the reason not to revisit these
+topologies, so it is worth more than the code was.
