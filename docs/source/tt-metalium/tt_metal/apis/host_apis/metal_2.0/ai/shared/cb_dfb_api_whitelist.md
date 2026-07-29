@@ -125,7 +125,7 @@ Prefer `noc.h` + DFB for transfers so leftover peeks are not required; keep `get
 
 | CB                                        | DFB                            |
 | ----------------------------------------- | ------------------------------ |
-| `read_tile_value` / `read_tile_value_u16` | templated `read_tile_value<T>` |
+| `read_tile_value` / `read_tile_value_uint16` | templated `read_tile_value<T>` |
 | `get_tile_address`                        | `get_tile_address`             |
 | `get_pointer_to_cb_data`                  | `get_tile_address`             |
 
