@@ -21,7 +21,7 @@
 
 namespace tt::tt_metal {
 
-using RealtimeProfilerRecordRing = BroadcastRing<tt::tt_metal::experimental::ProgramRealtimeRecord>;
+using RealtimeProfilerRecordRing = BroadcastRing<experimental::ProgramRealtimeRecord>;
 
 // Owner of real-time profiler consumers. Receivers attach independent record rings; every registered
 // consumer gets one thread of its own, which drains every attached ring.
@@ -35,9 +35,9 @@ public:
     RealtimeProfilerService(RealtimeProfilerService&&) = delete;
     RealtimeProfilerService& operator=(RealtimeProfilerService&&) = delete;
 
-    tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle register_consumer(
-        tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback);
-    void unregister_consumer(tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle handle);
+    experimental::ProgramRealtimeProfilerCallbackHandle register_consumer(
+        experimental::ProgramRealtimeProfilerCallback callback);
+    void unregister_consumer(experimental::ProgramRealtimeProfilerCallbackHandle handle);
 
     void attach_ring(RealtimeProfilerRecordRing& ring, size_t max_batch_records);
     // The ring's writer must be stopped before this call. Blocks until every consumer has drained and released it.
@@ -62,8 +62,8 @@ private:
 
     struct ConsumerRegistration {
         ConsumerRegistration(
-            tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle handle,
-            tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback) :
+            experimental::ProgramRealtimeProfilerCallbackHandle handle,
+            experimental::ProgramRealtimeProfilerCallback callback) :
             handle(handle), callback(std::move(callback)) {}
 
         ConsumerRegistration(const ConsumerRegistration&) = delete;
@@ -71,8 +71,8 @@ private:
         ConsumerRegistration(ConsumerRegistration&&) = delete;
         ConsumerRegistration& operator=(ConsumerRegistration&&) = delete;
 
-        tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle handle;
-        tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback;
+        experimental::ProgramRealtimeProfilerCallbackHandle handle;
+        experimental::ProgramRealtimeProfilerCallback callback;
 
         std::vector<RingReader> readers;
 
@@ -89,8 +89,7 @@ private:
         std::jthread thread;
     };
 
-    using ConsumerMap =
-        std::unordered_map<tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle, ConsumerRegistration>;
+    using ConsumerMap = std::unordered_map<experimental::ProgramRealtimeProfilerCallbackHandle, ConsumerRegistration>;
 
     void run_consumer(std::stop_token stop_token, ConsumerRegistration& registration);
     void destroy_consumer(ConsumerRegistration& registration);
@@ -106,7 +105,7 @@ private:
     // arrives can build a reader for it.
     std::unordered_map<RealtimeProfilerRecordRing*, size_t> attached_rings_;
     ConsumerMap consumers_;
-    tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle next_consumer_handle_ = 0;
+    experimental::ProgramRealtimeProfilerCallbackHandle next_consumer_handle_ = 0;
 
     std::atomic<uint32_t> wake_generation_{0};
 };

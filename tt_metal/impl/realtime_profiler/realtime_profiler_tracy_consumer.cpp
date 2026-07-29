@@ -30,7 +30,7 @@ namespace tt::tt_metal {
 namespace {
 
 tracy::TTDeviceMarker make_marker(
-    const tt::tt_metal::experimental::ProgramRealtimeRecord& record,
+    const experimental::ProgramRealtimeRecord& record,
     uint64_t timestamp,
     tracy::TTDeviceMarkerType marker_type,
     const std::string& file) {
@@ -51,7 +51,7 @@ tracy::TTDeviceMarker make_marker(
 
 }  // namespace
 
-void RealtimeProfilerTracyConsumer::on_records(const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+void RealtimeProfilerTracyConsumer::on_records(const experimental::ProgramRealtimeRecordBatch& batch) {
     // Past its connect-timeout window Tracy has dropped its backlog and refuses new connections, so nothing emitted
     // from here can ever be read.
     if (tracy::GetProfiler().IsEmitSuppressed()) {
@@ -72,8 +72,7 @@ void RealtimeProfilerTracyConsumer::on_records(const tt::tt_metal::experimental:
     }
 }
 
-void RealtimeProfilerTracyConsumer::CalibrateFromRecord(
-    const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+void RealtimeProfilerTracyConsumer::CalibrateFromRecord(const experimental::ProgramRealtimeRecord& record) {
     if (record.chip_id >= chips_.size()) {
         chips_.resize(record.chip_id + 1);
     }
@@ -193,7 +192,7 @@ void RealtimeProfilerTracyConsumer::PublishDeviceProfilerSyncAnchor(
         frequency);
 }
 
-void RealtimeProfilerTracyConsumer::HandleRecord(const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+void RealtimeProfilerTracyConsumer::HandleRecord(const experimental::ProgramRealtimeRecord& record) {
     TracyTTCtx ctx = GetContext(record.chip_id);
     if (!ctx) {
         return;

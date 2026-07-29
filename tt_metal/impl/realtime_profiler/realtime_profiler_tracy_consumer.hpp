@@ -24,15 +24,15 @@ public:
     RealtimeProfilerTracyConsumer(const RealtimeProfilerTracyConsumer&) = delete;
     RealtimeProfilerTracyConsumer& operator=(const RealtimeProfilerTracyConsumer&) = delete;
 
-    void on_records(const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch);
+    void on_records(const experimental::ProgramRealtimeRecordBatch& batch);
 
 private:
     // Establish a chip's Tracy context on its first record, then recalibrate whenever the record's device_cycle_offset
     // moves (i.e. a host<->device re-anchor happened).
-    void CalibrateFromRecord(const tt::tt_metal::experimental::ProgramRealtimeRecord& record);
+    void CalibrateFromRecord(const experimental::ProgramRealtimeRecord& record);
     // Create and calibrate a Tracy context for the given device; returns it (caller stores it in chips_).
     TracyTTCtx AddDevice(uint32_t chip_id, int64_t host_anchor, double device_anchor, double frequency);
-    void HandleRecord(const tt::tt_metal::experimental::ProgramRealtimeRecord& record);
+    void HandleRecord(const experimental::ProgramRealtimeRecord& record);
     // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
     TracyTTCtx GetContext(uint32_t chip_id);

@@ -81,8 +81,8 @@ RealtimeProfilerService::~RealtimeProfilerService() {
     }
 }
 
-tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerService::register_consumer(
-    tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback) {
+experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerService::register_consumer(
+    experimental::ProgramRealtimeProfilerCallback callback) {
     TT_FATAL(callback != nullptr, "Cannot register a null real-time profiler callback");
     reap_retired_consumers();
 
@@ -104,8 +104,7 @@ tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfil
     return handle;
 }
 
-void RealtimeProfilerService::unregister_consumer(
-    tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle handle) {
+void RealtimeProfilerService::unregister_consumer(experimental::ProgramRealtimeProfilerCallbackHandle handle) {
     if (current_registration_ != nullptr &&
         current_registration_->handle == handle) {  // a callback unregistering itself
         current_registration_->retired.store(true, std::memory_order_release);
@@ -185,22 +184,21 @@ void RealtimeProfilerService::run_consumer(
     const std::string thread_name = fmt::format("RtProfConsumer{}", registration.handle);
     tracy::SetThreadName(thread_name.c_str());
 
-    std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
+    std::vector<experimental::ProgramRealtimeRecord> records;
     std::vector<RingReader> readers_to_add;
     std::vector<RealtimeProfilerRecordRing*> rings_to_drain;
     // Losses seen across all readers since the last batch was handed to the callback. Drops can be noticed on a reader
     // that has nothing to deliver, so they are carried until a batch exists to report them on.
     uint64_t pending_dropped = 0;
 
-    auto invoke_callback = [&](std::span<const tt::tt_metal::experimental::ProgramRealtimeRecord> batch,
-                               uint64_t dropped) {
+    auto invoke_callback = [&](std::span<const experimental::ProgramRealtimeRecord> batch, uint64_t dropped) {
         TTZoneScopedDNC(RT_PROFILER, "Callback", 0xF032E6);
         TTZoneValueD(RT_PROFILER, batch.size());
         if (TTZoneIsActiveD(RT_PROFILER) && dropped > 0) {
             const auto dropped_txt = fmt::format("dropped {}", dropped);
             TTZoneTextD(RT_PROFILER, dropped_txt.c_str(), dropped_txt.size());
         }
-        const tt::tt_metal::experimental::ProgramRealtimeRecordBatch argument{.records = batch, .dropped = dropped};
+        const experimental::ProgramRealtimeRecordBatch argument{.records = batch, .dropped = dropped};
         try {
             registration.callback(argument);
         } catch (const std::exception& e) {
@@ -249,7 +247,7 @@ void RealtimeProfilerService::run_consumer(
             if (records.size() < ring_reader.max_batch_records) {
                 records.resize(ring_reader.max_batch_records);
             }
-            const std::span<tt::tt_metal::experimental::ProgramRealtimeRecord> batch =
+            const std::span<experimental::ProgramRealtimeRecord> batch =
                 ring_reader.reader.read_batch(std::span(records).first(ring_reader.max_batch_records));
             const uint64_t dropped_total = ring_reader.reader.dropped();
             pending_dropped += dropped_total - ring_reader.observed_dropped;

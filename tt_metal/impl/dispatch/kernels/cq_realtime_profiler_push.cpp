@@ -98,17 +98,17 @@ __attribute__((noinline)) void push_entries_to_host(
 }
 
 // Service a host clock-sync handshake. Capture the wall clock, NOC-write it to the host ACK buffer, then the token
-// one word before it. The host stops timing the round trip when the timestamp lands and waits for the token only to
-// know both of its words are there, so the token's write never widens the measured interval.
+// after it. The host stops timing the round trip when the timestamp lands and waits for the token only to know both
+// of its words are there, so the token's write never widens the measured interval.
 //
 // NOC PCIe writes require src and dst to share the low 4 bits (NOC_PCIE_WRITE_ALIGNMENT_BYTES = 16). device_time goes
 // first so it lands at the ACK buffer base, 8-byte aligned, and the PCIe path carries it as one transfer instead of
 // splitting a write that straddles the boundary; the token follows it two words in.
 static_assert(offsetof(realtime_profiler_msg_t, sync_ack_device_time) % 16 == 0);
-static_assert(offsetof(realtime_profiler_msg_t, sync_request) % 16 == 8);
+static_assert(offsetof(realtime_profiler_msg_t, sync_ack_token) % 16 == 8);
 
 __attribute__((noinline)) void realtime_profiler_service_sync(uint32_t pcie_xy_enc) {
-    const uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
+    const uint32_t token = rt_profiler_msg->sync_token;
 
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     const uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
@@ -118,7 +118,7 @@ __attribute__((noinline)) void realtime_profiler_service_sync(uint32_t pcie_xy_e
     rt_profiler_msg->sync_ack_device_time[0] = time_lo;
     rt_profiler_msg->sync_ack_device_time[1] = time_hi;
 
-    rt_profiler_msg->sync_request = host_time;
+    rt_profiler_msg->sync_ack_token = token;
     const uint64_t ack_pcie_addr = (static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr[1]) << 32) |
                                    static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr[0]);
     // write_reg_cmd_buf, the conventional buffer for small writes, is untouched by the record-push path, so the state
@@ -133,14 +133,14 @@ __attribute__((noinline)) void realtime_profiler_service_sync(uint32_t pcie_xy_e
     noc_async_write_barrier();
     noc_wwrite_with_state<noc_mode, write_reg_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
         noc_index,
-        reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_request),
+        reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_ack_token),
         pcie_xy_enc,
         ack_pcie_addr + 2 * sizeof(uint32_t),
         sizeof(uint32_t),
         1);
     noc_async_write_barrier();
 
-    rt_profiler_msg->sync_host_timestamp = 0;
+    rt_profiler_msg->sync_token = 0;
 }
 
 void kernel_main() {
@@ -198,7 +198,7 @@ void kernel_main() {
         loop_count++;
         RT_PROF_NCRISC_DBG_SET(ring_buffer, loop_iteration, loop_count);
 
-        if (rt_profiler_msg->sync_host_timestamp != 0) {
+        if (rt_profiler_msg->sync_token != 0) {
             realtime_profiler_service_sync(pcie_xy_enc);
         }
 

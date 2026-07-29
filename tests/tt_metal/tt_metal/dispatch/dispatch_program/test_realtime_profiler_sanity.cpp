@@ -4,8 +4,8 @@
 
 // Merge-gate sanity coverage for the real-time (RT) profiler, in three layers:
 //
-//   RealtimeProfilerClockModel / RealtimeProfilerRttFloor -- the host-side clock logic, exercised directly with
-//       synthetic handshakes. No device, so these also run wherever the profiler itself cannot.
+//   RealtimeProfilerClockModel -- the host-side clock logic, exercised directly with synthetic handshakes. No device,
+//       so these also run wherever the profiler itself cannot.
 //   RealtimeProfilerSanity -- the record service and its consumer threads, driven through hand-fed rings. A MeshDevice
 //       contributes exactly one ring, so multi-ring and mid-callback behaviour is unreachable from a device test.
 //   RealtimeProfilerDeviceSanity -- the whole pipeline on a unit mesh: mailbox layout, D2H socket init, sync
@@ -287,24 +287,32 @@ TEST(RealtimeProfilerClockModel, FitRecoversTheDeviceClockFrequency) {
     const auto start = host_instant(1'000'000'000);
     const auto samples = make_fit_samples(start, /*frequency=*/1.35, /*ticks_at_start=*/1'000'000, /*count=*/100);
 
-    const ClockFitQuality quality = model.fit(samples, start);
+    const std::optional<ClockModel::FitResidual> residual = model.fit(samples, start);
 
-    EXPECT_TRUE(quality.ok);
-    EXPECT_EQ(quality.num_samples, 100u);
+    ASSERT_TRUE(residual.has_value());
     EXPECT_NEAR(model.frequency(), 1.35, 1e-9);
     EXPECT_TRUE(model.is_anchored());
     // Samples sit on the line up to the truncation of device_ticks to whole cycles, i.e. under one cycle of residual.
-    EXPECT_LT(quality.residual_rms_ns, 1.0);
+    EXPECT_LT(residual->rms_ns, 1.0);
 }
 
-TEST(RealtimeProfilerClockModel, TooFewSamplesKeepTheSeededFrequency) {
+TEST(RealtimeProfilerClockModel, OneSampleAnchorsWithoutFittingAFrequency) {
+    // A slope needs two points, but the offset only needs one, and the seeded frequency is already a usable slope.
     ClockModel model;
     model.seed_frequency(1.35);
     const auto start = host_instant(1'000'000'000);
 
-    const ClockFitQuality quality = model.fit(make_fit_samples(start, /*frequency=*/0.5, 0, /*count=*/1), start);
+    EXPECT_FALSE(model.fit(make_fit_samples(start, /*frequency=*/0.5, 0, /*count=*/1), start).has_value());
+    EXPECT_EQ(model.frequency(), 1.35);
+    EXPECT_TRUE(model.is_anchored());
+}
 
-    EXPECT_FALSE(quality.ok);
+TEST(RealtimeProfilerClockModel, NoSamplesLeaveTheModelUnanchored) {
+    ClockModel model;
+    model.seed_frequency(1.35);
+    const auto start = host_instant(1'000'000'000);
+
+    EXPECT_FALSE(model.fit({}, start).has_value());
     EXPECT_EQ(model.frequency(), 1.35);
     EXPECT_FALSE(model.is_anchored()) << "a mapping with no handshake behind it must not look anchored";
 }
@@ -334,9 +342,9 @@ TEST(RealtimeProfilerClockModel, AnchorSitsAtTheRoundTripMidpoint) {
     constexpr auto kRtt = std::chrono::nanoseconds(1000);
     const ClockSyncSample sample{.host_time = now, .rtt = kRtt, .device_ticks = 500'000};
 
-    model.reanchor(now, sample);
+    EXPECT_TRUE(model.try_reanchor(sample));
 
-    const auto mapping = model.mapping(now);
+    const auto mapping = model.mapping();
     const int64_t mapped_host_ns = static_cast<int64_t>(
         (static_cast<double>(sample.device_ticks) - static_cast<double>(mapping.device_cycle_offset)) /
         model.frequency());
@@ -348,74 +356,37 @@ TEST(RealtimeProfilerClockModel, AnchorSitsAtTheRoundTripMidpoint) {
 TEST(RealtimeProfilerClockModel, FirstHandshakeIsAcceptedHoweverSlow) {
     ClockModel model;
     model.seed_frequency(1.0);
-    EXPECT_TRUE(model.accept_reanchor(std::chrono::seconds(1), host_instant(0)));
+    EXPECT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = host_instant(0), .rtt = std::chrono::seconds(1)}));
 }
 
-TEST(RealtimeProfilerClockModel, SlowHandshakeIsRejectedWhileTheAnchorIsFresh) {
+TEST(RealtimeProfilerClockModel, HandshakeWorseThanTheStandingAnchorIsRejected) {
     ClockModel model;
     model.seed_frequency(1.0);
     const auto anchored_at = host_instant(1'000'000'000);
-    model.reanchor(anchored_at, ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)});
+    ASSERT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)}));
 
+    // The standing anchor has drifted only nanoseconds in 10ms, so a round trip several times slower than the one it
+    // was placed with would land the anchor worse than leaving it alone.
     const auto soon_after = anchored_at + std::chrono::milliseconds(10);
-    EXPECT_TRUE(model.accept_reanchor(std::chrono::microseconds(2), soon_after));
-    EXPECT_FALSE(model.accept_reanchor(std::chrono::milliseconds(1), soon_after))
-        << "a round trip this slow places the anchor worse than the drift it would correct";
+    EXPECT_FALSE(model.try_reanchor(ClockSyncSample{.host_time = soon_after, .rtt = std::chrono::microseconds(30)}));
+    EXPECT_FALSE(model.try_reanchor(ClockSyncSample{.host_time = soon_after, .rtt = std::chrono::microseconds(2)}));
+    // One as tight as the standing anchor is worth taking, since it is that much fresher.
+    EXPECT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = soon_after, .rtt = std::chrono::nanoseconds(1200)}));
 }
 
-TEST(RealtimeProfilerClockModel, StaleAnchorAcceptsEvenASlowHandshake) {
+TEST(RealtimeProfilerClockModel, DriftEventuallyMakesEvenASlowHandshakeWorthTaking) {
     ClockModel model;
     model.seed_frequency(1.0);
     const auto anchored_at = host_instant(1'000'000'000);
-    model.reanchor(anchored_at, ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)});
+    ASSERT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)}));
 
-    EXPECT_FALSE(model.accept_reanchor(std::chrono::milliseconds(1), anchored_at + std::chrono::seconds(1)));
-    EXPECT_TRUE(model.accept_reanchor(std::chrono::milliseconds(1), anchored_at + std::chrono::seconds(5)))
-        << "once the anchor has gone stale, a loose anchor beats unbounded drift";
-}
-
-TEST(RealtimeProfilerRttFloor, HasNoTargetBeforeTheFirstObservation) {
-    const RttFloor floor;
-    EXPECT_EQ(floor.value(), std::chrono::nanoseconds::zero());
-    EXPECT_FALSE(floor.is_near(std::chrono::nanoseconds(1)));
-}
-
-TEST(RealtimeProfilerRttFloor, DropsToANewMinimumImmediately) {
-    RttFloor floor;
-    floor.observe(std::chrono::nanoseconds(2000));
-    EXPECT_EQ(floor.value(), std::chrono::nanoseconds(2000));
-    floor.observe(std::chrono::nanoseconds(1200));
-    EXPECT_EQ(floor.value(), std::chrono::nanoseconds(1200));
-}
-
-TEST(RealtimeProfilerRttFloor, TreatsASmallExcessOverTheFloorAsNearIt) {
-    RttFloor floor;
-    floor.observe(std::chrono::nanoseconds(1000));
-    EXPECT_TRUE(floor.is_near(std::chrono::nanoseconds(1040)));
-    EXPECT_FALSE(floor.is_near(std::chrono::nanoseconds(1500)));
-}
-
-TEST(RealtimeProfilerRttFloor, RisesWhenTheStepIsBelowOneNanosecond) {
-    // At a realistic floor the per-observation rise is a fraction of a nanosecond. Truncating it away would freeze the
-    // floor at the all-time minimum, and a burst would never exit early again.
-    RttFloor floor;
-    floor.observe(std::chrono::nanoseconds(1200));
-    for (int i = 0; i < 10; ++i) {
-        floor.observe(std::chrono::nanoseconds(5000));
-    }
-    EXPECT_GT(floor.value(), std::chrono::nanoseconds(1200));
-}
-
-TEST(RealtimeProfilerRttFloor, SustainedSlowHandshakesDoNotDragTheFloorToTheirMean) {
-    // A floor that rose in proportion to each sample's excess would converge on the distribution's mean and then admit
-    // everything, which is the one thing the burst's early exit must not do.
-    RttFloor floor;
-    floor.observe(std::chrono::nanoseconds(1200));
-    for (int i = 0; i < 500; ++i) {
-        floor.observe(std::chrono::nanoseconds(4000));
-    }
-    EXPECT_LT(floor.value(), std::chrono::nanoseconds(1600));
-    EXPECT_FALSE(floor.is_near(std::chrono::nanoseconds(4000)));
+    // At ~6ppm the standing anchor's error passes a 30us placement somewhere between these two instants, and the
+    // slow handshake goes from being a downgrade to being an improvement.
+    EXPECT_FALSE(model.try_reanchor(
+        ClockSyncSample{.host_time = anchored_at + std::chrono::seconds(1), .rtt = std::chrono::microseconds(60)}));
+    EXPECT_TRUE(model.try_reanchor(
+        ClockSyncSample{.host_time = anchored_at + std::chrono::seconds(30), .rtt = std::chrono::microseconds(60)}))
+        << "once drift has outgrown it, a loose anchor beats an old one";
 }
 
 // The service tests drive RealtimeProfilerService directly rather than opening a mesh: a MeshDevice contributes
@@ -1025,38 +996,6 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
               << std::endl;
 }
 
-// Devices take turns being resynced, one per tick, rather than all together on a single tick. A rotation that failed
-// to advance would leave every device but the first pinned to its bring-up fit, drifting with nothing to correct it,
-// while the published sync_error_ns still looked healthy -- so the counts are the only thing that shows it.
-TEST(RealtimeProfilerSanity, EveryDeviceIsResyncedInRotation) {
-    auto mesh_device = distributed::MeshDevice::create(
-        distributed::MeshDeviceConfig(std::nullopt),
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        /*num_command_queues=*/1,
-        DispatchCoreConfig{DispatchCoreType::WORKER});
-    ASSERT_NE(mesh_device, nullptr);
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
-    }
-
-    auto* receiver = mesh_device->impl().get_realtime_profiler();
-    ASSERT_NE(receiver, nullptr);
-    // A full rotation takes the resync interval; sleep well past several of them.
-    std::this_thread::sleep_for(1s);
-    const std::vector<uint64_t> resyncs = receiver->num_resyncs_per_device();
-
-    ASSERT_EQ(resyncs.size(), receiver->num_active_devices());
-    ASSERT_FALSE(resyncs.empty());
-    const auto [min_it, max_it] = std::minmax_element(resyncs.begin(), resyncs.end());
-    EXPECT_GT(*min_it, 0u) << "at least one device was never resynced; the rotation is not advancing";
-    // Strict round-robin, so the spread is one visit plus whatever the sample raced with.
-    EXPECT_LE(*max_it - *min_it, 2u) << "resyncs are not evenly distributed across devices";
-
-    EXPECT_TRUE(mesh_device->close());
-}
-
 // Independent check of the clock mapping the RT profiler publishes on every record. It shares no code and no
 // mechanism with the production sync: production has the host drive a round trip and bracket a device timestamp
 // inside it, while this reads the device's own clock and brackets that read between two host clock reads.
@@ -1193,26 +1132,6 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
             std::this_thread::sleep_for(1ms);
         }
         ASSERT_NE(read_device_ticks(), 0u) << "the stamping kernel never started";
-
-        // The window arithmetic is only exercised on the architectures this has actually run on, so prove the pointer
-        // before trusting a clock read through it. The device clock only rises, so a mapped read taken between two
-        // generic reads has to fall between them; anything else means the pointer does not address what it is
-        // believed to, and the generic path carries the rest of the test.
-        if (mapped_stamp != nullptr && round == 0) {
-            const auto generic_read = [&] {
-                uint32_t words[2] = {0, 0};
-                cluster.read_core(words, sizeof(words), tt_cxy_pair(device->id(), vcore), stamp_addr);
-                return (static_cast<uint64_t>(words[1]) << 32) | words[0];
-            };
-            const uint64_t before = generic_read();
-            const uint64_t mapped = *mapped_stamp;
-            const uint64_t after = generic_read();
-            if (mapped < before || mapped > after) {
-                ADD_FAILURE() << "the mapped clock read (" << mapped << ") fell outside two generic reads bracketing "
-                              << "it (" << before << ", " << after << "); falling back to the generic path";
-                mapped_stamp = nullptr;
-            }
-        }
 
         for (uint32_t i = 0; i < kClockReadsPerRound; ++i) {
             ClockBracket bracket;

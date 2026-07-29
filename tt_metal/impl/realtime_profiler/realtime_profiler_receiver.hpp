@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <stop_token>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -41,9 +42,10 @@ struct RealtimeProfilerCoreL1Addrs {
     uint32_t socket_config = 0;
 };
 
-// Owns the RT-profiler producers for one MeshDevice: the per-device sockets, the receiver thread, the record ring, and
-// the host<->device clock handshake. Bring-up fits a device-cycle<->host-time line per device; the receiver thread then
-// resyncs each on a fixed cadence, re-anchoring the offset to track clock drift.
+// Owns the RT-profiler producers for one MeshDevice: the per-device sockets, the record ring, and the two threads
+// behind them. Bring-up fits a device-cycle<->host-time line per device; the sync thread then resyncs each on a fixed
+// cadence, re-anchoring the offset to track clock drift, while the receiver thread drains the sockets and stamps every
+// record it publishes with the mapping current at that moment.
 class RealtimeProfilerReceiver {
 public:
     // Null when no local device passed the eligibility gate; a constructed receiver always has devices to drain.
@@ -66,36 +68,11 @@ public:
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
     // Records dropped before publication because their end timestamp preceded their start
     uint64_t num_malformed_records() const { return num_malformed_records_.load(std::memory_order_relaxed); }
-    // Clock resyncs performed per device, indexed as get_devices() orders them. Devices are resynced in strict
-    // rotation, so in a healthy run every entry is non-zero and they stay within one of each other.
-    std::vector<uint64_t> num_resyncs_per_device() const;
     // Blocking device L1 read across every chip; not for a latency-sensitive path.
     uint32_t read_ring_full_wait_count();
     size_t num_active_devices() const { return devices_.size(); }
 
 private:
-    // Folds a repeating condition into at most one log line per interval, carrying how many times it occurred since
-    // the last.
-    class WarnThrottle {
-    public:
-        explicit WarnThrottle(std::chrono::steady_clock::duration interval) : interval_(interval) {}
-
-        // Returns the count accumulated since the last report when it is time to emit one. The first always reports.
-        [[nodiscard]] std::optional<uint64_t> record(std::chrono::steady_clock::time_point now, uint64_t count = 1) {
-            pending_ += count;
-            if (last_report_.has_value() && now - *last_report_ < interval_) {
-                return std::nullopt;
-            }
-            last_report_ = now;
-            return std::exchange(pending_, 0);
-        }
-
-    private:
-        std::chrono::steady_clock::duration interval_;
-        std::optional<std::chrono::steady_clock::time_point> last_report_;
-        uint64_t pending_ = 0;
-    };
-
     struct DeviceState {
         IDevice* device = nullptr;
         uint32_t chip_id = 0;
@@ -107,7 +84,8 @@ private:
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
-        RealtimeProfilerClockSync clock_sync;
+        // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
+        std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
 
         DeviceState();
         ~DeviceState();
@@ -124,9 +102,14 @@ private:
     // eligibility gate or socket creation are skipped, so the result may be empty.
     static std::vector<DeviceState> initialize_devices(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id, bool hugepage_fallback);
-    void run_init_sync();
+    void calibrate_devices();
+    void calibrate_device(DeviceState& dev_state);
 
-    // Receiver thread: drain every device socket, resync the clocks, publish decoded records to the ring.
+    // The sync thread. Kept off the drain loop because a probe burst there shows up directly as page backlog.
+    void run_sync(std::stop_token stop);
+    void resync_all_devices(std::chrono::steady_clock::time_point now);
+
+    // Receiver thread: drain every device socket and publish decoded records to the ring.
     void run();
     uint64_t run_loop(std::vector<uint32_t>& page_buf, std::vector<ProgramRealtimeRecord>& record_buf);
     uint64_t drain_on_shutdown(std::vector<uint32_t>& page_buf, std::vector<ProgramRealtimeRecord>& record_buf);
@@ -144,26 +127,21 @@ private:
     void publish_pages(
         const DeviceState& dev_state,
         std::chrono::steady_clock::time_point now,
-        const uint32_t* page_buf,
-        uint32_t num_pages,
+        std::span<const uint32_t> pages,
         std::vector<ProgramRealtimeRecord>& records);
-    // Resyncs one device and advances the rotation, so a full pass takes kClockSyncInterval.
-    void resync_next_device(std::chrono::steady_clock::time_point now);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
     // context doesn't leak to silicon DEFAULT_CONTEXT_ID. See #38445 / #39849.
     ContextId context_id_;
-    bool d2h_hugepage_fallback_ = false;
     const DataCollector* data_collector_ = nullptr;
     RealtimeProfilerService* realtime_profiler_service_ = nullptr;
 
     // What the receiver thread drains, and where it publishes.
     std::vector<DeviceState> devices_;
-    size_t next_resync_device_ = 0;
-    // Indexed like devices_ and sized once at construction; the receiver thread writes, tests read.
-    std::vector<std::atomic<uint64_t>> num_resyncs_;
     RealtimeProfilerRecordRing ring_;
     std::thread receiver_thread_;
+    // Declared last so its join runs before anything the resync pass touches is destroyed.
+    std::jthread sync_thread_;
     std::atomic<bool> stop_{false};
 
     // Diagnostics, read by tests through the accessors above.
@@ -173,8 +151,10 @@ private:
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
     std::atomic<uint64_t> num_malformed_records_{0};  // dropped at decode for having end < start
 
-    WarnThrottle malformed_record_warns_{std::chrono::seconds(30)};
-    WarnThrottle probe_timeout_warns_{std::chrono::seconds(30)};
+    // Both recur on every pass once they start, so the log says so once rather than every time; the running totals
+    // are what carry the magnitude.
+    std::chrono::steady_clock::time_point last_malformed_warn_{};
+    std::chrono::steady_clock::time_point last_probe_timeout_warn_{};
 };
 
 }  // namespace tt::tt_metal
