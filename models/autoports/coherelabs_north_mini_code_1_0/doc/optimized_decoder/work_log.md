@@ -502,3 +502,73 @@ The stage history is isolated directly onto functional checkpoint
 `78dbd88bec7`. `git diff --name-only 78dbd88bec7..a53eebe040d` contains only
 `models/autoports/coherelabs_north_mini_code_1_0/` paths. The rewritten
 model-only SHAs are listed above. No commit was pushed.
+
+## Independent review 5 OPT-015 attempt
+
+36. Added a model-owned `ttnn-advise capture` target for the final dense
+    layer-0 attention+MLP decode block. It reuses the established local
+    config, synthetic weights, paged-cache/page-table, RoPE, and decode input
+    builders; defaults to batch 32 and supports a separate fresh batch-1
+    capture. Python compilation, capture-contract import, and the source-only
+    optimized-path audit pass.
+37. The required fresh-process bootstrap fails before descriptor generation
+    or capture because the only visible tt-mlir environment has neither the
+    `ttnn-advise` CLI nor the `ttnn_jit` package. The exact output is retained
+    in `shard_advise/bootstrap.txt`; `AUTOFIX.md` records the command, current
+    DRAM-sharded baseline, pending compiler-candidate comparison, and recovery
+    commands.
+38. No `report.json` or `final_ir.mlir` was synthesized, no speculative
+    compiler layout/program was applied, and no TT hardware or profiler was
+    run. OPT-015 remains blocked on the pinned external advisor installation;
+    after that setup, the candidate must be extracted from authoritative IR
+    and measured against the selected path.
+39. Isolated the review-5 batch-32 prefill discrepancy. The 117.903-ms
+    artifact is an incomplete, no-PCC three-sample result from an
+    unrecoverable pre-commit implementation that incorrectly forced
+    `_qkv_prefill` to batch 1. A final-code single-BFP4-family A/B is
+    140.177 ms, refuting the extra 612-MiB BFP8 expert family as the latency
+    cause. Added default-off explicit M=1024 gate/up and down program
+    controls, perf CLI serialization, authentic precision-gate injection,
+    and seven passing static geometry contracts for three legal split/packed
+    candidates. Exact evidence and the minimal serialized hardware matrix are
+    in `PREFILL_GEOMETRY_AUTOFIX.md`; no TT hardware or profiler was used.
+40. Hardware selected packed 80/80-core BFP4/LoFi prefill: layer-1/layer-4
+    sequence-128 means are 96.844/96.644 ms after three warmups and 20
+    samples, versus the previous 139.959/139.855 ms. Authentic sequence-33
+    batch-32 prefill passes at PCC 0.99923857/0.99993403
+    (`artifacts/review5_packed_prefill_authentic.xml`). Promoted its exact
+    geometry and packing as prefill-only defaults while leaving the global
+    decode packing flag false and legacy decode programs automatic. Eight
+    static phase/geometry tests and the optimized-path audit pass. The packed
+    family adds 216 MiB of persistent BFP4 weights, so final default latency,
+    profiler/watcher, full correctness, and advertised-context capacity
+    revalidation remain parent hardware gates.
+41. The plain promoted default reproduces the selected prefill candidate at
+    96.750/96.440 ms for layers 1/4 (three warmups, 20 samples). Batch-32
+    traced decode remains split and non-regressed at 2.214/2.219 ms.
+42. Revalidated the added 216-MiB resident family at the advertised context.
+    Batch-32 context-500,000 construction and traced decode are finite for
+    layers 1 and 4 at 3.307/132.660 ms
+    (`context500000_decode_b32_layer{1,4}_review5.json`). The supported
+    context remains 500,000.
+43. Collected fresh, separate Tracy profiles for both changed selected rows.
+    Layer-1/layer-4 batch-32 prefill contain 231/229 device ops, zero host
+    ops, 95.720/94.711 ms device time, and 97.439/96.458 ms profile wall.
+    The selected BFP4/LoFi packed/down rows show the intended 80-core
+    `in0_block_w=8/6`, subblock `1x5/1x7` configs, which
+    `tt-perf-report` marks as good. Raw/filtered tables, readable advice,
+    runtime JSON, and summaries are under `tracy/review5_selected/`.
+44. Final correctness is `38 passed, 16 skipped in 383.78s`; skips remain
+    opt-in DRAM candidates (`artifacts/review5_full.xml`). The final selected
+    layer-1/layer-4 batch-32 prefill rows pass 2/2 under
+    `TT_METAL_WATCHER=10` with PCC 0.99923857/0.99993403 and no watcher fault
+    signature (`artifacts/review5_packed_prefill_watcher.xml`,
+    `watcher/review5_packed_prefill/`). Post-run `tt-smi -s` reports live
+    heartbeats and zero corrected GDDR errors on all four devices.
+
+The prefill finding from `STAGE_REVIEW_5.md` is fixed. OPT-015 is the sole
+remaining gate: AutoFix cannot run the mandatory compiler seed because the
+external pinned tt-mlir environment lacks both `ttnn-advise` and `ttnn_jit`.
+Per the shard-advisor skill, building that environment inside this model
+experiment is prohibited operator setup. Exact failure and recovery commands
+are retained under `shard_advise/` and `AUTOFIX.md`.

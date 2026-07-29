@@ -94,6 +94,20 @@ def _policy(args):
         "dense_expert_down_per_core_n",
         "dense_expert_down_subblock_h",
         "dense_expert_down_subblock_w",
+        "dense_expert_prefill_gate_up_in0_block_w",
+        "dense_expert_prefill_gate_up_per_core_m",
+        "dense_expert_prefill_gate_up_per_core_n",
+        "dense_expert_prefill_gate_up_out_block_h",
+        "dense_expert_prefill_gate_up_out_block_w",
+        "dense_expert_prefill_gate_up_subblock_h",
+        "dense_expert_prefill_gate_up_subblock_w",
+        "dense_expert_prefill_down_in0_block_w",
+        "dense_expert_prefill_down_per_core_m",
+        "dense_expert_prefill_down_per_core_n",
+        "dense_expert_prefill_down_out_block_h",
+        "dense_expert_prefill_down_out_block_w",
+        "dense_expert_prefill_down_subblock_h",
+        "dense_expert_prefill_down_subblock_w",
     ):
         value = getattr(args, field)
         if value is not None:
@@ -122,6 +136,26 @@ def _policy(args):
         overrides["direct_down_input"] = True
     if args.packed_dense_experts:
         overrides["packed_dense_experts"] = True
+    if args.prefill_packed_dense_experts is not None:
+        overrides["prefill_packed_dense_experts"] = args.prefill_packed_dense_experts
+    if (args.dense_expert_prefill_gate_grid_x is None) != (args.dense_expert_prefill_gate_grid_y is None):
+        raise ValueError("dense-expert prefill gate grid requires both --*-grid-x and --*-grid-y")
+    if args.dense_expert_prefill_gate_grid_x is not None:
+        overrides["dense_expert_prefill_gate_up_grid"] = (
+            args.dense_expert_prefill_gate_grid_x,
+            args.dense_expert_prefill_gate_grid_y,
+        )
+    if (args.dense_expert_prefill_down_grid_x is None) != (args.dense_expert_prefill_down_grid_y is None):
+        raise ValueError("dense-expert prefill down grid requires both --*-grid-x and --*-grid-y")
+    if args.dense_expert_prefill_down_grid_x is not None:
+        overrides["dense_expert_prefill_down_grid"] = (
+            args.dense_expert_prefill_down_grid_x,
+            args.dense_expert_prefill_down_grid_y,
+        )
+    if args.dense_expert_prefill_gate_transpose_mcast:
+        overrides["dense_expert_prefill_gate_up_transpose_mcast"] = True
+    if args.dense_expert_prefill_down_transpose_mcast:
+        overrides["dense_expert_prefill_down_transpose_mcast"] = True
     if args.sparse_gate_grid_x is not None or args.sparse_gate_grid_y is not None:
         overrides["sparse_gate_up_grid"] = (
             args.sparse_gate_grid_x or cfg.sparse_gate_up_grid[0],
@@ -211,6 +245,20 @@ def main():
         "dense-expert-down-per-core-n",
         "dense-expert-down-subblock-h",
         "dense-expert-down-subblock-w",
+        "dense-expert-prefill-gate-up-in0-block-w",
+        "dense-expert-prefill-gate-up-per-core-m",
+        "dense-expert-prefill-gate-up-per-core-n",
+        "dense-expert-prefill-gate-up-out-block-h",
+        "dense-expert-prefill-gate-up-out-block-w",
+        "dense-expert-prefill-gate-up-subblock-h",
+        "dense-expert-prefill-gate-up-subblock-w",
+        "dense-expert-prefill-down-in0-block-w",
+        "dense-expert-prefill-down-per-core-m",
+        "dense-expert-prefill-down-per-core-n",
+        "dense-expert-prefill-down-out-block-h",
+        "dense-expert-prefill-down-out-block-w",
+        "dense-expert-prefill-down-subblock-h",
+        "dense-expert-prefill-down-subblock-w",
     ):
         parser.add_argument(f"--{name}", type=int)
     parser.add_argument("--split-dense-gate-up", action="store_true")
@@ -225,6 +273,17 @@ def main():
     parser.add_argument("--direct-o-input", action="store_true")
     parser.add_argument("--direct-down-input", action="store_true")
     parser.add_argument("--packed-dense-experts", action="store_true")
+    parser.add_argument(
+        "--prefill-packed-dense-experts",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument("--dense-expert-prefill-gate-grid-x", type=int)
+    parser.add_argument("--dense-expert-prefill-gate-grid-y", type=int)
+    parser.add_argument("--dense-expert-prefill-down-grid-x", type=int)
+    parser.add_argument("--dense-expert-prefill-down-grid-y", type=int)
+    parser.add_argument("--dense-expert-prefill-gate-transpose-mcast", action="store_true")
+    parser.add_argument("--dense-expert-prefill-down-transpose-mcast", action="store_true")
     parser.add_argument("--sparse-gate-grid-x", type=int)
     parser.add_argument("--sparse-gate-grid-y", type=int)
     parser.add_argument("--sparse-down-grid-x", type=int)

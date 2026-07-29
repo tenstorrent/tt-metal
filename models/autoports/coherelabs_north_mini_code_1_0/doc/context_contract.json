@@ -18,12 +18,12 @@
   "capability_reduction": null,
   "completion_status": "in-progress",
   "pending_gates": [
-    "Fresh independent stage review after review-4 AutoFix closure"
+    "Install the pinned external tt-mlir shard-advisor environment, complete OPT-015, and rerun independent stage review"
   ],
   "independent_stage_review": {
-    "verdict": "pending-final-review",
+    "verdict": "more-work-needed",
     "required_work": [
-      "Run a fresh stage review against the review-4 AutoFix closure and isolated history."
+      "Complete mandatory OPT-015 shard-advisor capture and candidate comparison after external operator setup installs ttnn-advise and ttnn_jit."
     ]
   },
   "context_probe_evidence": {
@@ -66,6 +66,18 @@
       "artifact": "optimized_decoder/context500000_decode_b32_review3.json",
       "implementation": "optimized-final-policy"
     },
+    "decode_500000_batch_32_moe_layer_kinds_after_packed_prefill": {
+      "position": 499999,
+      "traced": true,
+      "result": "pass with finite outputs",
+      "sliding_rope_moe_ms": 3.3073300000978634,
+      "full_no_rope_moe_ms": 132.6604649948422,
+      "artifacts": [
+        "optimized_decoder/context500000_decode_b32_layer1_review5.json",
+        "optimized_decoder/context500000_decode_b32_layer4_review5.json"
+      ],
+      "implementation": "optimized-final-policy-with-prefill-packed-weights"
+    },
     "non_aligned_prefill": [
       1,
       31,
@@ -95,6 +107,10 @@
     "kv_bytes_formula": "batch * context * 2 caches * 4 kv heads * 128 head dim * 2 BF16 bytes",
     "batch_1_context_500000_kv_bytes": 1024000000,
     "batch_32_context_500000_kv_bytes": 32768000000,
-    "note": "The final optimized policy passed advertised-limit dense prefill and near-limit nonaligned MoE prefill after adding large-M automatic programs and interleaved QKV/O copies. All three layer kinds also passed batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced dense decode passed; no capability reduction is applied."
+    "review3_sparse_layer_expert_weight_bytes": 981467136,
+    "selected_packed_prefill_expert_weight_delta_bytes": 226492416,
+    "selected_sparse_layer_expert_weight_bytes": 1207959552,
+    "selected_weight_capacity_status": "batch-32 advertised-context construction and traced decode pass for both MoE layer kinds",
+    "note": "The review-3 optimized policy passed advertised-limit dense prefill and near-limit nonaligned MoE prefill after adding large-M automatic programs and interleaved QKV/O copies. All three layer kinds passed batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced decode pass for dense and both MoE layer kinds, including the final additional 226,492,416-byte packed-prefill expert family; no capability reduction is applied."
   }
 }

@@ -234,6 +234,9 @@ def test_optimized_path_audit():
     assert policy.expert_gate_up_dtype == policy.expert_down_dtype == ttnn.bfloat8_b
     assert policy.dense_expert_gate_up_dtype == policy.dense_expert_down_dtype == ttnn.bfloat4_b
     assert policy.expert_gate_up_fidelity == policy.expert_down_fidelity == ttnn.MathFidelity.LoFi
+    assert policy.prefill_packed_dense_experts
+    assert not policy.packed_dense_experts
+    assert policy.dense_expert_prefill_gate_up_grid == policy.dense_expert_prefill_down_grid == (10, 8)
     for method_name in (
         "from_state_dict",
         "prefill_forward",
@@ -450,6 +453,21 @@ def test_optimized_real_weight_moe_precision_matrix(mesh_device, monkeypatch, la
         dense_expert_chunk_size=int(os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_CHUNK", "1024")),
         serving_fused_kv_update=os.environ.get("NORTH_MINI_AUTHENTIC_FUSED_KV", "0") == "1",
     )
+    geometry_json = os.environ.get("NORTH_MINI_AUTHENTIC_PREFILL_GEOMETRY")
+    if geometry_json:
+        geometry = json.loads(geometry_json)
+        unexpected = [
+            key
+            for key in geometry
+            if not key.startswith("dense_expert_prefill_")
+            and key not in {"packed_dense_experts", "prefill_packed_dense_experts"}
+        ]
+        if unexpected:
+            raise ValueError(f"unsupported authentic prefill geometry fields: {unexpected}")
+        for key in ("dense_expert_prefill_gate_up_grid", "dense_expert_prefill_down_grid"):
+            if key in geometry:
+                geometry[key] = tuple(geometry[key])
+        policy_overrides.update(geometry)
     if expert_dtype is not None:
         policy_overrides.update(
             dense_expert_gate_up_dtype=expert_dtype,
@@ -470,6 +488,7 @@ def test_optimized_real_weight_moe_precision_matrix(mesh_device, monkeypatch, la
         assert decoder.weights["expert_down"].dtype == ttnn.bfloat8_b
         assert decoder.weights["dense_expert_gate"].dtype == ttnn.bfloat4_b
         assert decoder.weights["dense_expert_down"].dtype == ttnn.bfloat4_b
+        assert decoder.weights["dense_expert_gate_up"].dtype == ttnn.bfloat4_b
     branch_calls = {"dense": 0, "active_prefill": 0}
     original_dense = decoder._dense_expert_moe_chunk
     original_active_prefill = decoder._sparse_moe_prefill_chunk
@@ -1278,9 +1297,9 @@ def test_optimized_serving_prefill_exercises_selected_dense_experts(mesh_device,
     dense_calls = []
     original_dense = decoder._dense_expert_moe_chunk
 
-    def counted_dense(value, token_count):
+    def counted_dense(value, token_count, **kwargs):
         dense_calls.append(token_count)
-        return original_dense(value, token_count)
+        return original_dense(value, token_count, **kwargs)
 
     def forbidden_sparse(*_args, **_kwargs):
         pytest.fail("selected serving prefill entered sparse expert execution")
