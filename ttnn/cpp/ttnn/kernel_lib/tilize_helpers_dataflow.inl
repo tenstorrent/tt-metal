@@ -30,6 +30,79 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
 
 }  // namespace detail
 
+// ─── read_stick_rows_for_tilize ─────────────────────────────────────────────
+//
+// One tile-height band of sticks into a caller-owned L1 window. Two modes:
+//
+//   Generic  — one noc_async_read per row, address from the accessor.
+//
+//   Stateful — bank-major with an armed command buffer (lever B13):
+//              `noc_async_read_one_packet_set_state` pins the coordinate + size,
+//              `..._with_state` then issues a read writing only the two
+//              addresses. For an interleaved tensor page `p` sits in bank
+//              `p % num_banks` at bank-page `p / num_banks`, so pages
+//              `g, g+nb, g+2nb, ...` share one bank and step by exactly one
+//              aligned page — one arm covers the whole group and the source
+//              address is a running increment (no per-row divide, no per-row
+//              coordinate write). The `ASSERT` in the inner loop re-derives the
+//              address through the accessor on watcher builds, so the identity
+//              this rests on is checked on device rather than assumed.
+//
+template <StickReadMode read_mode, uint32_t num_splits, typename Accessor>
+FORCE_INLINE void read_stick_rows_for_tilize(
+    const Accessor& accessor,
+    uint32_t first_page,
+    uint32_t row_bytes,
+    uint32_t byte_offset_within_page,
+    uint32_t l1_addr,
+    uint32_t l1_row_stride,
+    uint32_t num_rows,
+    uint32_t split_id) {
+    static_assert(num_splits >= 1, "num_splits must be at least 1");
+    ASSERT(split_id < num_splits);
+
+    if constexpr (read_mode == StickReadMode::Stateful && Accessor::DSpec::is_interleaved) {
+        // The interleaved accessor is an InterleavedAddrGen: page `id` sits in bank
+        // `id % NUM_BANKS` at bank-page `id / NUM_BANKS`
+        // (dataflow_api_addrgen.h:19-42,236-244), so the bank period is the bank
+        // count of the buffer's memory type. `DSpec::num_banks_ct` is 0 for the
+        // interleaved specialization (it has no dspec at all), which is why this
+        // reads the firmware constants directly.
+        constexpr uint32_t period = Accessor::DSpec::is_dram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
+        // Rows per armed command. Below 2 the arm costs more than it saves (that is
+        // what rules out L1-interleaved sources, with one bank per core), and a row
+        // wider than one packet cannot use the one_packet state at all.
+        if (period * 2 <= num_rows && row_bytes <= NOC_MAX_BURST_SIZE) {
+            const uint32_t aligned_page = accessor.get_aligned_page_size();
+            const uint32_t l1_group_stride = period * l1_row_stride;
+            for (uint32_t group = split_id; group < period && group < num_rows; group += num_splits) {
+                const uint64_t group_noc_addr = accessor.get_noc_addr(first_page + group, byte_offset_within_page);
+                noc_async_read_one_packet_set_state(group_noc_addr, row_bytes);
+
+                const uint64_t coord = group_noc_addr & ~static_cast<uint64_t>(0xFFFFFFFFu);
+                uint32_t src_local_addr = static_cast<uint32_t>(group_noc_addr);
+                uint32_t dst = l1_addr + group * l1_row_stride;
+                for (uint32_t row = group; row < num_rows; row += period) {
+                    // Same bank (coordinate from the armed state) one aligned page
+                    // further in, for every row of this group -- checked, not assumed.
+                    ASSERT(
+                        accessor.get_noc_addr(first_page + row, byte_offset_within_page) ==
+                        (coord | static_cast<uint64_t>(src_local_addr)));
+                    noc_async_read_one_packet_with_state(src_local_addr, dst);
+                    src_local_addr += aligned_page;
+                    dst += l1_group_stride;
+                }
+            }
+            return;
+        }
+    }
+
+    for (uint32_t row = split_id; row < num_rows; row += num_splits) {
+        const uint64_t noc_addr = accessor.get_noc_addr(first_page + row, byte_offset_within_page);
+        noc_async_read(noc_addr, l1_addr + row * l1_row_stride, row_bytes);
+    }
+}
+
 // ─── read_sticks_for_tilize ─────────────────────────────────────────────────
 //
 // TILE granularity example (reader kernel, single-core):
@@ -64,7 +137,7 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
 //   // L1 benefit: when total_num_rows < 32, CB only needs total_num_rows pages
 //   //   instead of width_in_tiles tile-pages (which always span 32 rows).
 //
-template <uint32_t cb_id, TilizeGranularity granularity, typename Accessor>
+template <uint32_t cb_id, TilizeGranularity granularity, StickReadMode read_mode, typename Accessor>
 FORCE_INLINE void read_sticks_for_tilize(
     const Accessor& accessor,
     uint32_t total_num_rows,
@@ -117,11 +190,14 @@ FORCE_INLINE void read_sticks_for_tilize(
             cb_reserve_back(cb_id, width_in_tiles);
             uint32_t l1_addr = get_write_ptr(cb_id);
 
-            for (uint32_t row = 0; row < rows_this_block; row++) {
-                uint64_t noc_addr = accessor.get_noc_addr(start_page + block_row + row, byte_offset_within_page);
-                noc_async_read(noc_addr, l1_addr, row_bytes);
-                l1_addr += padded_row_bytes;
-            }
+            read_stick_rows_for_tilize<read_mode, 1>(
+                accessor,
+                start_page + block_row,
+                row_bytes,
+                byte_offset_within_page,
+                l1_addr,
+                padded_row_bytes,
+                rows_this_block);
 
             noc_async_read_barrier();
             cb_push_back(cb_id, width_in_tiles);

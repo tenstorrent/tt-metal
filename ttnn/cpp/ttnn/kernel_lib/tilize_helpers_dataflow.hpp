@@ -44,6 +44,34 @@ enum class TilizeGranularity : uint8_t {
 };
 
 /**
+ * @brief How the per-row stick reads program the NoC command buffer.
+ *
+ * Generic (default): one `noc_async_read` per row, each re-programming the full
+ *   NoC command (coordinate + local address + size) and re-running
+ *   `TensorAccessor::get_noc_addr` (a rank loop plus a divide/modulo by the bank
+ *   count) for every row.
+ *
+ * Stateful: `noc_async_read_one_packet_set_state` / `..._with_state`
+ *   (dataflow_api.h:594,627). All rows of a tilize block have the SAME transfer
+ *   size, so the command can be armed once and each read then writes only the
+ *   varying addresses. `set_state` pins the NoC *coordinate*, so the rows are
+ *   visited **bank-major**: for an interleaved tensor, pages `p` and
+ *   `p + num_banks` live in the same bank exactly one aligned page apart, so one
+ *   armed command covers every `num_banks`-th row and its source address
+ *   advances by a constant. That also removes all but one address computation
+ *   per bank. Falls back to Generic (same call, no extra cost) when the accessor
+ *   is not interleaved, when there are fewer than 2 rows per bank (nothing to
+ *   amortize), or when a row exceeds the one-packet limit.
+ *
+ * Only affects TILE granularity; ROW granularity reads one row per CB page and
+ * has no group to amortize over.
+ */
+enum class StickReadMode : uint8_t {
+    Generic,
+    Stateful,
+};
+
+/**
  * @brief Read row-major sticks from DRAM into a CB for tilization
  *
  * Reads total_num_rows sticks, grouping them into tile-height blocks.
@@ -84,13 +112,62 @@ enum class TilizeGranularity : uint8_t {
  *        then scales with `row_bytes` (the chunk width), not the full row,
  *        bounding L1 footprint regardless of total W.
  */
-template <uint32_t cb_id, TilizeGranularity granularity = TilizeGranularity::TILE, typename Accessor>
+template <
+    uint32_t cb_id,
+    TilizeGranularity granularity = TilizeGranularity::TILE,
+    StickReadMode read_mode = StickReadMode::Generic,
+    typename Accessor>
 FORCE_INLINE void read_sticks_for_tilize(
     const Accessor& accessor,
     uint32_t total_num_rows,
     uint32_t row_bytes,
     uint32_t start_page = 0,
     uint32_t byte_offset_within_page = 0);
+
+/**
+ * @brief Read one tile-height band of row-major sticks into a CALLER-OWNED L1 region
+ *
+ * The inner row loop of read_sticks_for_tilize()'s TILE mode, exposed on its own
+ * so that (a) the caller can own the CB handshake, and (b) the band can be split
+ * across both data-movement RISC-Vs.
+ *
+ * Use this instead of read_sticks_for_tilize() when the reads of ONE block are
+ * shared between NCRISC and BRISC (the "split reader" pattern): a circular buffer
+ * must have exactly one producer, so only one RISC-V may call
+ * `cb_reserve_back`/`cb_push_back` on it — the other must be handed the reserved
+ * L1 window and write into it, which this helper does. It issues no CB call and
+ * no `noc_async_read_barrier()`; the caller owns both (each RISC-V barriers its
+ * own reads).
+ *
+ * The band is partitioned by GROUP, not by contiguous row range: with
+ * `num_splits = 2`, split 0 takes groups 0, 2, 4, ... and split 1 takes
+ * groups 1, 3, 5, .... Under StickReadMode::Stateful a group is a whole bank's
+ * worth of rows, so each half keeps ~num_banks/2 armed commands with several
+ * reads each — a contiguous row split would instead halve the rows per bank and
+ * give both halves the same number of arms. Under Generic a group is one row, so
+ * the two halves interleave rows.
+ *
+ * @tparam read_mode Generic or Stateful (see StickReadMode)
+ * @tparam num_splits How many DM RISC-Vs share this band (1 = no split)
+ * @param accessor TensorAccessor for the source tensor (stick-indexed)
+ * @param first_page Page/stick index of row 0 of this band
+ * @param row_bytes Bytes to read per row
+ * @param byte_offset_within_page Byte offset inside each source page
+ * @param l1_addr Destination L1 address of row 0 (inside the reserved CB window)
+ * @param l1_row_stride Bytes between consecutive rows in L1 (padded row bytes)
+ * @param num_rows Rows in this band (<= tile height)
+ * @param split_id Which of the num_splits DM RISC-Vs this call is (0-based)
+ */
+template <StickReadMode read_mode = StickReadMode::Generic, uint32_t num_splits = 1, typename Accessor>
+FORCE_INLINE void read_stick_rows_for_tilize(
+    const Accessor& accessor,
+    uint32_t first_page,
+    uint32_t row_bytes,
+    uint32_t byte_offset_within_page,
+    uint32_t l1_addr,
+    uint32_t l1_row_stride,
+    uint32_t num_rows,
+    uint32_t split_id = 0);
 
 /**
  * @brief Write untilized sticks from a CB to DRAM

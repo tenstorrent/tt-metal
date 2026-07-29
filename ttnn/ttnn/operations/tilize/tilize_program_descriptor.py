@@ -118,6 +118,74 @@ CORE_CAP_OVERRIDE = None
 CB_RM_INPUT = 0
 CB_TILED_OUTPUT = 16
 
+# --- Refinement 1c: the two sub-one-packet read-path levers -------------------
+#
+# `d_tall_narrow` [1,1,2048,32] reads 32 x 64 B sticks per block (a W=32 bf16
+# ROW_MAJOR row IS one 64 B DRAM page), 1 block per core. Refinement 1 priced the
+# 3 609 ns by subtraction: 764 ns launch + 437 ns address-gen + 1 504 ns read
+# issue/service/barrier + 931 ns tilize LLK. Both levers here attack the middle
+# two terms, i.e. the transaction *rate* -- NOT the transaction size, which is
+# pinned at 64 B: consecutive DRAM pages of a W=32 row-major tensor land on
+# DIFFERENT banks (round-robin), so rows cannot be coalesced without a
+# permutation the tilize LLK cannot consume.
+#
+#   B13 (`stateful_read`) -- arm the NoC command buffer once per bank and then
+#       write only the varying addresses. Every row of a block has the same
+#       transfer size, and for an interleaved tensor pages p and p+num_banks share
+#       a bank one aligned page apart, so one arm covers ~32/12 rows and their
+#       source addresses are a running increment. Implemented inside
+#       `dataflow_kernel_lib::read_stick_rows_for_tilize` (StickReadMode::Stateful)
+#       with a watcher-build ASSERT that re-derives every address through the
+#       accessor. Kernel-side it self-disables when the accessor is not
+#       interleaved or when there are < 2 rows per bank, so this flag is "offer
+#       the lever", not "force it".
+#
+#   C7 (`split_read`) -- give BRISC half of each block's stick reads. It is
+#       otherwise parked in cb_wait_front for the entire read window.
+#       Needs depth == 1: BRISC must write into the window NCRISC reserved, and it
+#       may not touch the CB pointers (single producer), so the window has to be
+#       at the CB base address every block -- which is exactly what depth-1 gives.
+#
+# Both are gated per plan and both have an env counterfactual switch so the
+# Mode-C ledger rows are re-measurable (`_bench_tilize.py` x_* rows).
+#
+# The C7 payoff gate is a MEASURED transaction-size threshold: splitting the
+# issue work only helps while the per-read RISC-V issue cost is a large share of
+# the read, and BRISC pays for it with a stall in front of its own write stage.
+# See `changelog.md` § "Refinement 1c" for the per-regime sweep behind the number.
+SPLIT_READ_MAX_ROW_BYTES = 64
+SEM_SPLIT_RESERVE = 0
+SEM_SPLIT_DONE = 1
+
+
+def _lever_flags():
+    """Env counterfactual switches for the Refinement-1c levers (Mode-C ledger).
+
+    Default 1 == the lever is offered to the plan. `_bench_tilize.py` flips one at
+    a time so each lever has a re-measurable counterfactual row instead of a
+    changelog claim. Never set in production.
+    """
+    return (
+        int(os.environ.get("TILIZE_LEVER_B13", "1")),
+        int(os.environ.get("TILIZE_LEVER_C7", "1")),
+    )
+
+
+def split_read_pays(depth: int, chunk_row_bytes: int) -> bool:
+    """C7 gate: is handing BRISC half the stick reads worth its stall + handshake?
+
+    Two clauses:
+
+    1. ``depth == 1`` is **structural**, not a payoff question: BRISC writes into
+       the window NCRISC reserved without touching the CB pointers, so the window
+       must be at the CB base address on every block.
+    2. the read must be small enough that the per-read *issue* cost still
+       dominates it (``SPLIT_READ_MAX_ROW_BYTES``). Past that the reads are
+       DRAM-service bound, the split buys nothing, and BRISC's stall in front of
+       its write stage is a net cost.
+    """
+    return depth == 1 and chunk_row_bytes <= SPLIT_READ_MAX_ROW_BYTES
+
 
 # ---------------------------------------------------------------------------
 # Small integer helpers (ttnn.div_up / round_up / find_max_divisor are not
@@ -372,6 +440,9 @@ def _plan_alias(plan, geo):
             "row_page_stride": 1,
             "source_page_bytes": shard_w * plan["elem_in"],
             "chunk_row_bytes": shard_w * plan["elem_in"],
+            # Path B has no NoC reads at all, so neither read-path lever applies.
+            "stateful_read": 0,
+            "split_read": 0,
             "ncores": len(cores),
             "cb_bytes_per_core": shard_tiles * (plan["tile_in"] + plan["tile_out"]),
         }
@@ -451,6 +522,15 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
     n_w = min(n_chunks, max(1, max_cores // n_h))
     ncores = n_h * n_w
 
+    # --- Refinement 1c read-path levers (see the module header) ---------------
+    # Both need one source page per logical row: the helpers' page index advances
+    # by exactly 1 per row, and B13's "p and p+num_banks share a bank" identity is
+    # only a bank *increment* for consecutive pages.
+    b13, c7 = _lever_flags()
+    chunk_row_bytes = chunk_wt * TILE_HW * elem_in
+    stateful_read = int(bool(b13) and row_page_stride == 1)
+    split_read = int(bool(c7) and row_page_stride == 1 and split_read_pays(depth, chunk_row_bytes))
+
     cores = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
     core_ranges = ttnn.num_cores_to_corerangeset(ncores, grid, True)
 
@@ -479,10 +559,12 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
             "cores": cores,
             "work": work,
             "chunk_wt": chunk_wt,
-            "chunk_row_bytes": chunk_wt * TILE_HW * elem_in,
+            "chunk_row_bytes": chunk_row_bytes,
             "row_page_stride": row_page_stride,
             "source_page_bytes": in_page_bytes,
             "shard_tiles": 0,
+            "stateful_read": stateful_read,
+            "split_read": split_read,
             "depth": depth,
             "n_h": n_h,
             "n_w": n_w,
@@ -583,6 +665,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
 
     alias_flag = 1 if alias else 0
 
+    split_read = plan["split_read"]
+    stateful_read = plan["stateful_read"]
+
     # ---------------- reader ----------------
     reader_ct_args = [
         alias_flag,
@@ -592,10 +677,18 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["source_page_bytes"],
         plan["shard_tiles"],
         skip_dm,
+        stateful_read,
+        split_read,
+        SEM_SPLIT_RESERVE,
+        SEM_SPLIT_DONE,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     # ---------------- writer ----------------
+    # On the split-read path the writer also reads, so it carries the INPUT
+    # accessor as well. Both TensorAccessorArgs are emitted unconditionally (the
+    # kernel declares them outside any `if constexpr`), so the CT arg layout does
+    # not depend on the lever.
     writer_ct_args = [
         alias_flag,
         chunk_wt,
@@ -603,8 +696,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["wt"],
         plan["shard_tiles"],
         skip_dm,
+        split_read,
+        plan["chunk_row_bytes"],
+        stateful_read,
+        SEM_SPLIT_RESERVE,
+        SEM_SPLIT_DONE,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     # ---------------- compute ----------------
     compute_ct_args = [chunk_wt, plan["needs_cast"], skip_compute]
@@ -635,7 +734,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 chunk_start,
                 chunk_count,
             ]
-            writer_rt[core.x][core.y] = [dst_addr, row_start, row_count, chunk_start, chunk_count]
+            # src_addr is appended last so the existing indices are unchanged; the
+            # writer only reads it on the split-read path.
+            writer_rt[core.x][core.y] = [dst_addr, row_start, row_count, chunk_start, chunk_count, src_addr]
             compute_rt[core.x][core.y] = [row_count * chunk_count]
 
     reader_kernel = ttnn.KernelDescriptor(
@@ -660,8 +761,19 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         config=_compute_config(input_tensor.dtype, output_tensor.dtype),
     )
 
+    # Lever C7's NCRISC <-> BRISC handshake. Two monotonic per-launch counters in
+    # this core's own L1 (set/wait are local loads and stores, no NoC round trip);
+    # the dispatcher re-writes the initial values on every launch, which is what
+    # makes a monotonic counter safe across launches.
+    semaphores = []
+    if split_read:
+        semaphores = [
+            ttnn.SemaphoreDescriptor(id=SEM_SPLIT_RESERVE, core_ranges=core_ranges, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_SPLIT_DONE, core_ranges=core_ranges, initial_value=0),
+        ]
+
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
-        semaphores=[],
+        semaphores=semaphores,
         cbs=[cb_rm_input, cb_tiled_output],
     )

@@ -157,6 +157,22 @@ REGIMES = {
     # A0 2D split off -> the wide-short shape (nt_h=1) collapses onto one core,
     # which is exactly what a height-only split_work_to_cores(nt_h) would do.
     "x_wide_short_1core": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, multicore=False),
+    # --- Refinement 1c: per-lever counterfactuals on the sub-one-packet read
+    # path. `d_tall_narrow` above measures the shipped default (both levers on);
+    # these three are the same plan with one/both turned off, measured IN THE SAME
+    # RUN so a few-percent delta is resolvable against the cross-session scatter.
+    "x_tall_narrow_no_levers": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
+    "x_tall_narrow_b13_only": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=1, c7=0)),
+    "x_tall_narrow_c7_only": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=1)),
+    # B13 on the two biggest-transaction interleaved regimes: the lever is offered
+    # to every interleaved plan, so its no-regression witness has to be measured
+    # where the reads are 1024 B and already DRAM-service bound.
+    "x_square_no_b13": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
+    "x_wide_short_no_b13": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
+    # A tall-narrow shape with 4 blocks/core: the C7 handshake runs per block, so
+    # its cost has to be seen with more than one block as well.
+    "n_tall_narrow_4blk": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16),
+    "x_tall_narrow_4blk_no_levers": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
@@ -325,6 +341,12 @@ def test_bench_tilize(device):
         spec = REGIMES[name]
         # A0 counterfactual rows force a core cap through the planner's sweep hook.
         tpd.CORE_CAP_OVERRIDE = spec.get("core_cap")
+        # Refinement-1c lever counterfactual rows (B13 stateful reads, C7 split
+        # reader). Set before the plan is built AND before the runs, since the
+        # planner reads them per call.
+        levers = spec.get("levers") or {}
+        os.environ["TILIZE_LEVER_B13"] = str(levers.get("b13", 1))
+        os.environ["TILIZE_LEVER_C7"] = str(levers.get("c7", 1))
         tt_input, out_cfg = _build(device, spec)
         plan = _plan_for(device, tt_input, spec, out_cfg)
         _assert_structural_gates(name, spec, plan, grid_cores)
@@ -356,6 +378,8 @@ def test_bench_tilize(device):
                     chunk_wt=plan["chunk_wt"],
                     depth=plan["depth"],
                     blocks=plan["blocks_per_core"],
+                    b13=plan["stateful_read"],
+                    c7=plan["split_read"],
                     cb_bytes=plan["cb_bytes_per_core"],
                     ns=ns,
                     cv=(std / ns * 100.0) if ns else 0.0,
@@ -365,6 +389,8 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
+        os.environ["TILIZE_LEVER_B13"] = "1"
+        os.environ["TILIZE_LEVER_C7"] = "1"
         tpd.CORE_CAP_OVERRIDE = None
 
     arch = os.environ.get("ARCH_NAME", "unknown")
@@ -376,15 +402,15 @@ def test_bench_tilize(device):
         f"A0_KNEE_CORES={tpd.A0_KNEE_CORES}); sharded -> shard's own cores",
         f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
         f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
-        f"    {'regime':<22} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
-        f"{'blk':>4} {'cbB/core':>9} {'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
+        f"    {'regime':<24} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
+        f"{'blk':>4} {'B13':>4} {'C7':>3} {'cbB/core':>9} {'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
         gbps = (r["traffic"] / r["ns"]) if (r["traffic"] and r["ns"]) else 0.0
         lines.append(
-            f"    {r['regime']:<22} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
-            f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['cb_bytes']:>9} "
-            f"{r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
+            f"    {r['regime']:<24} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
+            f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['c7']:>3} "
+            f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )
     print("\n".join(lines))
 
