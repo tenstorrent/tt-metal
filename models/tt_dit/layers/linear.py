@@ -385,13 +385,14 @@ class RowParallelLinear(Module):
         # worth it for large M (the gen stream); tiny-M (und) chunks add launch overhead
         # with no matmul to hide behind. Gated by TT_COSMOS3_RS_OVERLAP.
         _rs_chunks = int(_os_for_fidelity.environ.get("TT_COSMOS3_RS_OVERLAP", "0"))
+        _rank = len(x.shape)
         if self._mesh_axis_size > 1 and _rs_chunks > 1 and M >= _rs_chunks * 1024:
-            m_dim = x.ndim - 2
+            m_dim = _rank - 2
             step = ((M // _rs_chunks) + 31) // 32 * 32  # tile-aligned M split
             outs = []
             for start in range(0, M, step):
                 end = min(start + step, M)
-                sl_start = [0] * x.ndim
+                sl_start = [0] * _rank
                 sl_end = list(x.shape)
                 sl_start[m_dim], sl_end[m_dim] = start, end
                 x_chunk = ttnn.slice(x, sl_start, sl_end)
@@ -403,7 +404,7 @@ class RowParallelLinear(Module):
                     compute_kernel_config=compute_kernel_config or self.compute_config,
                     dtype=dtype,
                 )
-                oc_needs_reshape = oc.ndim <= 3
+                oc_needs_reshape = len(oc.shape) <= 3
                 if oc_needs_reshape:
                     oc = ttnn.unsqueeze(oc, 0)
                 # Non-persistent RS: overlapping chunk RS's would collide on the 2-slot
