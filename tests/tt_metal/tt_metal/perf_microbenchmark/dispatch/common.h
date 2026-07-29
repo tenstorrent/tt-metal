@@ -987,7 +987,7 @@ inline tt_metal::DataMovementProcessor dispatch_dm() {
     return tt::tt_metal::detail::dispatch_dm_processor();
 }
 
-inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map(const tt_metal::IDevice* /*device*/) {
+inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map() {
     return tt_metal::MetalContext::instance().dispatch_mem_map();
 }
 

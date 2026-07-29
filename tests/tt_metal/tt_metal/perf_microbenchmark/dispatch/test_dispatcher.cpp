@@ -1123,7 +1123,7 @@ public:
             append_dispatch_payload(raw, term_cmd);
         }
 
-        const auto& memmap = Common::sd_dispatch_mem_map(this->device_);
+        const auto& memmap = Common::sd_dispatch_mem_map();
         const tt::CoreType cq_core_type = Common::sd_cq_kernel_core_type(this->device_);
         // CQ0: this is a slow-dispatch (SD) test with no real command queue.
         const uint32_t l1_buf_base = memmap.dispatch_buffer_base(/*cq_id=*/0);
