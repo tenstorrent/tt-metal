@@ -61,7 +61,8 @@ void kernel_main() {
     constexpr uint32_t stateful_read = get_compile_time_arg_val(8);  // lever B13
     constexpr uint32_t sem_reserve_id = get_compile_time_arg_val(9);
     constexpr uint32_t sem_done_id = get_compile_time_arg_val(10);
-    constexpr auto dst_args = TensorAccessorArgs<11>();
+    constexpr uint32_t vc_spread = get_compile_time_arg_val(11);  // lever B10
+    constexpr auto dst_args = TensorAccessorArgs<12>();
     // Declared unconditionally (never inside `if constexpr`) so the CT arg offsets
     // are the same in both configurations; only used when split_read.
     [[maybe_unused]] constexpr auto src_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
@@ -81,6 +82,11 @@ void kernel_main() {
         const uint32_t chunk_count = get_arg_val<uint32_t>(4);
 
         const auto accessor = TensorAccessor(dst_args, dst_addr);
+        // Lever B10 (per-writer static unicast VC). Unlike the read path this needs
+        // no sticky-register dance and no restore: ncrisc_noc_fast_write writes
+        // NOC_CTRL (and therefore NOC_CMD_STATIC_VC) on EVERY call, so the vc
+        // argument of noc_async_write is live in DM_DEDICATED_NOC.
+        const uint32_t write_vc = vc_spread ? get_arg_val<uint32_t>(6) : NOC_UNICAST_WRITE_VC;
 
         for (uint32_t c = 0; c < chunk_count; ++c) {
             const uint32_t col0 = (chunk_start + c) * chunk_wt;
@@ -121,7 +127,7 @@ void kernel_main() {
                         volatile uint32_t sink = static_cast<uint32_t>(noc_addr);
                         (void)sink;
                     } else {
-                        noc_async_write(l1_addr, noc_addr, tile_bytes);
+                        noc_async_write(l1_addr, noc_addr, tile_bytes, noc_index, write_vc);
                     }
                     l1_addr += tile_bytes;
                 }

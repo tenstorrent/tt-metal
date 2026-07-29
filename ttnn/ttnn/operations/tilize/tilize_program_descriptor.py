@@ -193,17 +193,74 @@ SPLIT_READ_MAX_BLOCKS_PER_CORE = 1
 SEM_SPLIT_RESERVE = 0
 SEM_SPLIT_DONE = 1
 
+# --- Refinement 2: the three remaining per-transaction levers ------------------
+#
+# All three are `master.md` Part 2 items that Phase 0 pre-classified `deferred`.
+# Refinement 1c already refuted B13/C7 on `b_wide_short` (512 B reads), so this
+# entry's set is B8 / B10 / A3.
+#
+#   B8 (`prefetch_blocks == 2`) -- trid double-issue on the READ path. The reader
+#       tags each chunk-block's 32 stick reads with one of two transaction ids and
+#       barriers only on the PREVIOUS id, so the next block's reads are already in
+#       flight while the current block is drained. Structurally requires
+#       `blocks_per_core >= 2` (with one block there is no next block to keep in
+#       flight) and a THIRD CB window (the reader must own the next window's L1
+#       address before it pushes the current one, which `cb_reserve_back`/
+#       `get_write_ptr` cannot express at depth 2 -- see the reader kernel).
+#       NB the WRITE path already has this property without trids: Phase-0
+#       verification fix #1 replaced the per-block `noc_async_write_barrier()`
+#       with `noc_async_writes_flushed()`, so writes stay in flight across the
+#       block boundary. B8 is the read-side analogue of that fix, and the reader
+#       cannot use `flushed` because it needs the bytes PRESENT, not departed.
+#
+#   B10 (`vc_spread == 1`) -- per-reader / per-writer static unicast VC. Breaks
+#       first-come-first-serve serialization when many readers share a route into
+#       the same DRAM endpoints. Read side: in DM_DEDICATED_NOC (what
+#       Reader/WriterConfigDescriptor select) `noc_async_read`'s `read_req_vc`
+#       argument is DEAD -- `ncrisc_noc_fast_read` only writes NOC_CTRL under
+#       `DM_DYNAMIC_NOC` (noc_nonblocking_api.h:415-437). The VC therefore has to
+#       be programmed into the sticky NOC_CTRL register once per kernel with
+#       `noc_async_read_one_packet_set_state<use_vc=true>` and RESTORED at the end
+#       (the register survives kernel launches). Write side needs no such dance:
+#       `ncrisc_noc_fast_write` writes NOC_CTRL on every call, so the vc argument
+#       of `noc_async_write` is live.
+#
+#   A3 (`bank_placement == 1`) -- assign work units to cores in
+#       `get_optimal_dram_bank_to_logical_worker_assignment(NOC_0)` order (bank i's
+#       NoC-optimal worker first), instead of plain row-major. Stacks on the
+#       already-applied A1 `row_wise=True` line choice. Host-only; no kernel change.
+#
+# Payoff gates are set by measurement below; every one has an env counterfactual
+# switch and a permanent `_bench_tilize.py` row.
+PREFETCH_TRIDS = (1, 2)  # 0 is the firmware default tag; leave it alone
+PREFETCH_DEPTH = 3
+# Lever B8 needs a third CB window. Keeping `chunk_wt` pinned (so the transaction
+# shape is identical to the counterfactual -- the rule Refinement 1 established)
+# means the footprint grows 1.5x, which does not fit `L1_CB_BUDGET_BYTES`. WH B0
+# has 1 499 136 B of L1 per core, so 192 KiB of CB is still a small fraction; this
+# budget is only consulted on the B8 path.
+L1_CB_BUDGET_PREFETCH_BYTES = 196608
+# Unicast VCs are 0-3 (noc_parameters.h). The firmware default is VC 1 for both
+# reads (noc_init -> NCRISC_RD_CMD_BUF NOC_CTRL) and unicast writes
+# (NOC_UNICAST_WRITE_VC, dataflow_api_common.h:62).
+NUM_UNICAST_VCS = 4
+DEFAULT_UNICAST_VC = 1
+
 
 def _lever_flags():
-    """Env counterfactual switches for the Refinement-1c levers (Mode-C ledger).
+    """Env counterfactual switches for the read-path levers (Mode-C ledger).
 
-    Default 1 == the lever is offered to the plan. `_bench_tilize.py` flips one at
-    a time so each lever has a re-measurable counterfactual row instead of a
-    changelog claim. Never set in production.
+    Default 1 == the lever is offered to the plan, 0 == off, 2 == forced past its
+    payoff gate (structural preconditions still apply). `_bench_tilize.py` flips
+    one at a time so each lever has a re-measurable counterfactual row instead of
+    a changelog claim. Never set in production.
     """
-    return (
-        int(os.environ.get("TILIZE_LEVER_B13", "1")),
-        int(os.environ.get("TILIZE_LEVER_C7", "1")),
+    return dict(
+        b13=int(os.environ.get("TILIZE_LEVER_B13", "1")),
+        c7=int(os.environ.get("TILIZE_LEVER_C7", "1")),
+        b8=int(os.environ.get("TILIZE_LEVER_B8", "1")),
+        b10=int(os.environ.get("TILIZE_LEVER_B10", "1")),
+        a3=int(os.environ.get("TILIZE_LEVER_A3", "1")),
     )
 
 
@@ -235,6 +292,72 @@ def split_read_pays(depth: int, blocks_per_core: int, chunk_row_bytes: int) -> b
     return (
         depth == 1 and blocks_per_core <= SPLIT_READ_MAX_BLOCKS_PER_CORE and chunk_row_bytes <= SPLIT_READ_MAX_ROW_BYTES
     )
+
+
+# --- Refinement 2 payoff gates (measured; see the changelog's Mode-C ledger) ---
+#
+# B8 pays where the per-block read drain is NOT already hidden behind another
+# core's traffic, i.e. below the DRAM bandwidth-saturation knee. The NPE
+# counterfactual on the read group says the same thing before any device run:
+#   1024 B x 32 reads, 1 core   (ONE_FROM_ALL): 32/barrier 1 537.7 ns  ->
+#                                               64/barrier 1 323.5 ns/block  (0.861)
+#   1024 B x 32 reads, 64 cores (ALL_FROM_ALL): 32/barrier 28 448 ns   ->
+#                                               64/barrier 28 548 ns/block   (1.004)
+# i.e. deepening the outstanding-read window buys 14 % of the read leg when the
+# core owns the DRAM endpoints and exactly nothing when 64 cores are already
+# queued on them. Device numbers that set the constant are in the changelog.
+TRID_PREFETCH_MAX_CORES = 16
+TRID_PREFETCH_MIN_BLOCKS = 2
+# B10 / A3 thresholds -- set from the device sweep (see the changelog ledger).
+VC_SPREAD_MIN_CORES = 65  # > any current grid => OFF (measured no payoff)
+BANK_PLACEMENT_MIN_CORES = 65  # > any current grid => OFF (measured no payoff)
+
+
+def trid_prefetch_pays(ncores: int, blocks_per_core: int, prefetch_cb_bytes: int) -> bool:
+    """B8 gate: is a third CB window + two transaction ids worth 1.5x the CB L1?
+
+    Three clauses:
+
+    1. ``blocks_per_core >= TRID_PREFETCH_MIN_BLOCKS`` is **structural**, not a
+       payoff question: with one chunk-block per core there is no next block whose
+       reads could stay in flight across the barrier.
+    2. ``ncores < TRID_PREFETCH_MAX_CORES`` — measured. Above the DRAM
+       bandwidth-saturation knee the per-block drain is already overlapped by the
+       other cores' outstanding requests, so the deeper window buys nothing and
+       only costs L1.
+    3. the depth-3 footprint must fit ``L1_CB_BUDGET_PREFETCH_BYTES`` at the
+       **unchanged** ``chunk_wt`` — a lever is not allowed to move the transaction
+       shape behind the caller's back (Refinement 1's chunk-pin rule).
+    """
+    return (
+        blocks_per_core >= TRID_PREFETCH_MIN_BLOCKS
+        and ncores < TRID_PREFETCH_MAX_CORES
+        and prefetch_cb_bytes <= L1_CB_BUDGET_PREFETCH_BYTES
+    )
+
+
+def vc_spread_pays(ncores: int) -> bool:
+    """B10 gate: does spreading readers/writers over the 4 unicast VCs pay?
+
+    One measured clause on the core count — VC diversity can only break a
+    first-come-first-serve queue that several cores actually share. Measured no
+    payoff at every core count this op reaches (see the changelog ledger), so the
+    constant is above any current grid and this is identity-false; the lever code
+    and its counterfactual bench rows are kept so the verdict is re-measurable.
+    """
+    return ncores >= VC_SPREAD_MIN_CORES
+
+
+def bank_placement_pays(ncores: int) -> bool:
+    """A3 gate: does bank-adjacent work->core assignment pay?
+
+    Structurally weak for this op and measured neutral (see the changelog ledger):
+    a tilize block needs 32 CONSECUTIVE source pages, and interleaved round-robin
+    puts consecutive pages on consecutive banks, so every core necessarily touches
+    all ``NUM_DRAM_BANKS`` banks — there is no core<->bank affinity for a placement
+    to exploit. Kept as a re-measurable lever rather than deleted.
+    """
+    return ncores >= BANK_PLACEMENT_MIN_CORES
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +409,50 @@ def depth2_pays(ncores: int, blocks_per_core: int) -> bool:
     if ncores < BANDWIDTH_KNEE_CORES:
         return True
     return blocks_per_core > DEPTH1_MAX_BLOCKS_PER_CORE
+
+
+def _bank_ordered_cores(device, grid, ncores: int):
+    """Lever A3: ``ncores`` cores ordered bank-adjacent-first, plus their range set.
+
+    ``get_optimal_dram_bank_to_logical_worker_assignment(NOC_0)`` returns, for DRAM
+    bank *i*, the worker core that is NoC-optimal for it (one hop where the
+    topology allows). Those cores come first, in bank order, so work unit *i* —
+    which starts at source page *i* and therefore at bank ``i % NUM_DRAM_BANKS`` —
+    lands on that bank's own worker. Remaining cores fill in A1's row-major order.
+
+    Returns ``(cores, core_ranges)``. When the resulting core *set* is the same as
+    the default row-major prefix (the common full-grid case) the compact
+    ``num_cores_to_corerangeset`` is reused, so only the work->core MAPPING changes
+    and the CB / kernel placement is byte-identical to the counterfactual.
+    """
+    row_major = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
+    try:
+        bank_order = ttnn.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
+    except Exception:  # pragma: no cover - API not bound on this build
+        return row_major, ttnn.num_cores_to_corerangeset(ncores, grid, True)
+
+    inside = {(int(c.x), int(c.y)) for c in row_major}
+    ordered, seen = [], set()
+    for core in list(bank_order) + list(row_major):
+        key = (int(core.x), int(core.y))
+        if key in seen or key not in inside:
+            continue
+        seen.add(key)
+        ordered.append(ttnn.CoreCoord(key[0], key[1]))
+        if len(ordered) == ncores:
+            break
+    # A bank's optimal worker can fall outside the active rectangle, so top up.
+    for core in row_major:
+        if len(ordered) == ncores:
+            break
+        key = (int(core.x), int(core.y))
+        if key not in seen:
+            seen.add(key)
+            ordered.append(core)
+
+    if seen == inside:
+        return ordered, ttnn.num_cores_to_corerangeset(ncores, grid, True)
+    return ordered, ttnn.CoreRangeSet({ttnn.CoreRange(c, c) for c in ordered})
 
 
 def _split_contiguous(total: int, parts: int):
@@ -462,6 +629,11 @@ def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_d
         use_multicore=use_multicore,
         depth_request=depth_request,
         chunk_cap=chunk_cap,
+        # Lever B8 adds a THIRD CB window, so it may only fire on the delegated
+        # default. `use_double_buffer=True/False` keep their documented meanings
+        # ("depth-2, +L1" / "depth-1, minimal L1") exactly -- a caller who pinned
+        # the depth gets the depth they asked for.
+        depth_forced=use_double_buffer is not None,
     )
 
 
@@ -490,9 +662,15 @@ def _plan_alias(plan, geo):
             "row_page_stride": 1,
             "source_page_bytes": shard_w * plan["elem_in"],
             "chunk_row_bytes": shard_w * plan["elem_in"],
-            # Path B has no NoC reads at all, so neither read-path lever applies.
+            # Path B has no NoC traffic at all, so no transaction-shaping lever
+            # applies (B13 / C7 / B8 / B10 / A3 all move NoC commands around).
             "stateful_read": 0,
             "split_read": 0,
+            "prefetch_blocks": 1,
+            "vc_spread": 0,
+            "bank_placement": 0,
+            "read_vcs": None,
+            "write_vcs": None,
             "ncores": len(cores),
             "cb_bytes_per_core": shard_tiles * (plan["tile_in"] + plan["tile_out"]),
         }
@@ -500,7 +678,9 @@ def _plan_alias(plan, geo):
     return plan
 
 
-def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_request, chunk_cap=None):
+def _plan_generic(
+    plan, input_tensor, device, in_geo, *, use_multicore, depth_request, chunk_cap=None, depth_forced=False
+):
     """Path A/C: 2D height-first rectangular split over the compute grid.
 
     ``chunk_cap`` pins the chunk width from a previous (depth-2) pass so the C16
@@ -572,8 +752,20 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
     n_w = min(n_chunks, max(1, max_cores // n_h))
     ncores = n_h * n_w
 
-    cores = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
-    core_ranges = ttnn.num_cores_to_corerangeset(ncores, grid, True)
+    # --- lever A3: work-unit -> core assignment order ------------------------
+    # Default is A1's row-major line (`grid_to_cores(..., row_wise=True)`).
+    # `bank_placement` re-orders the SAME core set so that work unit 0..NUM_BANKS-1
+    # land on the NoC-optimal worker of DRAM bank 0..NUM_BANKS-1. Decided here
+    # because it needs `ncores`; whether it fires is gated below.
+    levers = _lever_flags()
+    bank_placement = int(
+        levers["a3"] == 2 or (levers["a3"] == 1 and bank_placement_pays(ncores)),
+    )
+    if bank_placement:
+        cores, core_ranges = _bank_ordered_cores(device, grid, ncores)
+    else:
+        cores = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
+        core_ranges = ttnn.num_cores_to_corerangeset(ncores, grid, True)
 
     row_ranges = _split_contiguous(nt_h, n_h)
     chunk_ranges = _split_contiguous(n_chunks, n_w)
@@ -597,7 +789,7 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
     # Both need one source page per logical row: the helpers' page index advances
     # by exactly 1 per row, and B13's "p and p+num_banks share a bank" identity is
     # only a bank *increment* for consecutive pages.
-    b13, c7 = _lever_flags()
+    b13, c7 = levers["b13"], levers["c7"]
     chunk_row_bytes = chunk_wt * TILE_HW * elem_in
     blocks_per_core = max(u["row_count"] * u["chunk_count"] for u in work)
     # b13 / c7 == 2 force the lever past its payoff gate (the structural conditions
@@ -619,6 +811,54 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
         row_page_stride == 1 and (b13 == 2 or (b13 == 1 and not split_read and stateful_read_pays(chunk_row_bytes)))
     )
 
+    # --- lever B8: trid double-issue on the read path -------------------------
+    # Structural preconditions (never overridden by the force flag):
+    #   * one source page per logical row -- the prefetch loop calls the same
+    #     helper the non-prefetched path does, which hard-codes that.
+    #   * not the split reader -- C7 already has BRISC writing into the window
+    #     NCRISC reserved, and that hand-off assumes exactly ONE live window.
+    #   * >= 2 chunk-blocks on the busiest core -- otherwise there is no next
+    #     block to keep in flight.
+    #   * the depth-3 footprint has to fit, at the UNCHANGED chunk width.
+    prefetch_cb_bytes = PREFETCH_DEPTH * chunk_wt * bytes_per_chunk_tile
+    b8 = levers["b8"]
+    prefetch_ok = (
+        row_page_stride == 1
+        and not split_read
+        and not depth_forced
+        and blocks_per_core >= TRID_PREFETCH_MIN_BLOCKS
+        and prefetch_cb_bytes <= L1_CB_BUDGET_PREFETCH_BYTES
+    )
+    prefetch_blocks = (
+        2
+        if (prefetch_ok and (b8 == 2 or (b8 == 1 and trid_prefetch_pays(ncores, blocks_per_core, prefetch_cb_bytes))))
+        else 1
+    )
+    if prefetch_blocks == 2:
+        # B8 owns the read command programming for the whole block sequence, so it
+        # is mutually exclusive with B13's bank-major arming (measured -- see the
+        # ledger). B13's own gate keeps it under 128 B reads, which only overlaps
+        # B8 on the narrow multi-block shapes.
+        stateful_read = 0
+        depth = PREFETCH_DEPTH
+        assert prefetch_cb_bytes <= L1_CB_BUDGET_PREFETCH_BYTES, (
+            f"B8 prefetch CB budget blown: {prefetch_cb_bytes} B/core > "
+            f"{L1_CB_BUDGET_PREFETCH_BYTES} B (chunk_wt={chunk_wt})"
+        )
+
+    # --- lever B10: per-reader / per-writer static unicast VC -----------------
+    b10 = levers["b10"]
+    vc_spread = int(b10 == 2 or (b10 == 1 and vc_spread_pays(ncores)))
+    # Rotate over the 4 unicast VCs by work-unit index. Reads and writes are on
+    # different NoCs (B9), so they get independent rotations; offsetting the write
+    # rotation by half the VC count keeps a core's read and write VCs different.
+    if vc_spread:
+        read_vcs = [i % NUM_UNICAST_VCS for i in range(len(work))]
+        write_vcs = [(i + NUM_UNICAST_VCS // 2) % NUM_UNICAST_VCS for i in range(len(work))]
+    else:
+        read_vcs = None
+        write_vcs = None
+
     plan.update(
         {
             "path": "generic",
@@ -632,6 +872,11 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
             "shard_tiles": 0,
             "stateful_read": stateful_read,
             "split_read": split_read,
+            "prefetch_blocks": prefetch_blocks,
+            "vc_spread": vc_spread,
+            "bank_placement": bank_placement,
+            "read_vcs": read_vcs,
+            "write_vcs": write_vcs,
             "depth": depth,
             "n_h": n_h,
             "n_w": n_w,
@@ -734,6 +979,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
 
     split_read = plan["split_read"]
     stateful_read = plan["stateful_read"]
+    prefetch_blocks = plan["prefetch_blocks"]
+    vc_spread = plan["vc_spread"]
 
     # ---------------- reader ----------------
     reader_ct_args = [
@@ -748,6 +995,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         split_read,
         SEM_SPLIT_RESERVE,
         SEM_SPLIT_DONE,
+        prefetch_blocks,  # lever B8: 1 = off, 2 = trid double-issue
+        vc_spread,  # lever B10: read VC comes from runtime arg 5
+        plan["depth"],  # CB windows -- the B8 prefetch's own window arithmetic
+        PREFETCH_TRIDS[0],
+        PREFETCH_TRIDS[1],
+        DEFAULT_UNICAST_VC,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -768,6 +1021,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         stateful_read,
         SEM_SPLIT_RESERVE,
         SEM_SPLIT_DONE,
+        vc_spread,  # lever B10: write VC comes from runtime arg 6
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -788,7 +1042,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             writer_rt[core.x][core.y] = [dst_addr]
             compute_rt[core.x][core.y] = [plan["num_blocks"]]
     else:
-        for unit in plan["work"]:
+        read_vcs = plan["read_vcs"]
+        write_vcs = plan["write_vcs"]
+        for index, unit in enumerate(plan["work"]):
             core = unit["core"]
             row_start = unit["row_start"]
             row_count = unit["row_count"]
@@ -800,10 +1056,21 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 row_count * TILE_HW,
                 chunk_start,
                 chunk_count,
+                # lever B10 (arg 5). Always emitted so the arg layout does not
+                # depend on the lever; only read when `vc_spread`.
+                read_vcs[index] if read_vcs is not None else DEFAULT_UNICAST_VC,
             ]
-            # src_addr is appended last so the existing indices are unchanged; the
-            # writer only reads it on the split-read path.
-            writer_rt[core.x][core.y] = [dst_addr, row_start, row_count, chunk_start, chunk_count, src_addr]
+            # src_addr is appended after the existing indices; the writer only
+            # reads it on the split-read path. Then the B10 write VC (arg 6).
+            writer_rt[core.x][core.y] = [
+                dst_addr,
+                row_start,
+                row_count,
+                chunk_start,
+                chunk_count,
+                src_addr,
+                write_vcs[index] if write_vcs is not None else DEFAULT_UNICAST_VC,
+            ]
             compute_rt[core.x][core.y] = [row_count * chunk_count]
 
     reader_kernel = ttnn.KernelDescriptor(

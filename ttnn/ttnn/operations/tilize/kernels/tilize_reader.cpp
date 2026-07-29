@@ -34,6 +34,38 @@
 //       CB base address, which is what BRISC's untouched get_write_ptr returns
 //       (see the host gate in tilize_program_descriptor.py).
 //
+//   alias_mode == 0, prefetch_blocks == 2  (Path A / C — lever B8)
+//       Trid double-issue. Each chunk-block's 32 stick reads carry one of two NoC
+//       transaction ids, and the barrier is `noc_async_read_barrier_with_trid` on
+//       the PREVIOUS id — so block i+1's reads are already in flight while block
+//       i drains, instead of the NoC request queue emptying once per block. This
+//       is the read-side analogue of the write side's `noc_async_writes_flushed()`
+//       (Phase-0 verification fix #1): the writer can let writes stay in flight
+//       because it only needs them to have DEPARTED, whereas the reader needs the
+//       bytes PRESENT before it pushes, which is what the second trid buys.
+//
+//       It needs a THIRD CB window. `cb_reserve_back` does not move the write
+//       pointer, so `get_write_ptr` returns the *current* block's window until
+//       `cb_push_back` — the reader cannot ask the CB for the next block's address
+//       before publishing the current one. The next window is therefore computed
+//       from the CB base (`cb_base + (block % depth) * chunk_bytes`, exactly what
+//       the FIFO's own pointer does after `depth` pushes) and its freedom is
+//       guaranteed by reserving TWO windows. At depth 2 that reserve would demand
+//       a fully drained CB and serialize compute behind the reader, hence
+//       depth == 3 (host gate).
+//
+//   vc_spread == 1  (lever B10)
+//       Program a per-core static unicast VC for this core's reads. In
+//       DM_DEDICATED_NOC — what ReaderConfigDescriptor selects —
+//       `noc_async_read`'s `read_req_vc` argument is DEAD: `ncrisc_noc_fast_read`
+//       only writes NOC_CTRL under DM_DYNAMIC_NOC
+//       (noc_nonblocking_api.h:415-437). NOC_CTRL is instead programmed once by
+//       `noc_init` (static VC 1) and is STICKY, so one
+//       `noc_async_read_one_packet_set_state<use_vc=true>` retargets every
+//       subsequent read on this core — and must be undone before the kernel ends,
+//       or the next program on this core inherits the custom VC and loses DRAM
+//       bandwidth (same hazard the dram-sharded matmul reader documents).
+//
 //       When the source is ROW_MAJOR-*sharded* with more than one page per
 //       logical row (`row_page_stride > 1`) neither helper path can be used:
 //       their page index advances by exactly 1 per row, hard-coding "one page ==
@@ -63,11 +95,20 @@ void kernel_main() {
     constexpr uint32_t split_read = get_compile_time_arg_val(8);     // lever C7
     constexpr uint32_t sem_reserve_id = get_compile_time_arg_val(9);
     constexpr uint32_t sem_done_id = get_compile_time_arg_val(10);
-    constexpr auto src_args = TensorAccessorArgs<11>();
+    constexpr uint32_t prefetch_blocks = get_compile_time_arg_val(11);  // lever B8
+    constexpr uint32_t vc_spread = get_compile_time_arg_val(12);        // lever B10
+    constexpr uint32_t cb_depth = get_compile_time_arg_val(13);
+    constexpr uint32_t trid_a = get_compile_time_arg_val(14);
+    constexpr uint32_t trid_b = get_compile_time_arg_val(15);
+    constexpr uint32_t default_read_vc = get_compile_time_arg_val(16);
+    constexpr auto src_args = TensorAccessorArgs<17>();
 
     using dataflow_kernel_lib::StickReadMode;
     constexpr StickReadMode read_mode = stateful_read ? StickReadMode::Stateful : StickReadMode::Generic;
     static_assert(!split_read || row_page_stride == 1, "the split reader needs one source page per logical row");
+    static_assert(prefetch_blocks == 1 || prefetch_blocks == 2, "B8 double-issues exactly two transaction ids");
+    static_assert(prefetch_blocks == 1 || !split_read, "B8 and C7 both own the read window; they are exclusive");
+    static_assert(prefetch_blocks == 1 || cb_depth >= 3, "B8 needs a third CB window (see the header)");
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -82,6 +123,77 @@ void kernel_main() {
         const uint32_t chunk_count = get_arg_val<uint32_t>(4);
 
         const auto accessor = TensorAccessor(src_args, src_addr);
+
+        // --- lever B10: retarget this core's reads onto its own static VC ------
+        // NOC_CTRL is sticky and `noc_async_read` never rewrites it in dedicated
+        // mode, so one armed set_state moves every read below onto `read_vc`.
+        if constexpr (vc_spread) {
+            const uint32_t read_vc = get_arg_val<uint32_t>(5);
+            noc_async_read_one_packet_set_state<true>(accessor.get_noc_addr(start_row), chunk_row_bytes, read_vc);
+        }
+
+        if constexpr (row_page_stride == 1 && prefetch_blocks == 2) {
+            // --- lever B8: trid double-issue over the whole (chunk, block) run --
+            // The sequence is flattened so the pipeline spans chunk boundaries too;
+            // the order stays chunk-outer / tile-row-inner, which is what the
+            // writer and compute both assume.
+            constexpr uint32_t tile_bytes = get_tile_size(cb_rm_input);
+            constexpr uint32_t window_bytes = chunk_wt * tile_bytes;
+            const uint32_t blocks_per_chunk = num_rows / tile_height;
+            const uint32_t total_blocks = chunk_count * blocks_per_chunk;
+            // The FIFO write pointer starts at the CB base and advances one window
+            // per `cb_push_back(chunk_wt)`, so window w is always base + w*bytes.
+            const uint32_t cb_base = get_write_ptr(cb_rm_input);
+
+            // Two windows free => the one block 0 lands in, and the one block 1
+            // will land in before block 0 is published.
+            cb_reserve_back(cb_rm_input, 2 * chunk_wt);
+            noc_async_read_set_trid(trid_a);
+            if constexpr (!skip_dm) {
+                dataflow_kernel_lib::read_stick_rows_for_tilize<StickReadMode::Generic, 1>(
+                    accessor,
+                    start_row,
+                    chunk_row_bytes,
+                    chunk_start * chunk_row_bytes,
+                    cb_base,
+                    chunk_row_bytes,
+                    tile_height);
+            }
+
+            for (uint32_t block = 0; block < total_blocks; ++block) {
+                if (block + 1 < total_blocks) {
+                    const uint32_t nxt = block + 1;
+                    const uint32_t nc = nxt / blocks_per_chunk;
+                    const uint32_t nr = nxt - nc * blocks_per_chunk;
+                    noc_async_read_set_trid((nxt & 1u) ? trid_b : trid_a);
+                    if constexpr (!skip_dm) {
+                        dataflow_kernel_lib::read_stick_rows_for_tilize<StickReadMode::Generic, 1>(
+                            accessor,
+                            start_row + nr * tile_height,
+                            chunk_row_bytes,
+                            (chunk_start + nc) * chunk_row_bytes,
+                            cb_base + (nxt % cb_depth) * window_bytes,
+                            chunk_row_bytes,
+                            tile_height);
+                    }
+                }
+                noc_async_read_barrier_with_trid((block & 1u) ? trid_b : trid_a);
+                cb_push_back(cb_rm_input, chunk_wt);
+                if (block + 2 < total_blocks) {
+                    // Guarantees window (block+2) % cb_depth carries no unpopped
+                    // data before the next iteration issues into it.
+                    cb_reserve_back(cb_rm_input, 2 * chunk_wt);
+                }
+            }
+            // NOC_PACKET_TAG is sticky across kernel launches -- hand the cmd buf
+            // back with the firmware's default tag.
+            noc_async_read_set_trid(0);
+            if constexpr (vc_spread) {
+                noc_async_read_one_packet_set_state<true>(
+                    accessor.get_noc_addr(start_row), chunk_row_bytes, default_read_vc);
+            }
+            return;
+        }
 
         for (uint32_t c = 0; c < chunk_count; ++c) {
             const uint32_t byte_offset = (chunk_start + c) * chunk_row_bytes;
@@ -152,6 +264,13 @@ void kernel_main() {
                     cb_push_back(cb_rm_input, chunk_wt);
                 }
             }
+        }
+
+        if constexpr (vc_spread) {
+            // Restore the firmware default before exiting -- NOC_CTRL survives the
+            // kernel launch and the next program on this core will not re-set it.
+            noc_async_read_one_packet_set_state<true>(
+                accessor.get_noc_addr(start_row), chunk_row_bytes, default_read_vc);
         }
     }
 }
