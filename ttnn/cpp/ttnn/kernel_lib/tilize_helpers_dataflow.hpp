@@ -51,17 +51,16 @@ enum class TilizeGranularity : uint8_t {
  *   `TensorAccessor::get_noc_addr` (a rank loop plus a divide/modulo by the bank
  *   count) for every row.
  *
- * Stateful: `noc_async_read_one_packet_set_state` / `..._with_state`
- *   (dataflow_api.h:594,627). All rows of a tilize block have the SAME transfer
- *   size, so the command can be armed once and each read then writes only the
- *   varying addresses. `set_state` pins the NoC *coordinate*, so the rows are
- *   visited **bank-major**: for an interleaved tensor, pages `p` and
+ * Stateful: `noc_async_read_set_state` / `noc_async_read_with_state`
+ *   (dataflow_api.h:673,708). `set_state` pins the NoC *coordinate*, so the rows
+ *   are visited **bank-major**: for an interleaved tensor, pages `p` and
  *   `p + num_banks` live in the same bank exactly one aligned page apart, so one
  *   armed command covers every `num_banks`-th row and its source address
  *   advances by a constant. That also removes all but one address computation
  *   per bank. Falls back to Generic (same call, no extra cost) when the accessor
- *   is not interleaved, when there are fewer than 2 rows per bank (nothing to
- *   amortize), or when a row exceeds the one-packet limit.
+ *   is not interleaved or when there are fewer than 2 rows per bank (nothing to
+ *   amortize). Deliberately NOT the `one_packet` flavour of the same API — that
+ *   one hangs every core on a watcher build; see the note in the .inl.
  *
  * Only affects TILE granularity; ROW granularity reads one row per CB page and
  * has no group to amortize over.

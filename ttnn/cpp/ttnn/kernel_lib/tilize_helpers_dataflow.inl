@@ -37,16 +37,31 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
 //   Generic  — one noc_async_read per row, address from the accessor.
 //
 //   Stateful — bank-major with an armed command buffer (lever B13):
-//              `noc_async_read_one_packet_set_state` pins the coordinate + size,
-//              `..._with_state` then issues a read writing only the two
-//              addresses. For an interleaved tensor page `p` sits in bank
-//              `p % num_banks` at bank-page `p / num_banks`, so pages
-//              `g, g+nb, g+2nb, ...` share one bank and step by exactly one
+//              `noc_async_read_set_state` pins the NoC coordinate once,
+//              `noc_async_read_with_state` then issues a read writing only the
+//              two addresses and the length. For an interleaved tensor page `p`
+//              sits in bank `p % num_banks` at bank-page `p / num_banks`, so
+//              pages `g, g+nb, g+2nb, ...` share one bank and step by exactly one
 //              aligned page — one arm covers the whole group and the source
 //              address is a running increment (no per-row divide, no per-row
 //              coordinate write). The `ASSERT` in the inner loop re-derives the
 //              address through the accessor on watcher builds, so the identity
 //              this rests on is checked on device rather than assumed.
+//
+//              NB the `one_packet` flavour of the same API
+//              (`noc_async_read_one_packet_set_state` / `..._with_state`) would
+//              also save the per-read length write, but it **hangs every core on
+//              a watcher build**: its sanitize macro
+//              `DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE`
+//              (sanitize.h:781) reads the transfer length back out of
+//              `NOC_AT_LEN_BE`, and the `..._WITH_ADDR_STATE` variant used by the
+//              general API — which takes the length as an argument instead — is
+//              the only difference between the two. Measured on WH B0:
+//              `scripts/run_safe_pytest.sh --dev tests/.../tilize/test_tilize.py`
+//              = 60/60 with the general API and an all-64-core hang at waypoint
+//              NATW with the one_packet one, same kernel otherwise. Do not
+//              "optimize" this back to the one_packet API without re-running that
+//              command.
 //
 template <StickReadMode read_mode, uint32_t num_splits, typename Accessor>
 FORCE_INLINE void read_stick_rows_for_tilize(
@@ -69,15 +84,14 @@ FORCE_INLINE void read_stick_rows_for_tilize(
         // interleaved specialization (it has no dspec at all), which is why this
         // reads the firmware constants directly.
         constexpr uint32_t period = Accessor::DSpec::is_dram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
-        // Rows per armed command. Below 2 the arm costs more than it saves (that is
-        // what rules out L1-interleaved sources, with one bank per core), and a row
-        // wider than one packet cannot use the one_packet state at all.
-        if (period * 2 <= num_rows && row_bytes <= NOC_MAX_BURST_SIZE) {
+        // Rows per armed command. Below 2 the arm costs more than it saves -- that
+        // is what rules out L1-interleaved sources, which have one bank per core.
+        if (period * 2 <= num_rows) {
             const uint32_t aligned_page = accessor.get_aligned_page_size();
             const uint32_t l1_group_stride = period * l1_row_stride;
             for (uint32_t group = split_id; group < period && group < num_rows; group += num_splits) {
                 const uint64_t group_noc_addr = accessor.get_noc_addr(first_page + group, byte_offset_within_page);
-                noc_async_read_one_packet_set_state(group_noc_addr, row_bytes);
+                noc_async_read_set_state(group_noc_addr);
 
                 const uint64_t coord = group_noc_addr & ~static_cast<uint64_t>(0xFFFFFFFFu);
                 uint32_t src_local_addr = static_cast<uint32_t>(group_noc_addr);
@@ -88,7 +102,7 @@ FORCE_INLINE void read_stick_rows_for_tilize(
                     ASSERT(
                         accessor.get_noc_addr(first_page + row, byte_offset_within_page) ==
                         (coord | static_cast<uint64_t>(src_local_addr)));
-                    noc_async_read_one_packet_with_state(src_local_addr, dst);
+                    noc_async_read_with_state(src_local_addr, dst, row_bytes);
                     src_local_addr += aligned_page;
                     dst += l1_group_stride;
                 }

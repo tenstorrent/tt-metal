@@ -177,6 +177,16 @@ CB_TILED_OUTPUT = 16
 #    only while each core reads its OWN rows. Every regime above 64 B here has
 #    `nt_h == 1`, i.e. all 64 cores read the same 32 source pages, so a second
 #    issuer per core just deepens an existing DRAM hot spot.
+#
+# The two are also mutually exclusive (measured -- see the `stateful_read`
+# assignment in `_plan_generic`), so each regime ships exactly one:
+#
+#   read bytes | blocks/core | ships   | vs no lever
+#   -----------|-------------|---------|-------------
+#         64 B |           1 | C7      | 0.948 - 0.956
+#         64 B |        >= 2 | B13     | 0.950 - 0.957
+#        128 B |         any | B13     | 0.950 - 0.968
+#     >= 256 B |         any | neither | 1.0 (both measured negative)
 STATEFUL_READ_MAX_ROW_BYTES = 128
 SPLIT_READ_MAX_ROW_BYTES = 64
 SPLIT_READ_MAX_BLOCKS_PER_CORE = 1
@@ -592,11 +602,21 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
     blocks_per_core = max(u["row_count"] * u["chunk_count"] for u in work)
     # b13 / c7 == 2 force the lever past its payoff gate (the structural conditions
     # still apply) so the bench can measure it on regimes the gate excludes.
-    stateful_read = int(row_page_stride == 1 and (b13 == 2 or (b13 == 1 and stateful_read_pays(chunk_row_bytes))))
     split_read = int(
         row_page_stride == 1
         and depth == 1
         and (c7 == 2 or (c7 == 1 and split_read_pays(depth, blocks_per_core, chunk_row_bytes)))
+    )
+    # The two levers are mutually exclusive by measurement, not by construction:
+    # C7 already halves the reads each RISC-V issues, so B13's saved command
+    # programming is halved too while its bank-major serialization cost is not.
+    # Three independent in-run A/B pairs on `[1,1,2048,32]`, 7-12 rounds x 10
+    # launches: C7 alone 3411.1 / 3404.1 / 3419.6 ns vs C7+B13 3462.4 / 3431.6 /
+    # 3434.2 ns -- B13 on top of C7 is +0.9 % on average and never negative, i.e.
+    # it does not pay where C7 runs. Every regime therefore ships exactly ONE of
+    # the two levers.
+    stateful_read = int(
+        row_page_stride == 1 and (b13 == 2 or (b13 == 1 and not split_read and stateful_read_pays(chunk_row_bytes)))
     )
 
     plan.update(

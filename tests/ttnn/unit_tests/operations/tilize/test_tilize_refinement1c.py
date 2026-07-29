@@ -3,8 +3,8 @@
 
 """Refinement 1c — the two sub-one-packet read-path levers.
 
-* **B13 `stateful_read`** — `noc_async_read_one_packet_set_state` /
-  `..._with_state` inside `dataflow_kernel_lib::read_stick_rows_for_tilize`.
+* **B13 `stateful_read`** — `noc_async_read_set_state` / `noc_async_read_with_state`
+  inside `dataflow_kernel_lib::read_stick_rows_for_tilize`.
   `set_state` pins the NoC *coordinate*, so the rows of a block are visited
   **bank-major**: for an interleaved tensor pages `p` and `p + num_banks` share a
   bank exactly one aligned page apart, so one armed command covers a whole group
@@ -15,11 +15,13 @@
   stick reads. NCRISC stays the *only* producer of `cb_rm_input`; the reserved
   window is handed over with two monotonic local counting semaphores.
 
-Both are **gated on the measured read-transaction size** — outside the 64-128 B
-regime they cost real time (up to +17.7 %), so the gates below are load-bearing
-and every threshold in them is pinned to the number that set it. The sweep lives
-in `changelog.md` § "Refinement 1c" and in the comment above
-`STATEFUL_READ_MAX_ROW_BYTES` in the planner.
+Both are **gated on the measured read-transaction size**, and they are **mutually
+exclusive** — also measured. Outside the 64-128 B regime each costs real time (up
+to +19.9 %), and inside it C7 wins at one block per core while B13 wins from two
+blocks on, so every plan ships exactly one of the two. The gates below are
+therefore load-bearing and every threshold in them is pinned to the number that
+set it; the sweep lives in `changelog.md` § "Refinement 1c" and in the comment
+above `STATEFUL_READ_MAX_ROW_BYTES` in the planner.
 
 Correctness is `torch.equal` throughout (tilize is value-preserving), so every
 new path is proven **bit-exact**, not merely fast. The B13 address identity is
@@ -46,10 +48,10 @@ from ttnn.operations.tilize.tilize_program_descriptor import (
 
 # Read bytes per row = chunk_wt * 32 * elem_size, and the planner picks chunk_wt
 # to fill the grid, so W selects the read size on an nt_h == 1 shape:
-#   W=32   -> chunk 1 -> 64 B    (both levers)
-#   W=4096 -> chunk 2 -> 128 B   (B13 only)
+#   W=32   -> chunk 1 -> 64 B    (C7 at 1 block/core, B13 from 2 blocks on)
+#   W=4096 -> chunk 2 -> 128 B   (B13)
 #   W=8192 -> chunk 4 -> 256 B   (neither)
-BOTH_LEVERS = (1, 1, 2048, 32)  # nt_h=64, Wt=1, 1 block/core
+C7_REGIME = (1, 1, 2048, 32)  # nt_h=64, Wt=1, 1 block/core
 B13_ONLY_MULTIBLOCK = (1, 1, 8192, 32)  # nt_h=256, 4 blocks/core
 B13_ONLY_128B = (1, 1, 32, 4096)  # nt_h=1, chunk 2
 NO_LEVERS_256B = (1, 1, 32, 8192)  # nt_h=1, chunk 4
@@ -102,12 +104,12 @@ def _roundtrip_exact(device, shape, *, memory_config=None, use_multicore=True, u
 def test_b13_gate_pinned_to_its_sweep():
     """B13 pays at 64/128 B and loses from 256 B up — the turnover is measured.
 
-    lever/none ratio, 64 cores, 7 rounds x 10 launches (CV <= 2.1 %):
-        64 B  0.980   ([1,1,2048,32], 1 blk)      0.950 (4 blk)
-       128 B  0.968   ([1,1,32,4096])
-       256 B  1.023   ([1,1,32,8192])
-       512 B  1.177   ([1,1,32,16384])   <- worst
-      1024 B  1.057   ([1,1,2048,512] -> BLOCK sharded)
+    B13-alone/none ratio, 64 cores, 7 rounds x 10 launches (CV <= 2.1 %):
+        64 B  0.978  ([1,1,2048,32], 1 blk)   0.957  ([1,1,8192,32], 4 blk)
+       128 B  0.950  ([1,1,32,4096])
+       256 B  1.023  ([1,1,32,8192])
+       512 B  1.199  ([1,1,32,16384])   <- worst
+      1024 B  1.057  ([1,1,2048,512] -> BLOCK sharded)
 
     `set_state` pins the NoC coordinate, so the lever REQUIRES bank-major issue
     order; past 128 B the DRAM-endpoint serialization of 2-3 consecutive
@@ -155,7 +157,7 @@ def test_c7_gate_pinned_to_its_sweep():
 @pytest.mark.parametrize(
     "shape,want_b13,want_c7",
     [
-        (BOTH_LEVERS, 1, 1),  # 64 B, 1 block/core
+        (C7_REGIME, 0, 1),  # 64 B, 1 block/core -> C7 only (B13 does not pay on top)
         (B13_ONLY_MULTIBLOCK, 1, 0),  # 64 B, 4 blocks/core -> C7 off
         (B13_ONLY_128B, 1, 0),  # 128 B -> C7 off
         (NO_LEVERS_256B, 0, 0),  # 256 B -> both off
@@ -172,18 +174,41 @@ def test_plan_lever_selection_per_read_size(device, shape, want_b13, want_c7):
     )
 
 
-def test_depth2_request_disables_c7_but_not_b13(device):
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 1, 2048, 32), (1, 1, 8192, 32), (1, 1, 32, 4096), (1, 1, 32, 8192), (1, 1, 2048, 2048)],
+    ids=["64B_1blk", "64B_4blk", "128B", "256B", "1024B"],
+)
+def test_the_two_levers_are_mutually_exclusive(device, shape):
+    """No shipped plan may carry both levers — measured, not stylistic.
+
+    C7 already halves the reads each RISC-V issues, so B13's saved command
+    programming is halved while its bank-major DRAM serialization is not. Three
+    in-run A/B pairs on `[1,1,2048,32]`: C7 alone 3411.1 / 3404.1 / 3419.6 ns vs
+    C7+B13 3462.4 / 3431.6 / 3434.2 ns (+0.9 % mean, never negative). A lever that
+    does not move the number is a defect, so the planner ships exactly one.
+    """
+    plan = _plan(device, shape)
+    assert not (plan["stateful_read"] and plan["split_read"]), (
+        f"{shape} ships both levers (chunk_row_bytes={plan['chunk_row_bytes']}, "
+        f"blocks_per_core={plan['blocks_per_core']})"
+    )
+
+
+def test_depth2_request_swaps_c7_for_b13(device):
     """`use_double_buffer=True` on the 64 B regime must turn C7 off, not corrupt.
 
     At depth 2 the reserved window alternates between two CB slots, and BRISC —
     which never touches the CB pointers — would keep writing the base slot. The
-    gate refuses the lever instead; B13 is independent of the CB depth.
+    gate refuses C7 structurally; B13 is independent of the CB depth, and with C7
+    gone it is no longer suppressed by the mutual-exclusion clause, so the plan
+    swaps one lever for the other.
     """
-    plan = _plan(device, BOTH_LEVERS, use_double_buffer=True)
+    plan = _plan(device, C7_REGIME, use_double_buffer=True)
     assert plan["depth"] == 2
     assert plan["split_read"] == 0
     assert plan["stateful_read"] == 1
-    _roundtrip_exact(device, BOTH_LEVERS, use_double_buffer=True)
+    _roundtrip_exact(device, C7_REGIME, use_double_buffer=True)
 
 
 def test_levers_off_on_the_zero_copy_path(device):
@@ -269,23 +294,29 @@ def test_bit_exact_with_l1_interleaved_input(device):
     the test that the in-kernel guard produces correct data rather than a
     bank-major walk over a bank period it cannot amortize.
     """
-    plan = _plan(device, (1, 1, 256, 32), memory_config=ttnn.L1_MEMORY_CONFIG)
+    plan = _plan(device, B13_ONLY_MULTIBLOCK, memory_config=ttnn.L1_MEMORY_CONFIG)
     assert plan["stateful_read"] == 1
-    _roundtrip_exact(device, (1, 1, 256, 32), memory_config=ttnn.L1_MEMORY_CONFIG)
+    _roundtrip_exact(device, B13_ONLY_MULTIBLOCK, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
-@pytest.mark.parametrize("b13,c7", [(0, 0), (1, 0), (0, 1), (1, 1)], ids=["none", "b13", "c7", "both"])
-def test_bit_exact_for_every_lever_combination(device, monkeypatch, b13, c7):
+@pytest.mark.parametrize(
+    "b13_env,c7_env,want",
+    [(0, 0, (0, 0)), (1, 0, (1, 0)), (0, 1, (0, 1)), (2, 1, (1, 1))],
+    ids=["none", "b13", "c7", "both_forced"],
+)
+def test_bit_exact_for_every_lever_combination(device, monkeypatch, b13_env, c7_env, want):
     """All four lever combinations must be bit-exact, not just the shipped one.
 
     The bench measures the same four via these env switches, so a wrong result in
-    a counterfactual row would otherwise be reported as a perf number.
+    a counterfactual row would otherwise be reported as a perf number. `both` needs
+    `b13=2` (force) because the shipped gate makes the two mutually exclusive —
+    the combined code path still exists and still has to be correct.
     """
-    monkeypatch.setenv("TILIZE_LEVER_B13", str(b13))
-    monkeypatch.setenv("TILIZE_LEVER_C7", str(c7))
-    plan = _plan(device, BOTH_LEVERS)
-    assert (plan["stateful_read"], plan["split_read"]) == (b13, c7)
-    _roundtrip_exact(device, BOTH_LEVERS)
+    monkeypatch.setenv("TILIZE_LEVER_B13", str(b13_env))
+    monkeypatch.setenv("TILIZE_LEVER_C7", str(c7_env))
+    plan = _plan(device, C7_REGIME)
+    assert (plan["stateful_read"], plan["split_read"]) == want
+    _roundtrip_exact(device, C7_REGIME)
 
 
 def test_bit_exact_split_reader_past_its_gate(device, monkeypatch):
@@ -314,10 +345,10 @@ def test_split_reader_is_bit_exact_over_repeated_launches(device):
     read into a window NCRISC has not reserved yet — a race that only shows from
     the second launch on. Ten launches of the same program, each bit-exact.
     """
-    plan = _plan(device, BOTH_LEVERS)
+    plan = _plan(device, C7_REGIME)
     assert plan["split_read"] == 1
     for i in range(10):
-        _roundtrip_exact(device, BOTH_LEVERS, seed=i)
+        _roundtrip_exact(device, C7_REGIME, seed=i)
 
 
 def test_program_cache_hits_with_the_split_reader(device):
@@ -327,22 +358,25 @@ def test_program_cache_hits_with_the_split_reader(device):
     entry (the semaphores are descriptor-level, the src address is a plain
     runtime arg that gets re-patched).
     """
-    plan = _plan(device, BOTH_LEVERS)
+    plan = _plan(device, C7_REGIME)
     assert plan["split_read"] == 1
-    _roundtrip_exact(device, BOTH_LEVERS)
+    _roundtrip_exact(device, C7_REGIME)
     before = device.num_program_cache_entries()
-    _roundtrip_exact(device, BOTH_LEVERS, seed=7)
+    _roundtrip_exact(device, C7_REGIME, seed=7)
     assert device.num_program_cache_entries() == before, "second identical call added a cache entry"
 
 
 def test_stateful_read_offered_to_every_interleaved_generic_plan(device):
-    """B13's plan flag keys on the read size only; the accessor kind is a
+    """B13's plan flag keys on the read size; the ACCESSOR kind is decided
 
-    *kernel-side* `if constexpr (DSpec::is_interleaved)` decision. Assert that
-    split, i.e. that the host does not try to second-guess the accessor: a DRAM
-    and an L1 interleaved input with the same read size both get the flag.
+    kernel-side by `if constexpr (DSpec::is_interleaved)`. Assert that split of
+    responsibility — the host does not try to second-guess the accessor: a DRAM
+    and an L1 interleaved input with the same read size both get the flag. Uses a
+    multi-block shape so the mutual-exclusion clause (C7 wins at 1 block/core)
+    does not mask the result.
     """
     for mem in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG):
-        plan = _plan(device, (1, 1, 256, 32), memory_config=mem)
+        plan = _plan(device, B13_ONLY_MULTIBLOCK, memory_config=mem)
+        assert plan["split_read"] == 0
         assert plan["stateful_read"] == 1
         assert plan["chunk_row_bytes"] <= STATEFUL_READ_MAX_ROW_BYTES
