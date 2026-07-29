@@ -114,8 +114,12 @@ CSV-console provenance are under `tracy/final/`.
 - [x] Real-weight BFP4/BFP8 crossed with LoFi/HiFi2 precision/fidelity sweep.
 - [x] Precision-locked 8/16/32-core and block-through-16 geometry sweep.
 - [x] Packed/split QKV and gate/up whole-layer A/B; measured winners selected.
-- [ ] Independent `$stage-review` clean pass and local checkpoint commit.
+- [x] Independent `$stage-review` clean pass and local checkpoint commit.
 
 ## Commits
 
-Pending independent review and final checkpoint.
+- Repo: `tt-metal`
+- Branch: `skillexp-probe`
+- Optimized-decoder checkpoint: `44de174c510`
+- Review: `doc/optimized_decoder/stage_review.md`, verdict `clean-pass`
+- Push: not performed
