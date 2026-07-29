@@ -45,7 +45,7 @@ import torch
 
 import ttnn
 from ttnn.operations.tilize import tilize
-from ttnn.operations.tilize.tilize_program_descriptor import build_plan
+from ttnn.operations.tilize.tilize_program_descriptor import L1_CB_BUDGET_BYTES, build_plan
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
@@ -94,6 +94,24 @@ REGIMES = {
         in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
         same_cfg=True,
     ),
+    # (g) interleaved<->sharded crossover (generic path on both sides today; the
+    #     design's R3b/R3c one-sided aliasing would take the sharded side's DRAM
+    #     traffic to zero). NB: the traffic column counts bytes MOVED, not DRAM
+    #     bytes — on a crossover one side lives in L1.
+    "g_dram_to_sharded": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+    ),
+    "g_sharded_to_dram": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+    ),
+    # (e cont.) narrowing cast: fp32 in, bf16 out. The compute kernel picks
+    # Fp32Mode::Lossless off the INPUT CB format, so this pays for the slow
+    # tilize path even though the bf16 output cannot hold the extra precision.
+    "e_square_fp32_to_bf16": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.float32, out_dtype=ttnn.bfloat16),
     # --- Mode-C counterfactuals: the same regime with ONE lever flipped off ----
     # C16 depth-2 CBs off -> reader/writer serialize instead of pipelining.
     "x_square_depth1": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, double_buffer=False),
@@ -200,16 +218,50 @@ _VARIANTS = (
 )
 
 
+def _assert_structural_gates(name, spec, plan, grid_cores):
+    """Machine-check the two *structural* perf gates (no correctness involved).
+
+    A0 (``master.md`` Part 2 §A): the program must launch on every core that has
+    work — ``min(grid_cores, total_tiles)`` on the interleaved/generic path, the
+    shard's own cores on the zero-copy alias path, 1 when the caller forced
+    single-core. Eyeballing this is exactly how a height-only split ships: the
+    wide-short regime (``nt_h == 1``) looks healthy in the duration column while
+    running on ONE core.
+
+    Bounded CB: per-core CB L1 must stay inside the planner's budget, i.e. be a
+    constant in ``W`` — the claim ``PROPERTIES["bounded_cb"]`` makes.
+    """
+    if plan["path"] == "alias":
+        expected = plan["ncores"]  # the shard's own cores, by construction
+    elif not spec.get("multicore", True):
+        expected = 1
+    else:
+        expected = min(grid_cores, plan["total_tiles"])
+    assert plan["ncores"] == expected, (
+        f"A0 violation on {name}: launched {plan['ncores']} cores, "
+        f"expected {expected} (total_tiles={plan['total_tiles']}, path={plan['path']})"
+    )
+
+    if plan["path"] != "alias":
+        assert plan["cb_bytes_per_core"] <= L1_CB_BUDGET_BYTES, (
+            f"CB budget violation on {name}: {plan['cb_bytes_per_core']} B/core "
+            f"> {L1_CB_BUDGET_BYTES} B (chunk_wt={plan['chunk_wt']}, depth={plan['depth']})"
+        )
+
+
 def test_bench_tilize(device):
-    """Measure; never assert correctness. The only assertion is that the
-    profiler produced a number (i.e. this is a profiler-enabled build)."""
+    """Measure; never assert correctness. The assertions here are the profiler
+    producing a number (i.e. this is a profiler-enabled build) plus the two
+    structural perf gates (A0 active-core count, bounded per-core CB L1)."""
     grid = device.compute_with_storage_grid_size()
+    grid_cores = grid.x * grid.y
     rows = []
 
     for name in REGIME_NAMES:
         spec = REGIMES[name]
         tt_input, out_cfg = _build(device, spec)
         plan = _plan_for(device, tt_input, spec, out_cfg)
+        _assert_structural_gates(name, spec, plan, grid_cores)
 
         elem_in = tt_input.element_size()
         bytes_read = plan["folded_h"] * plan["width"] * elem_in

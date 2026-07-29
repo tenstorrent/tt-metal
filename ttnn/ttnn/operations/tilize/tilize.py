@@ -97,6 +97,13 @@ INPUT_TAGGERS = {
 # ``dtype`` also lists uint16/int32 (not in the golden TARGET but exercised by
 # the acceptance test's integer-passthrough cases). Extra values beyond TARGET
 # are harmless — the harness only checks the values a cell actually takes.
+#
+# ``rank`` likewise lists 5 and 6 beyond the golden TARGET's [2,3,4]: the
+# program is rank-agnostic by construction (all leading dims fold into one row
+# axis, and ``H % 32 == 0`` guarantees no leading dim straddles a tile), so
+# there is nothing to add per rank. Verified bit-exact single- and multi-core by
+# ``test_tilize_extended.py::test_tilize_high_rank``; declared so a rank-5/6
+# caller is not refused by a contract the kernel actually satisfies.
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.uint16, ttnn.int32],
@@ -113,7 +120,7 @@ SUPPORTED = {
     "shard_api": ["none", "legacy_2d", "nd"],
     "out_scheme": ["interleaved", _HEIGHT, _WIDTH, _BLOCK, "nd"],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
-    "rank": [2, 3, 4],
+    "rank": [2, 3, 4, 5, 6],
 }
 
 
@@ -137,8 +144,15 @@ EXCLUSIONS = []
 # ---------------------------------------------------------------------------
 
 PROPERTIES = {
+    # A0 active-core count is asserted by
+    # tests/.../tilize/_bench_tilize.py::_assert_structural_gates and by
+    # test_tilize_extended.py::test_tilize_plan_invariants.
     "multi_core": {"value": True, "source": "verified"},
-    "bounded_cb": {"value": True, "source": "declared"},
+    # Per-core CB L1 = depth * chunk_wt * (tile_in + tile_out) with
+    # chunk_wt <= WT_CHUNK_MAX, i.e. constant in W. Asserted for Wt = 5 / 256 /
+    # 64x64 by test_tilize_extended.py::test_tilize_plan_invariants and for every
+    # bench regime by _bench_tilize.py.
+    "bounded_cb": {"value": True, "source": "verified"},
 }
 
 

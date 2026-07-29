@@ -261,3 +261,154 @@ implemented as specified. Advisory deviations:
 5. **B8 trid double-issue / B13 `set_state`** — untried; 32 same-shape reads per block is exactly
    B13's use case. Both are B0 per-core-overhead levers, so counterfactual them on `d_tall_narrow` and
    `f_sharded_small`, not only on `a_square`.
+
+---
+
+## Phase 0 — verification (2026-07-29, `incremental-verifier`)
+
+### What was done
+
+Code review + golden/verifier CLI run + precision baseline + extended coverage on the Phase-0
+implementation above. Deliverables: `verification_report.md`, `verifier_report.json`,
+`op_requirements.md` (perf-only queue: 4 measured levers + the run-closing Mode-D audit), this entry.
+
+### SUPPORTED at Phase 0 (after the verification fix below)
+
+```
+dtype:        [bfloat16, float32, uint32, uint16, int32]
+output_dtype: [bfloat16, float32, bfloat8_b, uint32, uint16, int32]
+use_multicore: [False, True]      double_buffer: [False, True]
+shard_api:    [none, legacy_2d, nd]
+out_scheme:   [interleaved, HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED, nd]
+buffer:       [dram_to_dram, dram_to_l1, l1_to_l1, l1_to_dram]
+rank:         [2, 3, 4, 5, 6]     EXCLUSIONS: []
+```
+
+`TARGET − SUPPORTED = ∅` on every axis, so the refinement queue carries **no** capability entries.
+
+### Golden suite / verifier CLI at Phase 0
+
+`eval/eval_test_runner.sh eval/golden_tests/tilize/` + `python3 -m eval.verify_supported`:
+
+| category | count |
+|---|---|
+| `supported_pass` | **126 / 126** |
+| `invalid_skipped` | 90 |
+| `xfail_expected` | 0 (nothing left to refuse) |
+| `supported_fail` / `xpass_drift` / `xfail_wrong_mode` | **0 / 0 / 0** |
+| `no_axes_found` | 420 (the non-registry reference/translated/regression files) |
+
+Whole directory: 515 passed, 118 skipped, 1 failed, 2 errors, 0 hangs. The 3 non-green are all
+reference-file issues outside the registry matrix (an L1 shard grid derived from
+`dram_grid_size().x = 12` on an 8-column compute grid; two `use_module_device` × `device_params`
+collection errors) — diagnosed in `verification_report.md`.
+
+### Accuracy achieved (precision baseline)
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_precision_baseline.py` — 4 shapes × 5 transitions,
+20/20 pass:
+
+| Transition | PCC | max_abs | mean_abs | rel RMS | mismatching elements |
+|---|---|---|---|---|---|
+| bf16→bf16, fp32→fp32, bf16→fp32 | 1.0 | 0 | 0 | 0 | **0** on all 4 shapes (bit-exact) |
+| fp32→bf16 | 1.0 | 1.562e-02 (1 ULP) | ≤1.8e-07 | ≤5.0e-05 | ≤3 / 196 608 (packer tie-rounding vs torch RNE) |
+| bf16→bf8b | ≥0.99 | 4.688e-02 | 7.1e-03 | 9.3e-03 (≈2⁻⁷) | ~80 % (block-float quantization) |
+
+Integer passthrough (uint32/uint16/int32) is bit-exact (`torch.equal`).
+
+### Verification fixes (all measured / tested, no regression)
+
+1. **Writer: per-block `noc_async_write_barrier()` → `noc_async_writes_flushed()` + one trailing
+   barrier.** Recycling a CB page needs the writes to have *departed*, not completed
+   (`dataflow_api.h:1802`). Measured: `c_single_core` **31 465 → 30 472 ns (−3.2 %)**,
+   `x_wide_short_1core` **61 526 → 57 459 ns (−6.6 %)**; every 64-core regime inside the ±2 % noise
+   floor; no regression anywhere. Verdict **KEEP** — the payoff is on the regimes where the barrier is
+   not hidden behind other cores' traffic, which is exactly the B0 "gate per-core overhead on the
+   smallest regime" story.
+2. **Planner: the depth-2 → depth-1 L1 fallback now happens at planner step 2** (before the chunk-width
+   choice) and the old post-hoc clamp — which could never fire, because `chunk_wt ≤ max_chunk_l1`
+   already bounded the footprint — became an explicit invariant `assert`. Behaviour identical; the
+   "auto-fall-back rather than OOM" rule is now expressed where it is claimed.
+3. **`SUPPORTED["rank"]` [2,3,4] → [2,3,4,5,6]** — the fold is rank-agnostic, so a rank-5 caller was
+   being refused by a contract the kernel already satisfies. Verified bit-exact (rank 5 and 6,
+   single- and multi-core).
+4. **`PROPERTIES["bounded_cb"]` `declared` → `verified`**, now backed by asserts (below).
+5. **Bench: A0 active-core count and bounded-CB are `assert`ed, not printed**
+   (`_bench_tilize.py::_assert_structural_gates`) — the design and this changelog both claimed the A0
+   gate was machine-checked; it was a print column, so a height-only-split regression on the
+   wide-short regime would not have failed the bench.
+6. **Bench: 3 new regimes** (`g_dram_to_sharded`, `g_sharded_to_dram`, `e_square_fp32_to_bf16`) so the
+   crossover paths and the narrowing-cast path have a measured baseline for the queue's Refinement 3
+   and 4 gates. `g_sharded_to_dram` immediately exposes `chunk_wt = 2` ⇒ 128 B read transactions, 4×
+   under the B6 512 B one-packet threshold.
+7. Naming/clarity: plan key `shard_row_bytes` → `source_page_bytes` (it is a page size, and matches the
+   reader's CT arg name); reader's magic `32` → `constexpr tile_height`.
+
+Verified by probe (not assumed): **program-cache re-binding on the zero-copy path** — two consecutive
+same-spec sharded calls hit the cache (entries 1 → 1) with different input/output buffer addresses,
+both bit-exact, first result untouched. `apply_descriptor_runtime_args` re-patches the aliased CB
+address from `cb_desc.tensor` every call (`program_descriptors.cpp:198-209`).
+
+### Perf re-measure — cumulative bench set (carry forward; this is the non-regression baseline)
+
+Median of 5 rounds × 10 launches, warm-up discarded, all CV ≤ 1.5 %. WH B0, 8×8, AICLK ≈ 985 MHz.
+Includes verification fix #1.
+
+| regime | shape | dtype | cores | chunk | cbB/core | ns (median) | GB/s | vs Phase 0 |
+|---|---|---|---|---|---|---|---|---|
+| a_square | `[1,1,2048,2048]` | bf16 | 64 | 16 | 131 072 | **85 417** | 196.4 | −0.2 % |
+| b_wide_short | `[1,1,32,16384]` | bf16 | 64 | 8 | 65 536 | **13 383** | 156.7 | −0.2 % |
+| c_single_core | `[1,1,512,512]` | bf16 | 1 | 16 | 131 072 | **30 472** | 34.4 | **−3.2 %** |
+| d_tall_narrow | `[1,1,2048,32]` | bf16 | 64 | 1 | 8 192 | **3 658** | 71.7 | −0.2 % |
+| e_square_fp32 | `[1,1,2048,2048]` | fp32 | 64 | 8 | 131 072 | **182 877** | 183.5 | +0.4 % (noise) |
+| e_square_bf8b_out | `[1,1,2048,2048]` | bf16→bf8b | 64 | 16 | 100 352 | **64 373** | 199.5 | +0.2 % (noise) |
+| e_square_fp32_to_bf16 | `[1,1,2048,2048]` | fp32→bf16 | 64 | 8 | 98 304 | **120 813** | 208.3 | *new* |
+| f_sharded_small | `[1,1,512,64]` H-shard | bf16 | 4 | 2 | 32 768 | **1 382** | 0 DRAM | −0.4 % |
+| f_sharded_large | `[1,1,2048,512]` B-shard | bf16 | 64 | 2 | 65 536 | **2 071** | 0 DRAM | 0 |
+| g_dram_to_sharded | `[1,1,2048,512]` → B-shard | bf16 | 64 | 16 | 131 072 | **18 923** | 221.6* | *new* |
+| g_sharded_to_dram | `[1,1,2048,512]` B-shard → | bf16 | 64 | 2 | 16 384 | **19 780** | 212.1* | *new* |
+| x_square_depth1 | `[1,1,2048,2048]` d1 | bf16 | 64 | 16 | 65 536 | **85 806** | 195.5 | 0 |
+| x_wide_short_1core | `[1,1,32,16384]` 1c | bf16 | 1 | 16 | 131 072 | **57 459** | 36.5 | **−6.6 %** |
+| x_sharded_small_depth1 | `[1,1,512,64]` d1 | bf16 | 4 | 2 | 32 768 | **1 364** | 0 DRAM | +0.4 % |
+
+\* the `g_*` GB/s counts bytes **moved**, not DRAM bytes — one side of a crossover lives in L1.
+
+Achieved-vs-target, recomputed on these numbers (DRAM spec peak 288 GB/s; the operationally meaningful
+ceiling for the 64-core interleaved regimes is the in-tree measured DRAM→DRAM copy, 86.6 µs @
+193.8 GB/s for 16.78 MB):
+
+| regime | binding reference | achieved | reading |
+|---|---|---|---|
+| a_square | in-tree 64-core copy 86.6 µs | **1.01×** | **at the ceiling** — residual is interleaved congestion |
+| e_square_fp32 / bf8b_out / fp32_to_bf16 | DRAM floor | 0.64 / 0.70 / 0.72 | same DM-bound ratio ⇒ the `Fp32Mode::Lossless` slow path costs nothing here |
+| b_wide_short | DRAM floor 7.3 µs | 0.54 | transaction/launch bound → queue R2 |
+| c_single_core | 1-core tt-npe pin 25.2 µs | 0.83 | improved from 0.80 by fix #1 → queue R2 |
+| d_tall_narrow | knee 190.9 GB/s | 0.38, 33 % sync floor | per-core overhead → queue R1 |
+| g_dram_to_sharded | DRAM-side leg 7.3 µs | 0.39 | sharded side pays a NoC leg it does not need → queue R3 |
+| f_sharded_small | own sync floor 0.69 µs | 0.50 | 50 % compute + 50 % sync, **0 % DM** → queue R4 |
+
+### Issues encountered (verification)
+
+1. The design/changelog claim that the A0 gate is "machine-checkable rather than eyeballed" was not
+   true of the bench — fixed (fix #5), and A0 is now also asserted from a unit test
+   (`test_tilize_plan_invariants`), so the width-split property is guarded without the profiler.
+2. The `use_double_buffer` auto-fallback existed but was unreachable dead code (fix #2). No behaviour
+   change, but the rule it implements is now checked rather than incidental.
+3. `SUPPORTED["rank"]` under-claimed (fix #3). No XPASS signal existed because the golden matrix has no
+   rank-5 cell — this was found by reading the fold, then confirmed by probe.
+4. The crossover and narrowing-cast regimes had no perf baseline at all, so the queue had nothing to
+   gate Refinements 3/4 on (fix #6).
+
+### Tests added (verification)
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_precision_baseline.py` — 20 cells
+  (4 shapes × 5 transitions): PCC, max/mean abs error, relative RMS, exact-element count.
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_extended.py` — 13 cells: high rank (5, 6),
+  awkward `Wt` (5, 7, 63) and `Wt = 256 ≫ WT_CHUNK_MAX`, host-planner invariants (`chunk_wt | Wt`, A0
+  core count, bounded CB, exact grid cover), and depth-1 against an **aliased** CB (the one depth-1
+  case nothing else covered — the golden harness never forwards `use_double_buffer`).
+- `tests/.../tilize/probes/probe_007.py` / `probe_008.py` — the rank-5/6 capability probe and the
+  zero-copy program-cache re-binding probe.
+
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **93 passed** (60 + 13 + 20) in **both**
+default and `--dev` mode.

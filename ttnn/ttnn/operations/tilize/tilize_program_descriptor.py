@@ -247,7 +247,7 @@ def _plan_alias(plan, geo):
             "num_blocks": num_blocks,
             "depth": 1,  # the CB *is* the shard
             "row_page_stride": 1,
-            "shard_row_bytes": shard_w * plan["elem_in"],
+            "source_page_bytes": shard_w * plan["elem_in"],
             "chunk_row_bytes": shard_w * plan["elem_in"],
             "ncores": len(cores),
             "cb_bytes_per_core": shard_tiles * (plan["tile_in"] + plan["tile_out"]),
@@ -290,8 +290,15 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_doub
     grid_cores = grid.x * grid.y
     max_cores = 1 if not use_multicore else min(grid_cores, plan["total_tiles"])
 
-    depth = 2 if use_double_buffer else 1
     bytes_per_chunk_tile = tile_in + tile_out
+    # "Depth-2 only if it fits": the smallest possible depth-2 footprint is one
+    # chunk tile-pair. If even that exceeds the budget, fall back to depth 1
+    # rather than OOM (the ttnn.concat pattern). Decided BEFORE the chunk width
+    # so `max_chunk_l1` is computed against the depth actually used; the
+    # post-loop assert below is then an invariant, not a second clamp.
+    depth = 2 if use_double_buffer else 1
+    if depth * bytes_per_chunk_tile > L1_CB_BUDGET_BYTES:
+        depth = 1
     max_chunk_l1 = max(1, L1_CB_BUDGET_BYTES // (depth * bytes_per_chunk_tile))
 
     n_h = min(nt_h, max_cores)
@@ -301,12 +308,13 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_doub
 
     chunk_wt = _largest_divisor_le(chunk_unit, max_chunk)
     assert wt % chunk_wt == 0, f"chunk_wt={chunk_wt} must divide Wt={wt}"
+    assert depth * chunk_wt * bytes_per_chunk_tile <= L1_CB_BUDGET_BYTES, (
+        f"CB budget blown: depth={depth} chunk_wt={chunk_wt} "
+        f"bytes_per_chunk_tile={bytes_per_chunk_tile} > {L1_CB_BUDGET_BYTES}"
+    )
     n_chunks = wt // chunk_wt
     n_w = min(n_chunks, max(1, max_cores // n_h))
     ncores = n_h * n_w
-
-    if depth * chunk_wt * bytes_per_chunk_tile > L1_CB_BUDGET_BYTES:
-        depth = 1
 
     cores = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
     core_ranges = ttnn.num_cores_to_corerangeset(ncores, grid, True)
@@ -338,7 +346,7 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_doub
             "chunk_wt": chunk_wt,
             "chunk_row_bytes": chunk_wt * TILE_HW * elem_in,
             "row_page_stride": row_page_stride,
-            "shard_row_bytes": in_page_bytes,
+            "source_page_bytes": in_page_bytes,
             "shard_tiles": 0,
             "depth": depth,
             "n_h": n_h,
@@ -442,7 +450,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         chunk_wt,
         plan["chunk_row_bytes"],
         plan["row_page_stride"],
-        plan["shard_row_bytes"],
+        plan["source_page_bytes"],
         plan["shard_tiles"],
         skip_dm,
     ]

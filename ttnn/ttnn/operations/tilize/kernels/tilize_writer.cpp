@@ -70,9 +70,18 @@ void kernel_main() {
                     }
                     l1_addr += tile_bytes;
                 }
-                noc_async_write_barrier();
+                // Recycling the CB pages only requires the writes to have DEPARTED
+                // (the data read out of L1), not to have been acked by the
+                // destination — that is exactly noc_async_writes_flushed
+                // (dataflow_api.h:1802 "wait for ... calls to depart, but will not
+                // wait for them to complete"). A full barrier per block would idle
+                // BRISC for the round-trip latency of the last tile of every block.
+                // One barrier after the loop still guarantees completion before the
+                // kernel ends.
+                noc_async_writes_flushed();
                 cb_pop_front(cb_tiled_output, chunk_wt);
             }
         }
+        noc_async_write_barrier();
     }
 }

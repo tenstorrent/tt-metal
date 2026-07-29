@@ -30,6 +30,7 @@
 
 void kernel_main() {
     constexpr uint32_t cb_rm_input = 0;
+    constexpr uint32_t tile_height = 32;  // rows per tile-row block
 
     constexpr uint32_t alias_mode = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_wt = get_compile_time_arg_val(1);
@@ -69,13 +70,13 @@ void kernel_main() {
                 // chunk lives in one page at a fixed intra-page offset.
                 const uint32_t page_col = byte_offset / source_page_bytes;
                 const uint32_t offset_in_page = byte_offset - page_col * source_page_bytes;
-                const uint32_t blocks = num_rows / 32;
+                const uint32_t blocks = num_rows / tile_height;
 
                 for (uint32_t block = 0; block < blocks; ++block) {
-                    const uint32_t row0 = start_row + block * 32;
+                    const uint32_t row0 = start_row + block * tile_height;
                     cb_reserve_back(cb_rm_input, chunk_wt);
                     uint32_t l1_addr = get_write_ptr(cb_rm_input);
-                    for (uint32_t row = 0; row < 32; ++row) {
+                    for (uint32_t row = 0; row < tile_height; ++row) {
                         const uint64_t noc_addr =
                             accessor.get_noc_addr((row0 + row) * row_page_stride + page_col, offset_in_page);
                         if constexpr (skip_dm) {
