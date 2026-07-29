@@ -22,8 +22,13 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         producer on the writer RISC and a receiver on the reader RISC. Every link is full duplex:
         the producer sends `num_tokens` chunks of `chunk_size_bytes` to the peer worker across the
         cable while the receiver consumes the peer's chunks into a `num_slots`-deep L1 ring, credited
-        back through the producer's connection. No input tensors; returns a dummy tensor. Used to
-        profile the fabric leg in isolation (inspect Tracy zones).
+        back through the producer's connection. Used to profile the fabric leg in isolation.
+
+        In the DRAM modes (`variant` bit5 DRAM_DIRECT / bit6 DRAM_DRAIN) the returned tensor is the
+        real interleaved DRAM landing buffer, one page per token per worker. Passing `input` — an
+        interleaved uint32 ROW_MAJOR DRAM tensor with `num_slots` pages per producer — makes each
+        producer prefill its L1 source slots from its own region of that buffer and send exactly those
+        tokens round-robin, so the landing buffer can be checked for content.
         )doc",
         &combine_fabric2d,
         nb::arg("device"),
@@ -34,7 +39,8 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("axis") = 0,
         nb::arg("stall_telemetry") = 0,
         nb::arg("variant") = 0,
-        nb::arg("topology") = nb::none());
+        nb::arg("topology") = nb::none(),
+        nb::arg("input") = nb::none());
 
     // Telemetry readback. Returns {"clock_mhz": int, "workers": [ {...}, ... ]} — plain Python data so
     // callers can format it however they like. The caller does NOT need to know where the worker cores
@@ -56,6 +62,7 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
                 d["relocated"] = w.relocated;
                 d["peer_mesh_id"] = w.peer_mesh_id;
                 d["peer_chip_id"] = w.peer_chip_id;
+                d["peer_coord"] = w.peer_coord;
                 d["valid"] = w.valid;
                 d["tokens_sent"] = w.tokens_sent;
                 d["credits_forwarded"] = w.credits_forwarded;
@@ -68,6 +75,9 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
                 d["edm_slots"] = w.edm_slots;
                 d["credit_packets"] = w.credit_packets;
                 d["loop_iters"] = w.loop_iters;
+                d["drain_packets"] = w.drain_packets;
+                d["in_base_page"] = w.in_base_page;
+                d["out_base_page"] = w.out_base_page;
                 d["wait_slot_cycles"] = w.wait_slot_cycles;
                 d["issue_cycles"] = w.issue_cycles;
                 d["starve_cycles"] = w.starve_cycles;
