@@ -75,11 +75,17 @@ enum TelemetryWord : uint32_t {
     TELEM_CREDIT_CY_LO = 20,  // forwarding the receiver's credits (a whole extra packet)
     TELEM_CREDIT_CY_HI = 21,
     TELEM_LOOP_ITERS = 22,  // producer loop trips, for a per-iteration cost estimate
-    TELEM_NUM_WORDS = 23,
+    // Phase 4. The drain packets are the D-1 header-only fillers the receiverless modes push to force
+    // every payload credit back (Goal 1); the base pages are what this producer read and wrote, so the
+    // host can check content without re-deriving the cable mapping (Goal 2).
+    TELEM_DRAIN_PACKETS = 23,
+    TELEM_IN_BASE_PAGE = 24,   // 0xFFFFFFFF => no precooked input
+    TELEM_OUT_BASE_PAGE = 25,  // first DRAM page written on the PEER chip
+    TELEM_NUM_WORDS = 26,
 };
 // Bumped whenever the record layout changes, so a stale record from an older kernel reads as invalid
 // instead of being misparsed.
-constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0002u;
+constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0003u;
 
 // ---------------------------------------------------------------------------------------------
 // Physical-column geometry
@@ -360,7 +366,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t data_ready_addr,
     uint32_t credits_addr,
     tt::tt_metal::Buffer* dram_buf,
-    uint32_t dram_addr) {
+    uint32_t dram_addr,
+    tt::tt_metal::Buffer* dram_in_buf,
+    uint32_t dram_in_addr) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* mesh = args.device;
     auto* dev = mesh->get_device(coord);
@@ -411,6 +419,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         const uint32_t peer_worker_idx = worker_index_of(peer_placement, far_eth_logical);
         const uint32_t producer_dram_base_page = peer_worker_idx * args.num_tokens;  // page on the PEER chip
         const uint32_t receiver_dram_base_page = self_worker_idx * args.num_tokens;  // page on THIS chip
+        // Phase 4 Goal 2: each producer owns its own num_slots-page region of THIS chip's input buffer,
+        // so the four producers of a chip send four distinguishable sets of tokens.
+        const uint32_t producer_input_base_page = self_worker_idx * args.num_slots;
 
         // ---- Producer (writer RISC). Owns the eth channel's single fabric connection: sends payload
         // ---- tokens AND forwards the co-located receiver's credit returns.
@@ -439,11 +450,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             args.stall_telemetry,
             args.variant,
             l1.pkt_hdr_ring,
-            producer_dram_base_page,  // 18: first DRAM page this producer writes (Approach #1)
-            dram_addr,                // 19: DRAM output buffer base address (uniform across the mesh)
+            producer_dram_base_page,   // 18: first DRAM page this producer writes (Approach #1)
+            dram_addr,                 // 19: DRAM output buffer base address (uniform across the mesh)
+            producer_input_base_page,  // 20: first DRAM page this producer reads (precooked tokens)
+            dram_in_addr,              // 21: DRAM input buffer base address, 0 => no precooked input
         };
-        // 20+: TensorAccessorArgs describing the interleaved DRAM output buffer (compile-time config).
+        // 22+: TensorAccessorArgs for the interleaved DRAM output buffer, then the input buffer (both
+        // compile-time config). A null input buffer emits a two-zero (page_size 0) config, which the
+        // kernel never instantiates because dram_in_addr == 0 turns the prefill off.
         tt::tt_metal::TensorAccessorArgs(dram_buf).append_to(prod.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(dram_in_buf).append_to(prod.compile_time_args);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -537,6 +553,13 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
     CombineFabric2dTelemetry out;
     out.clock_mhz = static_cast<uint32_t>(mesh_device->get_devices().front()->get_clock_rate_mhz());
 
+    // Physical chip id -> mesh coordinate, so a worker's record can name its peer in the same
+    // coordinate space the caller uses to index per-device tensor shards (Goal 2's content check).
+    std::map<uint32_t, ttnn::MeshCoordinate> chip_to_coord;
+    for (const auto& c : ttnn::MeshCoordinateRange(mesh_shape)) {
+        chip_to_coord.emplace(static_cast<uint32_t>(mesh_device->get_device(c)->id()), c);
+    }
+
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         auto* dev = mesh_device->get_device(coord);
         // Placement is a pure function of (device, axis, num_links), so recomputing it here reproduces
@@ -554,6 +577,14 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
             w.relocated = !wp.in_eth_column;
             w.peer_mesh_id = *wp.peer_node.mesh_id;
             w.peer_chip_id = static_cast<uint32_t>(wp.peer_node.chip_id);
+            // The chip this worker's tokens actually land on is the far end of ITS cable — the same
+            // resolution the program factory used to pick the destination page range. Reported in mesh
+            // coordinates because that is how the caller indexes per-device tensor shards.
+            const auto far = dev->get_connected_ethernet_core(eth_logical);
+            const auto fit = chip_to_coord.find(static_cast<uint32_t>(std::get<0>(far)));
+            if (fit != chip_to_coord.end()) {
+                w.peer_coord.assign(fit->second.coords().begin(), fit->second.coords().end());
+            }
 
             std::vector<uint32_t> words;
             const bool ok = tt::tt_metal::detail::ReadFromDeviceL1(
@@ -574,6 +605,9 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
                 w.edm_slots = words[TELEM_EDM_SLOTS];
                 w.credit_packets = words[TELEM_CREDIT_PACKETS];
                 w.loop_iters = words[TELEM_LOOP_ITERS];
+                w.drain_packets = words[TELEM_DRAIN_PACKETS];
+                w.in_base_page = words[TELEM_IN_BASE_PAGE];
+                w.out_base_page = words[TELEM_OUT_BASE_PAGE];
                 w.wait_slot_cycles = static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_LO]) |
                                      (static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_HI]) << 32);
                 w.issue_cycles = static_cast<uint64_t>(words[TELEM_ISSUE_CY_LO]) |
@@ -591,7 +625,7 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
 
 tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_descriptor(
     const CombineFabric2dParams& operation_attributes,
-    const CombineFabric2dInputs& /*tensor_args*/,
+    const CombineFabric2dInputs& tensor_args,
     ttnn::Tensor& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     auto* mesh_device = operation_attributes.device;
@@ -662,6 +696,33 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     TT_FATAL(dram_buf != nullptr, "combine_fabric2d: output tensor has no device buffer");
     const uint32_t dram_addr = static_cast<uint32_t>(dram_buf->address());
 
+    // Phase 4 Goal 2 input buffer (optional). Same interleaved page layout as the output, so the
+    // producers can prefill their L1 source slots from it with an ordinary local DRAM read. Its address
+    // is uniform across the mesh (one MeshBuffer), but each producer only ever reads its OWN chip's
+    // copy, so uniformity is a convenience here rather than a requirement.
+    tt::tt_metal::Buffer* dram_in_buf = nullptr;
+    uint32_t dram_in_addr = 0;
+    if (tensor_args.input.has_value()) {
+        dram_in_buf = tensor_args.input->buffer();
+        TT_FATAL(dram_in_buf != nullptr, "combine_fabric2d: input tensor has no device buffer");
+        TT_FATAL(
+            dram_in_buf->aligned_page_size() == dram_buf->aligned_page_size(),
+            "combine_fabric2d: input page size {} must equal the output page size {} (one page = one token)",
+            dram_in_buf->aligned_page_size(),
+            dram_buf->aligned_page_size());
+        const uint32_t needed_pages = 2u * operation_attributes.num_links * operation_attributes.num_slots;
+        TT_FATAL(
+            dram_in_buf->num_pages() >= needed_pages,
+            "combine_fabric2d: input buffer has {} pages but {} producers x num_slots {} need {}",
+            dram_in_buf->num_pages(),
+            2u * operation_attributes.num_links,
+            operation_attributes.num_slots,
+            needed_pages);
+        dram_in_addr = static_cast<uint32_t>(dram_in_buf->address());
+        TT_FATAL(
+            dram_in_addr != 0, "combine_fabric2d: input buffer address is 0, which the kernel reads as 'no input'");
+    }
+
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(write_up_to_sem);
     workload_descriptor.semaphores.push_back(data_ready_sem);
@@ -677,7 +738,9 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
             data_ready_addr,
             credits_addr,
             dram_buf,
-            dram_addr);
+            dram_addr,
+            dram_in_buf,
+            dram_in_addr);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;

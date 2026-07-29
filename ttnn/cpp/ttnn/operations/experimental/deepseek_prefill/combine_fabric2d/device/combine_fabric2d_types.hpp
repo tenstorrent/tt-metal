@@ -69,6 +69,14 @@ struct CombineFabric2dParams {
     }
 };
 
-struct CombineFabric2dInputs {};
+// Phase 4 Goal 2. Optional precooked source tokens: an interleaved DRAM buffer with the same page size
+// as the output (one page = one token), holding num_slots pages for each of this chip's producers
+// (producer i owns pages [i * num_slots, (i+1) * num_slots)). When given, each producer prefills its L1
+// source slots from its own region and then sends exactly those tokens round-robin, which is what makes
+// the destination DRAM checkable for content. When absent the op behaves exactly as in phase 3: the
+// payload is uninitialised L1 and only arrival is verifiable.
+struct CombineFabric2dInputs {
+    std::optional<ttnn::Tensor> input;
+};
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d

@@ -29,6 +29,16 @@
 // of interest is first-token-send -> credit-for-last-token-returned, which is why the loop now also
 // waits for `write_up_to` to reach num_slots + num_tokens: that is the point at which the peer has
 // provably consumed every token we sent (an upper bound on the last token's transfer completing).
+//
+// Phase 4 additions:
+//   * DRAIN (Goal 1). The receiverless flavors have no app-level end-to-end signal, so the window
+//     would close at the last send — a lower bound. After the loop those modes drain the EDM sender
+//     channel instead (see the drain block near the bottom) and stamp the result into the otherwise
+//     unused `t_last_credit`, which turns the report's GB/s column into an upper bound while sGB/s
+//     stays the push rate.
+//   * PRECOOKED (Goal 2). With an input DRAM region supplied, the producer prefills its num_slots L1
+//     source slots from it before the loop and then round-robins over exactly those tokens, so the
+//     destination DRAM can be checked for content, not just for arrival.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -75,7 +85,10 @@ constexpr uint32_t TELEM_STARVE_CY_HI = 19;
 constexpr uint32_t TELEM_CREDIT_CY_LO = 20;
 constexpr uint32_t TELEM_CREDIT_CY_HI = 21;
 constexpr uint32_t TELEM_LOOP_ITERS = 22;
-constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0002u;
+constexpr uint32_t TELEM_DRAIN_PACKETS = 23;
+constexpr uint32_t TELEM_IN_BASE_PAGE = 24;
+constexpr uint32_t TELEM_OUT_BASE_PAGE = 25;
+constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0003u;
 
 void kernel_main() {
     constexpr uint32_t num_tokens = get_compile_time_arg_val(0);
@@ -107,7 +120,15 @@ void kernel_main() {
     // sender-slot backpressure is the only throttle, so the send window IS the DRAM-bounded rate.
     constexpr uint32_t dram_base_page = get_compile_time_arg_val(18);
     constexpr uint32_t dram_bank_base_addr = get_compile_time_arg_val(19);
-    constexpr auto dram_out_args = TensorAccessorArgs<20>();
+    // Phase 4 Goal 2 — precooked tokens. Non-zero `dram_in_bank_base_addr` means the test has laid
+    // num_slots real tokens for THIS producer in this chip's DRAM input buffer, starting at page
+    // `input_base_page`. We read them into our L1 source slots up front and then send exactly those,
+    // round-robin, so the destination DRAM can be compared against known content.
+    constexpr uint32_t input_base_page = get_compile_time_arg_val(20);
+    constexpr uint32_t dram_in_bank_base_addr = get_compile_time_arg_val(21);
+    constexpr auto dram_out_args = TensorAccessorArgs<22>();
+    constexpr auto dram_in_args = TensorAccessorArgs<dram_out_args.next_compile_time_args_offset()>();
+    constexpr bool PRECOOKED = dram_in_bank_base_addr != 0;
 
     // Diagnostics only (see CombineFabric2dParams::variant); both break a guarantee to price it.
     constexpr bool RELAXED_READY = (variant & 4u) != 0;
@@ -155,6 +176,20 @@ void kernel_main() {
     // across chips, so an accessor built from THIS chip's buffer base produces addresses valid on the
     // peer chip (same trick the production combine op relies on).
     const auto dram_out = TensorAccessor(dram_out_args, dram_bank_base_addr);
+    // Prefill the L1 source ring with the precooked tokens, before any timestamp is taken. One page per
+    // slot from this chip's own DRAM (a local read — no fabric involved), so what leaves this producer
+    // is known content and the destination DRAM becomes checkable. The accessor is only constructed in
+    // this branch because with no input buffer the host emits a null (page_size 0) accessor config.
+    if constexpr (PRECOOKED) {
+        const auto dram_in = TensorAccessor(dram_in_args, dram_in_bank_base_addr);
+        for (uint32_t slot = 0; slot < num_slots; slot++) {
+            noc_async_read(
+                dram_in.get_noc_addr(input_base_page + slot),
+                prod_buf_addr + slot * chunk_size_bytes,
+                chunk_size_bytes);
+        }
+        noc_async_read_barrier();
+    }
     if constexpr (DRAM_DIRECT) {
         // Only the route is fixed per slot header (same peer chip every token); the destination page
         // changes per token and is stamped in the loop by to_noc_unicast_write.
@@ -200,8 +235,8 @@ void kernel_main() {
         if constexpr (DRAM_DIRECT) {
             // Approach #1: no credits, no receiver, no ring reuse to protect. Each token lands on its own
             // DRAM page (base_page + sent), so the only backpressure is the EDM refusing an empty write
-            // slot when the eth side cannot drain to DRAM fast enough. t_last_credit stays 0: there is no
-            // end-to-end signal, so the send window (first send -> last send) IS the measured rate.
+            // slot when the eth side cannot drain to DRAM fast enough. The send window is therefore a
+            // LOWER bound on the transfer; the drain after this loop supplies the matching upper bound.
             while (sent < num_tokens) {
                 const uint32_t slot = sent % num_slots;
                 volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
@@ -212,16 +247,19 @@ void kernel_main() {
                     t_first_send = w0;
                 }
                 sender.wait_for_empty_write_slot();
-                // Single fixed source chunk (payload content is garbage in this harness); a slot's header is
-                // not reused until the ring wraps, so the header send need not flush-block.
-                sender.send_payload_without_header_non_blocking_from_address(prod_buf_addr, chunk_size_bytes);
+                // With precooked input we must round-robin the source slots (that IS the content being
+                // checked); without it the payload is garbage, so one fixed source chunk is kept — it is
+                // what the phase-3 numbers were measured with. A slot's header is not reused until the ring
+                // wraps, so the header send need not flush-block either way.
+                sender.send_payload_without_header_non_blocking_from_address(
+                    PRECOOKED ? prod_buf_addr + slot * chunk_size_bytes : prod_buf_addr, chunk_size_bytes);
                 sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
                 sent++;
                 t_last_send = wall_clock();
             }
         } else {
             // In the NO_FLOW_CONTROL diagnostic there are no credits to wait on in either direction, so the
-            // window closes at the last send and t_last_credit stays 0 (report the send-window number).
+            // loop exits at the last send and, like DRAM_DIRECT, gets its upper bound from the drain below.
             while (NO_FLOW_CONTROL ? sent < num_tokens
                                    : (sent < num_tokens || credits_sent < num_tokens ||
                                       observed_write_up_to < write_up_to_target)) {
@@ -325,6 +363,41 @@ void kernel_main() {
         }  // end !DRAM_DIRECT
     }
 
+    // ---- Goal 1: upper bound on delivery for the flavors with no app-level end-to-end signal.
+    //
+    // Those are exactly the ones that leave t_last_credit == 0 (DRAM_DIRECT, and the NO_FLOW_CONTROL
+    // diagnostic): nothing tells us when the last token landed, so the send window alone is a LOWER
+    // bound on the transfer. The EDM sender channel gives us the missing signal for free.
+    //
+    // The worker's free-slot count is `D = num_buffers_per_channel` deep and satisfies
+    // free = D - (packets_written - credits_returned) (edm_fabric_worker_adapters.hpp:283). A credit is
+    // only produced by the FAR END (the router forwards to the worker what the remote receiver channel
+    // acked — fabric_erisc_router.cpp:1690). So after num_tokens payload packets, writing D-1 more and
+    // then obtaining one further free slot forces credits_returned >= num_tokens, i.e. every payload
+    // packet has provably reached the destination chip. Stamping that moment into t_last_credit makes
+    // the report's GB/s an upper-bound end-to-end rate while sGB/s stays the push rate.
+    //
+    // The D-1 filler packets are header-only atomic-incs of value ZERO aimed at the peer's write_up_to
+    // semaphore: a real, valid fabric packet (there is no NOP send type) that changes nothing on the
+    // peer, and nobody reads write_up_to in these modes. Their own completion is never awaited, so the
+    // argument above does not depend on them landing. Reaching a free slot cannot deadlock: the reverse
+    // direction is a different eth channel, so no producer waits on another producer here.
+    uint32_t drain_packets = 0;
+    if (t_last_credit == 0 && sent > 0) {
+        const uint32_t depth = sender.num_buffers_per_channel;
+        pkt_hdr_credit->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_write_up_to_noc, /*val=*/0, /*flush=*/false});
+        fabric_set_unicast_route(
+            (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr_credit, peer_chip_id, peer_mesh_id);
+        for (uint32_t d = 0; d + 1 < depth; d++) {
+            sender.wait_for_empty_write_slot();
+            sender.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr_credit, sizeof(PACKET_HEADER_TYPE));
+            drain_packets++;
+        }
+        sender.wait_for_empty_write_slot();
+        t_last_credit = wall_clock();
+    }
+
     telem[TELEM_TOKENS_SENT] = sent;
     telem[TELEM_CREDITS_FORWARDED] = credits_sent;
     telem[TELEM_CHUNK_SIZE] = chunk_size_bytes;
@@ -339,6 +412,11 @@ void kernel_main() {
     telem[TELEM_EDM_SLOTS] = sender.num_buffers_per_channel;
     telem[TELEM_CREDIT_PACKETS] = credit_packets;
     telem[TELEM_LOOP_ITERS] = loop_iters;
+    telem[TELEM_DRAIN_PACKETS] = drain_packets;
+    // What this producer read and where it wrote, so the host can check content without re-deriving the
+    // placement/cable mapping. Zero input base page is meaningful only together with PRECOOKED.
+    telem[TELEM_IN_BASE_PAGE] = PRECOOKED ? input_base_page : 0xFFFFFFFFu;
+    telem[TELEM_OUT_BASE_PAGE] = dram_base_page;
     telem[TELEM_WAIT_SLOT_CY_LO] = (uint32_t)(wait_slot_cy & 0xFFFFFFFFu);
     telem[TELEM_WAIT_SLOT_CY_HI] = (uint32_t)(wait_slot_cy >> 32);
     telem[TELEM_ISSUE_CY_LO] = (uint32_t)(issue_cy & 0xFFFFFFFFu);

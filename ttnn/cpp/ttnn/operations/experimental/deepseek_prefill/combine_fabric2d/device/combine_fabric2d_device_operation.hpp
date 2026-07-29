@@ -36,5 +36,6 @@ ttnn::Tensor combine_fabric2d(
     uint32_t axis,
     uint32_t stall_telemetry,
     uint32_t variant,
-    tt::tt_fabric::Topology topology);
+    tt::tt_fabric::Topology topology,
+    const std::optional<ttnn::Tensor>& input = std::nullopt);
 }  // namespace ttnn::prim

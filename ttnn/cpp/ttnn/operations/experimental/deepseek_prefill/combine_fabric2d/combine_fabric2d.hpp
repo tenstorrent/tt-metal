@@ -22,7 +22,9 @@ ttnn::Tensor combine_fabric2d(
     uint32_t axis = 0,
     uint32_t stall_telemetry = 0,
     uint32_t variant = 0,
-    std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
+    std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+    // Phase 4 Goal 2: precooked source tokens in interleaved DRAM (see CombineFabric2dInputs).
+    const std::optional<ttnn::Tensor>& input = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
 
