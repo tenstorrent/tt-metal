@@ -126,6 +126,13 @@ def _chunk_weights(per_layer_w):
     return out
 
 
+_PREFIX_KV_DTYPE = {
+    "bfloat8_b": ttnn.bfloat8_b,
+    "bfloat4_b": ttnn.bfloat4_b,
+    "bfloat16": ttnn.bfloat16,
+}[os.environ.get("PI05_PREFIX_KV_DTYPE", "bfloat8_b")]
+
+
 def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, prefix_kv, mask):
     import models.experimental.pi0_5.tt.tt_pipeline.denoise_block as _db
     from models.experimental.pi0_5.tt.tt_pipeline._device import set_device
@@ -159,10 +166,10 @@ def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, pref
         # tile-32 prefix + tile-16 suffix in one flash pass (each K tile yields a [Sq_h x 32] score
         # tile regardless of its own height), so no retile is needed. q/k/v stay at the tiny tile.
         pk_dev = from_torch_pi05(
-            pk, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
+            pk, dtype=_PREFIX_KV_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
         )
         pv_dev = from_torch_pi05(
-            pv, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
+            pv, dtype=_PREFIX_KV_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
         )
         stage._prefix_kv.append((pk_dev, pv_dev))
         dev += [pk_dev, pv_dev]

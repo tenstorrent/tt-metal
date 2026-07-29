@@ -117,7 +117,24 @@ _KV_FOLD = True
 # it internally (reshard_input=True), so the norm skips its trailing sharded_to_interleaved and there
 # is no interleaved intermediate between the norm and the projections.
 
-_K_BLOCKS = 2
+# matmul_decode block partitioning. Swept at tile-16 (median of 3-4, PCC 0.9999 throughout);
+# constraints are _K_BLOCKS * n_blocks <= 120 cores and n_blocks | N_tiles:
+#   K=2  40/32/32  0.121 ms   <- previous (tuned at M=32)
+#   K=4  20/16/16  0.119 ms
+#   K=4  16/16/16  0.117 ms   <- chosen
+#   K=4   8/8/8    0.119 ms
+#   K=8  10/8/8    0.132 ms   <- more K-splits means more pairwise reduction; regresses hard
+# Two non-obvious results: the optimum is INTERIOR (K=8 is much worse, so this is not "more
+# splitting is better"), and 64 cores beats 80 (QKV=16 over QKV=20) because at M=16 the activation
+# is tiny and gather/reduce overhead outweighs added parallelism -- the same reason _RESHARD_CORES=2
+# beats 4 and 8. Note K=4 raises PER-CORE weight L1 (shard goes (512,64) -> (256,160), ~35 -> ~43 KB)
+# on fewer cores, so it is gated on the 16-chip L1 budget as well as single-layer time.
+# TILE-HEIGHT DEPENDENT. K=4/16-16-16 is 3.3% faster at tile-16 but raises PER-CORE weight L1
+# (the _pws_B shard goes (kc=512,nc=64) -> (256,160), ~35 -> ~43 KB) on fewer cores, and at tile-32
+# that overflows the 16-chip L1 budget outright ("Statically allocated circular buffers ... clash
+# with L1 buffers"). tile-16 absorbs it because its activations are half-height. Single-layer timing
+# passes for BOTH, so this split is only visible on the 16-chip gate -- keep validating there.
+_K_BLOCKS = 4 if TILE_HEIGHT < 32 else 2
 _RESHARD_CORES = 2
 # Cap on tiles per kv_sdpa flash K/V chunk (Sk_chunk_t * DHt). kv_sdpa is ~40% of denoise device
 # time, so this is the highest-leverage knob in the block. The op's default (128) maximizes chunk size
@@ -131,7 +148,7 @@ _RESHARD_CORES = 2
 # 64 captures essentially all of the gain; 128 buys a further ~0.001 ms (inside run-to-run noise) for
 # double the L1. Chosen for the best perf-per-byte that still fits the 16-chip L1 budget.
 _KV_SDPA_MAX_CHUNK_TILES = 64
-_QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = 40, 32, 32
+_QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = (16, 16, 16) if TILE_HEIGHT < 32 else (40, 32, 32)
 
 _LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False

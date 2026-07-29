@@ -69,7 +69,16 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
         TT_FATAL(
             pks[2] % pk_tile_h == 0 && pvs[2] % pv_tile_h == 0 && pks[2] == pvs[2],
             "kv_sdpa: prefix length must be tile-aligned and match");
-        TT_FATAL(ta.past_k->dtype() == ta.k.dtype(), "kv_sdpa: past_k/k dtype must match (shared reader CB)");
+        // Prefix and suffix do NOT share a reader CB: the factory derives the prefix format
+        // independently (pkdf) and allocates its own CB pair (c_8/c_9) with its own tile size, the
+        // reader takes per-source tile bytes (get_tile_size(cb_k_prefix) vs cb_k_in) and issues a
+        // separate READ_KV_SOURCE per phase, and the compute reconfigures the unpack format per phase
+        // from whichever K CB it is handed. So the dtypes may legitimately differ -- e.g. a bfloat4_b
+        // resident prefix (halving the dominant prefix-KV read traffic) with bfloat8_b suffix
+        // activations. Only require that past_v matches past_k, since they share the phase geometry.
+        TT_FATAL(
+            ta.past_v->dtype() == ta.past_k->dtype(),
+            "kv_sdpa: past_k/past_v dtype must match (same prefix phase geometry)");
     }
     if (ta.mask.has_value()) {
         const auto& ms = ta.mask->padded_shape();
