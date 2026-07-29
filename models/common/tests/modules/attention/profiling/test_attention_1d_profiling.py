@@ -24,9 +24,12 @@ from pathlib import Path
 import pytest
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
-try:  # transformers >= 5 moved no_init_weights to transformers.initialization
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
     from transformers.initialization import no_init_weights
-except ImportError:  # transformers < 5
+except ImportError:
     from transformers.modeling_utils import no_init_weights
 
 import ttnn
@@ -108,9 +111,11 @@ def _create_attention_model_for_benchmark(
 
         with no_init_weights():
             hf_model = MllamaForConditionalGeneration._from_config(hf_config, torch_dtype=torch.bfloat16)
-        # Mllama has layers directly at language_model.layers (not language_model.model.layers)
-        first_layer = hf_model.language_model.layers[0]
-        rotary_emb = getattr(hf_model.language_model, "rotary_emb", None)
+        # Mllama has layers directly at language_model.layers (not language_model.model.layers).
+        # transformers 5.x nests the text model under hf_model.model.language_model.
+        text_model = hf_model.language_model if hasattr(hf_model, "language_model") else hf_model.model.language_model
+        first_layer = text_model.layers[0]
+        rotary_emb = getattr(text_model, "rotary_emb", None)
     else:
         with no_init_weights():
             hf_model = AutoModelForCausalLM.from_config(hf_config, torch_dtype=torch.bfloat16)

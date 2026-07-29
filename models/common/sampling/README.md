@@ -35,17 +35,7 @@ tt_tokens = sampling.sample(
 ```
 
 `SamplingGenerator.sample()` accepts `enable_trace=True` to record/replay
-sampling traces. Callers typically instantiate the module with tracing enabled
-and then choose per-request whether to split the trace.
-
-## Two-Part Trace Mode
-Before running decode, set `generator.enable_split_sampling = True` (or
-`False`) to choose between the two behaviors:
-
-1. **Split trace:** The model trace stops at logits and `SamplingGenerator`
-   captures/executes a dedicated sampling trace immediately afterward.
-2. **Single trace:** Sampling runs inline as part of the model trace for
-   maximum performance.
+sampling traces.
 
 ## File Map
 
@@ -108,6 +98,8 @@ plus `apply_decode_state(...)`.
 ## Pitfalls
 
 **`padded_vocab_size` vs `vocab_size`**: TTSampling device offsets for global token IDs must use the padded vocab size to match how the LM head shards logits across devices. Using unpadded `vocab_size` for offsets shifts token IDs from devices 1+ and produces garbled output.
+
+**Padded vocab logits**: If the LM head pads output weights beyond the real tokenizer vocabulary, the sampler must mask those padded token IDs before force-argmax or local top-k. Zero-padded LM-head weights are useful for legal sharded matmul shapes, but they are not a sampling mask.
 
 **`sampling_dp`**: When >1, k/p/temp tensors must have length `max_batch_size * sampling_dp` and are row-sharded via `ShardTensor2dMesh(dims=(0, None))`. Use `chunk_sampling_params` + `apply_decode_state` to distribute params across mesh rows.
 
