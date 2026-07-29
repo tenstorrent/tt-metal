@@ -1254,16 +1254,24 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     //
     // bit22 = FORCE_CHAIN (A/B the chain baseline), bit23 = FORCE_RSCATTER (test it outside the gate). Any
     // kernel-behaviour diagnostic (ablations, meet) keeps the chain so the ablation floors stay comparable.
+    // The partition does NOT need to divide evenly: chunk sizes differ by at most one tile, so the only
+    // structural requirement is rs_T >= Pk (every core must own at least one tile to write). Requiring
+    // divisibility locked out 41 of the 62 corpus shapes for no reason.
     const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles per output sub-block
-    const bool rs_feasible = (Pk > 1u) && (rs_T % Pk == 0u) && (rs_T >= Pk) && !has_bias && !has_ternary &&
-                             !has_activation && (n_chunks == 1u) && ((diag_mask & kDiagKernelBits) == 0u);
-    const bool rs_gate = rs_feasible && (Pk >= 4u) && (Kt_r <= 64u) && (Nt_r >= 32u) && (geo.N_sub >= 2u);
+    const bool rs_feasible = (Pk > 1u) && (rs_T >= Pk) && !has_bias && !has_ternary && !has_activation &&
+                             (n_chunks == 1u) && ((diag_mask & kDiagKernelBits) == 0u);
+    // No N-WIDTH requirement. The original gate also demanded Nt>=32; measuring the declined shapes with bit23
+    // showed that was wrong - 128x2048x512 (Nt=16) is 8.9% FASTER with reduce-scatter. Across all 15 shapes
+    // measured, every shallow-K Pk>=4 shape with N_sub>=2 won (6/6, 5.5-16.4%) regardless of N width, while
+    // deep-K was genuinely mixed (-3.0% to +3.0%, mean ~0) and N_sub==1 was neutral (+0.4%). So the three
+    // surviving conditions are the ones the data supports.
+    const bool rs_gate = rs_feasible && (Pk >= 4u) && (Kt_r <= 64u) && (geo.N_sub >= 2u);
     const bool diag_force_chain = (diag_mask & 0x400000u) != 0u;     // bit22
     const bool diag_force_rscatter = (diag_mask & 0x800000u) != 0u;  // bit23
     TT_FATAL(
         !diag_force_rscatter || rs_feasible,
-        "regime_a_matmul diag bit23 (FORCE_RSCATTER) needs Pk>1, unfused, single-chunk and a sub-block of "
-        "{} tiles divisible by Pk={}",
+        "regime_a_matmul diag bit23 (FORCE_RSCATTER) needs Pk>1, unfused, single-chunk and a sub-block of at "
+        "least Pk tiles (have {} tiles, Pk={})",
         rs_T,
         Pk);
     const bool rscatter = !diag_force_chain && (diag_force_rscatter || rs_gate);
@@ -1473,12 +1481,14 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         mkcb(program, all_cores, 6, gate_tiles, gfmt, gtsz);
     }
     // REDUCE-SCATTER chunk CBs (unfused only, so c_4/c_5 cannot collide with the fusion operands above).
-    // c_4 = compute->writer send chunk, c_5 = incoming chunk. EXACTLY 2 slots each: the kernel's slot index is
-    // the global epoch mod 2, so the FIFO period and the remote write offset are the same value by construction.
-    const uint32_t rs_chunk_tiles = rscatter ? (out_blk_tiles / Pk) : 0u;
+    // c_4 = compute->writer send chunk, c_5 = incoming chunk. EXACTLY 2 slots each, sized to the LARGEST chunk
+    // (chunks differ by at most one tile when Pk does not divide the sub-block): the kernel's slot index is the
+    // global epoch mod 2 and every CB operation moves a whole max-size slot, so the FIFO period and the remote
+    // write stride are the same value by construction.
+    const uint32_t rs_max_chunk = rscatter ? ((out_blk_tiles + Pk - 1u) / Pk) : 0u;
     if (rscatter) {
-        mkcb(program, all_cores, 4, 2u * rs_chunk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
-        mkcb(program, all_cores, 5, 2u * rs_chunk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, all_cores, 4, 2u * rs_max_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, all_cores, 5, 2u * rs_max_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
     }
 
     // ---- Semaphores ----
@@ -1763,7 +1773,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             wa.push_back(rp.y);             // 20
             wa.push_back(cp.rs_own_chunk);  // 21 tile-chunk index this core owns + writes
             wa.push_back(Pk);               // 22 cycle size
-            wa.push_back(rs_chunk_tiles);   // 23 tiles per chunk = M_block*N_sub / Pk
+            wa.push_back(rs_T);             // 23 sub-block tiles (kernel derives the chunk sizes)
         }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
@@ -1777,7 +1787,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         if (rscatter) {
             ca.push_back(cp.rs_pos);       // my position in the Pk cycle
             ca.push_back(Pk);              // cycle size
-            ca.push_back(rs_chunk_tiles);  // tiles per chunk
+            ca.push_back(rs_T);            // sub-block tiles (kernel derives the chunk sizes)
         }
         if (has_bias || has_ternary || has_activation) {
             ca.push_back(cp.is_top ? 1u : 0u);
