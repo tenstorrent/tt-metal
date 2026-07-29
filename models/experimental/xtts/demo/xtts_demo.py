@@ -111,15 +111,22 @@ def _score_take(wav_np, text, codes):
 def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, args):
     """One full device generation + vocode + onset post-processing. Returns (wav_np, codes, dt)."""
     t0 = time.time()
-    wav_dev, codes = tt.inference(
+    # FULL-MODEL TRACE: the entire model runs inside ttnn traces — SETUP trace (on-device
+    # conditioning mel + speaker encoder + prefill that seeds the KV cache), the DECODE-step trace
+    # captured once and replayed per token, and the VOCODER trace. Needs the fixed KV-cache length:
+    # prompt (cond perceiver latents = 32 + wrapped/padded text) + the decode budget.
+    prompt_len = 32 + wrapped.shape[1]
+    max_seq = -(-(prompt_len + args.max_tokens + 2) // TILE) * TILE
+    wav_dev, codes = tt.inference_fully_traced(
         wrapped,
         cond_wav,
         spk_wav_tt,
+        max_seq,
         max_new_tokens=args.max_tokens,
         temperature=args.temperature,
         top_k=args.top_k,
-        repetition_penalty=args.repetition_penalty,
         top_p=args.top_p,
+        repetition_penalty=args.repetition_penalty,
         min_new_tokens=args.min_tokens_resolved,
     )
     wav_np = ttnn.to_torch(wav_dev).float().reshape(-1).numpy()  # [T_out]
@@ -152,76 +159,30 @@ def main():
         "--text",
         # "can already" (not "can now"): "can now" is a /n/#/n/ nasal collision the vocoder
         # merges into "cannow/cannot" — "already" starts with a vowel and transcribes cleanly (CER 0.008).
-        default="Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy.",
+        default="Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey how are you doing?",
     )
-    ap.add_argument("--lang", default="en")
     ap.add_argument(
         "--ref-audio",
         default="reference.wav",
-        help="local WAV path or HF sample name. reference.wav scored best of the repo clips "
-        "(UTMOS 4.28 / CER 0.025 / SECS 0.70); en_sample.wav is the portable HF fallback.",
-    )
-    ap.add_argument(
-        "--ref-seconds",
-        type=int,
-        default=30,
-        help="reference audio used for conditioning (coqui gpt_cond_len=30). Split into 4s chunks "
-        "and averaged; a longer clean clip improves voice cloning. Short clips use a single window.",
-    )
-    ap.add_argument("--max-tokens", type=int, default=400, help="cap on audio codes (sampling usually stops earlier)")
-    ap.add_argument(
-        "--min-tokens",
-        type=int,
-        default=0,
-        help="floor on generated audio codes — STOP is suppressed below it. Default 0 = disabled "
-        "(matches HF; the [SPACE]-token fix removes the early-stop that this used to mask). Set "
-        "-1 for auto (~2x wrapped text len) or an explicit count only if a take still stops short.",
-    )
-    ap.add_argument(
-        "--num-outputs",
-        type=int,
-        default=1,
-        help="number of takes to generate; keeps the best (lowest CER vs the text, or code-diversity "
-        "if Whisper is unavailable). Default 1 matches HF/coqui num_gpt_outputs=1; set >1 to tame "
-        "run-to-run variance at Nx time cost.",
-    )
-    ap.add_argument(
-        "--temperature",
-        type=float,
-        default=0.65,
-        help="sampling temperature; 0 = greedy. 0.65 gives the most reliably-clean SINGLE take "
-        "(lower CER, no tail garble) with num-outputs=1; raise toward coqui's 0.75 for more "
-        "expressive prosody if you use best-of-N (--num-outputs>1) to reject the occasional bad draw.",
-    )
-    ap.add_argument("--top-k", type=int, default=50, help="top-k sampling cutoff")
-    ap.add_argument(
-        "--top-p",
-        type=float,
-        default=0.85,
-        help="nucleus (top-p) cutoff; XTTS uses 0.85. 1.0 disables it. Improves text alignment/intelligibility.",
-    )
-    ap.add_argument(
-        "--spk-seconds",
-        type=int,
-        default=8,
-        help="reference audio for the speaker-embedding path (separate from --ref-seconds): the "
-        "on-device speaker mel frontend reshapes samples in one shot and can't take very long "
-        "audio; the d-vector doesn't need >~8s. Kept small while conditioning uses the full clip.",
-    )
-    ap.add_argument("--repetition-penalty", type=float, default=5.0, help="repetition penalty (XTTS uses 5.0)")
-    ap.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="seed for on-device sampling (ttnn.manual_seed) so a run is reproducible; omit for random",
-    )
-    ap.add_argument("--output", default="generated/xtts_demo/xtts_demo.wav")
-    ap.add_argument(
-        "--write-torch-ref",
-        action="store_true",
-        help="also write the torch reference WAV for A/B (this does NOT set the voice; use --ref-audio for that)",
+        help="local WAV path or HF sample name (e.g. en_sample.wav) that sets the voice.",
     )
     args = ap.parse_args()
+
+    # ONLY --text and --ref-audio are exposed; everything else is fixed to the tuned XTTS-v2
+    # defaults so the demo runs full-model-traced with no other knobs.
+    args.lang = "en"
+    args.ref_seconds = 30  # conditioning window (coqui gpt_cond_len)
+    args.spk_seconds = 8  # speaker-embedding window (device mel frontend caps long audio)
+    args.max_tokens = 400  # cap on audio codes (sampling usually stops earlier)
+    args.min_tokens = 0  # STOP-suppression floor (0 = disabled, matches HF)
+    args.num_outputs = 1  # single take (coqui num_gpt_outputs=1)
+    args.temperature = 0.65  # sampling temperature (0 = greedy); 0.65 = cleanest single take
+    args.top_k = 50
+    args.top_p = 0.85  # nucleus cutoff (XTTS uses 0.85)
+    args.repetition_penalty = 5.0  # XTTS uses 5.0
+    args.seed = None
+    args.output = "generated/xtts_demo/xtts_demo.wav"
+    args.write_torch_ref = False
 
     from scipy.signal import resample_poly
 
