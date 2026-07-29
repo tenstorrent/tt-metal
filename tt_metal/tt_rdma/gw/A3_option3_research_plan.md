@@ -153,4 +153,51 @@ This is a fresh multi-hour build with its own DPACC build/iterate cycle — sche
 - **NEXT (native, event-driven):** P1 re-cast — CQE-hardware-triggered event handler, no doorbell, no poll,
   no Arm per frame. This is the production / lowest-latency form.
 
+## P1 EXECUTION RESULTS (2026-07-29) — ★★★ G1 SOLVED by `doca_dpa_device_extend`
+The stock reference sample **`/opt/mellanox/doca/samples/doca_dpa/dpa_verbs_initiator_target`** already
+implements the PF-DPA / SF-RoCE device split — and it works on this BF3. **G1 (the make-or-break HIGH-risk
+gate) is retired with NO co-location, NO mlxconfig, NO reboot.**
+
+The mechanism (host sample, `create_local_resources`, DOCA_ARCH_DPU path):
+```c
+open_doca_device(pf="mlx5_0", &pf_dev);                 // PF (DPA function, uplink p0 -> Blackhole)
+open_verbs_resources(sf="mlx5_2", &verbs_ctx,&pd,&dev); // SF (RoCE GID 10.99.0.1)  <-- QP lives here
+doca_dpa_create(pf_dev, &pf_dpa_ctx);                   // DPA context on the PF
+doca_dpa_device_extend(pf_dpa_ctx, dev/*SF*/, &dpa_ctx);// *** extends PF DPA onto the SF device ***
+create_verbs_qp(...set_send_dpa_completion / set_receive_dpa_completion...); // RC QP on SF, CQ -> DPA
+```
+`doca_dpa_device_extend` is the official DOCA API that lets a **PF-hosted DPA drive an SF device's RC QP
+completions** — exactly the hybrid the plan hoped for (cf. the `flexio_qp_create(process, ibv_ctx=SF)` idea,
+but at the clean DOCA layer). This dissolves the entire P2 co-location risk.
+
+### What is validated on silicon
+- **Build:** stock sample DPACC-compiles + links on the **DPU Arm (aarch64)** and the **x86 host** (meson+ninja,
+  DOCA/DPACC 3.4.0112). Recipe: `cp -r /opt/mellanox/doca/samples ~/doca_samples; cp /opt/mellanox/doca/VERSION
+  ~/VERSION` (meson wants `../../../VERSION`), then `meson setup build . && ninja -C build`.
+- **G1 chain:** DPU target reaches `connect_verbs_qp` — i.e. `doca_dpa_device_extend` + `create_verbs_qp`
+  (with DPA send/recv completions) on the **SF** + OOB param exchange all SUCCEEDED. The extended-DPA/SF-QP
+  binding is real.
+- **Device map (this BF3):** mlx5_0 = PF0 (DPA, uplink p0→BH); mlx5_1 = PF1; **mlx5_2 = port-0 SF
+  (10.99.0.1, RoCEv2 gid idx1)**; mlx5_3 = port-1 SF (10.99.0.2, gid idx1). Host: mlx5_0 = enp193s0f0np0 =
+  10.99.0.10 (RoCEv2 gid idx3), **host DPA `supported`** but PRM-process create needs root.
+
+### What is NOT yet shown (bench-harness limits, not DPA-path problems)
+- The `doca_dpa_dev_get_completion` **drain** with real traffic. Two harness blocks:
+  1. **RoCEv2 local loopback fails AH MAC resolution** (`ibv_create_ah ret=110 ETIMEDOUT`, "get remote MAC")
+     — two SFs on one host in one subnet route locally, so no wire MAC path (neighbors 10.99.0.1↔10.99.0.2 =
+     FAILED; but 10.99.0.10 host over the wire = resolved). Expected RoCE self/local-loopback limit.
+  2. **Host-side DPA needs root** (`flexio_prm_create_process Status 0x5`); desktop-0 sudo for arbitrary
+     binaries is password-gated (only ib_write_bw/ib_send_bw/ip/ethtool… are NOPASSWD).
+- **Unblock = a matched plain-ibverbs requester** (no DPA, no root — verbs is world-rw on the host) speaking
+  the sample's trivial OOB (send/recv: buff_addr u64, rkey u32, qpn u32, gid.raw 16B; RTR mtu=1K psn=0
+  RoCEv2, ack_to=14 retry=7). This is SIMPLER for the re-head target (external side just posts WRITE_IMM/SEND,
+  no ping-pong back) and is the requester P1.4 needs anyway. → task P1.5.
+
+### Next (P1.4 + P1.5, one unit)
+Adapt `target_thread_kernel`: on each recv completion build the 46B TT-RDMA header + A4 2-seg gather-egress
+`[hdr]+[landed payload]` on an **ETH SQ** to the BH (landing MR in DPA-private DDR), re-post recv, ack. Add the
+ETH SQ + TX→vport steering (from the packet_processor patch / `dpa_ttblast`). Drive with the P1.5 requester
+(host WRITE_IMM → DPU SF → DPA re-head → p0 → BH pool byte-exact), then N target threads on N EUs
+(`FLEXIO_AFFINITY_STRICT`) for ~146G, measuring latency vs the A3.3b doorbell path.
+
 _Companion: [[tt-rdma-dpa-rehead-plan]] (chronological), `gw/A3_rehead_plan.md` (the doorbell path + E2E)._
