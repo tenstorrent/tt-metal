@@ -14,22 +14,11 @@ shared the first core's allocation, which is silently wrong whenever those addre
 no op under ttnn/cpp/ttnn/operations resolves per-core addresses.
 """
 
-import os
-
 import pytest
 import torch
 
 import ttnn
-
-
-@pytest.fixture(scope="function")
-def per_core_mesh():
-    """1x1 mesh with HYBRID allocator mode, which per-core allocation requires."""
-    os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
-    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
-    yield mesh
-    ttnn.close_mesh_device(mesh)
-    os.environ.pop("TT_METAL_ALLOCATOR_MODE_HYBRID", None)
+from conftest import requires_hybrid_allocator
 
 
 def _width_sharded_config(grid_start, grid_end, shard_shape, per_core):
@@ -44,7 +33,8 @@ def _width_sharded_config(grid_start, grid_end, shard_shape, per_core):
     return mem_config
 
 
-def test_op_rejects_per_core_input(per_core_mesh, expect_error):
+@requires_hybrid_allocator
+def test_op_rejects_per_core_input(per_core_mesh_device, expect_error):
     """Handing a per-core tensor to an op that has not opted in must fail loudly."""
     mem_config = _width_sharded_config((0, 0), (7, 0), (512, 32), per_core=True)
     torch_input = torch.randn(512, 32 * 8, dtype=torch.bfloat16)
@@ -54,8 +44,8 @@ def test_op_rejects_per_core_input(per_core_mesh, expect_error):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh),
-        device=per_core_mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+        device=per_core_mesh_device,
     )
     assert row_major.is_per_core_allocated(), "precondition failed: ROW_MAJOR input is not per-core"
 
@@ -63,7 +53,8 @@ def test_op_rejects_per_core_input(per_core_mesh, expect_error):
         ttnn.tilize(row_major, memory_config=mem_config)
 
 
-def test_lockstep_input_unaffected(per_core_mesh):
+@requires_hybrid_allocator
+def test_lockstep_input_unaffected(per_core_mesh_device):
     """The check must be inert for ordinary lockstep tensors."""
     lockstep_config = _width_sharded_config((0, 0), (7, 0), (512, 32), per_core=False)
     torch_input = torch.randn(512, 32 * 8, dtype=torch.bfloat16)
@@ -73,8 +64,8 @@ def test_lockstep_input_unaffected(per_core_mesh):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=lockstep_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh),
-        device=per_core_mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+        device=per_core_mesh_device,
     )
 
     tiled = ttnn.tilize(row_major, memory_config=lockstep_config)

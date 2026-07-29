@@ -77,8 +77,9 @@ using ::tt::tt_metal::program_cache::detail::ProgramCacheKey;
 // Only inputs are checked here. Checking the requested *output* memory config would mean walking
 // operation_attributes, and ttsl::reflection's visitor throws on any leaf that is neither the
 // target type nor reflectable (reflection.hpp:696) -- fine for tensor_args, which holds nothing
-// but tensors, but not for attributes structs full of scalars. Ops that rebuild their output
-// MemoryConfig therefore still need their own guard; see the ones in tilize / untilize.
+// but tensors, but not for attributes structs full of scalars. An op that rebuilds its output
+// MemoryConfig from named fields can therefore still drop the per-core bit unnoticed; that is
+// tracked in #51482, and needs an input that is itself lockstep, which no current path produces.
 inline void reject_per_core_allocation(const Tensor& tensor, std::string_view operation_name) {
     if (!is_device_tensor(tensor) || !tensor.is_allocated()) {
         return;

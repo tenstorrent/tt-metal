@@ -31,6 +31,22 @@ def device(request):
 
 
 @pytest.fixture(scope="function")
+def per_core_mesh_device():
+    """Single-device 1x1 mesh with HYBRID allocator mode.
+
+    A mesh_mapper is what selects the on-device construction branch in
+    create_tt_tensor_from_host_data; the single-device path sends any sharded config to host
+    via is_data_transformation_required. Tests that need that branch therefore need a mesh,
+    but not more than one device -- unlike `mesh_device` below, which requires two.
+    """
+    os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
+    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
+    yield mesh
+    ttnn.close_mesh_device(mesh)
+    os.environ.pop("TT_METAL_ALLOCATOR_MODE_HYBRID", None)
+
+
+@pytest.fixture(scope="function")
 def mesh_device():
     """Function-scoped mesh device with HYBRID allocator mode for multi-device tests."""
     os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"

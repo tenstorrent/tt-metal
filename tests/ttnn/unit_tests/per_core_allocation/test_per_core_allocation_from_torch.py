@@ -14,28 +14,11 @@ per-core allocation, so the tensor is built on host and `to_device` applies the 
 memory config directly — no op in between.
 """
 
-import os
-
 import pytest
 import torch
 
 import ttnn
-
-
-@pytest.fixture(scope="function")
-def per_core_mesh():
-    """1x1 mesh with HYBRID allocator mode.
-
-    A mesh_mapper is what selects the on-device construction branch in
-    `create_tt_tensor_from_host_data`; the single-device path takes
-    `is_data_transformation_required` to host for any sharded config, so #51133 does not
-    reproduce there. A 1x1 mesh exercises the failing branch while still running on one device.
-    """
-    os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
-    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
-    yield mesh
-    ttnn.close_mesh_device(mesh)
-    os.environ.pop("TT_METAL_ALLOCATOR_MODE_HYBRID", None)
+from conftest import requires_hybrid_allocator
 
 
 def _per_core_width_sharded_config(grid_start, grid_end, shard_shape):
@@ -53,6 +36,7 @@ def _per_core_width_sharded_config(grid_start, grid_end, shard_shape):
 # range count are all irrelevant — the only thing that mattered was whether the shard was
 # small enough for has_sufficient_device_memory() to allow the on-device path. Grids here are
 # kept narrow so the test runs on any device, unlike the col-12 grids in the report.
+@requires_hybrid_allocator
 @pytest.mark.parametrize(
     "grid_start, grid_end, shard_shape",
     [
@@ -63,7 +47,7 @@ def _per_core_width_sharded_config(grid_start, grid_end, shard_shape):
     ],
     ids=["gate_mm_7168x32", "small_512x32", "four_cores", "two_rows"],
 )
-def test_from_torch_on_device_preserves_per_core_allocation(per_core_mesh, grid_start, grid_end, shard_shape):
+def test_from_torch_on_device_preserves_per_core_allocation(per_core_mesh_device, grid_start, grid_end, shard_shape):
     """from_torch(device=...) must honour a per-core memory config, not downgrade to lockstep."""
     num_cores = (grid_end[0] - grid_start[0] + 1) * (grid_end[1] - grid_start[1] + 1)
     mem_config = _per_core_width_sharded_config(grid_start, grid_end, shard_shape)
@@ -75,8 +59,8 @@ def test_from_torch_on_device_preserves_per_core_allocation(per_core_mesh, grid_
         layout=ttnn.TILE_LAYOUT,
         memory_config=mem_config,
         tile=ttnn.Tile((32, 32)),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh),
-        device=per_core_mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+        device=per_core_mesh_device,
     )
 
     assert tensor.is_per_core_allocated(), (
@@ -86,7 +70,8 @@ def test_from_torch_on_device_preserves_per_core_allocation(per_core_mesh, grid_
     assert torch.equal(ttnn.to_torch(tensor), torch_input), "from_torch corrupted the data"
 
 
-def test_from_torch_large_shard_still_per_core(per_core_mesh):
+@requires_hybrid_allocator
+def test_from_torch_large_shard_still_per_core(per_core_mesh_device):
     """A shard above the has_sufficient_device_memory() gate already worked; keep it working.
 
     This case took the host path on `main` and so was unaffected by #51133. It is here to catch
@@ -101,15 +86,16 @@ def test_from_torch_large_shard_still_per_core(per_core_mesh):
         layout=ttnn.TILE_LAYOUT,
         memory_config=mem_config,
         tile=ttnn.Tile((32, 32)),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh),
-        device=per_core_mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+        device=per_core_mesh_device,
     )
 
     assert tensor.is_per_core_allocated()
     assert torch.equal(ttnn.to_torch(tensor), torch_input)
 
 
-def test_from_torch_row_major_per_core_unaffected(per_core_mesh):
+@requires_hybrid_allocator
+def test_from_torch_row_major_per_core_unaffected(per_core_mesh_device):
     """ROW_MAJOR needs no layout conversion, so it always preserved the bit. Pin that."""
     mem_config = _per_core_width_sharded_config((0, 0), (7, 0), (512, 32))
     torch_input = torch.randn(512, 32 * 8, dtype=torch.bfloat16)
@@ -119,8 +105,8 @@ def test_from_torch_row_major_per_core_unaffected(per_core_mesh):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh),
-        device=per_core_mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+        device=per_core_mesh_device,
     )
 
     assert tensor.is_per_core_allocated()

@@ -183,6 +183,23 @@ TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
     SUCCEED();
 }
 
+// PerCoreAllocationAware gates whether launch() will accept a per-core allocated input. No op
+// declares supports_per_core_allocation today, so the accept path is otherwise never exercised --
+// a concept that could never match would look identical at runtime. Pin both directions here.
+namespace per_core_opt_in_test {
+struct NoDeclaration {};
+struct OptedIn {
+    static constexpr bool supports_per_core_allocation = true;
+};
+struct OptedOut {
+    static constexpr bool supports_per_core_allocation = false;
+};
+}  // namespace per_core_opt_in_test
+
+static_assert(!device_operation::PerCoreAllocationAware<per_core_opt_in_test::NoDeclaration>);
+static_assert(device_operation::PerCoreAllocationAware<per_core_opt_in_test::OptedIn>);
+static_assert(!device_operation::PerCoreAllocationAware<per_core_opt_in_test::OptedOut>);
+
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;
     EXPECT_EQ(
