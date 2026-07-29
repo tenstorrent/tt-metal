@@ -9,64 +9,57 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);        // batch_mean
-    uint32_t batch_var_addr = get_arg_val<uint32_t>(1);  // batch_var
-    uint32_t weight_addr = get_arg_val<uint32_t>(2);     // weight
-    uint32_t bias_addr = get_arg_val<uint32_t>(3);       // bias
-    uint32_t dst_addr = get_arg_val<uint32_t>(4);        // output
-    uint32_t start_tile_id = get_arg_val<uint32_t>(5);
-    uint32_t num_tiles = get_arg_val<uint32_t>(6);
-    uint32_t HtWt = get_arg_val<uint32_t>(7);
-    uint32_t n_stride = get_arg_val<uint32_t>(8);
-    uint32_t c_stride = get_arg_val<uint32_t>(9);
-    uint32_t N = get_arg_val<uint32_t>(10);
-    uint32_t C = get_arg_val<uint32_t>(11);
+    uint32_t start_tile_id = get_arg(args::start_tile_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t HtWt = get_arg(args::HtWt);
+    uint32_t n_stride = get_arg(args::n_stride);
+    uint32_t c_stride = get_arg(args::c_stride);
+    uint32_t N = get_arg(args::N);
+    uint32_t C = get_arg(args::C);
 
     constexpr uint32_t onetile = 1;
 
-    // batch_mean
-    constexpr bool weight_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr bool bias_has_value = get_compile_time_arg_val(1) == 1;
-    constexpr auto dfb_id_src = get_compile_time_arg_val(2);
-    constexpr auto dfb_id_dst = get_compile_time_arg_val(3);
-    constexpr auto dfb_id_batch_var = get_compile_time_arg_val(4);
-    constexpr auto dfb_id_weight = get_compile_time_arg_val(5);
-    constexpr auto dfb_id_bias = get_compile_time_arg_val(6);
-    constexpr auto src_args = TensorAccessorArgs<7>();
-    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-    constexpr auto batch_var_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
-    constexpr auto weight_args = TensorAccessorArgs<batch_var_args.next_compile_time_args_offset()>();
-    constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    constexpr bool batch_stat_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset()) == 1;
-    constexpr bool param_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset() + 1) == 1;
+    constexpr bool batch_stat_is_fp32 = get_arg(args::batch_stat_is_fp32) == 1;
+    constexpr bool param_is_fp32 = get_arg(args::param_is_fp32) == 1;
 
     Noc noc;
-    DataflowBuffer dfb_src(dfb_id_src);
-    DataflowBuffer dfb_dst(dfb_id_dst);
-    DataflowBuffer dfb_batch_var(dfb_id_batch_var);
-    DataflowBuffer dfb_weight(dfb_id_weight);
-    DataflowBuffer dfb_bias(dfb_id_bias);
+    DataflowBuffer dfb_src(dfb::batch_mean);
+    // The DFB this kernel drains. Bound to the compute kernel's output DFB, or — when the compute kernel
+    // typecasts its FP32 result down to the output dtype — to the writer-facing DFB it typecasts into. The
+    // host picks which; nothing here changes.
+    DataflowBuffer dfb_dst(dfb::dst);
+    DataflowBuffer dfb_batch_var(dfb::batch_var);
+    // weight / bias are bound (and allocated) on every path, so their entry size is always readable; only
+    // the tensors behind them, and the FIFO traffic, are conditional.
+    DataflowBuffer dfb_weight(dfb::weight);
+    DataflowBuffer dfb_bias(dfb::bias);
 
+    // batch_mean
     const uint32_t src_tile_bytes = dfb_src.get_entry_size();
-    const auto src = TensorAccessor(src_args, src_addr);
+    const auto src = TensorAccessor(tensor::batch_mean);
 
     // output
     const uint32_t dst_tile_bytes = dfb_dst.get_entry_size();
-    const auto dst = TensorAccessor(dst_args, dst_addr);
+    const auto dst = TensorAccessor(tensor::output);
 
     // batch_var
     const uint32_t batch_var_tile_bytes = dfb_batch_var.get_entry_size();
-    const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr);
+    const auto batch_var = TensorAccessor(tensor::batch_var);
 
+#ifdef WEIGHT_HAS_VALUE
     // weight
     const uint32_t weight_tile_bytes = dfb_weight.get_entry_size();
-    const auto weight = TensorAccessor(weight_args, weight_addr);
+    const auto weight = TensorAccessor(tensor::weight);
+#endif
 
+#ifdef BIAS_HAS_VALUE
     // bias
     const uint32_t bias_tile_bytes = dfb_bias.get_entry_size();
-    const auto bias = TensorAccessor(bias_args, bias_addr);
+    const auto bias = TensorAccessor(tensor::bias);
+#endif
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -104,7 +97,12 @@ void kernel_main() {
             }
             dfb_batch_var.push_back(onetile);
 
-            if constexpr (weight_has_value) {  // read a tile from weight tensor
+            // The weight / bias gates are preprocessor-level rather than `if constexpr`, because on the
+            // absent path there is no `tensor::weight` / `tensor::bias` token to name at all (the host
+            // declares no TensorParameter for an absent optional), and `if constexpr` still performs name
+            // lookup in its discarded branch.
+#ifdef WEIGHT_HAS_VALUE
+            {  // read a tile from weight tensor
                 dfb_weight.reserve_back(onetile);
                 noc.async_read(weight, dfb_weight, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
@@ -115,8 +113,10 @@ void kernel_main() {
                 }
                 dfb_weight.push_back(onetile);
             }
+#endif
 
-            if constexpr (bias_has_value) {  // read a tile from bias tensor
+#ifdef BIAS_HAS_VALUE
+            {  // read a tile from bias tensor
                 dfb_bias.reserve_back(onetile);
                 noc.async_read(bias, dfb_bias, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
@@ -127,6 +127,7 @@ void kernel_main() {
                 }
                 dfb_bias.push_back(onetile);
             }
+#endif
 
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst

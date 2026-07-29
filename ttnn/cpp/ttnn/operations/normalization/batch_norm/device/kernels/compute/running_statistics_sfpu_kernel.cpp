@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt>
 ALWI void maybe_typecast_stat(
@@ -41,30 +42,52 @@ ALWI void maybe_typecast_stat(
     }
 }
 
-void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+// The writer-facing updated-stat DFBs, and whether each typecast step runs. Both are gated on the
+// preprocessor rather than a CTA: when a stat is not typecast the host binds no writer-facing DFB for it (the
+// writer drains the staging DFB directly, exactly as legacy's `writer_updated_m_cb = updated_m_cb`), so the
+// token does not exist — and `if constexpr` would still perform name lookup in its discarded branch. Each
+// #else alias is inert: every use of it sits under `if constexpr (NeedsTypecast)` inside maybe_typecast_stat.
+// The host emits each define as `<stat>_has_value && stat_format_needs_typecast`, which is the same predicate
+// the kernel used to derive from the two CTAs.
+#ifdef NEEDS_MEAN_TYPECAST
+constexpr bool k_needs_mean_typecast = true;
+constexpr auto k_dfb_writer_updated_mean = dfb::writer_updated_mean;
+#else
+constexpr bool k_needs_mean_typecast = false;
+constexpr auto k_dfb_writer_updated_mean = dfb::updated_running_mean;
+#endif
 
-    constexpr auto dfb_batch_mean = get_compile_time_arg_val(2);  // batch mean
-    constexpr auto dfb_batch_var = get_compile_time_arg_val(3);   // batch var
-    constexpr auto dfb_out0 = get_compile_time_arg_val(4);
-    constexpr auto dfb_old_running_mean = get_compile_time_arg_val(5);      // old running mean tensor
-    constexpr auto dfb_old_running_var = get_compile_time_arg_val(6);       // old running var tensor
-    constexpr auto dfb_updated_running_mean = get_compile_time_arg_val(7);  // updated running mean tensor
-    constexpr auto dfb_updated_running_var = get_compile_time_arg_val(8);   // updated running var tensor
-    constexpr auto dfb_momentum = get_compile_time_arg_val(9);              // momentum
-    constexpr auto dfb_one = get_compile_time_arg_val(10);                  // stores 1
-    constexpr auto dfb_tmp1 = get_compile_time_arg_val(11);                 // tmp 1
-    constexpr auto dfb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
-    constexpr auto dfb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
-    constexpr auto dfb_writer_updated_mean = get_compile_time_arg_val(14);  // writer-facing updated mean
-    constexpr auto dfb_writer_updated_var = get_compile_time_arg_val(15);   // writer-facing updated var
-    constexpr bool stat_needs_typecast = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(17);
-    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(18);
-    constexpr bool needs_mean_typecast = old_running_mean_has_value && stat_needs_typecast;
-    constexpr bool needs_var_typecast = old_running_var_has_value && stat_needs_typecast;
+#ifdef NEEDS_VAR_TYPECAST
+constexpr bool k_needs_var_typecast = true;
+constexpr auto k_dfb_writer_updated_var = dfb::writer_updated_var;
+#else
+constexpr bool k_needs_var_typecast = false;
+constexpr auto k_dfb_writer_updated_var = dfb::updated_running_var;
+#endif
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    constexpr uint32_t old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
+    constexpr uint32_t old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
+
+    constexpr auto dfb_batch_mean = dfb::batch_mean;  // batch mean
+    constexpr auto dfb_batch_var = dfb::batch_var;    // batch var
+    constexpr auto dfb_out0 = dfb::output;
+    constexpr auto dfb_old_running_mean = dfb::old_running_mean;          // old running mean tensor
+    constexpr auto dfb_old_running_var = dfb::old_running_var;            // old running var tensor
+    constexpr auto dfb_updated_running_mean = dfb::updated_running_mean;  // updated running mean tensor
+    constexpr auto dfb_updated_running_var = dfb::updated_running_var;    // updated running var tensor
+    constexpr auto dfb_momentum = dfb::momentum;                          // momentum
+    constexpr auto dfb_one = dfb::one;                                    // stores 1
+    constexpr auto dfb_tmp1 = dfb::tmp1;                                  // tmp 1
+    constexpr auto dfb_tmp2 = dfb::tmp2;                                  // tmp 2
+    constexpr auto dfb_tmp3 = dfb::tmp3;                                  // tmp 3
+    constexpr auto dfb_writer_updated_mean = k_dfb_writer_updated_mean;   // writer-facing updated mean
+    constexpr auto dfb_writer_updated_var = k_dfb_writer_updated_var;     // writer-facing updated var
+    constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
+    constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
+    constexpr bool needs_mean_typecast = k_needs_mean_typecast;
+    constexpr bool needs_var_typecast = k_needs_var_typecast;
 
     DataflowBuffer dfb_batch_mean_obj(dfb_batch_mean);
     DataflowBuffer dfb_batch_var_obj(dfb_batch_var);

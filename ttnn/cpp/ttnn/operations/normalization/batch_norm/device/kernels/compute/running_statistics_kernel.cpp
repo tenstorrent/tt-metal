@@ -7,24 +7,25 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/dest_format_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    constexpr uint32_t old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
+    constexpr uint32_t old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
 
-    constexpr auto dfb_batch_mean = get_compile_time_arg_val(2);  // batch mean
-    constexpr auto dfb_batch_var = get_compile_time_arg_val(3);   // batch var
-    constexpr auto dfb_out0 = get_compile_time_arg_val(4);
-    constexpr auto dfb_old_running_mean = get_compile_time_arg_val(5);      // old running mean tensor
-    constexpr auto dfb_old_running_var = get_compile_time_arg_val(6);       // old running var tensor
-    constexpr auto dfb_updated_running_mean = get_compile_time_arg_val(7);  // updated running mean tensor
-    constexpr auto dfb_updated_running_var = get_compile_time_arg_val(8);   // updated running var tensor
-    constexpr auto dfb_momentum = get_compile_time_arg_val(9);              // momentum
-    constexpr auto dfb_one = get_compile_time_arg_val(10);                  // stores 1
-    constexpr auto dfb_tmp1 = get_compile_time_arg_val(11);                 // tmp 1
-    constexpr auto dfb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
-    constexpr auto dfb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
+    constexpr auto dfb_batch_mean = dfb::batch_mean;  // batch mean
+    constexpr auto dfb_batch_var = dfb::batch_var;    // batch var
+    constexpr auto dfb_out0 = dfb::output;
+    constexpr auto dfb_old_running_mean = dfb::old_running_mean;          // old running mean tensor
+    constexpr auto dfb_old_running_var = dfb::old_running_var;            // old running var tensor
+    constexpr auto dfb_updated_running_mean = dfb::updated_running_mean;  // updated running mean tensor
+    constexpr auto dfb_updated_running_var = dfb::updated_running_var;    // updated running var tensor
+    constexpr auto dfb_momentum = dfb::momentum;                          // momentum
+    constexpr auto dfb_one = dfb::one;                                    // stores 1
+    constexpr auto dfb_tmp1 = dfb::tmp1;                                  // tmp 1
+    constexpr auto dfb_tmp2 = dfb::tmp2;                                  // tmp 2
+    constexpr auto dfb_tmp3 = dfb::tmp3;                                  // tmp 3
 
     DataflowBuffer dfb_out0_obj(dfb_out0);
     DataflowBuffer dfb_momentum_obj(dfb_momentum);

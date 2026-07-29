@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 ALWI void batchnorm_bcast_tiles(
     uint32_t dfb_bcast,
@@ -136,37 +137,32 @@ ALWI void batchnorm_bcast_tiles(
 }
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t tile_freq = get_arg_val<uint32_t>(1);
-    uint32_t tile_start = get_arg_val<uint32_t>(2);
-    constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t tile_freq = get_arg(args::tile_freq);
+    uint32_t tile_start = get_arg(args::tile_start);
+    constexpr uint32_t weight_has_value = get_arg(args::weight_has_value) == 1;
+    constexpr uint32_t bias_has_value = get_arg(args::bias_has_value) == 1;
 
     if (num_tiles == 0) {
         return;
     }
 
-    constexpr auto dfb_input = get_compile_time_arg_val(2);       // input
-    constexpr auto dfb_batch_mean = get_compile_time_arg_val(3);  // batch_mean
-    constexpr auto dfb_output_0 =
-        get_compile_time_arg_val(4);  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    constexpr auto dfb_batch_var = get_compile_time_arg_val(5);  // batch_var
-    constexpr auto dfb_eps = get_compile_time_arg_val(6);        // eps
-    constexpr auto dfb_den = get_compile_time_arg_val(7);        // 1/(sqrt(batch_var + eps))
-    constexpr auto dfb_weight = get_compile_time_arg_val(8);     // weight tensor
-    constexpr auto dfb_tmp_1 = get_compile_time_arg_val(9);      // (input - batch_mean)/(sqrt(batch_var + eps))
-    constexpr auto dfb_bias = get_compile_time_arg_val(10);      // bias tensor
+    // The DFBs this kernel binds, and what each holds:
+    //   dfb::input      — input                dfb::batch_mean — batch_mean       dfb::batch_var — batch_var
+    //   dfb::eps        — eps                  dfb::weight     — weight tensor    dfb::bias      — bias tensor
+    //   dfb::den        — 1/(sqrt(batch_var + eps))
+    //   dfb::temp_1     — (input - batch_mean)/(sqrt(batch_var + eps))
+    //   dfb::output     — output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
+    auto dfb_bcast = dfb::batch_mean;
+    auto dfb_other = dfb::input;
 
-    auto dfb_bcast = dfb_batch_mean;
-    auto dfb_other = dfb_input;
-
-    binary_op_init_common(dfb_other, dfb_bcast, dfb_output_0);
+    binary_op_init_common(dfb_other, dfb_bcast, dfb::output);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     constexpr uint32_t onetile = 1;
-    DataflowBuffer dfb_eps_obj(dfb_eps);
+    DataflowBuffer dfb_eps_obj(dfb::eps);
     dfb_eps_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
@@ -175,13 +171,13 @@ void kernel_main() {
             dfb_other,
             tile_freq,
             tile_start,
-            dfb_batch_var,
-            dfb_eps,
-            dfb_den,
-            dfb_weight,
-            dfb_bias,
-            dfb_tmp_1,
-            dfb_output_0,
+            dfb::batch_var,
+            dfb::eps,
+            dfb::den,
+            dfb::weight,
+            dfb::bias,
+            dfb::temp_1,
+            dfb::output,
             weight_has_value,
             bias_has_value);
     }
@@ -191,13 +187,13 @@ void kernel_main() {
             dfb_other,
             remaining_iterations,
             tile_start,
-            dfb_batch_var,
-            dfb_eps,
-            dfb_den,
-            dfb_weight,
-            dfb_bias,
-            dfb_tmp_1,
-            dfb_output_0,
+            dfb::batch_var,
+            dfb::eps,
+            dfb::den,
+            dfb::weight,
+            dfb::bias,
+            dfb::temp_1,
+            dfb::output,
             weight_has_value,
             bias_has_value);
     }
