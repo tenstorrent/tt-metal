@@ -1,0 +1,13 @@
+{
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "layer": 0,
+  "attention_weight_dtype": "bfp4",
+  "dense_gate_up_dtype": "bfp4",
+  "dense_down_dtype": "bfp4",
+  "kv_cache_dtype": "bf16",
+  "position": 0,
+  "pcc": 0.9876854888492783,
+  "threshold": 0.995,
+  "result": "fail",
+  "command": "temporary precision-candidate parameterization of test_real_weight_dense_decode_precision_candidates"
+}

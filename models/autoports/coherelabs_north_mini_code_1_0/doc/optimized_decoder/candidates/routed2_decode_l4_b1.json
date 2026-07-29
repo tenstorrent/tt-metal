@@ -1,0 +1,31 @@
+{
+  "mean_ms": 2.4507503025233746,
+  "min_ms": 2.448159269988537,
+  "samples_ms": [
+    2.4527674540877342,
+    2.451205626130104,
+    2.451636828482151,
+    2.4509653449058533,
+    2.450653351843357,
+    2.449292689561844,
+    2.450292930006981,
+    2.448159269988537,
+    2.451314590871334,
+    2.45121493935585
+  ],
+  "implementation": "OptimizedDecoder",
+  "mode": "decode",
+  "batch": 1,
+  "sequence": 128,
+  "layer": 4,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "dense_decode_variant": "auto",
+  "dense_gate_up_in0_block_w": 8,
+  "dense_down_in0_block_w": 12,
+  "sparse_weight_dtype": "bfp8",
+  "sparse_cores": 11,
+  "sparse_gate_up_in0_block_w": 32,
+  "sparse_down_in0_block_w": 24,
+  "attention_weight_dtype": "bfp8",
+  "sparse_routed_chunk": 32
+}
