@@ -1606,6 +1606,12 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
     const PhysicalMultiMeshGraph& physical_graph,
     const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints) {
+    // EXPERIMENT: TT_TOPO_SAT_NO_MINHOST=1 skips the inter-mesh minimal-host objective entirely, so the solve is
+    // a plain embedding (any valid placement, hosts not minimized). Baseline for "how fast without minimization".
+    if (const char* e = std::getenv("TT_TOPO_SAT_NO_MINHOST"); e != nullptr && e[0] == '1') {
+        log_debug(tt::LogFabric, "TT_TOPO_SAT_NO_MINHOST=1: skipping inter-mesh minimal-host objective (plain embedding solve)");
+        return;
+    }
     if (config.hostname_to_asics.empty()) {
         return;
     }

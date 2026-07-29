@@ -210,6 +210,8 @@ void TopologySatSolver::configure_for_blocking_clause_enumeration() {
     (void)impl_->solver.set("ilb", 2);
 }
 
+bool TopologySatSolver::set_option(const std::string& name, int value) { return impl_->solver.set(name.c_str(), value); }
+
 TopologySatSolver::~TopologySatSolver() = default;
 
 TopologySatSolver::TopologySatSolver(TopologySatSolver&&) noexcept = default;

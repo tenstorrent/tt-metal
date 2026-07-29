@@ -65,6 +65,10 @@ struct TopologySatSolver {
      */
     void configure_for_blocking_clause_enumeration();
 
+    // Set a CaDiCaL option (e.g. "seed", "target"). Returns false if the option/value is rejected. Used by the
+    // Goal-1 base-embedding speedup experiments (TT_TOPO_SAT_SEED / TT_TOPO_SAT_FASTSAT). No-op-safe.
+    bool set_option(const std::string& name, int value);
+
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;
 

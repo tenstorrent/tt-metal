@@ -959,6 +959,88 @@ inline bool topology_sat_greedy_minhost_fill(
     return !best_mapping_out.empty();
 }
 
+// GOAL-1 base-embedding warm-start (TT_TOPO_SAT_BASE_WARMHINT=1). Construct a ring/line embedding by an
+// adjacency DFS (first-fit, NO host constraint — Goal 1 ignores minimization) and phase-hint it so CaDiCaL
+// branches toward it. Best-effort and always sound: phases are branching preferences only; partial or
+// imperfect hints never change correctness. Returns the number of phase hints applied.
+inline int topology_sat_apply_base_warmhint(
+    TopologySatSolver& solver, const TopologySatGraphView& graph_data, const TopologySatHardEncoding& enc) {
+    const size_t nt = graph_data.n_target;
+    const size_t ng = graph_data.n_global;
+    if (nt == 0) {
+        return 0;
+    }
+    std::vector<size_t> chosen(nt, SIZE_MAX);
+    std::vector<char> used(ng, 0);
+    auto g_adj = [&](size_t a, size_t b) {
+        const auto& adj = graph_data.global_adj_idx[a];
+        return std::binary_search(adj.begin(), adj.end(), b);
+    };
+    std::vector<size_t> order;
+    order.reserve(nt);
+    {
+        std::vector<char> seen(nt, 0);
+        for (size_t s = 0; s < nt; ++s) {
+            if (seen[s]) {
+                continue;
+            }
+            std::vector<size_t> st{s};
+            while (!st.empty()) {
+                const size_t u = st.back();
+                st.pop_back();
+                if (seen[u]) {
+                    continue;
+                }
+                seen[u] = 1;
+                order.push_back(u);
+                for (size_t v : graph_data.target_adj_idx[u]) {
+                    if (!seen[v]) {
+                        st.push_back(v);
+                    }
+                }
+            }
+        }
+    }
+    for (size_t t : order) {
+        const auto& globs = enc.allowed_global_idx[t];
+        long pick = -1;
+        for (size_t k = 0; k < globs.size(); ++k) {
+            const size_t g = globs[k];
+            if (used[g]) {
+                continue;
+            }
+            bool ok = true;
+            for (size_t tn : graph_data.target_adj_idx[t]) {
+                if (chosen[tn] == SIZE_MAX) {
+                    continue;
+                }
+                if (!g_adj(g, enc.allowed_global_idx[tn][chosen[tn]])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                pick = static_cast<long>(k);
+                break;
+            }
+        }
+        if (pick < 0) {
+            continue;  // dead-end for this target: leave unhinted (partial hint is still sound)
+        }
+        chosen[t] = static_cast<size_t>(pick);
+        used[globs[pick]] = 1;
+    }
+    int hints = 0;
+    for (size_t t = 0; t < nt; ++t) {
+        if (chosen[t] == SIZE_MAX) {
+            continue;
+        }
+        solver.phase(enc.assign_lit[t][chosen[t]]);
+        ++hints;
+    }
+    return hints;
+}
+
 // SOFT: minimize the number of occupied groups, best-effort. Takes one warm feasible solve, then descends an
 // assumable "at most (current-1)" budget under a per-step conflict cap, keeping the best (fewest-group) model.
 // Never turns a feasible instance UNSAT (step 1 is unconstrained). Writes the best mapping to best_mapping_out and
@@ -2267,6 +2349,18 @@ bool topology_sat_search(
     };
 
     auto solve_hard_only = [&](TopologySatSolver& solver, TopologySatHardEncoding& enc) -> bool {
+        // GOAL-1 base-embedding speedups (each env-gated, default off; independently toggleable):
+        //   TT_TOPO_SAT_SEED=N     -> CaDiCaL random seed (enables a seed portfolio; SAT time is seed-sensitive)
+        //   TT_TOPO_SAT_FASTSAT=1  -> bias CaDiCaL toward finding a model fast
+        // Set before encode() so they apply in CONFIGURING state. Rejected options are no-ops.
+        const long g1_seed = topology_sat_env_long("TT_TOPO_SAT_SEED", -1);
+        if (g1_seed >= 0) {
+            (void)solver.set_option("seed", static_cast<int>(g1_seed));
+        }
+        if (topology_sat_env_long("TT_TOPO_SAT_FASTSAT", 0) != 0) {
+            (void)solver.set_option("target", 2);
+            (void)solver.set_option("phase", 1);
+        }
         if (!topology_sat_encode_hard_constraints(
                 solver, graph_data, constraint_data, enc, validation_mode, quiet_mode)) {
             state.error_message = enc.trivial_reason.empty()
@@ -2278,6 +2372,18 @@ bool topology_sat_search(
                 log_error(tt::LogFabric, "{}", state.error_message);
             }
             return false;
+        }
+        // TT_TOPO_SAT_BASE_WARMHINT=1: phase-hint a greedy adjacency-walk embedding before the solve (Goal 1).
+        if (topology_sat_env_long("TT_TOPO_SAT_BASE_WARMHINT", 0) != 0) {
+            const auto t_wh = std::chrono::steady_clock::now();
+            const int h = topology_sat_apply_base_warmhint(solver, graph_data, enc);
+            if (!quiet_mode) {
+                log_debug(
+                    tt::LogFabric,
+                    "[topo-sat-profile] base.warmhint : {:.1f} ms ({} phase hints)",
+                    topology_sat_elapsed_ms(t_wh),
+                    h);
+            }
         }
         const int status = solve_with_symmetry_break(solver, enc);
         if (status != TopologySatSolver::kSat) {

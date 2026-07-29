@@ -86,3 +86,45 @@ optimal in ≤230 ms. The real minimal-host test is the **2x4 shape** (k_min < n
 **Recommendation:** eliminate the soft-descent loop; use **hardcap-only → skip-descent fallback**; fix greedy's
 traversal order (BFS→DFS) to unlock the ms-fast path on regular rings; treat 2x4 ≥112 as needing a
 non-SAT/structural approach.
+
+---
+
+## Hard-cap-only — per-size breakdown across host sizes (single solution, 150s cap)
+
+| shape | stage | SC16 (16h) | SC20 (20h) | SC36 (36h) |
+|---|---|---|---|---|
+| 2x4 | 16 | min 4h / 3ms | min 4h / 4ms | min 4h / 43ms |
+| 2x4 | 32 | non-min (fallback) | min 8h / 99ms | min 8h / 552ms |
+| 2x4 | 64 | min 16h / 59ms | min 16h / 10.8s | min 16h / 11.3s |
+| 2x4 | 80 | n/a | min 20h / 19.1s | ❌ NO SOLUTION |
+| 2x4 | 96 | n/a | n/a | min 24h / 36.8s |
+| 2x4 | 112 | n/a | n/a | ❌ NO SOLUTION |
+| 2x4 | 128 | n/a | n/a | ❌ NO SOLUTION |
+| 2x4 | 144 | n/a | n/a | ❌ NO SOLUTION |
+| 4x4 | 8 | ❌ NO SOLUTION (topology mismatch) | min 8h / 2ms | min 8h / 5ms |
+| 4x4 | 16 | ❌ NO SOLUTION (topology mismatch) | min 16h / 3ms | min 16h / 6ms |
+| 4x4 | 32 | ❌ NO SOLUTION (topology mismatch) | min 32h / 4ms | min 32h / 10ms |
+| 4x4 | 40–72 | n/a | (40 ok) | all min, ≤188ms |
+
+Zero-solution sizes (hardcap-only): 2x4-{80,112,128,144} on SC36 (packing too hard); 4x4-{8,16,32} on SC16
+(topology mismatch — 4x4 mesh can't embed on the 16-host mock). n/a = pipeline ASIC count exceeds mock capacity.
+
+## Baseline: NO host minimization (plain embedding, one solution, SC36)
+
+TT_TOPO_SAT_NO_MINHOST=1 skips the minimal-host objective entirely (topology_mapper_utils.cpp). Isolates base
+embedding difficulty from packing difficulty.
+
+| stage | k_min | hosts used (non-min) | solve time |
+|---|---|---|---|
+| 16 | 4 | 5 | 8.7ms |
+| 32 | 8 | 12 | 15.6ms |
+| 64 | 16 | 23 | 32.2ms |
+| 80 | 20 | 29 | 42.6ms |
+| 96 | 24 | 32 | 90.8ms |
+| 112 | 28 | 36 | 63.2ms |
+| 128 | 32 | 36 | 128.5s |
+| 144 | 36 | – | TIMEOUT (150s) |
+
+Conclusion: for 2x4 up to 112 the base embedding is trivially easy (8-91ms) — so their hardcap-only timeouts
+are caused by the MINIMIZATION/packing, not the embedding (112: plain 63ms vs hardcap TMO). Only 128 (slow,
+128s) and 144 (full fill, timeout) are hard at the base-embedding level, as the cluster fills up.
