@@ -26,7 +26,7 @@ keeps failed experiments visible so they are not repeated unchanged.
 - Final correctness gate: 27/27 tests passed; focused TP output/recurrent
   state/convolution PCC was `0.999965/0.999910/0.999997`.
 
-The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
+The complete evidence is in `docs/bringup_log.md`, `ROOFLINE.md`, and
 `perf_report/codex-kda_perf_report.html`.
 
 ## Top three by maximum plausible reward
