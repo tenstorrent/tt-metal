@@ -1,0 +1,11 @@
+{
+  "single_pass_ms": 85.89362500060815,
+  "finite": true,
+  "mode": "prefill",
+  "batch": 1,
+  "context": 1025,
+  "layer": 1,
+  "layer_kind": "sliding_rope_moe",
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "kv_cache_bytes": 2099200
+}
