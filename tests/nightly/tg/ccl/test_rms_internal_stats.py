@@ -3,14 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Correctness of the cross-device E(x^2) averaging in ttnn.fused_rms_minimal (the rms_allgather op).
+The op-allocated stats scratch in ttnn.fused_rms_minimal (the rms_allgather op).
 
-The op computes a per-device E(x^2) partial, all-gathers the partials across cluster_axis and
-averages them for the global E(x^2). The number of partials averaged used to be inferred from the
-caller-provided stats buffer's tile width, so a 1-tile-wide buffer silently collapsed that count to
-1 and each device normalized by its own E(x^2). On near-homogeneous data every device's E(x^2) is
-roughly equal, so that is invisible; only heterogeneous per-device data exposes it. These tests give
-device d a hidden slice scaled by (d + 1), spreading E(x^2) by ~64x across 8 devices.
+fused_rms_minimal computes a per-device E(x^2) partial, all-gathers the partials across cluster_axis
+and averages them for the global E(x^2). The count of partials averaged used to be inferred from the
+caller-provided stats buffer's tile width, so a 1-tile-wide buffer silently collapsed it to 1 and
+each device normalized by its own E(x^2). The op now derives the count from ring_size and allocates
+the scratch itself when stats is omitted.
+
+Covered here:
+  * the averaging is correct across all devices on cluster_axis. Every device's E(x^2) is roughly
+    equal on near-homogeneous data, which is why the bug was invisible, so these tests scale device
+    d's hidden slice by (d + 1) to spread E(x^2) by ~64x and compare against both a full-hidden and
+    a per-device golden.
+  * the scratch survives program cache hits, where a fresh allocation must be repointed.
+  * the scratch survives trace capture and replay, which is the case the optional-stats change
+    exists for.
+  * a stats buffer too narrow per core is rejected rather than silently degraded.
 
 Requires a TG (8x4 wormhole_b0) galaxy.
 """
@@ -120,8 +129,14 @@ def build_heterogeneous_inputs(mesh_device, num_devices, hidden_size, seq_len, i
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_rms_heterogeneous_internal_stats(mesh_device, topology, function_level_defaults):
-    """Omitting stats lets the op allocate a correctly sized scratch, so the output matches the golden."""
+@pytest.mark.parametrize("num_iters", [3])
+def test_rms_heterogeneous_internal_stats(mesh_device, topology, num_iters, function_level_defaults):
+    """Omitting stats lets the op allocate a correctly sized scratch, so the output matches the golden.
+
+    Runs several iterations so that every call after the first is a program cache hit: the op-allocated
+    scratch is a fresh tensor each time, so override_runtime_arguments has to repoint both the writer's
+    stats address and the cb_stats CB. Outputs are held alive to keep the allocator moving between calls.
+    """
     num_devices = 8  # cluster_axis=0 -> 8 rows on the 8x4 mesh
     hidden_size = 896 * num_devices
     seq_len = 32
@@ -130,22 +145,118 @@ def test_rms_heterogeneous_internal_stats(mesh_device, topology, function_level_
 
     ctx = build_heterogeneous_inputs(mesh_device, num_devices, hidden_size, seq_len, input_shard_grid)
 
-    tt_out = ttnn.fused_rms_minimal(
-        ctx["input_tensor"],
-        ctx["layer_norm_config"],
-        0,  # cluster_axis
-        mesh_device,
-        ctx["semaphore"],
-        topology=topology,
-        memory_config=ctx["output_memory_config"],
-        epsilon=epsilon,
-        dtype=ttnn.bfloat16,
-        weight=ctx["gamma_tensor"],
-        residual_input_tensor=None,
-        stats=None,  # op allocates its own stats scratch
-        use_noc1_only=False,
-    )
+    golden = get_torch_rms(ctx["x_torch"], ctx["gamma_torch"], epsilon)
+    golden_per_device = get_torch_rms_per_device(ctx["x_torch"], ctx["gamma_torch"], epsilon, num_devices)
+
+    outputs = []
+    cache_entries = []
+    for i in range(num_iters):
+        outputs.append(
+            ttnn.fused_rms_minimal(
+                ctx["input_tensor"],
+                ctx["layer_norm_config"],
+                0,  # cluster_axis
+                mesh_device,
+                ctx["semaphore"],
+                topology=topology,
+                memory_config=ctx["output_memory_config"],
+                epsilon=epsilon,
+                dtype=ttnn.bfloat16,
+                weight=ctx["gamma_tensor"],
+                residual_input_tensor=None,
+                stats=None,  # op allocates its own stats scratch
+                use_noc1_only=False,
+            )
+        )
+        cache_entries.append(mesh_device.num_program_cache_entries())
     ttnn.synchronize_device(mesh_device)
+
+    # Every call after the first must reuse the cached program, which is what forces
+    # override_runtime_arguments to repoint the freshly allocated scratch. Without this the loop
+    # could silently be recompiling each time and never exercise that path.
+    logger.info(f"program cache entries per iteration: {cache_entries}")
+    assert (
+        cache_entries[1:] == cache_entries[:-1]
+    ), f"expected program cache hits after the first call, but entry count grew: {cache_entries}"
+
+    for i, tt_out in enumerate(outputs):
+        tt_out_torch = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=(num_devices, 1)),
+        )[0].unsqueeze(0)
+
+        passing, output, pcc = comp_and_get_pcc(tt_out_torch, golden, 0.999)
+        _, _, pcc_per_device = comp_and_get_pcc(tt_out_torch, golden_per_device, 0.0)
+        logger.info(f"[iter {i}] PCC vs full-hidden golden: {pcc}, vs per-device golden: {pcc_per_device}")
+
+        assert passing, f"iter {i}: {output}"
+        # The two references are far apart on 64x-heterogeneous data, so tracking the full-hidden one is
+        # a decisive check that all devices on cluster_axis were averaged. There is no Python-visible
+        # device count to assert on directly.
+        assert pcc > pcc_per_device + 0.05, (
+            f"iter {i}: output is not clearly closer to the full-hidden golden ({pcc}) than to the "
+            f"single-device reference ({pcc_per_device}); cross-device averaging may have collapsed"
+        )
+
+    mesh_device.reset_sub_device_stall_group()
+
+
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 23887872, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("num_iters", [3])
+def test_rms_internal_stats_trace(mesh_device, topology, num_iters, function_level_defaults):
+    """The op-allocated scratch survives trace capture and replay.
+
+    This is the case the optional-stats change exists for: under trace the caller cannot allocate or
+    free anything, so the scratch is allocated during capture and the recorded program keeps its
+    address. Unlike the existing trace tests, this checks the output *after* execute_trace, so a stale
+    cb_stats/writer address or a scratch whose L1 was reissued between capture and replay would fail
+    here rather than pass silently.
+    """
+    num_devices = 8
+    hidden_size = 896 * num_devices
+    seq_len = 32
+    epsilon = 1e-6
+    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))})
+
+    ctx = build_heterogeneous_inputs(mesh_device, num_devices, hidden_size, seq_len, input_shard_grid)
+
+    def run_op():
+        return ttnn.fused_rms_minimal(
+            ctx["input_tensor"],
+            ctx["layer_norm_config"],
+            0,  # cluster_axis
+            mesh_device,
+            ctx["semaphore"],
+            topology=topology,
+            memory_config=ctx["output_memory_config"],
+            epsilon=epsilon,
+            dtype=ttnn.bfloat16,
+            weight=ctx["gamma_tensor"],
+            residual_input_tensor=None,
+            stats=None,  # op allocates its own stats scratch
+            use_noc1_only=False,
+        )
+
+    # Compile outside the trace so capture only records device commands.
+    run_op().deallocate(True)
+    ttnn.synchronize_device(mesh_device)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for _ in range(num_iters - 1):
+        run_op().deallocate(True)
+    tt_out = run_op()  # keep the last output alive so it can be read back after replay
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.release_trace(mesh_device, trace_id)
 
     tt_out_torch = ttnn.to_torch(
         tt_out,
@@ -157,15 +268,12 @@ def test_rms_heterogeneous_internal_stats(mesh_device, topology, function_level_
 
     passing, output, pcc = comp_and_get_pcc(tt_out_torch, golden, 0.999)
     _, _, pcc_per_device = comp_and_get_pcc(tt_out_torch, golden_per_device, 0.0)
-    logger.info(f"PCC vs full-hidden golden: {pcc}, vs per-device golden: {pcc_per_device}")
+    logger.info(f"[trace] PCC vs full-hidden golden: {pcc}, vs per-device golden: {pcc_per_device}")
 
     assert passing, output
-    # The two references are far apart on 64x-heterogeneous data, so tracking the full-hidden one is
-    # a decisive check that all devices on cluster_axis were averaged. There is no Python-visible
-    # device count to assert on directly.
     assert pcc > pcc_per_device + 0.05, (
-        f"output is not clearly closer to the full-hidden golden ({pcc}) than to the single-device "
-        f"reference ({pcc_per_device}); cross-device averaging may have collapsed to one device"
+        f"traced output is not clearly closer to the full-hidden golden ({pcc}) than to the "
+        f"single-device reference ({pcc_per_device}); cross-device averaging may have collapsed"
     )
 
     mesh_device.reset_sub_device_stall_group()
@@ -203,7 +311,7 @@ def test_rms_undersized_stats_rejected(mesh_device, topology, function_level_def
         ),
     )
 
-    with expect_error(RuntimeError, "requires a stats buffer at least ring_size"):
+    with expect_error(RuntimeError, "stats buffer of at least ring_size"):
         ttnn.fused_rms_minimal(
             ctx["input_tensor"],
             ctx["layer_norm_config"],
