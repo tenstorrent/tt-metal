@@ -48,11 +48,9 @@ class ReduceBlockMaxUnpacker(Unpacker):
         tile_x_in_block = f"({tile_x_abs} - {block.block_x})"
         dest_acc = config.dest_acc.cpp_enum_value
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
-        tiny_condition = f"({block.tile_id_global} == 0)"
         block_condition = f"(({tile_x_in_block}) % {ct_dim} == 0)"
         return (
-            f"if ((({tensor_shape}).num_faces_r_dim == 1 && {tiny_condition}) || "
-            f"(({tensor_shape}).num_faces_r_dim != 1 && {block_condition})) {{\n"
+            f"if ({block_condition}) {{\n"
             f"_llk_unpack_reduce_block_max_row_"
             f"<{ct_dim}, {block.tile_count_x}, {block.tile_count_y}, {dest_acc}>"
             f"({block.tile_id_global}, {block.tile_id_global}, "
