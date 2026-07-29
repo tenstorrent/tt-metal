@@ -2633,4 +2633,68 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PopulatesMeshNodeT
         << "At least one committed grouping should carry logical chip_id -> ASIC position pinning";
 }
 
+// PGD<->MGD matching receives MGD pinnings as many-to-many groups (same shape as TopologyMapper /
+// TopologyMappingConfig). Verify explicit corner all-to-all pinnings still commit PGD layouts with
+// mesh_node_to_asic_position populated.
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_WithManyToManyPinnings_StillCommitsPgdLayout) {
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_file_path)) << "PGD file not found: " << pgd_file_path;
+
+    const std::string mgd_text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology {
+            dims: [ 4, 4 ]
+            dim_types: [ LINE, LINE ]
+          }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+        pinnings {
+          logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+          logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+          logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+          logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+          physical_asic_position { tray_id: 1 asic_location: 1 }
+          physical_asic_position { tray_id: 2 asic_location: 1 }
+          physical_asic_position { tray_id: 3 asic_location: 1 }
+          physical_asic_position { tray_id: 4 asic_location: 1 }
+          physical_asic_position { tray_id: 1 asic_location: 5 }
+        }
+    )proto";
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with bh_galaxy_xyz_cluster_desc.yaml";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+    MeshGraphDescriptor mgd(mgd_text_proto);
+
+    const auto& pinning_groups = mgd.get_pinnings();
+    ASSERT_EQ(pinning_groups.size(), 1u);
+    ASSERT_EQ(pinning_groups[0].fabric_nodes.size(), 4u);
+    ASSERT_GE(pinning_groups[0].asic_positions.size(), 4u);
+
+    auto without_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+    auto with_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd, pinning_groups);
+
+    ASSERT_TRUE(without_pinnings.contains("MESH"));
+    ASSERT_TRUE(with_pinnings.contains("MESH"));
+    ASSERT_TRUE(with_pinnings.at("MESH").contains("M0"));
+    ASSERT_FALSE(with_pinnings.at("MESH").at("M0").empty())
+        << "PGD matching should succeed with many-to-many MGD pinnings";
+
+    for (const auto& grouping : with_pinnings.at("MESH").at("M0")) {
+        ASSERT_FALSE(grouping.mesh_node_to_asic_position.empty())
+            << "PGD-derived layout pinning must be populated for '" << grouping.name << "'";
+        EXPECT_EQ(grouping.mesh_node_to_asic_position.size(), 16u)
+            << "Committed PGD layout should cover all 16 logical chips";
+    }
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

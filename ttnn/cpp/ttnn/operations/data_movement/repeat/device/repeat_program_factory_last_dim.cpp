@@ -50,11 +50,11 @@ ProgramDescriptor RepeatProgramFactoryLastDim::create_descriptor(
     // Per-core page count so read/write start on page boundaries.
     const uint32_t number_of_pages = input_log_shape[-2];
     const uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
-    const uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + (source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
-                                   : (source_page_size_bytes & 0x7) == 0                    ? source_page_size_bytes * 2
-                                   : (source_page_size_bytes & 0x3) == 0                    ? source_page_size_bytes * 4
-                                   : (source_page_size_bytes & 0x1) == 0                    ? source_page_size_bytes * 8
-                                                                         : source_page_size_bytes * 16;
+    const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + ((source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
+                                   : (source_page_size_bytes & 0x7) == 0                       ? source_page_size_bytes * 2
+                                   : (source_page_size_bytes & 0x3) == 0                       ? source_page_size_bytes * 4
+                                   : (source_page_size_bytes & 0x1) == 0                       ? source_page_size_bytes * 8
+                                                                           : source_page_size_bytes * 16);
     constexpr uint32_t src0_cb_index = 0;
     constexpr uint32_t src1_cb_index = 1;
 
