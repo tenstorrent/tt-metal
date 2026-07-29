@@ -259,6 +259,45 @@ offline model so future analysis matches. 111/111 correctness tests pass.
 
 This shape is now **17.4% faster than at the start of the log** (92.2 -> 76.16 us).
 
+### TOP REMAINING LEVER (measured, specified, not yet built): the reduction chain is 9-14% deep
+
+We could never size the split-K reduction before, because deleting it makes every band write its own copy of
+the output (Pk times the output traffic) and that artefact swamped the result. Comparing "skip reduction AND
+output" against "skip output only" removes the artefact:
+
+| shape | wall | cost of the reduction chain | chain depth (Pk-1) |
+|---|---|---|---|
+| 512x6144x2304 | 109.8 | **14.3% (15.7 us)** | 11 |
+| 512x6144x4608 | 180.2 | **9.2% (16.6 us)** | 11 |
+| 256x2048x2048 | 38.8 | **12.7% (4.9 us)** | 3 |
+| 256x2048x6144 | 76.8 | 5.3% (4.0 us) | 3 |
+| 256x15360x768 | 87.5 | 2.6% (2.3 us) | 5 |
+
+This is now the biggest single item on the two highest-headroom shapes. The cost is a serial tail: with Pk=12
+the last partial sum has to travel 11 hops, and each hop is a 32 KB transfer plus an add on the receiving core
+(about 1.2 us per hop, which matches the 15.7 us measured).
+
+Fix with the best value/risk: a **meet-in-the-middle chain**. Today band 0 sends to 1, 1 to 2, ... 10 to 11,
+so the root is band 11 and the depth is 11. Instead let bands 0..5 flow up and bands 11..7 flow down, meeting
+at band 6 as the root: the critical path becomes 6 hops instead of 11, so roughly half the tail, worth an
+estimated 7-8 us (about 7%) on 512x6144x2304. A full fan-in-2 tree would reach depth 4 but is a much bigger
+change.
+
+Implementation notes for whoever picks this up:
+- The root must accept TWO incoming partials per sub-block. One semaphore is enough if the two senders write
+  to DIFFERENT cb_reduce slots and each increment it by one: the root waits for two increments, then adds both
+  known slots. That avoids the "single counter is fungible" trap that the old tree used two semaphores for.
+- cb_reduce has to grow from 2 slots to 4 (two per sub-block phase), which costs about 64 KB of L1 on
+  512x6144x2304 - affordable.
+- The reverse credit signal (redfree) needs to handle two senders per root.
+- Watch out: reassociating the sum means the result is PCC-equal but NOT bit-identical, so validate with PCC
+  plus a constant-input test (association-independent), exactly as the earlier tree/reduce-scatter work did.
+- Prior art: a fan-in-2 tree existed at commit dab66853bdc (227 lines over 4 files) before the production
+  cleanup removed it. It cannot be cherry-picked as-is because the diagnostic mechanism it used is gone, but
+  it is a useful reference. Its lesson also matters: the tree only pays when the reduction tail is EXPOSED.
+  Back then that was measured at Pk=4 where the chain is only 3 deep and it was neutral-to-negative. We have
+  now measured the tail exposed at 14.3% with Pk=12, which is a different regime.
+
 ## Total progress this session
 
 | shape | at log start | now | change |
