@@ -125,6 +125,8 @@ Result: core (0,0) 92% → **75%** busy, isl-256 276K → 246K cycles, **1.12× 
 | Full 11×10 grid (110 cores, 2 weight passes instead of 3 at isl-5120) | **hangs** | Top grid rows are needed by dispatch — wedged the board, needed `tt-smi -r`. |
 | Option B: strided-by-8 column ownership to get multi-tile reads with NO host relayout (GRID_X 8, 64 cores) | **rejected on paper, 0.87×** | Three independent problems. (a) `bank = (64k + gx) % 8 = gx` for every k, so each core is pinned to ONE DRAM bank and stuck on the `READ 1 DRAM` curve: 8 × 29.4 = 235 GB/s, *below* today's 310 (§7e). (b) 64 cores raise token work by 88/64 = 1.375×. (c) `per_core_N_d` 21→28 grows L1 by 390 KB against ~184 KB of headroom, forcing `per_core_M` 8→6 so isl-2048 goes 1→2 chunks and isl-5120 3→4. Also cannot be a runtime A/B switch, because CBs would have to be sized for the union of both modes. |
 
+| N weight senders per column, count-derived at RUNTIME (W=4 at isl<=512, 2 at <=1024, 1 above) | **rejected, 128: 167->280 us** | Implemented and measured on the staggered placement, i.e. with the weight-sender and x-sender sets disjoint — the reason the earlier attempt was dismissed. Still regressed: isl-128 167->280, isl-256 187->237, isl-512 252->282, isl-1024 309->323; isl>=2048 unchanged, which confirms the runtime switch itself worked (W=1 there). The per-block barrier PAIR — a ready counter over all GRID_Y members plus a gather over the W senders — costs ~3.6 us/block, swamping the ~28 us/chunk of multicast it saves. Two independent attempts, so this is settled. |
+
 ## 6. Secondary findings
 
 - **Compute is near HW peak**: 14.8 cycles per 32³ tile-MAC. matmul busy ≈ 1.35M cycles
@@ -320,7 +322,10 @@ rest 38.0.
 
 (An earlier draft of this table quoted 1.20x for A + 2 senders and 1.53x for the producer
 column. Both were optimistic: they used a 41 us weight-read floor instead of the correct
-bank-limited 65 us. Option B's row is gone -- see §7e.)
+bank-limited 65 us. Option B's row is gone -- see §7e. And per §10b the "+ 2 senders"
+rows are now known to be unachievable: the multi-sender split was implemented and
+regressed, so the multicast stays at 37.6 us/chunk and is ADDITIVE with the read.
+Treat the "A: multi-tile pages only" row as the realistic weight-side outcome.)
 
 Three things this settles:
 
@@ -369,3 +374,83 @@ Gotchas hit along the way:
   `--target ttnn` leaves the Python-visible `ttnn/ttnn/_ttnn.so` stale.
 - A killed pytest can wedge the chip (`Timeout waiting for physical cores`); recover with
   `tt-smi -r 0`.
+
+## 10. Implementation log (branch mbezulj/2607-routed-expert-dram)
+
+### 10a. LANDED: down-matmul ring padding (1.02x total, 1.08x at isl-128)
+
+The down matmul must cycle the FULL compile-time-MAX per_core_M ring through its
+partials CB — PACKER_L1_ACC needs push == drain == out_block_num_tiles so the write
+pointer wraps onto block 0's slots. But an out-of-bounds row only needs the pointer
+to ADVANCE; it needs no pack. So the K-loop now does a bare reserve_back/push_back
+for `sb_m >= m_subblocks` (ring wrap bit-identical, discipline preserved), and the
+final partials -> cb_out copy drains padding subblocks without copying or packing
+them, with the writer bounding its cb_out drain by the same runtime per_core_M.
+
+| ISL | before | after | |
+|---|---|---|---|
+| 128 | 179.6 | **166.9** | 1.08x |
+| 256 | 198.0 | **186.6** | 1.06x |
+| 512 | 256.5 | **251.9** | 1.02x |
+| 1024 | 328.9 | **308.8** | 1.07x |
+| 2048-5120 | | unchanged | 1.00-1.01x |
+| SUM | 4222.5 | **4149.2** | 1.02x |
+
+Zero change at per_core_M = 8 (no padding rows), exactly as predicted. This was a
+prerequisite: compute at per_core_M = 1 was ~85 us against a 73-80 us DRAM floor.
+
+### 10b. REJECTED: count-derived weight senders per column
+
+See section 5. Measured, reverted. **Consequence for every estimate in this doc:**
+the multicast is irreducible AND additive with the read, because one RISC issues
+both. So the per-chunk FIXED floor is **65 (read) + 37.6 (mcast) = 102.6 us**, not
+the 75 us section 8a assumed. That lowers the isl-256 ceiling from ~2.5x to about
+**1.25x from today / 1.5x from the original baseline**.
+
+### 10c. CONFIRMED BUT NOT LANDED: multi-tile weight pages (option A)
+
+Premise measured directly, by emulating option A's access pattern with no relayout
+at all: pages p, p+8, p+16, ... are contiguous inside one bank (aligned_page_size ==
+576 exactly), so a raw 3456 B read at page p fetches 6 tiles; stepping p by 11 per
+request rotates the bank the same way option A's page index would.
+
+| cores | req size | cy/req | per-core GB/s | aggregate GB/s |
+|---|---|---|---|---|
+| 11 | 576 B | 37.9 | 20.5 | 226 |
+| 11 | **3456 B** | 139.6 | **33.4** | **368** |
+| 88 | 576 B | 213.3 | 3.6 | 321 |
+| 88 | 3456 B | 986.2 | 4.7 | 416 |
+
+**1.63x on the weight read with the same 11 cores** — 24.77 MB at 368 GB/s = **67 us
+against today's 99.7**, matching the predicted bank floor. The request becomes
+data-bound (3456/64 = 54 cy of link time) instead of issue-bound. Worth ~1.09x on a
+total run and ~1.21x at isl-256.
+
+**Why it is not landed.** The required permutation is fully derived and needs no
+change to the buffer's page size — only to tile ORDER, and it fits inside the
+existing 2D tile grid (padded 64 -> 66 tile-cols, +3% weight bytes), so the mesh
+mapper and 4D shape survive. For core gx, K-row k, slice element n (col = 6*gx + n):
+
+```
+g = k * GRID_X + gx          # GRID_X = 11
+b = g % 8                    # NUM_DRAM_BANKS
+o = g / 8
+P = b + 48 * o + 8 * n       # target DRAM page index
+place logical tile (k, col) at tile-grid position (P / 66, P % 66)
+```
+
+This is a bijection onto [0, 224*66): page P has bank b and bank-offset 6o + n, so
+each (k, gx) group owns 6 CONSECUTIVE offsets within one bank — hence one 3456 B
+request — and consecutive g rotate the bank. The reader then issues one request per
+k at `gate_acc.get_noc_addr(b + 48*o)`, landing 6 tiles in the k-major/n-minor order
+cb_in1_gate already expects, so the compute kernel is untouched.
+
+The blocker is contract, not code. The weights are mesh-distributed and written to a
+**disk cache** in `_convert_and_cache_expert_weights`, so this layout would be baked
+into cached weight files and coupled to three op-internal facts: GRID_X = 11,
+per_core_N_gu = 6, and NUM_DRAM_BANKS = 8. Weights would need re-preparing per arch
+(Wormhole has a different bank count), and every other caller of the op
+(`test_swigluoai_routed_expert`, `test_routed_expert_bias`, the MoE tests) would need
+the same layout or a flag. That is a deployment decision, so it needs the op owner's
+call: relayout upstream and version the cache name, or add a
+`weights_bank_grouped` op attribute so the old layout stays the default.
