@@ -369,6 +369,32 @@ REGIMES = {
     ),
     "p_wide_short_4k_stg_off": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=0)),
     "x_wide_short_4k_stg": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=2)),
+    # Gate sweep: the read-side clustering exists whenever the tile-row is split by
+    # COLUMN (`n_w > 1`), so several cores read the SAME source pages in the same
+    # order. These two rows extend the sweep past `nt_h == 1`: chunk 16 at nt_h = 1,
+    # and nt_h = 2 (n_w = 32, so 32 cores share each row group).
+    "p_wide_short_32k_stg_off": dict(shape=(1, 1, 32, 32768), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=0)),
+    "n_wide_short_32k": dict(shape=(1, 1, 32, 32768), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=2)),
+    "p_wide_short_2row_stg_off": dict(shape=(1, 1, 64, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=0)),
+    "n_wide_short_2row": dict(shape=(1, 1, 64, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=2)),
+    # Can the stagger + re-blocking be combined? Re-blocking alone was 1.019 / 1.153
+    # (chunk 4 / 2) because the per-block sync floor grows ~400-500 ns per block; the
+    # question is whether the read/write overlap a second block buys is worth more
+    # once the banks are de-clustered.
+    "x_wide_short_chunk4_stg": dict(
+        shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, chunk_cap=4, levers=dict(r2b=0, b13=0, b8=0, stg=2)
+    ),
+    "x_wide_short_chunk2_stg": dict(
+        shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, chunk_cap=2, levers=dict(r2b=0, b13=0, b8=0, stg=2)
+    ),
+    # Rotation-modulus sweep: TILE_HW (32, the row-loop period) vs NUM_DRAM_BANKS (12,
+    # which makes the per-core starting bank perfectly uniform).
+    "x_wide_short_stg_mod12": dict(
+        shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, stagger_mod=12, levers=dict(r2b=0, stg=2)
+    ),
+    "x_wide_short_8k_stg_mod12": dict(
+        shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, stagger_mod=12, levers=dict(r2b=0, b13=0, stg=2)
+    ),
     "p_square_stg_off": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(stg=0)),
     "x_square_stg_read_only": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(stg=3)),
     "x_square_stg_write_only": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(stg=4)),
@@ -550,6 +576,28 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
                 f"wants {want} (ncores={plan['ncores']}, "
                 f"blocks_per_core={plan['blocks_per_core']})"
             )
+        # Refinement 2b. The fan-in path adds a staging window on top of both data
+        # CBs; assert its own budget so `PROPERTIES["bounded_cb"]` still means
+        # something on that path (piece_bytes is a constant in W).
+        if plan["fanin_mode"] == 1:
+            assert plan["cb_bytes_per_core"] <= tpd.L1_CB_BUDGET_FANIN_BYTES, (
+                f"fan-in CB budget violation on {name}: {plan['cb_bytes_per_core']} B/core "
+                f"> {tpd.L1_CB_BUDGET_FANIN_BYTES} B (piece={plan['piece_bytes']})"
+            )
+        # Refinement 2b: the shipped issue-order rotation must match the declared
+        # gate on every row that does not force the lever, so narrowing the gate
+        # (or a plan change that moves nt_h / chunk_wt) fails here.
+        if (spec.get("levers") or {}).get("stg", 1) == 1:
+            want_stg = tpd.stagger_pays(plan["ncores"], plan["nt_h"], plan["chunk_wt"])
+            if plan["chunk_wt"] == 1:
+                want_stg &= ~tpd.STAGGER_WRITE
+            if plan["fanin_mode"] or plan["split_read"] or plan["prefetch_blocks"] == 2 or plan["stateful_read"]:
+                want_stg = 0
+            assert plan["stagger"] == want_stg, (
+                f"stagger gate violation on {name}: stagger={plan['stagger']} but the "
+                f"gate wants {want_stg} (ncores={plan['ncores']}, nt_h={plan['nt_h']}, "
+                f"chunk_wt={plan['chunk_wt']})"
+            )
         if plan["prefetch_blocks"] == 2:
             assert (
                 plan["depth"] == tpd.PREFETCH_DEPTH
@@ -572,6 +620,7 @@ def test_bench_tilize(device):
         # A0 counterfactual rows force a core cap through the planner's sweep hook.
         tpd.CORE_CAP_OVERRIDE = spec.get("core_cap")
         tpd.CHUNK_CAP_OVERRIDE = spec.get("chunk_cap")
+        tpd.STAGGER_MOD_OVERRIDE = spec.get("stagger_mod")
         # Refinement-1c lever counterfactual rows (B13 stateful reads, C7 split
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
@@ -629,6 +678,7 @@ def test_bench_tilize(device):
             os.environ[f"TILIZE_LEVER_{key}"] = "1"
         tpd.CORE_CAP_OVERRIDE = None
         tpd.CHUNK_CAP_OVERRIDE = None
+        tpd.STAGGER_MOD_OVERRIDE = None
 
     arch = os.environ.get("ARCH_NAME", "unknown")
     lines = [

@@ -118,6 +118,10 @@ CORE_CAP_OVERRIDE = None
 # same core count. Refinement 2b uses it to sweep the read/write-overlap gate
 # (`chunk_blocks_pays`) without changing the shape. Never set in production.
 CHUNK_CAP_OVERRIDE = None
+# Sweep hook: Refinement 2b's read-rotation modulus. None => TILE_HW (the row-loop
+# period). The alternative worth sweeping is NUM_DRAM_BANKS, which makes the per-core
+# STARTING bank perfectly uniform instead of uniform-mod-32. Never set in production.
+STAGGER_MOD_OVERRIDE = None
 
 CB_RM_INPUT = 0
 # Refinement 2b staging buffer -- one `piece_bytes` window, allocated ONLY on the
@@ -318,16 +322,61 @@ L1_CB_BUDGET_FANIN_BYTES = 196608
 # the WRITE rotation is about a core's own run of consecutive output pages.
 STAGGER_READ = 1
 STAGGER_WRITE = 2
+# Both halves ship TOGETHER, because they are measured SUPERADDITIVE and neither is
+# worth much alone (in-run A/B, 7 rounds x 10 launches, CV <= 1.6 %):
+#
+#   shape            | chunk | read only | write only | BOTH
+#   -----------------|-------|-----------|------------|-------
+#   [1,1,32,16384]   |     8 |   0.992   |   0.985    | 0.929
+#   [1,1,32,8192]    |     4 |   0.993   |   0.924    | 0.897
+#
+# Mechanism (it explains the interaction): the instantaneous demand on a DRAM bank is
+# read demand PLUS write demand. Spreading only the reads leaves the writes piled on a
+# few banks, so the busiest bank -- which is what sets the time -- barely moves. Only
+# when both streams are spread does the per-bank load flatten.
+#
+# Where it pays -- the clause is `nt_h == 1`, i.e. EVERY core reads the SAME 32 source
+# pages (the width-split fan-in regime), plus a wide enough chunk:
+#
+#   shape            | nt_h | n_w | chunk | read B |    off ns |    stg ns | ratio
+#   -----------------|------|-----|-------|--------|-----------|-----------|-------
+#   [1,1,32,4096]    |    1 |  64 |     2 |  128 B |     4 989 |     4 972 | 0.997
+#   [1,1,32,8192]    |    1 |  64 |     4 |  256 B |     8 046 |     7 194 | 0.894
+#   [1,1,32,16384]   |    1 |  64 |     8 |  512 B |    13 433 |    12 543 | 0.934
+#   [1,1,32,32768]   |    1 |  64 |    16 | 1024 B |    25 394 |    23 820 | 0.938
+#   [1,1,64,16384]   |    2 |  32 |    16 | 1024 B |    24 669 |    24 447 | 0.991
+#   a_square         |   64 |   1 |    16 | 1024 B |    86 058 |    86 591 | 1.006
+#   d_tall_narrow    |   64 |   1 |     1 |   64 B |     3 609 |     3 627 | 1.005
+#   g_dram_to_sharded|   64 |   1 |    16 | 1024 B |    19 049 |    19 402 | 1.019
+#   e_square_fp32    |   64 |   1 |     8 | 1024 B |   182 908 |   183 178 | 1.001
+#
+# At `nt_h == 2` only half the grid shares each page set, which already halves the
+# clustering, and the win is gone (0.991). At `n_w == 1` each core reads its OWN rows,
+# so there is nothing to de-cluster and the rotation is neutral-to-slightly-negative.
+# `chunk_wt == 2` is measured neutral, so the chunk clause sits at 4.
+#
+# Also swept and REJECTED: rotating by NUM_DRAM_BANKS (12) instead of TILE_HW (32),
+# which makes the starting bank perfectly uniform -- 12 673 vs 12 480 (+1.5 %) and
+# 7 249 vs 7 155 (+1.3 %). The row-loop period wins; do not "improve" it to 12.
+STAGGER_MIN_CHUNK_WT = 4
 
 
-def stagger_pays(ncores: int, n_w: int, chunk_wt: int) -> int:
+def stagger_pays(ncores: int, nt_h: int, chunk_wt: int) -> int:
     """Refinement 2b gate: which halves of the issue-order rotation pay?
 
-    Returns a ``STAGGER_READ | STAGGER_WRITE`` bitmask. Clauses set by the device
-    sweep recorded in ``changelog.md`` § "Refinement 2b".
+    Returns a ``STAGGER_READ | STAGGER_WRITE`` bitmask. Three measured clauses, all
+    tabulated above:
+
+    1. more than one core -- a single core cannot cluster against itself.
+    2. ``nt_h == 1`` -- the width-split fan-in regime, where every core reads the
+       same source pages in the same order. Measured 0.894-0.938 there and
+       0.991-1.019 everywhere else.
+    3. ``chunk_wt >= STAGGER_MIN_CHUNK_WT`` -- at chunk 2 the rotation is neutral.
+
+    Both halves are returned together or not at all (they are superadditive).
     """
-    if ncores <= 1:
-        return 0  # one core cannot cluster against itself
+    if ncores <= 1 or nt_h != 1 or chunk_wt < STAGGER_MIN_CHUNK_WT:
+        return 0
     return STAGGER_READ | STAGGER_WRITE
 
 
@@ -493,17 +542,45 @@ def vc_spread_pays(ncores: int) -> bool:
 
 
 #
-# Refinement 2b payoff gate. Set by measurement -- see the sweep in the docstring.
-FANIN_MIN_READ_BYTES = 1
+# Refinement 2b payoff gate -- MEASURED, and the answer is NO. Three in-run A/B rows
+# on `b_wide_short` (7 rounds x 10 launches, CV <= 1.6 %):
+#
+#   variant                         |    ns | vs off | what it isolates
+#   --------------------------------|-------|--------|-------------------------------
+#   off (32 x 512 B strided reads)  | 13 461| 1.000  | the baseline
+#   PROBE: 1 x 16 384 B read, no    | 12 736| 0.946  | the read-side CEILING of this
+#     exchange (`fanin_mode == 2`)  |       |        | algorithm -- the most it can buy
+#   full 3-phase redistribution     | 18 574| 1.380  | + the L1 hop and the barrier
+#
+# and the one-sided DM ablation (TILIZE_SKIP_DM=2/3) says why, decisively:
+#
+#   leg                | off      | probe    | verdict
+#   -------------------|----------|----------|---------------------------------------
+#   read alone         | 5 966 ns | 5 985 ns | IDENTICAL -- a 32x bigger transaction
+#                      |          |          | moves the same bytes in the same time
+#   write alone        | 7 785 ns | 7 765 ns | untouched (as expected)
+#   compute+sync       | 2 226 ns | 1 684 ns | the whole probe gain is the 32 read
+#                      |          |          | ISSUES, not DRAM efficiency
+#
+# So the entry's premise -- that a 64-way *partial-page* fan-in costs DRAM bandwidth
+# -- is false on this hardware: 512 B slices of a shared 32 768 B page cost exactly
+# what 512 B whole pages cost. The 4.9 % ceiling the probe does show is issue
+# overhead, already below this entry's 14 % gate, and the redistribution's own L1 leg
+# (+4 676 ns) plus its 32-core barrier (+1 217 ns of sync) spend it three times over.
+#
+# The code stays so the verdict is re-measurable rather than a changelog claim
+# (`TILIZE_LEVER_R2B=2` forces it, `=3` runs the probe; both have permanent
+# `_bench_tilize.py` rows). The gate is identity-false on any reachable plan.
+FANIN_MIN_READ_BYTES = 1 << 30  # > any reachable chunk_row_bytes => OFF (refuted)
 FANIN_MIN_GROUPS = 1
 
 
 def fanin_pays(chunk_row_bytes: int, fanin_groups: int) -> bool:
     """Refinement 2b gate: is one extra L1 hop worth a 32x bigger DRAM read?
 
-    Structural preconditions are checked by the caller (this is only the payoff
-    question). The clauses are set by the device sweep recorded in
-    ``changelog.md`` § "Refinement 2b".
+    No — measured 1.380x SLOWER, and its own read-side probe shows the whole-page
+    read buys **zero** DRAM time (the table above ``FANIN_MIN_READ_BYTES``). Kept
+    identity-false so the counterfactual stays re-measurable.
     """
     return chunk_row_bytes >= FANIN_MIN_READ_BYTES and fanin_groups >= FANIN_MIN_GROUPS
 
@@ -1111,7 +1188,7 @@ def _plan_generic(
     elif stg == 4:
         stagger = STAGGER_WRITE
     else:
-        stagger = stagger_pays(ncores, n_w, chunk_wt)
+        stagger = stagger_pays(ncores, nt_h, chunk_wt)
     # The write rotation is a no-op with a single page per block; keep the plan value
     # honest so the bench column and the tests report what actually happens.
     if chunk_wt == 1:
@@ -1387,7 +1464,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 # Refinement 2b (arg 6): rotation of this core's 32 stick reads.
                 # Rotating by the work-unit index de-clusters the instantaneous bank
                 # demand; TILE_HW is the period of the row loop.
-                index % TILE_HW,
+                index % (STAGGER_MOD_OVERRIDE or TILE_HW) % TILE_HW,
             ]
             if fanin_mode:
                 # Refinement 2b. Work unit `index` lives in group `g` at slot `slot`;
