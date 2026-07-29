@@ -458,15 +458,14 @@ def test_sparse_tp_sharded_kv_matches_sp(mesh_device, device_params, variant, co
 
     # --- SP×TP-sharded (deduplicated) ---
     mla_tp = _build_mla_tp(config, weights, mesh_device, tp_shard_kv=True)
-    kvpe_tp = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    kvpe_tp = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_LEN,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
         tp_axis=TP_AXIS,  # dedup across TP
     )
     index_tp = init_kvpe_cache(
@@ -557,15 +556,14 @@ def test_sparse_tp_sharded_kv_matches_sp_multichunk(mesh_device, device_params, 
     hidden = torch.randn(1, MC_SEQ, config.hidden_size, dtype=torch.bfloat16)
 
     def _kvpe(tp_axis):
-        return init_kvpe_cache(
-            kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+        return init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=config,
             mesh_device=mesh_device,
             seq_len=MC_SEQ,
             mesh_shape=mesh_shape,
             sp_axis=SP_AXIS,
             num_kvpe_cache_layers=1,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
             tp_axis=tp_axis,
         )
 

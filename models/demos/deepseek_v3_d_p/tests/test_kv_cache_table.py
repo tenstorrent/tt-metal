@@ -885,15 +885,14 @@ def test_glm52_kv_cache_table(
     rope_tensors = rope.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=chunk_size_global)
 
     # KVPE cache: uncompressed bf16 + ROW_MAJOR (the format sparse_sdpa reads natively).
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Indexer key cache: caller-owned, block-cyclic bfp8 TILE, index_head_dim wide. GLM-5.2 cross-layer
@@ -980,7 +979,7 @@ def test_glm52_kv_cache_table(
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
+        tt_kvpe_cache=tt_kvpe_cache.storage,
         chunk_size_bytes=KVPE_CHUNK_SIZE_BYTES,
         num_users=1,
         config_id=KVPE_CONFIG_ID,
@@ -1002,7 +1001,7 @@ def test_glm52_kv_cache_table(
 
     # --- readback the MLA KVPE cache (config 0, bf16 ROW_MAJOR) ---
     tt_kvpe_cache_torch = ttnn.to_torch(
-        tt_kvpe_cache,
+        tt_kvpe_cache.storage,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.bfloat16)[:1, :1, :, :]
     kvpe_chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_head_dim]
