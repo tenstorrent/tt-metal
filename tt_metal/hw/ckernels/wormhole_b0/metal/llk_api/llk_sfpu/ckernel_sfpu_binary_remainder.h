@@ -385,7 +385,7 @@ inline void remainder_uint32_init() {
 
 template <bool APPROXIMATION_MODE>
 inline void remainder_binary_init() {
-    recip_init<APPROXIMATION_MODE, false, false>();
+    recip_init<DST_ACCUM_MODE, false>();
 }
 
 }  // namespace ckernel::sfpu

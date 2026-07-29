@@ -16,7 +16,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void recip_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, is_fp32_dest_acc_en, legacy_compat)));
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (is_fp32_dest_acc_en, legacy_compat)));
 }
 // clang-format off
 /**
@@ -40,7 +40,7 @@ ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_reciprocal,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/, legacy_compat),
+        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, legacy_compat),
         idst,
         vector_mode));
 }

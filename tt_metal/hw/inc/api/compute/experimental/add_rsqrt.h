@@ -20,7 +20,7 @@ namespace ckernel {
  * Initialize for add + rsqrt operation: result = rsqrt(x + addend)
  * Useful for operations like RMSNorm: rsqrt(variance + epsilon)
  */
-ALWI void add_rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::init_add_rsqrt, (APPROX))); }
+ALWI void add_rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::init_add_rsqrt, (DST_ACCUM_MODE))); }
 
 /**
  * Perform add + rsqrt operation: result = rsqrt(x + addend)
@@ -34,7 +34,7 @@ ALWI void add_rsqrt_tile(uint32_t idst, uint32_t addend) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_add_rsqrt,
-        (APPROX, ITERATIONS, DST_ACCUM_MODE, fast_and_approx),
+        (DST_ACCUM_MODE, ITERATIONS, fast_and_approx),
         idst,
         vec_mode,
         addend));

@@ -371,12 +371,10 @@ sfpi_inline void sfpu_reciprocal_init() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
 inline void calculate_reciprocal() {
     if constexpr (legacy_compat) {
-        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
-    } else if constexpr (APPROXIMATION_MODE) {
-        _calculate_reciprocal_fast_7b_(ITERATIONS);
+        _calculate_reciprocal_compat_<!is_fp32_dest_acc_en, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
     } else if constexpr (is_fp32_dest_acc_en) {
         _calculate_reciprocal_fast_24b_5c_(ITERATIONS);
     } else {
@@ -384,7 +382,7 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool legacy_compat = false>
+template <bool is_fp32_dest_acc_en, bool legacy_compat = false>
 void recip_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + reciprocal's ADDR_MOD_6 + counter
     // reset), then the op-specific reciprocal setup below -- one self-contained init, matching exp_init.
@@ -396,9 +394,7 @@ void recip_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
         sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
-        if constexpr (APPROXIMATION_MODE) {
-            _init_reciprocal_fast_7b_();
-        } else if constexpr (is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
             _init_reciprocal_fast_24b_5c_();
         } else {
             _init_reciprocal_fast_8b_3c_();

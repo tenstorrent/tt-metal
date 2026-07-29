@@ -76,16 +76,14 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     return y;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void _calculate_reciprocal_internal_(const int iterations) {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat out;
 
-        if constexpr (APPROXIMATION_MODE) {
-            out = sfpu_reciprocal_iter<0>(in);
-        } else if constexpr (is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
             out = sfpu_reciprocal_iter<2>(in);
         } else {
             out = sfpu_reciprocal_iter<1>(in);
@@ -110,16 +108,16 @@ sfpi_inline void sfpu_reciprocal_init() {
     sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
 inline void calculate_reciprocal() {
     if constexpr (legacy_compat) {
-        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
+        _calculate_reciprocal_compat_<!is_fp32_dest_acc_en, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
     } else {
-        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
+        _calculate_reciprocal_internal_<is_fp32_dest_acc_en, ITERATIONS>(ITERATIONS);
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /*maybe_unused*/, bool legacy_compat = false>
+template <bool is_fp32_dest_acc_en, bool legacy_compat = false>
 void recip_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its
@@ -129,7 +127,7 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<APPROXIMATION_MODE>();
+        sfpu_reciprocal_init<false>();
     }
 }
 

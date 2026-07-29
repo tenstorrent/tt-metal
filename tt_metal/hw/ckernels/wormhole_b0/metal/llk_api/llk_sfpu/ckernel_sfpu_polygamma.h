@@ -137,7 +137,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 template <bool APPROXIMATION_MODE>
 void polygamma_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    recip_init<APPROXIMATION_MODE, false, false>();
+    recip_init<DST_ACCUM_MODE, false>();
 }
 
 }  // namespace ckernel::sfpu

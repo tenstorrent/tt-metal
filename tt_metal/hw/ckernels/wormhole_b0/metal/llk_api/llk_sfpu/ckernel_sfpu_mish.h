@@ -81,7 +81,7 @@ template <bool APPROXIMATION_MODE>
 inline void mish_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // exp does not need an init
-    recip_init<APPROXIMATION_MODE, false, false>();
+    recip_init<DST_ACCUM_MODE, false>();
 }
 
 }  // namespace ckernel::sfpu

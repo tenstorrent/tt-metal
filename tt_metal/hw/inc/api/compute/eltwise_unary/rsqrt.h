@@ -17,7 +17,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = false>
 ALWI void rsqrt_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX, legacy_compat)));
+    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (DST_ACCUM_MODE, legacy_compat)));
 }
 
 // clang-format off
@@ -40,7 +40,7 @@ ALWI void rsqrt_tile(uint32_t idst) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_rsqrt,
-        (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en, FAST_APPROX, legacy_compat),
+        (is_fp32_dest_acc_en, 8 /* ITERATIONS */, FAST_APPROX, legacy_compat),
         idst,
         VectorMode::RC));
 }

@@ -97,32 +97,21 @@ inline void _calculate_sqrt_internal_() {
     }
 }
 
-template <
-    bool APPROXIMATION_MODE,
-    int ITERATIONS = 8,
-    bool fp32_dest_acc_en,
-    bool FAST_APPROX,
-    bool legacy_compat = false>
+template <bool fp32_dest_acc_en, int ITERATIONS = 8, bool FAST_APPROX = false>
 inline void calculate_sqrt() {
-    if constexpr (legacy_compat) {
-        _calculate_sqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(ITERATIONS);
-    } else {
-        _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, false, FAST_APPROX>();
-    }
+    _calculate_sqrt_internal_<!fp32_dest_acc_en, ITERATIONS, fp32_dest_acc_en, false, FAST_APPROX>();
 }
 
-template <bool APPROXIMATION_MODE, bool legacy_compat = false>
+template <bool fp32_dest_acc_en>
 void sqrt_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (!legacy_compat) {
-        if constexpr (APPROXIMATION_MODE) {
-            sfpi::vConstIntPrgm0 = 0x5f0b3892;
-            sfpi::vConstFloatPrgm1 = 1.89099014875f;
-        } else {
-            sfpi::vConstIntPrgm0 = 0x5f1110a0;
-            sfpi::vConstFloatPrgm1 = 2.2825186f;
-            sfpi::vConstFloatPrgm2 = 2.2533049f;
-        }
+    if constexpr (fp32_dest_acc_en) {
+        sfpi::vConstIntPrgm0 = 0x5f1110a0;
+        sfpi::vConstFloatPrgm1 = 2.2825186f;
+        sfpi::vConstFloatPrgm2 = 2.2533049f;
+    } else {
+        sfpi::vConstIntPrgm0 = 0x5f0b3892;
+        sfpi::vConstFloatPrgm1 = 1.89099014875f;
     }
 }
 
