@@ -31,7 +31,7 @@ _apply_production_env_defaults()
 import pytest  # noqa: E402
 import torch  # noqa: E402
 from models.experimental.pi0_5.tt.tt_pipeline.denoise_pipeline import perf_suffix_len
-from models.experimental.pi0_5.tt.tile_config import ACT_DTYPE, TILE_HEIGHT, from_torch_pi05
+from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, from_torch_pi05
 
 ttnn = pytest.importorskip("ttnn")
 
@@ -288,6 +288,25 @@ def _time_replay(submesh, forward_fn, x):
             ttnn.execute_trace(submesh, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(submesh)
             times.append((time.perf_counter() - t0) * 1e3)
+        # BACK-TO-BACK: N replays, ONE sync. The per-sample loop above pays a host round-trip on EVERY
+        # sample -- measured at ~20 us, i.e. 17% of its own number, and it is also the ~21 us window with
+        # no op active that shows up per iteration in the device timeline. Amortising the sync gives
+        # steady-state device time AND is ~15x more precise (+-0.3% vs +-4%), which matters because most
+        # of the tuning decisions in this pipeline are 1-4% effects.
+        import os as _os
+
+        if _os.environ.get("PI05_B2B", "1") == "1":
+            N = 50
+            ttnn.synchronize_device(submesh)
+            t0 = time.perf_counter()
+            for _ in range(N):
+                ttnn.execute_trace(submesh, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(submesh)
+            b2b = (time.perf_counter() - t0) * 1e3 / N
+            print(
+                f"\n[b2b] per-replay (amortised sync) = {b2b:.4f} ms   vs per-sample median = {statistics.median(times):.4f} ms"
+            )
+            return b2b
         return statistics.median(times)
     finally:
         try:
@@ -408,7 +427,7 @@ def test_l1_single_layer_pcc_phantom_mask(mesh_device):
     h_with = _torch_oracle(ref_blocks, hidden, adarms_cond, prefix_kv, phantom, cos, sin, suffix_len)
     h_without = _torch_oracle(ref_blocks, hidden, adarms_cond, prefix_kv, mask, cos, sin, suffix_len)
     a, b = h_with[:, :ah, :].float(), h_without[:, :ah, :].float()
-    rel = ((b - a).abs() / a.abs().clamp(min=1e-9))
+    rel = (b - a).abs() / a.abs().clamp(min=1e-9)
     print(
         f"\n[phantom-mask oracle] PCC(with,without)={_compute_pcc(a, b):.6f}  "
         f"mean|rel err|={rel.mean().item() * 100:.3f}%  max={rel.max().item() * 100:.3f}%"
@@ -427,7 +446,7 @@ def test_l1_single_layer_pcc_phantom_mask(mesh_device):
                 ttnn.deallocate(t)
             except Exception:
                 pass
-    rel_dev = ((h_dev - a).abs() / a.abs().clamp(min=1e-9))
+    rel_dev = (h_dev - a).abs() / a.abs().clamp(min=1e-9)
     pcc_dev = _compute_pcc(a, h_dev)
     print(
         f"[phantom-mask device] PCC(masked oracle, device)={pcc_dev:.6f}  "

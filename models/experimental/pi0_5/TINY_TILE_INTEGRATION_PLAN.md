@@ -723,3 +723,36 @@ verifiable with `test_l1_single_layer_pcc` + walltime):
 
 Keep the fused-norm path behind a compile-time flag defaulting OFF so the existing path is byte
 -identical until the A/B passes -- and remember runtime args are NOT free here (R9/R11: they cost 12%).
+
+---
+
+# Fusion re-measured with the accurate metric: CONFIRMED NEGATIVE
+
+Re-ran the adaRMS-norm fusion against the back-to-back (trace-replay, sync-amortised) metric, which is
+what trace+2CQ actually delivers in production -- the old per-sample metric paid a host round-trip on
+every sample and hid a 17% overhead inside its own number.
+
+| | b2b, 3 runs (ms) | median | 16-chip 2CQ e2e @3 cams |
+|---|---|---|---|
+| fusion OFF | 0.0972 / 0.0971 / 0.0974 | **0.0972** | 26.75-26.81 (median 26.78) |
+| fusion ON | 0.1028 / 0.1025 / 0.1025 | **0.1026** (+5.6%) | 27.03 (+0.93%) |
+
+Ranges do not overlap on either metric. **The fusion is genuinely a loss** -- it was not a measurement
+artifact, and the earlier verdict stands. Keep `PI05_FUSE_NORM` default off.
+
+**Useful calibration from this:** the prologue costs ~7.5 us and removing 2 ops bought back only ~2 us,
+so **removing an op from the dependency chain is worth ~1 us, not the ~3.7 us** originally hypothesised.
+That also means the ~14 us of device-side inter-op gaps is mostly dependency latency, NOT per-op launch
+cost, and cannot be reclaimed just by fusing ops together.
+
+## Measurement methodology (both metrics now precise -- use both, for different things)
+
+| metric | noise | per-layer sensitivity | use for |
+|---|---|---|---|
+| single-layer b2b (`PI05_B2B=1`, default) | **+-0.3%** | amplifies (the block IS the measurement) | per-layer optimization decisions |
+| 16-chip 2CQ e2e | **+-0.11%** (26.75-26.81 over 4 runs) | dilutes ~6x (denoise is ~33% of e2e, and 2CQ hides part of it) | final validation, anything touching L1 or global structure |
+
+Always use trace + 2CQ for the e2e number: it overlaps H2D on CQ1 with compute on CQ0, so host cost is
+hidden rather than measured, which is why it is both the ground truth and remarkably repeatable.
+Never judge a per-layer change on the old per-sample single-layer median: at +-4% it cannot see the
+1-4% effects that all of this pipeline's tuning decisions turn on.
