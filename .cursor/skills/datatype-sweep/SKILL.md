@@ -79,8 +79,10 @@ Use real weights and real recorded activations for fidelity decisions.
 Synthetic tensors may find crashes or layout bugs but cannot approve or veto a
 shipping precision policy by themselves.
 
-The production MoE is `tt/sparse_moe.py` true-sparse token gather. Sweep that
-path, not the retired dense-128 debug implementation.
+The production MoE is `tt/concat_moe.py` concat-experts for denoise and batched
+commit, and the ragged zero-drop path in `tt/sparse_moe.py` for prefill. Sweep
+those. The token-gather dispatch and the dense-128 debug implementation were
+both deleted on 2026-07-29 and are not sweepable arms.
 
 ## Context and capacity
 

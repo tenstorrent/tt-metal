@@ -45,7 +45,9 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 
 
-BASE_ENV = {"DG_SPARSE_MOE": "1", "DG_SPARSE_MOE_TUNED": "1"}
+# The DG_SPARSE_MOE / DG_SPARSE_MOE_TUNED pins that used to live here selected the token-gather
+# denoise MoE, which was deleted on 2026-07-29 (tt/concat_moe.py is the only denoise MoE now).
+BASE_ENV: dict[str, str] = {}
 TENSOR_DECISION_FIELDS = ("argmax", "sampled", "accept_mask", "canvas", "entropy")
 DECISION_FIELDS = (*TENSOR_DECISION_FIELDS, "commit_candidate")
 

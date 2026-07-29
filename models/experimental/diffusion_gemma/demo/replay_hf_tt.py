@@ -1230,8 +1230,9 @@ def _validate_stage_gate_args(args) -> None:
         raise ValueError("--stage-gate requires --mesh P150x4")
     if args.num_layers is not None:
         raise ValueError("--stage-gate requires the full model (omit --num-layers)")
-    if os.environ.get("DG_SPARSE_MOE", "0") != "1":
-        raise ValueError("--stage-gate requires the production sparse path (DG_SPARSE_MOE=1)")
+    # A DG_SPARSE_MOE=1 check used to sit here, so the gate could not be run on a reference MoE.
+    # The selectable MoE paths were deleted on 2026-07-29 (tt/concat_moe.py is the only denoise MoE),
+    # so there is no longer anything to assert — do not re-add a check on a flag that does nothing.
     if getattr(args, "hf_dtype", "bfloat16") != "bfloat16":
         raise ValueError("--stage-gate requires the bf16 HF reference (--hf-dtype bfloat16)")
 

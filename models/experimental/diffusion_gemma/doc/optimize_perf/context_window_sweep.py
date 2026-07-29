@@ -36,7 +36,6 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
     self_conditioning_logits_l1_mode,
 )
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
-from models.experimental.diffusion_gemma.tt.sparse_moe import tuned_configs_enabled
 
 CANVAS_LENGTH = 256
 NUM_BLOCKS = 2
@@ -116,12 +115,8 @@ def _validate_contract(args) -> None:
                 f"prompt {prompt_len} aligns to {aligned}; two committed blocks exceed "
                 f"max_seq_len={args.max_seq_len}"
             )
-    if not args.prefill_only and os.environ.get("DG_SPARSE_MOE") != "1":
-        raise ValueError("set DG_SPARSE_MOE=1 for the comparison contract")
     if not tuned_prefill_moe_enabled():
         raise ValueError("tuned prefill MoE must resolve enabled")
-    if not args.prefill_only and not tuned_configs_enabled():
-        raise ValueError("tuned sparse denoise MoE must resolve enabled")
 
 
 def run(args) -> dict:
@@ -156,8 +151,6 @@ def run(args) -> dict:
             name: os.environ.get(name, "<unset>")
             for name in (
                 "DG_PREFILL_MOE_TUNED",
-                "DG_SPARSE_MOE",
-                "DG_SPARSE_MOE_TUNED",
                 "DG_SELFCOND_PRECHUNK_EMBED",
                 "DG_SELFCOND_LOGITS_L1",
                 "DG_NORM_FULLCANVAS",
@@ -167,7 +160,6 @@ def run(args) -> dict:
         },
         "resolved_defaults": {
             "prefill_moe_tuned": tuned_prefill_moe_enabled(),
-            "sparse_moe_tuned": tuned_configs_enabled(),
             "batched_commit": True,
             "selfcond_prechunk": self_conditioning_embedding_prechunk_enabled(),
             "selfcond_logits_l1": self_conditioning_logits_l1_mode(),

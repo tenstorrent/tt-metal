@@ -13,7 +13,7 @@ the *identical bit-exact* layer-0 MoE input the device computed, and comparing:
   PCC(torch, batched-experts)   vs   PCC(torch, sequential-decode-experts)
 
 The higher one is the correct kernel. Batched uses ``moe.experts`` /
-``sparse_experts_forward`` (the CI-verified prefill MoE); sequential uses
+``concat_experts_forward`` (the denoise/commit MoE); sequential uses
 ``_commit_experts_decode_forward`` (decode ``sparse_matmul`` nnz=8, never verified).
 
 Runs a 2-layer model (layer 0 is the decisive, bit-exact-input layer).

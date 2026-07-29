@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
 from types import SimpleNamespace
 
 import pytest
@@ -455,104 +454,76 @@ def test_denoise_router_forward_uses_chunked_norm(monkeypatch):
     assert ("scatter", "zeros", -1, "topk-indices", "topk-normalized") in calls
 
 
-def test_denoise_sparse_moe_defaults_to_zero_drop_canvas_capacity(monkeypatch):
-    from models.experimental.diffusion_gemma.tt import sparse_moe
+def test_denoise_moe_is_unconditionally_the_concat_path(monkeypatch):
+    """No env var may route the denoise MoE anywhere but concat-experts.
 
-    monkeypatch.setenv("DG_SPARSE_MOE", "1")
-    monkeypatch.delenv("DG_SPARSE_MOE_CAPACITY", raising=False)
+    The token-gather capacity dispatch (``DG_SPARSE_MOE``) and the dense-128 reference behind it
+    (``DG_ALLOW_DENSE_MOE``) were deleted on 2026-07-29 along with the ``DG_MOE_CONCAT`` selector,
+    because the gather path leaves the denoise trajectory ~100x above the halt-entropy threshold —
+    no block settles and roughly two thirds of requests end degenerate. The exact combination that
+    used to select the dense reference is set here: it must now be inert, not a quiet route back.
+    """
+    monkeypatch.setenv("DG_MOE_CONCAT", "0")
+    monkeypatch.setenv("DG_SPARSE_MOE", "0")
+    monkeypatch.setenv("DG_ALLOW_DENSE_MOE", "1")
+
     dense_routing = _FakeTensor([1, 1, 256, 128])
-    expert_input = _FakeTensor([1, 1, 256, 2816])
+    monkeypatch.setattr(DF, "_denoise_router_forward", lambda router, hidden: dense_routing)
     calls = []
 
-    monkeypatch.setattr(DF, "_denoise_router_forward", lambda router, hidden: dense_routing)
+    def fake_concat_experts_forward(experts, hidden, routing):
+        calls.append((experts, hidden, routing))
+        return "concat-output"
 
-    def fake_sparse_experts_forward(experts, hidden, routing, *, capacity):
-        calls.append((experts, hidden, routing, capacity))
-        return "sparse-output"
-
-    monkeypatch.setattr(sparse_moe, "sparse_experts_forward", fake_sparse_experts_forward)
+    monkeypatch.setattr(DF, "concat_experts_forward", fake_concat_experts_forward)
     experts = object()
     moe = SimpleNamespace(router=object(), experts=experts)
+    expert_input = _FakeTensor([1, 1, 256, 2816])
 
-    assert DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), expert_input) == "sparse-output"
-    assert calls == [(experts, expert_input, dense_routing, 256)]
+    assert DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), expert_input) == "concat-output"
+    assert calls == [(experts, expert_input, dense_routing)]
     assert dense_routing.deallocated is True
 
 
-def test_denoise_moe_defaults_to_sparse_when_unset(monkeypatch):
-    """Optimized sparse MoE is the DEFAULT: unset DG_SPARSE_MOE => sparse path (not dense/error)."""
-    from models.experimental.diffusion_gemma.tt import sparse_moe
+def test_retired_moe_selectors_and_entry_points_stay_deleted():
+    """Pin the deletion itself, not just the current default.
 
-    monkeypatch.delenv("DG_SPARSE_MOE", raising=False)
-    monkeypatch.delenv("DG_SPARSE_MOE_CAPACITY", raising=False)
-    dense_routing = _FakeTensor([1, 1, 256, 128])
-    monkeypatch.setattr(DF, "_denoise_router_forward", lambda router, hidden: dense_routing)
-    monkeypatch.setattr(
-        sparse_moe, "sparse_experts_forward", lambda experts, hidden, routing, *, capacity: "sparse-output"
-    )
-    # The dense reference path must NOT be entered when the flag is unset.
-    monkeypatch.setattr(
-        DF,
-        "use_tanh_expert_activations",
-        lambda: (_ for _ in ()).throw(AssertionError("dense path must not run when DG_SPARSE_MOE is unset")),
-    )
-    moe = SimpleNamespace(router=object(), experts=object())
-    assert (
-        DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), _FakeTensor([1, 1, 256, 2816])) == "sparse-output"
-    )
+    A DiffusionGemma flag that quietly stops doing anything is a recurring failure here (a no-op
+    ``DG_TERMINAL_SHARDED``, a corrupting ``DG_VLLM_GUMBEL_MODE`` default that survived two weeks).
+    Reintroducing any of these names is a deliberate act that should have to delete this test.
+    """
+    from models.experimental.diffusion_gemma.tt import concat_moe, sparse_moe
+
+    for name in ("_sparse_moe_enabled", "_dense_moe_explicitly_allowed"):
+        assert not hasattr(DF, name), f"denoise_forward.{name} is back"
+    assert not hasattr(concat_moe, "concat_moe_enabled"), "the DG_MOE_CONCAT selector is back"
+    for name in ("sparse_experts_forward", "build_capacity_dispatch", "_batched_experts", "build_tuned_configs"):
+        assert not hasattr(sparse_moe, name), f"sparse_moe.{name} is back (token-gather denoise MoE)"
 
 
-def test_denoise_dense_moe_fails_loud_without_escape_hatch(monkeypatch, expect_error):
-    """DG_SPARSE_MOE=0 must raise (no silent ~5x-slower dense fallback) unless opted in."""
-    monkeypatch.setenv("DG_SPARSE_MOE", "0")
-    monkeypatch.delenv("DG_ALLOW_DENSE_MOE", raising=False)
-    moe = SimpleNamespace(router=object(), experts=lambda *a, **k: "dense-output")
-    with expect_error(RuntimeError, match="dense-128 MoE path is disabled"):
-        DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), _FakeTensor([1, 1, 256, 2816]))
-
-
-def test_denoise_dense_moe_runs_with_explicit_escape_hatch(monkeypatch):
-    """DG_SPARSE_MOE=0 + DG_ALLOW_DENSE_MOE=1 explicitly runs the dense A/B baseline."""
-    monkeypatch.setenv("DG_SPARSE_MOE", "0")
-    monkeypatch.setenv("DG_ALLOW_DENSE_MOE", "1")
-    monkeypatch.setattr(DF, "use_tanh_expert_activations", contextlib.nullcontext)
-    dense_routing = _FakeTensor([1, 1, 256, 128])
-    monkeypatch.setattr(DF, "_denoise_router_forward", lambda router, hidden: dense_routing)
-    calls = []
-
-    def fake_experts(hidden, routing):
-        calls.append((hidden, routing))
-        return "dense-output"
-
-    moe = SimpleNamespace(router=object(), experts=fake_experts)
-    expert_input = _FakeTensor([1, 1, 256, 2816])
-    assert DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), expert_input) == "dense-output"
-    assert calls == [(expert_input, dense_routing)]
-
-
-def test_sparse_experts_opt_into_blackhole_fp32_full_dst_accumulation(monkeypatch):
-    from models.experimental.diffusion_gemma.tt import sparse_moe
+def test_expert_matmuls_opt_into_blackhole_fp32_full_dst_accumulation(monkeypatch):
+    from models.experimental.diffusion_gemma.tt import concat_moe
 
     class _Device:
         def arch(self):
-            return sparse_moe.ttnn.Arch.BLACKHOLE
+            return concat_moe.ttnn.Arch.BLACKHOLE
 
     tensor = SimpleNamespace(device=lambda: _Device())
     fallback = object()
     captured = {}
-    sparse_moe._EXPERT_FP32_FULL_SYNC_CFG_CACHE.clear()
+    concat_moe._EXPERT_FP32_FULL_SYNC_CFG_CACHE.clear()
     monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "1")
 
     def fake_init(arch, **kwargs):
         captured.update(arch=arch, **kwargs)
         return "accurate-config"
 
-    monkeypatch.setattr(sparse_moe.ttnn, "init_device_compute_kernel_config", fake_init)
-    monkeypatch.setattr(sparse_moe.ttnn, "MathFidelity", SimpleNamespace(HiFi4="hifi4"))
+    monkeypatch.setattr(concat_moe.ttnn, "init_device_compute_kernel_config", fake_init)
+    monkeypatch.setattr(concat_moe.ttnn, "MathFidelity", SimpleNamespace(HiFi4="hifi4"))
 
-    assert sparse_moe.expert_compute_kernel_config(tensor, fallback) == "accurate-config"
+    assert concat_moe.expert_compute_kernel_config(tensor, fallback) == "accurate-config"
     assert captured == {
-        "arch": sparse_moe.ttnn.Arch.BLACKHOLE,
+        "arch": concat_moe.ttnn.Arch.BLACKHOLE,
         "math_fidelity": "hifi4",
         "math_approx_mode": False,
         "fp32_dest_acc_en": True,
@@ -561,20 +532,17 @@ def test_sparse_experts_opt_into_blackhole_fp32_full_dst_accumulation(monkeypatc
     }
 
     monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "0")
-    assert sparse_moe.expert_compute_kernel_config(tensor, fallback) is fallback
+    assert concat_moe.expert_compute_kernel_config(tensor, fallback) is fallback
 
 
-def test_sparse_experts_keep_wormhole_policy_and_zero_drop_api_default(monkeypatch):
-    from inspect import signature
+def test_expert_matmuls_keep_wormhole_policy(monkeypatch):
+    from models.experimental.diffusion_gemma.tt import concat_moe
 
-    from models.experimental.diffusion_gemma.tt import sparse_moe
-
-    wormhole = SimpleNamespace(device=lambda: SimpleNamespace(arch=lambda: sparse_moe.ttnn.Arch.WORMHOLE_B0))
+    wormhole = SimpleNamespace(device=lambda: SimpleNamespace(arch=lambda: concat_moe.ttnn.Arch.WORMHOLE_B0))
     fallback = object()
     monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "1")
 
-    assert sparse_moe.expert_compute_kernel_config(wormhole, fallback) is fallback
-    assert signature(sparse_moe.sparse_experts_forward).parameters["capacity"].default is None
+    assert concat_moe.expert_compute_kernel_config(wormhole, fallback) is fallback
 
 
 def test_denoise_logits_adapter_threads_canvas_rope_offset():

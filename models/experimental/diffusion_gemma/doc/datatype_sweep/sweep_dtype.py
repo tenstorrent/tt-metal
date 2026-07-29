@@ -104,8 +104,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_arg_parser().parse_args(argv)
-    os.environ["DG_SPARSE_MOE"] = "1"
-    os.environ["DG_SPARSE_MOE_TUNED"] = "1"
     # Explicit "0": up-front capture is default ON, so unsetting no longer disables it.
     os.environ["DG_UPFRONT_CAPTURE"] = "0"
     os.makedirs(args.out_dir, exist_ok=True)

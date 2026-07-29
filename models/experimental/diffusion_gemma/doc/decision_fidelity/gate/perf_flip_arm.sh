@@ -2,10 +2,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Absolute-quality gate for the two measured perf levers that are still default OFF:
-# DG_MOE_CONCAT (-29.9%) and DG_NORM_FULLCANVAS (-17.9%), ~1.9x together.
+# Absolute-quality gate for the measured perf lever that is still default OFF:
+# DG_NORM_FULLCANVAS (-17.9%).
 #
-# WHY THIS SHAPE. Both levers change the committed tokens, so the TT-vs-TT bit-identity comparison
+# THIS GATE USED TO CARRY TWO LEVERS. The other was DG_MOE_CONCAT (-29.9%), and it never needed to
+# come through here: on 2026-07-29 the concat-experts MoE became the ONLY denoise MoE, because the
+# token-gather path it replaced does not let the denoise trajectory converge (halted 0/9 vs 19/19,
+# min halt entropy 0.44 vs 6e-4 against a 0.005 threshold). That is a correctness decision, not a
+# perf/quality trade, so the flag and its arms are gone. Its -29.9% is in the shipped baseline now.
+#
+# WHY THIS SHAPE. The lever changes the committed tokens, so the TT-vs-TT bit-identity comparison
 # that has gated them until now cannot answer the question: it compares a candidate against a
 # baseline our own #48291 record calls degenerate, so a lever can only pass by changing nothing.
 #
@@ -30,30 +36,19 @@
 # device time re-measuring a TT baseline -- the `base` arm below exists only for someone who
 # explicitly wants the shipped-default TT number for its own sake, and it is not the bar.
 #
-# ARMS, one variable each vs the shipped defaults, so any delta is attributable:
-#   both    + DG_MOE_CONCAT=1 DG_NORM_FULLCANVAS=1 -- what would actually ship; run this first
-#   concat  + DG_MOE_CONCAT=1
+# ARMS, one variable vs the shipped defaults, so any delta is attributable:
 #   norm    + DG_NORM_FULLCANVAS=1
 #   base    shipped defaults -- OPTIONAL
 #
-# The `both` arm is not redundant. The levers touch different things (MoE layout vs norm shape) but
-# both perturb the same bf16 reductions feeding the same argmax, so their fidelity effects are not
-# guaranteed to be independent — this module has already been burned assuming that
-# (doc/decision_fidelity/device_gumbel_restored.md: DG_DENOISE_SLIDING_WINDOW looked clean on one
-# arm and regressed on question 2 of the second).
-#
-# CONCAT NEEDS DRAM. The concat weights cost 7.8 GiB, so its arms run at TRACE_REGION_SIZE=4 GiB
-# (measured floor 3.04 GiB at reveal_pmax 4096; see doc/optimize_perf/flag_triage_20260728.md).
-# The base and norm arms use the same value so the reservation is not a second variable.
-#
-# BLAST RADIUS, stated because it changes what a pass means: DG_MOE_CONCAT also folds the COMMIT
-# MoE (tt/commit_batched.py calls the same _denoise_moe_forward seam and batched commit is the
-# default), and commit hidden states build the committed-prefix KV, so it compounds across blocks.
-# A pass on this gate is a pass on two components, not one.
+# THE CONCAT MoE IS IN BOTH ARMS. It is the shipped default and costs 7.8 GiB of duplicated gate/up
+# weights, so every arm runs at TRACE_REGION_SIZE=4 GiB (measured floor 3.04 GiB at reveal_pmax
+# 4096; see doc/optimize_perf/flag_triage_20260728.md) and the reservation is not a variable. Note
+# also that it folds the COMMIT MoE as well as denoise (tt/commit_batched.py calls the same
+# _denoise_moe_forward seam and batched commit is the default), so both arms carry that.
 #
 # Usage:
-#   perf_flip_arm.sh                    # both, concat, norm -- sequential, ~4 h each
-#   ARMS="base concat" perf_flip_arm.sh # subset
+#   perf_flip_arm.sh                  # norm -- ~4 h
+#   ARMS="base norm" perf_flip_arm.sh # add the shipped-default TT number
 #
 # Each arm is a full 198-sample run through the real vLLM server via run_upfront_gpqa.sh, so the
 # result is directly comparable to the reference numbers above and to whatever the current baseline
@@ -65,16 +60,14 @@ R=${TT_METAL_ROOT:-/home/zni/tt-metal}
 TTSMI=${TT_SMI_BIN:-/home/zni/ttis-verify/.workflow_venvs/.venv_tt_smi/bin/tt-smi}
 OUT_ROOT=${OUT_ROOT:-/home/zni/dg_runs/perf_flip_gate}
 TRACE=${TRACE_REGION_SIZE:-4294967296}
-ARMS=${ARMS:-"both concat norm"}
+ARMS=${ARMS:-"norm"}
 
 # A case rather than an associative array: under `set -u`, an empty value in a
 # `declare -A` literal is reported as an unbound variable on this bash, and `base` must be empty.
 arm_env() {
     case "$1" in
         base) echo "" ;;
-        concat) echo "DG_MOE_CONCAT=1" ;;
         norm) echo "DG_NORM_FULLCANVAS=1" ;;
-        both) echo "DG_MOE_CONCAT=1 DG_NORM_FULLCANVAS=1" ;;
         *) return 1 ;;
     esac
 }
@@ -84,7 +77,7 @@ echo "DG_PERF_FLIP_GATE_BEGIN $(date -u +%FT%TZ) arms='${ARMS}' trace=${TRACE}"
 
 for arm in $ARMS; do
     if ! env_for_arm=$(arm_env "$arm"); then
-        echo "ERROR: unknown arm '${arm}'; valid: base concat norm both" >&2
+        echo "ERROR: unknown arm '${arm}'; valid: base norm" >&2
         exit 2
     fi
     out="$OUT_ROOT/$arm"

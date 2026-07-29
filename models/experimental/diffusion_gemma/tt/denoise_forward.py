@@ -23,11 +23,9 @@ from models.experimental.diffusion_gemma.reference.attention_mask import (
     build_canvas_reveal_denoise_mask,
     build_canvas_reveal_denoise_window_mask,
 )
+from models.experimental.diffusion_gemma.tt.concat_moe import concat_experts_forward
 from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
-from models.experimental.diffusion_gemma.tt.expert_operations import (
-    shared_mlp_forward,
-    use_tanh_expert_activations,
-)
+from models.experimental.diffusion_gemma.tt.expert_operations import shared_mlp_forward
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
     _rms_norm_dram,
     build_self_conditioning,
@@ -595,77 +593,24 @@ def _denoise_router_forward(router, hidden_states):
     return dense_routing
 
 
-def _sparse_moe_enabled() -> bool:
-    """Whether the optimized true-sparse token-gather MoE runs (``DG_SPARSE_MOE``).
-
-    Default **ON**: the true-sparse path (~13x cheaper than the dense-128 path; ~5x faster
-    end-to-end, measured on QB2) is the validated production default. ``DG_SPARSE_MOE=0``
-    selects the reference dense-128 path, which :func:`_denoise_moe_forward` now REFUSES to
-    run unless ``DG_ALLOW_DENSE_MOE=1`` is also set — dense is a deliberate A/B / PCC baseline,
-    never a silent runtime fallback. See tt/sparse_moe.py.
-    """
-    return os.environ.get("DG_SPARSE_MOE", "1") != "0"
-
-
-def _dense_moe_explicitly_allowed() -> bool:
-    """Escape hatch for the dense-128 reference path (``DG_ALLOW_DENSE_MOE``, default off)."""
-    return os.environ.get("DG_ALLOW_DENSE_MOE", "0").lower() in ("1", "true", "yes", "on")
-
-
 def _denoise_moe_forward(moe, router_input, expert_input):
-    # True-sparse token-gather MoE is the DEFAULT (see _sparse_moe_enabled). DG_SPARSE_MOE=0
-    # selects the ~5x-slower reference dense-128 path, which fails loud unless
-    # DG_ALLOW_DENSE_MOE=1 is set (A/B / PCC baseline only). See tt/sparse_moe.py.
-    # Concat-experts (DG_MOE_CONCAT, default ON since 2026-07-29) replaces token-gather entirely:
-    # at the shipped capacity=256 the gather/combine matmuls add ~89% MACs on top of an expert MAC
-    # count already equal to computing every expert. See tt/concat_moe.py for the arithmetic and
-    # the ~7.7 GiB weight-duplication cost this trades against.
-    from models.experimental.diffusion_gemma.tt.concat_moe import concat_experts_forward, concat_moe_enabled
+    """Router + concat-experts MoE. The single denoise (and batched-commit) MoE body.
 
-    if concat_moe_enabled():
-        # Concat is tested FIRST, so every other MoE selector below is unreachable while it is on.
-        # Silently winning that race is how DG_TERMINAL_SHARDED became a no-op and how a corrupting
-        # DG_VLLM_GUMBEL_MODE default survived two weeks: the run looks fine and the label lies.
-        # Fail loud instead, naming both knobs, in the style of the DG_SPARSE_MOE=0 guard below.
-        # DG_MOE_EXPERT_BFP8 used to be checked here. It was deleted along with the sparse path's
-        # only consumer of it; the supported route to quantized experts is DG_EXPERTS_DTYPE /
-        # DG_EXPERTS_BFP8 in tt/precision_build.py, which quantizes at build time and so applies to
-        # the concat weights too — no conflict to report.
-        conflicts = []
-        if not _sparse_moe_enabled():
-            conflicts.append("DG_SPARSE_MOE=0 (asks for the dense reference, would silently get concat)")
-        if conflicts:
-            raise RuntimeError(
-                "DG_MOE_CONCAT=1 takes the concat-experts MoE path, which ignores: "
-                + "; ".join(conflicts)
-                + ". Unset DG_MOE_CONCAT to use those, or unset them to use concat — running both "
-                "would report a measurement under the wrong label."
-            )
-        dense_routing = _denoise_router_forward(moe.router, router_input)
-        out = concat_experts_forward(moe.experts, expert_input, dense_routing)
-        dense_routing.deallocate(True)
-        return out
+    This used to select between three implementations. The other two — the token-gather capacity
+    dispatch (``DG_SPARSE_MOE``) and the dense-128 reference behind it (``DG_ALLOW_DENSE_MOE``) —
+    were deleted on 2026-07-29 along with the ``DG_MOE_CONCAT`` selector, because the gather path
+    leaves the denoise trajectory at ~100x the halt-entropy threshold: no block ever settles, and
+    roughly two thirds of requests end degenerate. It was also the slower of the two at the shipped
+    capacity=256, where the gather/combine matmuls add ~89% MACs on top of an expert MAC count
+    already equal to computing every expert. tt/concat_moe.py carries the evidence, the arithmetic,
+    and the ~7.7 GiB weight-duplication cost this path pays for it.
 
-    if _sparse_moe_enabled():
-        from models.experimental.diffusion_gemma.tt.sparse_moe import sparse_experts_forward
-
-        dense_routing = _denoise_router_forward(moe.router, router_input)
-        # Zero-drop capacity: real routing is highly concentrated (measured max expert load
-        # 156-256 for a 256-token canvas), so anything smaller silently discards active routes.
-        # Passed explicitly rather than left to the callee default so the contract is visible here.
-        out = sparse_experts_forward(moe.experts, expert_input, dense_routing, capacity=expert_input.shape[2])
-        dense_routing.deallocate(True)
-        return out
-    if not _dense_moe_explicitly_allowed():
-        raise RuntimeError(
-            "DiffusionGemma dense-128 MoE path is disabled: DG_SPARSE_MOE=0 selects the "
-            "~5x-slower reference dense path, which is no longer a supported runtime default. "
-            "Use the optimized sparse MoE (unset DG_SPARSE_MOE, or set DG_SPARSE_MOE=1), or set "
-            "DG_ALLOW_DENSE_MOE=1 to explicitly run the dense baseline for A/B / PCC comparison."
-        )
+    Prefill is a different MoE and is untouched: it keeps the ragged top-8 path in tt/sparse_moe.py.
+    """
     dense_routing = _denoise_router_forward(moe.router, router_input)
-    with use_tanh_expert_activations():
-        return moe.experts(expert_input, dense_routing)
+    out = concat_experts_forward(moe.experts, expert_input, dense_routing)
+    dense_routing.deallocate(True)
+    return out
 
 
 def _denoise_shared_mlp_forward(mlp, hidden_states):

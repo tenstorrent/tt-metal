@@ -58,9 +58,12 @@ For the integrated diffusion path, correctness is the injected-noise decision
 trajectory: argmax agreement, entropy PCC/max error, accept/renoise IoU, canvas
 agreement, and committed-token agreement. Teacher-forcing top-k is not a gate.
 
-The production MoE path is the existing true-sparse token-gather
-`tt/sparse_moe.py` implementation. Do not replace it with the generic dense
-all-expert or GPT-OSS bring-up recipe.
+The production MoE is split by phase: denoise and batched commit use the
+concat-experts `tt/concat_moe.py` implementation (the only denoise MoE since
+2026-07-29 — the token-gather dispatch that used to live in `tt/sparse_moe.py`
+was deleted because the denoise trajectory does not converge on it), and prefill
+uses the ragged zero-drop path in `tt/sparse_moe.py`. Do not replace either with
+the generic dense all-expert or GPT-OSS bring-up recipe.
 
 ## Capability and runtime checks
 

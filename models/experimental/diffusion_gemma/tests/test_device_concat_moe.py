@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Numerical equivalence of the concat-experts MoE (``DG_MOE_CONCAT``) against a torch oracle.
+"""Numerical equivalence of the concat-experts denoise MoE against a torch oracle.
 
-The concat path (``tt/concat_moe.py``) folds the routing weights into the GeGLU output so the down
-projection is one wide matmul:
+The concat path (``tt/concat_moe.py``) is the only denoise MoE since 2026-07-29. It folds the routing
+weights into the GeGLU output so the down projection is one wide matmul:
 
     out = (geglu(x @ gate_cat, x @ up_cat) * (routing @ expand)) @ down_cat
 
-instead of the per-expert form the reference and the shipped token-gather path compute:
+instead of the per-expert form the reference and the retired token-gather path compute:
 
     out = sum_e routing_e * (geglu(x @ W_gate_e, x @ W_up_e) @ W_down_e)
 

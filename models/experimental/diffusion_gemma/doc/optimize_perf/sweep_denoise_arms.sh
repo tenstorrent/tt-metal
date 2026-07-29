@@ -20,7 +20,7 @@
 #     "failed".
 #
 # Usage:
-#   sweep_denoise_arms.sh "base:" "grid:DG_SDPA_GRID=device" "tuned:DG_SPARSE_MOE_TUNED=1"
+#   sweep_denoise_arms.sh "base:" "grid:DG_SDPA_GRID=device" "fullcanvas:DG_NORM_FULLCANVAS=1"
 #   UPFRONT=1 REVEAL_PMAX=4096 STEPS=48 sweep_denoise_arms.sh ...
 #
 # An empty env list (``base:``) runs the shipped defaults.

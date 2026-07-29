@@ -193,9 +193,7 @@ def main(argv=None) -> int:
     )
     args = ap.parse_args(argv)
 
-    # Engage the model-faithful stacked path while keeping this diagnostic eager.
-    os.environ["DG_SPARSE_MOE"] = "1"
-    os.environ["DG_SPARSE_MOE_TUNED"] = "1"
+    # Keep this diagnostic eager.
     # Explicit "0": up-front capture is default ON, so unsetting no longer keeps this eager.
     os.environ["DG_UPFRONT_CAPTURE"] = "0"
 

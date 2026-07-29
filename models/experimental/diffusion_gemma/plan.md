@@ -39,10 +39,17 @@ on 07-27. If a flag below is not in the tree any more, that document says why.
 | lever | effect | state |
 |---|---|---|
 | `DG_SDPA_GRID=device` | **−8.8%, bit-exact** | **default flipped** |
-| `DG_MOE_CONCAT=1` | **−29.9%**, fold verified at PCC 0.9999218 | default OFF — needs the gate |
+| `DG_MOE_CONCAT=1` | **−29.9%**, fold verified at PCC 0.9999218 | **shipped 2026-07-29, then the flag and its alternative were deleted** |
 | `DG_NORM_FULLCANVAS=1` | **−17.9%**, also cuts commit 2.04 s → 0.37 s | default OFF — needs the gate |
 
-Together the two pending flips are ~1.9×. Both change committed tokens, so neither flips on a
+The concat MoE never went through the quality gate, because it turned out not to be a trade: the
+token-gather MoE it competed with does not let the denoise trajectory converge (halted 0/9 vs 19/19,
+min halt entropy 0.44 vs 6e-4 against a 0.005 threshold, ~2/3 of requests degenerate). So it shipped
+as a correctness fix and both `DG_MOE_CONCAT` and the token-gather/dense-128 denoise paths behind it
+were deleted; `tt/concat_moe.py` is now the only denoise MoE, and `tt/sparse_moe.py` is prefill-only.
+Its −29.9% is in the baseline. **Any absolute quality number measured before that flip is void.**
+
+That leaves one pending flip, −17.9%. It changes committed tokens, so it does not flip on a
 TT-vs-TT bit-identity comparison — the gate is the absolute GPQA arm against the CUDA reference
 (`doc/decision_fidelity/gate/gpu_reference.jsonl`, bar **70.71% / 70.20%** flexible-extract over two
 reps, resolution ~0.5–1 pp).
@@ -52,9 +59,10 @@ self-conditioning 2.3 — and **~120 ms outside the layer stack**. Layer matmul 
 bottleneck. Commit is 0.27–0.37 s/block (7–10%), not the 2.0 s quoted before `NORM_FULLCANVAS`.
 
 *Measurement contract, learned the hard way.* Any device verification must include a plain
-`default:` arm alongside whatever is being optimized — two deleted symbols broke the **default-ON**
-sparse dispatch for four commits because every check used `DG_MOE_CONCAT=1`, which bypasses it, and
-the host tests mock it. Also: `--upfront` **forces 48 denoise steps** (`--max-denoising-steps` is
+`default:` arm alongside whatever is being optimized — two deleted symbols broke the then-default-ON
+sparse dispatch for four commits because every check used `DG_MOE_CONCAT=1`, which bypassed it, and
+the host tests mock it. (Both paths are gone now, so that specific trap is closed; the rule is not.)
+Also: `--upfront` **forces 48 denoise steps** (`--max-denoising-steps` is
 ignored there); the shipped early halt fires at ~2–9 steps, so use
 `serving_smoke --entropy-stop-threshold -1` for a per-step A/B; and `host` vs `device` Gumbel is
 **1.94×**, so any absolute ms/step from a host-Gumbel run is ~2× the served figure.

@@ -367,9 +367,14 @@ prototype). Targets MoE 10.5 → ~5–6 ms/layer.
 - `opt004_matmul_geometry.md` — per-matmul shape/tile/grid/`in0_block_w`/subblock/L1-budget rationale +
   the TTNN op-contract facts (`per_core_N==Nt`, `split_work_to_cores`, 2D M-over-y/N-over-x) that fix
   the geometry, and the expected-impact reconciliation.
-- `bench_opt004_matmul_geometry.py` — device verify + candidate-sweep bench: untuned-vs-tuned per matmul
-  (PCC ≈ 1.0), a geometry sweep per role, and full-MoE off-vs-on latency + PCC-vs-dense.
-  **Write-only; run on QB2 when the device is free.**
+- ~~`bench_opt004_matmul_geometry.py`~~ — **deleted 2026-07-29 with its subject.** OPT-004 tuned the
+  five matmuls of the token-gather denoise MoE, and that whole MoE was removed when the concat-experts
+  path became the only denoise MoE (it is the only one whose denoise trajectory converges; see
+  `tt/concat_moe.py`). `verify_opt004_fullmoe.py`, `bench_moe_decomp.py`, `verify_sparse_moe.py` and
+  `verify_dispatch_fused.py` went with it, along with `DG_SPARSE_MOE`, `DG_ALLOW_DENSE_MOE`,
+  `DG_SPARSE_MOE_TUNED`, `DG_MOE_DISPATCH_FUSED2` and `DG_MOE_FUSED_GATHER`. The measurements they
+  produced stay on record in `opt004_matmul_geometry.md` and `perf_progress.md`; they are history now,
+  not reproducible arms. Prefill's ragged MoE (`tt/sparse_moe.py`) is untouched.
 
 ## Commit batching (#47557) — the 31.5 s/block commit
 
