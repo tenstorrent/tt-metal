@@ -1,0 +1,12 @@
+Script started on 2026-07-29 14:50:56+00:00 [COMMAND="tt-perf-report models/autoports/microsoft_phi_3_5_mini_instruct/doc/fused_decoder/tracy/ops_final.csv --start-signpost PERF_FUNCTIONAL_DECODE_B32 --end-signpost PERF_FUNCTIONAL_DECODE_B32_END --no-color --csv models/autoports/microsoft_phi_3_5_mini_instruct/doc/fused_decoder/tracy/functional_decode_b32_final.csv --no-summary" <not executed on terminal>]
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_FUNCTIONAL_DECODE_B32'.
+Using operations until 'PERF_FUNCTIONAL_DECODE_B32_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/microsoft_phi_3_5_mini_instruct/doc/fused_decoder/tracy/functional_decode_b32_final.csv
+Overall DRAM roofline (modeled ops): 39.7% (203 GB/s)
+
+Script done on 2026-07-29 14:50:56+00:00 [COMMAND_EXIT_CODE="0"]
