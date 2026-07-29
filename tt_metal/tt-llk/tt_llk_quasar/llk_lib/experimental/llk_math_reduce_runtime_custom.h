@@ -63,7 +63,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
                     p_gpool::DIM_16X16,
                     ADDR_MOD_0,
                     p_gpool::INDEX_DIS,
-                    REDUCE_BLOCK_SLOT1_DST); // F3 -> slot1, keep valid (last face, nothing to hand off to)
+                    REDUCE_BLOCK_SLOT1_DST); // F3 -> slot1, keep valid (last face; CLR_SRCA_VLD here zeros DEST)
             }
             TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_AB);
         });

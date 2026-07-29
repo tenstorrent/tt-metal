@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Block of TILE_CNT operand tiles (SrcA) + one scaler face (SrcB) -> one reduced result tile.
     _llk_unpack_AB_reduce_block_max_row_init_runtime_(params.TILE_CNT, false /*respect_trigger*/, buf_desc_id_a, buf_desc_id_b, tensor_shape_A);
-    _llk_unpack_AB_reduce_block_max_row_runtime_(0 /*operand tile start*/, 0 /*scaler tile*/, tensor_shape_A);
+    _llk_unpack_AB_reduce_block_max_row_runtime_(params.TILE_CNT, 0 /*operand tile start*/, 0 /*scaler tile*/, buf_desc_id_b, tensor_shape_A);
 }
 
 #endif
