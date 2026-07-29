@@ -20,17 +20,17 @@ def apply_swiglu(gate, up, config: ExpertConfig):
     Returns:
         Activated tensor
     """
-    # Clamp gate and up
-    gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
+    # SwiGLU with build-time alpha-fold: the gate weights are pre-scaled by alpha
+    # (see weights.py), so `gate` here is already alpha*gate_raw. Thus
+    # gate_raw*sigmoid(alpha*gate_raw) = silu(alpha*gate_raw)/alpha = silu(gate)/alpha,
+    # and the 1/alpha is absorbed into the down weights. This lets us use a single
+    # fused ttnn.silu instead of (mul-by-alpha + sigmoid + mul), removing ops/layer
+    # with zero runtime correction. Clamp bound scales with alpha (clamp(alpha*g) at
+    # alpha*limit == alpha*clamp(g at limit)).
+    gate = ttnn.clamp(gate, min=None, max=config.alpha * config.swiglu_limit, output_tensor=gate)
     up = ttnn.clamp(up, min=-config.swiglu_limit, max=config.swiglu_limit, output_tensor=up)
 
-    # SwiGLU: gate * sigmoid(alpha * gate) * (up + 1)
-    gate_alpha = ttnn.mul(gate, config.alpha)
-    gate_sigmoid = ttnn.sigmoid(gate_alpha)
-    gate_alpha.deallocate(True)
-
-    glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
-    gate_sigmoid.deallocate(True)
+    glu = ttnn.silu(gate, output_tensor=gate)  # = alpha * gate_raw*sigmoid(alpha*gate_raw)
 
     up = ttnn.add(up, 1, output_tensor=up)
     result = ttnn.mul(up, glu, output_tensor=up)

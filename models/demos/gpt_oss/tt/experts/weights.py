@@ -155,6 +155,18 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # SwiGLU alpha-fold (build-time): gate*sigmoid(a*gate)*(up+1) = silu(a*gate)/a*(up+1).
+    # Pre-scale gate weights+bias by alpha and down weights by 1/alpha ON-DEVICE so the
+    # per-token SwiGLU can use a single fused ttnn.silu (no separate mul-by-alpha op),
+    # with ZERO runtime correction (the 1/alpha is absorbed into down_proj). Block-float
+    # weights are per-block scale-invariant, so folding a scalar is quantization-neutral.
+    # Done on-device (not in torch) to stay cache-safe (warm cache = device tensors).
+    # The SwiGLU clamp becomes alpha*swiglu_limit (see operations.py / prefill.py).
+    _alpha = config.alpha
+    gate_proj_tt = ttnn.mul(gate_proj_tt, _alpha, dtype=weight_dtype)
+    gate_proj_bias_tt = ttnn.mul(gate_proj_bias_tt, _alpha, dtype=bias_dtype)
+    down_proj_tt = ttnn.mul(down_proj_tt, 1.0 / _alpha, dtype=weight_dtype)
+
     # Build the fused gate+up weight on-device by concatenating the (already cached /
     # loaded) gate and up tensors along the output dim. Works with warm cache
     # (state_dict=None) since gate_proj_tt/up_proj_tt exist as device tensors. One-time
