@@ -125,7 +125,9 @@ def test_max_pool2d_sharded(ttnn_mesh_device, reset_seeds, variant, channels, hw
 
     x_nchw = U.torch_rand((n, c, h, w))
     x_nhwc_flat = x_nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c).contiguous()
-    x = U.to_tt(x_nhwc_flat, mesh, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x = U.to_tt(
+        x_nhwc_flat, mesh, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
     pool_kwargs = dict(
         batch_size=n,
