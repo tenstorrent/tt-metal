@@ -330,8 +330,12 @@ on WH) and `tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerfo
 placement levers below, the *number* of active cores must be right for **every shape regime the op
 accepts** — a single distribution scheme can be optimal in one regime and pathological in another.
 The criterion:
-- **interleaved** → `active_cores == min(grid, total_tiles)` (enough cores to expose parallelism up to
-  the movement knee — see `dram_saturation` — never fewer, never more than there is work for);
+- **interleaved** → `active_cores == min(grid, total_tiles, bandwidth_knee)`. The DRAM/L1 **bandwidth
+  knee is a hard ceiling, not a footnote**: once achieved bandwidth plateaus (see `dram_saturation`,
+  `sweet_spot_cores()`), extra cores add no bandwidth and only add dispatch/NoC overhead. If the knee
+  is **below** `total_tiles`, stop at the knee — do **not** fill to `total_tiles`. Filling the grid
+  because "there is work for it" is exactly the overshoot this guards against: more cores past the knee
+  can be *slower*, not just wasteful.
 - **sharded input** → `active_cores == the shard's own cores` (lever A2), not a re-spread 2D grid.
 
 A **fixed split axis** — row-only, column-only, **or square-block** — is a latent bug: it fills the
@@ -362,6 +366,17 @@ per-core tile-column range capped by `WT_CHUNK`).
   the cliff kernel when empty. `work_split.hpp:46`; `untilize_multi_core_program_factory.cpp:132,396-400`.
 
 ## B. Transaction shape & the NoC (kernel level)
+
+**B0. Levers that add fixed per-core setup are a per-regime tradeoff, not a free win.** Most levers
+below (coalesced-block reads B5, deferred barriers B7, trid double-issue B8, per-reader VCs B10,
+stateful NoC B13, shard-aligned core groups) add a fixed per-core setup/issue cost that pays off when
+each core has enough work to amortize it — and *regresses* the smallest-shard / lowest-work-per-core
+regime, where that fixed cost dominates the ~1–8 tiles of real work. So a lever's counterfactual
+(Mode C) must be measured on the **smallest regime it will run in**, not only the aggregate or a large
+shape: a lever that is net-positive on big/interleaved shapes can be net-negative on tiny sharded
+ones. "Missed lever" (Mode D) is real headroom **only in the regime the lever would actually run** —
+gate it on a work-per-core threshold rather than applying it globally.
+
 - **B5. Coalesce into whole-page transactions; don't scatter sub-tile faces** — bigger transactions hit
   higher achieved BW. `dataflow_api.h:566`. **→ example: `tile_reorder`**.
 - **B6. Hit the one-packet fast path** — transfers ≤ `NOC_MAX_BURST_SIZE` (**512 B** on WH) take the
