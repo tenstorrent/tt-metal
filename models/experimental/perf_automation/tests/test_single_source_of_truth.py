@@ -47,6 +47,39 @@ _OWNERS = {
             "cc_optimize/summary.py": set(),
         },
     ),
+    # THE CEILING'S BYTES. One owner (the ledger anchor, written once per model by
+    # run._emit_perf_target_inputs) and one cache (the throughput snapshot). _roofline_lines must
+    # prefer the anchor -- the snapshot is rewritten from a file inside the model directory the
+    # optimize loop reverts, and a 16-layer 3.33 GB vintage came back twice in one run and printed a
+    # 153.8 tok/s/u ceiling beside a full-model measurement.
+    "the ceiling bytes": (
+        "active_bytes",
+        {
+            "cc_optimize/perf_mcp.py": {"_persist_throughput"},
+            "cc_optimize/summary.py": {"_roofline_lines", "_throughput_from_profile"},
+        },
+    ),
+    # THE UNIT OF WORK. Derived once from the model (model_bytes) and then PASSED along the chain --
+    # facts json -> ledger anchor depth -> PerfTarget.unit -> snapshot -> report, plus the separate
+    # record of which unit the gate's reading counts. No hop may re-derive it; a hop that defaults
+    # instead of reading is how "unit" being absent from the snapshot made every model read as
+    # per-token while every unit test passed.
+    "the unit of work": (
+        "unit",
+        {
+            "agent/model_bytes.py": {"weight_bytes"},
+            "agent/perf_target.py": {"compute_target"},
+            "cc_optimize/run.py": {"_emit_perf_target_inputs", "_perf_target_inputs"},
+            "cc_optimize/perf_mcp.py": {
+                "_persist_throughput",
+                "_perf_target_status",
+                "_reliable_forward_unit",
+                "_record_fullpipe_candidate",
+                "_establish_fullpipe_baseline",
+            },
+            "cc_optimize/summary.py": {"_roofline_lines"},
+        },
+    ),
     "the modeled floor": (
         "modeled_floor_ms",
         {
@@ -61,6 +94,22 @@ _OWNERS = {
         },
     ),
 }
+
+
+def _sm():
+    spec = importlib.util.spec_from_file_location("sm_ssot", _ROOT / "cc_optimize" / "summary.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["sm_ssot"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _led():
+    spec = importlib.util.spec_from_file_location("led_ssot", _ROOT / "cc_optimize" / "measurements.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["led_ssot"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _funcs_reading(path: Path, key: str) -> set:
@@ -164,3 +213,39 @@ def test_anchors_are_per_model_with_no_per_model_code(tmp_path, monkeypatch):
     for name in ("llama", "whisper", "seamless", "nemotron", "voxtral", "qwen", "kokoro", "phi"):
         hits = [h for h in haystack if name in h]
         assert not hits, "summary.py branches on a specific model (%s): %s" % (name, hits[:5])
+
+
+def test_the_ledger_anchor_outranks_the_snapshot_for_the_ceiling(tmp_path, monkeypatch):
+    """PRECEDENCE, not just ownership. Both stores hold the bytes; the anchor must win. The snapshot is
+    regenerated from perf_target_inputs.json, which lives in the model directory the optimize loop
+    reverts between attempts -- it was rolled back twice in one run, each time restoring a different
+    vintage, and the report printed each one as fact."""
+    sm = _sm()
+    led = _led()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    led.anchor(led.KIND_ACTIVE_BYTES, 6094.651392, depth="token", mode="bytes_mb", source="t", model="m")
+    snap = {
+        "has_unit_ceiling": True,
+        "theoretical_rate": 153.8,  # the stale vintage
+        "band": [92.3, 123.0],
+        "active_bytes": 3_330_000_000,  # ditto
+        "peak_bw_gbps": 512.0,
+        "tp_degree": 1,
+        "perf_layers": "all",
+        "unit": "token",
+    }
+    txt = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 17.0}, "m", "main"))
+    assert "84.0 tok/s/u" in txt, txt
+    assert "153.8" not in txt and "92.3" not in txt, txt
+
+
+def test_no_hop_re_derives_the_unit_from_the_model(tmp_path):
+    """The unit is derived ONCE (model_bytes) and passed. A second derivation would be a second source
+    of truth that can disagree -- so only model_bytes may consult a pipeline tag or architecture."""
+    from pathlib import Path as _P
+
+    root = _P(__file__).resolve().parents[1]
+    for rel in ("cc_optimize/perf_mcp.py", "cc_optimize/summary.py", "agent/perf_target.py"):
+        src = (root / rel).read_text()
+        for name in ("unit_for_tag", "unit_from_config", "unit_for_architectures"):
+            assert name not in src, "%s re-derives the unit via %s instead of reading it" % (rel, name)
