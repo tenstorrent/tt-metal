@@ -819,25 +819,63 @@ def drop_dataflow_pays(blocks_per_core: int) -> bool:
 #             CB, but no writer drains the output, and the output CB has the identical
 #             exact-page property (`shard_tiles` pages against `shard_tiles` pushes).
 #
-# Ceiling: `f_sharded_small` 1273 -> ~1117 (1.14x), `f_sharded_large` 1985 -> ~1674
-# (1.19x), `n_sharded_tiny` 755 -> ~716 (1.05x). All below the parent's 1.30x bar,
-# which Refinement 4 already showed sits under the launch floor + LLK sum.
-def resident_cb_pays(resident_blocks: int) -> bool:
+# Ceiling AS PREDICTED BY Refinement 4: `f_sharded_small` 1273 -> ~1117 (1.14x),
+# `f_sharded_large` 1985 -> ~1674 (1.19x). **THAT PREDICTION IS REFUTED BY THIS PASS,
+# and the way it is wrong is the most reusable thing here.** The 38.9-40.5 ns/block came
+# from `sync_only(4 blk) - sync_only(1 blk)`, and the claim that it was *exposed* rested
+# on `full - LLK`, where `LLK := full - no_compute`. That identity is TAUTOLOGICAL: it
+# attributes every nanosecond to either the LLK or the CB dance and therefore cannot
+# detect that the two OVERLAP. They do, almost completely -- the CB calls sit on the same
+# TRISCs as the LLK stages they pipeline against (reserve/push on PACK, pop on UNPACK),
+# so while TRISC0 pops block k the packer is still on block k-1. `sync_only` has no LLK
+# to overlap with, which is exactly why it over-reports.
+#
+# MEASURED, in-run A/B against `rcb=0`, 15 rounds x 10 launches, CV <= 1.4 %:
+#
+#   regime            blk  chk | shipped |  rcb=0 | ratio |   dns | dns/blk
+#   ------------------|--------|---------|--------|-------|-------|--------
+#   n_sharded_tiny      1    2 |   748.7 |  755.4 | 1.009 |  -6.7 |   -6.7
+#   f_sharded_small     4    2 |  1256.4 | 1272.5 | 1.013 | -16.1 |   -4.0
+#   f_sharded_large     8    2 |  1952.2 | 1981.5 | 1.015 | -29.3 |   -3.7
+#   n_sharded_deep     32    2 |  5563.0 | 5717.4 | 1.028 | -154.4|   -4.8
+#   n_sharded_wide      1   64 |  4702.4 | 4715.4 | 1.003 | -13.0 |  -13.0
+#
+# => **~4.6 ns/block, i.e. 12 % of the 38.9 ns/block the isolation instrument
+# reported.** It is a real, proportional win (the 32-block row is 1.028x at CV 0.3 %,
+# far outside noise) and it grows with the shard's depth, but it is 1.3 % on
+# `f_sharded_small`, not the 14 % this entry was filed to chase.
+RESIDENT_CB_MIN_BLOCKS = 1
+
+
+def resident_cb_pays(mask: int, resident_blocks: int) -> bool:
     """Refinement 4b gate: address a zero-copy CB by tile index instead of by pointer?
 
-    **MEASURED: see the sweep in `changelog.md` § "Refinement 4b".** The structural
-    half (nothing on the other end of the CB; the CB holds the whole run) is checked
-    by the caller from `drop_reader` / `drop_writer`; this is the payoff half.
+    The structural half (nothing on the other end of the CB, and the CB holds the
+    whole run) is checked by `_resident_cb_mask` from `drop_reader` / `drop_writer`.
+    This is the payoff half, and it has ONE clause: **both** CBs must be resident.
 
-    `resident_blocks` is the number of per-block CB round-trips the lever would
-    remove on this plan, i.e. `blocks_per_core`. With one block there is exactly one
-    reserve/push/pop triple to drop and nothing to amortise the extra `constexpr`
-    branch against, so the gate exists to keep that regime measurable separately.
+    `mask == 3` means the program has no dataflow kernel at all, so there is no data
+    movement and the compute thread is the bound BY CONSTRUCTION -- which is the only
+    condition under which shaving compute-side per-block overhead can move the
+    number. Measured, in-run A/B, on the one-sided `alias_out` crossover where only
+    the OUTPUT CB is resident (`mask == 2`):
+
+      regime                    | rcb=2 |  rcb=0 | ratio
+      --------------------------|-------|--------|-------
+      n_g_to_sharded_small  4blk|  6800 |   6807 | 1.001
+      g_dram_to_sharded     8blk| 16548 |  16462 | 0.995
+
+    i.e. **NEUTRAL and sign-unstable**, and Refinement 3b's per-RISC timeline says
+    why rather than leaving it to inference: on that regime TRISC0 is blocked in
+    `cb_wait_front` for **90 %** of the kernel waiting on the DRAM reads, so the
+    compute thread has ~14 us of slack to hide three CB calls in. The mode is
+    *correct* there (bit-exact, `probe_038`) and stays reachable through
+    `TILIZE_LEVER_RCB=2` with permanent counterfactual rows
+    (`x_g_to_sharded_small_rcb_forced`, `x_g_to_sharded_rcb_forced`) -- it simply
+    does not pay, and this run's rule is that a lever which does not move the number
+    is not shipped.
     """
-    return resident_blocks >= RESIDENT_CB_MIN_BLOCKS
-
-
-RESIDENT_CB_MIN_BLOCKS = 1
+    return mask == 3 and resident_blocks >= RESIDENT_CB_MIN_BLOCKS
 
 
 def _resident_cb_mask(plan, levers) -> int:
@@ -866,7 +904,7 @@ def _resident_cb_mask(plan, levers) -> int:
         mask |= 2
     if not mask:
         return 0
-    if rcb == 2 or resident_cb_pays(plan["blocks_per_core"]):
+    if rcb == 2 or resident_cb_pays(mask, plan["blocks_per_core"]):
         return mask
     return 0
 

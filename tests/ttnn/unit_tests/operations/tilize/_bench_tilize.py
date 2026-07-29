@@ -750,6 +750,89 @@ REGIMES = {
         same_cfg=True,
         levers=dict(f32=0),
     ),
+    # --- Refinement 4b: resident CBs -----------------------------------------
+    # `levers=dict(rcb=0)` is the Refinement-4 behaviour: the zero-copy CBs keep
+    # their per-block reserve/push/pop. The shipped rows (`f_*` / `n_*` / `g_*`)
+    # carry rcb=1. The effect is ~1-2 %, i.e. inside the cross-session scatter, so
+    # every arm has to be an IN-RUN pair -- which is what these rows are for.
+    #
+    # Blocks per core are 1 / 4 / 8 across the three Path-B rows, so the pair
+    # answers the question the sync_only decomposition could not: is the per-block
+    # CB cost proportional to the block count (R4's premise) or a fixed per-launch
+    # term? Plus the two `alias_out` rows, where only the OUTPUT side is resident.
+    "p_sharded_tiny_rcb_off": dict(
+        shape=(1, 1, 128, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (32, 64)),
+        same_cfg=True,
+        levers=dict(rcb=0),
+    ),
+    "p_sharded_small_rcb_off": dict(
+        shape=(1, 1, 512, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (128, 64)),
+        same_cfg=True,
+        levers=dict(rcb=0),
+    ),
+    "p_sharded_large_rcb_off": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        same_cfg=True,
+        levers=dict(rcb=0),
+    ),
+    # A DEEP Path-B shape (32 blocks/core): the block count is the axis this
+    # lever's cost model turns on, so the non-regression gate has to cover the
+    # far end of it and not just 1-8 (op_requirements.md's shape-range rule).
+    "n_sharded_deep": dict(
+        shape=(1, 1, 4096, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (1024, 64)),
+        same_cfg=True,
+    ),
+    "p_sharded_deep_rcb_off": dict(
+        shape=(1, 1, 4096, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (1024, 64)),
+        same_cfg=True,
+        levers=dict(rcb=0),
+    ),
+    # ... and a WIDE Path-B shape (chunk_wt = 16, 1 block/core): the other axis the
+    # resident tile index scales on, since it steps by chunk_wt per block.
+    "n_sharded_wide": dict(
+        shape=(1, 1, 128, 2048),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (32, 2048)),
+        same_cfg=True,
+    ),
+    "p_sharded_wide_rcb_off": dict(
+        shape=(1, 1, 128, 2048),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (32, 2048)),
+        same_cfg=True,
+        levers=dict(rcb=0),
+    ),
+    # The one-sided `alias_out` crossover: only the OUTPUT CB is resident (a reader
+    # still fills the input). This is the row that says whether the helper mode is a
+    # reusable primitive or a Path-B special case -- and the answer is that it is
+    # reusable and CORRECT there but does NOT PAY (1.001 / 0.995), because R3b's
+    # per-RISC timeline has TRISC0 blocked in `cb_wait_front` for 90 % of that kernel.
+    # So the shipped gate is Path-B-only (`resident_cb_pays`: mask == 3) and these are
+    # FORCED arms (`rcb=2`) kept permanently, so the refutation stays re-measurable
+    # instead of being a changelog claim. Their `f_*`/`n_*`/`g_*` partners carry rcb=0
+    # by the gate, so each pair is still an in-run A/B.
+    "x_g_to_sharded_small_rcb_forced": dict(
+        shape=(1, 1, 512, 128),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(1, 3), (128, 64)),
+        levers=dict(rcb=2),
+    ),
+    "x_g_to_sharded_rcb_forced": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(rcb=2),
+    ),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
@@ -927,6 +1010,32 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
         f"lever-3 gate violation on {name}: fp32_lossless={plan['fp32_lossless']}, " f"wanted {want_lossless}"
     )
 
+    # Refinement 4b: a CB may declare itself RESIDENT only when it is aliased AND the
+    # kernel on its other end is not launched. Asserted on EVERY row (not only the
+    # sharded ones), because the failure mode is silent: a resident output CB whose
+    # writer still exists publishes nothing, and the writer would hang on a credit
+    # that never arrives -- or worse, on the input side, the reader would refill pages
+    # the compute kernel never freed. This is the one precondition the kernel's own
+    # static_asserts cannot see.
+    rcb = plan["resident_cb"]
+    rcb_lever = (spec.get("levers") or {}).get("rcb", 1)
+    structural = (1 if (plan["alias_in"] and plan["drop_reader"]) else 0) | (
+        2 if (plan["alias_out"] and plan["drop_writer"]) else 0
+    )
+    if rcb_lever == 0:
+        want_rcb = 0
+    elif rcb_lever == 2:
+        want_rcb = structural  # forced past the payoff gate, structural clauses intact
+    else:
+        # The SHIPPED gate: only a compute-only program (mask == 3, no dataflow kernel
+        # at all) -- on the one-sided alias the compute thread has slack to hide the CB
+        # calls in, measured neutral. Asserted so re-widening the gate to `alias_out`
+        # has to change this line and re-measure.
+        want_rcb = structural if tpd.resident_cb_pays(structural, plan["blocks_per_core"]) else 0
+    assert rcb == want_rcb, f"resident-CB gate violation on {name}: resident_cb={rcb}, wanted {want_rcb}"
+    assert not (rcb & 1) or plan["drop_reader"], f"{name}: input CB declared resident while the reader is launched"
+    assert not (rcb & 2) or plan["drop_writer"], f"{name}: output CB declared resident while the writer is launched"
+
     if plan["path"] != "alias":
         # Lever B8 (Refinement 2) buys a THIRD CB window, so its budget is the
         # prefetch one. Either way the footprint is a constant in W, which is the
@@ -999,7 +1108,7 @@ def test_bench_tilize(device):
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
         levers = spec.get("levers") or {}
-        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg", "r3", "coal", "bt", "nw", "nd", "f32"):
+        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg", "r3", "coal", "bt", "nw", "nd", "f32", "rcb"):
             os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, 1))
         # Default 0: these two are measurement probes, not levers.
         os.environ["TILIZE_LEVER_ADDR"] = str(levers.get("addr", 0))
@@ -1045,6 +1154,8 @@ def test_bench_tilize(device):
                     sa=plan["self_arm"],
                     f32=plan["fp32_lossless"],
                     iu=int(os.environ.get("TILIZE_LEVER_IU", "0")),
+                    # Refinement 4b: resident-CB bitmask (1 = input, 2 = output, 3 = both).
+                    rcb=plan["resident_cb"],
                     c7=plan["split_read"],
                     b8=plan["prefetch_blocks"],
                     b10=plan["vc_spread"],
@@ -1061,7 +1172,7 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
-        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG", "R3", "COAL", "BT", "NW", "ND", "F32"):
+        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG", "R3", "COAL", "BT", "NW", "ND", "F32", "RCB"):
             os.environ[f"TILIZE_LEVER_{key}"] = "1"
         os.environ["TILIZE_LEVER_ADDR"] = "0"
         os.environ["TILIZE_LEVER_IU"] = "0"
@@ -1080,7 +1191,7 @@ def test_bench_tilize(device):
         f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
         f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
         f"    {'regime':<34} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
-        f"{'blk':>4} {'B13':>4} {'BT':>3} {'NW':>3} {'ND':>3} {'SA':>3} {'F32':>4} {'IU':>3} "
+        f"{'blk':>4} {'B13':>4} {'BT':>3} {'NW':>3} {'ND':>3} {'SA':>3} {'RCB':>4} {'F32':>4} {'IU':>3} "
         f"{'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'GRP':>4} {'cbB/core':>9} "
         f"{'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
@@ -1089,7 +1200,7 @@ def test_bench_tilize(device):
         lines.append(
             f"    {r['regime']:<34} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
             f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['bt']:>3} {r['nw']:>3} "
-            f"{r['nd']:>3} {r['sa']:>3} {r['f32']:>4} {r['iu']:>3} {r['c7']:>3} "
+            f"{r['nd']:>3} {r['sa']:>3} {r['rcb']:>4} {r['f32']:>4} {r['iu']:>3} {r['c7']:>3} "
             f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} {r['stg']:>4} {r['grp']:>4} "
             f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )
