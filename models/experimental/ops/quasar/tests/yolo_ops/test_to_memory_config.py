@@ -61,7 +61,8 @@ def _width_sharded(h, w):
 def test_to_memory_config_placement(ttnn_mesh_device, reset_seeds, target_memcfg, shape):
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
-    x = U.to_tt(x_torch, mesh)  # interleaved DRAM
+    source_memcfg = ttnn.DRAM_MEMORY_CONFIG if target_memcfg == ttnn.L1_MEMORY_CONFIG else ttnn.L1_MEMORY_CONFIG
+    x = U.to_tt(x_torch, mesh, memory_config=source_memcfg)
     out = ttnn.to_memory_config(x, target_memcfg)
     U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
 
