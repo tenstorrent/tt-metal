@@ -5,7 +5,11 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <atomic>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -51,6 +55,12 @@ struct TopologySatSolver {
     int solve_limited(int max_conflicts);
     int val(int lit) const;
 
+    // Progress annotations surfaced in the 15s solve heartbeat (see topology_solver_sat_solver.cpp). Optional and
+    // side-effect-free w.r.t. the search; callers driving a multi-solution enumeration set these so the heartbeat can
+    // report "seeking 1st solution" vs "N/target solutions" and a coarse stage tag. Persist across solve() calls.
+    void set_progress_phase(std::string_view phase);
+    void set_solution_progress(std::int64_t found, std::int64_t target);
+
     /**
      * Must be called immediately after construction, before any add() / encoding.
      * Tunes CaDiCaL for AllSAT-style enumeration: repeated solve() after permanent blocking clauses.
@@ -60,6 +70,10 @@ struct TopologySatSolver {
     // Set a CaDiCaL option (e.g. "seed", "target"). Returns false if the option/value is rejected. Used by the
     // Goal-1 base-embedding speedup experiments (TT_TOPO_SAT_SEED / TT_TOPO_SAT_FASTSAT). No-op-safe.
     bool set_option(const std::string& name, int value);
+
+    // Point the solver's terminator at a shared cancel flag: once *flag is true, solve() aborts (returns non-SAT).
+    // Used by the parallel seed portfolio so the first thread to hit SAT cancels the rest. nullptr = no cancel.
+    void set_cancel_flag(std::atomic<bool>* flag);
 
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;

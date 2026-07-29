@@ -22,6 +22,7 @@
 #include <unordered_set>
 #include <optional>
 #include <filesystem>
+#include <cstdint>
 #include <string>
 #include <climits>
 #include <unistd.h>
@@ -38,6 +39,9 @@ class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy);
+
+// Compact large-number formatting for log lines (e.g. 1.2M, 340.0k). Negative input renders as "n/a".
+std::string humanize(int64_t n);
 
 // Returns whether a declared torus axis realizes a distinct wrap edge. Use bare
 // has_flag only for declared intent, never to decide realized routing topology.
