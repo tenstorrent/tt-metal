@@ -34,7 +34,7 @@ HEIGHT_SHARDED_NON_TILE_ALIGNED_SHAPES = [
     (1, 256, 1, 100, 32),  # H*W=100 -> padded 128 (21.9% padding)
 ]
 
-# Block-sharded (v2) non-tile-aligned cases (#50682). grid_x splits the padded H*W tile count and
+# Block-sharded (v2) non-tile-aligned cases. grid_x splits the padded H*W tile count and
 # must divide it; grid_y splits channels. H*W=100 -> padded 128 = 4 tiles, so grid_x in {1, 2, 4}
 # keeps each M-shard tile-aligned. grid_x > 1 exercises the multi-core M-split, where the padding
 # tail lands on the last M-core only.
@@ -248,8 +248,8 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_NON_TILE_ALIGNED_SHAPES)
 def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_groups):
-    # Regression for tt-metal #50682 on the sharded two-pass path: single-core height-sharded
-    # group_norm with a non-tile-aligned flattened height must match torch within bf16 tol.
+    # Single-core height-sharded group_norm with a non-tile-aligned flattened height must match
+    # torch within bf16 tolerance.
     torch.manual_seed(0)
 
     assert (N * H * W) % 32 != 0, "shape must be non-tile-aligned to exercise the fix"
@@ -339,7 +339,7 @@ def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_grou
 def test_group_norm_block_sharded_non_tile_aligned(
     device, N, C, H, W, num_groups, grid_y, grid_x, use_welford, out_row_major
 ):
-    # #50682 on the block-sharded two-pass path. grid_x > 1 splits the padded H*W across M-cores
+    # Block-sharded two-pass path. grid_x > 1 splits the padded H*W across M-cores
     # (padding tail on the last), exercising the multi-core correction; use_welford=True must be
     # routed to the two-pass path; out_row_major selects UNTILIZE_OUT, which runs after the
     # corrected rsqrt and so must not change the result. negative_mask is not covered: it requires
@@ -1540,7 +1540,7 @@ def test_group_norm_rejects_per_sample_non_tile_aligned_spatial(device, expect_e
 
 
 def test_group_norm_rejects_tile_input_with_inplace(device, expect_error):
-    # Scope boundary for tt-metal #50682, same argument as negative_mask above: inplace is only
+    # Scope boundary, same argument as negative_mask above: inplace is only
     # allowed for ROW_MAJOR inputs, and a ROW_MAJOR tensor has padded_shape[2] == logical_shape[2],
     # so inplace and the tile-padding correction can never be active at the same time. Note the
     # binding defaults inplace to True, which is why every TILE-input test passes inplace=False.

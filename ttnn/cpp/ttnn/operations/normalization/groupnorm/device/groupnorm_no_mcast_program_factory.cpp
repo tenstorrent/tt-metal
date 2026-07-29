@@ -1082,7 +1082,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }}},
     });
 
-    // #50682 pad-correction scalars/scratch: cb_k written by the writer, cb_msq / cb_kmsq scratch.
+    // Pad-correction scalars/scratch: dfb_k written by the writer, dfb_msq / dfb_kmsq scratch.
     append_group_norm_pad_correction_cbs(
         desc.cbs,
         pad,

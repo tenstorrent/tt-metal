@@ -17,7 +17,7 @@ from models.common.utility_functions import is_blackhole, is_watcher_enabled, ru
 
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
-# atol for the #50682 non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
+# atol for the non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
 NON_TILE_ALIGNED_ATOL = 0.08
 WELFORD_MODES = ("legacy", "welford_normal", "welford_reciprocal")
 
@@ -74,7 +74,7 @@ GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES = [
 # the bug present, so max abs error vs torch is the discriminator.
 # (N, C, H, W, num_groups)
 GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES = [
-    (1, 1024, 1, 200, 32),  # issue #50682 repro (H*W=200 -> padded 224, 10.7% padding)
+    (1, 1024, 1, 200, 32),  # issue repro (H*W=200 -> padded 224, 10.7% padding)
     (1, 1024, 1, 269, 32),  # XTTS-v2 conditioning encoder (~269 mel frames)
     (1, 512, 1, 100, 32),  # larger padding fraction (H*W=100 -> padded 128, 21.9%)
 ]
@@ -87,13 +87,10 @@ GROUP_NORM_NON_TILE_ALIGNED_PER_SAMPLE_DRAM_SHAPES = [
     (4, 512, 1, 40, 32),  # H*W=40 -> padded 64 (K=0.60), N*H*W=160 is a multiple of 32
 ]
 
-# Explicit grid, to reach paths auto-grid does not: num_out_blocks > 1 puts the padding tail in
-# the last out block, and batch >= num_virtual_rows selects no_mcast over mcast (N=9 on nvr=8 also
-# hits no_mcast's uneven-batch second core group, which carries its own corrected scaler).
-# Grids are constrained -- validate_dram_grid in groupnorm.cpp requires
+# Explicit grid, to reach paths auto-grid does not (see the test for which). Grids are constrained
+# -- validate_dram_grid in groupnorm.cpp requires, with num_virtual_cols = 8 for every row below:
 #   nvr = (grid_x / num_virtual_cols) * grid_y,  Ht >= nvr,  Ht % nvr == 0,
 #   (nvr < num_batches or nvr % num_batches == 0),  and num_out_blocks <= Ht / nvr.
-# num_virtual_cols is 8 for every row below.
 # (N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x)
 GROUP_NORM_NON_TILE_ALIGNED_GRID_DRAM_CASES = [
     # XTTS length, mcast + chunked: Ht=9, nvr=3, block_ht=3
@@ -118,11 +115,10 @@ GROUP_NORM_NON_TILE_ALIGNED_PADDING_FRACTION_CASES = [
 ]
 
 # Accuracy vs the mean-to-spread ratio at the XTTS-scale padding fraction (H*W=200, K=0.12).
-# group_norm is shift-invariant, so the reference output is unchanged and only the kernel's internal
-# cancellation moves. `aligned_ref` is the TILE-ALIGNED H*W=224 control at the same shift, because
-# the fused bf16 kernel degrades with a large mean even unpadded -- the correction's real cost is
-# the gap. `max_ratio` bounds that gap and is the portable half of the assertion: both columns move
-# together with arch and precision, so the ratio survives what absolute numbers do not.
+# `aligned_ref` is the TILE-ALIGNED H*W=224 control at the same shift: the fused bf16 kernel degrades
+# with a large mean even unpadded, so the correction's real cost is the gap. `max_ratio` bounds that
+# gap and is the portable half of the assertion -- both columns move together with arch and
+# precision, so the ratio survives what absolute numbers do not.
 # (input_shift, max_abs_err, aligned_ref, max_ratio)
 GROUP_NORM_NON_TILE_ALIGNED_SHIFT_CASES = [
     (0.0, 0.08, 0.042, 2.0),  # measured 0.040 vs 0.042 aligned (ratio 0.95) -- no measurable cost
@@ -411,13 +407,11 @@ def run_group_norm_non_tile_aligned_DRAM(
     cores_x=None,
     num_out_blocks=None,
 ):
-    # Shared body for the #50682 regressions on the fused interleaved path.
-    #   input_shift    leaves the reference output unchanged (group_norm is shift-invariant) but
-    #                  scales the mean^2/variance ratio the correction is sensitive to.
-    #   cores_y/_x     pin the grid (selecting mcast vs no_mcast via batch >= num_virtual_rows) and
-    #                  allow an explicit num_out_blocks; omit them to exercise the C++ heuristics.
-    # Does NOT require a non-tile-aligned H*W -- the shifted-input test also drives it with an
-    # aligned control. Callers assert alignment where it matters.
+    # Shared body for the non-tile-aligned regressions on the fused interleaved path.
+    #   input_shift  leaves the reference unchanged (shift-invariance) but scales mean^2/variance.
+    #   cores_y/_x   pin the grid (mcast vs no_mcast via batch >= num_virtual_rows) and allow an
+    #                explicit num_out_blocks; omit to exercise the C++ heuristics.
+    # Also used with an aligned shape as a control, so alignment is asserted by callers.
     torch.manual_seed(0)
 
     specify_grid = cores_y is not None and cores_x is not None
@@ -485,9 +479,8 @@ def run_group_norm_non_tile_aligned_DRAM(
 @pytest.mark.parametrize("N, C, H, W, num_groups", GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES)
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford):
-    # #50682: fused interleaved group_norm must match torch even when N*H*W is not a multiple of
-    # the tile height. use_welford=True is routed to the two-pass path (Welford cannot express
-    # these shapes). Auto grid selection.
+    # Fused interleaved group_norm must match torch even when N*H*W is not a multiple of the tile
+    # height. use_welford=True is routed to the two-pass path; auto grid selection.
     if device.core_grid.y == 7:
         pytest.skip()
 
@@ -501,9 +494,8 @@ def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_we
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", GROUP_NORM_NON_TILE_ALIGNED_PER_SAMPLE_DRAM_SHAPES)
 def test_group_norm_non_tile_aligned_per_sample_DRAM(device, N, C, H, W, num_groups):
-    # #50682 with N > 1: the correction keys off the PER-SAMPLE height (logical_shape()[2]), not
-    # N*H*W, so H*W=80 pads to 96 even though N*H*W=160 is aligned. tt-mlir #8935 gates on the same
-    # quantity, so these shapes reach the fused kernel and must be correct.
+    # N > 1: the correction keys off the PER-SAMPLE height (logical_shape()[2]), not N*H*W, so
+    # H*W=80 pads to 96 even though N*H*W=160 is aligned. tt-mlir #8935 gates on the same quantity.
     if device.core_grid.y == 7:
         pytest.skip()
 
@@ -521,7 +513,7 @@ def test_group_norm_non_tile_aligned_per_sample_DRAM(device, N, C, H, W, num_gro
 def test_group_norm_non_tile_aligned_explicit_grid_DRAM(
     device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x
 ):
-    # #50682 on paths the auto-grid tests never reach:
+    # Paths the auto-grid tests never reach:
     #  * num_out_blocks > 1 -- the padding tail lands in the LAST chunk (extra_out_block /
     #    out_block_h_last). The auto heuristic picks 1 here, so padding never meets the chunking.
     #  * batch >= num_virtual_rows -- selects no_mcast over mcast. no_mcast also has a SECOND core
@@ -554,7 +546,7 @@ def test_group_norm_non_tile_aligned_explicit_grid_DRAM(
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups, K, max_err", GROUP_NORM_NON_TILE_ALIGNED_PADDING_FRACTION_CASES)
 def test_group_norm_non_tile_aligned_padding_fraction_DRAM(device, N, C, H, W, num_groups, K, max_err):
-    # How the correction (#50682) degrades as the padding fraction grows: it is exact in exact
+    # How the correction degrades as the padding fraction grows: it is exact in exact
     # arithmetic, and what degrades is the bfloat16 cancellation in Var - K*E[x]^2, which scales
     # with K. Real shapes sit at K <= 0.6 (XTTS-v2 H*W=269, K=0.07) and stay inside 0.08. K >= 1
     # happens only for H*W <= 16 and is recorded as a known limit, not a target.
@@ -572,9 +564,9 @@ def test_group_norm_non_tile_aligned_padding_fraction_DRAM(device, N, C, H, W, n
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES[:1])
 def test_group_norm_non_tile_aligned_no_input_mask_DRAM(device, N, C, H, W, num_groups):
-    # tt-metal #50682 on the no-input-mask variant. Without the channel mask the compute kernel
-    # skips the "zero out garbage by mult mask again" step, so this checks that the padding-row
-    # correction is independent of the channel masking path.
+    # No-input-mask variant: without the channel mask the compute kernel skips the "zero out
+    # garbage by mult mask again" step, so this checks the padding-row correction is independent
+    # of channel masking.
     if device.core_grid.y == 7:
         pytest.skip()
 
@@ -585,11 +577,9 @@ def test_group_norm_non_tile_aligned_no_input_mask_DRAM(device, N, C, H, W, num_
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize(
-    "input_shift, max_err, aligned_ref, max_ratio", GROUP_NORM_NON_TILE_ALIGNED_SHIFT_CASES
-)
+@pytest.mark.parametrize("input_shift, max_err, aligned_ref, max_ratio", GROUP_NORM_NON_TILE_ALIGNED_SHIFT_CASES)
 def test_group_norm_non_tile_aligned_shifted_input_DRAM(device, input_shift, max_err, aligned_ref, max_ratio):
-    # Accuracy limit of the correction (#50682) vs the input mean. group_norm is shift-invariant so
+    # Accuracy limit of the correction vs the input mean. group_norm is shift-invariant so
     # the output must not change, but the kernel's internals do: subtracting K*E[x]^2 from a bf16
     # variance makes the relative error grow like 2^-8 * (1 + 2*K*r) with r = mean^2/variance.
     # The TILE-ALIGNED H*W=224 control is measured alongside because the fused bf16 kernel also
@@ -643,9 +633,9 @@ def test_group_norm_non_tile_aligned_shifted_input_DRAM(device, input_shift, max
     "the padding rows are being masked and the precondition can be dropped from the kernel docs.",
 )
 def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
-    # Documents (as a strict xfail) the precondition the #50682 correction depends on. The op
-    # reduced over the padding rows before the fix too, so this dependence is not new -- but the
-    # fix is what makes "correct for non-tile-aligned H*W" a claim, and this is its boundary.
+    # Documents (as a strict xfail) the precondition the correction depends on. The op reduced over
+    # the padding rows before the fix too, so the dependence is not new -- but the fix is what makes
+    # "correct for non-tile-aligned H*W" a claim, and this is its boundary.
     if device.core_grid.y == 7:
         pytest.skip()
 

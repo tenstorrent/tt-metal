@@ -686,7 +686,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_sender_compute_compile_time_args.push_back(tile_width);
-    // #50682. Appended last: index is 25/26 without Welford, 26/27 with it (the conditional arg
+    // Appended last: index is 25/26 without Welford, 26/27 with it (the conditional arg
     // above shifts them). Only the two-pass kernel reads them.
     mcast_sender_compute_compile_time_args.push_back(pad.kernel_logical_hw);
     mcast_sender_compute_compile_time_args.push_back(pad.padded_hw);
@@ -1121,7 +1121,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }}},
     });
 
-    // #50682 pad-correction scalars/scratch: cb_k written by the writer, cb_msq / cb_kmsq scratch.
+    // Pad-correction scalars/scratch: dfb_k written by the writer, dfb_msq / dfb_kmsq scratch.
     append_group_norm_pad_correction_cbs(
         desc.cbs,
         pad,
