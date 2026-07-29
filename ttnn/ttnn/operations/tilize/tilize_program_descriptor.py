@@ -29,7 +29,7 @@ with ``chunk_wt <= WT_CHUNK_MAX``, i.e. bounded by a constant in ``W``.
 
 from __future__ import annotations
 
-from math import prod
+from math import gcd, prod
 from pathlib import Path
 
 import ttnn
@@ -153,13 +153,38 @@ def _alias_eligible(in_geo, out_geo, folded_h: int, width: int) -> bool:
 
 
 def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_double_buffer=True):
-    """Evaluate the host planner once per program build."""
-    padded = list(input_tensor.padded_shape)
-    folded_h = int(prod(padded[:-1]))
-    width = int(padded[-1])
+    """Evaluate the host planner once per program build.
+
+    The tile grid is derived from the **output** tensor's padded shape — that is
+    the page grid the writer addresses. A ROW_MAJOR-*sharded* input can carry
+    extra padding on its last dim (its width is rounded up to a whole number of
+    shard widths, e.g. logical W=160 with shard_W=96 stores a padded W=192), and
+    that padding is a source *stride* concern only. Deriving the tile grid from
+    the input's padded shape would invent tile columns that do not exist in the
+    output and silently corrupt every page index.
+    """
+    out_padded = list(output_tensor.padded_shape)
+    in_padded = list(input_tensor.padded_shape)
+
+    folded_h = int(prod(out_padded[:-1]))
+    width = int(out_padded[-1])
     nt_h = folded_h // TILE_HW
     wt = width // TILE_HW
     total_tiles = nt_h * wt
+
+    # Only the last dim may differ between the two padded shapes; anything else
+    # means the row fold is not the same on both sides and the plain
+    # "flatten the leading dims" mapping below would not hold.
+    if in_padded[:-1] != out_padded[:-1]:
+        raise UnsupportedAxisValue(
+            f"tilize: input padded shape {in_padded} and output padded shape "
+            f"{out_padded} disagree on the leading dims — the row fold is not "
+            "expressible as a single flatten"
+        )
+    if int(in_padded[-1]) < width:
+        raise UnsupportedAxisValue(
+            f"tilize: input padded width {in_padded[-1]} is narrower than the " f"output width {width}"
+        )
 
     elem_in = input_tensor.element_size()
     tile_in = ttnn.tile_size(input_tensor.dtype)
@@ -172,6 +197,7 @@ def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_d
     plan = {
         "folded_h": folded_h,
         "width": width,
+        "in_padded_width": int(in_padded[-1]),
         "nt_h": nt_h,
         "wt": wt,
         "total_tiles": total_tiles,
@@ -182,7 +208,10 @@ def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_d
         "needs_cast": int(output_tensor.dtype != input_tensor.dtype),
     }
 
-    if _alias_eligible(in_geo, out_geo, folded_h, width):
+    # Path B is inherently multi-core (one shard per core), so an explicit
+    # use_multicore=False request routes to the generic single-core path
+    # instead of being refused.
+    if use_multicore and _alias_eligible(in_geo, out_geo, folded_h, width):
         return _plan_alias(plan, in_geo)
 
     return _plan_generic(
@@ -234,22 +263,26 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_doub
     width = plan["width"]
 
     # --- source page geometry (one page == one stick of `page_bytes`) --------
+    # NB: the stride is measured against the input's *padded* row, which for a
+    # ROW_MAJOR-sharded input may be wider than the logical/tile row.
     in_page_bytes = input_tensor.buffer_page_size()
-    row_bytes_full = width * elem_in
-    if row_bytes_full % in_page_bytes:
+    in_padded_row_bytes = plan["in_padded_width"] * elem_in
+    if in_padded_row_bytes % in_page_bytes:
         raise UnsupportedAxisValue(
-            f"tilize: input row of {row_bytes_full} B is not a whole number of "
-            f"{in_page_bytes} B pages (shard width does not divide W)"
+            f"tilize: input padded row of {in_padded_row_bytes} B is not a whole " f"number of {in_page_bytes} B pages"
         )
-    row_page_stride = row_bytes_full // in_page_bytes
+    row_page_stride = in_padded_row_bytes // in_page_bytes
 
-    # A chunk must never straddle a source page, so it has to divide the page
-    # width in tiles as well as Wt.
-    chunk_unit = wt if row_page_stride == 1 else in_page_bytes // (TILE_HW * elem_in)
     if in_page_bytes % (TILE_HW * elem_in):
         raise UnsupportedAxisValue(
             f"tilize: input page of {in_page_bytes} B is not a whole number of " f"{TILE_HW * elem_in} B tile-columns"
         )
+
+    # A chunk must never straddle a source page, so when a logical row spans
+    # several pages the chunk width has to divide BOTH Wt (for the column split)
+    # and the page width in tiles (so `byte_offset` stays inside one page).
+    page_wt = in_page_bytes // (TILE_HW * elem_in)
+    chunk_unit = wt if row_page_stride == 1 else gcd(wt, page_wt)
 
     # --- planner (op_design.md "Host planner") ------------------------------
     grid = device.compute_with_storage_grid_size()

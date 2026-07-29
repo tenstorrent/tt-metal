@@ -121,15 +121,15 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 #
-# Sharded I/O is inherently multi-core (one shard per core); a single-core
-# sharded program is not something this op builds. A future refinement could
-# legitimately construct one, which is exactly why this is EXCLUSIONS and not
-# INVALID.
+# Empty. op_design.md proposed excluding {use_multicore: False} x sharded on the
+# grounds that "sharded I/O is inherently multi-core". That turned out not to be
+# a kernel-level boundary here: the generic (TensorAccessor) path addresses
+# sharded pages from any core count, so `use_multicore=False` with sharded I/O
+# simply routes to a 1-core generic program instead of the zero-copy Path B.
+# Declaring it excluded would have been a refusal the op does not actually need
+# — and the reference suite exercises exactly that cell.
 
-EXCLUSIONS = [
-    {"use_multicore": False, "shard_api": "legacy_2d"},
-    {"use_multicore": False, "shard_api": "nd"},
-]
+EXCLUSIONS = []
 
 
 # ---------------------------------------------------------------------------
