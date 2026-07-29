@@ -53,7 +53,7 @@ using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorklo
 // core as though it shared the first core's allocation, which is silently wrong whenever those
 // addresses differ.
 //
-// Ops are refused per-core inputs and outputs unless they declare support:
+// Ops are refused per-core *inputs* unless they declare support (the output side is #51482):
 //
 //     struct MyDeviceOperation {
 //         static constexpr bool supports_per_core_allocation = true;
