@@ -66,6 +66,10 @@ def decode_forward(
 
     # Gate projection
     # Fused gate+up: one sparse_matmul over the concatenated [gate|up] weight.
+    # gate/up output kept bf16 (not bf8): the downstream transpose+slice+add+SwiGLU
+    # chain operates in bf16 and otherwise inserts bf8->bf16 typecasts around each
+    # transpose (tracy: 144 Transpose->Typecast->Transpose in decode = ~1.2ms/tok).
+    # Emitting bf16 directly from the matmul removes those casts. Verify perf+accuracy.
     gate = ttnn.sparse_matmul(
         hidden_states,
         weights.gate_up_proj,
@@ -78,7 +82,7 @@ def decode_forward(
         program_config=program_config.get_decode_gate_up_config(
             hidden_states.shape[2], weights.gate_up_proj.shape[3], k=hidden_states.shape[-1]
         ),
-        dtype=activation_dtype,
+        dtype=ttnn.bfloat16,
     )
     hidden_states.deallocate(True)
     # Fused output is [.., 2*I]; split into gate/up along the last dim after the
