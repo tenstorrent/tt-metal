@@ -11,16 +11,16 @@
 namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingProgramFactory {
-    // Contract (1): single ProgramDescriptor.  Sharded variants set CBDescriptor::buffer
-    // so the framework patches dynamic CB addresses on cache hit; per-core runtime args
-    // and CB total_sizes (which depend on input shape) are re-applied via
-    // apply_descriptor_runtime_args.
+    // Contract (1): single ProgramDescriptor.  Two variants: single-tile (Wt == 1) and multi-tile.
+    // Sharded variants set CBDescriptor::buffer for the globally-allocated input/output CBs.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const RotaryEmbeddingParams& operation_attributes,
         const RotaryEmbeddingInputs& tensor_args,
         Tensor& tensor_return_value);
 
-    // Re-applies the token_idx-derived runtime args on every cache hit (the value is excluded from the hash).
+    // Patches the cached program in place on every cache hit: the token_idx-derived cos/sin offsets
+    // (its value is excluded from the hash) plus every buffer address and globally-allocated CB
+    // address, since this hook supersedes resolve_bindings.  Does NOT rebuild the descriptor.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const RotaryEmbeddingParams& operation_attributes,

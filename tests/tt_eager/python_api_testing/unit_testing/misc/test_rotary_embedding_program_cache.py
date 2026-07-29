@@ -23,7 +23,8 @@ def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx):
 
 
 @pytest.mark.parametrize("cache_size", [2048])
-@pytest.mark.parametrize("head_dim", [64])
+# head_dim 32 exercises the single-tile (Wt == 1) descriptor variant, 64 the multi-tile one.
+@pytest.mark.parametrize("head_dim", [32, 64])
 def test_rotary_embedding_decode_program_cache_reuse(cache_size, head_dim, device):
     # Regression: token_idx's value is excluded from the hash, so decode positions hit the same cached
     # program and the token_idx-derived args must be re-applied each hit or they freeze. The existing
