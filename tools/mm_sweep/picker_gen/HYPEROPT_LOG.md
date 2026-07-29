@@ -549,3 +549,85 @@ Commit `a86dd5e0b68`. New diagnostics: bit22 FORCE_CHAIN, bit23 FORCE_RSCATTER.
 **LESSON.** A refactor that preserves numerics can still silently delete performance. Any "cleanup" that
 removes a gated optimisation must re-run the A/B that justified it, and the corpus baseline must be re-measured
 after the cleanup, not assumed unchanged.
+
+### S8. SHIPPED: reduce-scatter for 3 more shapes - uneven chunks + the N-width rule was wrong (-7.4 to -8.5%)
+
+Having restored reduce-scatter (S7), I measured the shapes its gate DECLINED, using the new bit23
+FORCE_RSCATTER. Both remaining restrictions turned out to be wrong for the shallow-K regime.
+
+**Finding 1: the "wide N" rule was wrong.** The gate demanded N >= 32 tiles. `128x2048x512` has N = 16 tiles
+and is **8.9% FASTER** with reduce-scatter. Across all 15 shapes measured, every shallow-K shape with Pk>=4 and
+N_sub>=2 won - six out of six - no matter how wide N was. Rule deleted.
+
+**Finding 2: the "divisible by Pk" rule locked out 41 of 62 corpus shapes for no reason.** The old code cut the
+output sub-block into Pk EQUAL chunks, so it gave up whenever Pk did not divide the tile count. Chunks do not
+have to be equal. They now differ by at most one tile (the first few take one extra), so the only real
+requirement is that there are at least as many tiles as cores. The protocol is unchanged because every buffer
+operation still moves a full maximum-size slot and only the useful part of it is written or read - so the
+double-buffer rhythm and the remote write stride stay constant. For shapes that DO divide evenly, the code
+behaves exactly as before, which I confirmed by re-measuring two of them (they reproduced their earlier numbers
+within noise).
+
+**Result: 5 -> 8 adopted shapes.** Measured against bit22 FORCE_CHAIN, two relaunches with the mask order
+reversed on the second:
+
+| shape | chain (us) | reduce-scatter (us) | change | why it is new |
+|---|---|---|---|---|
+| 256x2048x1024 | 23.26 | 19.85 | **14.7% faster** | |
+| 256x2048x2048 | 39.16 | 34.18 | **12.7% faster** | |
+| 128x2048x1024 | 16.40 | 14.50 | **11.6% faster** | |
+| 128x2048x2048 | 27.04 | 24.62 | **9.0% faster** | |
+| 256x2048x512 | 15.10 | 13.82 | **8.5% faster** | NEW - uneven chunks 2,2,1,1 |
+| 128x2048x512 | 11.21 | 10.29 | **8.2% faster** | NEW - N-width rule dropped |
+| 256x2048x1536 | 29.78 | 27.58 | **7.4% faster** | NEW - uneven chunks 3,2,2,2 |
+| 64x2048x1024 | 12.85 | 12.14 | **5.5% faster** | |
+
+The three newly-adopted shapes were carrying 46-54% relative slack to their roofline floor - the highest in the
+whole corpus - so this is exactly where the headroom was.
+
+**What is still on the chain, and why.** Deep-K shapes (K >= 72 tiles). Measured with bit23 they are genuinely
+mixed: 256x15360x1536 -3.0%, 256x15360x768 -1.4%, 128x15360x768 -1.3%, 128x2304x6144 -0.7%, but
+128x15360x1536 +3.0%, 64x15360x1536 +2.7%, 256x2304x6144 +2.3%. Mean about zero. The pattern is that the
+LOSERS are the ones whose chunks shrink to a single tile: with Pk=12 you get 11 rounds of one 2 KB message
+each, and the per-round handshake costs more than the shortened critical path saves. So chunk SIZE, not depth,
+is what decides whether reduce-scatter pays.
+
+Gate is now: Pk>=4, K <= 64 tiles, N_sub>=2, at least Pk tiles per sub-block, unfused, single output chunk.
+
+PCC 0.99999-1.000000 vs an FP32 CPU reference on all 8 adopted shapes plus 2 chain controls; 111/111
+correctness tests pass. Commit `f3370a45409`.
+
+### F9. FAILED, and it protects the two biggest-slack shapes: reduce-scatter on deep-K is a big LOSS
+
+With uneven chunks (S8) the two largest-slack shapes in the corpus became *feasible* for reduce-scatter for the
+first time, so I tested them with bit23 FORCE_RSCATTER. Two relaunches, mask order reversed:
+
+| shape | chain (us) | reduce-scatter (us) | result |
+|---|---|---|---|
+| 512x6144x4608 | 180.08 | 240.25 | **33.4% SLOWER** |
+| 512x6144x2304 | 110.29 | 131.75 | **19.5% SLOWER** |
+| 256x6144x6144 | 193.88 | 186.49 | 3.8% faster |
+| 256x6144x4608 | 143.43 | 140.85 | 1.8% faster |
+| 256x6144x1536 | 61.53 | 60.61 | 1.5% faster |
+
+**Why the two 512-row shapes collapse.** Reduce-scatter replaces ONE full-block add per core with Pk-1 small
+chunk-adds. Each of those calls pays a fixed setup cost (add_tiles_init + data-format reconfig) no matter how
+few tiles it touches. These two shapes have N_sub = 1 and Pk = 12, so their chunks are 1-2 tiles and they run
+18 sub-blocks x 11 rounds = **198 tiny add-calls where the chain does 18**. And 512x6144x4608 is the one shape
+in the corpus that is already COMPUTE-floor-bound - its compute floor is 139.2 us of a 180.4 us wall, 77% - so
+extra compute overhead is the worst thing you can add to it.
+
+Where compute has slack the same change pays: 256x6144x6144 sits at 47% compute and gains 3.8%.
+
+**So the rule is: reduce-scatter trades data movement for per-round compute overhead. It pays only when compute
+has slack AND the chunks are big enough to amortise the per-round setup.** That is exactly why the shallow-K
+shapes win 5-15% (compute is only 30-40% of their wall) and why the deep-K ones do not.
+
+**Decision: keep the chain for deep K.** The deep-K wins are all <=3.8% and mostly at the +-1.5% noise floor for
+large shapes, while the losses reach +33%. Bad expected value, and the gate as shipped in S8 already excludes
+them. No code change - this is a guard rail recorded so nobody widens the gate on the strength of the three
+small wins in the table above.
+
+**Remaining headroom on the top two shapes is therefore NOT the reduction.** 512x6144x4608 has 41.2 us of slack
+and is compute-floor-bound; the lever there is cheaper math, not cheaper movement. 512x6144x2304 has 38.1 us
+with its compute floor (70.0) and DRAM floor (72.2) essentially equal, so it needs BOTH to improve.
