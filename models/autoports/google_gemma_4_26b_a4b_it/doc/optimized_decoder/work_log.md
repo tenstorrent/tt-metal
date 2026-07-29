@@ -303,8 +303,11 @@ full raw health dump remains in `final_device_health.txt`.
 Implementation, tests, and complete evidence checkpoint:
 `b79bcad4c17` (`Add optimized Gemma 4 decoder stage`).
 
-The documentation-finalization SHA is recorded by the following bookkeeping
-commit after it is created; the final local HEAD is also reported at handoff.
+Documentation/checklist finalization:
+`cce3dfc2746` (`Record optimized decoder checkpoint`).
+
+The bookkeeping commit that records this second SHA is the final local HEAD
+and is reported at handoff.
 
 The persistent `/dev/shm` warning did not abort any gate. All evidence above
 was regenerated from base `bae72d8aa452c8bcdf2d8d70216de58a1fb32c25`.
