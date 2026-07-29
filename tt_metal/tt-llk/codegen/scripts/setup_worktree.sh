@@ -149,11 +149,12 @@ setup_worktree() {
   # Writable: artifacts dir is per-worktree (no cross-contamination)
   mkdir -p "${wt_llk}/codegen/artifacts"
 
-  # run_test.sh lives outside codegen/ but is codegen infra: symlink it to the
-  # source copy so every worktree runs the current test harness, not the base
-  # commit's. Marked --skip-worktree below so git ignores the override.
+  # Test wrappers live outside codegen/ but are codegen infra: symlink them to
+  # the source copy so every worktree runs the current harness, not the base
+  # commit's. Mark tracked overrides --skip-worktree below.
   mkdir -p "${wt_llk}/.claude/scripts"
   ln -sf "${LLK_ROOT}/.claude/scripts/run_test.sh"  "${wt_llk}/.claude/scripts/run_test.sh"
+  ln -sf "${LLK_ROOT}/.claude/scripts/run_qsr_metal_test.sh" "${wt_llk}/.claude/scripts/run_qsr_metal_test.sh"
   ln -sf "${LLK_ROOT}/.claude/scripts/llk_triage.py" "${wt_llk}/.claude/scripts/llk_triage.py"
 
   # Share the source checkout's Python venv across worktrees instead of rebuilding
@@ -199,7 +200,7 @@ GITIGNORE
   # the symlink shows up as a typechange. Mark such tracked paths
   # --skip-worktree so git ignores the worktree symlink. (.gitignore is included so
   # its own appended lines stay hidden too.)
-  for rel in CLAUDE.md .mcp.json .gitignore .claude/scripts/run_test.sh; do
+  for rel in CLAUDE.md .mcp.json .gitignore .claude/scripts/run_test.sh .claude/scripts/run_qsr_metal_test.sh; do
     p="${LLK_REL}/${rel}"
     if git -C "$WORKTREE_DIR" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
       git -C "$WORKTREE_DIR" update-index --skip-worktree -- "$p" 2>/dev/null || true

@@ -275,10 +275,12 @@ The mechanism is concurrency-safe — launch as many as the machine can handle:
   even two runs of the *same* issue never collide.
 - Fixes are committed to **separate branches**, so concurrent local commits
   never touch each other.
-- Device access is serialized by `.claude/scripts/run_test.sh` via a single
-  global lock (`/tmp/tt-llk-test.lock`), so parallel runs compile in parallel
-  (lock-free) and queue only at the `simulate`/`run` step; whoever holds the lock
-  rebuilds under it if a peer's compile invalidated the shared build cache.
+- Device access is serialized by `.claude/scripts/run_test.sh`. Local devices
+  use `/tmp/tt-llk-test.lock`; Quasar uses `QSR_AETHER_LOCK` when configured so
+  separate compute hosts also serialize against the same remote Aether
+  resource. Parallel runs compile lock-free and queue only at the
+  `simulate`/`run` step; whoever holds the lock rebuilds if a peer's compile
+  invalidated the build cache.
 
 Launch pattern (mirrors `batch_generate.sh` for kernels): run one
 `claude -p "solve issue #<N> ..."` per issue, passing every input the Startup

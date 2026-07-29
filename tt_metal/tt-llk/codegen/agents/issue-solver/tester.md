@@ -52,8 +52,13 @@ The router leaves simulator paths in bootstrap state. For ttsim, read
 Optional environment:
 
 - `HW_TEST_DISPATCH_CMD`: shared silicon-queue client. It applies only to the
-  local backend.
+  local backend and only to Blackhole/Wormhole. Quasar always executes on the
+  compute runner through Aether.
 - `HW_TEST_SESSION`: queue session name.
+- `QSR_SIM_BACKEND`: Quasar Aether backend, `emu` (default) or `vcs`.
+- `QSR_EMU_SIM_PATH` / `QSR_VCS_SIM_PATH`: runner-local UMD build directories.
+- `QSR_AETHER_LOCK`: shared-filesystem lock used by every compute runner.
+- `QSR_AETHER_HOST`: remote Aether host (default `soc-l-04`).
 
 ## Pre-Flight
 
@@ -187,8 +192,10 @@ For a compile-only plan, use `subcommand=compile` and return
 
 For a functional test:
 
-- with `HW_TEST_DISPATCH_CMD`, run `subcommand=compile` as the local gate and
-  then follow **Queued Silicon**;
+- for Quasar, run `subcommand=compile` as the local gate and then follow
+  **Local Quasar Aether**. Never submit Quasar to the silicon queue;
+- for Blackhole/Wormhole with `HW_TEST_DISPATCH_CMD`, run
+  `subcommand=compile` as the local gate and then follow **Queued Silicon**;
 - without it, use `subcommand=run` so the wrapper compiles and runs on the
   local device.
 
@@ -225,12 +232,45 @@ the wrapper reports an environment-style exit.
 
 Do not submit a queue job after a local compile failure.
 
+## Local Quasar Aether
+
+Use this route for `arch=quasar` with `TEST_BACKEND=local`, whether or not
+`HW_TEST_DISPATCH_CMD` is set. The compute runner owns the patched worktree and
+the compile artifacts, so Quasar VCS/emulator execution stays on that same
+machine. Blackhole/Wormhole remain queue-backed.
+
+After the local `compile` gate passes, run:
+
+```bash
+set +e
+bash .claude/scripts/run_test.sh simulate \
+  --worktree "$WORKTREE_DIR/tt_metal/tt-llk" \
+  --arch quasar \
+  --test "$TEST_FILE" \
+  --log-dir "$LOG_DIR" \
+  --verbose
+qsr_exit=$?
+set -e
+```
+
+Add the plan's `--k "$K_FILTER"` or `--test-id "$TEST_ID"` selector. The
+wrapper resolves `QSR_SIM_BACKEND=emu|vcs` to the corresponding configured UMD
+path and uses `QSR_AETHER_LOCK`, which must be a shared-filesystem path so the
+two compute hosts cannot start or reap each other's Aether jobs.
+
+If the test requires `--no-split`, skip the separate compile/simulate pair and
+use `run --no-split` once with the same arguments. It compiles and executes
+while holding the shared Aether lock.
+
+Classify the final `RUN_LLK_TESTS_VERDICT` with the local exit-code table above.
+Record the selected `QSR_SIM_BACKEND` and no queue job ID.
+
 ## Queued Silicon
 
-Use this route only for `TEST_BACKEND=local` with
-`HW_TEST_DISPATCH_CMD`, after the corresponding local compile passes. The
-queue owns card scheduling and silicon execution; do not call the wrapper's
-`run` or `simulate` subcommands.
+Use this route only for Blackhole/Wormhole with `TEST_BACKEND=local` and
+`HW_TEST_DISPATCH_CMD`, after the corresponding local compile passes. The queue
+owns card scheduling and silicon execution; do not call the wrapper's `run` or
+`simulate` subcommands. Quasar is never valid on this route.
 
 The current queue accepts a worktree and pytest selector rather than the
 locally produced artifact. Its runner repeats the producer step because

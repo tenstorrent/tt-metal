@@ -8,8 +8,9 @@
 # on its own.
 #
 # Two device paths:
-#   quasar              emulator — pytest --run-simulator --port; tt-exalens boots,
-#                       runs, tears down. HANG = post-ready log stall.
+#   quasar              Aether VCS/emulator — pytest --run-simulator --port;
+#                       tt-exalens boots, runs, tears down. HANG = post-ready
+#                       log stall. QSR_SIM_BACKEND selects vcs|emu.
 #   blackhole/wormhole  real silicon (/dev/tenstorrent). HANG = TENSIX TIMED OUT
 #                       or log stall; recovered with llk_triage.py + tt-smi -r.
 #
@@ -81,7 +82,8 @@ GRACE_SECS="${GRACE_SECS:-30}"          # wait after SIGINT before SIGKILL
 # "tt-exalens ready (PID …)" to the pytest stream; match that (keep [4B MODE] as
 # a fallback for 4B-mode configs that surface it).
 READY_RE='tt-exalens ready|\[4B MODE\]'
-EMU_HOST="${EMU_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}"
+QSR_SIM_BACKEND="${QSR_SIM_BACKEND:-emu}"
+EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-04}}}"
 NNG_LOCAL_BASE="5555"                   # local NNG bind (infra-forwarded; fixed)
 DBD_BASE="54910"                        # NNG_SOCKET_ADDR debuda port (fixed)
 
@@ -135,14 +137,42 @@ _validate() {
   [[ -d "$TEST_DIR" ]] || { echo "ERROR: test directory not found: ${TEST_DIR}" >&2; exit 3; }
   [[ -f "${TEST_DIR}/${TEST_FILE}" ]] || { echo "ERROR: test file not found: ${TEST_DIR}/${TEST_FILE}" >&2; exit 3; }
 
-  [[ -z "$SIM_PATH" ]] && SIM_PATH="/proj_sw/user_dev/${USER}/tt-umd-simulators/build/emu-${ARCH}-1x3"
-  # One global lock for every invocation on this host, regardless of arch.
-  [[ -z "$LOCKFILE" ]] && LOCKFILE="/tmp/tt-llk-test.lock"
-
   case "$ARCH" in
     blackhole|wormhole) MODE="hardware"  ;;
     *)                  MODE="simulator" ;;
   esac
+
+  if [[ -z "$SIM_PATH" ]]; then
+    if [[ "$ARCH" == "quasar" ]]; then
+      case "$QSR_SIM_BACKEND" in
+        emu|emulator)
+          QSR_SIM_BACKEND="emu"
+          SIM_PATH="${QSR_EMU_SIM_PATH:-/proj_sw/user_dev/${USER}/tt-umd-simulators/build/emu-quasar-1x3}"
+          ;;
+        vcs)
+          SIM_PATH="${QSR_VCS_SIM_PATH:-/proj_sw/user_dev/${USER}/tt-umd-simulators/build/vcs-quasar-1x3}"
+          ;;
+        *)
+          echo "ERROR: QSR_SIM_BACKEND must be emu or vcs, got '$QSR_SIM_BACKEND'" >&2
+          exit 3
+          ;;
+      esac
+    else
+      SIM_PATH="/proj_sw/user_dev/${USER}/tt-umd-simulators/build/emu-${ARCH}-1x3"
+    fi
+  fi
+
+  # Quasar's Aether resource is remote and shared by both compute runners. Use
+  # QSR_AETHER_LOCK (a shared-filesystem path) when configured so tensix-l-04
+  # and tensix-l-05 cannot start or reap each other's runs. Other paths retain
+  # the historical node-local lock.
+  if [[ -z "$LOCKFILE" ]]; then
+    if [[ "$ARCH" == "quasar" && -n "${QSR_AETHER_LOCK:-}" ]]; then
+      LOCKFILE="$QSR_AETHER_LOCK"
+    else
+      LOCKFILE="/tmp/tt-llk-test.lock"
+    fi
+  fi
 
   # Hang threshold: emulator gets the post-ready stall; silicon keeps the larger
   # default. Explicit --stall / HANG_STALL wins.
@@ -269,6 +299,7 @@ _run_consumer() {
   if [[ "$MODE" == "simulator" ]]; then
     export NNG_SOCKET_ADDR="$NNG_ADDR" NNG_SOCKET_LOCAL_PORT="$NNG_LOCAL" NNG_SOCKET_NAME="$RUN_TAG"
     export TT_UMD_SIMULATOR_PATH="$SIM_PATH"
+    export SSH_MACHINE_NAME="$EMU_HOST"
     # Free this run's port before booting tt-exalens.
     local stale; stale="$(lsof -ti :"$PORT" 2>/dev/null || true)"
     [[ -n "$stale" ]] && echo "$stale" | xargs -r kill -9 2>/dev/null || true
@@ -321,19 +352,19 @@ _run_consumer() {
     # Stalled before tt-exalens ever reported ready → a boot wedge, not a kernel
     # hang. Transient (emulator congestion) → ENV so the caller may retry.
     echo "[run_test] ENV: stalled before tt-exalens became ready (boot wedge)" >&2
-    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >&2 2>&1 || true
+    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
     code=3
   elif [[ -f "$hangflag" ]]; then
     echo "[run_test] HANG: no output for ${STALL}s" >&2
     if [[ "$MODE" == "simulator" ]]; then
-      [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >&2 2>&1 || true
+      [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
     else
       _hw_hang_cleanup
     fi
     code=5
   elif [[ "$MODE" == "simulator" && $rc -ne 0 ]] && ! grep -qE "$READY_RE" "$log" 2>/dev/null; then
     echo "[run_test] ENV: tt-exalens never became ready" >&2
-    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >&2 2>&1 || true
+    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
     code=3
   elif [[ "$MODE" == "hardware" && $rc -ne 0 ]] && grep -qF "TENSIX TIMED OUT" "$log" 2>/dev/null; then
     echo "[run_test] HANG: TENSIX TIMED OUT" >&2
@@ -387,6 +418,8 @@ _run_under_lock() {
   _validate; _activate_venv; _ensure_sfpi || return 3
   _build_target; cd "$TEST_DIR" || return 3
 
+  mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null ||
+    { echo "ERROR: cannot create lock directory for ${LOCKFILE}" >&2; return 3; }
   exec 9>>"$LOCKFILE" || { echo "ERROR: cannot open lock ${LOCKFILE}" >&2; return 3; }
   _vlog "waiting for global lock ${LOCKFILE}"
   flock 9                       # unbounded — wait in line
@@ -395,7 +428,7 @@ _run_under_lock() {
   # Pre-flight reap under the lock: any live emu job now is an orphan from a run
   # whose peer died non-gracefully. Clear it before booting ours.
   if [[ "$MODE" == "simulator" && -x "$REAP" ]]; then
-    bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >&2 2>&1 || true
+    bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
   fi
 
   # Build under the lock if forced or the stamp is not ours (a peer recompiled).
@@ -430,7 +463,7 @@ _cleanup() {
     while kill -0 "$CONSUMER_PID" 2>/dev/null && [[ $waited -lt $GRACE_SECS ]]; do sleep 1; waited=$((waited + 1)); done
     kill -9 "$CONSUMER_PID" 2>/dev/null
     if [[ "${MODE:-}" == "simulator" && -x "${REAP:-}" ]]; then
-      bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >/dev/null 2>&1 || true
+      bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >/dev/null 2>&1 || true
     fi
   fi
 }
