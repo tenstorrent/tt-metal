@@ -275,103 +275,145 @@ template <typename F>
 using state_of_t = typename group_of_t<F>::State;
 
 
-enum class Operation : std::uint32_t;
-
-class OperationUtil
+class Operation
 {
 public:
-    enum class NativeThread : std::uint32_t
+    enum class Exu : std::uint32_t
     {
-        TRISC0 = 0,
-        TRISC1 = 1,
-        TRISC2 = 2,
-        TRISC3 = 3
+        Unpack = 0,
+        Fpu    = 1,
+        Sfpu   = 2,
+        Pack   = 3
     };
 
-    enum class ExecutionUnit : std::uint32_t
+    enum class Thread : std::uint32_t
     {
-        UNPACK = 0,
-        MATH   = 1,
-        SFPU   = 2,
-        PACK   = 3
+        Trisc0 = 0,
+        Trisc1 = 1,
+        Trisc2 = 2,
+        Trisc3 = 3
     };
 
-    enum class ExpectUninit : bool
+    enum class Hoistable : std::uint32_t
     {
-        No  = false,
-        Yes = true
+        No  = 0,
+        Yes = 1
     };
 
-    // [31:30] THREAD | [29:28] EXU | [27] UNINIT | [26:0] ID
-    static constexpr std::size_t THREAD_WIDTH = 2;
-    static constexpr std::size_t EXU_WIDTH    = 2;
-    static constexpr std::size_t UNINIT_WIDTH = 1;
-    static constexpr std::size_t ID_WIDTH     = 27;
+    enum class Dependency : std::uint32_t
+    {   
+        None = 0,
+        
+        // UNPACK EXU
+        UnpackAInputFormat  = 1u << 0,
+        UnpackAOutputFormat = 1u << 1,
+        UnpackAFaceHeight   = 1u << 2,
+        UnpackANumFaces     = 1u << 3,
+        UnpackBInputFormat  = 1u << 4,
+        UnpackBOutputFormat = 1u << 5,
+        UnpackBFaceHeight   = 1u << 6,
+        UnpackBNumFaces     = 1u << 7,
+        UnpackDestWidth32   = 1u << 8,
 
-    static_assert(THREAD_WIDTH + EXU_WIDTH + UNINIT_WIDTH + ID_WIDTH == 32, "Operation fields must exactly fill the 32-bit underlying type");
+        UnpackInputFormat   = UnpackAInputFormat | UnpackBInputFormat,
+        UnpackOutputFormat  = UnpackAOutputFormat | UnpackBOutputFormat,
+        UnpackFaceHeight    = UnpackAFaceHeight | UnpackBFaceHeight,
+        UnpackNumFaces      = UnpackANumFaces | UnpackBNumFaces,
+    
+        // FPU EXU 
+        FpuFormat           = 1u << 0,
+        
+        // SFPU EXU
+        SfpuFormat          = 1u << 1,
 
-    static constexpr std::size_t ID_SHAMT     = 0;
-    static constexpr std::size_t UNINIT_SHAMT = ID_SHAMT + ID_WIDTH;
-    static constexpr std::size_t EXU_SHAMT    = UNINIT_SHAMT + UNINIT_WIDTH;
-    static constexpr std::size_t THREAD_SHAMT = EXU_SHAMT + EXU_WIDTH;
+        // PACK EXU
+        PackInputFormat    = 1u << 0,
+        PackOutputFormat   = 1u << 1,
+        PackFaceHeight     = 1u << 2,
+        PackTileWidth      = 1u << 3,
+        PackNumFaces       = 1u << 4,
+        PackPartialFace    = 1u << 5,
+        PackNarrowTile     = 1u << 6,
+        PackDestWidth32    = 1u << 7,
 
-    static constexpr std::uint32_t ID_MASK     = ((0x1u << ID_WIDTH) - 1) << ID_SHAMT;
-    static constexpr std::uint32_t UNINIT_MASK = ((0x1u << UNINIT_WIDTH) - 1) << UNINIT_SHAMT;
-    static constexpr std::uint32_t EXU_MASK    = ((0x1u << EXU_WIDTH) - 1) << EXU_SHAMT;
-    static constexpr std::uint32_t THREAD_MASK = ((0x1u << THREAD_WIDTH) - 1) << THREAD_SHAMT;
+    };
 
-    static constexpr std::uint32_t make(ExecutionUnit exu, NativeThread thread, ExpectUninit expect_uninit, std::uint32_t id)
-    {
-        return (ckernel::to_underlying(thread) << THREAD_SHAMT) | (ckernel::to_underlying(exu) << EXU_SHAMT) |
-               (static_cast<std::uint32_t>(expect_uninit) << UNINIT_SHAMT) | (id << ID_SHAMT);
-    }
 
-    static constexpr NativeThread thread(Operation operation)
-    {
-        return static_cast<NativeThread>((bits(operation) & THREAD_MASK) >> THREAD_SHAMT);
-    }
-
-    static constexpr ExecutionUnit unit(Operation operation)
-    {
-        return static_cast<ExecutionUnit>((bits(operation) & EXU_MASK) >> EXU_SHAMT);
-    }
-
-    static constexpr ExpectUninit expect_uninit(Operation operation)
-    {
-        return static_cast<ExpectUninit>((bits(operation) & UNINIT_MASK) >> UNINIT_SHAMT);
-    }
-
-    static constexpr std::uint32_t id(Operation operation)
-    {
-        return (bits(operation) & ID_MASK) >> ID_SHAMT;
-    }
 
 private:
-    static constexpr std::uint32_t bits(Operation operation)
+    // First word.
+    std::uint32_t _thread       : 2;
+    std::uint32_t _exu          : 2;
+    std::uint32_t _hoistable    : 1;
+    std::uint32_t
+    std::uint32_t _id           : 27;
+
+    // Operand Dependencies.
+
+    std::
+
+
+    // sstanisic todo: add bitset for operand dependencies for each operation
+
+    // Operand Clobbers.
+
+    // sstanisic todo: add bitset for operand clobbers for each operation
+
+    
+    constexpr Operation(std::uint32_t thread, std::uint32_t exu, std::uint32_t id) : _thread(thread), _exu(exu), _id(id)
     {
-        return ckernel::to_underlying(operation);
     }
-};
 
-enum class Operation : std::uint32_t
-{
-    None = 0,
+    static constexpr Operation make(Exu exu, Thread thread, std::uint32_t id)
+    {
+        std::uint32_t _exu      = std::to_underlying(exu);
+        std::uint32_t _thread   = std::to_underlying(thread);
+        return Operation(_thread, _exu, id);
+    }
 
+public:
+    constexpr Thread thread()
+    {
+        return static_cast<Thread>(_thread);
+    }
+
+    constexpr Exu exu()
+    {
+        return static_cast<Exu>(_exu);
+    }
+
+    constexpr 
+
+    constexpr std::uint32_t id()
+    {
+        return _id;
+    }
+
+    // ----------------------
+    // Operation Declarations
+    // ----------------------
+
+    static const Operation None;
     // UNPACK EXU (TRISC0)
-    UnpackA        = OperationUtil::make(OperationUtil::ExecutionUnit::UNPACK, OperationUtil::NativeThread::TRISC0, OperationUtil::ExpectUninit::No, 1),
-    UnpackABMatmul = OperationUtil::make(OperationUtil::ExecutionUnit::UNPACK, OperationUtil::NativeThread::TRISC0, OperationUtil::ExpectUninit::No, 2),
-    UnpackUntilize = OperationUtil::make(OperationUtil::ExecutionUnit::UNPACK, OperationUtil::NativeThread::TRISC0, OperationUtil::ExpectUninit::Yes, 3),
-
-    // MATH EXU (TRISC1)
-    FpuEltwiseUnaryDatacopy = OperationUtil::make(OperationUtil::ExecutionUnit::MATH, OperationUtil::NativeThread::TRISC1, OperationUtil::ExpectUninit::No, 1),
-    Matmul                  = OperationUtil::make(OperationUtil::ExecutionUnit::MATH, OperationUtil::NativeThread::TRISC1, OperationUtil::ExpectUninit::No, 2),
-
+    static const Operation UnpackA;
+    static const Operation UnpackABMatmul;
+    static const Operation UnpackUntilize;
+    // FPU EXU (TRISC1)
+    static const Operation FpuMatmul;
+    static const Operation FpuEltwiseUnaryDatacopy;
+    static const Operation FpuEltwiseBinaryAdd;
+    static const Operation FpuEltwiseBinarySub;
+    static const Operation FpuEltwiseBinaryMul;
+    static const Operation FpuEltwiseBinaryAddDestReuse;
+    static const Operation FpuEltwiseBinarySubDestReuse;
+    static const Operation FpuEltwiseBinaryMulDestReuse;
     // PACK EXU (TRISC2)
-
-    // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
-    Pack         = OperationUtil::make(OperationUtil::ExecutionUnit::PACK, OperationUtil::NativeThread::TRISC2, OperationUtil::ExpectUninit::Yes, 1),
-    PackUntilize = OperationUtil::make(OperationUtil::ExecutionUnit::PACK, OperationUtil::NativeThread::TRISC2, OperationUtil::ExpectUninit::Yes, 2),
+    static const Operation Pack;
+    static const Operation PackUntilize;
 };
+
+static_assert(sizeof(Operation) == sizeof(std::uint32_t), "Operation must be 32 bits");
+
 
 enum class OperationStatus : std::uint32_t
 {
