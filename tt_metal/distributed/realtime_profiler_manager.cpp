@@ -125,7 +125,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
 
     // Gate mock/emulated targets: D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage absent there.
     if (cluster.is_mock_or_emulated()) {
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: target is mock or emulated; D2H sockets "
             "require a real PCIe hugepage that is not present in mock/emulated flows.",
@@ -136,7 +136,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     // Skip Simulator: ttsim kernels are too slow to meet run_sync's 2s poll deadline, burning ~30s/chip and deadlocking
     // finish_sync waiters on WH.
     if (cluster.get_target_device_type() == tt::TargetDevice::Simulator) {
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: target is Simulator; D2H sync polls "
             "cannot meet real-time deadlines against ttsim's emulated PCIe.",
@@ -145,7 +145,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     }
 
     if (!device->is_mmio_capable()) {
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: device is not MMIO-capable (remote device). "
             "D2H sockets require the sender core to sit on a PCIe-connected chip.",
@@ -154,7 +154,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     }
 
     if (hal.get_supports_64_bit_pcie_addressing() && !cluster.is_iommu_enabled()) {
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: this architecture uses 64-bit PCIe "
             "addressing for the D2H socket, which requires IOMMU to be enabled on the host. "
@@ -166,7 +166,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
 
     const auto fabric_tensix_config = metal.get_fabric_tensix_config();
     if (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED) {
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: fabric tensix datamover is enabled "
             "(FabricTensixConfig={}, FabricUDMMode={}), and fabric_mux_core() will drain the "
@@ -181,7 +181,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
 
     std::optional<tt_cxy_pair> reserved = dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
     if (!reserved.has_value()) {
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: no tensix core could be reserved for the "
             "RT profiler. Dispatch is configured for ETH cores, which cannot run the RT profiler "
@@ -209,7 +209,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     }
 
     if (metal.rtoptions().get_kernels_nullified()) {
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: null-kernels mode is active "
             "(TT_METAL_NULL_KERNELS / set_kernels_nullified). The RT profiler kernel "
@@ -549,7 +549,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
         }
         CoreCoord realtime_profiler_core = eligibility.core;
 
-        log_debug(
+        log_info(
             tt::LogMetal,
             "[Real-time profiler] Using reserved tensix ({}, {}) for real-time profiler on device {}",
             realtime_profiler_core.x,
