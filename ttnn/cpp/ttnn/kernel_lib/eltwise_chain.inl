@@ -36,11 +36,41 @@ constexpr uint32_t BlockingSettings::total_tiles_or(uint32_t shape_total_tiles) 
     return total_tiles == 0 ? shape_total_tiles : total_tiles;
 }
 
-constexpr uint32_t BlockingSettings::num_blocks(uint32_t Ht, uint32_t Wt) const {
+namespace detail {
+
+// Runtime-only validation for BlockingSettings' constexpr accessors below.
+//
+// MUST NOT be inlined back into those accessors. `ASSERT` expands to a form
+// containing `asm("ebreak")` under LIGHTWEIGHT_KERNEL_ASSERTS, and to a
+// non-constexpr `assert_and_hang(...)` call under the watcher — both of which
+// kernels build (`--dev` enables them). Kernels compile at `-std=c++17` with
+// `-Wall -Werror` (tt_metal/jit_build/build.cpp), and GCC diagnoses `asm` in a
+// constexpr function body as `-Wc++20-extensions`, which `-Werror` promotes to
+// a hard error. The diagnostic is LEXICAL: it fires on the definition, so
+// wrapping the ASSERTs in `if (!__builtin_is_constant_evaluated())` does NOT
+// silence it, and the error lands on every translation unit that includes this
+// header — even a kernel that never calls these accessors. That is why `--dev`
+// could not compile any eltwise_chain caller at all.
+//
+// Keeping the asm in a NON-constexpr callee, reached only when not
+// constant-evaluated, preserves all three properties we need: the accessors
+// stay usable in constant expressions (CB sizing, template args), the runtime
+// checks still fire under `--dev`, and the default build is unchanged (ASSERT
+// degrades to `sizeof`, so this collapses to nothing).
+__attribute__((always_inline)) inline void assert_blocking_valid(
+    uint32_t block_size, uint32_t Ht, uint32_t Wt, uint32_t effective_total_tiles) {
     ASSERT(block_size > 0);
     ASSERT(Ht > 0);
     ASSERT(Wt > 0);
-    ASSERT(total_tiles_or(Ht * Wt) == Ht * Wt);
+    ASSERT(effective_total_tiles == Ht * Wt);
+}
+
+}  // namespace detail
+
+constexpr uint32_t BlockingSettings::num_blocks(uint32_t Ht, uint32_t Wt) const {
+    if (!__builtin_is_constant_evaluated()) {
+        detail::assert_blocking_valid(block_size, Ht, Wt, total_tiles_or(Ht * Wt));
+    }
     return Ht * ((Wt / block_size) + (Wt % block_size != 0));
 }
 
@@ -49,10 +79,9 @@ constexpr uint32_t BlockingSettings::physical_tiles(uint32_t Ht, uint32_t Wt) co
 }
 
 constexpr uint32_t BlockingSettings::last_block_size(uint32_t Ht, uint32_t Wt) const {
-    ASSERT(block_size > 0);
-    ASSERT(Ht > 0);
-    ASSERT(Wt > 0);
-    ASSERT(total_tiles_or(Ht * Wt) == Ht * Wt);
+    if (!__builtin_is_constant_evaluated()) {
+        detail::assert_blocking_valid(block_size, Ht, Wt, total_tiles_or(Ht * Wt));
+    }
     const uint32_t remainder = Wt % block_size;
     return remainder == 0 ? block_size : remainder;
 }
