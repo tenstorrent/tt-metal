@@ -8,8 +8,8 @@ from enum import Enum
 from typing import ClassVar
 
 import pandas as pd
-from ttexalens.tt_exalens_lib import read_words_from_device
 
+from .device_io import read_words_from_device
 from .llk_params import PerfRunType
 from .test_config import TestConfig
 

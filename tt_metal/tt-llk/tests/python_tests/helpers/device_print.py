@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.device_io import read_from_device, write_words_to_device
 from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
     QUASAR_DATA_FORMAT_ENUM_VALUES,
@@ -39,7 +40,7 @@ from helpers.format_config import (
 )
 from helpers.logger import logger
 from helpers.utils import TILE_BG_RESULT, format_tile_row
-from ttexalens.tt_exalens_lib import parse_elf, read_from_device, write_words_to_device
+from ttexalens.tt_exalens_lib import parse_elf
 
 # hostdev/device_print_structures.h: DevicePrintStringInfo is four uint32_t
 # on 32-bit ELFs, and four uint64_t on 64-bit ELFs (Rocket cores on Quasar).

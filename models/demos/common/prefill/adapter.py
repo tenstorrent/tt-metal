@@ -115,6 +115,10 @@ class PrefillModelAdapter(ABC):
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
+    # Emb-axis sharding of the cross-rank D2D hidden state (seq is always SP-sharded). True (default):
+    # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
+    # Must match the layout the model's decoder layer consumes/produces.
+    pipeline_activation_emb_tp_sharded: bool = True
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -242,7 +246,7 @@ class PrefillModelAdapter(ABC):
 # model is one line here (plus the adapter class in that model's package). Keeping
 # these as strings means importing this common module never imports a model's
 # device/runtime stack — only the selected model is imported, at get_adapter time.
-DEFAULT_MODEL = "deepseek_v3_d_p"
+DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
