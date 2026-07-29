@@ -1811,6 +1811,24 @@ def _ablation_flags():
     )
 
 
+def _zone_flag():
+    """Refinement 3b lever 1 -- the per-RISC Tracy timeline (MEASUREMENT ONLY).
+
+    ``TILIZE_ZONES=1`` selects an instrumented copy of the per-block loop in each
+    of the three kernels, with a ``DeviceZoneScopedN`` around every stage
+    (reader: reserve / issue / barrier / push; compute: wait / LLK; writer:
+    wait / pop). The output is still CORRECT -- unlike the ablations this changes
+    no read, no CB count and no trip count -- but the zone writes perturb the
+    timing, so it is never on in a shipped plan. It answers the one question no
+    ablation variant can: which RISC is blocked, and on what.
+
+    Off unless the bench asks for it. Cannot be combined with the ablation flags
+    (the instrumented loop replaces the branch they patch), nor with the levers
+    that own the read loop -- the reader carries a ``static_assert`` for that.
+    """
+    return int(os.environ.get("TILIZE_ZONES", "0"))
+
+
 def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.ProgramDescriptor:
     alias = plan["path"] == "alias"
     # Refinement 3: each side is aliased independently. Path B has both, a crossover
@@ -1822,6 +1840,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     core_ranges = plan["core_ranges"]
     chunk_wt = plan["chunk_wt"]
     reader_skip_dm, writer_skip_dm, skip_compute = _ablation_flags()
+    zones = _zone_flag()
 
     # ---------------- circular buffers ----------------
     shard_tiles = plan["shard_tiles"]
@@ -1881,6 +1900,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["blocks_row_major"],
         plan["read_group"],  # lever B7': blocks per read barrier
         plan["addr_probe"],  # measurement probe (bench only, garbage output)
+        zones,  # Refinement 3b lever 1: per-RISC Tracy timeline (bench only)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1906,12 +1926,13 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # Refinement 3: the input CB's window count, so lever C7's read half can
         # derive the window NCRISC reserved at any depth (it was depth-1 only).
         plan["depth"],
+        zones,  # Refinement 3b lever 1: per-RISC Tracy timeline (bench only)
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     # ---------------- compute ----------------
-    compute_ct_args = [chunk_wt, plan["needs_cast"], skip_compute]
+    compute_ct_args = [chunk_wt, plan["needs_cast"], skip_compute, zones]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()

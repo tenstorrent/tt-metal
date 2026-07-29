@@ -148,7 +148,20 @@
 //       exactly (reserve chunk_wt, 32 reads, one barrier, push chunk_wt) so
 //       lever B7 (one barrier per block) still holds.
 
+//   zones == 1  (Refinement 3b lever 1 — MEASUREMENT VARIANT, bench only)
+//       An instrumented copy of the shipped per-block read loop with a
+//       `DeviceZoneScopedN` around each of its four stages (reserve / issue /
+//       barrier / push), so `/perf-measure` can say WHICH RISC is waiting WHEN
+//       instead of only how long each stage's payload costs. No ablation variant
+//       can answer that: `no_dm` keeps the address-gen sink and `no_compute`
+//       keeps the CB dance, so the residual falls between their attributions.
+//       The shipped path is left byte-for-byte alone — this is a separate branch,
+//       selected by a compile-time arg the host only sets from `TILIZE_ZONES=1`.
+//       Correctness is unaffected (same reads, same CB counts) but the zone
+//       writes perturb the timing, so it is never on in a shipped plan.
+
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 void kernel_main() {
@@ -201,7 +214,9 @@ void kernel_main() {
     // collapsing 12 banks to 1 costs 2.8x, while halving the ISSUERS (lever C7) or
     // doubling the reads in flight (lever B8) each cost ~10 %.
     constexpr uint32_t addr_probe = get_compile_time_arg_val(27);
-    constexpr auto src_args = TensorAccessorArgs<28>();
+    // Refinement 3b lever 1: per-RISC Tracy timeline (bench only, see the header).
+    constexpr uint32_t zones = get_compile_time_arg_val(28);
+    constexpr auto src_args = TensorAccessorArgs<29>();
 
     using dataflow_kernel_lib::StickReadMode;
     constexpr StickReadMode read_mode = stateful_read ? StickReadMode::Stateful : StickReadMode::Generic;
@@ -255,6 +270,12 @@ void kernel_main() {
     static_assert(
         !blocks_row_major || (prefetch_blocks == 1 && !fanin_mode && !stagger),
         "row-major block order owns the block sequence; B8/fan-in/rotation cannot also own it");
+    // The timeline variant re-implements the plain per-block loop, so it is only
+    // meaningful (and only correct) where that loop is what ships.
+    static_assert(
+        !zones || (!alias_mode && !fanin_mode && !coalesce_rows && !split_read && prefetch_blocks == 1 && !stagger &&
+                   !addr_probe && read_group == 1 && row_page_stride == 1 && vc_spread == 0),
+        "the per-RISC timeline instruments the plain per-block read loop only");
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -276,6 +297,67 @@ void kernel_main() {
         if constexpr (read_vc_spread) {
             const uint32_t read_vc = get_arg_val<uint32_t>(5);
             noc_async_read_one_packet_set_state<true>(accessor.get_noc_addr(start_row), chunk_row_bytes, read_vc);
+        }
+
+        if constexpr (zones) {
+            // --- Refinement 3b lever 1: the per-RISC timeline ---------------------
+            // Same four stages the shipped loop runs, each in its own zone:
+            //   RD-RESV  blocked waiting for compute to free a CB window
+            //   RD-ISSUE address generation + 32 noc_async_read commands
+            //   RD-BARR  draining this block's reads (the DRAM service time that
+            //            the issue stage did not already hide)
+            //   RD-PUSH  publishing the window
+            // Each zone needs its OWN scope: the macro declares a variable named
+            // `zone`, so two in one scope do not compile.
+            const uint32_t blocks = num_rows / tile_height;
+            const uint32_t total = blocks * chunk_count;
+            constexpr uint32_t window_bytes = chunk_wt * get_tile_size(cb_rm_input);
+            const uint32_t cb_base = get_write_ptr(cb_rm_input);
+            for (uint32_t idx = 0; idx < total; ++idx) {
+                const uint32_t block = idx % blocks;
+                const uint32_t c = idx / blocks;
+                const uint32_t row0 = start_row + block * tile_height;
+                const uint32_t byte_offset = (chunk_start + c) * chunk_row_bytes;
+                {
+                    DeviceZoneScopedN("RD-RESV");
+                    cb_reserve_back(cb_rm_input, chunk_wt);
+                }
+                {
+                    // `skip_dm` keeps the 32 address-generation calls and drops only
+                    // the noc_async_read commands, so RD-ISSUE(no_dm) is the pure
+                    // address-generation term and RD-ISSUE(full) - RD-ISSUE(no_dm) is
+                    // the command programming plus the NoC back-pressure. That split
+                    // is the whole point: `noc_async_read` spins on
+                    // `noc_cmd_buf_ready`, so a DRAM-bound read shows up INSIDE the
+                    // issue loop, not in the barrier.
+                    DeviceZoneScopedN("RD-ISSUE");
+                    if constexpr (skip_dm) {
+                        for (uint32_t row = 0; row < tile_height; ++row) {
+                            volatile uint32_t sink =
+                                static_cast<uint32_t>(accessor.get_noc_addr(row0 + row, byte_offset));
+                            (void)sink;
+                        }
+                    } else {
+                        dataflow_kernel_lib::read_stick_rows_for_tilize<read_mode, 1>(
+                            accessor,
+                            row0,
+                            chunk_row_bytes,
+                            byte_offset,
+                            cb_base + (idx % cb_depth) * window_bytes,
+                            chunk_row_bytes,
+                            tile_height);
+                    }
+                }
+                {
+                    DeviceZoneScopedN("RD-BARR");
+                    noc_async_read_barrier();
+                }
+                {
+                    DeviceZoneScopedN("RD-PUSH");
+                    cb_push_back(cb_rm_input, chunk_wt);
+                }
+            }
+            return;
         }
 
         if constexpr (fanin_mode != 0) {

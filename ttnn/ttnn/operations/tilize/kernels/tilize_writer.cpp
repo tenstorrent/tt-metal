@@ -65,6 +65,7 @@
 // also pair the wrong source rows with the reserved window.
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 void kernel_main() {
@@ -90,7 +91,9 @@ void kernel_main() {
     // Refinement 3: the input CB's window count, so the C7 read half can derive the
     // window NCRISC reserved at ANY depth (see the header).
     constexpr uint32_t cb_in_depth = get_compile_time_arg_val(13);
-    constexpr auto dst_args = TensorAccessorArgs<14>();
+    // Refinement 3b lever 1: per-RISC Tracy timeline (bench only).
+    constexpr uint32_t zones = get_compile_time_arg_val(14);
+    constexpr auto dst_args = TensorAccessorArgs<15>();
     // Declared unconditionally (never inside `if constexpr`) so the CT arg offsets
     // are the same in both configurations; only used when split_read.
     [[maybe_unused]] constexpr auto src_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
@@ -139,6 +142,19 @@ void kernel_main() {
                 noc_async_read_barrier();
                 noc_semaphore_set(sem_done, seq);
             }
+        }
+        if constexpr (zones) {
+            // Refinement 3b lever 1: how long BRISC sits here is the whole reason
+            // this kernel is a drop candidate (lever 2).
+            {
+                DeviceZoneScopedN("WR-WAIT");
+                cb_wait_front(cb_tiled_output, shard_tiles);
+            }
+            {
+                DeviceZoneScopedN("WR-POP");
+                cb_pop_front(cb_tiled_output, shard_tiles);
+            }
+            return;
         }
         cb_wait_front(cb_tiled_output, shard_tiles);
         cb_pop_front(cb_tiled_output, shard_tiles);
