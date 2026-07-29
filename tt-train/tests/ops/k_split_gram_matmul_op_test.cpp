@@ -155,10 +155,10 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     auto input = make_random_tensor(2048, 2048);
     uint32_t M = input.logical_shape()[-2];
 
-    auto output_spec = ttnn::TensorSpec(
+    auto output_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, M, M}),
         tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
-    auto preallocated = create_device_tensor(output_spec, device);
+    auto preallocated = ttnn::create_device_tensor(output_spec, device);
 
     auto output =
         ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, MathFidelity::HiFi4, preallocated);

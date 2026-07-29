@@ -154,6 +154,6 @@ constexpr size_t RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
 using RingJointSDPAResult = Tensors;
 
 // RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
-using RingJointSDPAResultSpec = std::vector<TensorSpec>;
+using RingJointSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::prim

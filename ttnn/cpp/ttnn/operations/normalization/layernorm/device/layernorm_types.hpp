@@ -22,7 +22,7 @@ struct LayerNormDefaultProgramConfig {
     bool use_welford = false;
 };
 struct LayerNormShardedMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w{};
     std::size_t block_h{};
     std::size_t block_w{};

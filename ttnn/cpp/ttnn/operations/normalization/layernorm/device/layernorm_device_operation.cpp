@@ -388,7 +388,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.program_config);
 }
 
-TensorSpec LayerNormDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto output_shape = input_tensor.logical_shape();
@@ -414,7 +414,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         operation_attributes.output_mem_config.memory_layout(),
                         operation_attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return TensorSpec(
+                    return tt::tt_metal::TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
                 }
                 if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
@@ -435,7 +435,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
-                return ttnn::TensorSpec(
+                return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout::fromPaddedShape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
@@ -445,7 +445,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         output_padded_shape));
             } else {
                 const auto output_layout = input_tensor.layout();
-                return TensorSpec(
+                return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout(
                         input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));

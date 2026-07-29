@@ -11,7 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_results_batch_norm,
 )
 from itertools import product
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -928,3 +928,90 @@ def test_batch_norm_training_avoids_variance_cancellation(device):
     assert torch.isfinite(tt_output).all()
     assert torch.isfinite(tt_running_var).all()
     assert_numeric_metrics(torch_output, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
+    ],
+)
+@pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize(
+    "input_dtype, param_dtype, needs_output_typecast",
+    [
+        ("bfloat16", "float32", True),
+        ("float32", "float32", False),
+    ],
+)
+def test_batch_norm_fp32_acc_output_typecast(
+    input_shapes, weight, bias, input_dtype, param_dtype, needs_output_typecast, device
+):
+    """Regression test for missing output_tensor_cb in the UnpackToDestFp32 list.
+
+    needs_output_typecast is true when interm_data_format is Float32 (any tensor is
+    float32) but the output dtype is not (input/output are bfloat16). In that config
+    the SFPU compute kernel uses output_tensor_cb (c_2) as an fp32 staging buffer and
+    unpacks it back via copy_tile for dtype conversion — c_2 must be in the
+    UnpackToDestFp32 list or the unpack/DST precision mismatch degrades output accuracy.
+
+    Two parametrized cases:
+      - bf16 I/O + fp32 params (needs_output_typecast=True): hits the typecast self-loop.
+      - all fp32 (needs_output_typecast=False): control — no typecast, c_2 is plain output.
+    """
+    in_data, input_tensor = data_gen_with_range_batch_norm(
+        input_shapes, 5, 10, device, is_input=True, testing_dtype=input_dtype
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype)
+    var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=param_dtype)
+    weight_data, weight_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype)
+        if weight
+        else (None, None)
+    )
+    bias_data, bias_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype) if bias else (None, None)
+    )
+
+    # Explicit fp32_dest_acc_en pins the bug path; HiFi3 matches batch_norm_utils default on Wormhole.
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor)
+
+    in_ref = in_data.float()
+    mean_ref = mean_data.float()
+    var_ref = var_data.float()
+    weight_ref = weight_data.float() if weight_data is not None else None
+    bias_ref = bias_data.float() if bias_data is not None else None
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_ref,
+        running_mean=mean_ref,
+        running_var=var_ref,
+        weight=weight_ref,
+        bias=bias_ref,
+    ).to(tt_output.dtype)
+
+    if needs_output_typecast:
+        assert_numeric_metrics(
+            torch_result, tt_output, pcc_threshold=0.999, rtol=1e-2, atol=0.1, frobenius_threshold=0.02
+        )
+    else:
+        assert_numeric_metrics(
+            torch_result, tt_output, pcc_threshold=0.999, rtol=1e-2, atol=0.5, frobenius_threshold=0.05
+        )

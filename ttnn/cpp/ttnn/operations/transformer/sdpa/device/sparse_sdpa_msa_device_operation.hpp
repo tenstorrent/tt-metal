@@ -41,7 +41,7 @@ inline constexpr uint32_t kWriterVGroupStrideArg = 8;
 struct SparseSDPAMsaOperation {
     using operation_attributes_t = SparseSDPAMsaParams;
     using tensor_args_t = SparseSDPAMsaInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct SparseSDPAMsaProgramFactory {

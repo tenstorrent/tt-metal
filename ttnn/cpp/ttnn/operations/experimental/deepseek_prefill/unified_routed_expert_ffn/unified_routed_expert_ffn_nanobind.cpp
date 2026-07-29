@@ -91,6 +91,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
 
+        The kernel picks chunk_M_tiles / per_core_M / num_chunks at RUNTIME from
+        the device-resident token count, so there is no chunk-sizing argument.
+
         Returns:
             ttnn.Tensor: (M_max, K=emb).
         )doc",
@@ -109,7 +112,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("input_m_tiles") = nb::none(),
         nb::arg("read_x_at_offset") = false,
         nb::arg("x_is_row_major") = false,
-        nb::arg("activation") = RoutedExpertActivation::Silu);
+        nb::arg("activation") = RoutedExpertActivation::Silu,
+        nb::arg("gate_bias") = nb::none(),
+        nb::arg("up_bias") = nb::none(),
+        nb::arg("down_bias") = nb::none());
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -143,6 +149,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
 
+        Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
+        RUNTIME from the device-resident token count, so there is no expected-token
+        argument — the work scales to each expert's actual load automatically.
+
         Returns:
             ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
         )doc",
@@ -157,7 +167,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("activation") = RoutedExpertActivation::Silu);
+        nb::arg("activation") = RoutedExpertActivation::Silu,
+        nb::arg("gate_biases") = nb::none(),
+        nb::arg("up_biases") = nb::none(),
+        nb::arg("down_biases") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

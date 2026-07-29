@@ -11,13 +11,13 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
@@ -51,7 +51,16 @@ class GateComputeMode(Enum):
 class TtMoEGateConfig:
     # gate_params
 
-    ccl_config: dict = field(default_factory=lambda: {"DISPATCH_AXIS": 0, "TP_AXIS": 1, "NUM_LINKS": 2})
+    ccl_config: dict = field(
+        default_factory=lambda: {
+            "DISPATCH_AXIS": 0,
+            "TP_AXIS": 1,
+            "NUM_LINKS": 2,
+            # CCL topology for the TP-axis gate all-reduce. Ring requires the TP axis to be physically
+            # wrapped (FABRIC_2D_TORUS_X / _XY); set from TtMoe's col_topology. Defaults to Linear.
+            "TOPOLOGY": ttnn.Topology.Linear,
+        }
+    )
     mm_configs: dict = field(
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
@@ -549,7 +558,7 @@ class TtMoEGatePrefill(LightweightModule):
                 num_links=self.config.ccl_config["NUM_LINKS"],
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
+                topology=self.config.ccl_config.get("TOPOLOGY", ttnn.Topology.Linear),
             )
         return logits
 
@@ -572,11 +581,20 @@ class TtMoEGatePrefill(LightweightModule):
             epsilon=1e-20,
         )
 
-    def build_padding_config(self, actual_isl: int, padding_side: str = "right") -> ttnn.Tensor:
+    def build_padding_config(self, actual_isl: int, padding_side: str = "right", actual_start: int = 0) -> ttnn.Tensor:
         """Create the per-SP-shard [local_num_real_tokens, pad_side] config for moe_grouped_topk.
 
         Public so callers (TtMoe) can build the config once and share the same tensor between
         the gate topk and the dispatch op.
+
+        ``actual_start`` is the chunked-prefill absolute KV position of this chunk's first real
+        token (0 for single-shot / non-chunked). It is REQUIRED to get the per-chip counts right:
+        chunked prefill hands the MoE the KV-pad-aware ROTATED block-cyclic layout, in which chip c
+        does NOT hold global tokens [c*seq_len_per_chip, (c+1)*seq_len_per_chip). Deriving the count
+        as min(seq_len_per_chip, actual_isl - c*seq_len_per_chip) there sentinel-marks real tokens
+        (dropping them from MoE entirely) while dispatching pad rows as real. The rotated layout is
+        the identity exactly when actual_start is slab-aligned, so actual_start=0 reproduces the
+        sequential result bit-for-bit and every pre-existing caller is unaffected.
 
         When is_balanced=True, the sequence uses zigzag placement: the original sequence
         is split into 2*sp_factor chunks and device d holds chunks d and (2*sp_factor-1-d),
@@ -594,7 +612,24 @@ class TtMoEGatePrefill(LightweightModule):
 
         padding_config = []
 
-        if self.is_balanced:
+        if actual_start:
+            # Rotated chunked prefill. Both branches below assume the sequential layout, so neither
+            # is valid here; fail loudly rather than silently drop tokens. Rotation implies
+            # is_balanced=False (ttMLA._chunked_attn asserts it) and produces right-padding WITHIN
+            # each chip by construction, so those two combinations are unreachable, not merely
+            # unsupported.
+            if self.is_balanced:
+                raise ValueError("rotated chunked prefill (actual_start != 0) does not support is_balanced=True")
+            if padding_side != "right":
+                raise ValueError(
+                    f"rotated chunked prefill (actual_start != 0) is right-padded by construction; "
+                    f"got padding_side={padding_side!r}"
+                )
+            for local_real_tokens in rotated_chip_real_token_counts(
+                actual_start, actual_isl, sp_factor, seq_len_per_chip
+            ):
+                padding_config.append([local_real_tokens, pad_side])
+        elif self.is_balanced:
             num_chunks = 2 * sp_factor
             chunk_size = total_tokens // num_chunks
 
@@ -643,8 +678,13 @@ class TtMoEGatePrefill(LightweightModule):
         actual_isl: int = None,
         padding_side: str = "right",
         padding_config: ttnn.Tensor = None,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run moe_grouped_topk on device with fp32 typecast.
+        """Run moe_grouped_topk on device.
+
+        The (bf16) logits and bias are fed directly to the op, which upcasts them to fp32 inside
+        the kernel; no host-side fp32 typecast is needed (the method name is kept for the DEVICE_FP32
+        gate mode it serves).
 
         When actual_isl is set, padded token rows get sentinel expert
         indices (= n_routed_experts) so downstream masked_bincount/dispatch/
@@ -657,13 +697,16 @@ class TtMoEGatePrefill(LightweightModule):
         """
         owns_padding_config = padding_config is None
         if owns_padding_config:
-            padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
+            padding_config = (
+                self.build_padding_config(actual_isl, padding_side, actual_start) if actual_isl is not None else None
+            )
 
-        logits_f32 = ttnn.typecast(logits, ttnn.float32)
-        bias_f32 = ttnn.typecast(self.bias, ttnn.float32)
+        # moe_grouped_topk upcasts the (bf16) logits and bias to fp32 inside the kernel, so the
+        # previous host-side ttnn.typecast ops are gone. They were very short (2-5us) and created
+        # op-to-op gaps that fast-dispatch could not hide.
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
-            logits_f32,
-            bias_f32,
+            logits,
+            self.bias,
             n_groups=self.config.n_expert_groups,
             summed_experts_per_group=self.config.n_expert_groups // self.config.n_limited_groups,
             topk_groups=self.config.n_limited_groups,
@@ -674,8 +717,6 @@ class TtMoEGatePrefill(LightweightModule):
             score_func=self.config.score_func,
             padding_config=padding_config,
         )
-        ttnn.deallocate(logits_f32)
-        ttnn.deallocate(bias_f32)
         if owns_padding_config and padding_config is not None:
             ttnn.deallocate(padding_config)
         return ttnn_scores, ttnn_top_k_experts_indices
@@ -687,18 +728,22 @@ class TtMoEGatePrefill(LightweightModule):
         actual_isl: int = None,
         padding_side: str = "right",
         padding_config: ttnn.Tensor = None,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run moe_hash_gate on device: fused tid2eid[input_ids] routing + score_func/normalize/scale.
 
-        Mirrors _device_grouped_gate_fp32's fp32 typecast and padding-config ownership, but expert
-        selection comes from the hash table instead of top-k.
+        Mirrors _device_grouped_gate_fp32's padding-config ownership, but expert selection comes
+        from the hash table instead of top-k. moe_hash_gate still requires an fp32 logits input, so
+        this path keeps the host-side typecast (unlike moe_grouped_topk, which upcasts internally).
         """
         if input_ids is None:
             raise ValueError("GateComputeMode.HASH_DEVICE forward requires input_ids for the tid2eid lookup.")
 
         owns_padding_config = padding_config is None
         if owns_padding_config:
-            padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
+            padding_config = (
+                self.build_padding_config(actual_isl, padding_side, actual_start) if actual_isl is not None else None
+            )
 
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
         input_ids_dev = self._input_ids_to_device(input_ids)
@@ -742,12 +787,12 @@ class TtMoEGatePrefill(LightweightModule):
         padding_side: str = "right",
         padding_config: ttnn.Tensor = None,
         input_ids: torch.Tensor = None,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
         logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
         # ---- Phase 1: Logits (matmul) ----
-        signpost(header="moe_gate_linear")
         if mode in (
             GateComputeMode.DEVICE,
             GateComputeMode.DEVICE_FP32,
@@ -759,10 +804,8 @@ class TtMoEGatePrefill(LightweightModule):
             pass  # the reference HashRouter computes logits from composed host x in Phase 2
         else:  # HOST_MATMUL, HOST_ALL
             host_logits = self._host_matmul(x)
-        signpost(header="moe_gate_linear")
 
         # ---- Phase 2: Grouped gate ----
-        signpost(header="moe_gate_grouped_gate")
         # The device gate kernels select the routing rule from n_expert_groups: with a single expert
         # group (n_expert_groups == 1, e.g. Kimi) the grouped-topk op collapses to a plain top-k.
         single_group = self.config.n_expert_groups == 1
@@ -779,6 +822,7 @@ class TtMoEGatePrefill(LightweightModule):
                 actual_isl=actual_isl,
                 padding_side=padding_side,
                 padding_config=padding_config,
+                actual_start=actual_start,
             )
 
         elif mode == GateComputeMode.HOST_GROUPED_GATE:
@@ -814,8 +858,8 @@ class TtMoEGatePrefill(LightweightModule):
                 actual_isl=actual_isl,
                 padding_side=padding_side,
                 padding_config=padding_config,
+                actual_start=actual_start,
             )
-        signpost(header="moe_gate_grouped_gate")
 
         return (
             ttnn_scores,

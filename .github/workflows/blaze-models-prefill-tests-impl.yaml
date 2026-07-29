@@ -120,6 +120,19 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
           echo "Filtered tests for ${{ inputs.sp-config }}:"
           echo "$FILTERED" | jq .
+      - name: Write test matrix to file
+        env:
+          MATRIX: ${{ steps.filter-tests.outputs.matrix }}
+        run: |
+          echo "$MATRIX" > test_matrix_${{ inputs.resource-prefix }}.json
+      # Named per resource-prefix so the two impl invocations (module, sdpa-perf)
+      # don't collide on one artifact name; the parent merges them for expected-jobs.
+      - name: Upload test matrix
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test_matrix_${{ inputs.resource-prefix }}
+          path: test_matrix_${{ inputs.resource-prefix }}.json
+          retention-days: 1
 
   multihost-tests:
     name: ${{ matrix.test-group.name }}
@@ -128,6 +141,9 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
+      # /ci is the NFS volume shared with the runner; worker /home/user is per-node, invisible to it.
+      # Rank 0 writes; the run/attempt/job subpath keeps reused-PVC runs from colliding.
+      PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
     strategy:
       fail-fast: false
       matrix:
@@ -155,7 +171,10 @@ jobs:
           pip3 install PyYAML
           {
             echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
+            # Derive the allocation from this leg's own SKU (matrix.test-group.sku) rather than
+            # the pipeline-wide sp-config, so individual tests can opt into a different allocation
+            # pool (e.g. bh_sc1_high_power) without changing the pool for the rest of the run.
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "${{ matrix.test-group.sku }}"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
@@ -324,16 +343,68 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        working-directory: /home/user/tt-metal
-        run: |
-          CMD=$(cat << 'EOF'
-          ${{ matrix.test-group.cmd }}
-          EOF
-          )
+        uses: ./.github/actions/run-with-log
+        with:
+          working-directory: /home/user/tt-metal
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            CMD=$(cat << 'EOF'
+            ${{ matrix.test-group.cmd }}
+            EOF
+            )
 
-          echo "Running: ${{ matrix.test-group.name }}"
-          echo "$CMD"
-          eval "$CMD"
+            echo "Running: ${{ matrix.test-group.name }}"
+            echo "$CMD"
+            eval "$CMD"
+
+      - name: 📊 Publish prefill summaries
+        if: always() && !cancelled()
+        continue-on-error: true
+        run: |
+          shopt -s nullglob
+          files=("$PREFILL_SUMMARIES"/perf/*.md "$PREFILL_SUMMARIES"/pcc/*.md)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No prefill summary files under $PREFILL_SUMMARIES"
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            # tee so the table shows in this step's log too, not only on the job-summary page.
+            cat "$f" | tee -a "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "Published ${#files[@]} prefill summary file(s) to the job summary"
+
+      # Keep the raw .md files for cross-run perf-trend analysis. Uploaded before cleanup; unique name per
+      # matrix job so v7 (no auto-merge) doesn't collide when the whole suite runs.
+      - name: ⬆️ Upload prefill summaries
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-summaries-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          path: ${{ env.PREFILL_SUMMARIES }}/**/*.md
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 🧹 Clean prefill summaries
+        if: always()
+        run: if [ -n "$PREFILL_SUMMARIES" ]; then rm -rf "$PREFILL_SUMMARIES"; fi
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "/home/user/tt-metal",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
 
       - name: Delete test environment
         if: always()
