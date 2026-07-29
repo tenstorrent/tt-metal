@@ -290,7 +290,7 @@ constexpr uint32_t kMailboxProbeOffset = 96 + 0x40;
 // cb_resolve is irrelevant here (no CB involved) but establishes the message.
 TEST_F(MeshDeviceFixture, Mailbox_LocalWrite_Detected) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
-    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_MAILBOX_GUARD");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_MAILBOX_CLOBBER");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -321,7 +321,7 @@ TEST_F(MeshDeviceFixture, Mailbox_LocalWrite_Detected) {
 // Before §13 this was silent (see GapAddr_CrossCoreNocWrite_NotDetected).
 TEST_F(MeshDeviceFixture, Mailbox_CrossCoreNocWrite_Detected) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
-    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_MAILBOX_GUARD");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_MAILBOX_CLOBBER");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord sender_logical = {0, 0};
@@ -359,7 +359,7 @@ TEST_F(MeshDeviceFixture, Mailbox_CrossCoreNocWrite_Detected) {
 // The opt-out must actually opt out, so a sweep can isolate this check.
 TEST_F(MeshDeviceFixture, Mailbox_SkipGate_Respected) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
-    ::setenv("TT_METAL_EMULE_ASAN_SKIP_MAILBOX_GUARD", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN_CHECK_MAILBOX_CLOBBER", "0", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -383,7 +383,7 @@ TEST_F(MeshDeviceFixture, Mailbox_SkipGate_Respected) {
 
     detail::LaunchProgram(device, program);
     std::printf("[PROBE] skip gate honored: mailbox write completed with NO abort\n");
-    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_MAILBOX_GUARD");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_MAILBOX_CLOBBER");
 }
 
 }  // namespace tt::tt_metal

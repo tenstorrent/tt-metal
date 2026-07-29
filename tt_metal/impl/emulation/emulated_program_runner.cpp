@@ -76,6 +76,7 @@
 #include "tt_emule/tile_counter.hpp"
 #include "jit_hw/internal/emule_thread_ctx.h"
 #include "jit_hw/asan/emule_asan.h"  // §13 mailbox-region guard (declaration-only for __emule_asan_panic)
+#include "jit_hw/asan/asan_profile.h"  // EmuleAsanCheck / __emule_asan_check_enabled
 #include "emule_fiber_scheduler.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
@@ -3241,7 +3242,14 @@ static void launch_cores(
     // the trackers must not outlive this frame across a deferred run_mesh_dispatch.
     // Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241 / docs/ASAN.md.
     std::vector<std::unique_ptr<tt::tt_metal::emule::ObjectIntentTracker>> intent_trackers;
-    const bool object_intent_active = !defer_run && oob_state.object_intent_strict;
+    // §12 Object Intent is also excluded from the Blaze profile. On Blaze `defer_run`
+    // already closes this gate, so the profile test changes no observed behaviour
+    // today — it turns an accidental silence into a stated decision, and keeps the
+    // exclusion true if the deferred path ever changes. Its premise needs one kernel
+    // per core and stable buffer ownership; Blaze has three kernels per core and
+    // reuses arena memory both spatially and temporally. See asan/asan_profile.h.
+    const bool object_intent_active =
+        !defer_run && oob_state.object_intent_strict && __emule_asan_check_enabled(EmuleAsanCheck::ObjectIntent);
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         auto& cs = core_setups[core_idx];

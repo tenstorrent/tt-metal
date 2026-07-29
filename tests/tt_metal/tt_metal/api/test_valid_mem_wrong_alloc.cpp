@@ -28,6 +28,10 @@ namespace tt::tt_metal {
 // OFFSET from the resolved buffer; the victim's address never enters the args.
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_OBJECT_INTENT");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -106,6 +110,10 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
 // changes to the resolved-set tracking or snapshot logic.
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_OBJECT_INTENT");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -152,6 +160,10 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
 // the intended object as long as it lands inside *some* allocated buffer).
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_OBJECT_INTENT");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -216,6 +228,10 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
 // TT-NN ops).
 TEST_F(MeshDeviceFixture, Object_Intent_IOArg_Exempt_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_OBJECT_INTENT");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};

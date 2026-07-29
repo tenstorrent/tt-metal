@@ -33,9 +33,10 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, Dirty_CB_ReserveWithoutPush) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     // This test validates the Dirty CB check itself, so force it on regardless
-    // of any environment-level opt-out (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB) that a
+    // of any environment-level opt-out (TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB=0, or a blaze profile) that a
     // regression run may have exported to skip the check elsewhere.
-    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");  // §11 is excluded from the blaze profile
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -71,9 +72,10 @@ TEST_F(MeshDeviceFixture, Dirty_CB_ReserveWithoutPush) {
 TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     // This test validates the Dirty CB check itself, so force it on regardless
-    // of any environment-level opt-out (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB) that a
+    // of any environment-level opt-out (TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB=0, or a blaze profile) that a
     // regression run may have exported to skip the check elsewhere.
-    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");  // §11 is excluded from the blaze profile
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -118,7 +120,8 @@ TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
 // a correct matmul reader); the trailing-dangling-flag detection fixes it.
 TEST_F(MeshDeviceFixture, Dirty_CB_LookaheadReserve_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
-    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");  // §11 is excluded from the blaze profile
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -165,9 +168,10 @@ TEST_F(MeshDeviceFixture, Dirty_CB_LookaheadReserve_NoViolation) {
 TEST_F(MeshDeviceFixture, Dirty_CB_Balanced_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     // This test validates the Dirty CB check itself, so force it on regardless
-    // of any environment-level opt-out (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB) that a
+    // of any environment-level opt-out (TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB=0, or a blaze profile) that a
     // regression run may have exported to skip the check elsewhere.
-    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");  // §11 is excluded from the blaze profile
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -202,14 +206,14 @@ TEST_F(MeshDeviceFixture, Dirty_CB_Balanced_NoViolation) {
 }
 
 // The per-check opt-out: with the master switch on but
-// TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB set, a reserve-without-push (which
+// TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB=0, a reserve-without-push (which
 // Dirty_CB_ReserveWithoutPush proves aborts by default) must run to completion —
 // the runner's sweep_per_kernel_dirty_cbs returns early. This lets a regression
 // run proceed past a known un-flushed-CB bug while every other sanitizer stays
 // active.
 TEST_F(MeshDeviceFixture, Dirty_CB_SkipEnv_Suppresses) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
-    ::setenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB", "1", 1);
+    ::setenv("TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB", "0", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -239,7 +243,8 @@ TEST_F(MeshDeviceFixture, Dirty_CB_SkipEnv_Suppresses) {
     detail::LaunchProgram(device, program);
     SUCCEED();
 
-    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB");
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");  // §11 is excluded from the blaze profile
     ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 

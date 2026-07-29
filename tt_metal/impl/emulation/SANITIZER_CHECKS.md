@@ -89,23 +89,49 @@ happens to the core the `abort()` would otherwise produce:
 
 ## Checks at a glance
 
-| Check | Layer | Lives in | Fires when |
-|---|---|---|---|
-| Use-After-Free | host | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host access through a deallocated `Buffer` |
-| Host L1 / DRAM Alignment | host | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host poke address not aligned to the transfer's real requirement |
-| Metadata Overflow | host | `[metal] host_api/tt_metal.cpp` | program's static CB region overruns the reserved L1 window |
-| Out-of-Bounds Write (L1/DRAM) | kernel + runner | `[emule] asan/asan_l1_checks.h` (L1); `[metal] emulated_program_runner.cpp` (`__emule_dram_ptr`) | access lands in no live buffer extent |
-| Tensor Padding Violation *(test skipped — see §5)* | kernel | `[emule] asan/asan_l1_checks.h` | write into a buffer's `[logical_end, physical_end)` pad band |
-| Illegal Semaphore Access | kernel | `[emule] asan/asan_l1_checks.h` | scalar access into the reserved semaphore region |
-| CB Boundary Violation | kernel | `[emule] asan/asan_l1_checks.h` (window counters in `asan/asan_cb.h`) | access to a CB page outside an **active** reserve/wait window |
-| CB Reservation Overflow | kernel | `[emule] asan/asan_cb.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
-| NoC-read-pending on pop | kernel | `[emule] asan/asan_cb.h` (pop) + `api/dataflow/dataflow_api.h` (read counter) | `cb_pop_front` while a `noc_async_read` is unbarriered |
-| NOC Transfer Alignment | kernel | `[emule] api/dataflow/asan/asan_dataflow.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
-| Dirty CB Detected | runner | `[metal] emule_sanitizers.cpp` (counters in `[emule] asan/asan_cb.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
-| Object Intent Violation | runner | `[metal] emule_sanitizers.cpp` | a kernel changed a buffer it never resolved a pointer into |
-| Launch-Mailbox Clobber | kernel + runner | `[emule] asan/emule_asan.h`; hooked at the local chokepoint and at `__emule_resolve_noc_addr` / `__emule_multicast_write` in `[metal] emulated_program_runner.cpp` | kernel-initiated data movement lands in the reserved firmware launch-mailbox window |
+| Check | Layer | Profile | Lives in | Fires when |
+|---|---|---|---|---|
+| Use-After-Free | host | both | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host access through a deallocated `Buffer` |
+| Host L1 / DRAM Alignment | host | both | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host poke address not aligned to the transfer's real requirement |
+| Metadata Overflow | host | both | `[metal] host_api/tt_metal.cpp` | program's static CB region overruns the reserved L1 window |
+| Out-of-Bounds Write (L1/DRAM) | kernel + runner | both | `[emule] asan/asan_l1_checks.h` (L1); `[metal] emulated_program_runner.cpp` (`__emule_dram_ptr`) | access lands in no live buffer extent |
+| Tensor Padding Violation *(test skipped — see §5)* | kernel | **metal only** | `[emule] asan/asan_l1_checks.h` | write into a buffer's `[logical_end, physical_end)` pad band |
+| Illegal Semaphore Access | kernel | both | `[emule] asan/asan_l1_checks.h` | scalar access into the reserved semaphore region |
+| CB Boundary Violation | kernel | **metal only** | `[emule] asan/asan_l1_checks.h` (window counters in `asan/asan_cb.h`) | access to a CB page outside an **active** reserve/wait window |
+| CB Reservation Overflow | kernel | both | `[emule] asan/asan_cb.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
+| NoC-read-pending on pop | kernel | both | `[emule] asan/asan_cb.h` (pop) + `api/dataflow/dataflow_api.h` (read counter) | `cb_pop_front` while a `noc_async_read` is unbarriered |
+| NOC Transfer Alignment | kernel | both | `[emule] api/dataflow/asan/asan_dataflow.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
+| Dirty CB Detected | runner | **metal only** | `[metal] emule_sanitizers.cpp` (counters in `[emule] asan/asan_cb.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
+| Object Intent Violation | runner | **metal only** | `[metal] emule_sanitizers.cpp` | a kernel changed a buffer it never resolved a pointer into |
+| Launch-Mailbox Clobber | kernel + runner | both | `[emule] asan/emule_asan.h`; hooked at the local chokepoint and at `__emule_resolve_noc_addr` / `__emule_multicast_write` in `[metal] emulated_program_runner.cpp` | kernel-initiated data movement lands in the reserved firmware launch-mailbox window |
 
 ---
+
+## Profiles — metal vs blaze
+
+These checks were designed against tt-metal's model: one kernel per core, buffers
+allocated per op, mostly core-local data movement. Blaze breaks all three, and four
+checks are **conceptually void** there — they report normal Blaze structure as an
+error. Rather than weaken them for everyone, they are excluded by profile:
+
+```
+TT_METAL_EMULE_ASAN_PROFILE = metal | blaze        (default: metal)
+```
+
+`metal` is the default, so a ttnn run is unaffected; Blaze opts in. **Metal-only:**
+§5 Tensor Padding, §7 CB Boundary, §11 Dirty CB, §12 Object Intent — the *Profile*
+column above marks them, and each section states why. Per-check override
+`TT_METAL_EMULE_ASAN_CHECK_<NAME>=0|1` composes with and wins over the profile.
+
+The selector, exclusion list and per-check names live in
+`[emule] include/jit_hw/asan/asan_profile.h` — dependency-free so the JIT kernel TUs
+and metal's emule-only host TUs share one definition of check identity. Full
+rationale per check: `[emule] docs/ASAN.md` "Profiles".
+
+This replaced three earlier bring-up opt-outs
+(`TT_METAL_EMULE_ASAN_SKIP_{DIRTY_CB,CB_BOUNDARY,NOC_RACE}`). Nothing ever set them,
+so those checks were in fact always armed, and the naming conflated "noisy on Blaze"
+with "meaningless on Blaze"; the profile states which it is.
 
 ## Host-side checks
 
@@ -428,10 +454,12 @@ consumed ends with pages occupied yet fully handed off (dangling flag clear) and
 correctly **not** flagged (globally-allocated/sharded output CBs, producer-only
 programs that DMA their result out).
 *Diagnostic:* `Dirty CB Detected: Core (x, y) CB <id> was not flushed! Kernel (processor P): <N> page(s) reserved via cb_reserve_back at <file:line> were never committed with cb_push_back. … <M> page(s) waited … were never released with cb_pop_front.`
-*Per-check opt-out:* set `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` (non-empty, not `0`)
+*Profile:* **metal only** — excluded from blaze (see "Profiles"). *Per-check
+override:* set `TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB=0` (or `=1` to re-arm it under blaze)
 to suppress **only** this check while every other sanitizer stays active under the
 master switch. `sweep_per_kernel_dirty_cbs` returns early when
-`dirty_cb_check_skipped()` (host_sanitizers.hpp) is true. Use it to run a full
+§11 is disabled for the active profile (blaze excludes it) or by
+`TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB=0`. Use it to run a full
 regression past a kernel with a known un-flushed-CB bug without losing OOB /
 Padding / Object-Intent / CB-Boundary coverage. The `test_cb_leak.cpp` death tests
 `unsetenv` it so they still validate the check even when it is exported globally.
@@ -542,7 +570,7 @@ The canonical failure leaves the address inside a *registered* CB, so a
 *Diagnostic:* `Launch-Mailbox Clobber: <local write|NOC write|multicast write> to
 offset 0x… is inside the reserved launch-mailbox region [0x…, 0x…)`. The `how`
 field distinguishes a local stomp from a cross-core one.
-*Opt-out:* `TT_METAL_EMULE_ASAN_SKIP_MAILBOX_GUARD`.
+*Opt-out:* `TT_METAL_EMULE_ASAN_CHECK_MAILBOX_CLOBBER=0`.
 *Exercised by:* `test_asan_crosscore_gap.cpp` — `Mailbox_LocalWrite_Detected`,
 `Mailbox_CrossCoreNocWrite_Detected` (the bug shape this check exists for) and
 `Mailbox_SkipGate_Respected`. The same file's `GapAddr_*` /
@@ -566,6 +594,6 @@ which needs per-core liveness in `LiveL1Ranges`.
 | CB Reservation Overflow | `[emule] asan/asan_cb.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
 | NoC pending on pop | `[emule] asan/asan_cb.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
 | NOC Transfer Alignment | `[emule] api/dataflow/asan/asan_dataflow.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
-| Dirty CB | `[metal] emule_sanitizers.cpp` (+ `[emule] asan/asan_cb.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; opt out with `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` |
+| Dirty CB | `[metal] emule_sanitizers.cpp` (+ `[emule] asan/asan_cb.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; **metal only**; override with `TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB` |
 | Object Intent | `[metal] emule_sanitizers.cpp` | post-launch `memcmp` of buffers never resolved into |
-| Launch-Mailbox Clobber | `[emule] asan/emule_asan.h` + local chokepoint & `__emule_resolve_noc_addr` / `__emule_multicast_write` | offset ∈ HAL-armed `san.mailbox_l1_range_*`; checked before CB resolution, and on the cross-core paths §4 never sees; opt out with `TT_METAL_EMULE_ASAN_SKIP_MAILBOX_GUARD=1` |
+| Launch-Mailbox Clobber | `[emule] asan/emule_asan.h` + local chokepoint & `__emule_resolve_noc_addr` / `__emule_multicast_write` | offset ∈ HAL-armed `san.mailbox_l1_range_*`; checked before CB resolution, and on the cross-core paths §4 never sees; override with `TT_METAL_EMULE_ASAN_CHECK_MAILBOX_CLOBBER` |

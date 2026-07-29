@@ -18,8 +18,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 
-#include "host_sanitizers.hpp"  // emule_asan_enabled / dirty_cb_check_skipped
+#include "host_sanitizers.hpp"  // emule_asan_enabled
 #include "impl/emulation/emule_live_ranges.hpp"
+#include "jit_hw/asan/asan_profile.h"          // EmuleAsanCheck / __emule_asan_check_enabled
 #include "jit_hw/internal/emule_thread_ctx.h"  // __emule_self / EmuleSanitizerState (per-fiber ASAN state)
 #include "tt_emule/cb_sync_state.hpp"
 
@@ -241,8 +242,11 @@ void sweep_per_kernel_dirty_cbs(
     if (!oob.asan_enabled || cb_array == nullptr) {
         return;
     }
-    // Per-check opt-out (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB); see host_sanitizers.hpp.
-    if (dirty_cb_check_skipped()) {
+    // Excluded from the Blaze profile: "unmatched reserve/wait at kernel exit" has
+    // no meaning for a `while(true)` stage whose CB state is deliberately reset by
+    // CbReconfig / CbScratchReset, and whose contract prescribes CBReconfigs as the
+    // remedy for the imbalance this reports. See asan/asan_profile.h.
+    if (!__emule_asan_check_enabled(EmuleAsanCheck::DirtyCb)) {
         return;
     }
     for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
@@ -307,7 +311,13 @@ OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
     owner.state.dram_tensor_ranges_count = static_cast<uint32_t>(owner.dram_live_ranges.size());
     owner.state.object_intent_strict = true;
 
-    owner.padding_ranges = tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id);
+    // §5 Tensor Padding: excluded from the Blaze profile by not arming its extents
+    // — the kernel-side check early-returns on a null list, so it costs no kernel
+    // edit. (On Blaze nothing declares a logical size, so the list is empty anyway;
+    // gating it here makes that a stated decision rather than an accident.)
+    owner.padding_ranges = __emule_asan_check_enabled(EmuleAsanCheck::TensorPadding)
+                               ? tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id)
+                               : std::vector<uint64_t>{};
     if (!owner.padding_ranges.empty()) {
         owner.state.l1_padding_ranges = owner.padding_ranges.data();
         owner.state.l1_padding_ranges_count = static_cast<uint32_t>(owner.padding_ranges.size());

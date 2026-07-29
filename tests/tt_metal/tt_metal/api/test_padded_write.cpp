@@ -23,6 +23,10 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
     GTEST_SKIP() << "Temporarily disabled. See SANITIZER_CHECKS.md for details.";
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_TENSOR_PADDING");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};

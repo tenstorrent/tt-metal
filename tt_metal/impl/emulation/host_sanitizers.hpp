@@ -11,7 +11,7 @@
 // (`-DTT_METAL_USE_EMULE=OFF`). To guarantee that, it is split into two layers:
 //
 //   * This header — the always-safe facade. It only ever exposes:
-//       - the master-switch readers (`emule_asan_enabled` / `dirty_cb_check_skipped`),
+//       - the master-switch reader (`emule_asan_enabled`),
 //         which are pure `getenv` and safe in any build, and
 //       - DECLARATIONS of the host checks. In an emule build they resolve to the
 //         real definitions in host_sanitizers.cpp; in a non-emule build they are
@@ -59,14 +59,12 @@ inline bool emule_asan_enabled() {
     return v != nullptr && v[0] != '\0' && v[0] != '0';
 }
 
-// Per-check opt-out for the Dirty CB sanitizer (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB):
-// skips only `sweep_per_kernel_dirty_cbs` while every other check stays active.
-// Re-read every call (a static cache would stick across combined gtest runs). What
-// it's for and why this is the one check with its own switch: SANITIZER_CHECKS.md §11.
-inline bool dirty_cb_check_skipped() {
-    const char* v = std::getenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
-    return v != nullptr && v[0] != '\0' && v[0] != '0';
-}
+// Per-check enablement (profile + override) lives in the emule-side
+// jit_hw/asan/asan_profile.h, which both the kernel TUs and metal's emule-only TUs
+// include so the two sides agree on check identity. It is deliberately NOT exposed
+// here: this header is included unconditionally by the core host API and must stay
+// free of jit_hw. The former TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB opt-out is replaced
+// by TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB=0 (see SANITIZER_CHECKS.md §11).
 
 // ---- Host checks --------------------------------------------------------
 // In an emule build these are defined in host_sanitizers.cpp; otherwise they are

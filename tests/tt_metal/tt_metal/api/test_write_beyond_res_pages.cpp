@@ -28,6 +28,10 @@ namespace tt::tt_metal {
 // reserved sub-range, and aborts before the memcpy.
 TEST_F(MeshDeviceFixture, CB_Boundary_Violation_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_CB_BOUNDARY");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -76,6 +80,10 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_SanityCheck) {
 // outside both windows (write reservation is empty after the push) and aborts.
 TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_CB_BOUNDARY");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -131,6 +139,10 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
 // strict subset, which the paired Violation test below relies on.)
 TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_CB_BOUNDARY");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -186,6 +198,10 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_NoViolation) {
 // dormancy failure mode).
 TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_CB_BOUNDARY");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -233,6 +249,10 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
 // check false-positived across the TT-NN sweeps (expand/reshape/roll/to_memory_config/…).
 TEST_F(MeshDeviceFixture, CB_Boundary_NoActiveWindow_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_CB_BOUNDARY");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -276,6 +296,10 @@ TEST_F(MeshDeviceFixture, CB_Boundary_NoActiveWindow_NoViolation) {
 // conv activation-reuse pattern). See SANITIZER_CHECKS.md §7.
 TEST_F(MeshDeviceFixture, CB_Boundary_ProducedRegionReuse_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // This check is excluded from the blaze profile; pin to metal so a
+    // shell-level PROFILE/override export cannot disable it under us.
+    ::unsetenv("TT_METAL_EMULE_ASAN_PROFILE");
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_CB_BOUNDARY");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
