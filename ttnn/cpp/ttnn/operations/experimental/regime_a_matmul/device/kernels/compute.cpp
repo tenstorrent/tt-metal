@@ -438,7 +438,7 @@ void kernel_main() {
     // M_block*N_block / Pk). Follow is_reduce_bottom; unfused only, so they cannot collide with is_reduce_top.
     const uint32_t rs_ring_pos = get_arg_val<uint32_t>(argidx++);
     const uint32_t rs_P = get_arg_val<uint32_t>(argidx++);
-    const uint32_t rs_chunk_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t rs_T = get_arg_val<uint32_t>(argidx++);  // tiles per sub-block (== out_block_num_tiles)
 #endif
 
 // Any fusion active => the reduction ROOT (is_top) applies bias/activation/addcmul exactly once after the
@@ -563,33 +563,41 @@ void kernel_main() {
 
 #ifdef RSCATTER
             // ---- Ring REDUCE-SCATTER. intermediate_cb (FP32, resident) is my matmul partial for the whole
-            // sub-block, row-major, partitioned into P=Pk contiguous chunks of ct tiles (chunk c = tiles
-            // [c*ct, (c+1)*ct)). Seed cb_send with MY OWN chunk `rs_ring_pos`; then over P-1 rounds receive the
-            // running sum for chunk d = (rs_ring_pos - t - 1) mod P, add my resident chunk d, and either forward
-            // it (earlier rounds) or keep it (last round) - at which point it is fully reduced and is exactly
-            // the chunk this core owns, so it goes to out_cb for the writer to send to DRAM. ----
+            // sub-block, row-major, partitioned into P=Pk contiguous chunks whose sizes differ by at most one
+            // tile (the first rs_T%P chunks take one extra), so any rs_T >= P works. Seed cb_send with MY OWN
+            // chunk `rs_ring_pos`; then over P-1 rounds receive the running sum for chunk
+            // d = (rs_ring_pos - t - 1) mod P, add my resident chunk d, and either forward it (earlier rounds)
+            // or keep it (last round) - at which point it is fully reduced and is exactly the chunk this core
+            // owns, so it goes to out_cb for the writer to send to DRAM.
+            // Every CB operation moves a full MAX-size slot while only the chunk's useful prefix is written or
+            // read; that keeps the send/recv FIFOs in lockstep with the writer's constant-stride remote writes. ----
             {
                 const uint32_t P = rs_P;
-                const uint32_t ct = rs_chunk_tiles;
+                const uint32_t cbase = rs_T / P;  // floor chunk size; first crem chunks carry one more
+                const uint32_t crem = rs_T - cbase * P;
+                const uint32_t max_chunk = cbase + (crem ? 1u : 0u);
+                auto csize = [=](uint32_t c) { return cbase + (c < crem ? 1u : 0u); };
+                auto coff = [=](uint32_t c) { return c * cbase + (c < crem ? c : crem); };
                 constexpr uint32_t cb_send_cb = tt::CBIndex::c_4;     // compute -> writer send chunk (bf16)
                 constexpr uint32_t cb_recv_cb = tt::CBIndex::c_5;     // incoming chunk (bf16), 2 slots
                 cb_wait_front(intermediate_cb, out_block_num_tiles);  // resident; popped after the ring
-                cb_reserve_back(cb_send_cb, ct);
-                rs_copy_chunk(intermediate_cb, rs_ring_pos * ct, cb_send_cb, ct);
-                cb_push_back(cb_send_cb, ct);
+                cb_reserve_back(cb_send_cb, max_chunk);
+                rs_copy_chunk(intermediate_cb, coff(rs_ring_pos), cb_send_cb, csize(rs_ring_pos));
+                cb_push_back(cb_send_cb, max_chunk);
                 for (uint32_t t = 0; t + 1u < P; ++t) {
                     const uint32_t d = (rs_ring_pos + P - t - 1u) % P;  // chunk reduced this round
-                    cb_wait_front(cb_recv_cb, ct);
+                    const uint32_t dn = csize(d);
+                    cb_wait_front(cb_recv_cb, max_chunk);
                     if (t + 1u < P - 1u) {  // forward the running sum into the next round's send slot
-                        cb_reserve_back(cb_send_cb, ct);
-                        rs_add_chunk(intermediate_cb, d * ct, cb_recv_cb, cb_send_cb, ct);
-                        cb_push_back(cb_send_cb, ct);
+                        cb_reserve_back(cb_send_cb, max_chunk);
+                        rs_add_chunk(intermediate_cb, coff(d), cb_recv_cb, cb_send_cb, dn);
+                        cb_push_back(cb_send_cb, max_chunk);
                     } else {  // last round: fully reduced AND owned by this core -> writer writes it to DRAM
-                        cb_reserve_back(out_cb, ct);
-                        rs_add_chunk(intermediate_cb, d * ct, cb_recv_cb, out_cb, ct);
-                        cb_push_back(out_cb, ct);
+                        cb_reserve_back(out_cb, max_chunk);
+                        rs_add_chunk(intermediate_cb, coff(d), cb_recv_cb, out_cb, dn);
+                        cb_push_back(out_cb, max_chunk);
                     }
-                    cb_pop_front(cb_recv_cb, ct);
+                    cb_pop_front(cb_recv_cb, max_chunk);
                 }
                 cb_pop_front(intermediate_cb, out_block_num_tiles);
             }

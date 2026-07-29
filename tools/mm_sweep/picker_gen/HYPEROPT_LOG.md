@@ -496,3 +496,56 @@ Across the whole 63-shape corpus the mesh alone is adopted on 26 shapes for a me
       the ring was 17% and the read 10%; now the ring is 3.5% and the read 12.2%, so the balance has flipped.
    b. ~~Add 256x2048x6144 nsb=2 to the picker table.~~ DONE (S5, +5.7%).
    c. 512x6144x4608 is compute-limited, so for it the only real lever is fewer or cheaper math passes.
+
+### S7. SHIPPED: restored the reduce-scatter reduction that a "cleanup" commit had deleted (-5.5 to -16.4%)
+
+**How I found it.** The user asked for the corpus sorted by absolute slack. Five shapes in that corpus carried
+a note "was-reduce-scatter(now chain)" from an earlier run, so I went looking for why. Commit `21b08d6f1df`
+("Production cleanup: remove all diagnostic modes + reduction experiments") had deleted the ring reduce-scatter
+reduction that commit `1eee35d311a` had measured, gated and shipped. The cleanup commit's own message says
+*"No production numerical change (chain reduction ... preserved)"* - that is true about the numbers and false
+about the speed. It reverted a shipped win while claiming to change nothing.
+
+**What reduce-scatter is, in plain terms.** With split-K, Pk cores each compute a partial sum of the same
+output block and the partials have to be added together.
+
+- The **chain** passes the whole block up a line of Pk cores. Core 1 sends to core 2, which adds its own
+  partial and sends to core 3, and so on. The last partial cannot start moving until Pk-2 earlier hops have
+  finished, and the single core at the top writes the entire output to DRAM.
+- **Reduce-scatter** cuts the block into Pk pieces and rotates the pieces around the Pk cores. Every core sends
+  a piece every round, so all the cores are busy at once instead of one at a time. After Pk-1 rounds each core
+  holds one finished piece, which it writes to DRAM itself - so the output write is shared by Pk cores instead
+  of dumped on one.
+
+The total number of additions and the total bytes moved are IDENTICAL. What changes is how much of it has to
+happen one-after-another, and how many cores share the output write.
+
+**Measured**, mask 0 (gate picks reduce-scatter) vs bit22 FORCE_CHAIN, at the deployed picker config, two
+relaunches with the mask order reversed on the second:
+
+| shape | chain (us) | reduce-scatter (us) | change |
+|---|---|---|---|
+| 256x2048x1024 | 23.37 | 19.54 | **16.4% faster** |
+| 256x2048x2048 | 39.21 | 34.31 | **12.5% faster** |
+| 128x2048x1024 | 16.40 | 14.50 | **11.6% faster** |
+| 128x2048x2048 | 27.04 | 24.62 | **9.0% faster** |
+| 64x2048x1024 | 12.85 | 12.14 | **5.5% faster** |
+
+Mean 11.0% faster. The two relaunches agree within 0.9 percentage points on every shape, so this is well clear
+of the +-2.4% noise floor for these 2048-K shapes. It is also BIGGER than the 5-9% the original commit
+claimed, because the op has changed a lot since then.
+
+**Where it is used.** The gate is exactly the original one and still selects exactly these five corpus shapes:
+Pk>=4, K depth <= 64 tiles, N >= 32 tiles, N_sub >= 2, sub-block tile count divisible by Pk, unfused, single
+output chunk. All 57 other corpus shapes keep the chain and are byte-identical to before.
+
+**Precision.** Each owner adds the Pk partials in ring order rather than bottom-to-top, so the result is
+PCC-equal but not bit-identical to the chain. Every add is still FP32 in DST and no operand is narrowed - this
+is a different order of summation, not lower precision. PCC vs an FP32 CPU reference is 0.99998-0.999998 on all
+five shapes, and chain-vs-scatter outputs agree to PCC 1.00000. 111/111 correctness tests pass.
+
+Commit `a86dd5e0b68`. New diagnostics: bit22 FORCE_CHAIN, bit23 FORCE_RSCATTER.
+
+**LESSON.** A refactor that preserves numerics can still silently delete performance. Any "cleanup" that
+removes a gated optimisation must re-run the A/B that justified it, and the corpus baseline must be re-measured
+after the cleanup, not assumed unchanged.
