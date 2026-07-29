@@ -420,6 +420,10 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                 compute_kernel_config=_KV_SDPA_HIFI2,
                 max_kv_chunk_tiles=_KV_SDPA_MAX_CHUNK_TILES,
                 kv_splits=_KV_SPLITS,
+                # Skip prefix K-tiles that are entirely masked (absent camera / padded prefix tail)
+                # instead of masking them: no mask tensor, so no bf8+mask+16-row sign inversion, and
+                # strictly less work. Set on the module at stage-build time; None => attend everything.
+                prefix_valid_tiles=getattr(self, "_prefix_valid_tiles", None),
             )
             new_cache = None
         else:

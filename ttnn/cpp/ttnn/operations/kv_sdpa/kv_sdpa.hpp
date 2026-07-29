@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -32,6 +33,8 @@ Tensor kv_sdpa(
     const std::optional<Tensor>& past_v = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t max_kv_chunk_tiles = 128,
-    uint32_t kv_splits = 1);
+    uint32_t kv_splits = 1,
+    // Indices of the VALID prefix K-tiles; empty = all. Skips invalid tiles instead of masking them.
+    std::vector<uint32_t> prefix_valid_tiles = {});
 
 }  // namespace ttnn

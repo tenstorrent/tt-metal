@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -46,6 +47,15 @@ struct KvSdpaDeviceOperation {
         // Requires prefix_Kt % S == 0; validation clamps S when it does not divide.
         // S == 1 reproduces the original single-core-per-head program exactly.
         uint32_t kv_splits = 1;
+        // PREFIX TILE SKIPPING. Indices of the prefix K-tiles that are VALID; empty means all of them.
+        // The pi0.5 expert mask is tile-aligned for the case that matters: pad_mask is built from
+        // 256-element per-camera segments and 256 % 32 == 0, so an absent camera is exactly 8 whole
+        // K-tiles. Skipping those tiles is strictly better than masking them -- it needs no mask tensor
+        // (so it side-steps the bf8 + dense-mask + 16-row-tile sign inversion entirely) and it does LESS
+        // work than the unmasked path, whereas routing a masked call to the general SDPA costs +47%.
+        // The reader indirects its prefix page index through this list; the compute kernel is unchanged
+        // because it simply sees a dense, shorter prefix.
+        std::vector<uint32_t> prefix_valid_tiles = {};
     };
 
     struct tensor_args_t {
@@ -93,5 +103,6 @@ ttnn::operations::kv_sdpa::KvSdpaDeviceOperation::tensor_return_value_t kv_sdpa(
     std::optional<Tensor> past_v,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t max_kv_chunk_tiles = 128,
-    uint32_t kv_splits = 1);
+    uint32_t kv_splits = 1,
+    std::vector<uint32_t> prefix_valid_tiles = {});
 }  // namespace ttnn::prim

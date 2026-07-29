@@ -270,6 +270,7 @@ def _bind_stage_runtime(
     suffix_len,
     attention_mask_torch,
     bind_mods=True,
+    prefix_valid_tiles=None,
 ):
     kvd = _kv_dtype()
     # Every prefix-KV upload below deliberately stays on the default 32x32 tile: kv_sdpa's
@@ -304,6 +305,11 @@ def _bind_stage_runtime(
         st._attention_mask = from_torch_pi05(
             attention_mask_torch, dtype=ttnn.bfloat16, device=mesh, memory_config=_DRAM
         )
+        # Prefix tile skipping: attach the valid-tile list to each block's attention so kv_sdpa reads
+        # only those tiles. Constant for the setup, so it costs nothing per step. None => read all.
+        if prefix_valid_tiles is not None:
+            for blk in st.blocks:
+                blk.attention._prefix_valid_tiles = list(prefix_valid_tiles)
 
 
 def _build_stages(

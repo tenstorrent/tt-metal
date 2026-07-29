@@ -100,6 +100,7 @@ def kv_sdpa(
     compute_kernel_config=None,
     max_kv_chunk_tiles=None,
     kv_splits=None,
+    prefix_valid_tiles=None,
 ):
     # The tiny-tile kv_sdpa dropped the mask path our earlier version had (cb_mask_in + a
     # use_provided_mask compile-time gate) and now hard-fails:
@@ -120,6 +121,8 @@ def kv_sdpa(
             kwargs["max_kv_chunk_tiles"] = max_kv_chunk_tiles
         if kv_splits is not None:
             kwargs["kv_splits"] = kv_splits
+        if prefix_valid_tiles:
+            kwargs["prefix_valid_tiles"] = list(prefix_valid_tiles)
         return ttnn.kv_sdpa(q, k, v, **kwargs)
 
     if past_k is not None and past_v is not None:

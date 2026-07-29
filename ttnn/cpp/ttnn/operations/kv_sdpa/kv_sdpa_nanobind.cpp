@@ -4,6 +4,8 @@
 
 #include "kv_sdpa_nanobind.hpp"
 
+#include <vector>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
@@ -48,7 +50,8 @@ void bind_kv_sdpa_operation(nb::module_& mod) {
         nb::arg("past_v") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("max_kv_chunk_tiles") = 128,
-        nb::arg("kv_splits") = 1);
+        nb::arg("kv_splits") = 1,
+        nb::arg("prefix_valid_tiles") = std::vector<uint32_t>{});
 }
 
 }  // namespace ttnn::operations::kv_sdpa

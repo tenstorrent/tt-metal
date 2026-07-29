@@ -87,16 +87,27 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     };
     const uint32_t suffix_Sk_chunk_t = pick_chunk(suffix_Kt);
     const uint32_t suffix_num_chunks = suffix_Sk_chunk_t == 0 ? 0 : suffix_Kt / suffix_Sk_chunk_t;
+    // Prefix tile skipping: attend only the VALID prefix tiles. The reader indirects its page index
+    // through the list, so from here down `prefix_Kt_eff` is simply a shorter prefix and every chunk /
+    // subblock / granularity decision below is unchanged. Strictly less work than the unmasked path.
+    const auto& pvt = attrs.prefix_valid_tiles;
+    const bool skip_prefix_tiles = has_past && !pvt.empty() && pvt.size() < prefix_Kt;
+    const uint32_t prefix_Kt_eff = skip_prefix_tiles ? static_cast<uint32_t>(pvt.size()) : prefix_Kt;
+    if (skip_prefix_tiles) {
+        for (uint32_t t : pvt) {
+            TT_FATAL(t < prefix_Kt, "kv_sdpa: prefix_valid_tiles entry {} >= prefix_Kt {}", t, prefix_Kt);
+        }
+    }
     // Split-KV (flash decode): S cores per Q head, each taking prefix_Kt/S of the prefix. Clamp to 1
     // unless there is a prefix that divides evenly -- the suffix is not split (it is far shorter, and
     // it stays on the reducer so no split has mixed geometry).
     uint32_t kv_splits = std::max<uint32_t>(1u, attrs.kv_splits);
-    if (!has_past || prefix_Kt == 0 || prefix_Kt % kv_splits != 0) {
+    if (!has_past || prefix_Kt_eff == 0 || prefix_Kt_eff % kv_splits != 0) {
         kv_splits = 1;
     }
     // Prefix chunk geometry is PER SPLIT, so every split has the same chunk count and the compute's
     // per-phase block sizing stays a compile-time constant.
-    const uint32_t prefix_Kt_per_split = has_past ? prefix_Kt / kv_splits : 0;
+    const uint32_t prefix_Kt_per_split = has_past ? prefix_Kt_eff / kv_splits : 0;
     const uint32_t prefix_Sk_chunk_t = has_past ? pick_chunk(prefix_Kt_per_split) : 1;
     const uint32_t prefix_num_chunks = has_past ? prefix_Kt_per_split / prefix_Sk_chunk_t : 0;
     const uint32_t num_children = kv_splits - 1;
@@ -235,6 +246,9 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         // there is no real past they alias k/v and the reader never reads them (has_past gates use).
         TensorAccessorArgs(*pk_buf).append_to(c);
         TensorAccessorArgs(*pv_buf).append_to(c);
+        // After the accessors: accessor arg blocks are variable-length and q is pinned at slot 9, so
+        // nothing may be inserted ahead of them.
+        c.push_back((uint32_t)skip_prefix_tiles);
         return c;
     };
     KernelDescriptor readers[2];
@@ -322,6 +336,15 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
             const uint32_t prefix_tile_start = s * prefix_Kt_per_split;
             readers[r].emplace_runtime_args(
                 core, {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf, prefix_tile_start});
+            if (skip_prefix_tiles) {
+                // Slots 8..: the VALID prefix tile indices, in order. Runtime (not compile-time) args are
+                // fine here -- they feed an index lookup, not a loop bound, so every loop in the reader
+                // and the compute stays constexpr-bounded (that distinction cost 12% once, see R9/R11).
+                auto& ra = readers[r].runtime_args.back().second;
+                for (uint32_t t : pvt) {
+                    ra.push_back(t);
+                }
+            }
             writers[r].emplace_runtime_args(
                 core,
                 {out.buffer(),

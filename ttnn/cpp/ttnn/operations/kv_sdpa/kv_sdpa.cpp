@@ -21,7 +21,8 @@ Tensor kv_sdpa(
     const std::optional<Tensor>& past_v,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t max_kv_chunk_tiles,
-    uint32_t kv_splits) {
+    uint32_t kv_splits,
+    std::vector<uint32_t> prefix_valid_tiles) {
     const uint32_t DH = input_tensor_q.logical_shape()[-1];
     const float s = scale.value_or(1.0f / std::sqrt(static_cast<float>(DH)));
     uint32_t scale_bits = 0;
@@ -36,7 +37,8 @@ Tensor kv_sdpa(
         past_v,
         compute_kernel_config,
         max_kv_chunk_tiles,
-        kv_splits);
+        kv_splits,
+        std::move(prefix_valid_tiles));
 }
 
 }  // namespace ttnn

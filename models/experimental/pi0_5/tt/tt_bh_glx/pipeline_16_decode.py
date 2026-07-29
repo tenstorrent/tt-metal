@@ -17,6 +17,14 @@ import os
 # so masking real prefix columns is no longer silently dropped and this guard need not fire.
 # Must match PI05_PASS_EXPERT_MASK in denoise_block.py.
 _PASS_EXPERT_MASK_16 = int(os.environ.get("PI05_PASS_EXPERT_MASK", "0")) == 1
+# Tolerate a PARTIALLY masked prefix K-tile (keep it, attending its invalid columns) instead of raising.
+# Exactly one such tile arises in the LIBERO config: the language segment's prompt ends mid-tile, so
+# tile 24 mixes real prompt tokens with language padding. Skipping it would drop real tokens; keeping it
+# attends up to 31 pad columns out of ~544 attended (~5.7% spurious mass). Whether that matters is an
+# EMPIRICAL question -- validate with a LIBERO rollout, exactly as the phantom-suffix tail was
+# (0.011% measured error). Opt-in, because silently attending invalid columns is what the guard exists
+# to prevent. The exact fix is a 1-tile additive mask in kv_sdpa's boundary chunk.
+_TOLERATE_PARTIAL_TILE = int(os.environ.get("PI05_TOLERATE_PARTIAL_PREFIX_TILE", "0")) == 1
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -298,10 +306,56 @@ class Pi0_5GLX16DecodePipeline:
         # Masking REAL prefix columns is NOT: those K/V are full magnitude. That only arises when a
         # caller supplies img_masks with an absent camera or a padded lang_masks, so fail loudly here
         # rather than let it be dropped without a trace.
+        # ---- PREFIX TILE SKIPPING ----------------------------------------------------------------
+        # Every fully-masked prefix K-tile is dropped from kv_sdpa's read list rather than masked. The
+        # masking here is tile-aligned for the case that matters: pad_mask is built from _NUM_PATCHES
+        # (256) element per-camera segments and 256 % 32 == 0, so an absent camera is exactly 8 whole
+        # K-tiles. Skipping them needs no mask tensor (side-stepping the bf8 + dense-mask + 16-row-tile
+        # sign inversion, which is what made tile-16 unusable for LIBERO) and does LESS work than the
+        # unmasked path -- for LIBERO's padded slot 3 that is 24 of 32 prefix tiles.
+        _TW = 32
+        prefix_tile_valid = []
+        prefix_tile_partial = []
+        for t in range(prefix_padded // _TW):
+            lo, hi = t * _TW, (t + 1) * _TW
+            if lo >= prefix_len:
+                continue  # padded prefix tail: fully invalid, skip
+            seg = pad_mask[lo : min(hi, prefix_len)]
+            n_real = int(seg.sum().item())
+            if n_real == 0:
+                continue  # fully masked (absent camera): skip
+            if n_real == seg.numel() and hi <= prefix_len:
+                prefix_tile_valid.append(t)
+            else:
+                # Partially masked tile -- skipping would drop real columns, keeping it would attend
+                # invalid ones. Not reachable in the production config (lang_masks is all-ones and
+                # prefix_len is 32-aligned), so record it and let the guard below decide.
+                prefix_tile_valid.append(t)
+                prefix_tile_partial.append(t)
+        self._prefix_valid_tiles = prefix_tile_valid if len(prefix_tile_valid) < prefix_padded // _TW else None
+
         _dropped = expert_mask.clone()
+        # Prefix columns handled by tile skipping are no longer "dropped" -- zero them before the guard.
+        for t in range(prefix_padded // _TW):
+            if t not in prefix_tile_valid:
+                _dropped[:, t * _TW : (t + 1) * _TW] = 0.0
+        # When a partial tile is deliberately tolerated, its masked columns are a KNOWN, measured
+        # tolerance rather than a silent drop, so clear them too (the partial-tile guard above is the
+        # one that governs this case).
+        if _TOLERATE_PARTIAL_TILE:
+            for t in prefix_tile_partial:
+                _dropped[:, t * _TW : (t + 1) * _TW] = 0.0
         if suffix_padded > action_horizon:  # the tolerated phantom-suffix tail
             _dropped[:, prefix_padded + action_horizon : kv_total] = 0.0
             _dropped[action_horizon:suffix_padded, :] = 0.0
+        if prefix_tile_partial and not (_PASS_EXPERT_MASK_16 or _TOLERATE_PARTIAL_TILE):
+            raise NotImplementedError(
+                f"prefix K-tiles {prefix_tile_partial} are PARTIALLY masked, so neither skipping them "
+                "(drops real columns) nor keeping them (attends invalid ones) is correct, and the "
+                "tiny-tile kv_sdpa has no mask path. Only arises with a partial lang_masks or a "
+                "non-32-aligned prefix_len; the production config hits neither. Set "
+                "PI05_PASS_EXPERT_MASK=1 to route through the general SDPA instead (TILE_HEIGHT=32 only)."
+            )
         if bool((_dropped != 0).any()) and not _PASS_EXPERT_MASK_16:
             raise NotImplementedError(
                 "pipeline_16_decode built an expert attention mask that blocks REAL prefix columns "
@@ -555,6 +609,7 @@ class Pi0_5GLX16DecodePipeline:
             prefix_len=self._prefix_len,
             suffix_len=perf_suffix_len(self.action_horizon),
             attention_mask_torch=self._expert_attn_mask_torch,
+            prefix_valid_tiles=self._prefix_valid_tiles,
             position_offset=self._position_offset,
             num_steps=self.num_denoising_steps,
             action_horizon=self.action_horizon,
@@ -1118,6 +1173,7 @@ class Pi0_5GLX16DecodePipeline:
                 prefix_len=self._prefix_len,
                 suffix_len=perf_suffix_len(self.action_horizon),
                 attention_mask_torch=self._expert_attn_mask_torch,
+                prefix_valid_tiles=self._prefix_valid_tiles,
                 position_offset=self._position_offset,
                 num_steps=self.num_denoising_steps,
                 action_horizon=self.action_horizon,

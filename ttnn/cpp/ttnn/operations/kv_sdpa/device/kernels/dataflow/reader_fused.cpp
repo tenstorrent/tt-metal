@@ -26,6 +26,13 @@ void kernel_main() {
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto pk_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto pv_args = TensorAccessorArgs<pk_args.next_compile_time_args_offset()>();
+    // PREFIX TILE SKIPPING: when set, the prefix page index indirects through a list of VALID tile
+    // indices supplied as runtime args from slot 8. The pi0.5 expert mask is tile-aligned for the case
+    // that matters (an absent camera is exactly 8 whole K-tiles, 256 % 32 == 0), so skipping beats
+    // masking: no mask tensor is needed at all -- which side-steps the bf8 + dense-mask + 16-row-tile
+    // sign inversion -- and it does LESS work than the unmasked path.
+    constexpr uint32_t skip_prefix_tiles = get_compile_time_arg_val(pv_args.next_compile_time_args_offset());
+    constexpr uint32_t VALID_ARG0 = 8;
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_arg_val<uint32_t>(1);
@@ -37,6 +44,15 @@ void kernel_main() {
     // Split-KV: this core's first prefix TILE (s * prefix_Kt / kv_splits) and how many suffix chunks
     // it owns (only the reducer takes the suffix). With kv_splits == 1 these are (0, suffix_num_chunks).
     const uint32_t prefix_tile_start = get_arg_val<uint32_t>(7);
+    // Logical prefix tile position -> physical tile in past_k/past_v.
+    auto prefix_tile = [&](uint32_t pos) -> uint32_t {
+        if constexpr (skip_prefix_tiles) {
+            return get_arg_val<uint32_t>(VALID_ARG0 + pos);
+        } else {
+            return pos;
+        }
+    };
+    auto ident_tile = [](uint32_t pos) -> uint32_t { return pos; };
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;      // suffix K
@@ -69,25 +85,25 @@ void kernel_main() {
     // Read one K/V source chunk-by-chunk. K is written transposed into cb_k: tile (seq=kt, dim=d) ->
     // offset (d*Sk_chunk + kt), i.e. a [DHt x Sk_chunk] tile grid, as the QK^T matmul expects. V stays
     // seq-major [Sk_chunk x DHt]. Page within a source = (kv_head * src_Kt + local) * DHt + d.
-#define READ_KV_SOURCE(CB_K, CB_V, K_ACC, V_ACC, K_TB, V_TB, SRC_KT, SK_CHUNK, NUM_CHUNKS, KT_START) \
-    for (uint32_t c = 0; c < (NUM_CHUNKS); ++c) {                                                    \
-        const uint32_t kt0 = (KT_START) + c * (SK_CHUNK);                                            \
-        cb_reserve_back(CB_K, (SK_CHUNK) * DHt);                                                     \
-        const uint32_t k_base = get_write_ptr(CB_K);                                                 \
-        cb_reserve_back(CB_V, (SK_CHUNK) * DHt);                                                     \
-        uint32_t lv = get_write_ptr(CB_V);                                                           \
-        for (uint32_t kt = 0; kt < (SK_CHUNK); ++kt) {                                               \
-            const uint32_t g = kt0 + kt;                                                             \
-            const uint32_t base = (kv_head * (SRC_KT) + g) * DHt;                                    \
-            for (uint32_t d = 0; d < DHt; ++d) {                                                     \
-                noc_async_read_tile(base + d, K_ACC, k_base + (d * (SK_CHUNK) + kt) * (K_TB));       \
-                noc_async_read_tile(base + d, V_ACC, lv + d * (V_TB));                               \
-            }                                                                                        \
-            lv += DHt * (V_TB);                                                                      \
-        }                                                                                            \
-        noc_async_read_barrier();                                                                    \
-        cb_push_back(CB_K, (SK_CHUNK) * DHt);                                                        \
-        cb_push_back(CB_V, (SK_CHUNK) * DHt);                                                        \
+#define READ_KV_SOURCE(CB_K, CB_V, K_ACC, V_ACC, K_TB, V_TB, SRC_KT, SK_CHUNK, NUM_CHUNKS, KT_START, MAPPER) \
+    for (uint32_t c = 0; c < (NUM_CHUNKS); ++c) {                                                            \
+        const uint32_t kt0 = (KT_START) + c * (SK_CHUNK);                                                    \
+        cb_reserve_back(CB_K, (SK_CHUNK) * DHt);                                                             \
+        const uint32_t k_base = get_write_ptr(CB_K);                                                         \
+        cb_reserve_back(CB_V, (SK_CHUNK) * DHt);                                                             \
+        uint32_t lv = get_write_ptr(CB_V);                                                                   \
+        for (uint32_t kt = 0; kt < (SK_CHUNK); ++kt) {                                                       \
+            const uint32_t g = (MAPPER)(kt0 + kt);                                                           \
+            const uint32_t base = (kv_head * (SRC_KT) + g) * DHt;                                            \
+            for (uint32_t d = 0; d < DHt; ++d) {                                                             \
+                noc_async_read_tile(base + d, K_ACC, k_base + (d * (SK_CHUNK) + kt) * (K_TB));               \
+                noc_async_read_tile(base + d, V_ACC, lv + d * (V_TB));                                       \
+            }                                                                                                \
+            lv += DHt * (V_TB);                                                                              \
+        }                                                                                                    \
+        noc_async_read_barrier();                                                                            \
+        cb_push_back(CB_K, (SK_CHUNK) * DHt);                                                                \
+        cb_push_back(CB_V, (SK_CHUNK) * DHt);                                                                \
     }
 
     // Phase 1: resident prefix K/V (own tile geometry). Skipped when there is no past.
@@ -102,10 +118,12 @@ void kernel_main() {
             prefix_Kt,
             prefix_Sk_chunk_t,
             prefix_num_chunks,
-            prefix_tile_start);
+            prefix_tile_start,
+            prefix_tile);
     }
     // Phase 2: new suffix K/V (model tiny tile).
-    READ_KV_SOURCE(cb_k_in, cb_v_in, k_acc, v_acc, ks_tb, vs_tb, suffix_Kt, suffix_Sk_chunk_t, suffix_num_chunks, 0);
+    READ_KV_SOURCE(
+        cb_k_in, cb_v_in, k_acc, v_acc, ks_tb, vs_tb, suffix_Kt, suffix_Sk_chunk_t, suffix_num_chunks, 0, ident_tile);
 
     (void)NQH;
 }
