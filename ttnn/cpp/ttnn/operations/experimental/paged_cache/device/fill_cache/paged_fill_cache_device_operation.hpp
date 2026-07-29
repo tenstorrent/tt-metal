@@ -14,7 +14,6 @@
 #include "paged_fill_cache_program_factory.hpp"
 
 #include "paged_fill_cache_device_operation_types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
@@ -37,8 +36,9 @@ struct PagedFillCacheDeviceOperation {
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // Cache-hit re-derivation: re-run create_descriptor (single source of truth) for the current
-    // tensors/attrs and re-apply it, so hash-excluded batch_idx_fallback can't freeze at the miss value.
+    // Cache-hit re-derivation: patches the cached program's runtime args in place (no descriptor
+    // rebuild). Re-applies every buffer address plus the args derived from what compute_program_hash
+    // excludes — batch_idx_fallback and noop — which would otherwise freeze at the cache-miss value.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
