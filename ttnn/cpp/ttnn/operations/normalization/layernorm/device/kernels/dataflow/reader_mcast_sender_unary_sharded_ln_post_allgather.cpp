@@ -9,6 +9,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -28,49 +29,25 @@ void kernel_main() {
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;      // [E[x], E[X^2]] global to all cores
 
     Noc noc;
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
     CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
     CircularBuffer cb_ex_global_obj(cb_ex_global);
-    MulticastEndpoint mcast_ep;
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
 
-    const auto& global_semaphore_set = [&]() __attribute__((always_inline)) {
-        reduce_sender_sem.set(VALID);
-        reduce_sender_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
-            noc,
-            mcast_dest_noc_start_x,
-            mcast_dest_noc_start_y,
-            mcast_dest_noc_end_x,
-            mcast_dest_noc_end_y,
-            num_blocks,
-            false);
-        noc.async_write_barrier();
-    };
-
-    const auto& global_reduce_sender =
-        [&](CircularBuffer& cb_ex_obj, CircularBuffer& cb_ex_global_obj_inner)
-            __attribute__((always_inline)) {
-                uint32_t l1_read_addr_ex_global = cb_ex_global_obj_inner.get_read_ptr();
-                noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                    cb_ex_obj,
-                    mcast_ep,
-                    stats_tiles * num_tiles_per_worker_bytes,
-                    num_blocks,
-                    {},
-                    {.noc_x_start = mcast_dest_noc_start_x,
-                     .noc_y_start = mcast_dest_noc_start_y,
-                     .noc_x_end = mcast_dest_noc_end_x,
-                     .noc_y_end = mcast_dest_noc_end_y,
-                     .addr = l1_read_addr_ex_global},
-                    false);
-                noc.async_write_barrier();
-            };
+    // One-shot loopback broadcast of the global reduce result and its ready flag. The rectangle
+    // covers all num_blocks cores including this sender, so SenderPipe derives the old INCLUDE_SRC
+    // fan-out from the geometry. No pre-handshake is needed because every receiver reserves a fresh
+    // cb_ex_global slot before waiting.
+    constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
+    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_sem_id, /*PRE_HANDSHAKE=*/false> reduce_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect<>{
+            mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y});
 
     cb_stats_reduced_obj.wait_front(stats_tiles * block_h);
     cb_ex_global_obj.reserve_back(stats_tiles * block_h);
-    global_reduce_sender(cb_stats_reduced_obj, cb_ex_global_obj);
+    reduce_pipe.send(
+        cb_stats_reduced_obj.get_read_ptr(), cb_ex_global_obj.get_read_ptr(), stats_tiles * num_tiles_per_worker_bytes);
     cb_ex_global_obj.push_back(stats_tiles * block_h);
     cb_stats_reduced_obj.pop_front(stats_tiles * block_h);
-    global_semaphore_set();
 }

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -64,6 +65,12 @@ void kernel_main() {
         (split_reader_cb_shared) ? dfb_act_second_obj.get_write_ptr() + act_write_offset_last : 0;
     const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 
+    constexpr auto s_weight_args = TensorAccessorArgs<36>();
+    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
+    constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
+    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(mcast_sem_args_base);
+    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(mcast_sem_args_base + 1);
+
     // mcast args
     uint32_t i = 0;
     const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
@@ -71,12 +78,16 @@ void kernel_main() {
 
     // Experimental API objects
     Noc noc;
-    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
+    i += 2;  // Runtime semaphore ids remain for argument-layout compatibility.
     DataflowBuffer dfb_weight_obj(cb_id_weight);
     DataflowBuffer dfb_bias_obj(bias_cb_id);
     DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
     DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
+
+    const uint32_t weights_sender_coords[2] = {weights_mcast_sender_noc_x, weights_mcast_sender_noc_y};
+    dataflow_kernel_lib::
+        ReceiverPipe<weights_mcast_receiver_sem_id, /*PRE_HANDSHAKE=*/true, weights_mcast_sender_sem_id>
+            weights_pipe(noc, weights_sender_coords);
 
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
 
@@ -174,14 +185,7 @@ void kernel_main() {
                     // read weight slice - 1 block of weights in width dim and full weight matrix height
                     // read slice only once for all activation blocks
                     dfb_weight_obj.reserve_back(weight_block_num_tiles);
-                    // Set weights semaphore value to INVALID
-                    weights_mcast_receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    weights_mcast_receiver_sem.wait(VALID);
+                    weights_pipe.receive();
 
                     dfb_weight_obj.push_back(weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
@@ -198,14 +202,7 @@ void kernel_main() {
                 if (load_bias) {
                     dfb_bias_obj.reserve_back(bias_ntiles);
 
-                    // Set weights semaphore value to INVALID
-                    weights_mcast_receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    weights_mcast_receiver_sem.wait(VALID);
+                    weights_pipe.receive();
 
                     dfb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;
