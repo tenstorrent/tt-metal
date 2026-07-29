@@ -10,12 +10,12 @@ from typing import List
 import pandas as pd
 import pytest
 from helpers.chip_architecture import ChipArchitecture
+from helpers.device_io import read_words_from_device
 from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.logger import logger
 from helpers.perf import PerfReport
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
-from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .fused_operand import OperandRegistry
 from .fused_operation import FusedOperation
