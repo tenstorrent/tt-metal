@@ -15,10 +15,13 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Wander of the device clock, used to judge how far the standing anchor has degraded since it was placed. Measured
-// at ~6ppm; carried a little high because underestimating is the unsafe direction -- it holds a stale anchor while
-// the real error grows faster than modelled, where overestimating only re-anchors sooner.
-constexpr double kClockDriftPpm = 10.0;
+// Rate the device clock walks away from the frequency fitted at bring-up, used to judge how far the standing anchor
+// has degraded since it was placed. Dominated by the chip warming after a fit taken cold, so it is architecture- and
+// load-dependent: measured under trace replay at <=0.2ppm on Wormhole and 0.1-14.5ppm on Blackhole, always in the
+// same direction (the clock slows). Sized above the worst of those, because underestimating is the unsafe direction
+// -- it holds a stale anchor while the real error grows faster than modelled, where overestimating only re-anchors
+// sooner. RealtimeProfilerStress.ClockDriftStaysWithinModelBudget measures the rate and asserts this still bounds it.
+constexpr double kClockDriftPpm = 25.0;
 
 // Half the round trip: the anchor could have landed anywhere inside it.
 constexpr std::chrono::nanoseconds placement_error(std::chrono::nanoseconds rtt) { return rtt / 2; }
