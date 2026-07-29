@@ -245,9 +245,16 @@ def test_one_sided_alias_casts_through_the_aliased_cb(device):
 
 
 def test_alias_out_zero_copy_is_structural_not_incidental(device):
-    """The WRITER must be compiled into its no-NoC branch on `alias_out` (and the
-    READER on `alias_in`) — that is what "zero traffic on the sharded side" means at
-    the kernel level, and it is a compile-time arg, so it is checkable."""
+    """The WRITER must have no NoC traffic on `alias_out` (and the READER none on
+    `alias_in`) — that is what "zero traffic on the sharded side" means at the
+    kernel level, and it is compile-time checkable.
+
+    Refinement 3b strengthened the `alias_out` half: since the writer's whole body
+    was one `cb_wait_front`/`cb_pop_front`, it is no longer launched at all, so the
+    assertion is now "the kernel is ABSENT" rather than "its CT arg selects the
+    no-NoC branch". The original form is kept below under the lever's
+    counterfactual, which is what the ledger row measures.
+    """
     shape = (1, 1, 2048, 512)
     shard = _shard(_BLOCK, _crs(7, 7), (256, 64), _ROW)
 
@@ -255,10 +262,18 @@ def test_alias_out_zero_copy_is_structural_not_incidental(device):
     out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, shard)
     plan = build_plan(tt_in, out, device)
     descriptor = create_program_descriptor(tt_in, out, plan)
-    reader, writer, _compute = descriptor.kernels
     assert plan["path"] == "alias_out"
-    assert list(writer.compile_time_args)[0] == 1, "writer must take the aliased (no-NoC) branch"
+    sources = [k.kernel_source for k in descriptor.kernels]
+    assert not any("tilize_writer" in s for s in sources), f"the writer must not be launched at all: {sources}"
+    reader = [k for k in descriptor.kernels if "tilize_reader" in k.kernel_source][0]
     assert list(reader.compile_time_args)[0] == 0, "reader still reads the interleaved input"
+
+    # ... and the Refinement-3 form, under the lever-2 counterfactual.
+    with _levers(nw=0):
+        plan_3k = build_plan(tt_in, out, device)
+        reader_3k, writer_3k, _compute = create_program_descriptor(tt_in, out, plan_3k).kernels
+        assert list(writer_3k.compile_time_args)[0] == 1, "writer must take the aliased (no-NoC) branch"
+        assert list(reader_3k.compile_time_args)[0] == 0, "reader still reads the interleaved input"
 
     _, tt_in2 = _make(device, shape, shard)
     out2 = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, DRAM)
