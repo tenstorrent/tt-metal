@@ -110,7 +110,7 @@ def _corerangeset(mesh_device, num_cores):
     return ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
 
 
-def height_sharded_memcfg(mesh_device, num_cores, shape, *, buffer_type=ttnn.BufferType.L1):
+def height_sharded_memcfg(mesh_device, num_cores, shape):
     """HEIGHT_SHARDED memory config over ``num_cores`` — the model's neck/SPPF sharding.
 
     ``shape`` is the full logical shape; it's HEIGHT-sharded over ``num_cores`` — each
