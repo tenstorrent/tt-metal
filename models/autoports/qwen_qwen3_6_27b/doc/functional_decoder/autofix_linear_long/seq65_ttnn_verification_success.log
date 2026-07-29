@@ -1,0 +1,19 @@
+Command:
+python models/autoports/qwen_qwen3_6_27b/tests/linear_attention_synthetic_pcc.py --mode prefill --sequence 65
+
+Date: 2026-07-29 09:08 UTC
+Exit code: 0
+Device: single Blackhole through a 1x1 TTNN mesh
+
+Numerical result:
+LINEAR_ATTENTION_SYNTHETIC_PCC mode=prefill sequence=65 0.999997826941027
+
+Interpretation:
+The bounded binary concat path preserves chronological token ordering across
+the 32/33 and 64/65 chunk boundaries and exceeds the functional PCC acceptance
+threshold of 0.995 on the real Qwen3.6-27B layer shapes with deterministic
+nonzero synthetic weights.
+
+Device initialization, synchronization, and close completed successfully.
+Nanobind shutdown leak diagnostics were printed after the passing assertion;
+they did not change the zero exit status.

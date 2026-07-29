@@ -1,0 +1,16 @@
+Qwen/Qwen3.6-27B functional-decoder real-weight evidence
+date_utc=2026-07-29
+revision=6a9e13bd6fc8f0983b9b99948120bc37f49c13e9
+layer=0
+layer_kind=linear_attention
+checkpoint_shards=model-00001-of-00015.safetensors,model-00006-of-00015.safetensors,model-00008-of-00015.safetensors
+command=python models/autoports/qwen_qwen3_6_27b/tests/linear_attention_real_pcc.py
+result=PASS
+threshold=0.995
+pcc=0.9999218584509479
+device_mesh=1x1
+architecture=BLACKHOLE
+input_shape_hf=1x1x5120
+input_shape_ttnn=1x1x1x5120
+cache_initial_state=zeros
+note=HF used its installed torch fallback for the gated-delta reference because optional FLA and causal-conv1d fast-path packages were unavailable.
