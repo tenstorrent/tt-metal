@@ -6,121 +6,29 @@ import os
 
 import pytest
 import torch
-from transformers import AutoConfig
 
-from models.demos.deepseek_v3_d_p.reference.dflash_prefill.dflash import DFlashDraftModel
+from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import DrafterUnavailable
+from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import (
+    drafter_cfg_from_hf as _drafter_cfg_from_hf,
+)
+from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import hf_context_kv as _hf_context_kv
+from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import load_hf_drafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 
 HF_ENV = "DFLASH_HF_MODEL"
 
 
 # helpers
-def _is_drafter(m) -> bool:
-    return all(hasattr(m, a) for a in ("fc", "hidden_norm", "layers", "target_layer_ids"))
-
-
-def _normalize_rope_config(config):
-    """K2.6 ships its yarn rope under DeepSeek's ``deepseek_yarn`` type in the new ``rope_parameters``
-    schema. transformers' ROPE_INIT_FUNCTIONS has no ``deepseek_yarn`` entry, so the reference's rotary
-    embedding raises ``KeyError: 'deepseek_yarn'`` at build time. Remap it to the standard ``yarn`` init in
-    whichever field this transformers version actually reads (``rope_parameters`` and/or ``rope_scaling``),
-    keeping factor/beta*/mscale so yarn's attention_factor still resolves to 1 — numerically equivalent to
-    deepseek_yarn here since mscale == mscale_all_dim == 1. Also lift rope_theta to the top level so the base
-    (50000, not the 10000 default) isn't lost."""
-
-    def _fix_type(d):
-        if isinstance(d, dict):
-            for key in ("rope_type", "type"):
-                if d.get(key) == "deepseek_yarn":
-                    d[key] = "yarn"
-
-    theta = None
-    rp = getattr(config, "rope_parameters", None)
-    if isinstance(rp, dict):
-        theta = rp.get("rope_theta")
-        _fix_type(rp)  # the field new transformers reads — remap in place
-
-    rs = getattr(config, "rope_scaling", None)
-    if isinstance(rs, dict):
-        theta = theta or rs.get("rope_theta")
-        _fix_type(rs)
-    elif isinstance(rp, dict):
-        # Older transformers read rope_scaling instead; mirror the (now-fixed) yarn params into it.
-        config.rope_scaling = {
-            k: rp[k]
-            for k in (
-                "rope_type",
-                "factor",
-                "original_max_position_embeddings",
-                "beta_fast",
-                "beta_slow",
-                "mscale",
-                "mscale_all_dim",
-            )
-            if k in rp
-        }
-
-    if theta is not None:
-        config.rope_theta = float(theta)
-    return config
-
-
 def _load_hf_drafter(load_weights: bool = True):
-    """Build the REAL z-lab DFlashDraftModel (fp32, eager) from the VENDORED reference modeling code
-    (``reference/dflash_prefill``) + the checkout's config (+ safetensors when pretrained). The
-    model *code* is always the in-repo reference; only config/weights come from ``$DFLASH_HF_MODEL``. With
-    load_weights=False (random mode) no safetensors is loaded — the caller supplies random weights."""
-    path = os.environ.get(HF_ENV)
-    if not path or not os.path.exists(path):
-        pytest.skip(f"set {HF_ENV}=/path/to/Kimi-K2.x-DFlash (dir with config.json [+ model.safetensors])")
+    """Thin test wrapper over ``reference_kv.load_hf_drafter``: reads ``$DFLASH_HF_MODEL`` and translates a
+    'checkpoint unavailable/incomplete' soft failure (``DrafterUnavailable``) into a ``pytest.skip``; a
+    genuine build failure (``RuntimeError``) still propagates as a test error. The drafter model *code* is
+    always the vendored reference; only config/weights come from ``$DFLASH_HF_MODEL``. With
+    ``load_weights=False`` (random mode) no safetensors is loaded — the caller supplies random weights."""
     try:
-        config = _normalize_rope_config(AutoConfig.from_pretrained(path, trust_remote_code=True))
-        model = DFlashDraftModel(config).float().eval()
-        if load_weights:
-            from safetensors.torch import load_file
-
-            sd = load_file(os.path.join(path, "model.safetensors"))
-            missing, _ = model.load_state_dict(sd, strict=False)
-            required = ["fc.weight", "hidden_norm.weight"] + [
-                f"layers.{i}.self_attn.{p}.weight"
-                for i in range(config.num_hidden_layers)
-                for p in ("k_proj", "v_proj", "k_norm")
-            ]
-            absent = [k for k in required if k in missing]
-            if absent:
-                pytest.skip(f"checkpoint missing required drafter tensors, e.g. {absent[:3]}")
-    except Exception as e:
-        raise RuntimeError(
-            f"could not build DFlashDraftModel (reference/dflash_prefill) from {path}: {type(e).__name__}: {e}"
-        ) from e
-
-    if not _is_drafter(model):
-        pytest.skip("built model is not a DFlashDraftModel (missing fc/hidden_norm/target_layer_ids)")
-    model.config._attn_implementation = "eager"  # force eager so the synthetic forward runs on CPU
-    return model
-
-
-def _drafter_cfg_from_hf(c) -> DFlashDrafterConfig:
-    """Build the device config from the HF model's config so dims + rope params match the checkpoint."""
-    rs = dict(getattr(c, "rope_scaling", None) or getattr(c, "rope_parameters", None) or {})
-    dfc = dict(getattr(c, "dflash_config", None) or {})
-    d = DFlashDrafterConfig()  # defaults fill anything the config omits
-    return DFlashDrafterConfig(
-        hidden_size=c.hidden_size,
-        head_dim=getattr(c, "head_dim", c.hidden_size // c.num_attention_heads),
-        num_attention_heads=c.num_attention_heads,
-        num_key_value_heads=c.num_key_value_heads,
-        num_hidden_layers=c.num_hidden_layers,
-        rms_norm_eps=c.rms_norm_eps,
-        target_layer_ids=tuple(dfc.get("target_layer_ids", d.target_layer_ids)),
-        rope_theta=float(rs.get("rope_theta") or getattr(c, "rope_theta", None) or d.rope_theta),
-        rope_factor=float(rs.get("factor", d.rope_factor)),
-        rope_beta_fast=float(rs.get("beta_fast", d.rope_beta_fast)),
-        rope_beta_slow=float(rs.get("beta_slow", d.rope_beta_slow)),
-        rope_orig_max_pos=int(rs.get("original_max_position_embeddings", d.rope_orig_max_pos)),
-        rope_mscale=float(rs.get("mscale", d.rope_mscale)),
-        rope_mscale_all_dim=float(rs.get("mscale_all_dim", d.rope_mscale_all_dim)),
-    )
+        return load_hf_drafter(os.environ.get(HF_ENV), load_weights=load_weights)
+    except DrafterUnavailable as e:
+        pytest.skip(f"set {HF_ENV}=/path/to/Kimi-K2.x-DFlash — {e}")
 
 
 def _random_state_dict(cfg: DFlashDrafterConfig, seed: int = 42) -> dict:
@@ -142,51 +50,6 @@ def _random_state_dict(cfg: DFlashDrafterConfig, seed: int = 42) -> dict:
         sd[f"layers.{i}.self_attn.v_proj.weight"] = _lin(kv, H)
         sd[f"layers.{i}.self_attn.k_norm.weight"] = torch.ones(D, dtype=torch.bfloat16)
     return sd
-
-
-def _cache_kv(pkv, i):
-    """Pull layer i's (key, value) from a DynamicCache across transformers API variants."""
-    if hasattr(pkv, "key_cache") and len(pkv.key_cache) > i:
-        return pkv.key_cache[i], pkv.value_cache[i]
-    if hasattr(pkv, "layers"):
-        return pkv.layers[i].keys, pkv.layers[i].values
-    kv = pkv[i]
-    return kv[0], kv[1]
-
-
-@torch.inference_mode()
-def _hf_context_kv(model, cfg: DFlashDrafterConfig, ctx: torch.Tensor, q_len: int):
-    """Run the REAL drafter forward and return per-layer (k_ctx, v_ctx) as [kv_heads, ctx_len, head_dim] fp32.
-
-    The context K/V depend only on ``target_hidden`` (shared across layers), so the noise block content
-    is irrelevant — zeros suffice — and the forward's noise/attention path need not be numerically
-    meaningful for the captured context slice to be correct.
-    """
-    from transformers import DynamicCache
-
-    ctx_len = ctx.shape[1]
-    total = ctx_len + q_len
-    noise = torch.zeros(1, q_len, cfg.hidden_size, dtype=ctx.dtype)
-    position_ids = torch.arange(total).unsqueeze(0)
-    pkv = DynamicCache()
-    try:
-        model(
-            target_hidden=ctx,
-            noise_embedding=noise,
-            position_ids=position_ids,
-            attention_mask=None,
-            past_key_values=pkv,
-            use_cache=True,
-            cache_position=torch.arange(total),
-        )
-    except Exception as e:
-        raise RuntimeError(f"HF drafter forward failed (reference/dflash_prefill): {type(e).__name__}: {e}") from e
-
-    out = {}
-    for i in range(cfg.num_hidden_layers):
-        k, v = _cache_kv(pkv, i)  # [1, kv_heads, total, head_dim]
-        out[i] = (k[0, :, :ctx_len, :].float(), v[0, :, :ctx_len, :].float())
-    return out
 
 
 # fixtures
@@ -234,8 +97,6 @@ def hf_context_kv(hf_drafter, drafter_cfg):
     device drafter is PCC'd against."""
 
     def _run(ctx, q_len=None):
-        if q_len is None:
-            q_len = int(getattr(hf_drafter.config, "block_size", drafter_cfg.block_size))
         return _hf_context_kv(hf_drafter, drafter_cfg, ctx, q_len)
 
     return _run
