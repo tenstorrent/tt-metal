@@ -128,11 +128,8 @@ def test_nd_shardspec_construction_across_tensor_ranks(device, torch_tensor, sha
     assert tt_tensor.memory_config().nd_shard_spec is not None
 
 
-# DRAM banks are 1D: bank_id == the core's logical x-coordinate and the DRAM grid is a single row.
-# A shard grid that puts a core off row 0 or reuses an x-coordinate aliases banks and silently
-# corrupts data (tenstorrent/tt-metal#51503). Allocating such a buffer must be rejected. The
-# invariant itself is unit-tested in C++ (DramShardValidation.AcceptsSingleRowRejectsBankAliasing);
-# this exercises the end-to-end user path from the issue repro.
+# DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row. A shard
+# core off row 0, or a repeated x, aliases banks and corrupts data, so allocation must be rejected.
 @pytest.mark.parametrize(
     "grid",
     [

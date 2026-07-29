@@ -100,10 +100,9 @@ void validate_buffer_parameters(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
 
-        // DRAM banks are 1D: bank_id == a core's logical x-coordinate and the DRAM grid is a single
-        // row. A shard grid with a core off row 0, or a repeated x, aliases multiple shards onto the
-        // same bank and silently corrupts data (tenstorrent/tt-metal#51503). Covers both the ND
-        // (BufferDistributionSpec) and legacy (ShardSpecBuffer) sharding paths.
+        // DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row.
+        // A shard core off row 0, or a repeated x, aliases shards onto the same bank and corrupts
+        // data. Applies to both the ND (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
         if (buffer_type == BufferType::DRAM) {
             std::vector<CoreCoord> shard_cores;
             if (buffer_distribution_spec.has_value()) {
