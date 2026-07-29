@@ -213,6 +213,7 @@ You read the subagent's summary and decide what to do next. If you then need to 
   - `runtime_args` and `common_runtime_args` (names if known, dimensions, and shapes).
   - `defines` (key → value pairs).
   - `config` (the descriptor type: `ReaderConfigDescriptor` / `WriterConfigDescriptor` / `ComputeConfigDescriptor` and its content).
+  - `opt_level` — `grep -n opt_level` the factory rather than reading `config`: it is a `KernelDescriptor` field *beside* `config`, often set in a separate assignment. Record the **resolved** level — an absent field still means `O2` on a DM kernel, `O3` on a compute one. See [Compiler options](#compiler-options).
 - **CBs**: every `CBDescriptor` (one row per descriptor):
   - `total_size`, `core_ranges`, format descriptors (`buffer_index`, `data_format`, `page_size`, `tile` if set).
   - **Flag any GlobalCircularBuffer separately — it is not a plain CB, and is not portable** (why: [kernel-side whitelist rule 1](#kernel-side-whitelist)). Signals: a `CBDescriptor` with `.global_circular_buffer` set; an `experimental::GlobalCircularBuffer` / `global_cb` parameter; or the `remote_cb_config` + `CreateCircularBuffer(program, cores, cfg, *global_cb)` construction idiom (legacy code calls these *"remote CBs"*). The audit should have caught it ([audit — GlobalCircularBuffer UNSUPPORTED](../audit/metal2_audit.md#globalcircularbuffer--unsupported)); if it slipped through, record it here and the port capitulates on that factory ([§When the discipline doesn't fit](#when-the-discipline-doesnt-fit)) — the op's other factories may still be portable.
@@ -569,7 +570,7 @@ DFBBinding{
 
 For each resource type, construct the spec entry and its run-args entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
 
-- **`KernelSpec` ↔ `KernelRunArgs`.** For each planned `KernelSpec`, build the schema (`compile_time_args`, `runtime_arg_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `hw_config` — the last has its own subsection, [Hardware configuration](#hardware-configuration), because it is the easiest field to break silently); alongside, build the corresponding `KernelRunArgs` entry (`runtime_arg_values` and `common_runtime_arg_values`). If the kernel has no RTAs, the run-args entry may be omitted entirely.
+- **`KernelSpec` ↔ `KernelRunArgs`.** For each planned `KernelSpec`, build the schema (`compile_time_args`, `runtime_arg_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `hw_config`, `compiler_options` — the last two have their own subsections, [Hardware configuration](#hardware-configuration) and [Compiler options](#compiler-options), because they are the easiest fields to break silently); alongside, build the corresponding `KernelRunArgs` entry (`runtime_arg_values` and `common_runtime_arg_values`). If the kernel has no RTAs, the run-args entry may be omitted entirely.
 
   `runtime_arg_values` is keyed **name-first, then node** (`name → node → value`). Legacy factories almost always set RTAs **node-first** (a loop over cores, values assigned per core). To bridge that without hand-inverting the loop, use `AddRuntimeArgsForNode` (from `program_run_args.hpp`) — keep the legacy per-node loop as-is and let the helper transpose into the name-first table:
 
@@ -627,7 +628,7 @@ After all resources are built, assemble the `ProgramSpec` (collecting `kernels`,
 **Stop signals**: any urge to —
 
 - Demote a CTA to a runtime arg to make a single `KernelSpec` work where the legacy had multiple. ([Anti-pattern](../shared/port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta).)
-- Bind a conditionally-used DFB *unconditionally* on the host to dodge the `if constexpr` name-lookup problem. That wastes L1 and breaks the moment the kernel references the name from a file-scope ternary or similar context. The right shape is conditional host binding + matching `KernelSpec::defines` + kernel-side `#ifdef`-gated alias and uses — see [Pattern: Conditional / optional DFB bindings](../shared/port_patterns.md#pattern-conditional--optional-dfb-bindings).
+- Bind a conditionally-used DFB *unconditionally* on the host to dodge the `if constexpr` name-lookup problem. That wastes L1 and breaks the moment the kernel references the name from a file-scope ternary or similar context. The right shape is conditional host binding + matching `KernelSpec::compiler_options.defines` + kernel-side `#ifdef`-gated alias and uses — see [Pattern: Conditional / optional DFB bindings](../shared/port_patterns.md#pattern-conditional--optional-dfb-bindings).
 - Extract `.id` from a `dfb::name`, or construct a temporary `DataflowBuffer` to retrieve its underlying id. ([Anti-pattern](../shared/port_patterns.md#anti-pattern-id-extraction-or-temp-dfb-wrappers-at-llk-call-sites).)
 - Pack data into varargs that should be named arguments. ([Caution](../shared/port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary).)
 - Thread a buffer address through an RTA because the binding mechanism doesn't fit. *(A **compute** kernel needing a raw L1 base address cannot bind a `TensorAccessor`, so it has no bridge — that does **not** make an RTA acceptable; the port is **blocked** there pending the compute-kernel `TensorBinding` fix, per [kernel-side whitelist rule 5](#kernel-side-whitelist).)*
@@ -728,6 +729,32 @@ Build only the Gen1 config; do not populate a `Gen2Config` or add your own `if (
 
 In the *default* DM and compute cases the arch-agnostic helpers already emit a correct Gen2 branch for free; anything beyond that is a separate, later Quasar-uplift pass carried out with the right expertise.
 
+### Compiler options
+
+`KernelSpec::compiler_options` is `hw_config`'s sibling, and `opt_level` is in the same hazard class as everything in the section above: a **pure performance setting** that almost never fails the build and usually slips past the op's tests too. Get it wrong and the op compiles and passes; what shifts is its performance profile — subtly, in no guaranteed direction, and with nothing pointing back to this line.
+
+Two rules cover it:
+
+1. **The legacy kernel set an explicit `opt_level`** → carry that value verbatim into `compiler_options.opt_level`, DM kernels included. An op that asked for `Os` or `O0` meant it; don't "correct" it toward a default.
+2. **A compute kernel that set none** → set `KernelBuildOptLevel::O3` explicitly. Legacy defaults `opt_level` on the *per-kernel-type* config struct; Metal 2.0's single type-agnostic `CompilerOptions` defaults to `O2` for both kinds, so a compute spec that leaves it alone drops a level on the compile *and* the link:
+
+   | | legacy DM (`DataMovementConfig`) | legacy compute (`ComputeConfig`) | Metal 2.0 (`KernelSpec::compiler_options`) |
+   |---|---|---|---|
+   | default `opt_level` | `O2` | **`O3`** | `O2` |
+
+```cpp
+KernelSpec compute{
+    .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+    // ...
+};
+```
+
+A DM kernel that set none needs nothing — its legacy default already lands on Metal 2.0's `O2`. Apply the rules per `KernelSpec`, not per kernel role: a factory that builds several compute specs (multiplicity, a runtime source selection, multiple variants) needs the level on each.
+
+**Answering "did it set one?" is the part that goes wrong** — `grep -n opt_level` the factory rather than reading the config. On the descriptor API `opt_level` is a field on `KernelDescriptor` *beside* `config` (`ComputeConfigDescriptor` has no such field), usually set in a separate assignment statement below the `…_desc.config = …` line. And a genuinely absent `KernelDescriptor::opt_level` is **not** "no setting": `std::nullopt` resolves at lowering exactly as legacy does — `O2` for a reader / writer / DM descriptor, **`O3` for a `ComputeConfigDescriptor`** — so rule 2 still applies. Most ports come off this API, where the field reads as absent and therefore irrelevant. It isn't.
+
+Nothing anywhere checks this: every level is legal on every kernel, no validator or test distinguishes them, and **no `hw_config` helper touches `compiler_options`** — `to_compute_hardware_config` and friends return an `hw_config` and nothing else, so reaching for one carries no `opt_level` across. Metal 2.0 will not grow legacy's per-kernel-type default split, so don't file that as a missing feature; anything else about this field reports as usual.
+
 ---
 
 ## Verification
@@ -785,7 +812,7 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
 - [ ] **No `tensor.buffer()->address()` survived.** Search the factory `.cpp` for this string; if present, the corresponding tensor needs a `TensorBinding` instead.
 - [ ] **No magic-number CB indices in CTAs.** Search `compile_time_args` for values that are CB indices (typically small integers or `CBIndex::c_*`); if found, the value should come from a `DFBBinding` instead.
 - [ ] **No `TensorAccessorArgs<N>()` survived in any ported kernel.** Search for this; if present, the kernel needs `TensorAccessor(tensor::name)` instead.
-- [ ] **Conditional DFB bindings follow [Pattern: Conditional / optional DFB bindings](../shared/port_patterns.md#pattern-conditional--optional-dfb-bindings).** For each conditionally-used DFB: the host conditionally binds it; `KernelSpec::defines` carries the matching preprocessor flag; the kernel `#ifdef`-gates both the constexpr alias of the DFB name and every expression referencing it. No unconditional bindings introduced as a workaround.
+- [ ] **Conditional DFB bindings follow [Pattern: Conditional / optional DFB bindings](../shared/port_patterns.md#pattern-conditional--optional-dfb-bindings).** For each conditionally-used DFB: the host conditionally binds it; `KernelSpec::compiler_options.defines` carries the matching preprocessor flag; the kernel `#ifdef`-gates both the constexpr alias of the DFB name and every expression referencing it. No unconditional bindings introduced as a workaround.
 - [ ] **No `.id` extraction at LLK call sites.** Search for `.id` on `dfb::` handles; if present, pass `dfb::name` directly.
 - [ ] **No CTA→RTA demotion in compute kernels.** If a per-group dimension was moved from CTA to RTA in the port, the structural decision is wrong; revisit planning.
 - [ ] **No unnecessary multi-binding flag, and never stacked with a self-loop.** Search the factory for `allow_instance_multi_binding = true`. For each, confirm the CB's kernel-touch census genuinely can't fit 1P+1C — **≥3 distinct touchers, or ≥2 kernels locked to the same FIFO role**. A two-toucher work-split (one source, Reader- + Writer-config over one grid) is a **1P+1C assignment, not a flag**. And a DFB must never be *both* self-looped *and* multi-bound — that stacking is the tell of a mis-slotted plain 1:1. See [Two-toucher DFB → assign 1P+1C](../shared/port_patterns.md#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split).
@@ -793,6 +820,7 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
 - [ ] **No nameable argument smuggled into varargs.** For each `get_vararg` use, ask: does the kernel reach it as a **distinct field read a fixed number of times**? If yes — even via a legacy `arg_index++`, even at an offset *after* a variable-count block (named args live in a separate section, so the legacy offset is irrelevant), even sitting beside a genuine vararg loop — it's a **named** arg (this is the *silent* error; `get_vararg(arg_index++)` at the top of a kernel is the tell). Varargs are legitimate only for an **indexed-collection element**: a variable-count loop, a data-selected `get(k)`, or a scan-terminating sentinel. (Don't over-correct — a genuine collection element that lands in a named local is still a vararg.) See [Caution: Avoid varargs](../shared/port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary).
 - [ ] **No ephemeral doc cited from code.** Run `git diff --name-only origin/main... | grep -E '\.(cpp|hpp|h)$' | xargs grep -nE '[A-Za-z0-9_./-]+\.md'` — scope it by the diff, not a hand-listed set, so it also covers the nanobind file, the device-op header, and any peer kernel you added a pointer comment to. Expect **zero** hits: a normal op directory cites no `.md` at all, so every hit is a real citation to adjudicate rather than noise. For each, run `git cat-file -e origin/main:<cited path>`; if it fails — or the citation is a bare filename with nothing to resolve — delete it and inline the rationale. Failing by construction: the four `METAL2_*.md` artifacts, any other in-op scratch doc (`CB_TAXONOMY_ANALYSIS.md`, `METAL2_MCAST_PLAN.md`, `CB_DFB_KERNEL_AUDIT.md` and friends), and **every doc under `docs/…/metal_2.0/`** including this recipe. The most common offender is the "see the report's Open items" form (see [Generated docs in the op directory](#generated-docs-in-the-op-directory)).
 - [ ] **Every `hw_config` reproduces the legacy op's resolved values.** For each kernel, diff the ported config against the legacy one: DM `(processor, noc, noc_mode)`, and the compute knobs — *including* the two fields the helper does not cover, `bfp_pack_precision_mode` and `unpack_modes`, swept from the legacy `ComputeConfig`. These are silent perf/precision settings with no test net; see [Hardware configuration](#hardware-configuration).
+- [ ] **Every `KernelSpec`'s `opt_level` matches its legacy kernel's.** Compute *and* DM: an explicit legacy level is carried verbatim; a compute kernel that set none gets an explicit `O3` (legacy `ComputeConfig` defaults to `O3`, Metal 2.0 to `O2`). Silent perf loss with no test net; see [Compiler options](#compiler-options).
 
 If any checklist item fails, return to planning / construction to fix. Do not paper over with kernel-side modifications.
 
@@ -904,11 +932,13 @@ Written during the inventory and planning steps; committed alongside the port fo
 > **Multi-variant ops** (e.g., Welford W/H/HW; Reduce W/H/HW): repeat the Kernels / CBs / Semaphores / Tensor accessors / Work split sub-sections **per variant**. Nest the per-variant blocks under a `### Variant: <name>` heading and downshift the per-resource headings to `####`. Shared kernels and Flags stay top-level — they typically apply across variants. The single-variant skeleton below is the inner shape of each variant block.
 
 ### Kernels
-| unique_id | source | core_ranges | CTAs (positional) | CTAs (named) | RTAs | CRTAs | defines | config |
-|---|---|---|---|---|---|---|---|---|
-| reader | ... | ... | ... | ... | ... | ... | ... | ... |
-| writer | ... | ... | ... | ... | ... | ... | ... | ... |
-| compute | ... | ... | ... | ... | ... | ... | ... | ... |
+| unique_id | source | core_ranges | CTAs (positional) | CTAs (named) | RTAs | CRTAs | defines | opt_level | config |
+|---|---|---|---|---|---|---|---|---|---|
+| reader | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+| writer | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+| compute | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+
+*(`opt_level` is the legacy kernel's **resolved** level, not what the source literally says — an unset field still resolves to `O2` on a DM kernel and `O3` on a compute one. See [Compiler options](#compiler-options).)*
 
 ### CBs
 | index | total_size | core_ranges | data_format | page_size | tile (if set) |
