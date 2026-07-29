@@ -201,6 +201,17 @@ def align(requests, docs):
     return None
 
 
+def _finished_count(run_dir):
+    """Requests lm_eval has FINISHED, from its progress bar; None when it cannot be read."""
+    for name in ("full.log", "eval.log"):
+        log = run_dir / name
+        if log.exists():
+            hits = re.findall(r"(\d+)/\d+ \[", log.read_text(errors="replace")[-6000:])
+            if hits:
+                return int(hits[-1])
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir", type=Path)
@@ -248,6 +259,17 @@ def main() -> int:
         print(f"  -> doc order holds from request {start} on (constant offset {offset}); the {start}")
         print("     earlier request(s) belong to an earlier stage in the same log and are dropped")
     requests = requests[start:]
+
+    # Drop the request still being generated: a partial completion's extracted letter is not final,
+    # and including it also makes this denominator disagree with any subset derived from the same log.
+    finished = _finished_count(args.run_dir)
+    if finished is not None and len(requests) > finished:
+        live = len(requests) - finished
+        requests = requests[:finished]
+        print(
+            f"  -> {live} request(s) still generating dropped (lm_eval reports {finished} finished); "
+            "a partial completion has no final answer"
+        )
 
     ref = json.loads(args.reference.read_text())["per_record"]
     rows = []
