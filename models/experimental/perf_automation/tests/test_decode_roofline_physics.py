@@ -504,3 +504,33 @@ def test_an_anchored_snapshot_without_the_fraction_keeps_its_old_reading(tmp_pat
         sm._roofline_lines(_unit_snap("token", 3_330_000_000, 153.8), None, {"per_token_ms": 17.0}, "m", "main")
     )
     assert "84.0 tok/s/u" in txt, txt
+
+
+def test_the_anchored_divisor_is_the_one_the_ceiling_divides_by(tmp_path, monkeypatch):
+    """THE BUG: the anchor pinned facts["weight_bytes"] (what the CHECKPOINT stores) while the ceiling
+    divides by params (xB -> xGB). The report recomputes from the anchor and the stop gate computes
+    from the facts, so one run had two divisors: a bf16 checkpoint storing 16.06 GB with 7.5B params
+    printed 25.5 tok/s/u while the gate judged against 54.6.
+
+    The anchor exists so a directory revert cannot move the ceiling; pinning the WRONG quantity moved
+    it on every run instead."""
+    run, led = _run_mod(), _led_mod()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    # a bf16 checkpoint: 16.06 GB stored, but 8B params -> the ceiling divides by 8 GB
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 16_060_556_376)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
+    monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
+
+    root = tmp_path / "m"
+    root.mkdir()
+    run._emit_perf_target_inputs(root, root, None, {})
+    facts = json.loads((root / "perf_target_inputs.json").read_text())
+
+    pinned_mb = led.anchor_value(led.KIND_ACTIVE_BYTES, depth=facts.get("unit") or "unit", model="m")
+    assert pinned_mb, "nothing anchored"
+    pinned_bytes = int(round(float(pinned_mb) * 1e6))
+
+    pt = _pt()
+    gate = pt.compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
+    assert pinned_bytes == gate.active_bytes, (pinned_bytes, gate.active_bytes)
+    assert pinned_bytes != 16_060_556_376, "anchored the checkpoint bytes, not the ceiling's divisor"

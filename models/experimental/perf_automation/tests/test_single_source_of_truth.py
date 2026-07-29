@@ -76,6 +76,13 @@ _OWNERS = {
                 "_reliable_forward_unit",
                 "_record_fullpipe_candidate",
                 "_establish_fullpipe_baseline",
+                # The byte anchor is KEYED by unit, so reading it requires the unit; and once the
+                # loop's revert deletes perf_target_inputs.json, the unit the anchor was pinned under
+                # is the only surviving record of it. These two read that record instead of
+                # re-deriving the unit from a config, and neither DEFAULTS it -- no recoverable unit
+                # means no ceiling, which is the rule this registry exists to enforce.
+                "_anchored_ceiling_bytes",
+                "_anchored_ceiling_facts",
             },
             "cc_optimize/summary.py": {"_roofline_lines"},
         },

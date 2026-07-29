@@ -275,7 +275,9 @@ def _shared_bytes(mf: dict, dt) -> float:
     return float(mf.get("shared_params", 0)) * _bytes_per_elem(dt)
 
 
-def compute_target(model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, seq_len: int = 0) -> PerfTarget:
+def compute_target(
+    model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, seq_len: int = 0, bytes_per_unit: float = 0.0
+) -> PerfTarget:
     """MODEL-LEVEL decode ceiling, SUSTAINED (not spec peak).
 
         ceiling = (peak_BW * bw_fraction) / bytes_per_unit
@@ -288,10 +290,21 @@ def compute_target(model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, seq
     written before this change still yield a ceiling instead of dropping to the weaker ms floor.
     Per-device convention: per-device bytes vs single-chip BW (never per-device bytes against
     mesh-aggregate BW — that is the 4-8x error).
+
+    `bytes_per_unit` overrides the divisor with a caller-supplied one -- how the PINNED BASELINE byte
+    count is passed in. The optimize loop reverts the model directory between attempts, so facts read
+    from it describe whichever vintage is on disk; the report already divided by the ledger's write-once
+    anchor while this function divided by the facts, so the report and the stop gate could judge one run
+    against two ceilings. A caller holding the anchor passes it here instead of recomputing.
     """
     mf = model_facts or {}
-    ab = simple_active_bytes(mf)
-    src = "params rule: %.3gB x %.2f B/param" % (ceiling_params(mf) / 1e9, _BYTES_PER_PARAM)
+    ab, src = 0, ""
+    if bytes_per_unit and float(bytes_per_unit) > 0:
+        ab = int(round(float(bytes_per_unit)))
+        src = "anchored baseline bytes"
+    if ab <= 0:
+        ab = simple_active_bytes(mf)
+        src = "params rule: %.3gB x %.2f B/param" % (ceiling_params(mf) / 1e9, _BYTES_PER_PARAM)
     if ab <= 0:
         ab = active_bytes(mf, seq_len=seq_len)
         src = "per-tensor exact bytes (no param count available)"

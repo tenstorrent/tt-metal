@@ -2889,9 +2889,18 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
         # ceiling the report divides by cannot change underneath it.
         try:
             led = _ledger()
+            # ANCHOR THE DIVISOR THE CEILING ACTUALLY USES, not the checkpoint's byte count. The
+            # ceiling divides by PARAMS (xB -> xGB); pinning weight_bytes pinned a different quantity,
+            # so the report -- which recomputes from this anchor -- and the stop gate -- which computes
+            # from the facts -- divided by different numbers for the same run. On a bf16 checkpoint
+            # (16.06 GB stored, 7.5B params) that is 25.5 vs 54.6 tok/s/u. perf_target owns the choice,
+            # so the two cannot drift apart again.
+            from agent import perf_target as _pt_div
+
+            _divisor = _pt_div.simple_active_bytes(facts) or float(facts["weight_bytes"])
             led.anchor(
                 led.KIND_ACTIVE_BYTES,
-                float(facts["weight_bytes"]) / 1e6,
+                float(_divisor) / 1e6,
                 depth=str(facts.get("unit") or "unit"),
                 mode="bytes_mb",
                 source=facts["source"][:120],

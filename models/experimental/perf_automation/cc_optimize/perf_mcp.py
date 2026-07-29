@@ -3333,10 +3333,79 @@ def _select_perf_target(rep: dict):
     module_level = os.environ.get("TT_PERF_MODULE_LEVEL") == "1"
     if not module_level:
         mf = _load_perf_target_inputs()
+        anchored = _anchored_ceiling_bytes(mf)
+        if not mf and anchored > 0:
+            # THE FACTS ARE GONE BUT THE BASELINE SURVIVES. Losing the file must not silently downgrade
+            # the gate from a bandwidth ceiling to the band-less ms floor -- that is the anchor's whole
+            # purpose, and it was only wired into the report.
+            mf = _anchored_ceiling_facts()
         if mf:
             tp = int(os.environ.get("TT_PERF_MESH_COLS", "1") or "1")
-            return perf_target.compute_target(mf, _ENV, tp_degree=tp), "model", True
+            return (
+                perf_target.compute_target(mf, _ENV, tp_degree=tp, bytes_per_unit=anchored),
+                "model",
+                True,
+            )
     return perf_target.target_from_floor_ms(rep.get("modeled_floor_ms")), ("module" if module_level else "model"), False
+
+
+def _anchored_ceiling_bytes(mf: dict) -> float:
+    """The PINNED baseline bytes-per-unit from the ledger, or 0.0 when nothing is pinned.
+
+    The report already read this anchor while the stop gate computed from perf_target_inputs.json --
+    and that file lives in the model directory the optimize loop REVERTS between attempts, so the gate
+    could judge against a different ceiling than the report printed for the same run (and against a
+    moving one, since a lever that shrinks weights shrinks the facts). Both sides now read the same
+    write-once anchor. Keyed exactly like the renderer's lookup: depth = the model's own unit, model =
+    the root's name, task = PERF_MCP_TASK. Best-effort; 0.0 means "compute from the facts as before".
+    """
+    try:
+        led = _ledger()
+        model = Path(_MODEL_ROOT).name if _MODEL_ROOT else ""
+        task = os.environ.get("PERF_MCP_TASK", "main")
+        depth = str((mf or {}).get("unit") or "").strip().lower()
+        if depth:
+            mb = led.anchor_value(led.KIND_ACTIVE_BYTES, depth=depth, model=model, task=task)
+            if mb and float(mb) > 0:
+                return float(mb) * 1e6
+        # NO UNIT TO KEY ON. perf_target_inputs.json is untracked, so the loop's revert can DELETE it --
+        # and then the gate had no facts, skipped the ceiling entirely and fell to the band-less ms
+        # floor, while the report still showed the pinned ceiling. The anchored row carries the unit it
+        # was pinned under, so the baseline is recoverable without the file and without guessing.
+        for r in led.rows(led.KIND_ACTIVE_BYTES, led.PHASE_BEFORE, model, task):
+            try:
+                v = float(r.get("value_ms"))
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                return v * 1e6
+        return 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _anchored_ceiling_facts():
+    """Minimal facts rebuilt from the byte anchor when the facts FILE is gone, or None.
+
+    Returns None rather than defaulting the unit. A ceiling whose unit is unknown cannot be scored --
+    a per-step ceiling against a per-token measurement is not a comparison -- and defaulting to
+    "token" is the exact bug that once labelled every diffusion and classifier model per-token. No
+    recoverable unit means no ceiling, which lands on the floor fallback: weaker, but not wrong.
+    """
+    try:
+        led = _ledger()
+        for r in led.rows(
+            led.KIND_ACTIVE_BYTES,
+            led.PHASE_BEFORE,
+            Path(_MODEL_ROOT).name if _MODEL_ROOT else "",
+            os.environ.get("PERF_MCP_TASK", "main"),
+        ):
+            d = str(r.get("depth") or "").strip().lower()
+            if d:
+                return {"unit": d}
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _persist_throughput(rep: dict) -> None:
