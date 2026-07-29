@@ -83,9 +83,6 @@ class UnarySfpu(Sfpu):
     ) -> str:
         stage = operation.stage_id
         op = f"SfpuType::{self.operation.cpp_enum_value}"
-        # Dest width has to reach the init too: ops with separate 16/32-bit Dest implementations
-        # (gelu) program different constants for each, so an init that assumed 16-bit would leave
-        # the 32-bit path running without them.
         en_32bit_dest = config.dest_acc.cpp_enum_value
 
         return (
