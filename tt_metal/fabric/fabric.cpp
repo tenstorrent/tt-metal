@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/internal/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -648,6 +649,18 @@ namespace tt::tt_metal::internal {
 
 std::vector<tt::tt_fabric::MeshId> get_all_fabric_mesh_ids() {
     return tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph().get_mesh_ids();
+}
+
+std::vector<tt::tt_fabric::FabricType> get_all_mgd_fabric_types() {
+    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& mgd = mesh_graph.get_mesh_graph_descriptor();
+    std::vector<tt::tt_fabric::FabricType> fabric_types;
+    for (const auto mesh : mgd.all_meshes()) {
+        const auto& instance = mgd.get_instance(mesh);
+        const auto* mesh_desc = std::get<const tt::tt_fabric::proto::MeshDescriptor*>(instance.desc);
+        fabric_types.push_back(tt::tt_fabric::MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc));
+    }
+    return fabric_types;
 }
 
 // Query the kernel defines required by the current fabric configuration.
