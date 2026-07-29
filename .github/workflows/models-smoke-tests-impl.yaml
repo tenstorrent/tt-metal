@@ -94,7 +94,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ (inputs.docker-image && (contains(join(matrix.test-group.runs_on, ','), 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }} #[DO NOT MERGE] this is for test purposes ONLY
       env:
         ARCH_NAME: wormhole_b0
         TT_METAL_HOME: /work
