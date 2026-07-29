@@ -14,6 +14,7 @@ Pure + unit-testable — no device, no pipeline, no I/O.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 BYTES_PER_ELEM = {
@@ -128,9 +129,14 @@ def _scalar(v, default=0):
     if isinstance(v, dict):
         vals = list(v.values())
         return _scalar(vals[0], default) if vals else default
+    # NaN/inf are UNKNOWN, not enormous. json.loads accepts `Infinity`, so a hand-edited or corrupted
+    # perf_target_inputs.json reaches here, and int(inf) raises OverflowError -- which is neither a
+    # TypeError nor a ValueError, so it escaped this guard and crashed the whole ceiling path.
+    if isinstance(v, float) and not math.isfinite(v):
+        return default
     try:
         return type(default)(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -197,7 +203,13 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0)
         kv_dt = mf.get("kv_dtype") or mf.get("dominant_dtype") or "bfloat16"
         kv = 2.0 * int(mf["layers"]) * int(mf["kv_heads"]) * int(mf["head_dim"]) * int(seq_len) * _bytes_per_elem(kv_dt)
 
-    return int(round(wb + kv))
+    total = wb + kv
+    # Non-finite means the facts are junk (a corrupted/hand-edited perf_target_inputs.json: json.loads
+    # accepts `Infinity`). int(round(inf)) raises OverflowError and took the whole ceiling path with it;
+    # 0 reads as "no byte count", which is what an unusable input is.
+    if not math.isfinite(total):
+        return 0
+    return int(round(total))
 
 
 def ceiling_params(model_facts: dict) -> int:
@@ -244,7 +256,13 @@ def rate_and_band(
     """
     tp = max(1, int(tp_degree or 1))
     per_dev = (float(bytes_per_unit) / tp) if bytes_per_unit else 0.0
-    theo = ((float(peak_bw_bytes_s) * float(frac)) / per_dev) if per_dev > 0 else 0.0
+    # A NEGATIVE input is unknown, not fast. A junk dram_bw_gbps (or frac) used to divide straight
+    # through to a negative ceiling, which then set a negative band and scored as BELOW_BAND -- a
+    # verdict on a target that does not exist. Clamping to 0 makes score() report UNKNOWN instead.
+    pk, fr = max(0.0, float(peak_bw_bytes_s or 0.0)), max(0.0, float(frac or 0.0))
+    if per_dev <= 0:
+        return 0.0, (0.0, 0.0)
+    theo = (pk * fr) / per_dev
     return theo, (_ACHIEVABLE_BAND_LO_FRAC * theo, theo)
 
 

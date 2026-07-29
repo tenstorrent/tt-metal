@@ -151,3 +151,43 @@ def test_prefill_stub_raises():
         except NotImplementedError as exc:
             raised = exc
         assert raised is not None, call
+
+
+# --- junk inputs must DEGRADE, never crash or invert (found by fuzzing the ceiling path) ---
+
+
+def test_a_negative_bandwidth_is_unknown_not_a_negative_ceiling():
+    """A junk dram_bw_gbps divided straight through to a NEGATIVE ceiling, which set a negative band
+    and scored BELOW_BAND -- a verdict against a target that cannot exist. Unknown, not fast."""
+    t = pt.compute_target({"total_params": int(8e9)}, {"dram_bw_gbps": -1})
+    assert t.theoretical_rate == 0.0
+    assert t.band == (0.0, 0.0)
+    assert pt.score(t, 19.4)["status"] == "UNKNOWN"
+
+
+def test_a_non_finite_param_count_degrades_instead_of_raising():
+    """json.loads accepts `Infinity`, so a corrupted or hand-edited perf_target_inputs.json reaches
+    here; int(round(inf)) raises OverflowError -- neither TypeError nor ValueError, so it escaped the
+    coercion guard and took the whole ceiling path down."""
+    for bad in (float("inf"), float("-inf"), float("nan")):
+        assert pt._scalar(bad, 0) == 0
+        t = pt.compute_target({"total_params": bad}, {"dram_bw_gbps": 512.0})
+        assert t.theoretical_rate == 0.0
+        assert pt.score(t, 19.4)["status"] == "UNKNOWN"
+        assert pt.active_bytes({"total_params": bad, "dominant_dtype": "bfloat16"}) == 0
+
+
+def test_rate_and_band_never_inverts_or_goes_negative():
+    for byts, peak, frac, tp in (
+        (0, 512e9, 0.8, 1),
+        (8e9, 0, 0.8, 1),
+        (8e9, 512e9, 0.0, 1),
+        (8e9, -512e9, 0.8, 1),
+        (8e9, 512e9, -0.8, 1),
+        (8e9, 512e9, 0.8, 0),
+        (8e9, 512e9, 0.8, -4),
+        (-8e9, 512e9, 0.8, 1),
+    ):
+        theo, band = pt.rate_and_band(byts, peak, frac=frac, tp_degree=tp)
+        assert theo >= 0.0, (byts, peak, frac, tp, theo)
+        assert band[0] <= band[1], (byts, peak, frac, tp, band)
