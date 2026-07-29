@@ -226,6 +226,11 @@ public:
         static_assert(
             Scope != SemScope::DM_LOCAL_CACHED,
             "relay_unicast is a NoC op and is not valid on a DM_LOCAL_CACHED semaphore; use SemScope::EXTERNAL");
+        static_assert(
+            dst_scope != SemScope::DM_LOCAL_CACHED,
+            "the DESTINATION of relay_unicast must not be a DM_LOCAL_CACHED semaphore: its word lives in the "
+            "cached-only pool, so relaying to it would put a NoC write into that pool -- the one thing the "
+            "pool exists to exclude. Give the destination SemScope::EXTERNAL.");
         ASSERT(l1_offset_ != dst_sem.l1_offset_);
         const uint64_t dst_noc_addr = ::get_noc_addr(noc_x, noc_y, dst_sem.get_l1_addr(), noc.get_noc_id());
         noc_semaphore_set_remote(get_l1_addr(), dst_noc_addr, noc.get_noc_id());
@@ -298,6 +303,11 @@ public:
         static_assert(
             Scope != SemScope::DM_LOCAL_CACHED,
             "relay_multicast is a NoC op and is not valid on a DM_LOCAL_CACHED semaphore; use SemScope::EXTERNAL");
+        static_assert(
+            dst_scope != SemScope::DM_LOCAL_CACHED,
+            "the DESTINATION of relay_multicast must not be a DM_LOCAL_CACHED semaphore: its word lives in the "
+            "cached-only pool, so relaying to it would put a NoC write into that pool -- the one thing the "
+            "pool exists to exclude. Give the destination SemScope::EXTERNAL.");
         ASSERT(l1_offset_ != dst_sem.l1_offset_);
         const uint64_t multicast_addr = ::get_noc_multicast_addr(
             noc_x_start, noc_y_start, noc_x_end, noc_y_end, dst_sem.get_l1_addr(), noc.get_noc_id());

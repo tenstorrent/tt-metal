@@ -193,8 +193,10 @@
 // tt_metal/hw/inc/api/dataflow/noc_semaphore.h (DM_LOCAL_CACHED routing).
 #define MEM_DM_CACHED_SEM_BASE (((MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE) + 63) & ~63)
 #define MEM_DM_CACHED_SEM_SIZE 256  // 16 semaphores * 16B; keep >= NUM_SEMAPHORES * L1_ALIGNMENT
-#if (MEM_DM_CACHED_SEM_BASE % 64 != 0) || (MEM_DM_CACHED_SEM_SIZE % 64 != 0)
-#error "DM cached semaphore pool must be 64-byte (cache-line) aligned and a whole number of lines"
+// Real check (guards a future size edit). NOTE: a BASE % 64 guard would be a tautology -- the base is
+// defined as a 64B round-up -- so it is deliberately absent rather than kept as decoration.
+#if (MEM_DM_CACHED_SEM_SIZE % 64 != 0)
+#error "DM cached semaphore pool size must be a whole number of 64B cache lines"
 #endif
 
 // Read-only reserved memory boundary for watcher checks
@@ -206,17 +208,11 @@
 // Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).
 #define MEM_KERNEL_CONFIG_SIZE (100 * 1024)
 
-
-// Static invariant the cached-only pool's correctness rests on: it sits ENTIRELY within the
-// reserved region -- above the (fabric, NoC-written) packet header pool and at/below MEM_MAP_END --
-// so it is physically disjoint from the NoC-written kernel_config ring, which begins at MEM_MAP_END.
-// Nothing on the NoC/dispatcher write path can ever address a pool word.
-#if (MEM_DM_CACHED_SEM_BASE < (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE))
-#error "DM cached semaphore pool overlaps the packet header pool"
-#endif
-#if ((MEM_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE) > MEM_MAP_END)
-#error "DM cached semaphore pool extends past MEM_MAP_END (would overlap the kernel_config ring)"
-#endif
+// Disjointness from the NoC-written kernel_config ring holds BY CONSTRUCTION: the pool base is the 64B
+// round-up of the previous reserved region's end, and MEM_MAP_END (where the ring begins) is *defined* as
+// this pool's end. Earlier revisions asserted both with #error guards, but those were tautologies
+// (`X > X`, `roundup64(Y) < Y`) that could never fire, so they were removed rather than left as
+// decoration that reads like enforcement.
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"

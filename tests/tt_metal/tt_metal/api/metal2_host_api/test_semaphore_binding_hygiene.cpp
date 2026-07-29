@@ -157,7 +157,7 @@ bool is_allowlisted(const std::string& path) {
     return false;
 }
 
-// Kernel sources worth scanning: the metal test kernels and the ttnn op kernels.
+// Kernel sources worth scanning: the metal test kernels and the TT-NN op kernels.
 bool is_kernel_source(const std::filesystem::path& p) {
     if (p.extension() != ".cpp") {
         return false;
@@ -214,9 +214,9 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
         GTEST_SKIP() << "TT_METAL_HOME not set; cannot locate kernel sources to lint";
     }
     const std::filesystem::path root{home};
-    // Broad roots: "tests" (not just tests/tt_metal -- tests/ttnn also holds Metal 2.0 kernels, e.g.
-    // tests/ttnn/unit_tests/gtests/accessor/kernels/) and all of "ttnn". The per-file predicate below
-    // narrows to kernel sources.
+    // Broad roots: "tests" (not just tests/tt_metal -- the TT-NN test tree also holds Metal 2.0
+    // kernels, e.g. under unit_tests/gtests/accessor/kernels/) and the whole op tree. The per-file
+    // predicate below narrows to kernel sources.
     const std::vector<std::filesystem::path> scan_roots = {
         root / "tests",
         root / "ttnn",
