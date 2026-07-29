@@ -29,12 +29,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
 #endif
-    const std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
+    constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     tdma_descriptor_t td_val;
-    const std::uint32_t buf_desc_id          = 0;
-    const std::uint32_t num_tiles_per_unpack = TILE_CNT;
-    const auto tensor_shape_A                = tensor_shape_from_params(params);
+    const std::uint32_t buf_desc_id           = 0;
+    const std::uint32_t num_tiles_per_unpack  = TILE_CNT;
+    const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -49,18 +51,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                auto cfg                                         = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-                cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+                set_up_zero_dest_dvalid_handshake_for_unpack();
             }
 
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                if (pack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
+                }
+                else if (pack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                }
+                else
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+                }
             }
             else
             {
@@ -75,11 +83,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         unsigned l1_addr_16B;
         if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
         {
-            l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
+            l1_addr_16B = L1_ADDRESS(buffer_B[0]);
         }
         else
         {
-            l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
+            l1_addr_16B = L1_ADDRESS(buffer_A[0]);
         }
 
         td_val = ckernel::trisc::construct_tdma_desc(tensor_shape_A, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
@@ -121,11 +129,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     // 32-bit datacopy uses ELWADD and consumes both SrcA
                     // and the dummy SrcB produced by unpack.
-                    _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
             }
         }
@@ -147,7 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, tensor_shape_A);
+                _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0 /*l1_tile_idx*/, tensor_shape_A);
             }
         }
         PROFILER_SYNC();
@@ -187,13 +195,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             DataFormat math_format     = static_cast<DataFormat>(formats.math);
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+                if (pack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+                }
+                else if (pack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+                }
+                else
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+                }
             }
             else
             {
@@ -213,11 +228,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<true, false>(LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -268,9 +283,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const auto tensor_shape         = tensor_shape_from_params(params);
-    std::uint32_t const buf_desc_id = 31;
+    const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
+    std::uint32_t const buf_desc_id         = 31;
     {
         ZONE_SCOPED("INIT")
         // Match WH/BH PACK_ISOLATE and L1_CONGESTION: no math↔pack handshake;
@@ -281,7 +297,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (unpack_to_dest)
             {
@@ -299,11 +315,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // PACR_STRIDE quirk: tiny-tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
             tdma_desc = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
-                tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
+                tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
         }
         else
         {
-            tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
+            tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
         }
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
@@ -338,11 +354,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // and switches the packer to the other bank.
                     if (tensor_shape.total_num_faces() == NUM_FACES)
                     {
-                        _llk_pack_untilize_(0, y * y_stride_external);
+                        _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external);
                     }
                     else
                     {
-                        _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * FULL_CT_DIM, 0);
+                        _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * FULL_CT_DIM, 0 /*src_tile_idx*/);
                     }
                 }
             }
@@ -355,11 +371,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if (tensor_shape.total_num_faces() == NUM_FACES)
                     {
-                        _llk_pack_untilize_(0, y * y_stride_external);
+                        _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external);
                     }
                     else
                     {
-                        _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * FULL_CT_DIM, 0);
+                        _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * FULL_CT_DIM, 0 /*src_tile_idx*/);
                     }
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }

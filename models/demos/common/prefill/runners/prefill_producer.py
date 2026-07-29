@@ -715,9 +715,19 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[producer] attached; payload={payload_bytes}B")
 
-    # Read the KV table + attach the LayerAck channel BEFORE pushing (the runner publishes them at setup).
+    # Read the KV table BEFORE pushing (the runner publishes it at setup).
     kv_table = _read_kv_chunk_table(timeout_s)
-    ack_channel = _connect_layer_ack_channel(timeout_s)
+    # The LayerAck channel is a shared counter and try_consume_all() REMOVES completions. Draining it
+    # serves ONLY the golden-trace KV read-back below
+
+    # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
+    # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
+    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
+    if not cfg.verify:
+        logger.info(
+            "[producer] CHECK_PCC off — not consuming the LayerAck channel (pure token feeder; "
+            "the runner's migration self-test owns it)"
+        )
 
     trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
     token_pool = _load_token_pool(trace_dir, cfg.chunks_max * CHUNK_SIZE)

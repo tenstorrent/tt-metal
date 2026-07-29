@@ -47,6 +47,7 @@
 #include "ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
 #include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/matmul_decode/matmul_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
@@ -150,6 +151,7 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_attn_matmul(mod);
     matmul::detail::bind_attn_matmul_from_cache(mod);
     matmul::detail::bind_group_attn_matmul(mod);
+    matmul_decode::detail::bind_matmul_decode_operation(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
     deepseek_prefill::detail::bind_outbound_socket_service_sync(mod);

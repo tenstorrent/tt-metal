@@ -2244,7 +2244,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // tensors the CTA payload never carried tensor_shape in the first place (and
     // the device-side accessor doesn't read it), so the flag is a pure host-side
     // validation loosening and has no effect on the CTA/CRTA layout.
-    const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape && is_sharded;
+    const bool dyn_shape = tensor_parameter.relaxations.dynamic_tensor_shape && is_sharded;
     // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
     // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
     // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
@@ -2255,7 +2255,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
     // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
     const bool dyn_page =
-        tensor_parameter.advanced_options.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
+        tensor_parameter.relaxations.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2925,10 +2925,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
-        const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape;
-        const bool match_padded_only = tensor_parameter.advanced_options.match_padded_shape_only;
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id.get(), tensor_parameter.spec, dyn_shape, match_padded_only);
+            tensor_parameter.unique_id.get(), tensor_parameter.spec, tensor_parameter.relaxations);
     }
 
     // Create DataflowBuffers and build name -> ID map.

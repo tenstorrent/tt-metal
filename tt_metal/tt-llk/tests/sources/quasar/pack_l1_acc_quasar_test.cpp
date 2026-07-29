@@ -10,6 +10,7 @@
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -34,7 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
     const Operand& buffer_A                       = params.buffer_A;
 #endif
-    const std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
+    constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id = 0;
 
@@ -46,15 +47,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
             }
+            else
+            {
+                // CFG persists across run types, so non-L1_TO_L1 runs must not
+                // inherit the unpack-to-dest handshake.
+                set_up_zero_dest_dvalid_handshake_for_unpack();
+            }
 
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                if (pack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
+                }
+                else if (pack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+                }
+                else
+                {
+                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+                }
             }
             else
             {
@@ -112,11 +126,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
             }
         }
@@ -175,7 +189,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         {
             ZONE_SCOPED("INIT")
-            // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
+            // Only end-to-end and math-isolate runs use the FPU→PACK
+            // dest-dvalid handshake.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -183,13 +198,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             DataFormat math_format     = static_cast<DataFormat>(formats.math);
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+                if (pack_src_format == DataFormat::Float32)
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+                }
+                else if (pack_src_format == DataFormat::Int32)
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+                }
+                else
+                {
+                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+                }
             }
             else
             {
@@ -212,11 +234,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * num_blocks * tiles_in_block);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<true, false>(LOOP_FACTOR * num_blocks * tiles_in_block);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -279,7 +301,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
