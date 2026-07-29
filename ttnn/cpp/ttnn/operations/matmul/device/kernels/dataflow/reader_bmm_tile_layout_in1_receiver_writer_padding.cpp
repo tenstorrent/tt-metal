@@ -11,6 +11,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -98,11 +99,16 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
     DataflowBuffer dfb_out(dfb_id_out0);
-    Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
+
+    const uint32_t in1_sender_coords[2] = {in1_mcast_sender_noc_x, in1_mcast_sender_noc_y};
+    dataflow_kernel_lib::ReceiverPipe<
+        get_compile_time_arg_val(5),
+        /*PRE_HANDSHAKE=*/true,
+        get_compile_time_arg_val(4)>
+        in1_pipe(noc, in1_sender_coords);
 
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
@@ -118,16 +124,7 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
-
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
-
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
-
+                    in1_pipe.receive();
                     dfb_in1.push_back(in1_block_num_tiles);
                 }
 
@@ -136,16 +133,7 @@ void kernel_main() {
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     // Operand 2
                     dfb_in3.reserve_back(in3_block_w);
-
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
-
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
-
+                    in1_pipe.receive();
                     dfb_in3.push_back(in3_block_w);
                 }
 #endif

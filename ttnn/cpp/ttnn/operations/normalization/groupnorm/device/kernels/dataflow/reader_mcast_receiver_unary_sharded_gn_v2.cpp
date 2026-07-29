@@ -10,6 +10,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -36,8 +37,6 @@ void kernel_main() {
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
@@ -47,6 +46,13 @@ void kernel_main() {
 
     const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
     const DataFormat data_format = get_dataformat(dfb_ex_partial_id);
+
+    const uint32_t reduce_sender_coords[2] = {mcast_sender_noc_x, mcast_sender_noc_y};
+    dataflow_kernel_lib::ReceiverPipe<
+        reduce_sender_semaphore_id,
+        /*PRE_HANDSHAKE=*/true,
+        reduce_receiver_semaphore_id>
+        reduce_pipe(noc, reduce_sender_coords);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
@@ -73,10 +79,8 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_batch_group; ++i) {
         for (uint32_t j = 0; j < 2; ++j) {
             dfb_ex_partial.wait_front(1);
-            reduce_sender_sem.set(INVALID);
             dfb_ex_global.reserve_back(1);
-            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-            reduce_sender_sem.wait(VALID);
+            reduce_pipe.receive();
             dfb_ex_global.push_back(1);
             dfb_ex_partial.pop_front(1);
         }

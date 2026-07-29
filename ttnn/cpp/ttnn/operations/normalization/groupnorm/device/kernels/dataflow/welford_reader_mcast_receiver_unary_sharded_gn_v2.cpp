@@ -11,6 +11,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
@@ -42,8 +43,13 @@ void kernel_main() {
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    const uint32_t reduce_sender_coords[2] = {mcast_sender_noc_x, mcast_sender_noc_y};
+    dataflow_kernel_lib::ReceiverPipe<
+        reduce_sender_semaphore_id,
+        /*PRE_HANDSHAKE=*/true,
+        reduce_receiver_semaphore_id>
+        reduce_pipe(noc, reduce_sender_coords);
+
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
@@ -107,12 +113,7 @@ void kernel_main() {
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
-            // Signal to sender that our partial data is ready
-            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-
-            // Wait for sender to signal that it has sent the global data
-            reduce_sender_sem.wait(VALID);
-            reduce_sender_sem.set(INVALID);
+            reduce_pipe.receive();
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;

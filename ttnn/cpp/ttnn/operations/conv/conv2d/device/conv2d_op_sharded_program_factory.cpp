@@ -1031,6 +1031,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
+    // The multicast pipe owns the weights/bias channel semaphores, so their
+    // program-uniform ids are template arguments. Append them after both
+    // TensorAccessorArgs blocks to preserve every existing compile-time index.
+    writer_compile_time_args.push_back(weights_mcast_sender_semaphore_id);
+    writer_compile_time_args.push_back(weights_mcast_receiver_semaphore_id);
+    writer_compile_time_args.push_back(block_sharded ? (transpose_mcast ? num_cores_x - 1 : num_cores_y - 1) : 0);
 
     const bool check_skip_compute = input_cores != output_cores;
 
