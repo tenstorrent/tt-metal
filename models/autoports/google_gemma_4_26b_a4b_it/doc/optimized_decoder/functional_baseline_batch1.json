@@ -1,0 +1,19 @@
+{
+  "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+  "command": "TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' GEMMA4_FUNCTIONAL_DECODER_PERF=1 GEMMA4_RANGE_DOWNLOAD=1 python -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py::test_functional_decoder_perf_profile -k batch1",
+  "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+  "hardware": "Blackhole P300C, single device",
+  "isolated_worktree": "/tmp/gemma4-opt-baseline.IdbywC/repo",
+  "measurements": {
+    "full_attention": {
+      "prefill_host_ms": 681.8187550088624,
+      "traced_decode_host_ms": 3.21027499740012
+    },
+    "sliding_attention": {
+      "prefill_host_ms": 680.8853849943262,
+      "traced_decode_host_ms": 3.0337380012497306
+    }
+  },
+  "sequence_length_and_decode_position": 1024,
+  "ttnn_extension_sha256": "004ca3464fc6aa2925633bd6b50d6b910ecac170a2c7330587760f42bb0593c0"
+}
