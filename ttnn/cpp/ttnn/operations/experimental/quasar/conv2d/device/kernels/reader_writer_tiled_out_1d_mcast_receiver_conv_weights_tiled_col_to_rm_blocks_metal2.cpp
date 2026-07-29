@@ -132,7 +132,7 @@ void kernel_main() {
         if constexpr (split_reader_enabled) {
             if constexpr (activation_reuse_enabled) {
                 l1_write_addr_act = cb_start_addr;
-                get_local_cb_interface(dfb::act_second_reader).fifo_wr_ptr = l1_write_addr_act;
+                cb_act_second_obj.evil_set_write_ptr(l1_write_addr_act);
             }
             reader_offset = act_l1_read_addr;
         }

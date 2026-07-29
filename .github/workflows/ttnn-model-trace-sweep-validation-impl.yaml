@@ -323,7 +323,7 @@ jobs:
     # Validation stays hardware-grouped, but routing decisions come from the shared
     # CI policy helpers in matrix_runner_config.py rather than workflow-local logic.
     needs: [prepare-validation-inputs, generate-sweeps]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:

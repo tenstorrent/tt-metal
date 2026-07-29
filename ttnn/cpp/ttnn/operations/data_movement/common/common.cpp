@@ -420,10 +420,13 @@ uint32_t get_estimated_size_of_cbs(
     const Tensor& /*input_tensor_a*/,
     const uint32_t input_single_tile_size,
     const uint32_t output_single_tile_size,
-    const uint32_t num_tiles_per_row) {
+    const uint32_t num_tiles_per_row,
+    const uint32_t staging_bytes_per_tile,
+    const uint32_t fixed_staging_bytes) {
     uint32_t cb_src0_size = input_single_tile_size * num_tiles_per_row;
     uint32_t cb_output_size = output_single_tile_size * num_tiles_per_row;
-    return cb_src0_size + cb_output_size;
+    uint32_t cb_staging_size = staging_bytes_per_tile * num_tiles_per_row + fixed_staging_bytes;
+    return cb_src0_size + cb_output_size + cb_staging_size;
 }
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
@@ -438,10 +441,17 @@ bool is_enough_space(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
     const uint32_t output_single_tile_size,
-    const uint32_t num_tiles_per_row) {
+    const uint32_t num_tiles_per_row,
+    const uint32_t staging_bytes_per_tile,
+    const uint32_t fixed_staging_bytes) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    uint32_t estimated_size_of_cbs =
-        get_estimated_size_of_cbs(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    uint32_t estimated_size_of_cbs = get_estimated_size_of_cbs(
+        input_tensor_a,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        staging_bytes_per_tile,
+        fixed_staging_bytes);
     return max_l1_space > estimated_size_of_cbs;
 }
 
@@ -601,13 +611,13 @@ ttnn::MemoryConfig create_sharded_memory_config(
     auto rank = logical_shape.rank();
     TT_FATAL(rank >= 2, "rank of tensor to shard must be at least 2.");
 
-    ttnn::TensorMemoryLayout tensor_memory_layout{};
+    tt::tt_metal::TensorMemoryLayout tensor_memory_layout{};
     if (strategy == ShardStrategy::BLOCK) {
-        tensor_memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
+        tensor_memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
     } else if (strategy == ShardStrategy::WIDTH) {
-        tensor_memory_layout = ttnn::TensorMemoryLayout::WIDTH_SHARDED;
+        tensor_memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
     } else if (strategy == ShardStrategy::HEIGHT) {
-        tensor_memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED;
+        tensor_memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
     }
 
     auto height = logical_shape[-2];

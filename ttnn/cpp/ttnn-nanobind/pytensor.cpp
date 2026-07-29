@@ -166,7 +166,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 // Wrapper around HostBuffer that provides a row-major view of the data, handles padding / logical view, and provides
 // `shape` and `data_type` information.
 struct RowMajorHostBuffer {
-    static RowMajorHostBuffer create_padded(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
+    static RowMajorHostBuffer create_padded(HostBuffer buffer, const tt::tt_metal::TensorSpec& tensor_spec) {
         ttsl::Span<const uint32_t> shape_view = tensor_spec.padded_shape().view();
         return RowMajorHostBuffer{
             .buffer = std::move(buffer),
@@ -175,7 +175,7 @@ struct RowMajorHostBuffer {
         };
     }
 
-    static RowMajorHostBuffer create_logical(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
+    static RowMajorHostBuffer create_logical(HostBuffer buffer, const tt::tt_metal::TensorSpec& tensor_spec) {
         ttsl::Span<const uint32_t> shape_view = tensor_spec.logical_shape().view();
         return RowMajorHostBuffer{
             .buffer = std::move(buffer),
@@ -206,7 +206,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
-                auto row_major_data = tensor_impl::to_row_major_layout(
+                auto row_major_data = tt::tt_metal::tensor_impl::to_row_major_layout(
                     tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
                 return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
             }
@@ -217,7 +217,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         // because the HostBuffer will be returned directly to the other python frameworks
         // wrapped in an ndarray
 
-        auto logical_data = tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
+        auto logical_data = tt::tt_metal::tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 
@@ -465,7 +465,8 @@ void pytensor_module(nb::module_& mod) {
                T pad_value) {
                 new (t) Tensor(Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     /*device=*/nullptr,
                     std::nullopt,
                     pad_value));
@@ -520,7 +521,8 @@ void pytensor_module(nb::module_& mod) {
                T pad_value) {
                 new (t) Tensor(Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     device.value_or(nullptr),
                     std::nullopt,
                     pad_value));
@@ -576,7 +578,8 @@ void pytensor_module(nb::module_& mod) {
                T pad_value) {
                 new (t) Tensor(Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
                     device.value_or(nullptr),
                     std::nullopt,
                     pad_value));
@@ -1632,7 +1635,7 @@ void pytensor_module(nb::module_& mod) {
             TT_FATAL(
                 host_tensor.storage_type() == StorageType::HOST, "experimental_to_single_device expects a host tensor");
 
-            auto tensor_spec = TensorSpec(
+            auto tensor_spec = tt::tt_metal::TensorSpec(
                 host_tensor.logical_shape(),
                 TensorLayout(host_tensor.dtype(), host_tensor.tensor_spec().page_config(), mem_config));
 
@@ -1671,7 +1674,7 @@ void pytensor_module(nb::module_& mod) {
 
             mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
 
-            TensorTopology topology(
+            tt::tt_metal::TensorTopology topology(
                 tt::tt_metal::distributed::MeshShape(1, 1),
                 {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
                 {coord});
@@ -1690,7 +1693,7 @@ void pytensor_module(nb::module_& mod) {
 
     mod.def(
         "get_optimal_worker_cores_for_sharded_tensor",
-        &tt::tt_metal::get_optimal_worker_cores_for_sharded_tensor,
+        &ttnn::get_optimal_worker_cores_for_sharded_tensor,
         nb::arg("tensor"),
         nb::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
         R"doc(

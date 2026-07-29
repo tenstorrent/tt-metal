@@ -20,7 +20,7 @@ struct PolyNorm3BWTensorArgs {
     std::optional<ttnn::Tensor> preallocated_packed_partials = std::nullopt;
 };
 
-using PolyNorm3BWSpecReturn = std::vector<ttnn::TensorSpec>;
+using PolyNorm3BWSpecReturn = std::vector<tt::tt_metal::TensorSpec>;
 using PolyNorm3BWTensorReturn = std::vector<ttnn::Tensor>;
 
 }  // namespace ttml::metal::ops::polynorm3_bw::device

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include "ckernel.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 using namespace sfpi;
 
@@ -80,6 +81,8 @@ inline void calculate_signbit_int32() {
 #endif
 }
 inline void signbit_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSHFT2(-31 & 0xfff, 0, 12, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
@@ -109,6 +112,8 @@ inline void signbit_init() {
 }
 
 inline void signbit_int32_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSHFT2(-31 & 0xfff, 0, 12, sfpi::SFPSHFT2_MOD1_SHFT_IMM);

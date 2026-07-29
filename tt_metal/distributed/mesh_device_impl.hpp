@@ -66,7 +66,6 @@ class DriscL1Arena;
 
 namespace distributed {
 
-class D2HSocket;
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
@@ -245,6 +244,8 @@ public:
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
+        NOC noc, const MeshCoordinate& coord);
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
@@ -304,7 +305,7 @@ public:
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
-    D2HSocket* get_realtime_profiler_socket() const;
+    RealtimeProfilerManager* get_realtime_profiler() const;
 
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the

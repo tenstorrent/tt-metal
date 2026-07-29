@@ -10,6 +10,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/resource.h>  // getrlimit(RLIMIT_NOFILE) — bound JIT compile fan-out under the fd limit
 #include <csignal>
 #if defined(__x86_64__) && defined(__linux__)
 #include <ucontext.h>
@@ -19,6 +20,8 @@
 #include <bit>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
+#include <limits>
 #include <tt_stl/assert.hpp>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +34,7 @@
 #include <memory>
 #include <mutex>
 #include <regex>
+#include <semaphore>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -61,6 +65,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
+#include "umd/device/chip_helpers/simulation_sysmem_manager.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // fabric route table (multi-chip dst resolve)
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>   // FabricNodeId, MeshId, FabricConfig
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
@@ -82,6 +87,15 @@
 #ifndef TT_EMULE_INCLUDE_DIR
 #error "TT_EMULE_INCLUDE_DIR must be defined by CMake (path to tt-emule's include/)"
 #endif
+
+////////////////////////////////////////////////////////////
+// Blaze-only experimental named args
+// Removal is tracked by issue #50953
+namespace tt::tt_metal::experimental::blaze {
+bool emit_named_args_header(
+    const std::string& dir, const NamedCTArgNamespaces& ct_namespaces, const NamedRuntimeArgNamespaces& rt_namespaces);
+}  // namespace tt::tt_metal::experimental::blaze
+////////////////////////////////////////////////////////////
 
 // ---------------------------------------------------------------------------
 // Thread-local context for JIT kernels.
@@ -120,39 +134,18 @@ thread_local uint8_t __processor_id = 0;
 thread_local uint8_t __emule_neo_id = 0;
 thread_local uint8_t __emule_trisc_id = 0;
 
-// Sanitizer thread-local state (ASAN feature). Exported via -rdynamic so the jit_hw ASAN headers
-// resolve them; all null/zero and inert when TT_METAL_EMULE_ASAN is off. Mirrored from
-// tt-emule/src/kernel_runner.cpp — the two libs are never linked into the same binary, so the
-// duplicate definitions are benign.
-thread_local uint32_t __emule_sem_l1_range_start = 0;
-thread_local uint32_t __emule_sem_l1_range_end = 0;
+// The sanitizer per-launch range/counter state (semaphore region, L1/DRAM OOB +
+// padding + host-poke extents, CB window counters + Dirty-CB flags/sites, the
+// NoC-read counter, and the Object-Intent resolved-log pointer) now lives in the
+// per-fiber context (__emule_self->san, EmuleSanitizerState) — moved out of these
+// worker-thread-locals so a kernel that yields under the fiber engine can't have
+// it clobbered by a co-scheduled fiber (the all_reduce/global-sem OOB false
+// positive). It is armed per launch by set_sanitizer_thread_locals and consumed
+// by the kernel-side checks + the two host resolvers below. See docs/ASAN.md
+// "Per-fiber sanitizer state". __emule_kernel_name stays a -rdynamic global (the
+// launch path owns the backing string); the ASAN trace reads kernel identity
+// from __emule_self->san (armed alongside the ranges).
 thread_local const char* __emule_kernel_name = nullptr;
-thread_local uint32_t __emule_pending_noc_reads = 0;
-thread_local uint32_t __emule_l1_unreserved_base = 0;
-thread_local const uint64_t* __emule_l1_tensor_ranges = nullptr;
-thread_local uint32_t __emule_l1_tensor_ranges_count = 0;
-thread_local const uint64_t* __emule_l1_padding_ranges = nullptr;
-thread_local uint32_t __emule_l1_padding_ranges_count = 0;
-thread_local const uint64_t* __emule_l1_host_ranges = nullptr;
-thread_local uint32_t __emule_l1_host_ranges_count = 0;
-// Object-Intent resolved-range log now lives in the fiber ctx (ThreadCommonCtx::
-// san_resolved_*), reached via __emule_self — no thread-local. See tt-emule #241.
-thread_local uint32_t __emule_cb_reserved_pages[32] = {};
-thread_local uint32_t __emule_cb_waited_pages[32] = {};
-// Dirty-CB leak flags: set by reserve/wait, cleared by push/pop; still-set at
-// kernel exit is the leak. Decoupled from the window counters. See SANITIZER_CHECKS.md §11.
-thread_local bool __emule_cb_reserve_dangling[32] = {};
-thread_local bool __emule_cb_wait_dangling[32] = {};
-thread_local const char* __emule_cb_reserve_file[32] = {};
-thread_local uint32_t __emule_cb_reserve_line[32] = {};
-thread_local const char* __emule_cb_wait_file[32] = {};
-thread_local uint32_t __emule_cb_wait_line[32] = {};
-thread_local bool __emule_cb_boundary_strict = false;
-
-// DRAM equivalent of __emule_l1_tensor_ranges; consumed only by __emule_dram_ptr below.
-thread_local uint32_t __emule_dram_unreserved_base = 0;
-thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
-thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
 
 // ---------------------------------------------------------------------------
 // Bank mapping arrays — populated from SoC descriptor before kernel launch.
@@ -201,12 +194,12 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
     // ASAN out-of-bounds DRAM check (inert when TT_METAL_EMULE_ASAN off — ranges stay null). Range-test
     // in 32 bits to match the live-range registry (uint32_t start/end); the 64-bit offset is used only
     // for the backing-store address. Assumes DRAM addresses fit in 32 bits (true for every WH/BH config).
-    if (__emule_dram_tensor_ranges != nullptr &&
-        static_cast<uint32_t>(offset) >= __emule_dram_unreserved_base) {
+    if (__emule_self->san.dram_tensor_ranges != nullptr &&
+        static_cast<uint32_t>(offset) >= __emule_self->san.dram_unreserved_base) {
         uint32_t addr = static_cast<uint32_t>(offset);
         bool in_tensor = false;
-        for (uint32_t i = 0; i < __emule_dram_tensor_ranges_count; ++i) {
-            uint64_t packed = __emule_dram_tensor_ranges[i];
+        for (uint32_t i = 0; i < __emule_self->san.dram_tensor_ranges_count; ++i) {
+            uint64_t packed = __emule_self->san.dram_tensor_ranges[i];
             uint32_t r_start = static_cast<uint32_t>(packed >> 32);
             uint32_t r_end = static_cast<uint32_t>(packed);
             if (addr >= r_start && addr < r_end) {
@@ -227,13 +220,13 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
     emule_require_self(__func__);
     // ASAN illegal-semaphore-region check (inert when ASAN off — range end stays 0).
-    if (__emule_sem_l1_range_end > 0 &&
-        offset >= __emule_sem_l1_range_start && offset < __emule_sem_l1_range_end) {
+    if (__emule_self->san.sem_l1_range_end > 0 && offset >= __emule_self->san.sem_l1_range_start &&
+        offset < __emule_self->san.sem_l1_range_end) {
         __emule_asan_panic(
             "[ASAN ERROR] Illegal Semaphore Access: Offset 0x%x is inside the reserved Semaphore region [0x%x, 0x%x)\n",
             offset,
-            __emule_sem_l1_range_start,
-            __emule_sem_l1_range_end);
+            __emule_self->san.sem_l1_range_start,
+            __emule_self->san.sem_l1_range_end);
     }
     return __emule_self->bridge_l1 ? __emule_self->bridge_l1 + offset : nullptr;
 }
@@ -259,9 +252,12 @@ extern "C" void __emule_fiber_unlock(void) { efib::FiberScheduler::instance().un
 extern "C" void __emule_fiber_park_locked(const void* key) {
     efib::FiberScheduler::instance().park_locked(key);
 }
+extern "C" void __emule_fiber_park_locked_socket(const void* key) {
+    efib::FiberScheduler::instance().park_locked_socket(key);
+}
 extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
 extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
-extern "C" void __emule_fiber_read_latency(void) { efib::FiberScheduler::instance().latency_park(); }
+extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
 extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
@@ -283,12 +279,64 @@ static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 //     that is the true in-bank offset (already includes
 //     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
 //     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
+// Helper: get SWEmuleChip* from MetalContext cluster for a given device_id. (Relocated up from
+// later in this file — needed here for the PCIe branch below, and by the fabric teleport hooks
+// further down.)
+static tt::umd::SWEmuleChip* get_sw_emulated_chip(tt::ChipId device_id) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto* umd_cluster = cluster.get_driver().get();
+    if (!umd_cluster) {
+        return nullptr;
+    }
+    auto* chip = umd_cluster->get_chip(device_id);
+    return dynamic_cast<tt::umd::SWEmuleChip*>(chip);
+}
+
+// Per-device cache of pcie_base_ (the host-facing/PCIe address threshold), keyed by device_id —
+// avoids a dynamic_cast + cluster lookup on every single NOC-address resolve. Rebuilt lazily; a
+// device close+reopen mints a new SWEmuleChip with a stable arch, so the cached value never goes
+// stale the way the core_map cache (which holds raw Core* into per-chip L1) can.
+static std::mutex g_pcie_base_mutex;
+static std::unordered_map<uint32_t, uint64_t> g_pcie_base_cache;
+
+static uint64_t get_pcie_base_cached(uint32_t device_id) {
+    std::lock_guard<std::mutex> lock(g_pcie_base_mutex);
+    auto it = g_pcie_base_cache.find(device_id);
+    if (it != g_pcie_base_cache.end()) {
+        return it->second;
+    }
+    auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
+    uint64_t pcie_base =
+        sw_emu ? tt::umd::SysmemManager::get_pcie_base_for_arch(sw_emu->get_soc_descriptor().arch) : UINT64_MAX;
+    g_pcie_base_cache[device_id] = pcie_base;
+    return pcie_base;
+}
+
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
+    emule_require_self(__func__);
+
+    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space starts at
+    // pcie_base_ and shares the same 64-bit range as a real on-chip NOC address, so this branch
+    // must run FIRST, before any noc_x/noc_y/local_addr decomposition below.
+    uint32_t device_id = __emule_self->chip_id;
+    if (noc_addr >= get_pcie_base_cached(device_id)) {
+        auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
+        auto* sysmem = sw_emu ? static_cast<tt::umd::SimulationSysmemManager*>(sw_emu->get_sysmem_manager()) : nullptr;
+        // A host-facing address (>= pcie_base) is by construction on an emule chip that has a
+        // SimulationSysmemManager, so a null manager is a contract violation, not a resolvable miss.
+        // (A buffer miss still returns nullptr below — callers like noc_semaphore_set_remote rely on it.)
+        TT_FATAL(
+            sysmem != nullptr,
+            "emule: host-facing NOC address 0x{:x} on chip {} has no SimulationSysmemManager.",
+            noc_addr,
+            device_id);
+        return static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr));
+    }
+
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;  // 36 bits, raw
 
-    emule_require_self(__func__);
     if (__emule_self->core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_self->core_map->find(key);
@@ -327,7 +375,7 @@ extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
 // silicon clears the bit and the sender NIU drops the packet at itself ->
 // include_self=false. Sender coords come from the TLS that thread launch
 // wires up (my_x[0], my_y[0]).
-extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self) {
+extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self, uint8_t noc) {
     uint32_t x_end = (mcast_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t y_end = (mcast_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint32_t x_start = (mcast_addr >> (NOC_LOCAL_BITS + 2 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
@@ -350,9 +398,37 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t self_x = my_x[0];
     uint32_t self_y = my_y[0];
 
+    // NOC1 rectangles arrive with start<->end SWAPPED: silicon describes a NOC1
+    // multicast in NOC1's reflected coordinate frame (paired with the DYNAMIC_NOC_X/Y
+    // reflection). Emule models NOC coordinates as identity (DYNAMIC_NOC_X/Y is
+    // identity), so no reflection happens and the swap alone leaves the rectangle
+    // reversed. Undo it so the walk below runs on physical (NOC0-frame) coordinates
+    // for both NOCs. Without this, canonical NOC1 in0/in1-mcast ops (matmul/linear,
+    // multicore argmax) present start>end and the torus walk misreads it as a
+    // wraparound → receivers never see their semaphore → quiescent deadlock.
+    if (noc != 0) {
+        uint32_t t;
+        t = x_start; x_start = x_end; x_end = t;
+        t = y_start; y_start = y_end; y_end = t;
+    }
+
+    // Torus-wraparound walk on physical coords. Silicon's NOC treats the rectangle on
+    // a torus, so a rectangle whose cores straddle the worker-grid seam encodes
+    // start > end and wraps around the NOC node space rather than covering the min..max
+    // bounding box; SDPA S-block multicasts (NOC0) rely on this. Walk each axis
+    // start->end stepping +1 mod the node space; coords with no core in the map are
+    // skipped. For a non-wrapping rectangle (start <= end) this is identical to
+    // min..max — the post-un-swap NOC1 case (matmul/argmax in0-mcast).
+    auto axis_count = [](uint32_t s, uint32_t e) -> uint32_t {
+        return (e >= s ? (e - s) : ((NOC_NODE_MASK + 1 - s) + e)) + 1;
+    };
+    const uint32_t nx = axis_count(x_start, x_end);
+    const uint32_t ny = axis_count(y_start, y_end);
     uint32_t delivered = 0;
-    for (uint32_t x = std::min(x_start, x_end); x <= std::max(x_start, x_end); x++) {
-        for (uint32_t y = std::min(y_start, y_end); y <= std::max(y_start, y_end); y++) {
+    for (uint32_t ix = 0; ix < nx; ix++) {
+        const uint32_t x = (x_start + ix) & NOC_NODE_MASK;
+        for (uint32_t iy = 0; iy < ny; iy++) {
+            const uint32_t y = (y_start + iy) & NOC_NODE_MASK;
             if (!include_self && x == self_x && y == self_y) {
                 continue;
             }
@@ -485,6 +561,12 @@ struct DeferredCompile {
     std::string src_path;
     std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    NamedCTArgNamespaces named_ct_arg_namespaces;
+    NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
+    ////////////////////////////////////////////////////////////
     std::map<std::string, std::string> defines;
     std::string extra_inc;
     Metal2BindingsSnapshot bindings;
@@ -747,9 +829,9 @@ static void emit_metal2_namespaces(
             // which is not a valid flat C++ identifier, so emitting
             // `constexpr CtaVal<uint32_t> cp.dst{...}` here would fail to compile;
             // skip them to keep the flat `args::` form namespaced-safe. This change
-            // does NOT emit the matching `ct_args::<ns>` structs — that is a separate
+            // does NOT emit the matching `blaze_ct_args::<ns>` structs — that is a separate
             // emission step (it needs a Kernel::process_named_ct_arg_namespaces API);
-            // a kernel that references `ct_args::<ns>` requires that step to be
+            // a kernel that references `blaze_ct_args::<ns>` requires that step to be
             // present, so skipping here only prevents invalid flat C++, it does not
             // itself make namespaced args available.
             if (name.find('.') != std::string::npos) {
@@ -811,6 +893,10 @@ static std::function<void()> jit_compile_kernel(
     const std::string& kernel_src_path,
     const std::vector<uint32_t>& compile_args,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
+    // Blaze-only experimental named args (issue #50953) — begin
+    const NamedCTArgNamespaces& named_ct_arg_namespaces,
+    const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces,
+    // Blaze-only experimental named args (issue #50953) — end
     const std::map<std::string, std::string>& defines,
     const std::string& extra_include_flags,
     const Metal2BindingsSnapshot& bindings = {},
@@ -869,6 +955,16 @@ static std::function<void()> jit_compile_kernel(
         tt::emule::patch_kernel_source(abs_kernel, patched_kernel_path, kernel_inc_roots, emule_inc_roots);
     }
 
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // 2c. Blaze EXPERIMENTAL named kernel args.
+    // Emule's JIT path bypasses genfiles; call the experimental helper to
+    // emit named_args_generated.h. Included from wrapper.cpp when non-empty.
+    bool has_named_args =
+        experimental::blaze::emit_named_args_header(dir, named_ct_arg_namespaces, named_runtime_arg_namespaces);
+    ////////////////////////////////////////////////////////////
+
     // 3. Write wrapper.cpp
     // Kernel defines are written as #define directives in the wrapper to avoid
     // shell quoting issues (values like SFPU_OP_CHAIN_0 contain parentheses).
@@ -887,7 +983,16 @@ static std::function<void()> jit_compile_kernel(
             }
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
+        // Metal-2.0 `namespace args` (base).
         emit_metal2_namespaces(f, bindings, named_compile_args);
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        // Blaze experimental `blaze_ct_args::` header (additive layer on top of Metal-2.0 args).
+        if (has_named_args) {
+            f << "#include \"" << dir << "/named_args_generated.h\"\n";
+        }
+        ////////////////////////////////////////////////////////////
         f << "#include \"" << patched_kernel_path << "\"\n";
         f << "extern \"C\" { void __emule_kernel_entry() { kernel_main(); } }\n";
     }
@@ -1014,19 +1119,6 @@ static std::function<void()> jit_compile_kernel(
     // 11. Wrap in shared_ptr for lifetime management (dlclose on destruction).
     auto shared_handle = std::shared_ptr<void>(handle, [](void* h) { dlclose(h); });
     return [fn, shared_handle]() { fn(); };
-}
-
-// ---------------------------------------------------------------------------
-// Helper: get SWEmuleChip* from MetalContext cluster for a given device_id.
-// ---------------------------------------------------------------------------
-static tt::umd::SWEmuleChip* get_sw_emulated_chip(ChipId device_id) {
-    auto& cluster = MetalContext::instance().get_cluster();
-    auto* umd_cluster = cluster.get_driver().get();
-    if (!umd_cluster) {
-        return nullptr;
-    }
-    auto* chip = umd_cluster->get_chip(device_id);
-    return dynamic_cast<tt::umd::SWEmuleChip*>(chip);
 }
 
 // ---------------------------------------------------------------------------
@@ -1368,16 +1460,20 @@ static std::map<std::string, std::string> build_kernel_defines(
         }
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
-                if (idx < EMULE_NUM_CBS) {
-                    // Calculate tile size from the CB's data format.
-                    const auto& tile = cb_impl->tile(idx);
-                    tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
-                                                       : Tile().get_tile_size(cb_impl->data_format(idx));
-                    cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
-                    if (tile.has_value()) {
-                        tile_r_dim[idx] = tile->get_height();
-                        tile_c_dim[idx] = tile->get_width();
-                    }
+                TT_FATAL(
+                    idx < EMULE_NUM_CBS,
+                    "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap "
+                    "at the arch's NUM_CIRCULAR_BUFFERS.",
+                    idx,
+                    EMULE_NUM_CBS);
+                // Calculate tile size from the CB's data format.
+                const auto& tile = cb_impl->tile(idx);
+                tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
+                                                   : Tile().get_tile_size(cb_impl->data_format(idx));
+                cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
+                if (tile.has_value()) {
+                    tile_r_dim[idx] = tile->get_height();
+                    tile_c_dim[idx] = tile->get_width();
                 }
             }
         }
@@ -1535,6 +1631,19 @@ static void collect_kernels(
 
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
+            ////////////////////////////////////////////////////////////
+            // Blaze-only experimental named args
+            // Removal is tracked by issue #50953
+            NamedCTArgNamespaces named_ct_arg_namespaces;
+            kernel->process_named_ct_arg_namespaces([&named_ct_arg_namespaces](const NamedCTArgNamespaces& namespaces) {
+                named_ct_arg_namespaces = namespaces;
+            });
+            NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
+            kernel->process_named_runtime_args(
+                [&named_runtime_arg_namespaces](const NamedRuntimeArgNamespaces& namespaces) {
+                    named_runtime_arg_namespaces = namespaces;
+                });
+            ////////////////////////////////////////////////////////////
             auto defines = build_kernel_defines(
                 *kernel, impl, num_dram_channels, num_l1_banks, worker_col_map_str, worker_row_map_str, emule_sem_base);
 
@@ -1564,7 +1673,30 @@ static void collect_kernels(
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
             const std::string metal2_key_suffix = bindings.cache_key_suffix();
 
-            // Helper: compute cache key from a defines map.
+            // GENERAL emule fix — intentionally NOT part of the Blaze named-args feature and NOT
+            // fenced: it is required by any compute or data-movement kernel built under emule and
+            // must remain in place after the named-args feature is deleted (issue #50953). It is
+            // grouped here only because it shares this per-kernel `defines` map.
+            //
+            // COMPILE_FOR_{TRISC,BRISC,NCRISC} defines — silicon's per-RISC kernel build sets
+            // exactly one of these. Kernel-author API headers use them to pick the right include
+            // chain and to define `is_brisc` / `is_ncrisc` / `is_trisc` constexpr bools; without
+            // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all RISCs in one unified
+            // thread, so we set the corresponding macro based on the kernel's processor class.
+            if (is_tensix) {
+                defines["COMPILE_FOR_TRISC"] = "1";
+            } else if (auto* dm_kernel = dynamic_cast<DataMovementKernel*>(kernel.get()); dm_kernel != nullptr) {
+                auto cfg_variant = dm_kernel->config();
+                const auto& cfg = std::get<DataMovementConfig>(cfg_variant);
+                switch (cfg.processor) {
+                    case DataMovementProcessor::RISCV_0: defines["COMPILE_FOR_BRISC"] = "1"; break;
+                    case DataMovementProcessor::RISCV_1: defines["COMPILE_FOR_NCRISC"] = "1"; break;
+                    default: break;
+                }
+            }
+
+            // Helper: compute cache key from a defines map (preserves upstream's sorted
+            // iteration of named_compile_args and defines for key stability).
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
                 std::string key;
                 if (ksrc.source_type_ == KernelSource::FILE_PATH) {
@@ -1583,6 +1715,30 @@ static void collect_kernels(
                 for (const auto& [k, v] : sorted_named) {
                     key += ":N" + k + "=" + std::to_string(v);
                 }
+                ////////////////////////////////////////////////////////////
+                // Blaze-only experimental named args
+                // Removal is tracked by issue #50953
+                // The compiled wrapper depends on named_runtime_arg_namespaces through
+                // named_args_generated.h (the blaze_rt_args:: Arg/ArrayArg descriptors),
+                // so the full named RT schema — ns, field, index, length, dispatch — must
+                // be part of the key. Without it, two kernels sharing source/CT args/defines
+                // but differing in Blaze RT names or layout alias in the JIT and disk caches
+                // and load a stale descriptor layout (the .so then reads runtime args from
+                // the wrong slots). The named CT namespaces need no separate entry: they are
+                // a deterministic split of the flat named_compile_args serialized above.
+                // Determinism: NamedRuntimeArgNamespaces is a std::map (sorted ns order) of
+                // declaration-ordered vectors, so this iteration order is fixed; ns/field are
+                // validated C++ identifiers (alnum + '_'), so they cannot contain the
+                // ':'/'='/',' separators and the serialization is unambiguous.
+                for (const auto& [ns, entries] : named_runtime_arg_namespaces) {
+                    key += ":brtns:" + ns;
+                    for (const auto& entry : entries) {
+                        key += ":brt:" + entry.field + "=" + std::to_string(entry.index) + "," +
+                               std::to_string(entry.length) + "," +
+                               std::to_string(static_cast<uint32_t>(entry.dispatch));
+                    }
+                }
+                ////////////////////////////////////////////////////////////
                 for (const auto& [k, v] : defs) {
                     key += ":" + k + "=" + v;
                 }
@@ -1623,8 +1779,17 @@ static void collect_kernels(
                         resolved_fns[key] = disk_fn;
                         g_jit_cache[key] = disk_fn;
                     } else {
-                        deferred_compiles[key] =
-                            DeferredCompile{src_path, compile_args, named_compile_args, defs, kernel_extra_inc, bindings};
+                        deferred_compiles[key] = DeferredCompile{
+                            src_path,
+                            compile_args,
+                            named_compile_args,
+                            // Blaze-only experimental named args (issue #50953) — begin
+                            named_ct_arg_namespaces,
+                            named_runtime_arg_namespaces,
+                            // Blaze-only experimental named args (issue #50953) — end
+                            defs,
+                            kernel_extra_inc,
+                            bindings};
                     }
                 }
             };
@@ -1725,6 +1890,68 @@ static std::mutex g_compile_inflight_mutex;
 static std::unordered_map<std::string, std::shared_future<std::function<void()>>> g_compile_inflight;
 static std::atomic<uint64_t> g_compile_tmp_seq{0};
 
+// Max jit_compile_kernel calls allowed to run concurrently. Each in-flight compile
+// holds a burst of open file descriptors (patched-header mirror writes, header reads,
+// the clang subprocess pipes — order tens of fds each), so an UNBOUNDED std::async
+// fan-out over every cache-miss makes peak fd use scale with the kernel count.
+// A large mesh program (8-chip loudbox on the full 14x10 grid compiles ~hundreds
+// of distinct kernels) then blows past a container's RLIMIT_NOFILE soft limit
+// (commonly 1024) → open() fails mid-compile → "kernel_patcher: cannot read/write"
+// (and the failing file varies run-to-run with the interleaving). A dev box with a
+// high fd limit (e.g. 65536) never hits it, so this is CI/container-only. Bounding
+// concurrent compiles keeps peak fds (and concurrent clang processes) under the
+// limit. Note this bounds concurrent *compiles*, not the thread count: std::async
+// still spawns one thread per cache-miss which then blocks on the gate — the fd/
+// clang-process footprint is what EMFILE cares about here.
+static unsigned jit_compile_concurrency_cap() {
+    // First, opportunistically raise the soft fd limit to the hard limit — unprivileged
+    // and enough on its own in most containers (large hard limit), so the throttle
+    // rarely engages on well-provisioned hosts. Kept as a floor because some containers
+    // pin the hard limit at 1024 too; derive the cap from the (possibly raised) soft limit.
+    struct rlimit rl {};
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != rl.rlim_max) {
+        rl.rlim_cur = rl.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &rl);
+        getrlimit(RLIMIT_NOFILE, &rl);  // re-read the effective soft limit
+    }
+
+    unsigned cap = std::max(1u, std::thread::hardware_concurrency());
+    if (rl.rlim_cur != RLIM_INFINITY) {
+        // Budget the fd limit across concurrent compiles. kReserve covers the process's
+        // baseline fds (libs, python, fibers, the cached kernel .sos); kFdsPerCompile is
+        // an estimate of the fds one compile holds at its peak (patched-header writes +
+        // header reads + clang pipes). Both are conservative estimates, not measured; the
+        // soft→hard raise above and TT_EMULE_JIT_COMPILE_JOBS relieve any over-throttling.
+        constexpr rlim_t kReserve = 512;
+        constexpr rlim_t kFdsPerCompile = 48;
+        rlim_t budget = rl.rlim_cur > kReserve ? (rl.rlim_cur - kReserve) / kFdsPerCompile : 1;
+        cap = std::min<unsigned>(cap, std::max<rlim_t>(1, budget));
+    }
+
+    // Explicit override for tuning/debug. Only a fully-parsed, in-range, nonzero value
+    // wins; anything malformed (sign, trailing junk, overflow, 0) keeps the fd-derived
+    // cap rather than silently disabling the gate (e.g. "-1" must not become UINT_MAX).
+    if (const char* s = std::getenv("TT_EMULE_JIT_COMPILE_JOBS")) {
+        errno = 0;
+        char* end = nullptr;
+        unsigned long v = std::strtoul(s, &end, 10);
+        if (end != s && *end == '\0' && errno == 0 && v > 0 && v <= std::numeric_limits<unsigned>::max()) {
+            cap = static_cast<unsigned>(v);
+        }
+    }
+    return std::max(1u, cap);
+}
+
+// Counting gate limiting concurrently-executing jit_compile_kernel calls to the
+// fd-safe cap above. Process-global so it also bounds the total across the several
+// jit_compile_pending calls a multi-chip mesh setup may run in parallel. Each
+// compile acquires a slot for the duration of its (fd-heavy) work and releases it
+// via RAII, so peak open fds stay bounded regardless of the kernel count.
+static std::counting_semaphore<>& compile_slots() {
+    static std::counting_semaphore<> slots(jit_compile_concurrency_cap());
+    return slots;
+}
+
 static void jit_compile_pending(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
@@ -1756,11 +1983,29 @@ static void jit_compile_pending(
                     std::string cache_path = disk_cache_so_path(key);
                     DeferredCompile dc_copy = dc;  // own a copy: the future may outlive this call's map
                     fut = std::async(std::launch::async, [dc_copy, cache_path]() {
+                              // Bound concurrent compiles to the fd-safe cap: a slot is
+                              // held for the whole (fd-heavy) compile and released even if
+                              // it throws. std::async spawns the thread eagerly, but the
+                              // fd-consuming work waits here until a slot frees.
+                              compile_slots().acquire();
+                              struct SlotGuard {
+                                  ~SlotGuard() { compile_slots().release(); }
+                              } slot_guard;
                               std::string tmp_path = cache_path + ".tmp." + std::to_string(::getpid()) + "." +
                                                      std::to_string(g_compile_tmp_seq.fetch_add(1));
+                              // Blaze-only experimental named args (issue #50953) are threaded through here.
                               auto fn = jit_compile_kernel(
-                                  dc_copy.src_path, dc_copy.compile_args, dc_copy.named_compile_args,
-                                  dc_copy.defines, dc_copy.extra_inc, dc_copy.bindings, tmp_path);
+                                  dc_copy.src_path,
+                                  dc_copy.compile_args,
+                                  dc_copy.named_compile_args,
+                                  // Blaze named args (issue #50953) — begin
+                                  dc_copy.named_ct_arg_namespaces,
+                                  dc_copy.named_runtime_arg_namespaces,
+                                  // Blaze named args (issue #50953) — end
+                                  dc_copy.defines,
+                                  dc_copy.extra_inc,
+                                  dc_copy.bindings,
+                                  tmp_path);
                               std::filesystem::rename(tmp_path, cache_path);
                               return fn;
                           }).share();
@@ -2921,6 +3166,20 @@ struct EmuleSigfpeGuard {
 static bool g_emule_mesh_defer = false;
 static std::vector<std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>>>
     g_mesh_dfb_keep;
+// [MESH] ASAN snapshot keepalive. In defer mode the deferred fibers read the per-launch
+// live-range snapshot (via oob.state's pointers) only later, in run_mesh_dispatch — long
+// after dispatch_to_device's local OobStateOwner would have been destroyed. Without this
+// the range pointers dangle and the checks read freed/reused heap (the all_reduce global-
+// semaphore OOB false positive). Holds each device's OobStateOwner alive until the run
+// completes; cleared alongside g_mesh_dfb_keep. std::move preserves the heap buffers the
+// pointers reference, so the captured views stay valid across the vector's own growth.
+static std::vector<tt::tt_metal::emule::OobStateOwner> g_mesh_oob_keep;
+
+// [HOST-INTERLEAVED SOCKET] Set when run_mesh_dispatch's run_persistent() returned HostWait: the mesh
+// run is parked awaiting host socket I/O, with g_mesh_dfb_keep + the scheduler's fibers kept alive.
+// pump_device() drives it forward per host socket call; the pump that completes clears this + the mesh
+// keepalives (the cleanup run_mesh_dispatch deferred). See tt-emule docs/socket-emulation.md §7.
+static bool g_emule_host_wait = false;
 
 // Resolved-program cache — emule's analogue of silicon's is_compiled(): collect + JIT compile + resolve
 // run ONCE per program (keyed by ProgramId); every device dispatches against the shared read-only result.
@@ -2957,12 +3216,12 @@ static void launch_cores(
     std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>> dfb_keepalive;
     dfb_keepalive.reserve(core_setups.size());
 
-    // Object-Intent (ASAN §12): one tracker per core, owned here so it outlives the fiber
-    // run (run_until_idle below, for the non-deferred single-device path). The deferred
-    // mesh path skips OI — per-fiber ASAN state is single-device-scoped (see the ASAN note
-    // in the spawn lambda) and the trackers must not outlive this frame across a deferred
-    // run_mesh_dispatch. Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241.
-    std::vector<std::unique_ptr<ObjectIntentTracker>> intent_trackers;
+    // Object-Intent (ASAN §12): one tracker per core, owned here so it outlives the
+    // fiber run (run_until_idle below, non-deferred single-device path only). The
+    // deferred mesh path skips OI — per-fiber ASAN state is single-device-scoped and
+    // the trackers must not outlive this frame across a deferred run_mesh_dispatch.
+    // Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241 / docs/ASAN.md.
+    std::vector<std::unique_ptr<tt::tt_metal::emule::ObjectIntentTracker>> intent_trackers;
     const bool object_intent_active = !defer_run && oob_state.object_intent_strict;
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
@@ -2986,13 +3245,13 @@ static void launch_cores(
             per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
         }
 
-        // Object-Intent: snapshot this core's non-I/O live buffers BEFORE its kernel runs
-        // (on the dispatch thread, so L1 still holds the pre-kernel bytes). Self-gates to a
-        // no-op unless ASAN is on and this is a single-kernel core; the fiber(s) below then
-        // record resolved extents and verify at exit. See tt-emule #241 and ObjectIntentTracker.
-        ObjectIntentTracker* intent_tracker = nullptr;
+        // Object-Intent: snapshot this core's non-I/O live buffers BEFORE its kernel
+        // runs (on the dispatch thread, so L1 still holds the pre-kernel bytes). The
+        // fiber(s) below record resolved extents, then verify at exit. Self-gates to a
+        // no-op unless single-kernel (the attribution rule). See tt-emule #241.
+        tt::tt_metal::emule::ObjectIntentTracker* intent_tracker = nullptr;
         if (object_intent_active) {
-            intent_trackers.push_back(std::make_unique<ObjectIntentTracker>());
+            intent_trackers.push_back(std::make_unique<tt::tt_metal::emule::ObjectIntentTracker>());
             intent_tracker = intent_trackers.back().get();
             static const std::vector<uint32_t> kEmptyRtArgs;
             intent_tracker->pre_launch_snapshot(
@@ -3052,28 +3311,39 @@ static void launch_cores(
             // blocked fiber parks rather than spins, so start order is irrelevant).
             //
             // ASAN sanitizer (#44848) is armed per-kernel here: set_sanitizer_thread_locals /
-            // sweep_per_kernel_dirty_cbs / clear (+ the identity globals the sanitizer .cpp reads,
-            // mirroring the ctx). All inert when TT_METAL_EMULE_ASAN is off — set_sanitizer_thread_locals
-            // early-returns, so the by-value oob_state view (owned by dispatch_to_device's OobStateOwner)
-            // is never dereferenced. The range thread-locals are program-uniform, so a peer fiber
-            // re-arming them on a shared worker is harmless. The Object-Intent resolved-range log is
-            // per-fiber, so it lives in the fiber ctx (__emule_self->san_resolved_*) and needs no
-            // thread-local / swap-in restore. Object-Intent snapshot/verify run per single-kernel core
-            // on the non-deferred (single-device) path; deferred mesh runs skip OI. See tt-emule #241.
+            // sweep_per_kernel_dirty_cbs / clear all write/read __emule_self->san (the per-fiber
+            // sanitizer state), so a kernel that yields mid-body can't have its ranges clobbered by
+            // a co-scheduled fiber — the fix for the fiber-engine false positives (the all_reduce /
+            // global-semaphore OOB). All inert when TT_METAL_EMULE_ASAN is off — set_sanitizer_thread_locals
+            // arms null/zero and the chokepoint early-outs. The by-value oob_state view's snapshot
+            // vectors (owned by dispatch_to_device's OobStateOwner) are kept alive past this deferred
+            // spawn by g_mesh_oob_keep so the armed range pointers don't dangle before the mesh run.
             sched.spawn(
-                [ki_ptr, lx, ly, cb_array, l1_data, intent_tracker, oob_state, sem_base = cs.sem_base,
+                [ki_ptr,
+                 lx,
+                 ly,
+                 cb_array,
+                 l1_data,
+                 intent_tracker,
+                 oob_state,
+                 sem_base = cs.sem_base,
                  sem_size = cs.sem_size]() {
                     auto& ki = *ki_ptr;
                     __processor_id = ki.processor_id;
                     __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                     __emule_trisc_id = 0;
                     __emule_kernel_name = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
-                    __emule_pending_noc_reads = 0;
+                    // ASAN identity on the fiber's OWN ctx (read by the [ASAN ERROR] trace) —
+                    // per-fiber so a co-scheduled fiber can't overwrite it across a yield. lx/ly
+                    // also fix the previously-always-zero logical-coord report.
+                    __emule_self->san.kernel_name = __emule_kernel_name;
+                    __emule_self->san.logical_x = lx;
+                    __emule_self->san.logical_y = ly;
+                    __emule_self->san.processor_id = ki.processor_id;
                     set_sanitizer_thread_locals(oob_state, sem_base, sem_size);
-
-                    // Arm the Object-Intent resolved-range log in this fiber's ctx (reset count,
-                    // enable recording). The kernel-side OOB check appends resolved extents to
-                    // __emule_self->san_resolved_log; teardown accumulates and verify diffs them.
+                    // Arm the Object-Intent resolved-range log in THIS fiber's ctx (reset
+                    // count, enable recording). The kernel-side OOB check appends resolved
+                    // extents to __emule_self->san_resolved_log; accumulate/verify below.
                     if (intent_tracker != nullptr) {
                         __emule_self->san_resolved_active = true;
                         __emule_self->san_resolved_count = 0;
@@ -3099,16 +3369,19 @@ static void launch_cores(
                             ") failed"));
                     }
                     if (intent_tracker != nullptr) {
-                        // Accumulate this kernel's resolved extents, then verify: any non-I/O
-                        // buffer whose bytes changed but was never resolved is an Object-Intent
-                        // violation (aborts). No-op for multi-kernel cores (nothing snapshotted).
+                        // Fold this kernel's resolved extents into the core's resolved set, then
+                        // verify: any non-I/O live buffer whose bytes changed but was never
+                        // resolved is an Object-Intent violation (aborts). No-op on multi-kernel
+                        // cores (nothing snapshotted). Runs in-fiber, after the kernel wrote L1.
                         intent_tracker->accumulate_resolved(
                             oob_state, __emule_self->san_resolved_log, __emule_self->san_resolved_count);
                         __emule_self->san_resolved_active = false;
-                        intent_tracker->verify_post_launch(l1_data, lx, ly, __emule_kernel_name);
+                        // Use the per-fiber kernel name (survives a mid-kernel yield) rather than
+                        // the worker-thread_local __emule_kernel_name, which a co-scheduled fiber
+                        // could have overwritten — otherwise an OI violation can misattribute.
+                        intent_tracker->verify_post_launch(l1_data, lx, ly, __emule_self->san.kernel_name);
                     }
                     __emule_kernel_name = nullptr;
-                    __emule_pending_noc_reads = 0;
                     clear_sanitizer_thread_locals();
                 },
                 std::move(ctx),
@@ -3239,6 +3512,11 @@ static void dispatch_to_device(
 
     OobStateOwner oob = build_oob_tensor_state(device, device_id);
     launch_cores(core_setups, dram_data, core_map_ptr, device_id, defer_run, oob.state);
+    if (defer_run) {
+        // Deferred fibers run later (run_mesh_dispatch); keep the snapshot vectors that
+        // oob.state's ASAN range pointers reference alive until then. See g_mesh_oob_keep.
+        g_mesh_oob_keep.push_back(std::move(oob));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3272,23 +3550,79 @@ void execute_program_emulated(IDevice* device, Program& program) {
 void begin_mesh_dispatch() {
     g_emule_mesh_defer = true;
     g_mesh_dfb_keep.clear();
+    g_mesh_oob_keep.clear();
 }
 
 void run_mesh_dispatch() {
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;  // the actual kernel run happens here, across all chips
 #endif
-    // Reset defer + free the kept per-device state even if the run throws.
+    // Reset defer + free the kept per-device state even if the run throws. Disarmed on the
+    // host-wait path, which keeps the state alive across the return to the host.
     struct Cleanup {
+        bool armed = true;
         ~Cleanup() {
+            if (!armed) {
+                return;
+            }
             g_emule_mesh_defer = false;
             g_mesh_dfb_keep.clear();
+            g_mesh_oob_keep.clear();
         }
     } cleanup;
-    // All devices' fibers were registered (spawned) during the per-device register phase;
-    // run them concurrently on the worker pool in one pass. Each fiber's ctx carries its
-    // device's core_map/bridge_dram, so cross-chip NOC resolution stays correct.
-    tt::tt_metal::emule_fiber::FiberScheduler::instance().run_until_idle();
+    // All devices' fibers were registered (spawned) during the per-device register phase; run them
+    // concurrently on the worker pool in one pass. Each fiber's ctx carries its device's
+    // core_map/bridge_dram, so cross-chip NOC resolution stays correct. run_persistent (vs
+    // run_until_idle) lets a host-interleaved socket program quiesce back to the host mid-run. On a
+    // throw the RAII Cleanup above frees the kept state during unwind.
+    tt::tt_metal::emule_fiber::RunOutcome oc =
+        tt::tt_metal::emule_fiber::FiberScheduler::instance().run_persistent();
+    if (oc == tt::tt_metal::emule_fiber::RunOutcome::HostWait) {
+        // A kernel is parked on a host-fed socket wait. Keep the kept state + the scheduler's fibers
+        // ALIVE and return to the host; it streams socket tokens and pump_device() drives the run to
+        // completion (which runs the cleanup, see pump_device()).
+        cleanup.armed = false;
+        g_emule_host_wait = true;
+        return;
+    }
+    // Completed synchronously (no host-fed socket wait): the RAII Cleanup frees the kept state.
+}
+
+void pump_device() {
+    // Drive a parked (run_persistent) mesh run forward one scheduler quantum. No-op unless a run is
+    // parked in HostWait (set by run_mesh_dispatch). The host advanced a socket credit word by a raw
+    // L1 store, so pump() blanket-re-polls the parked fibers to re-check predicates. When every fiber
+    // reaches Done the pump returns Completed — run the mesh cleanup run_mesh_dispatch deferred.
+    //
+    // Serialize: a host program drives H2D and D2H on separate threads, so both credit-wait loops can
+    // call pump_device() concurrently; the single resumable run + g_emule_host_wait are not reentrant.
+    static std::mutex pump_mu;
+    std::lock_guard<std::mutex> pump_lk(pump_mu);
+    if (!g_emule_host_wait) {
+        return;
+    }
+#if defined(__x86_64__) && defined(__linux__)
+    // pump() re-enters kernel bodies; run_mesh_dispatch's guard was destroyed at its HostWait return,
+    // so reinstall the SIGFPE->RISC-V divide/overflow handler for the resumed execution.
+    EmuleSigfpeGuard sigfpe_guard;
+#endif
+    try {
+        auto oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
+        if (oc == tt::tt_metal::emule_fiber::RunOutcome::Completed) {
+            g_emule_host_wait = false;
+            g_emule_mesh_defer = false;
+            g_mesh_dfb_keep.clear();
+            g_mesh_oob_keep.clear();
+        }
+    } catch (...) {
+        // pump() threw (kernel exception / host-wait stall deadlock) — the scheduler registry is torn
+        // down; drop the mesh keepalives + host-wait/defer flags so a later dispatch starts clean.
+        g_emule_host_wait = false;
+        g_emule_mesh_defer = false;
+        g_mesh_dfb_keep.clear();
+        g_mesh_oob_keep.clear();
+        throw;
+    }
 }
 
 }  // namespace tt::tt_metal::emule

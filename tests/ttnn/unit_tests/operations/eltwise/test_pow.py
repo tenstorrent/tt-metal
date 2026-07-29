@@ -353,6 +353,67 @@ def test_pow(exponent, device):
     assert_allclose(torch_output, ttnn_output, atol=2.5e-4, rtol=5e-7)
 
 
+# Dense log-spaced base sweep accuracy for non-integer exponents (issue #49625).
+# fp32 pow(x, y) must stay < 3 ULP for the CogVideo/DeepSeek regime x in [0.5, 50000],
+# while integer exponents stay bit-exact (0 ULP). Covers the long-mantissa 1.7984 case.
+@pytest.mark.parametrize("exponent", [0.5, 1.5, 1.7984, 2.5])
+def test_unary_pow_fp32_ulp_noninteger(exponent, device):
+    base = torch.logspace(-0.3, 4.7, 1024, dtype=torch.float32).reshape(32, 32)  # ~0.5 .. ~50000
+    golden = torch.pow(base, exponent)
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.pow(tt_base, exponent)
+    result = ttnn.to_torch(tt_out)
+
+    assert_with_ulp(golden, result, ulp_threshold=3)
+
+
+@pytest.mark.parametrize("exponent", [2.0, 3.0])
+def test_unary_pow_fp32_ulp_integer_exact(exponent, device):
+    base = torch.logspace(-0.3, 4.7, 1024, dtype=torch.float32).reshape(32, 32)
+    golden = torch.pow(base, exponent)
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.pow(tt_base, exponent)
+    result = ttnn.to_torch(tt_out)
+
+    assert_with_ulp(golden, result, ulp_threshold=0)
+
+
+# Overflow must saturate to +inf, not wrap. The non-integer fp32 path scales by 2**k via
+# setexp, which writes the 8-bit exponent field and wraps instead of saturating, so a
+# missing clamp turns an overflowing result into a finite garbage value. Exponents are
+# non-integer on purpose: integer exponents take a separate exact iterative path that is
+# not affected. base=50000, y=9.5 gives ~1e42 -> +inf in fp32. Covers both the unary
+# (scalar y) and binary (tensor y) paths, which apply the 2**k scale independently.
+@pytest.mark.parametrize("exponent", [9.5, 20.5, 50.5])
+def test_unary_pow_fp32_overflow_to_inf(exponent, device):
+    base = torch.full((32, 32), 50000.0, dtype=torch.float32)
+    golden = torch.pow(base, exponent)
+    assert torch.isinf(golden).all()  # sanity: this exponent really overflows fp32
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
+
+    assert torch.isinf(result).all(), "overflow wrapped to a finite value instead of +inf"
+    assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
+
+
+@pytest.mark.parametrize("exponent", [9.5, 20.5, 50.5])
+def test_binary_pow_fp32_overflow_to_inf(exponent, device):
+    base = torch.full((32, 32), 50000.0, dtype=torch.float32)
+    exp = torch.full((32, 32), exponent, dtype=torch.float32)
+    golden = torch.pow(base, exp)
+    assert torch.isinf(golden).all()  # sanity: this exponent really overflows fp32
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_exp = ttnn.from_torch(exp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+
+    assert torch.isinf(result).all(), "overflow wrapped to a finite value instead of +inf"
+    assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
+
+
 @pytest.mark.parametrize("exponent", [0.25, 0.5, 0.75, -0.25, -0.5, -0.75])
 def test_pow_arange_masking_fp32(exponent, device):
     tt_input = generate_clean_bf16_tensor(torch.float32)

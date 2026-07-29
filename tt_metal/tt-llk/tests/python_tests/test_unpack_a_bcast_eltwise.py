@@ -5,13 +5,19 @@ import pytest
 import torch
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
+from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     MathFidelity,
     MathOperation,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -19,6 +25,8 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     MATH_FIDELITY,
     MATH_OP,
+    NUM_BLOCKS,
+    NUM_TILES_IN_BLOCK,
     SRCA_REUSE_COUNT,
     TILE_COUNT,
     generate_input_dim,
@@ -44,6 +52,7 @@ from helpers.utils import passed_test
         [128, 32],
         [32, 128],
         [64, 128],
+        [128, 256],
     ],
 )
 def test_unp_bcast_sub_sdpa(
@@ -115,9 +124,11 @@ def test_unp_bcast_sub_sdpa(
 
                 golden.append(result)
 
-    golden_tensor = torch.cat(golden).to(dtype=format_dict[formats.output_format])[
-        : 1024 * reuse_factor
-    ]
+    golden_tensor = torch.cat(golden).to(dtype=format_dict[formats.output_format])
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
 
     configuration = TestConfig(
         "sources/unpack_a_bcast_eltwise_test.cpp",
@@ -131,6 +142,8 @@ def test_unp_bcast_sub_sdpa(
         runtimes=[
             TILE_COUNT(tile_cnt_A),
             SRCA_REUSE_COUNT(srca_reuse_count),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            NUM_BLOCKS(num_blocks),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -139,8 +152,8 @@ def test_unp_bcast_sub_sdpa(
             formats.input_format,
             formats.output_format,
             tile_count_A=reuse_factor,
-            tile_count_B=reuse_factor,
-            tile_count_res=reuse_factor,
+            tile_count_B=input_tiles,
+            tile_count_res=input_tiles,
         ),
         dest_acc=dest_acc,
     )

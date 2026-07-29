@@ -111,7 +111,7 @@ spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
     output_shape_vec.back() = attrs.k;
 
     const auto memory_config = tensor_args.input_tensor.memory_config();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(std::move(output_shape_vec)),
         tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config));
 }
