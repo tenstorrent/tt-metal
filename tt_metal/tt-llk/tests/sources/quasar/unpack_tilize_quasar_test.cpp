@@ -118,15 +118,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (is_fp32_dest_acc_en)
             {
-                _perf_unpack_loop_set_valid<true, true>(total_tilize_dvalids);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(total_tilize_dvalids);
             }
             else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
             {
-                _perf_unpack_loop_set_valid<true, false>(total_tilize_dvalids);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(total_tilize_dvalids);
             }
             else
             {
-                _perf_unpack_loop_set_valid<false, true>(total_tilize_dvalids);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(total_tilize_dvalids);
             }
         }
         else
@@ -217,15 +217,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 const std::uint32_t total_tilize_dvalids = LOOP_FACTOR * TILE_CNT;
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_math_loop_clear_valid<true, true>(total_tilize_dvalids);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(total_tilize_dvalids);
                 }
                 else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
                 {
-                    _perf_math_loop_clear_valid<true, false>(total_tilize_dvalids);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(total_tilize_dvalids);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<false, true>(total_tilize_dvalids);
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(total_tilize_dvalids);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
