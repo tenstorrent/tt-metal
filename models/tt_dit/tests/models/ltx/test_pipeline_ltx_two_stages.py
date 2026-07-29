@@ -18,7 +18,7 @@ from models.tt_dit.utils.ltx import (
 )
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
 
-from .ltx_mesh_params import LTX_PIPELINE_MESH_PARAMS_DL, _2x4sp1tp0nl2_line_is_fsdp0, _with_dynamic_load
+from .ltx_mesh_params import LTX_PIPELINE_MESH_PARAMS_DL, LTX_TWO_STAGES_I2V_MESH_PARAMS_DL
 
 
 def _default_distilled_lora() -> str:
@@ -141,7 +141,7 @@ def test_pipeline_two_stages(
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
-    [_with_dynamic_load(_2x4sp1tp0nl2_line_is_fsdp0, True)],
+    LTX_TWO_STAGES_I2V_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_two_stages_i2v_smoke(

@@ -126,6 +126,11 @@ LTX_DISTILLED_I2V_MESH_PARAMS_DL = [
     ),
 ]
 
+# Two-stages (Pro) I2V smoke reuses the same geometry + device params as the distilled i2v chain
+# (2x4 loudbox + 4x8 galaxy, traced + L1_SMALL for the audio vocoder), so the Pro-I2V leg can run on
+# the single 4x8 galaxy in addition to the 2x4 loudbox.
+LTX_TWO_STAGES_I2V_MESH_PARAMS_DL = LTX_DISTILLED_I2V_MESH_PARAMS_DL
+
 # Audio-decode-only profiling: both configs use the traced line params (trace region + L1_SMALL)
 # so LTX_TRACED=1 can capture the vocoder.
 LTX_DISTILLED_AUDIO_MESH_PARAMS_DL = [
