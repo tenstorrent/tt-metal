@@ -198,5 +198,6 @@ noise, dedicated gate-family contract audit, correctness/watcher evidence,
 and profiler artifacts. The stage-owned local commit SHA is recorded below;
 no push was performed.
 
-Stage implementation commit: recorded by the following documentation-only
-checkpoint after creation.
+Stage implementation commit:
+`52479ea865ee9cebb8618ab17866fe3599e5c3dc`. This SHA is recorded by the
+following documentation-only checkpoint.
