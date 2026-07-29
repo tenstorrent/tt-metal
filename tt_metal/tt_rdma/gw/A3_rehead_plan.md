@@ -140,12 +140,24 @@ ssh ubuntu@192.168.100.2 'bash /tmp/launch_gw.sh'   # setsid + stdbuf -oL -> /tm
 launch_gw.sh runs: `sudo setsid bash -c "stdbuf -oL -eL env TTDPA_DOORBELL=1 TTDPA_ROCE=1 TTDPA_HOSTSRC=1
 TTDPA_COUNT=<N> TTDPA_PLEN=<plen> TTDPA_NOCRC=1 <bin> mlx5_0 >/tmp/gw.log 2>&1" </dev/null >/dev/null 2>&1 &`
 
+### BH-pool byte-exact E2E ✅ (2026-07-29) — the full Plan-B loop
+Drove the drainer pool (`bh1_rx_dispatch 1 ext <hold> 1 1 2 0`, crc_check=0 to match the gateway's CRC-skip;
+MR rkey 0x00CAFE42) with the REAL gateway path: host `tt_roce_client 10.99.0.1 18515 100000 <plen>` → SF →
+DPA re-head → p0 → pool. **Pool: total=100000 write_ok=100000 bad=0 crc_err=0 rkey_miss=0** — every frame
+landed byte-exact, exactly-once, lossless, zero errors. Gateway GW_EXIT=0; both clean-shutdown. External
+RoCEv2 → ConnectX terminate → DPA re-head → BH TT-RDMA landing, proven end-to-end.
+
+Orchestration (3 machines): launch gateway detached FIRST (listening) → pool background (long hold) →
+`until grep "dispatch kernel up"` then fire the client → read pool total/write_ok/bad. AICLK boosts to 1350
+under load; READ RTT p50≈55µs (perf.sh). NB the DPU `/tmp/launch_gw.sh` was the hardcoded-256B early version
+(sync the env-driven vendored one for jumbo).
+
 ### Remaining
-1. **BH-pool byte-exact**: bring the drainer pool up, confirm delivered==processed, drop=0, exactly-once
-   (check AICLK — see `tt-rdma-drainer-pool`).
+1. **Jumbo + A5 fan-out** into the drain for line-rate *landed* BW (this run was 256B, single-thread).
 2. **Generic-app interop**: `ib_send_bw -R … 10.99.0.1` / `ib_write_bw -R …` (our responder is CM-based;
    perftest layers its own MR-exchange, so this validates *connect* + confirms the trigger contract).
-3. **Part B** multi-in-flight generator for real interop throughput (removes the burst crutch).
+3. **B2 MR federation** — rkey→BH per-destination mapping (currently one slot, roff=0).
+4. **Part B** multi-in-flight generator for real interop throughput (removes the burst crutch).
 
 ## Production refinements (after b-3 basic E2E)
 
