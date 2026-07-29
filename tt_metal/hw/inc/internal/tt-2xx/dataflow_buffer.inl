@@ -431,7 +431,9 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
         return;
     } else {
         for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
-            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = local_dfb_interface_.txn_ids[i]});
+            // Uses internal API rather than user facing noc.async_write_barrier() since it ASSERTs that the txn_id comes
+            // from the user tnx ID pool and the DFB txn ids are internal only.
+            noc_async_write_barrier_with_trid(local_dfb_interface_.txn_ids[i], noc.get_noc_id());
         }
     }
 }
