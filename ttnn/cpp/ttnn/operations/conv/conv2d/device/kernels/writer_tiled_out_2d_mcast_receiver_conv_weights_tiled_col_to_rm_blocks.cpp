@@ -78,7 +78,6 @@ void kernel_main() {
 
     // Experimental API objects
     Noc noc;
-    i += 2;  // Runtime semaphore ids remain for argument-layout compatibility.
     DataflowBuffer dfb_weight_obj(cb_id_weight);
     DataflowBuffer dfb_bias_obj(bias_cb_id);
     DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
@@ -211,6 +210,4 @@ void kernel_main() {
 
         }  // out_num_blocks_h
     }  // out_num_blocks_w
-
-    noc.async_write_barrier();
 }

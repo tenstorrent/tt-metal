@@ -1039,7 +1039,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // TensorAccessorArgs blocks to preserve every existing compile-time index.
     writer_compile_time_args.push_back(weights_mcast_sender_semaphore_id);
     writer_compile_time_args.push_back(weights_mcast_receiver_semaphore_id);
-    writer_compile_time_args.push_back(block_sharded ? (transpose_mcast ? num_cores_x - 1 : num_cores_y - 1) : 0);
 
     const bool check_skip_compute = input_cores != output_cores;
 
@@ -1283,20 +1282,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
-                // Pad-out path: 14 zeros with only the semaphore/bias-flag slots
-                // populated.  weight/bias addresses are unused for skipped work
-                // cores so we keep them as literal zeros (no buffer binding).
+                // Pad-out path uses the exact 2D sender layout: weight/bias, tile offsets,
+                // rectangle, is_sender_core, skip_work. Weight/bias are unused on skipped cores.
                 KernelDescriptor::RTArgList args;
-                args.reserve(14);
+                args.reserve(10);
                 args.push_back(uint32_t{0});  // 0: weight addr (unused for skipped cores)
                 args.push_back(uint32_t{0});  // 1: bias addr (unused)
-                for (int i = 2; i < 10; ++i) {
+                for (int i = 2; i < 8; ++i) {
                     args.push_back(uint32_t{0});
                 }
-                args.push_back(weights_mcast_sender_semaphore_id);
-                args.push_back(weights_mcast_receiver_semaphore_id);
-                args.push_back(uint32_t{1});  // is_sender_core, always true for input_cores
-                args.push_back(uint32_t{1});  // skip_work
+                args.push_back(uint32_t{1});  // 8: is_sender_core, always true for input_cores
+                args.push_back(uint32_t{1});  // 9: skip_work
                 writer_mcast_sender_desc.emplace_runtime_args(core, args);
                 continue;
             }
@@ -1338,10 +1334,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                         right_core_physical.y);
 
                     sender_rt_args.append(mcast_coords);
-                    sender_rt_args.push_back(num_cores_x - 1);  // mcast_num_dests
-                    sender_rt_args.push_back(num_cores_x - 1);  // mcast_num_cores
-                    sender_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                    sender_rt_args.push_back(weights_mcast_receiver_semaphore_id);
                     sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
                     sender_rt_args.push_back(uint32_t{0});  // skip_work
                     writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
@@ -1357,10 +1349,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                         bottom_right_core_physical.y);
 
                     sender_rt_args.append(mcast_coords);
-                    sender_rt_args.push_back(num_cores_y - 1);  // mcast_num_dests
-                    sender_rt_args.push_back(num_cores_y - 1);  // mcast_num_cores
-                    sender_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                    sender_rt_args.push_back(weights_mcast_receiver_semaphore_id);
                     sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
                     sender_rt_args.push_back(uint32_t{0});  // skip_work
                     writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
@@ -1375,10 +1363,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     bottom_right_core_physical.y);
 
                 sender_rt_args.append(mcast_coords);
-                sender_rt_args.push_back(total_active_num_cores - 1);  // mcast_num_dests
-                sender_rt_args.push_back(total_num_cores - 1);         // mcast_num_cores
-                sender_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                sender_rt_args.push_back(weights_mcast_receiver_semaphore_id);
+                // Only active cores acknowledge; McastRect derives the full rectangle fan-out.
+                sender_rt_args.push_back(total_active_num_cores - 1);
                 if (enable_activation_reuse) {
                     uint32_t writer_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
@@ -1399,8 +1385,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
             // Helper lambda to create receiver runtime args
             auto create_receiver_args = [&](uint32_t sender_noc_x, uint32_t sender_noc_y) {
-                return std::vector<uint32_t>{
-                    sender_noc_x, sender_noc_y, weights_mcast_sender_semaphore_id, weights_mcast_receiver_semaphore_id};
+                return std::vector<uint32_t>{sender_noc_x, sender_noc_y};
             };
 
             for (const CoreCoord& core : core_range) {
@@ -1420,11 +1405,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
                     receiver_args = std::vector<uint32_t>{
-                        static_cast<uint32_t>(is_no_op_core),
-                        top_left_core_physical.x,
-                        top_left_core_physical.y,
-                        weights_mcast_sender_semaphore_id,
-                        weights_mcast_receiver_semaphore_id};
+                        static_cast<uint32_t>(is_no_op_core), top_left_core_physical.x, top_left_core_physical.y};
                     if (enable_activation_reuse) {
                         uint32_t writer_remaining_tiles_to_push = 0;
                         if (activation_reuse_config.has_partial_core &&
