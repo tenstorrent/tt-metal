@@ -64,7 +64,7 @@ def test_subtract_l1(ttnn_mesh_device, reset_seeds, shape):
     a = U.to_tile_l1(a_torch, mesh)
     b = U.to_tile_l1(b_torch, mesh)
 
-    out = ttnn.subtract(a, b)
+    out = ttnn.subtract(a, b, dtype=ttnn.bfloat8_b)
 
     ref = a_torch.float() - b_torch.float()
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
