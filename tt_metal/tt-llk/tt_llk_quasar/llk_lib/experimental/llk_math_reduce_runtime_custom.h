@@ -7,10 +7,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
-#include "experimental/llk_math_reduce_custom.h"
 #include "llk_math_common.h"
 #include "tensor_shape.h"
 
@@ -18,10 +18,55 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
-// Runtime-block_ct_dim variant of the block reduce_max_row math kernel. Same algorithm as the
-// compile-time header (accumulate the row-max across the block, then transpose once); only the block
-// tile count is a runtime argument. Shared helpers (addrmod, transpose, slot layout) come from
-// llk_math_reduce_custom.h. See that header for the full algorithm description.
+// Block reduce_max_row math kernel (runtime block_ct_dim): accumulate the row-max across a block of
+// `block_ct_dim` operand tiles into two DEST slots, then transpose each slot into a column once. The
+// block tile count is a runtime argument.
+
+// DEST scratch slot for the second input face-row (F2&F3) partial. Row TILE_R_DIM (= 2*FACE_R_DIM =
+// 32) == output face F2, so the transpose reads and writes the same base (mirrors native reduce-row's
+// per-face-row DEST advance).
+static constexpr std::uint32_t REDUCE_BLOCK_SLOT1_DST = TILE_R_DIM;
+
+/**
+ * @brief Program the address modifiers used by the block reduce_max_row pool + transpose.
+ *
+ * ADDR_MOD_0: no counter movement (pool parks DEST; MOVD2B reads DEST at the counter). fidelity clr.
+ * ADDR_MOD_1: srcb += ELTWISE_MATH_ROWS, dest += ELTWISE_MATH_ROWS (retained; unused now that the
+ *             transpose writeback is MOVB2D + ADDR_MOD_0).
+ */
+inline void reduce_block_max_row_configure_addrmod()
+{
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_0);
+
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = ELTWISE_MATH_ROWS},
+        .dest = {.incr = ELTWISE_MATH_ROWS},
+    }
+        .set(ADDR_MOD_1);
+}
+
+/**
+ * @brief Transpose one pooled 1x16 row partial (at the current DEST counter) into a 16x1 column.
+ *
+ * Mirrors the inline transpose in Quasar's native _llk_math_reduce_row_mop_config_, but writes the
+ * transposed column back with a plain MOVB2D (not ZEROSRC + ELWADDDI).
+ */
+inline void reduce_block_max_row_transpose_face_row(const bool wide_face)
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
+    // Move the row partial into SrcB rows [16-31], transposed into rows [32-47].
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1, 0);
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, 0);
+    // Write the transposed column back to DEST via plain MOVB2D (SrcB rows 32-47 -> DEST). First move
+    // covers DEST rows 0-7.
+    TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
+    if (wide_face)
+    {
+        // face_r_dim > ELTWISE_MATH_ROWS (full 16-row face): second move covers DEST rows 8-15.
+        TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
+    }
+}
 
 /**
  * @brief Runtime-block_ct_dim MOP config for block reduce_max_row.
@@ -42,7 +87,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
     // NOTE: GMPOOL consumes SrcA by bank rotation, NOT by an srca offset (that is the matmul/MVMUL
     // model). An address-walk (Dst_Face_Idx_Inc=1 to rows 0/16/32/48 + srca+=16) was tried and fails --
     // the faces scatter across both banks and the walk reads never-written rows.
-    const std::uint32_t pool_len = (two_face_rows ? 5u : 3u);
+    const std::uint32_t pool_len = (two_face_rows ? 4u : 2u);
 
     load_replay_buf(
         0,
@@ -52,20 +97,23 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
         0,
         [two_face_rows]
         {
-            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0); // F0 -> slot0, consume + rotate bank
-            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0); // F1 -> slot0, consume + rotate bank
+            // Every face is pooled with CLR_SRCA_VLD (consume + rotate the SrcA read bank, releasing the
+            // consumed bank for the unpacker). The LAST GMPOOL's CLR_SRCA_VLD doubles as the tile's single
+            // SrcA release, so there is deliberately NO trailing SETRWC(CLR_A).
+            // RULE (device-verified): exactly ONE SrcA release per tile. A terminal CLR_SRCA_VLD *and* a
+            // SETRWC(CLR_A) both release -> double-release -> DEST is zeroed. Either one alone -> correct.
+            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0); // F0 -> slot0
             if (two_face_rows)
             {
-                TTI_GMPOOL(
-                    p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST); // F2 -> slot1, consume + rotate bank
-                TTI_GMPOOL(
-                    p_gpool::CLR_NONE,
-                    p_gpool::DIM_16X16,
-                    ADDR_MOD_0,
-                    p_gpool::INDEX_DIS,
-                    REDUCE_BLOCK_SLOT1_DST); // F3 -> slot1, keep valid (last face; CLR_SRCA_VLD here zeros DEST)
+                TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);                      // F1 -> slot0
+                TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST); // F2 -> slot1
+                TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST); // F3 -> slot1 (terminal release)
             }
-            TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_AB);
+            else
+            {
+                // Tiny tile (single face-row): only F0,F1 -> slot0; F1 is the terminal SrcA release.
+                TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0); // F1 -> slot0 (terminal release)
+            }
         });
 
     const std::uint32_t pool_replay = TT_OP_REPLAY(0, pool_len, 0, 0, 0, 0);

@@ -35,17 +35,17 @@ from helpers.utils import passed_test
 
 # block_ct_dim values: 1 (single tile / first-tile init), 2, 4, 8 (multi-tile accumulation + DEST
 # bank switching across the block).
-BLOCK_CT_DIMS = [1, 2, 3, 4, 8]
+BLOCK_CT_DIMS = [1, 2, 3, 4, 8, 16]
 
 # 32x32 (num_faces=4) and 16x32 tiny tile (num_faces=2, a single input face-row).
-TILE_DIMENSIONS = [(32, 32)]
+TILE_DIMENSIONS = [(32, 32), (16, 32)]
 
 
 @pytest.mark.quasar
 @parametrize(
     # bf16 operand/scaler, 16-bit DEST (contract for block reduce_max_row). 32-bit DEST is not yet
     # supported on Quasar (the LLK asserts on it).
-    formats=input_output_formats([DataFormat.Float16_b]),
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16]),
     block_ct_dim=BLOCK_CT_DIMS,
     tile_dimensions=TILE_DIMENSIONS,
     dest_sync_mode=[DestSync.Half, DestSync.Full],
