@@ -58,7 +58,7 @@ def test_div_l1(ttnn_mesh_device, reset_seeds, shape):
     x_torch = U.torch_rand(shape)
     x = U.to_tile_l1(x_torch, mesh)
 
-    out = ttnn.div(x, 2)
+    out = ttnn.div(x, 2, dtype=ttnn.bfloat8_b)
 
     ref = x_torch.float() / 2
     U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
