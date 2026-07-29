@@ -44,6 +44,7 @@ from collections import Counter
 from pathlib import Path
 
 METRIC = re.compile(r"DG_VLLM_METRIC (\{.*\})\s*$")
+CANVAS = 256
 DEFAULT_REFERENCE = Path(__file__).resolve().parent / "gpu_reference_by_record.json"
 
 
@@ -137,6 +138,53 @@ def read_requests(server_log: Path):
     return requests
 
 
+def gold_is_trustworthy(rows, ref, reps):
+    """Sanity-check the re-rendered gold before any score built on it is printed.
+
+    The gold letters here come from re-rendering the task at ``--seed``. If the run under analysis
+    used a different lm_eval seed, the choice shuffle differs and every gold letter is wrong -- and
+    the prompt-length alignment check CANNOT catch it, because reordering four choices does not change
+    the prompt's length. That combination produced a score of 24.75% for a run lm_eval itself scored
+    59.6%: a 35-point error with no warning.
+
+    Two shuffle-independent tells, both from the 07-28 16384 CI run:
+
+    * accuracy on responses that DID state an answer collapsing to ~the 25% random baseline while the
+      stated-answer rate is healthy is not a model failure, it is a key mismatch;
+    * per-question agreement with the reference far below what the two scores imply. For scores p (TT)
+      and q (ref), agreement should sit near p*q + (1-p)*(1-q); the run showed 38-40% against an
+      implied ~54%, while the reference's own two reps agree 80%.
+
+    Returns a list of warning strings; empty means nothing looked wrong.
+    """
+    warn = []
+    real = [r for r in rows if r["stage"] in (1, 2)]
+    if len(real) >= 30:
+        acc_real = sum(1 for r in real if r["correct"]) / len(real)
+        stated = len(real) / max(1, len(rows))
+        if acc_real < 0.35 and stated > 0.6:
+            warn.append(
+                f"accuracy on stated answers is {100*acc_real:.1f}% (near the 25% random floor) while "
+                f"{100*stated:.0f}% of responses stated an answer -- that combination usually means the "
+                f"gold letters do not match this run's choice shuffle, not that the model failed"
+            )
+    if reps and len(rows) >= 30:
+        p = sum(1 for r in rows if r["correct"]) / len(rows)
+        for rep in reps:
+            pairs = [(r, ref[r["record"]][rep]) for r in rows if r["record"] in ref]
+            if not pairs:
+                continue
+            q = sum(1 for _, g in pairs if g) / len(pairs)
+            agree = sum(1 for r, g in pairs if r["correct"] == g) / len(pairs)
+            implied = p * q + (1 - p) * (1 - q)
+            if agree < implied - 0.12:
+                warn.append(
+                    f"per-question agreement with {rep} is {100*agree:.0f}% but the two scores imply "
+                    f"~{100*implied:.0f}% -- suspect a gold/shuffle mismatch"
+                )
+    return warn
+
+
 def align(requests, docs):
     """(start, offset) such that requests[start + i] is docs[i], or None.
 
@@ -161,6 +209,14 @@ def main() -> int:
     ap.add_argument("--thinking", type=int, choices=(0, 1), default=1)
     ap.add_argument("--seed", type=int, default=42, help="the eval's --seed; it fixes the choice shuffle")
     ap.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE)
+    ap.add_argument(
+        "--max-gen-toks",
+        type=int,
+        default=None,
+        help="the eval's max_gen_toks, used to derive the truncation threshold (max_gen_toks - 256). "
+        "Omit to infer it from the run's own longest response. NEVER hardcode it: it is a function of "
+        "max_model_len, so a literal from one context silently reports zero truncation at another.",
+    )
     args = ap.parse_args()
 
     server_log = args.run_dir / "server.log"
@@ -237,11 +293,36 @@ def main() -> int:
     if len(real) < 0.95 * len(scored):
         print(f"  !! the A100 reference states an answer on 98.5% of questions. A gap here is a")
         print(f"     TERMINATION problem, not a reasoning one -- check how many hit the generation cap")
-        capped = [r for r in scored if r["tokens"] >= 5376]
+        # The cap is DERIVED, never hardcoded. It is one canvas below the eval's max_gen_toks, which
+        # is itself (max_model_len - longest_prompt) floored to a canvas -- so it moves with the
+        # served context. A literal 5376 (correct only for max_model_len 8192) silently marks nothing
+        # as truncated at 16384, which would turn "the budget was the problem" into "the budget was
+        # not the problem". With no --max-gen-toks given, fall back to the run's own observed maximum:
+        # a request that stopped at the cap is by definition the longest one there can be.
+        cap = (args.max_gen_toks - CANVAS) if args.max_gen_toks else max(r["tokens"] for r in scored)
+        capped = [r for r in scored if r["tokens"] >= cap]
+        print(
+            f"     generation cap taken as {cap} tokens "
+            f"({'from --max-gen-toks' if args.max_gen_toks else 'observed maximum'})"
+        )
         print(
             f"     responses at/near the generation cap: {len(capped)}, of which answer-free "
             f"{sum(1 for r in capped if r['stage'] in (3, None))}"
         )
+
+    reps_for_check = sorted(k for k in next(iter(ref.values())) if k.startswith("rep") and not k.endswith("_stage"))
+    warnings = gold_is_trustworthy(scored, ref, reps_for_check)
+    if warnings:
+        print()
+        print("  *** THE GOLD LETTERS LOOK WRONG FOR THIS RUN -- the scores below are NOT usable:")
+        for w in warnings:
+            print(f"  ***   {w}")
+        print("  *** Gold is re-rendered at --seed, and lm_eval reshuffles the choices per run, so a")
+        print("  *** different eval seed silently invalidates every letter. The prompt-length alignment")
+        print("  *** check cannot catch it (reordering choices does not change prompt length).")
+        print("  *** Use the run's OWN samples file via compare_same_questions.py, or pass the eval's")
+        print("  *** actual --seed. The stated-answer rate and stage split above ARE still valid:")
+        print("  *** they do not depend on which letter is correct.")
 
     print()
     print("  THREE denominators. The first is the one comparable to the reference.")
