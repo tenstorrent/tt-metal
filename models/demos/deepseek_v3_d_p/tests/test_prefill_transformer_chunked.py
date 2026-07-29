@@ -558,6 +558,7 @@ def run_chunked_transformer(
     topology,
     routing_use_l1_small_for_semaphores=False,
     preload_isl=0,
+    attn_norm_output_memcfg=None,
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
@@ -625,6 +626,7 @@ def run_chunked_transformer(
         is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+        attn_norm_output_memcfg=attn_norm_output_memcfg,
     )
     ttnn.synchronize_device(mesh_device)
     gc.collect()
@@ -1087,6 +1089,11 @@ def test_glm_prefill_transformer_chunked(
         topology,
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
+        # GLM chunk=5120 / sp=8 on this test's fixed mesh-8x4 -> seq_len_local=640 always -- the
+        # tuned shape where L1 is measured to help ALL FOUR hidden_states consumers (see
+        # GLM52_MLA_MATMUL_TUNING.md). Not applied to the shared Kimi/DeepSeek chunked tests above
+        # (run_chunked_transformer defaults attn_norm_output_memcfg=None there): unmeasured for them.
+        attn_norm_output_memcfg=ttnn.L1_MEMORY_CONFIG,
     )
 
 
