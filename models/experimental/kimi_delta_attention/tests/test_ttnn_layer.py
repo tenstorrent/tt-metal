@@ -41,10 +41,10 @@ def _forward(
     return ttnn.to_torch(output)
 
 
-@pytest.mark.parametrize("sequence", [1, 4, 32])
-def test_composed_layer_pcc(device: ttnn.Device, sequence: int) -> None:
+def test_composed_layer_pcc(device: ttnn.Device) -> None:
     config = make_config()
     weights = random_weights(config)
+    sequence = 32
     hidden = torch.randn(
         1,
         sequence,
@@ -74,22 +74,37 @@ def test_composed_layer_pcc(device: ttnn.Device, sequence: int) -> None:
     _assert_pcc(f"T={sequence} convolution state", golden_convolution, actual_convolution)
 
 
+def test_non_tile_aligned_sequence_is_rejected(device: ttnn.Device, expect_error) -> None:
+    config = make_config()
+    hidden = torch.randn(
+        1,
+        4,
+        config.hidden_size,
+        generator=torch.Generator().manual_seed(45),
+    ).to(torch.bfloat16)
+    layer = KimiDeltaAttention(device, config, random_weights(config))
+    layer.reset_state(batch_size=1)
+
+    with expect_error(ValueError, r"requires local T .* divisible by 32, got T=4"):
+        _forward(layer, hidden)
+
+
 def test_segmented_prefill_cache_continuity(device: ttnn.Device) -> None:
     config = make_config()
     weights = random_weights(config)
     hidden = torch.randn(
         1,
-        8,
+        64,
         config.hidden_size,
         generator=torch.Generator().manual_seed(73),
     ).to(torch.bfloat16)
-    golden_first, golden_state = kda_forward_reference(hidden[:, :4], weights, config)
-    golden_second, golden_state = kda_forward_reference(hidden[:, 4:], weights, config, golden_state)
+    golden_first, golden_state = kda_forward_reference(hidden[:, :32], weights, config)
+    golden_second, golden_state = kda_forward_reference(hidden[:, 32:], weights, config, golden_state)
 
     layer = KimiDeltaAttention(device, config, weights)
     layer.reset_state(batch_size=1)
-    actual_first = _forward(layer, hidden[:, :4])
-    actual_second = _forward(layer, hidden[:, 4:])
+    actual_first = _forward(layer, hidden[:, :32])
+    actual_second = _forward(layer, hidden[:, 32:])
 
     assert layer.recurrent_state is not None
     assert layer.convolution_state is not None
@@ -115,7 +130,7 @@ def test_external_state_is_updated_in_place(device: ttnn.Device, recurrent_state
     weights = random_weights(config)
     hidden = torch.randn(
         1,
-        8,
+        64,
         config.hidden_size,
         generator=torch.Generator().manual_seed(109),
     ).to(torch.bfloat16)
@@ -133,8 +148,8 @@ def test_external_state_is_updated_in_place(device: ttnn.Device, recurrent_state
 
     actual_output = torch.cat(
         (
-            _forward(layer, hidden[:, :4]),
-            _forward(layer, hidden[:, 4:]),
+            _forward(layer, hidden[:, :32]),
+            _forward(layer, hidden[:, 32:]),
         ),
         dim=1,
     )
