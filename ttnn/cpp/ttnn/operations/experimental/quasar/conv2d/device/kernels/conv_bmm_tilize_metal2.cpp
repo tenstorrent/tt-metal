@@ -17,7 +17,8 @@
 // This fork is bound by the Metal 2.0 width-sharded factory and the non-overlap paths of the
 // sharded factory (height-sharded; block-sharded without split_reader_cb_shared).  The split-reader
 // activation-reuse / shared-overlap paths are gated by SPLIT_READER / ACTIVATION_REUSE defines.
-// SUNSET: delete when the legacy conv_bmm_tilize.cpp loses its last legacy consumer.
+// The legacy conv_bmm_tilize.cpp this was forked from has since been removed (it had no remaining
+// consumer once both quasar conv2d factories moved to this fork); see git history for the original.
 
 #include <cstdint>
 

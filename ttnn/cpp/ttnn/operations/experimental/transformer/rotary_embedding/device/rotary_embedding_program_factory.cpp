@@ -160,7 +160,7 @@ ProgramDescriptor create_single_tile_descriptor(
 
     // Keep sin/cos intermediates at input format regardless of sincos format.
     // The packer format stays stable across matmul / mul / add, avoiding
-    // fragile pack_reconfig sequences after mm_init for mixed precision.
+    // fragile pack_reconfig sequences after the matmul init for mixed precision.
     constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_interm_tiles * input_single_tile_size,
