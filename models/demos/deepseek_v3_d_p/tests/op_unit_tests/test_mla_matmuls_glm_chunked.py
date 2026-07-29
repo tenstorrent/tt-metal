@@ -185,7 +185,12 @@ BEST = {
     "o_proj": (_mc2d(16, 1, 6, 2, 18), DRAM, L1, BF16),  # 110c, 135.4us, 78%
     "indexer.wq_b": (_mc2d(8, 1, 6, 2, 12), L1, L1, BF16),  # == q_b_proj (BF16 act/BF8 wt), 49.1us, 72%
     "indexer.wk": (_mc2d(8, 1, 1, 2, 1), DRAM, DRAM, BF16),  # 40c (N_t=4), 13.9us, tiny
-    "indexer.weights_proj": (_mc2d(8, 1, 1, 2, 1), DRAM, DRAM, BF16),  # 10c (N_t=1), BF16 wt (#51005), re-tune below
+    "indexer.weights_proj": (
+        _mc2d(24, 1, 1, 2, 1),
+        L1,
+        L1,
+        BF16,
+    ),  # 10c (N_t=1), re-tuned for BF16 wt (#51005): 6.2us, 37% (was 10.2us/22% DRAM/DRAM)
 }
 
 # Sweep variants for a single tracy pass: (variant_id, base_shape_name, prog, act, out, out_dtype).
@@ -200,6 +205,19 @@ SWEEP = [
     ("wkv_b2__pcm2_h1w8", "wkv_b2", _reuse(2, 1, 8, 2, 8), L1, L1, BF8),
     # confirm the round-1 o_proj winner (ib16, out L1) reproduces.
     ("o_proj__ib16_outL1", "o_proj", _mc2d(16, 1, 6, 2, 18), DRAM, L1, BF16),
+    # Round 3: indexer.weights_proj re-tune. #51005 landed its weight at BF16 (not BF8, unlike
+    # wq_b/wk) for accuracy, so its old BEST config (tuned at BF8 weight) needs a re-check. N_t=1
+    # floors per_core_N=1 and, on this 11x10 grid (grid.y=10), M_t=20 floors per_core_M>=2 (pcm=1
+    # needs num_blocks_y=20 > grid.y=10 -- rejected by the op). So cores are already maxed at 10
+    # (pcm=2); the only levers left are in0_block_w (K_t=48 reuse) and act/out memory (in0 is
+    # 640x1536 BF16 = ~1.97 MB, huge relative to this 960-tile matmul).
+    ("weights_proj__pcm2_l1_ib8", "indexer.weights_proj", _mc2d(8, 1, 1, 2, 1), L1, L1, BF16),
+    ("weights_proj__pcm2_l1_ib16", "indexer.weights_proj", _mc2d(16, 1, 1, 2, 1), L1, L1, BF16),
+    ("weights_proj__pcm2_l1_ib48", "indexer.weights_proj", _mc2d(48, 1, 1, 2, 1), L1, L1, BF16),
+    ("weights_proj__pcm2_actl1_outdram_ib8", "indexer.weights_proj", _mc2d(8, 1, 1, 2, 1), L1, DRAM, BF16),
+    ("weights_proj__pcm2_actdram_outl1_ib8", "indexer.weights_proj", _mc2d(8, 1, 1, 2, 1), DRAM, L1, BF16),
+    ("weights_proj__pcm2_l1_ib12", "indexer.weights_proj", _mc2d(12, 1, 1, 2, 1), L1, L1, BF16),
+    ("weights_proj__pcm2_l1_ib24", "indexer.weights_proj", _mc2d(24, 1, 1, 2, 1), L1, L1, BF16),
 ]
 
 

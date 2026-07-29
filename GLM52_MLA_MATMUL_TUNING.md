@@ -83,8 +83,8 @@ util% = tiles*32 / CORE_COUNT / 1.35 / measured_ns * 100.
 | q_a_proj | MultiCast2D ib8 pcm2 pcn6 sub1x6 | DRAM | L1 | 110 | 22.7 | 58 |
 | indexer.wk | MultiCast2D ib8 pcm2 pcn1 sub1x1 | DRAM | DRAM | 40 | 13.9 | 16 |
 | kv_a_proj_with_mqa | MultiCast2D ib8 pcm2 pcn2 sub1x2 | L1 | L1 | 90 | 11.2 | 41 |
-| indexer.weights_proj | MultiCast2D ib8 pcm2 pcn1 sub1x1 | DRAM | DRAM | 10 | 10.2 | 22 |
-| **TOTAL** | | | | | **~393 us** | |
+| indexer.weights_proj | MultiCast2D ib24 pcm2 pcn1 sub1x1 | **L1** | **L1** | 10 | 6.2 | 37 |
+| **TOTAL** | | | | | **~389 us** | |
 
 (`BEST` dict in the test file is the source of truth for exact configs.)
 
@@ -95,7 +95,15 @@ util% = tiles*32 / CORE_COUNT / 1.35 / measured_ns * 100.
   across 6 variants (in0_block_w, subblocks, act/out mem, 1D-vs-non-mcast). Core count is capped at
   **80** (B·M_t=320; pcm=4→80, pcm=3 doesn't divide 320, pcm=2→160 > 110-core grid). The BF16 output
   (wkv_b1 writes ~10.5 MB) is the bottleneck — an op-level change, not a config one.
-- **indexer.wk / weights_proj** are core-count-limited by tiny N (N_t=4 → 40c, N_t=1 → 10c). Floor.
+- **indexer.wk / weights_proj are core-count-limited by tiny N** (N_t=4 → 40c, N_t=1 → 10c — a hard
+  geometry floor, `per_core_M` can't go below `ceil(M_t/grid.y) = ceil(20/10) = 2` either, so 10
+  cores is the max reachable for weights_proj on this grid). **weights_proj re-tuned (2026-07-29)**
+  for its #51005 BF16 weight: the old BEST (DRAM/DRAM, ib8, 10.2 us/22%) was still tuned for the
+  BF8-weight era. Swept act/out mem + in0_block_w (8 variants): moving **activation** to L1 was the
+  real lever (act is 640×1536 BF16 ≈ 1.97 MB vs the weight's mere 98 KB — out-mem placement barely
+  moved it, DRAM act alone stayed ~10 us regardless of out mem). Best: L1/L1 + `in0_block_w=24` →
+  **6.2 us, 37%** util (ib bracket 8/12/16/24/48 → 7.62/6.73/6.29/6.17/6.66 us, peak near 24). Still
+  well under 100% util since cores are floored at 10 — not fully tunable away, just improved.
 - Batched matmuls MUST use `MatmulMultiCoreReuseProgramConfig` (non-mcast). The 1D-mcast path
   serializes to 5 cores (258/330 us).
 
