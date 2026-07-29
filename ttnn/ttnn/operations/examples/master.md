@@ -234,6 +234,27 @@ handles **partial** (non-tile-aligned) row/col via a masked bcast-mul on the las
 (`WaitAndPopPerTile` — DST is the accumulator, ~2 tiles resident), and **cross-call accumulate** (a raw
 partial-sum CB tile folded into the pairwise add natively by parity — no `binary_dest_reuse` — finalized only on
 the last chunk).
+
+## ⭐⭐⭐ T3 — [`row_unicast_vs_mcast`](row_unicast_vs_mcast/README.md)
+**Concept:** Tensix-to-Tensix row fan-out — one hardware multicast versus one unicast write per peer.
+**Situation:** every core in a hardware row owns an L1 payload that every other member of that row
+needs, and the kernel currently loops over peers issuing duplicate writes.
+**Measured win:** on Wormhole B0 with eight rows active, the multicast win grows with row fan-out
+for one 32 KiB dispatch per sender: **1.06× at 2 cores/row**, **2.44× at 4**, and **5.30× at 8**
+(64.49 µs → 12.17 µs at 8). Splitting those same 32 KiB into 1, 2, 4, then 8 dispatches makes both
+paths slower and reduces the 8-core multicast advantage from **5.30× to 2.62×**. State stays sharded
+in L1; self-copy, compute, and DRAM traffic are excluded.
+**Gist:** run one ordered round per sender; on its round, the sender multicasts once across its row
+and all other members receive through a semaphore handshake. Hold total payload bytes fixed when
+sweeping dispatch count: `D` chunks cost `D × (row_width - 1)` unicast calls versus `D` multicast
+calls. The gain grows with payload size and fan-out, while excessive chunking repeats fixed dispatch
+and synchronization costs.
+**Crossover:** at 2 cores/row there is only one peer, so multicast has no replication advantage.
+For a 2 KiB payload, multicast wins with one or two writes, then unicast wins from four 512 B writes
+onward, reaching **1.20× at 32 × 64 B**. TT-Metal's NoC estimator predicts the same small-chunk
+unicast regime but places the crossover one step earlier because it excludes the kernel's semaphore
+and rotating-sender protocol. At 4–8 cores/row multicast still wins even at 32 dispatches.
+
 ## ⭐⭐⭐ T3 — [`shared_input_reuse`](shared_input_reuse/README.md)
 **Concept:** redundant-DRAM-read elimination — stream a shared input once and NoC-multicast it (the `mcast_pipe` helper) vs. every core re-reading it from DRAM.
 **Situation:** a grid of cores all need the **same** multi-MB input — a large shared matrix `[R, C]` (~2.4 MB) streamed in fixed-size chunks (larger than L1). Written the obvious way, every core streams the whole input from DRAM — `N×` the unique bytes.
