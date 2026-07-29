@@ -152,7 +152,6 @@ def ttnn_mesh_device(request):
     if not hasattr(request, "param"):
         pytest.skip(f"{__file__}: mesh_device fixture called without parametrization")
 
-
     # request.param is either a Sequence of ints or a dict with fabric_config and etc.
     params = getattr(request, "param", tuple())
     if isinstance(params, tuple):
