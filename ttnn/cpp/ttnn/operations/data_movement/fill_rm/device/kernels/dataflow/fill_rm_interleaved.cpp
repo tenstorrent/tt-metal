@@ -31,12 +31,6 @@ void kernel_main() {
     // DPRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in1(dfb::in1);
-    std::uint32_t num_bytes_per_tile_row = 64;
-    std::uint32_t Wt = (W >> 5);
-
-    // Variables
-    std::uint64_t replicate_dest_addr;
-    std::uint32_t start_dram_addr_offset_for_tensor_row = 0;
 
     dfb_in0.reserve_back(16);
     dfb_in1.reserve_back(16);
