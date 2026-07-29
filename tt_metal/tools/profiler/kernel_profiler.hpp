@@ -648,10 +648,7 @@ __attribute__((noinline)) void trace_only_init() {
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
 
-#define DeviceZoneScopedN(name)                                                \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+#define DeviceZoneScopedN(name) (void(sizeof(name)))
 
 #define DeviceTimestampedData(name, data)                                          \
     {                                                                              \
@@ -665,11 +662,7 @@ __attribute__((noinline)) void trace_only_init() {
 // Dispatch and enabled
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedN(name)                                                          \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
-    kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
-        kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
+#define DeviceZoneScopedN(name) (void(sizeof(name)))
 
 #define DeviceTimestampedData(name, data)                                                            \
     {                                                                                                \
