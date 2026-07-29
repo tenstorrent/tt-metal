@@ -307,6 +307,7 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
             accumulated += chunk;
             packet_header->command_fields.unicast_scatter_write.chunk_size[i] = chunk;
         }
+
         if constexpr (update_payload_size) {
             ASSERT(accumulated < payload_size);
         }

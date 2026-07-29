@@ -26,6 +26,7 @@ file(
     llama_reduce_scatter_create_heads/device/kernels/*.cpp
     neighbor_pad_async/device/kernels/*.cpp
     reduce_scatter_minimal_async/device/kernels/*.cpp
+    reduce_scatter_minimal_direct/device/kernels/*.cpp
     ring_attention_all_gather_async/device/kernels/*.cpp
     ring_attention_all_gather_async/device/kernels/*.hpp
     rms_allgather/device/kernels/*.cpp
