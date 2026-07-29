@@ -835,6 +835,20 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
         auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
         tt::jit_build::utils::run_command(
             cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, env_.get_rtoptions().get_dump_build_commands());
+
+        // *.o.log only exists when the compiler ran HERE. Under preprocess-and-ship the objects were
+        // compiled on the JIT server, so the grep above finds nothing and every zone for this target --
+        // including the `*-KERNEL` markers that "DEVICE KERNEL DURATION [ns]" is derived from -- would be
+        // lost. That is silent: `*-FW` markers still come from the locally-built firmware, so FW duration
+        // stays populated while the kernel column goes blank.
+        //
+        // The shipped .ii sits next to the ELF in this same out_dir and keeps the `_Pragma(message(...))`
+        // as a literal directive, so recover the zones from it. This runs on BOTH the warmed-ELF reuse
+        // path and the ordinary compile path (the two callers), and in-process AFTER the truncation
+        // above -- a harvest done in some earlier process would have been deleted by it. run_command
+        // redirects with ">>", so both sources simply append. No-op when no .ii is present, which is the
+        // ordinary local build. Gated on the profiler being enabled, so it costs nothing otherwise.
+        tt::jit_build::utils::harvest_zone_src_locations_from_dir(out_dir);
     }
 }
 
