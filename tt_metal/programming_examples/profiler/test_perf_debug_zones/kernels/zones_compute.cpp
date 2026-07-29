@@ -11,6 +11,22 @@
 #define N_ITERS 50u
 #endif
 
+// ZONE_CYC: UNIFORM per-zone spin count, for producer-rate (knee) sweeps. 0 = keep the graduated
+// ~1..100 us table below, which is what you want for a representative Tracy capture. A non-zero value
+// makes every zone the same length, which is what you want for a knee: the marker rate per lane becomes
+// a single number (2 markers per zone, so ~2 * aiclk / ZONE_CYC markers/s), and every lane runs at that
+// same rate. Graduated durations would smear the knee, because the instantaneous aggregate rate would
+// swing through the sweep of durations instead of holding at the peak.
+#ifndef ZONE_CYC
+#define ZONE_CYC 0u
+#endif
+
+#if ZONE_CYC
+#define ZCYC(graduated) ((uint32_t)(ZONE_CYC))
+#else
+#define ZCYC(graduated) ((uint32_t)(graduated))
+#endif
+
 #if COMPILE_FOR_TRISC == 0
 #define ZTAG "T0"
 #elif COMPILE_FOR_TRISC == 1
@@ -37,15 +53,15 @@
 void kernel_main() {
     // Durations span ~1..100 us (typical ~10 us). CYC = us * 2500 (see ZONE calibration note above).
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
-        ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
-        ZONE(ZTAG "_Zone1", 5000u);    // ~2 us
-        ZONE(ZTAG "_Zone2", 7500u);    // ~3 us
-        ZONE(ZTAG "_Zone3", 12500u);   // ~5 us
-        ZONE(ZTAG "_Zone4", 20000u);   // ~8 us
-        ZONE(ZTAG "_Zone5", 30000u);   // ~12 us
-        ZONE(ZTAG "_Zone6", 50000u);   // ~20 us
-        ZONE(ZTAG "_Zone7", 100000u);  // ~40 us
-        ZONE(ZTAG "_Zone8", 175000u);  // ~70 us
-        ZONE(ZTAG "_Zone9", 250000u);  // ~100 us
+        ZONE(ZTAG "_Zone0", ZCYC(2500u));    // ~1 us
+        ZONE(ZTAG "_Zone1", ZCYC(5000u));    // ~2 us
+        ZONE(ZTAG "_Zone2", ZCYC(7500u));    // ~3 us
+        ZONE(ZTAG "_Zone3", ZCYC(12500u));   // ~5 us
+        ZONE(ZTAG "_Zone4", ZCYC(20000u));   // ~8 us
+        ZONE(ZTAG "_Zone5", ZCYC(30000u));   // ~12 us
+        ZONE(ZTAG "_Zone6", ZCYC(50000u));   // ~20 us
+        ZONE(ZTAG "_Zone7", ZCYC(100000u));  // ~40 us
+        ZONE(ZTAG "_Zone8", ZCYC(175000u));  // ~70 us
+        ZONE(ZTAG "_Zone9", ZCYC(250000u));  // ~100 us
     }
 }

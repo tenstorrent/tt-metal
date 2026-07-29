@@ -23,7 +23,9 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
-    uint32_t gx = 2, gy = 2, n_iters = 50;  // small grid + modest iteration count keep the run quick
+    // --delay is the KNEE knob: uniform per-zone spin count (wall-clock ticks). 0 = graduated ~1..100 us
+    // durations, the representative-capture default. Smaller --delay = higher marker rate per lane.
+    uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
@@ -33,6 +35,8 @@ int main(int argc, char** argv) {
             gy = v;
         } else if (a == "--iters") {
             n_iters = v;
+        } else if (a == "--delay") {
+            zone_cyc = v;
         }
     }
 
@@ -53,7 +57,8 @@ int main(int argc, char** argv) {
         gy = grid.y;
     }
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
-    std::map<std::string, std::string> defs{{"N_ITERS", std::to_string(n_iters) + "u"}};
+    std::map<std::string, std::string> defs{
+        {"N_ITERS", std::to_string(n_iters) + "u"}, {"ZONE_CYC", std::to_string(zone_cyc) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 
     // BRISC (RISCV_0) + NCRISC (RISCV_1): the data-movement zone kernel (tags BR_/NC_).
@@ -71,7 +76,27 @@ int main(int argc, char** argv) {
     CreateKernel(program, kdir + "zones_compute.cpp", cores, ComputeConfig{.defines = defs});
 
     workload.add_program(device_range, std::move(program));
-    printf("[perf-debug zones] dispatching %ux%u cores x 5 RISCs x 10 named zones x %u iters ...\n", gx, gy, n_iters);
+    // Report the offered load so a knee sweep is self-documenting: 2 markers per zone (START+END), 10 zones
+    // per iteration, 5 RISCs per core. Rate uses the ~1.35 GHz boosted aiclk the spin loop counts against.
+    const uint32_t lanes = gx * gy * 5;
+    const uint64_t markers = (uint64_t)lanes * 10ull * 2ull * (uint64_t)n_iters;
+    printf(
+        "[perf-debug zones] dispatching %ux%u cores x 5 RISCs x 10 named zones x %u iters\n"
+        "[perf-debug zones]   lanes=%u  total markers=%llu  --delay=%u (%s)\n",
+        gx,
+        gy,
+        n_iters,
+        lanes,
+        (unsigned long long)markers,
+        zone_cyc,
+        zone_cyc ? "uniform: knee mode" : "graduated ~1..100us");
+    if (zone_cyc) {
+        const double per_lane = 2.0 * 1.35e9 / (double)zone_cyc;  // 2 markers per zone of zone_cyc ticks
+        printf(
+            "[perf-debug zones]   offered rate: %.2f M markers/s per lane, %.1f M markers/s aggregate\n",
+            per_lane / 1e6,
+            per_lane * lanes / 1e6);
+    }
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
     printf("[perf-debug zones] workload done; closing device.\n");
