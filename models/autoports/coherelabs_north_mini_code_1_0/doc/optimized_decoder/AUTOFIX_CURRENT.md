@@ -70,3 +70,26 @@ retained-S2 mean/median deltas were -0.47%/-0.08% and +0.18%/+0.49%,
 respectively. The prefill programs are asserted identical, so the earlier
 gap is explained as host scheduling noise. Evidence:
 `candidates/sparse_subblocks/interleaved_prefill{33,128}.json`.
+
+## Fresh resumed-stage AutoFix
+
+`AUTODEBUG_B32_FRESH.md` re-audited the current API and kernel contracts from
+scratch. It found no additional model-local family that preserves complete
+routed output, trace safety, fabric-free execution, and the batch-32
+no-regression requirement.
+
+The missing capability has since landed upstream as commit `50c56281566`
+(`Feature: Add single-device fused moe_compute support (#49886)`), which is
+contained in `origin/main` but not in this checkout's HEAD. That change adds
+`MoEComputePath::FullLocal` and a local selective-reduce-combine writer across
+shared TTNN sources. It permits `compute_only=False, cluster_axis=None` on a
+1x1 mesh and drains each rolling expert output while it is live, without
+fabric.
+
+This cannot be reproduced from `optimized_decoder.py`: current HEAD has only
+`Full` and `ComputeOnly`, and the necessary producer/consumer work occurs
+inside the shared device program. Advancing shared TTNN to `50c56281566` or
+newer is therefore the concrete external dependency. The original goal
+explicitly permits edits only to the model-local optimized decoder, tests,
+and docs, so applying or backporting that shared change is not authorized in
+this stage.
