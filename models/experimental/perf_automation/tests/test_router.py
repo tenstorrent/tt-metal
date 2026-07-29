@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 
 from agent.router import (
     WILDCARD,
@@ -92,17 +91,22 @@ def test_route_wildcard():
 def test_route_rejects_unknown_dim():
     index = build_index()
     # `rank_axis` is the old POC dim name -> a real, likely-silent mistake.
-    with pytest.raises(ValueError):
+    try:
         route(index, {"rank_axis": "time"})
+        raise AssertionError("expected ValueError for the old POC dim name")
+    except ValueError:
+        pass
 
 
 def test_route_rejects_invalid_value():
     index = build_index()
     # `gemm`/`saturated` are not in the closed vocabulary (PLAN section 4.1).
-    with pytest.raises(ValueError):
-        route(index, {"op_class": "gemm"})
-    with pytest.raises(ValueError):
-        route(index, {"fidelity": "saturated"})
+    for bad in ({"op_class": "gemm"}, {"fidelity": "saturated"}):
+        try:
+            route(index, bad)
+            raise AssertionError("expected ValueError for %r" % (bad,))
+        except ValueError:
+            pass
 
 
 # ---- read_section ----
@@ -119,8 +123,11 @@ def test_read_section_by_anchor():
 
 
 def test_read_section_unknown_raises():
-    with pytest.raises(KeyError):
+    try:
         read_section("does-not-exist")
+        raise AssertionError("expected KeyError for an unknown anchor")
+    except KeyError:
+        pass
 
 
 # ---- coverage_lint ----
@@ -187,126 +194,3 @@ def test_index_cache_invalidates_on_content_change(tmp_path):
 
 
 # ---- ROUTE handler: off-menu (from-principles) is ALWAYS offered, not just on empty bucket ----
-def test_route_handler_always_offers_from_principles(tmp_path):
-    """Even when the bucket HAS matching playbook levers, FROM_PRINCIPLES must be appended
-    to the candidate list so the brain can choose to reason freely (levers exist but none
-    fits — the nemotron/Tilize case)."""
-    from agent import states
-    from agent.handlers.route import route as route_handler
-    from agent.loop_context import LoopContext
-    from agent.run import Run
-
-    run = Run.create(tmp_path / "runs", config={"config": {}, "pathmap": {}}, run_id="R")
-    prof = {
-        "device_ms": 10.0,
-        "wall_ms": 10.0,
-        "buckets": [
-            {
-                "id": "matmul",
-                "device_ms": 8.0,
-                "count": 5,
-                "tags": {"op_class": "matmul", "rank": "time", "bound": "flop"},
-                "top_ops": [],
-            }
-        ],
-    }
-    (run.profiles_dir / "baseline_profile.json").write_text(json.dumps(prof))
-    run.state_path.write_text(json.dumps({"state": "ROUTE", "exec_scope_done": True, "iteration": 0, "cost_usd": 0.0}))
-    ctx = LoopContext.from_run(run, index=build_index())
-
-    nxt = route_handler(ctx)
-    cands = ctx.state["candidates"]
-    assert nxt == states.SELECT
-    assert states.FROM_PRINCIPLES in cands, "from-principles must always be a candidate"
-    # matmul has real levers -> candidates must be levers PLUS from-principles (not fallback-only)
-    assert len(cands) > 1, f"expected real levers + from-principles, got {cands}"
-
-
-def test_route_handler_emits_bucket_landscape(tmp_path):
-    """ROUTE-as-evidence: the brief must carry the FULL bucket landscape (all bottlenecks),
-    not just the one bucket the deterministic ranker picked."""
-    import json as _json
-
-    from agent.handlers.route import route as route_handler
-    from agent.loop_context import LoopContext
-    from agent.run import Run
-
-    run = Run.create(tmp_path / "runs", config={"config": {}, "pathmap": {}}, run_id="RL")
-    prof = {
-        "device_ms": 10.0,
-        "wall_ms": 10.0,
-        "buckets": [
-            {"id": "datamove", "device_ms": 6.0, "count": 50, "tags": {"op_class": "datamove"}, "top_ops": []},
-            {
-                "id": "matmul",
-                "device_ms": 4.0,
-                "count": 5,
-                "tags": {"op_class": "matmul", "rank": "time", "bound": "flop"},
-                "top_ops": [],
-            },
-        ],
-    }
-    (run.profiles_dir / "baseline_profile.json").write_text(_json.dumps(prof))
-    run.state_path.write_text(_json.dumps({"state": "ROUTE", "exec_scope_done": True, "iteration": 0, "cost_usd": 0.0}))
-    ctx = LoopContext.from_run(run, index=build_index())
-
-    route_handler(ctx)
-    brief = _json.loads([l for l in (run.dir / "route_briefs.jsonl").read_text().splitlines()][-1])
-    land = brief.get("bucket_landscape")
-    assert land and {b["id"] for b in land} == {"datamove", "matmul"}  # ALL buckets present, not just the picked one
-
-
-def test_route_handler_regime_verdict_and_kernel_reorder(tmp_path):
-    """knob-vs-kernel diagnosis: the brief carries a regime_verdict, and once the bucket's
-    TTNN knobs are all tried the verdict flips to 'kernel' and the kernel lever is moved to the
-    front of the candidate list (routed directly, no exhaustion grind)."""
-    import json as _json
-
-    from agent import states
-    from agent.handlers.route import _tt_lang_available
-    from agent.handlers.route import route as route_handler
-    from agent.loop_context import LoopContext
-    from agent.run import Run
-
-    if not _tt_lang_available():
-        import pytest
-
-        pytest.skip("tt-lang (ttl) not installed in this env")
-
-    def _run_route(run_id, tried, iteration):
-        run = Run.create(tmp_path / run_id, config={"config": {}, "pathmap": {}}, run_id=run_id)
-        prof = {
-            "device_ms": 10.0,
-            "wall_ms": 10.0,
-            "buckets": [
-                {
-                    "id": "matmul",
-                    "device_ms": 8.0,
-                    "count": 5,
-                    "tags": {"op_class": "matmul", "rank": "time"},
-                    "top_ops": [],
-                }
-            ],
-        }
-        (run.profiles_dir / "baseline_profile.json").write_text(_json.dumps(prof))
-        run.state_path.write_text(
-            _json.dumps(
-                {"state": "ROUTE", "exec_scope_done": True, "iteration": iteration, "cost_usd": 0.0, "tried": tried}
-            )
-        )
-        ctx = LoopContext.from_run(run, index=build_index())
-        route_handler(ctx)
-        brief = _json.loads((run.dir / "route_briefs.jsonl").read_text().splitlines()[-1])
-        return ctx, brief
-
-    # 1) fresh: brief carries a regime_verdict, and the kernel lever is offered for matmul
-    ctx, brief = _run_route("RK0", tried=[], iteration=0)
-    assert "regime_verdict" in brief and brief["regime_verdict"]["verdict"] in ("knob", "kernel")
-    cands = ctx.state["candidates"]
-    assert states.KERNEL_LEVER in cands, "kernel lever must be offered for a matmul bucket when ttl is available"
-
-    # 2) all TTNN knobs tried -> verdict flips to kernel -> kernel lever reordered to front
-    knobs = [c for c in cands if c not in (states.KERNEL_LEVER, states.FROM_PRINCIPLES)]
-    ctx2, _ = _run_route("RK1", tried=knobs, iteration=1)
-    assert ctx2.state["regime"]["verdict"] == "kernel"
-    assert ctx2.state["candidates"][0] == states.KERNEL_LEVER

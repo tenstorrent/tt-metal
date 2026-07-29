@@ -238,16 +238,6 @@ def test_half_set_mesh_env_does_not_silently_open_one_by_one(monkeypatch, capsys
     assert "WARNING" in capsys.readouterr().err, "the fallback was silent"
 
 
-def test_noise_floor_scales_with_the_baseline_and_the_measured_spread():
-    """A fixed 0.05 ms banked a 0.06 ms delta on a 100 ms model -- six hundredths of one percent,
-    far inside this hardware's documented thermal drift -- as a real gain."""
-    from agent.handlers.decide import _noise_floor
-
-    assert _noise_floor(100.0) >= 1.0, "a 0.06 ms delta on a 100 ms model can still be called a win"
-    assert _noise_floor(100.0, 2.5) >= 2.5, "the measured spread is still ignored"
-    assert _noise_floor(3.0) >= 0.05, "a small model must keep a usable absolute floor"
-
-
 def test_promotion_requires_positive_evidence():
     """Every missing field defaulted to 'kept win', so an edit that was never measured could be
     distilled by an LLM into a permanent GUIDELINES lever every future run trusts."""

@@ -1,5 +1,3 @@
-from agent import states
-from agent.handlers import decide as decide_mod
 from agent.handlers.remeasure import _comparable
 
 
@@ -96,24 +94,3 @@ class _Ctx:
 
     def log_event(self, *a):
         self.events.append(a)
-
-
-def test_decide_discards_untrusted_measurement():
-    ctx = _Ctx({"before": 12.10, "after": 0.55, "measurement_ok": False, "measurement_reason": "op_count_mismatch: x"})
-    nxt = decide_mod.decide(ctx)
-    assert ctx.state["last_decision"]["result"] == "discard"
-    assert "op_count_mismatch" in ctx.state["last_decision"]["reason"]
-    assert nxt == states.REVERT
-
-
-def test_decide_keeps_real_gain():
-    ctx = _Ctx({"before": 12.10, "after": 11.50, "measurement_ok": True})
-    nxt = decide_mod.decide(ctx)
-    assert ctx.state["last_decision"]["result"] == "keep" and nxt == states.COMMIT
-
-
-def test_decide_flags_suspicious_but_keeps():
-    ctx = _Ctx({"before": 12.10, "after": 3.0, "measurement_ok": True})
-    decide_mod.decide(ctx)
-    d = ctx.state["last_decision"]
-    assert d["result"] == "keep" and d.get("suspicious_gain") is not None

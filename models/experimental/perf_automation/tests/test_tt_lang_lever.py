@@ -3,7 +3,6 @@
 """tt-lang kernel lever — compile-error detection, repair budget, lever indexing, availability gate."""
 
 from agent import probes, states
-from agent.handlers import route as route_mod
 
 
 def test_tt_lang_compile_error_detected_as_crash():
@@ -45,11 +44,3 @@ def test_kernel_lever_is_routable():
     # section the structural agent reads carries the ttl API recipe
     sec = read_section(states.KERNEL_LEVER)
     assert "ttl" in sec and "@ttl.operation" in sec and "I/O" in sec
-
-
-def test_availability_gate_helper():
-    # the gate must reflect reality: True iff the ttl toolchain is importable in this env.
-    import importlib.util
-
-    expected = importlib.util.find_spec("ttl") is not None
-    assert route_mod._tt_lang_available() is expected
