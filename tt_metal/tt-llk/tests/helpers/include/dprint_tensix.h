@@ -57,7 +57,8 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
     ckernel::tensix_sync();
 
-    // Wait a bit before reading through the memory-mapped region for the write to be committed.
+    // Wait before reading through the memory-mapped region for the write to be committed.
+    // A thousand cycles is more than enough.
     ckernel::wait(1000);
 
     constexpr uint32_t ELT_PER_ROW = 16;
