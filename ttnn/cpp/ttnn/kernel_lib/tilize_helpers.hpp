@@ -77,6 +77,60 @@ enum class RemapMode : uint8_t {
     AssumeConfigured  // Caller already configured remap for this kernel
 };
 
+// ── Resident (zero-copy) DFBs ───────────────────────────────────────────────
+//
+// A ZERO-COPY op aliases a DFB onto a buffer that is already resident in L1 (typically
+// the core's own shard) and then does not launch the kernel on the other end of it —
+// there is nothing for that kernel to move. For such a DFB the circular-buffer
+// protocol has no counterpart to talk to:
+//
+//   * `cb_reserve_back` polls a free-space credit that no consumer will ever decrement,
+//     so it always succeeds on the first read;
+//   * `cb_push_back` publishes a tiles-received credit nobody reads, and pays a
+//     `TTI_STALLWAIT(STALL_THCON, PACK)` to order that publish behind the packer;
+//   * `cb_pop_front` returns a free-space credit nobody reads, and pays a
+//     `TTI_STALLWAIT(STALL_THCON, UNPACK)` for the same reason.
+//
+// What IS load-bearing in those calls is the pointer walk: it is `fifo_rd_ptr` /
+// `fifo_wr_ptr` that address block k. `Resident` keeps the addressing and drops the
+// credits, by addressing block k at tile index `k * block_width_tiles` off the DFB base
+// (the `input_tile_index` / `output_tile_index` parameters the tilize LLK already takes)
+// instead of walking the pointers. Net effect per block: four CB calls and two THCON
+// stalls become two register-immediate offsets.
+//
+// This is a CONTRACT, not a hint — the helper cannot see the rest of the program, so
+// the caller owns these preconditions:
+//
+//   InputBufferMode::Resident
+//     1. NOTHING produces into the input DFB — the bytes are already at its address.
+//        (Pair with `WaitMode::NoWait`; the helper static_asserts this.)
+//     2. The DFB holds the whole run: capacity >= block_width_tiles * num_blocks pages.
+//     3. Symmetric (tile-sized) pages — do not pass `total_input_pages`.
+//   OutputBufferMode::Resident
+//     1. NOTHING consumes from the output DFB (no writer kernel, no second compute
+//        phase reading it through the CB protocol).
+//     2. Capacity >= block_width_tiles * num_blocks pages.
+//
+//   Both: the helper leaves the DFB's fifo pointers where it found them, so the DFB
+//   must be at its base on entry (true at launch — the firmware re-initialises every
+//   DFB interface) and must not also be driven through the circular protocol
+//   elsewhere in the same kernel.
+//
+// Violating (1) is a correctness bug that no assert can catch (a consumer would read
+// pages that were never published, or a producer would overwrite pages that were never
+// freed); (2) and (3) are checked by debug ASSERTs.
+enum class InputBufferMode : uint8_t {
+    Circular,  // Default — a real circular buffer: a producer publishes into it, the helper
+               // waits (see WaitMode) and pops, and fifo_rd_ptr addresses block k.
+    Resident   // Aliased onto resident L1 with no producer — see the contract above.
+};
+
+enum class OutputBufferMode : uint8_t {
+    Circular,  // Default — a real circular buffer: the helper reserves and pushes, a consumer
+               // pops, and fifo_wr_ptr addresses block k.
+    Resident   // Aliased onto resident L1 with no consumer — see the contract above.
+};
+
 }  // namespace tilize_config
 
 /**
@@ -115,6 +169,17 @@ enum class RemapMode : uint8_t {
  *   remap_mode       — BH DEST remap setup control (default: Configure).
  *                       Configure: helper configures remap when the selected tilize path needs it.
  *                       AssumeConfigured: caller already enabled BH DEST remap and no intervening code changes it.
+ *   input_mode       — Input DFB residency (default: Circular).
+ *                       Circular: full CB protocol (wait per wait_mode, pop per block).
+ *                       Resident: zero-copy DFB with NO producer — no wait, no pop; block k is
+ *                                 addressed at tile index k*block_width_tiles off the DFB base.
+ *                                 Requires WaitMode::NoWait and symmetric pages. See the
+ *                                 InputBufferMode contract above.
+ *   output_mode      — Output DFB residency (default: Circular).
+ *                       Circular: full CB protocol (reserve + push per block).
+ *                       Resident: zero-copy DFB with NO consumer — no reserve, no push; block k is
+ *                                 addressed at tile index k*block_width_tiles off the DFB base.
+ *                                 See the OutputBufferMode contract above.
  *
  * ── Block Geometry ─────────────────────────────────────────────────────────
  *
@@ -183,6 +248,29 @@ enum class RemapMode : uint8_t {
  *          tilize_config::WaitMode::WaitBlock,
  *          tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
  *          tilize_config::Fp32Mode::Lossless>(num_blocks);
+ *
+ *   // 8. Zero-copy: BOTH DFBs aliased onto the core's resident L1 shard and neither a
+ *   //    reader nor a writer kernel launched (a compute-only program). No per-block CB
+ *   //    credit traffic at all — see the InputBufferMode / OutputBufferMode contract.
+ *   compute_kernel_lib::tilize<block_w, dfb_in, dfb_out,
+ *          tilize_config::InitUninitMode::InitAndUninit,
+ *          tilize_config::WaitMode::NoWait,
+ *          tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+ *          tilize_config::Fp32Mode::Fast,
+ *          tilize_config::RemapMode::Configure,
+ *          tilize_config::InputBufferMode::Resident,
+ *          tilize_config::OutputBufferMode::Resident>(num_blocks);
+ *
+ *   // 9. One-sided zero-copy: a reader still fills the input DFB, but the output DFB is
+ *   //    the resident shard and no writer is launched.
+ *   compute_kernel_lib::tilize<block_w, dfb_in, dfb_out,
+ *          tilize_config::InitUninitMode::InitAndUninit,
+ *          tilize_config::WaitMode::WaitBlock,
+ *          tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+ *          tilize_config::Fp32Mode::Fast,
+ *          tilize_config::RemapMode::Configure,
+ *          tilize_config::InputBufferMode::Circular,
+ *          tilize_config::OutputBufferMode::Resident>(num_blocks);
  */
 template <
     uint32_t block_width_tiles,
@@ -193,7 +281,9 @@ template <
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
-    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
+    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure,
+    tilize_config::InputBufferMode input_mode = tilize_config::InputBufferMode::Circular,
+    tilize_config::OutputBufferMode output_mode = tilize_config::OutputBufferMode::Circular>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib

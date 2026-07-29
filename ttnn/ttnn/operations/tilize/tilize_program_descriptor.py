@@ -574,6 +574,11 @@ def _lever_flags():
         # measures the real kernel.
         iu=int(os.environ.get("TILIZE_LEVER_IU", "0")),
         addr=int(os.environ.get("TILIZE_LEVER_ADDR", "0")),
+        # Refinement 4b: resident CBs — address a zero-copy CB's blocks by tile index
+        # off its base instead of walking its fifo pointers, dropping the per-block
+        # reserve/push/pop. 0 = off (the Refinement-4 behaviour == the counterfactual),
+        # 1 = gated, 2 = forced past the payoff gate (structural clauses still apply).
+        rcb=int(os.environ.get("TILIZE_LEVER_RCB", "1")),
     )
 
 
@@ -767,6 +772,103 @@ def drop_dataflow_pays(blocks_per_core: int) -> bool:
     distinguishable by measurement rather than by argument.
     """
     return blocks_per_core <= DROP_DATAFLOW_MAX_BLOCKS_PER_CORE
+
+
+# --- Refinement 4b: resident CBs (drop the per-block CB bookkeeping) ------------
+#
+# Lever 1 above removed the reader and the writer, and `WaitMode::NoWait` removed the
+# per-block `cb_wait_front`. THREE per-block CB calls survived, and on a program with
+# nothing on the other end of either CB all three are dead weight:
+#
+#   * `cb_reserve_back(cb_out)` polls a free-space credit no consumer will ever
+#     decrement, so it always succeeds on its first `reg_read`;
+#   * `cb_push_back(cb_out)` publishes a tiles-received credit nobody reads, and pays a
+#     `TTI_STALLWAIT(STALL_THCON, PACK)` to order that publish behind the packer
+#     (`llk_push_to_brisc`, `llk_io_pack.h:66`);
+#   * `cb_pop_front(cb_in)` returns a free-space credit nobody reads, and pays a
+#     `TTI_STALLWAIT(STALL_THCON, UNPACK)` for the same reason (`llk_io_unpack.h:96`).
+#
+# Refinement 4 priced the survivors at **40.5 ns/block** (`sync_only(4 blk) -
+# sync_only(1 blk)` / 3) and handed them here. Re-measured at the top of this pass on
+# the same instrument: **38.9 ns/block**, and — the number that decides this entry is
+# worth running — that cost is **fully EXPOSED, not hidden behind the tilize LLK**.
+# Two independent subtractions agree:
+#
+#     per-block cost in `full`  = (1271.3 - 755.0) / 3   = 172.1 ns   (small - tiny)
+#     per-block LLK             = 2 tiles x 67.1 ns/tile = 134.2 ns   ((654-251)/6)
+#     => exposed non-LLK        =                          37.9 ns  ==  38.9 measured
+#
+# What is load-bearing in those calls is NOT the credit but the POINTER WALK: it is
+# `fifo_rd_ptr` / `fifo_wr_ptr` that address block k. So the lever is not "delete the
+# CB ops" — it is "keep the addressing, drop the credits", which the tilize LLK already
+# supports directly: `tilize_block` / `fast_tilize_block` take an `input_tile_index` /
+# `output_tile_index` and resolve them off the CB base
+# (`get_output_tile_address<out_of_order=true>`, `llk_pack_common_api.h:69-77`;
+# `_llk_unpack_fast_tilize_block_`, `llk_unpack_tilize.h:773`). Block k is then tile
+# index `k*chunk_wt` off a CB whose pointers never move.
+#
+# THIS SHIPS AS A HELPER CHANGE, NOT A RAW-LLK BLOCK IN THIS KERNEL, and that was the
+# condition Refinement 4b set for taking it at all. `compute_kernel_lib::tilize` gains
+# `InputBufferMode` / `OutputBufferMode` (`Circular` | `Resident`), defaulted to
+# `Circular` so every other call site in the tree is byte-identical, with the
+# "nothing is on the other end" contract written out in the header. The mode is
+# per-CB, so the same primitive covers BOTH zero-copy shapes this op has:
+#
+#   mask 3 -- Path B: both CBs aliased, compute-only program.
+#   mask 2 -- the `alias_out` crossover (Refinement 3b): a reader still fills the input
+#             CB, but no writer drains the output, and the output CB has the identical
+#             exact-page property (`shard_tiles` pages against `shard_tiles` pushes).
+#
+# Ceiling: `f_sharded_small` 1273 -> ~1117 (1.14x), `f_sharded_large` 1985 -> ~1674
+# (1.19x), `n_sharded_tiny` 755 -> ~716 (1.05x). All below the parent's 1.30x bar,
+# which Refinement 4 already showed sits under the launch floor + LLK sum.
+def resident_cb_pays(resident_blocks: int) -> bool:
+    """Refinement 4b gate: address a zero-copy CB by tile index instead of by pointer?
+
+    **MEASURED: see the sweep in `changelog.md` § "Refinement 4b".** The structural
+    half (nothing on the other end of the CB; the CB holds the whole run) is checked
+    by the caller from `drop_reader` / `drop_writer`; this is the payoff half.
+
+    `resident_blocks` is the number of per-block CB round-trips the lever would
+    remove on this plan, i.e. `blocks_per_core`. With one block there is exactly one
+    reserve/push/pop triple to drop and nothing to amortise the extra `constexpr`
+    branch against, so the gate exists to keep that regime measurable separately.
+    """
+    return resident_blocks >= RESIDENT_CB_MIN_BLOCKS
+
+
+RESIDENT_CB_MIN_BLOCKS = 1
+
+
+def _resident_cb_mask(plan, levers) -> int:
+    """Bit 0 == the input CB is resident, bit 1 == the output CB is resident.
+
+    STRUCTURAL clauses first, so `TILIZE_LEVER_RCB=2` cannot bypass them (the
+    analyzer's F2 rule from Refinement 4: a "structural" clause a force flag can
+    bypass is not structural):
+
+      * a CB is resident only when it is ALIASED (`alias_in` / `alias_out`) **and**
+        the kernel on its other end is not launched (`drop_reader` / `drop_writer`);
+      * the zone variant needs the three-kernel program, and lever 2's per-block-init
+        arm restarts the tile index every call, so both forbid residency;
+      * the `self_arm` fold drives both CBs through the full protocol from the compute
+        kernel itself, so neither side is resident there.
+    """
+    rcb = levers["rcb"]
+    if rcb == 0:
+        return 0
+    if _zone_flag() or levers["iu"] or plan["self_arm"]:
+        return 0
+    mask = 0
+    if plan["alias_in"] and plan["drop_reader"]:
+        mask |= 1
+    if plan["alias_out"] and plan["drop_writer"]:
+        mask |= 2
+    if not mask:
+        return 0
+    if rcb == 2 or resident_cb_pays(plan["blocks_per_core"]):
+        return mask
+    return 0
 
 
 # --- Refinement 4, lever 3: Fp32Mode::Fast on a narrowing fp32 cast -------------
@@ -1515,6 +1617,10 @@ def _plan_alias(plan, geo):
             "alias_cb_bytes": shard_tiles * (plan["tile_in"] + plan["tile_out"]),
         }
     )
+    # Refinement 4b. Derived LAST because it reads `drop_reader` / `drop_writer` /
+    # `self_arm` off the finished plan, which is also what makes the "nothing is on the
+    # other end of this CB" precondition a single derivation rather than two.
+    plan["resident_cb"] = _resident_cb_mask(plan, _lever_flags())
     return plan
 
 
@@ -2095,6 +2201,10 @@ def _plan_generic(
             "alias_cb_bytes": alias_cb_bytes,
         }
     )
+    # Refinement 4b (see `_resident_cb_mask`). On this path only the OUTPUT side can be
+    # resident, and only on `alias_out` with the writer dropped (Refinement 3b lever 2):
+    # the input CB is a plain CB the reader fills, so it stays circular.
+    plan["resident_cb"] = _resident_cb_mask(plan, levers)
     return plan
 
 
@@ -2338,6 +2448,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["shard_tiles"],
         plan["fp32_lossless"],  # Refinement 4 lever 3
         _lever_flags()["iu"],  # Refinement 4 lever 2 (measurement)
+        # Refinement 4b: resident-CB bitmask (bit0 input, bit1 output). Selects the
+        # helper's InputBufferMode / OutputBufferMode. The kernel static_asserts the
+        # pairings it can see (`no_wait`, `self_arm`, `zones`, `per_block_init`); the
+        # one it cannot — "no kernel is on the other end of this CB" — is
+        # `_resident_cb_mask`'s structural clause, guarded host-side by
+        # `test_tilize_refinement4b.py::test_resident_mask_is_set_exactly_when_the_
+        # counterpart_kernel_is_gone`.
+        plan["resident_cb"],
     ]
 
     reader_rt = ttnn.RuntimeArgs()

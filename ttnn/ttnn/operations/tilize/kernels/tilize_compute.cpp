@@ -41,6 +41,21 @@
 //     measures the fold at 0.74x-0.95x (slower), which is exactly why the shipped
 //     form deletes the handshake instead of moving it. Kept as a bench arm so the
 //     distinction is measured, not argued.
+//
+// RESIDENT CBs (Refinement 4b): `no_wait` above removed the per-block `cb_wait_front`
+// but left the other three CB calls — `cb_reserve_back` polling a credit no consumer
+// decrements, `cb_push_back` publishing a credit nobody reads, `cb_pop_front` returning
+// a credit nobody reads — each of the latter two paying a `TTI_STALLWAIT(STALL_THCON, .)`.
+// Refinement 4 priced that at 40.5 ns/block. `resident_cb` selects the helper's
+// InputBufferMode / OutputBufferMode = Resident, which drops all of it and addresses
+// block k at tile index k*chunk_wt off the CB base instead (the tilize LLK's own
+// `input_tile_index` / `output_tile_index` parameters). The precondition the helper
+// cannot see — "nothing is on the other end of this CB" — is the host's
+// `drop_reader` / `drop_writer`, the same derivation `no_wait` already rests on.
+//   bit 0 = the INPUT CB is resident (no reader kernel)
+//   bit 1 = the OUTPUT CB is resident (no writer kernel)
+// so 3 == Path B (both sides aliased, compute-only program) and 2 == the `alias_out`
+// crossover, where a reader still fills the input CB but no writer drains the output.
 
 // ZONES (Refinement 3b lever 1, bench only): an instrumented copy of the same
 // loop with the per-block `cb_wait_front` hoisted OUT of the helper
@@ -85,8 +100,14 @@ void kernel_main() {
     // pairs -- i.e. the ceiling of ANY init/uninit amortisation scheme. Never on in
     // a shipped plan.
     constexpr uint32_t per_block_init = get_compile_time_arg_val(8);
+    // Refinement 4b: resident-CB bitmask (bit0 = input, bit1 = output). See the header.
+    constexpr uint32_t resident_cb = get_compile_time_arg_val(9);
 
     using namespace compute_kernel_lib::tilize_config;
+
+    constexpr InputBufferMode input_mode = (resident_cb & 1u) ? InputBufferMode::Resident : InputBufferMode::Circular;
+    constexpr OutputBufferMode output_mode =
+        (resident_cb & 2u) ? OutputBufferMode::Resident : OutputBufferMode::Circular;
 
     constexpr ReconfigureRegisterDatatypeMode reconfig_mode =
         needs_cast ? ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
@@ -106,6 +127,17 @@ void kernel_main() {
     // `test_tilize_refinement4.py::test_no_wait_is_set_exactly_when_the_reader_is_gone`.
     static_assert(!(no_wait && self_arm), "self_arm publishes the input CB itself, so it must WAIT for it");
     static_assert(!zones || !(no_wait || self_arm), "the zone variant instruments the three-kernel program");
+    // A resident INPUT CB is exactly the `no_wait` precondition ("nothing publishes it"),
+    // so the two must agree — a resident input with a wait would hang on a credit nobody
+    // will post, and a waiting input that is also resident would never free its pages.
+    // `self_arm` drives BOTH CBs through the full protocol from this kernel, and the zone
+    // variant instruments the three-kernel program, so neither may declare residency.
+    static_assert(!(resident_cb & 1u) || no_wait, "a resident input CB requires no_wait");
+    static_assert(!(resident_cb & 2u) || !self_arm, "self_arm drains the output CB itself, so it is not resident");
+    static_assert(!resident_cb || !zones, "the zone variant instruments the three-kernel program");
+    // Lever 2's measurement arm issues one 1-block call per block, so a resident tile
+    // index would restart at 0 every call and rewrite block 0 num_blocks times.
+    static_assert(!resident_cb || !per_block_init, "the per-block-init arm needs the circular CB modes");
 
     compute_kernel_hw_startup(cb_rm_input, cb_tiled_output);
 
@@ -171,19 +203,27 @@ void kernel_main() {
             }
         }
     } else if constexpr (skip_compute) {
+        // The ablation must reproduce the SHIPPED program's CB traffic, so it mirrors the
+        // resident flags: a resident CB has no reserve/push/pop to reproduce.
         for (uint32_t block = 0; block < num_blocks; ++block) {
             if constexpr (!no_wait) {
                 cb_wait_front(cb_rm_input, chunk_wt);
             }
-            cb_reserve_back(cb_tiled_output, chunk_wt);
-            cb_push_back(cb_tiled_output, chunk_wt);
-            cb_pop_front(cb_rm_input, chunk_wt);
+            if constexpr (!(resident_cb & 2u)) {
+                cb_reserve_back(cb_tiled_output, chunk_wt);
+                cb_push_back(cb_tiled_output, chunk_wt);
+            }
+            if constexpr (!(resident_cb & 1u)) {
+                cb_pop_front(cb_rm_input, chunk_wt);
+            }
         }
     } else {
         constexpr WaitMode wait_mode = no_wait ? WaitMode::NoWait : WaitMode::WaitBlock;
         if constexpr (per_block_init) {
             // Refinement 4 lever 2's measurement arm: num_blocks fully-inited calls
             // instead of one. Bit-exact, so the delta is the config-burst price.
+            // NB this arm keeps the CIRCULAR modes: each call would restart the resident
+            // tile index at 0 and rewrite block 0 num_blocks times.
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 compute_kernel_lib::tilize<
                     chunk_wt,
@@ -202,7 +242,10 @@ void kernel_main() {
                 InitUninitMode::InitAndUninit,
                 wait_mode,
                 reconfig_mode,
-                fp32_mode>(num_blocks);
+                fp32_mode,
+                RemapMode::Configure,
+                input_mode,
+                output_mode>(num_blocks);
         }
     }
 

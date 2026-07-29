@@ -91,13 +91,26 @@ template <
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
-    tilize_config::RemapMode remap_mode>
+    tilize_config::RemapMode remap_mode,
+    tilize_config::InputBufferMode input_mode,
+    tilize_config::OutputBufferMode output_mode>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
     static_assert(input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
     static_assert(input_dfb < 32, "Invalid input_dfb: must be less than 32");
     static_assert(output_dfb < 32, "Invalid output_dfb: must be less than 32");
+
+    // A resident DFB is not a circular buffer: nothing publishes into it and nothing drains
+    // it, so the helper addresses block k by tile index off the DFB base instead of walking
+    // the fifo pointers. See the InputBufferMode / OutputBufferMode contract in the header.
+    constexpr bool resident_in = (input_mode == tilize_config::InputBufferMode::Resident);
+    constexpr bool resident_out = (output_mode == tilize_config::OutputBufferMode::Resident);
+
+    static_assert(
+        !resident_in || wait_mode == tilize_config::WaitMode::NoWait,
+        "InputBufferMode::Resident means NOTHING produces into the input DFB, so there is no "
+        "credit to wait for. Pair it with WaitMode::NoWait; a wait would hang.");
 
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
@@ -150,6 +163,11 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         ASSERT(*total_input_pages > (num_blocks - 1) * 32);  // at least one row in the last block
         ASSERT(*total_input_pages <= num_blocks * 32);       // rows fit within num_blocks tile-rows
     }
+    // A resident input is addressed in TILES off the DFB base, so it must have tile-sized
+    // pages. Row-sized (asymmetric) pages have no tile index to offset by.
+    if constexpr (resident_in) {
+        ASSERT(!asymmetric_dfb_pages);
+    }
 
     // Tilize input must not be a block float format (Bfp8/4/2 and _b variants).
     // Block floats have shared exponents that break row-major-to-tile reinterpretation.
@@ -199,14 +217,21 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
     }
 
-    // Validate DFB capacity
-    if (asymmetric_dfb_pages) {
+    // Validate DFB capacity. A resident DFB is never recycled — every block of the whole run
+    // is addressed off its base — so it must hold the ENTIRE run, not just one block.
+    if constexpr (resident_in) {
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles * num_blocks));
+    } else if (asymmetric_dfb_pages) {
         uint32_t max_in = (*total_input_pages < 32) ? *total_input_pages : 32;
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= max_in));
     } else {
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
     }
-    PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
+    if constexpr (resident_out) {
+        PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles * num_blocks));
+    } else {
+        PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
+    }
 
     // Construct DataflowBuffer objects for sync operations
     DataflowBuffer in_dfb(input_dfb);
@@ -221,6 +246,11 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     // Main loop
     uint32_t pages_left = total_input_pages.value_or(0);
     uint32_t input_pages = block_width_tiles;
+    // Block-relative tile offsets into a RESIDENT DFB. Both stay compile-time 0 on the
+    // circular path (their increments are `if constexpr`-elided), so the LLK call is
+    // byte-identical to the pre-Resident one there.
+    uint32_t in_tile_index = 0;
+    uint32_t out_tile_index = 0;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // Determine input pages for this block
         if (asymmetric_dfb_pages) {
@@ -232,22 +262,32 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             in_dfb.wait_front(input_pages);
         }
 
-        out_dfb.reserve_back(block_width_tiles);
+        if constexpr (!resident_out) {
+            out_dfb.reserve_back(block_width_tiles);
+        }
 
         if constexpr (use_fast) {
 #ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
-            fast_tilize_block(input_dfb, block_width_tiles, output_dfb);
+            fast_tilize_block(input_dfb, block_width_tiles, output_dfb, in_tile_index, out_tile_index);
 #else
             // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
             // Trap (watcher/runtime assert) in case this path is ever reached.
             ASSERT(false);
 #endif
         } else {
-            tilize_block(input_dfb, block_width_tiles, output_dfb);
+            tilize_block(input_dfb, block_width_tiles, output_dfb, in_tile_index, out_tile_index);
         }
 
-        out_dfb.push_back(block_width_tiles);
-        in_dfb.pop_front(input_pages);
+        if constexpr (!resident_out) {
+            out_dfb.push_back(block_width_tiles);
+        } else {
+            out_tile_index += block_width_tiles;
+        }
+        if constexpr (!resident_in) {
+            in_dfb.pop_front(input_pages);
+        } else {
+            in_tile_index += block_width_tiles;
+        }
 
         if (asymmetric_dfb_pages) {
             pages_left -= input_pages;
