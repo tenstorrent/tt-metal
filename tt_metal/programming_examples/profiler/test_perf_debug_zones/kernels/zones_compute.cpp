@@ -21,12 +21,6 @@
 #define ZONE_CYC 0u
 #endif
 
-#if ZONE_CYC
-#define ZCYC(graduated) ((uint32_t)(ZONE_CYC))
-#else
-#define ZCYC(graduated) ((uint32_t)(graduated))
-#endif
-
 #if COMPILE_FOR_TRISC == 0
 #define ZTAG "T0"
 #elif COMPILE_FOR_TRISC == 1
@@ -39,7 +33,7 @@
 // zone displays ~CYC/2500 us in Tracy: at the ~1.35 GHz boosted aiclk the profiler records ~0.55 timestamp
 // tick per spin-count and the context period is ~0.741 ns/tick, so displayed_ns ~= CYC * 0.41. LOW-register-
 // only read with unsigned-wrap subtraction is tear-free for spins << 2^32.
-#define ZONE(NAME, CYC)                                                                            \
+#define ZONE_WALL(NAME, CYC)                                                                       \
     {                                                                                              \
         DeviceZoneScopedN(NAME);                                                                   \
         volatile tt_reg_ptr uint32_t* _zwc =                                                       \
@@ -50,18 +44,40 @@
         }                                                                                          \
     }
 
+// KNEE body (ZONE_CYC != 0): byte-identical to test_x280_realprof's producer loop (realprof_dm.cpp,
+// WORK_SIZE), so ZONE_CYC and that test's --proddelay are the SAME UNIT and the two knees are directly
+// comparable. The counter MUST stay `volatile`: that is what forces a load/increment/store/compare per
+// iteration, so one iteration costs several cycles rather than a single nop. Do NOT turn this into a
+// wall-clock spin -- that is exactly what made ZONE_CYC 30000 produce 22.2 us zones (30000 / 1.35 GHz)
+// while --proddelay 950 produces ~5-6 us, i.e. two knees on different axes that looked like a regression.
+#define ZONE_NOPS(NAME, ITERS)                                            \
+    {                                                                     \
+        DeviceZoneScopedN(NAME);                                          \
+        for (volatile uint32_t _zj = 0; _zj < (uint32_t)(ITERS); _zj++) { \
+            asm volatile("nop");                                          \
+        }                                                                 \
+    }
+
+// GRADUATED keeps the wall-clock spin (ZONE_WALL above): its point is durations calibrated in microseconds
+// for a representative capture, which a nop-iteration count cannot express.
+#if ZONE_CYC
+#define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
+#else
+#define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
+#endif
+
 void kernel_main() {
     // Durations span ~1..100 us (typical ~10 us). CYC = us * 2500 (see ZONE calibration note above).
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
-        ZONE(ZTAG "_Zone0", ZCYC(2500u));    // ~1 us
-        ZONE(ZTAG "_Zone1", ZCYC(5000u));    // ~2 us
-        ZONE(ZTAG "_Zone2", ZCYC(7500u));    // ~3 us
-        ZONE(ZTAG "_Zone3", ZCYC(12500u));   // ~5 us
-        ZONE(ZTAG "_Zone4", ZCYC(20000u));   // ~8 us
-        ZONE(ZTAG "_Zone5", ZCYC(30000u));   // ~12 us
-        ZONE(ZTAG "_Zone6", ZCYC(50000u));   // ~20 us
-        ZONE(ZTAG "_Zone7", ZCYC(100000u));  // ~40 us
-        ZONE(ZTAG "_Zone8", ZCYC(175000u));  // ~70 us
-        ZONE(ZTAG "_Zone9", ZCYC(250000u));  // ~100 us
+        ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
+        ZONE(ZTAG "_Zone1", 5000u);    // ~2 us
+        ZONE(ZTAG "_Zone2", 7500u);    // ~3 us
+        ZONE(ZTAG "_Zone3", 12500u);   // ~5 us
+        ZONE(ZTAG "_Zone4", 20000u);   // ~8 us
+        ZONE(ZTAG "_Zone5", 30000u);   // ~12 us
+        ZONE(ZTAG "_Zone6", 50000u);   // ~20 us
+        ZONE(ZTAG "_Zone7", 100000u);  // ~40 us
+        ZONE(ZTAG "_Zone8", 175000u);  // ~70 us
+        ZONE(ZTAG "_Zone9", 250000u);  // ~100 us
     }
 }
