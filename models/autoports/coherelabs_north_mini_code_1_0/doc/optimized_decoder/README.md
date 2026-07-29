@@ -49,11 +49,11 @@ Final normal run:
 
 ```bash
 pytest -q -s --timeout=900 \
-  --junitxml=models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/review3_full.xml \
+  --junitxml=models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/review4_full.xml \
   models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py
 ```
 
-Result: `30 passed, 16 skipped in 308.39s`. The skips are opt-in
+Result: `30 passed, 16 skipped in 310.391s`. The skips are opt-in
 DRAM-sharded candidate cases, not selected-path coverage.
 
 | Check | Final evidence |
