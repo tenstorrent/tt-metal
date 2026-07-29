@@ -93,7 +93,7 @@ UNARY_BROADCAST_FORMATS = input_output_formats(
         DataFormat.MxInt4,
         DataFormat.MxInt2,
     ],
-    same=True, # input_fmt != output_fmt not tested, ISSUE: #47560
+    same=True,  # input_fmt != output_fmt not tested, ISSUE: #47560
 )
 
 
