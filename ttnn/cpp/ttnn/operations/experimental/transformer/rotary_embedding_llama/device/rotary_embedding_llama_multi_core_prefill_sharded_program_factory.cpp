@@ -80,6 +80,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
+    CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
     const uint32_t num_input_tiles = 2 * head_dim_t;
     const uint32_t num_output_tiles = num_input_tiles;
 
@@ -106,27 +108,29 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         input_cb_num_tiles = num_input_tiles;
         num_cos_sin_tiles = num_input_tiles;
     }
-    // When cos/sin are sharded: fast path (seq_per_core==1) uses globally-allocated L1 view;
-    // reload path reads each row via TensorAccessor (used when seq_per_core>1 or active cores exceed shard count).
-    // We compare against active cores (not total device cores) to preserve the fast L1 path
-    // when the shard grid is smaller than the device grid but still covers all active cores.
-    const uint32_t num_active_cores_upper_bound = batch_parallel_factor * seq_parallel_factor;
+    // Borrowed cos/sin (a globally-allocated L1 view of the resident shard) is only expressible in
+    // Metal 2.0 when the shard grid covers ALL cores. A DFB has a single `borrowed_from` and its
+    // placement is derived from the union of its bound kernels' nodes, so — unlike the legacy CB —
+    // it cannot present a per-node borrowed/plain split (borrowed on the shard grid, plain on the
+    // remaining cores). When the shard is partial we therefore fall back to the reload path (read
+    // each row via TensorAccessor), which is layout-agnostic and runs on all_cores exactly as the
+    // interleaved path does. This keeps the port a faithful all_cores placement; the only observable
+    // difference from legacy is that a partial-shard config legacy would have served from the fast L1
+    // view now takes the (output-identical) reload path.
+    const bool cos_sin_shard_full = cos_sin_sharded && cos.shard_spec()->grid.num_cores() == num_cores;
     const bool cos_sin_sharded_reload =
-        cos_sin_sharded && (seq_per_core > 1 || num_active_cores_upper_bound > cos.shard_spec()->grid.num_cores() ||
-                            seq_len_t > cos_seq_len_t);
+        cos_sin_sharded && (seq_per_core > 1 || !cos_sin_shard_full || seq_len_t > cos_seq_len_t);
     if (cos_sin_sharded) {
         num_cos_sin_tiles = cos_sin_sharded_reload ? num_input_tiles : head_dim_t;
     }
-    // Globally-allocated CB for trans_mat requires shard grid to cover all active cores.
-    // When shard count < active cores, fall back to TensorAccessor reads (the non-sharded kernel path).
-    const bool trans_mat_use_global_cb =
-        trans_mat_sharded && num_active_cores_upper_bound <= trans_mat.shard_spec()->grid.num_cores();
+    // Globally-allocated (borrowed) CB for trans_mat likewise requires the shard grid to cover all
+    // cores; otherwise fall back to TensorAccessor reads (the non-global-cb kernel path).
+    const bool trans_mat_use_global_cb = trans_mat_sharded && trans_mat.shard_spec()->grid.num_cores() == num_cores;
 
     const uint32_t num_interm_tiles = head_dim_t;
 
-    // Borrowed-memory selection (mirrors the legacy dynamic-CB `.buffer` split, minus the
-    // remaining-cores placeholder — the work unit is placed on active cores only, which are a subset
-    // of the shard grid whenever the borrow conditions hold, so every active core has its own shard).
+    // Borrowed-memory selection. Borrow only in the full-shard fast path (above), where the borrowed
+    // DFB is placed on all_cores and every node has its own shard to back it.
     const bool cos_sin_borrowed = cos_sin_sharded && !cos_sin_sharded_reload;
     const bool cos_sin_accessor = !cos_sin_borrowed;  // reader reads cos/sin via TensorAccessor
     const bool trans_mat_borrowed = trans_mat_use_global_cb;
@@ -309,15 +313,19 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .hw_config = compute_hw_config};
 
     // ------------------------------------------------------------------
-    // Per-node runtime args + active-core placement. Placement is the set of cores assigned real work
-    // (see plan): required so the borrowed cos/sin/trans_mat DFBs resolve per-node from their shard.
+    // Per-node runtime args (batch×seq parallelization; idle cores zero-filled exactly as legacy).
+    // Placement is all_cores (faithful to legacy): borrowed DFBs are used only on the full-shard fast
+    // path, where every core has its own shard to back the borrow, so no placement narrowing is needed.
     // ------------------------------------------------------------------
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    KernelRunArgs reader_run{.kernel = READER};
-    KernelRunArgs writer_run{.kernel = WRITER};
-    KernelRunArgs compute_run{.kernel = COMPUTE};
-    std::vector<CoreRange> active_ranges;
+    struct CoreArgs {
+        uint32_t start_batch = 0;
+        uint32_t end_batch = 0;
+        uint32_t start_seq = 0;
+        uint32_t end_seq = 0;
+    };
+    std::vector<CoreArgs> per_core_args(cores.size());
 
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
@@ -328,38 +336,42 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
             uint32_t end_seq = std::min(start_seq + seq_per_core, seq_len_t);
 
             if (start_seq >= seq_len_t || start_batch >= batch) {
-                // Skip cores with no work — they must not run (and must not be placed), otherwise they
-                // would wait on cos/sin data that never arrives.
+                // Important to skip cores which have no work to do, otherwise they will wait
+                // on cos/sin data which will never arrive.
                 continue;
             }
-
-            const NodeCoord node = cores[core_idx];
-            active_ranges.push_back(CoreRange(node, node));
-            AddRuntimeArgsForNode(
-                reader_run.runtime_arg_values,
-                node,
-                {{"batch_start", start_batch},
-                 {"batch_end", end_batch},
-                 {"seq_t_start", start_seq},
-                 {"seq_t_end", end_seq}});
-            AddRuntimeArgsForNode(
-                writer_run.runtime_arg_values,
-                node,
-                {{"batch_start", start_batch},
-                 {"batch_end", end_batch},
-                 {"seq_t_start", start_seq},
-                 {"seq_t_end", end_seq}});
-            AddRuntimeArgsForNode(
-                compute_run.runtime_arg_values,
-                node,
-                {{"batch_start", start_batch},
-                 {"batch_end", end_batch},
-                 {"seq_t_start", start_seq},
-                 {"seq_t_end", end_seq}});
+            per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq};
         }
     }
 
-    const CoreRangeSet active_cores(active_ranges);
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+    KernelRunArgs compute_run{.kernel = COMPUTE};
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const auto& a = per_core_args[i];
+        const NodeCoord node = cores[i];
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
+        AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
+    }
 
     ProgramSpec spec{
         .name = "rotary_embedding_llama_multi_core_prefill_sharded",
@@ -375,8 +387,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
              out_dfb,
              zero_dfb},
         .tensor_parameters = {input_param, cos_param, sin_param, trans_mat_param, output_param},
-        .work_units = {
-            WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = active_cores}}};
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {reader_run, writer_run, compute_run};

@@ -2,14 +2,17 @@
 
 ## Outcome
 
-**PORTED** — all three factories (`RotaryEmbeddingLlamaMultiCore` interleaved-prefill,
+**PORTED** (with one documented framework-gap deviation — see [Handoff points](#handoff-points)) — all
+three factories (`RotaryEmbeddingLlamaMultiCore` interleaved-prefill,
 `RotaryEmbeddingLlamaMultiCorePrefillSharded` sharded-prefill, `RotaryEmbeddingLlamaMultiCoreSharded`
-decode) converted to `MetalV2FactoryConcept` and verified. Build clean (`./build_metal.sh --build-tests`,
-wormhole_b0). Tests: pre-port baseline 13/13 passed; post-port sweep **410 passed, 5 skipped, 0 failed**
-(`test_rotary_embedding_llama.py`, all factories + every factory-2 config path: borrowed fast-path,
-reload, interleaved, per-head, cos-padding tail). A follow-up run of prefill 8k/16k added 13 more passes
-(423 total, 0 failed); only prefill 128k was left unrun (very slow, single head config, same factory-1
-reload path as the covered sizes).
+decode) converted to `MetalV2FactoryConcept` and verified. The port is a faithful syntax swap everywhere
+**except** Factory 2's partial-shard fast path, which Metal 2.0 cannot express (single `borrowed_from`,
+derived placement — no per-node borrowed/plain split) and which is therefore routed to the pre-existing
+reload path: output-identical, a performance-only deviation, recorded as a framework-gap handoff. Build
+clean (`./build_metal.sh --build-tests`, wormhole_b0). Tests: post-fix full sweep **423 passed, 5 skipped,
+0 failed** (`test_rotary_embedding_llama.py`, all factories + every factory-2 config path: full-shard
+borrowed fast-path, partial-shard reload, interleaved, per-head, cos-padding tail); only prefill 128k left
+unrun (very slow, single-head, same factory-1 reload path as the covered sizes).
 
 ## Provenance
 
@@ -33,12 +36,40 @@ MetalV2FactoryConcept — three sibling factories (`RotaryEmbeddingLlamaMultiCor
 ### Open items
 - **TensorParameter relaxation candidates:** none applied (kept strict). No `ArgConfig::Runtime*` in any
   kernel; the ops are shape-specialized via CTAs, so strict `TensorSpec` matching is correct.
-- **Factory-2 placement narrowing (see Friction):** worth a doc note; it is the one non-pure-syntax
-  decision in this port.
+- **Factory-2 borrow restricted to full-shard (see Friction):** the port borrows cos/sin/trans_mat only
+  when the shard grid covers all cores (faithful all_cores placement) and routes partial shards to the
+  reload path. Worth a patterns-catalog note; it is the one place the legacy op has no 1:1 Metal 2.0 shape.
 
 ## Handoff points
 
-None. No capitulation; no shared-kernel `_metal2` fork (the two intra-op shared kernels — writer and
+- **Framework gap — no per-node borrowed/plain DFB split (partial-shard fast path).** Tagged
+  "Framework: missing per-node borrowed-memory split / GlobalDataflowBuffer." Owner: Metal 2.0 host-API team.
+
+  *What legacy does:* Factory 2's fast path (`RotaryEmbeddingLlamaMultiCorePrefillSharded`) emits, for a
+  **partially**-sharded cos/sin (or trans_mat), a single CB `buffer_index` that is **borrowed** on the shard-grid
+  cores and a **plain placeholder** on the remaining cores, with the reader/writer/compute kernels placed on
+  `all_cores`. It selects this fast (resident-L1-view) path whenever the shard covers the active cores
+  (`num_active <= shard_cores`), even when the shard grid is smaller than the device grid.
+
+  *Why it can't be ported faithfully:* a Metal 2.0 `DataflowBufferSpec` has a single `borrowed_from`, and its
+  placement is **derived** from the union of its bound kernels' work-unit nodes — there is no per-node
+  borrowed/plain split. So the legacy merged CB is inexpressible for a partial shard: you cannot borrow on some
+  placed nodes and be plain on others, and you cannot place the borrowed DFB on `all_cores` because the backing
+  shard does not exist on the non-shard nodes (`AttachBorrowedDFBBuffers` would fail the per-bank check —
+  `program_run_args.cpp`; the spec-time validator only checks existence/L1/size, `program_spec.cpp:1506-1552`).
+
+  *What the port does instead (deviation on record):* borrow **only when the shard grid covers all cores**
+  (`shard_spec()->grid.num_cores() == num_cores`), where borrowed-over-`all_cores` is an exact syntax swap;
+  route a **partial** shard to the pre-existing reload / `TensorAccessor` path (layout-agnostic, `all_cores`
+  placement, output-identical). This is **output-identical but a performance deviation**: a partial-shard config
+  that legacy served from the fast L1 view now takes the slower reload path. It is *not* a pure syntax swap for
+  that config class; a strict-recipe port would capitulate on Factory 2's partial-shard fast path. We chose the
+  reload fallback (over capitulation) because it introduces no new construct, keeps the op fully ported, keeps
+  faithful `all_cores` placement, and matches the op's own test contract (docstring: `N`-core shard `-> reload
+  path`; `-1` all-cores `-> fast globally-allocated CB path`). Revisit if Metal 2.0 gains a per-node
+  borrowed-memory split or a `GlobalDataflowBuffer` that can back a DFB on a subset of its placed nodes.
+
+No other handoffs: no shared-kernel `_metal2` fork (the two intra-op shared kernels — writer and
 `compute/rotary_embedding_llama.cpp` — convert in place because factories 1 & 2 both port in this
 change); no pybind entry point removed (`create_descriptor` was never pybound); no custom-hash deletion;
 no out-of-directory kernel edits; no `sem::`/`tensor::` boundary violations (the op has no semaphores and
@@ -70,19 +101,22 @@ compute kernels bind no tensors).
   `CBDescriptor`s sharing one `buffer_index` over disjoint core ranges (a borrowed CB on the shard grid + a
   plain placeholder on the remaining cores) because the kernels are placed on **all** cores and a shard may
   not cover them all. Metal 2.0 has no per-node borrowed/plain split for a single DFB (placement is derived,
-  one `borrowed_from` per spec). The port resolves this by **narrowing the work unit to the active cores**
-  (the cores assigned real work) — a subset of the shard grid whenever the legacy borrow-eligibility
-  conditions hold, so every placed node has its own shard to borrow and the placeholder split disappears.
-  This is the one place the port is not a pure syntax swap; it is output-identical (legacy idle cores
-  produced nothing) but a reviewer/doc-maintainer should know the recipe currently has no worked pattern for
-  "legacy all-cores-with-idle-noops + partial-shard borrowed CB." Suggest a patterns-catalog entry.
+  one `borrowed_from` per spec), so the legacy merged CB is genuinely inexpressible for a *partial* shard.
+  **Resolution (recipe-faithful):** borrow cos/sin/trans_mat **only when the shard grid covers all cores**
+  (`shard_spec()->grid.num_cores() == num_cores`), where borrowed-over-all_cores is an exact syntax swap of
+  the legacy borrowed CB; route a **partial** shard to the existing reload / `TensorAccessor` path, which is
+  layout-agnostic and runs on all_cores with no placement change. Placement therefore stays **all_cores**
+  (faithful to legacy: idle cores kept, RTAs zero-filled). The only observable deviation from legacy is that
+  a partial-shard config legacy would have served from the fast L1 view now takes the (output-identical,
+  slower) reload path — which matches the op's own test contract (`N`-core shard `-> reload path`, `-1`
+  all-cores `-> fast globally-allocated CB path`). *(An earlier revision instead narrowed the work unit to
+  the active cores; that was a behavior change — a non-syntax-swap improvisation the recipe forbids, plus a
+  latent runtime-hang risk since the spec validator does not check DFB node-coverage vs shard grid, only
+  existence/L1/size, with the per-bank check deferred to attach time — and has been reverted.)* Suggest a
+  patterns-catalog entry for "legacy all-cores-with-idle-noops + partial-shard borrowed CB → borrow only on
+  full shard, else reload."
 
 ### Confusion
-- **Borrowed DFB over a *subset* of the tensor's shard grid** (factory 2 fast path, partial shard, e.g. the
-  `cs_sharded_32` sweep row when it lands on the fast path). This is the first port to borrow where the DFB
-  placement (active cores) is a strict subset of the backing tensor's shard grid, rather than exactly equal
-  (as in decode). Expected to resolve per-node; verified at test time. If a future framework change requires
-  placement == shard grid for a borrowed DFB, this factory's fast path would need revisiting.
 - **DFB and tensor accessors sharing a name.** The input DFB accessor and the input `TensorParameter`
   accessor are both named `"input"` (→ `dfb::input` and `tensor::input`). Relied on the `dfb::` / `tensor::`
   namespaces being independent; confirmed OK by build. Worth an explicit note in the migration guide that
