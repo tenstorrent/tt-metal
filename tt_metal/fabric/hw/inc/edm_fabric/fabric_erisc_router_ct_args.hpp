@@ -315,6 +315,42 @@ constexpr bool is_intermesh_router_on_edge = NAMED_CT_ARG("IS_INTERMESH_ROUTER_O
 constexpr bool is_intramesh_router_on_edge = NAMED_CT_ARG("IS_INTRAMESH_ROUTER_ON_EDGE") != 0;
 
 // ============================================================================
+// Skip-link routing
+// ============================================================================
+// Deployment-wide compile-time selector between the legacy hop-program 2D path and the indexed
+// destination-keyed 2D ABI that realizes the skip-link routing design. The two decodes must never
+// mix — despite the feature-flag-style name, this is an ABI selector and is never safe to toggle
+// per workload. OFF by default. Enabling requires BOTH:
+//   1. -DFABRIC_SKIP_LINKS_ENABLED on the ERISC kernel compile, and
+//   2. the builder emitting MESH_Y_SIZE / MESH_X_SIZE (the pinned mesh shape) and the per-channel
+//      IS_RECEIVER_CHANNEL_*_INTERMESH_INGRESS (ingress capability) named CT args.
+// Without those named args the #if branch does not compile (fail-fast). The #else zeros are never
+// read: every use is gated on skip_links_enabled.
+#if defined(FABRIC_SKIP_LINKS_ENABLED)
+constexpr bool skip_links_enabled = true;
+constexpr size_t SKIP_LINK_MESH_Y_SIZE = NAMED_CT_ARG("MESH_Y_SIZE");
+constexpr size_t SKIP_LINK_MESH_X_SIZE = NAMED_CT_ARG("MESH_X_SIZE");
+// The landing intercept is keyed on the builder-provided INTERMESH ingress capability of
+// the receiving channel. A whole-kernel flag is not sufficient — a boundary-facing router's intrachip
+// channels carry intramesh egress traffic that must NOT be re-encoded. Named CT args like the mesh
+// shape args above: absent emission fails the compile.
+constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_intermesh_ingress = {
+    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_0_INTERMESH_INGRESS")),
+    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_INTERMESH_INGRESS")),
+    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_2_INTERMESH_INGRESS"))};
+// Only the dense packed-key dispatch is implemented, so enabling this requires a Z-capable build.
+static_assert(
+    z_router_enabled,
+    "skip-link routing requires a Z-capable build (dense 16-way dispatch); "
+    "the WH bit-test admission realization is not implemented");
+#else
+constexpr bool skip_links_enabled = false;
+constexpr size_t SKIP_LINK_MESH_Y_SIZE = 0;
+constexpr size_t SKIP_LINK_MESH_X_SIZE = 0;
+constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_intermesh_ingress = {false, false, false};
+#endif
+
+// ============================================================================
 // Sender channel per-channel arrays
 // Arrays are sized to NUM_SENDER_CHANNELS, built from MAX-sized intermediaries.
 // ============================================================================
