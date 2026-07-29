@@ -548,15 +548,15 @@ Tensor floor_div(
 }
 
 Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    // Integer inputs take the integer floor path directly. They cannot produce
-    // Inf/NaN, so the non-finite guard below has nothing to select and would
-    // instead mix a float32 `temp` with an int32 `result` in the where, which
-    // reinterprets the integer bit pattern as float (7 / 2 came back as
-    // 4.2e-45). The integer path is also exact across the whole int32 range,
-    // whereas routing through float32 loses precision above 2^24.
-    const DataType dt = input_a.dtype();
-    const bool is_integer = (dt == DataType::INT32 || dt == DataType::UINT32);
-    if (is_integer) {
+    // When both inputs are integer the quotient cannot be Inf/NaN, so the guard
+    // below has nothing to select and would instead mix a float32 `temp` with an
+    // int32 `result` in the where, reinterpreting the integer bit pattern as
+    // float (7 / 2 came back as 4.2e-45). The integer path is also exact across
+    // the whole int32 range, whereas routing through float32 loses precision
+    // above 2^24. Both dtypes are checked because a float operand on either side
+    // can still divide by zero, and those combinations must keep the guard.
+    auto is_integer = [](DataType dt) { return dt == DataType::INT32 || dt == DataType::UINT32; };
+    if (is_integer(input_a.dtype()) && is_integer(input_b.dtype())) {
         return ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
     }
 
