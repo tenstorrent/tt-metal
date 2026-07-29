@@ -12,13 +12,28 @@
 
 namespace ckernel::sfpu {
 
+// Returns by value on purpose. The caller copy-initializes from this prvalue, which is the same
+// construct as the original single-expression init, so C++17 guaranteed elision keeps `out` directly
+// initialized by the reciprocal call. Selecting the variant with a local `vFloat out;` + assignment
+// would instead route through vVal::operator= (__builtin_rvtt_sfpassign_lv) and change the emitted
+// SFPU sequence on the legacy path -- which must stay bit-identical for blaze.
+template <bool legacy_compat>
+sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
+    if constexpr (legacy_compat) {
+        return ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+    } else if constexpr (APPROX) {
+        return ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
+    } else if constexpr (DST_ACCUM_MODE) {
+        return ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
+    } else {
+        return ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
+    }
+}
+
 template <bool legacy_compat = true>
 inline void calculate_sampling_recip_scalar() {
-    // Blaze's LLK lacks sfpu_reciprocal_iter, so keep only the legacy compat path.
-    // Current callers use the default legacy_compat=true.
-    static_assert(legacy_compat, "blaze only ports the legacy_compat reciprocal (sfpu_reciprocal_iter absent)");
     sfpi::vFloat in = sfpi::dst_reg[0];
-    sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+    sfpi::vFloat out = sampling_recip_value<legacy_compat>(in);
     if constexpr (!(DST_ACCUM_MODE || APPROX)) {
         out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
     }
