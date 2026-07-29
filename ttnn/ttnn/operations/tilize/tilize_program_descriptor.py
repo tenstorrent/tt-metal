@@ -449,6 +449,25 @@ def stagger_pays(ncores: int, nt_h: int, chunk_wt: int) -> int:
 ALIAS_OUT_MIN_CORES = 2
 ALIAS_IN_MIN_CORES = 2
 
+# --- Refinement 3, third lever: one barrier per GROUP of blocks (B7') ----------
+#
+# The ablation of the shipped `alias_out` plan says the read PAYLOAD is already at
+# the DRAM read rate (10 199 ns for 2.10 MB = 206 GB/s, vs 214 for the 1024 B
+# generic path) while `sync_only` is 5 616 ns — 3 815 ns of it the 256
+# `accessor.get_noc_addr` calls and the rest per-block CB + barrier cost. A
+# per-block `noc_async_read_barrier()` drains the read pipeline to ZERO once per
+# block, so with 8 blocks per core the DRAM round trip is exposed 8 times and the
+# next block's address generation cannot hide behind it either.
+#
+# `read_group = G` reserves G windows, issues 32*G reads, then takes ONE barrier —
+# lever B7 ("one barrier per block, not per transaction") applied one level up. It
+# costs G+1 CB windows (the +1 is what lets compute drain one window while the next
+# G fill), which is why it is only offered on the delegated depth default, exactly
+# like lever B8's third window.
+READ_GROUP_MAX = 8
+# Sweep hook: force a group size while calibrating the gate. Never set in production.
+READ_GROUP_OVERRIDE = None
+
 
 def alias_out_pays(ncores: int) -> bool:
     """C14 gate, DRAM/interleaved RM -> sharded TILE: is the write leg worth the
@@ -466,6 +485,32 @@ def alias_in_pays(ncores: int) -> bool:
     """C14 gate, sharded RM -> DRAM/interleaved TILE: same clause as
     ``alias_out_pays``. The read leg it deletes is 65 % of `g_sharded_to_dram`."""
     return ncores >= ALIAS_IN_MIN_CORES
+
+
+def read_group_pays(blocks_per_core: int) -> int:
+    """B7' gate: how many chunk-blocks should share one read barrier?
+
+    **Measured: NO — 1 always.** In-run A/B on `g_dram_to_sharded`'s aliased plan
+    (64 cores, 8 blocks, 128 B reads; 7 rounds x 10 launches, CV <= 1.5 %):
+
+      group | depth | ns     | vs the shipped d2+B13 15 866
+      ------|-------|--------|-----------------------------
+        1   |   2   | 15 866 | 1.000   (B13 on -- the shipped plan)
+        2   |   3   | 16 187 | 1.020
+        4   |   5   | 17 706 | 1.116
+        8   |   9   | 19 750 | 1.245
+
+    The premise -- that the per-block `noc_async_read_barrier()` drains the read
+    pipeline and exposes DRAM latency 8 times -- is FALSE here: the ablation says the
+    read payload is already 10 199 ns for 2.10 MB = **206 GB/s**, i.e. at the best
+    DRAM read rate this op has ever measured (214 GB/s for its 1024 B reads), so
+    there is no latency left to hide. What grouping DOES do is delay the first push
+    by G blocks, which serializes compute behind the reads -- monotonically worse
+    with G, exactly as measured. Kept identity-false (and with the
+    ``READ_GROUP_OVERRIDE`` sweep hook + the `x_g_alias_g*` bench rows) so the
+    verdict is re-measurable rather than a changelog claim.
+    """
+    return 1
 
 
 def coalesce_rows_pays(chunk_row_bytes: int, source_page_bytes: int) -> bool:
@@ -507,6 +552,7 @@ def _lever_flags():
         stg=int(os.environ.get("TILIZE_LEVER_STG", "1")),
         r3=int(os.environ.get("TILIZE_LEVER_R3", "1")),
         coal=int(os.environ.get("TILIZE_LEVER_COAL", "1")),
+        addr=int(os.environ.get("TILIZE_LEVER_ADDR", "0")),
     )
 
 
@@ -1099,6 +1145,8 @@ def _plan_alias(plan, geo):
             "alias_out": 1,
             "coalesce_rows": 0,
             "blocks_row_major": 0,
+            "read_group": 1,
+            "addr_probe": 0,
             "core_ranges": grid,
             "cores": cores,
             "chunk_wt": chunk_wt,
@@ -1382,7 +1430,16 @@ def _plan_generic(
     #     without also agreeing on the chunk order.
     split_read_expressible = row_page_stride == 1 and not coalesce_rows and not blocks_row_major
     if alias_out:
-        c7_pays = chunks_per_core == 1
+        # MEASURED NO. The freed BRISC really is idle, and C7 really does halve the
+        # reads each RISC-V issues -- but the read leg is DRAM-BANDWIDTH bound
+        # (10 199 ns for 2.10 MB = 206 GB/s, against a 214 GB/s best), not
+        # issue-rate bound, so a second issuer buys nothing and its per-block
+        # hand-off costs. In-run A/B at depth 2 on `g_dram_to_sharded`:
+        # **17 699 ns with C7 vs 15 866 without (+11.6 %)**; at depth 1,
+        # 18 113 vs 16 480 (+9.9 %). The `x_g_alias_d*_c7` bench rows keep it
+        # re-measurable. `chunks_per_core == 1` remains the structural clause (both
+        # kernels must agree on the block order) for the forced counterfactual.
+        c7_pays = False
     else:
         c7_pays = depth == 1 and split_read_pays(depth, blocks_per_core, chunk_row_bytes)
     split_read = int(split_read_expressible and (c7 == 2 or (c7 == 1 and c7_pays)))
@@ -1422,16 +1479,14 @@ def _plan_generic(
         and blocks_per_core >= TRID_PREFETCH_MIN_BLOCKS
         and prefetch_cb_bytes <= L1_CB_BUDGET_PREFETCH_BYTES
     )
-    prefetch_blocks = (
-        2
-        if (
-            prefetch_ok
-            and (
-                b8 == 2 or (b8 == 1 and trid_prefetch_pays(ncores, blocks_per_core, chunk_row_bytes, prefetch_cb_bytes))
-            )
-        )
-        else 1
-    )
+    # MEASURED NO on `alias_out`, for the same reason C7 fails there: B8's whole
+    # point is to keep reads in flight across the per-block barrier, and this path's
+    # read leg is already at the DRAM read rate with 32 reads in flight. Its own
+    # size clause (<= 128 B) would otherwise fire on every crossover shard narrower
+    # than 8 tiles. In-run A/B on `g_dram_to_sharded`: **17 440 ns with B8 (depth 3)
+    # vs 15 866 without (+9.9 %)**; `x_g_alias_d3_b8` keeps it re-measurable.
+    b8_pays = (not alias_out) and trid_prefetch_pays(ncores, blocks_per_core, chunk_row_bytes, prefetch_cb_bytes)
+    prefetch_blocks = 2 if (prefetch_ok and (b8 == 2 or (b8 == 1 and b8_pays))) else 1
     if prefetch_blocks == 1 and b8 == 3 and prefetch_ok:
         # Isolation row for the Mode-C ledger: B8 bundles TWO changes (a third CB
         # window and the trid pipeline). `TILIZE_LEVER_B8=3` gives the extra window
@@ -1448,6 +1503,23 @@ def _plan_generic(
             f"B8 prefetch CB budget blown: {prefetch_cb_bytes} B/core > "
             f"{L1_CB_BUDGET_PREFETCH_BYTES} B (chunk_wt={chunk_wt})"
         )
+
+    # --- Refinement 3, lever B7': one barrier per GROUP of blocks ---------------
+    # Structural: only on the `alias_out` read loop (the one whose ablation showed a
+    # barrier-drain cost), only where no other lever owns the block sequence, and
+    # only on the delegated depth default -- the group needs G+1 CB windows, and a
+    # caller who pinned `use_double_buffer` gets the depth they asked for.
+    read_group = 1
+    if alias_out and not depth_forced and not split_read and prefetch_blocks == 1:
+        want = int(READ_GROUP_OVERRIDE) if READ_GROUP_OVERRIDE is not None else read_group_pays(blocks_per_core)
+        want = max(1, min(want, blocks_per_core))
+        group_cb_bytes = (want + 1) * chunk_wt * (tile_in if alias_out else tile_out)
+        if want > 1 and group_cb_bytes <= L1_CB_BUDGET_PREFETCH_BYTES:
+            read_group = want
+            depth = want + 1
+    assert read_group == 1 or depth >= read_group + 1, "B7' needs one CB window more than the group"
+    # Address-generation ceiling probe (bench only; output is garbage by design).
+    addr_probe = int(levers["addr"] == 1 and alias_out and not split_read and prefetch_blocks == 1)
 
     # --- Refinement 2b: whole-page staged read + L1 redistribution -------------
     # Structural preconditions (never overridden by the force flag):
@@ -1582,6 +1654,8 @@ def _plan_generic(
             "alias_out": alias_out,
             "coalesce_rows": coalesce_rows,
             "blocks_row_major": blocks_row_major,
+            "read_group": read_group,
+            "addr_probe": addr_probe,
             "core_ranges": core_ranges,
             "cores": cores,
             "work": work,
@@ -1778,6 +1852,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # OUTPUT CB's pages are in -- see `_one_sided_shard_split`).
         plan["coalesce_rows"],
         plan["blocks_row_major"],
+        plan["read_group"],  # lever B7': blocks per read barrier
+        plan["addr_probe"],  # measurement probe (bench only, garbage output)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 

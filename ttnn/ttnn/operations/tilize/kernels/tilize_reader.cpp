@@ -187,7 +187,21 @@ void kernel_main() {
     // --- Refinement 3: crossover paths --------------------------------------------
     constexpr uint32_t coalesce_rows = get_compile_time_arg_val(24);     // levers B5/B6
     constexpr uint32_t blocks_row_major = get_compile_time_arg_val(25);  // chunked alias_out
-    constexpr auto src_args = TensorAccessorArgs<26>();
+    constexpr uint32_t read_group = get_compile_time_arg_val(26);        // lever B7' (below)
+    // MEASUREMENT PROBE (bench only, garbage output): drop 31 of every 32
+    // `accessor.get_noc_addr` calls in the read loop to price the
+    // address-generation term on its own.
+    //
+    // MEASURED, AND THE INSTRUMENT IS REFUTED: 46 851 ns vs 16 743 (2.80x SLOWER).
+    // Reusing ONE address per block does not only remove the arithmetic, it also
+    // sends all 32 reads of the block to a SINGLE DRAM bank instead of spreading
+    // them over 12 -- so it prices bank serialization, not address generation. The
+    // number is kept because it is a third independent confirmation that this path's
+    // read leg is bound by DRAM BANK PARALLELISM (i.e. bandwidth), not by issue rate:
+    // collapsing 12 banks to 1 costs 2.8x, while halving the ISSUERS (lever C7) or
+    // doubling the reads in flight (lever B8) each cost ~10 %.
+    constexpr uint32_t addr_probe = get_compile_time_arg_val(27);
+    constexpr auto src_args = TensorAccessorArgs<28>();
 
     using dataflow_kernel_lib::StickReadMode;
     constexpr StickReadMode read_mode = stateful_read ? StickReadMode::Stateful : StickReadMode::Generic;
@@ -414,57 +428,96 @@ void kernel_main() {
             return;
         }
 
-        if constexpr (coalesce_rows || blocks_row_major) {
+        if constexpr (coalesce_rows || blocks_row_major || read_group > 1 || addr_probe) {
             // --- Refinement 3: one explicit (row-block, chunk) sequence ----------
             // `blocks_row_major` selects WHICH order (row-outer for the chunked
             // aliased output, chunk-outer otherwise — identical when either count
-            // is 1), `coalesce_rows` selects HOW each block is read. Both keep the
-            // block contract lever B7 rests on: reserve chunk_wt, issue this
-            // block's reads, ONE barrier, push chunk_wt.
+            // is 1), `coalesce_rows` selects HOW each block is read, and
+            // `read_group` how many blocks share ONE barrier.
+            //
+            // read_group is lever B7 at a coarser granularity, and the measurement
+            // that motivates it is the ablation of the `alias_out` crossover: its
+            // read payload is 10 199 ns for 2.10 MB = 206 GB/s, i.e. already at the
+            // best read rate this op has ever measured (the 1024 B generic path gets
+            // 214), but its `sync_only` is 5 616 ns — 3 815 ns of which is the 256
+            // `accessor.get_noc_addr` calls and the rest per-block CB/barrier cost.
+            // A per-block `noc_async_read_barrier()` drains the read pipeline to
+            // ZERO once per block, so with 8 blocks the DRAM round-trip latency is
+            // exposed 8 times and neither the address generation of the next block
+            // nor its reads can hide behind it. Grouping G blocks under one barrier
+            // keeps 32*G reads in flight and exposes the drain total/G times. It
+            // needs the same window arithmetic lever B8 uses (the FIFO write pointer
+            // only advances on push, so the G windows this group writes into are
+            // derived from the CB base) and a CB deep enough to hold them, which the
+            // host guarantees (`depth >= read_group + 1`).
             const uint32_t blocks = num_rows / tile_height;
             const uint32_t total = blocks * chunk_count;
-            for (uint32_t o = 0; o < total; ++o) {
-                const uint32_t block = blocks_row_major ? (o / chunk_count) : (o % blocks);
-                const uint32_t c = blocks_row_major ? (o % chunk_count) : (o / blocks);
-                const uint32_t row0 = start_row + block * tile_height;
-                const uint32_t byte_offset = (chunk_start + c) * chunk_row_bytes;
-
-                cb_reserve_back(cb_rm_input, chunk_wt);
-                const uint32_t l1_addr = get_write_ptr(cb_rm_input);
-                if constexpr (coalesce_rows) {
-                    // The chunk covers a whole source page (static_assert above), so
-                    // `byte_offset` selects a page COLUMN and never an intra-page
-                    // offset; rows row0..row0+31 are then 32 consecutive pages of the
-                    // SAME shard (the host gates shard_h % 32 == 0), i.e. one
-                    // contiguous run in the owner's L1 — and the destination is
-                    // contiguous as well, because the L1 row stride IS the page size.
-                    const uint32_t page_col = byte_offset / source_page_bytes;
-                    if constexpr (!skip_dm) {
-                        noc_async_read(
-                            accessor.get_noc_addr(row0 * row_page_stride + page_col),
-                            l1_addr,
-                            tile_height * chunk_row_bytes);
+            constexpr uint32_t tile_bytes_in = get_tile_size(cb_rm_input);
+            constexpr uint32_t window_bytes = chunk_wt * tile_bytes_in;
+            // Read BEFORE the first reserve: `cb_reserve_back` does not move the
+            // write pointer, and the firmware re-inits the CB interfaces per launch,
+            // so this is the CB base even for a cached program.
+            const uint32_t cb_base = get_write_ptr(cb_rm_input);
+            for (uint32_t o = 0; o < total; o += read_group) {
+                const uint32_t group = (total - o) < read_group ? (total - o) : read_group;
+                cb_reserve_back(cb_rm_input, group * chunk_wt);
+                for (uint32_t i = 0; i < group; ++i) {
+                    const uint32_t idx = o + i;
+                    const uint32_t block = blocks_row_major ? (idx / chunk_count) : (idx % blocks);
+                    const uint32_t c = blocks_row_major ? (idx % chunk_count) : (idx / blocks);
+                    const uint32_t row0 = start_row + block * tile_height;
+                    const uint32_t byte_offset = (chunk_start + c) * chunk_row_bytes;
+                    const uint32_t l1_addr = cb_base + (idx % cb_depth) * window_bytes;
+                    if constexpr (coalesce_rows) {
+                        // The chunk covers a whole source page (static_assert above),
+                        // so `byte_offset` selects a page COLUMN and never an
+                        // intra-page offset; rows row0..row0+31 are then 32
+                        // consecutive pages of the SAME shard (the host gates
+                        // shard_h % 32 == 0), i.e. one contiguous run in the owner's
+                        // L1 — and the destination is contiguous as well, because the
+                        // L1 row stride IS the page size.
+                        const uint32_t page_col = byte_offset / source_page_bytes;
+                        if constexpr (!skip_dm) {
+                            noc_async_read(
+                                accessor.get_noc_addr(row0 * row_page_stride + page_col),
+                                l1_addr,
+                                tile_height * chunk_row_bytes);
+                        } else {
+                            volatile uint32_t sink =
+                                static_cast<uint32_t>(accessor.get_noc_addr(row0 * row_page_stride + page_col));
+                            (void)sink;
+                        }
+                        // Checked, not assumed: the run this folds into one
+                        // transaction must really be contiguous in the source
+                        // (watcher builds only).
+                        ASSERT(
+                            accessor.get_noc_addr((row0 + tile_height - 1) * row_page_stride + page_col) ==
+                            accessor.get_noc_addr(row0 * row_page_stride + page_col) +
+                                (tile_height - 1) * chunk_row_bytes);
+                    } else if constexpr (addr_probe) {
+                        // Timing probe: ONE accessor call per block, then a running
+                        // increment. Wrong bytes on purpose (rows of an interleaved
+                        // tensor are in different banks) -- bench-only.
+                        const uint64_t base = accessor.get_noc_addr(row0, byte_offset);
+                        for (uint32_t row = 0; row < tile_height; ++row) {
+                            if constexpr (!skip_dm) {
+                                noc_async_read(base, l1_addr + row * chunk_row_bytes, chunk_row_bytes);
+                            }
+                        }
+                    } else if constexpr (!skip_dm) {
+                        dataflow_kernel_lib::read_stick_rows_for_tilize<read_mode, 1>(
+                            accessor, row0, chunk_row_bytes, byte_offset, l1_addr, chunk_row_bytes, tile_height);
                     } else {
-                        volatile uint32_t sink =
-                            static_cast<uint32_t>(accessor.get_noc_addr(row0 * row_page_stride + page_col));
-                        (void)sink;
-                    }
-                    // Checked, not assumed: the run this folds into one transaction
-                    // must really be contiguous in the source (watcher builds only).
-                    ASSERT(
-                        accessor.get_noc_addr((row0 + tile_height - 1) * row_page_stride + page_col) ==
-                        accessor.get_noc_addr(row0 * row_page_stride + page_col) + (tile_height - 1) * chunk_row_bytes);
-                } else if constexpr (!skip_dm) {
-                    dataflow_kernel_lib::read_stick_rows_for_tilize<read_mode, 1>(
-                        accessor, row0, chunk_row_bytes, byte_offset, l1_addr, chunk_row_bytes, tile_height);
-                } else {
-                    for (uint32_t row = 0; row < tile_height; ++row) {
-                        volatile uint32_t sink = static_cast<uint32_t>(accessor.get_noc_addr(row0 + row, byte_offset));
-                        (void)sink;
+                        for (uint32_t row = 0; row < tile_height; ++row) {
+                            volatile uint32_t sink =
+                                static_cast<uint32_t>(accessor.get_noc_addr(row0 + row, byte_offset));
+                            (void)sink;
+                        }
                     }
                 }
+                // ONE barrier for the whole group (lever B7 at group granularity).
                 noc_async_read_barrier();
-                cb_push_back(cb_rm_input, chunk_wt);
+                cb_push_back(cb_rm_input, group * chunk_wt);
             }
             if constexpr (read_vc_spread) {  // NOC_CTRL is sticky across launches
                 noc_async_read_one_packet_set_state<true>(

@@ -461,6 +461,118 @@ REGIMES = {
         double_buffer=False,
         levers=dict(b8=0, b13=2, c7=0),
     ),
+    # --- Refinement 3 counterfactuals -----------------------------------------
+    # `levers=dict(r3=N)`: 0 = the Phase-0 generic path on BOTH sides of the
+    # crossover (the counterfactual), 1 = gated, 2 = force past the payoff gate.
+    # `coal=N` is the coalesced sharded read (only reachable with r3=0, since the
+    # aliased input has no reads at all).
+    "p_g_to_sharded_r3_off": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(r3=0),
+    ),
+    # ... the alias with C7 off, i.e. the shard-shaped work split (and its narrower
+    # 128 B read) WITHOUT the second read issuer the freed BRISC pays for.
+    "x_g_to_sharded_alias_no_c7": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(c7=0),
+    ),
+    # ... and at depth 1, which is what C7 used to require: on the alias path the
+    # only thing left to overlap the reads with is the tilize LLK, so this row is
+    # what the depth-2 generalisation of C7 is worth.
+    "x_g_to_sharded_alias_d1": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        double_buffer=False,
+    ),
+    "x_g_to_sharded_alias_d1_no_c7": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        double_buffer=False,
+        levers=dict(c7=0),
+    ),
+    # The alias_out read-path sweep: 128 B reads x 8 blocks x 64 cores is a NEW
+    # operating point for every read lever (they were all calibrated on the generic
+    # path, where the same core also writes), so depth x lever is measured rather
+    # than inherited. `_G_ALIAS` builds one row per point.
+    **{
+        f"x_g_alias_{name}": dict(
+            shape=(1, 1, 2048, 512),
+            dtype=ttnn.bfloat16,
+            out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+            **spec,
+        )
+        for name, spec in {
+            "d1_bare": dict(double_buffer=False, levers=dict(b13=0, c7=0, b8=0)),
+            "d1_b13": dict(double_buffer=False, levers=dict(b13=2, c7=0, b8=0)),
+            "d1_c7": dict(double_buffer=False, levers=dict(b13=0, c7=2, b8=0)),
+            "d2_bare": dict(double_buffer=True, levers=dict(b13=0, c7=0, b8=0)),
+            "d2_b13": dict(double_buffer=True, levers=dict(b13=2, c7=0, b8=0)),
+            "d2_c7": dict(double_buffer=True, levers=dict(b13=0, c7=2, b8=0)),
+            "d3_b8": dict(levers=dict(b8=2, b13=0, c7=0)),
+        }.items()
+    },
+    # ... and lever B7' (one barrier per GROUP of blocks) swept over the group size.
+    # G+1 CB windows, so G=8 (all 8 blocks under one barrier) costs 9 windows =
+    # 36 864 B/core, still a constant in W.
+    **{
+        f"x_g_alias_g{g}": dict(
+            shape=(1, 1, 2048, 512),
+            dtype=ttnn.bfloat16,
+            out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+            read_group=g,
+            levers=dict(b13=0, c7=0, b8=0),
+        )
+        for g in (1, 2, 4, 8)
+    },
+    # ... and with B13 on top of the best group (the two attack different terms:
+    # the group hides the barrier drain, B13 the per-read address arithmetic).
+    **{
+        f"x_g_alias_g{g}_b13": dict(
+            shape=(1, 1, 2048, 512),
+            dtype=ttnn.bfloat16,
+            out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+            read_group=g,
+            levers=dict(b13=2, c7=0, b8=0),
+        )
+        for g in (2, 4, 8)
+    },
+    # ADDRESS-GENERATION CEILING PROBE (garbage output, timing only): one accessor
+    # call per block instead of 32, same read count/size/bank. `probe / off` is the
+    # most any cheaper address generator could buy on the aliased crossover.
+    "x_g_alias_addr_probe": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(addr=1, b13=0),
+    ),
+    "p_g_alias_addr_off": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(addr=0, b13=0),
+    ),
+    # The other direction. `r3=0, coal=0` is the true Phase-0 baseline (32 x 128 B
+    # reads per block through the generic accessor); `r3=0, coal=1` isolates the
+    # coalesced read on its own, which is the lever every sharded-RM input the alias
+    # declines (wide shards, ND specs, use_multicore=False, cross-spec) inherits.
+    "p_sharded_to_dram_r3_off_coal_off": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(r3=0, coal=0),
+    ),
+    "x_sharded_to_dram_coal_only": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(r3=0, coal=1),
+    ),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
@@ -593,6 +705,15 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
     """
     if plan["path"] == "alias":
         expected = plan["ncores"]  # the shard's own cores, by construction
+    elif plan["path"] in ("alias_out", "alias_in"):
+        # Refinement 3: the work split IS the sharded side's shard map, so the core
+        # count is the shard grid's. Asserted non-tautologically -- the shards must
+        # tile the tensor EXACTLY, which is what makes CB page k == shard tile k.
+        assert plan["shard_tiles"] * plan["ncores"] == plan["total_tiles"], (
+            f"one-sided alias cover violation on {name}: {plan['ncores']} shards x "
+            f"{plan['shard_tiles']} tiles != {plan['total_tiles']} tiles"
+        )
+        expected = plan["ncores"]
     elif not spec.get("multicore", True):
         expected = 1
     else:
@@ -613,7 +734,13 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
             f"CB budget violation on {name}: {plan['cb_bytes_per_core']} B/core "
             f"> {budget} B (chunk_wt={plan['chunk_wt']}, depth={plan['depth']})"
         )
-        if spec.get("double_buffer") is None and plan["depth"] <= 2:
+        if plan["read_group"] > 1:
+            # Refinement 3 lever B7': the group needs one CB window more than the
+            # group size, and the C16 gate does not apply (the depth IS the lever).
+            assert (
+                plan["depth"] == plan["read_group"] + 1
+            ), f"B7' depth violation on {name}: group={plan['read_group']} depth={plan['depth']}"
+        elif spec.get("double_buffer") is None and plan["depth"] <= 2:
             want = 2 if tpd.depth2_pays(plan["ncores"], plan["blocks_per_core"]) else 1
             assert plan["depth"] == want, (
                 f"C16 gate violation on {name}: depth={plan['depth']} but the gate "
@@ -665,12 +792,15 @@ def test_bench_tilize(device):
         tpd.CORE_CAP_OVERRIDE = spec.get("core_cap")
         tpd.CHUNK_CAP_OVERRIDE = spec.get("chunk_cap")
         tpd.STAGGER_MOD_OVERRIDE = spec.get("stagger_mod")
+        tpd.READ_GROUP_OVERRIDE = spec.get("read_group")
         # Refinement-1c lever counterfactual rows (B13 stateful reads, C7 split
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
         levers = spec.get("levers") or {}
-        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg"):
+        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg", "r3", "coal"):
             os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, 1))
+        # Default 0: this one is a measurement probe, not a lever.
+        os.environ["TILIZE_LEVER_ADDR"] = str(levers.get("addr", 0))
         tt_input, out_cfg = _build(device, spec)
         plan = _plan_for(device, tt_input, spec, out_cfg)
         _assert_structural_gates(name, spec, plan, grid_cores)
@@ -709,6 +839,7 @@ def test_bench_tilize(device):
                     a3=plan["bank_placement"],
                     r2b=plan["fanin_mode"],
                     stg=plan["stagger"],
+                    grp=plan["read_group"],
                     cb_bytes=plan["cb_bytes_per_core"],
                     ns=ns,
                     cv=(std / ns * 100.0) if ns else 0.0,
@@ -718,11 +849,13 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
-        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG"):
+        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG", "R3", "COAL"):
             os.environ[f"TILIZE_LEVER_{key}"] = "1"
+        os.environ["TILIZE_LEVER_ADDR"] = "0"
         tpd.CORE_CAP_OVERRIDE = None
         tpd.CHUNK_CAP_OVERRIDE = None
         tpd.STAGGER_MOD_OVERRIDE = None
+        tpd.READ_GROUP_OVERRIDE = None
 
     arch = os.environ.get("ARCH_NAME", "unknown")
     lines = [
@@ -734,7 +867,7 @@ def test_bench_tilize(device):
         f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
         f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
         f"    {'regime':<34} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
-        f"{'blk':>4} {'B13':>4} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'cbB/core':>9} "
+        f"{'blk':>4} {'B13':>4} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'GRP':>4} {'cbB/core':>9} "
         f"{'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
@@ -742,7 +875,7 @@ def test_bench_tilize(device):
         lines.append(
             f"    {r['regime']:<34} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
             f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['c7']:>3} "
-            f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} {r['stg']:>4} "
+            f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} {r['stg']:>4} {r['grp']:>4} "
             f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )
     print("\n".join(lines))
