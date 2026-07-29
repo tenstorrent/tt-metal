@@ -22,7 +22,7 @@
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
-#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -81,11 +81,16 @@ using ::tt::tt_metal::program_cache::detail::ProgramCacheKey;
 // MemoryConfig from named fields can therefore still drop the per-core bit unnoticed; that is
 // tracked in #51482, and needs an input that is itself lockstep, which no current path produces.
 inline void reject_per_core_allocation(const Tensor& tensor, std::string_view operation_name) {
-    if (!is_device_tensor(tensor) || !tensor.is_allocated()) {
-        return;
-    }
+    // Ask via device_local_config().sharding_args, not the MeshBuffer overload of
+    // is_per_core_allocation. That overload resolves MeshBuffer::get_reference_buffer(), which
+    // TT_THROWs "no local buffer found" when no shard is local -- and this runs before launch()'s
+    // inactive-MeshDevice short-circuit, which exists precisely because most MeshDevice calls fail
+    // there. A guard meant to be inert must not be able to throw.
+    // This is also the expression behind Tensor.is_per_core_allocated(), so the check and the
+    // accessor the caller branches on cannot disagree.
     TT_FATAL(
-        !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(tensor.mesh_buffer()),
+        !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+            tensor.mesh_buffer().device_local_config().sharding_args),
         "{}: input tensor is per-core allocated, but this operation has not opted in to per-core allocation. "
         "Ops address a buffer by a single L1 address, so a per-core buffer would be read as though every core "
         "shared the first core's allocation (#51354). If the operation resolves per-core addresses, declare "
