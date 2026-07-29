@@ -337,7 +337,6 @@ def test_reduce_scatter_on_reshaped_submesh(
     passing, pcc = comp_pcc(golden, torch_out)
     assert passing, f"PCC failed (topology={topology}, cluster_axis={cluster_axis}, dim={dim}, batch={batch}): {pcc}"
 
-    
 @skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
