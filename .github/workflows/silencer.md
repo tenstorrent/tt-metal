@@ -268,24 +268,37 @@ a fresh scan always governs priority, and new patterns you discover there are in
 
 ## Scan procedure (scheduled mode)
 
-1. **Pick runs to scan — cover BOTH build and test/model workflows.** This matters: compile
-   and JIT warnings (categories 1–2, and most category-4 `-Wdeprecated-declarations`) live in
-   *build* logs, but runtime warnings and log spam (categories 3, 5, 6 — e.g. the #48660
-   matmul `allowed_worker_cores` spam) appear **only in test/model run logs**. A build-only
-   scan structurally cannot see half the categories, so sample from both groups. Use
-   `gh run list --repo ${{ github.repository }} --workflow <wf> --status completed --limit 5`
-   per workflow, preferring runs on `main`:
-   - **Build group** (compile / JIT / deprecated-decl warnings): `build-artifact.yaml`,
-     `build-and-test-wheels.yaml`, `fabric-build-and-unit-tests.yaml`,
-     `fast-dispatch-build-and-unit-tests.yaml`.
-   - **Test / model / perf group** (runtime warnings + log spam, the pipe-delimited
-     `| warning |` lines the *Token discipline* grep is tuned for): `all-model-tests.yaml`,
-     `blackhole-e2e-tests.yaml`, `galaxy-integration-tests.yaml`, `galaxy-perf-tests.yaml`,
-     the ttnn sweeps nightly, and similar suites.
-   Rotate which workflows you sample across runs (record the last-sampled set in memory) so
-   over successive runs you cover the CI surface instead of re-scanning the same one. Note the
-   frequency counts differ in kind: build logs report warnings **per compile**, test logs
-   report them **per tile/core/device iteration** — the latter is where true log spam lives.
+1. **Pick runs to scan — from the repo's canonical tracked-workflow list.** The set of
+   workflows the team actively tracks is **not** something you should guess or hardcode here;
+   it is maintained in one place: the `workflow_ids` array in
+   **`.github/workflows/aggregate-workflow-data.yaml`** (the `(triage) Aggregate Workflow
+   Data` pipeline that fetches CI health every 10 minutes). **Read that file at the start of
+   each run and treat its `workflow_ids` list as your scan target set**, so Silencer stays in
+   lock-step with triage as workflows are added or removed — no parallel list to drift:
+   ```bash
+   # Extract the tracked workflow files from the triage config (source of truth).
+   sed -n '/workflow_ids:/,/]/p' .github/workflows/aggregate-workflow-data.yaml \
+     | grep -oE '[A-Za-z0-9_.-]+\.ya?ml' | sort -u > /tmp/gh-aw/agent/silencer/tracked_workflows.txt
+   ```
+   That list currently spans the full tracked CI surface — sanity/e2e/demo/unit/integration/
+   perf/profiler/stress suites across **Blackhole, Galaxy, T3000, and single-card**, the
+   `models-t1/t2/t3` suites, `tt-metal-l2-nightly`, `ttnn-run-sweeps`, `vllm-nightly-tests`,
+   `metal-run-microbenchmarks`, the `runtime-*` suites, and the `pr-gate` / `merge-gate`
+   gates (which invoke `build-artifact.yaml`, so **host compile / JIT / deprecated-declaration
+   warnings are covered transitively** through the gate logs — you do not need a separate
+   build-only list). For each tracked workflow:
+   `gh run list --repo ${{ github.repository }} --workflow <wf> --status completed --limit 5`,
+   preferring runs on `main`.
+   - Keep in mind *which categories live where*: compile / JIT / `-Wdeprecated-declarations`
+     warnings (categories 1–2, 4) surface in the **gate/build** logs; runtime warnings and
+     log spam (categories 3, 5, 6 — e.g. the #48660 matmul `allowed_worker_cores` spam, the
+     pipe-delimited `| warning |` lines the *Token discipline* grep is tuned for) surface in
+     the **test / model / perf** logs. Scanning the full tracked list reaches all of them.
+   - **Rotate** which tracked workflows you sample each run (record the last-sampled set in
+     memory) so over successive runs you cover the whole surface instead of re-scanning one.
+   - Frequency counts differ in kind: gate/build logs report a warning **per compile**, test
+     logs report it **per tile/core/device iteration** — the latter is where true log spam
+     concentrates, so weight it accordingly when ranking.
 2. **Deduplicate against memory.** Read your memory index of already-scanned run IDs and
    already-fixed noise patterns. **Skip** runs/patterns you have already handled or that
    already have an open `[silencer]` PR. Do not re-open a PR for a pattern in flight.
