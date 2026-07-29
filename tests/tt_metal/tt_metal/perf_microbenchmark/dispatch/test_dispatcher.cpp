@@ -1689,7 +1689,7 @@ INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorDispatcherStressTests,
     DispatchLinearWriteQuasarSimulatorStressTestFixture,
     ::testing::Values(
-        LinearWriteParams{613376, 1, /*is_mcast=*/false}, LinearWriteParams{1226752, 5, /*is_mcast=*/false}),
+        LinearWriteParams{614400, 3, /*is_mcast=*/false}, LinearWriteParams{1228800, 5, /*is_mcast=*/false}),
     [](const testing::TestParamInfo<LinearWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + (info.param.is_mcast ? "mcast" : "unicast");

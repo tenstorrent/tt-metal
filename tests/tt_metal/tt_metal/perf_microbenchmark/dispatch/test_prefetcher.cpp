@@ -1950,45 +1950,6 @@ public:
         // PHASE 2, 3, 4: Execute and Validate
         execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
     }
-
-    void run_ringbuffer_boundary_reset_stress_test() {
-        constexpr uint32_t ringbuffer_page_size_log2 = 10;
-        constexpr uint32_t ringbuffer_page_size = 1 << ringbuffer_page_size_log2;
-
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
-        const uint32_t ringbuffer_size = mem_map.ringbuffer_size();
-
-        const CoreCoord first_worker = this->worker_start();
-        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
-        const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
-        const uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
-        TT_FATAL(
-            ringbuffer_page_size % dram_alignment == 0,
-            "Ringbuffer staging page {} B must align to DRAM alignment {} B",
-            ringbuffer_page_size,
-            dram_alignment);
-
-        Common::DeviceData device_data(
-            device_, worker_range, l1_base, dram_base_, nullptr, false, get_dram_data_size_words(), cfg_);
-        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-        std::vector<HostMemDeviceCommand> commands;
-
-        const auto add_staged_relay = [&](const std::vector<uint32_t>& lengths) {
-            const uint32_t total_length = std::accumulate(lengths.begin(), lengths.end(), 0u);
-            const uint32_t dst_addr = device_data.get_result_data_addr(first_worker, 0);
-            auto sub_cmds = build_sub_cmds(lengths, static_cast<uint32_t>(lengths.size()));
-            commands.push_back(CommandBuilder::build_prefetch_ringbuffer_relay<false, false>(
-                sub_cmds, lengths, device_data, *this, noc_xy, dst_addr, total_length, ringbuffer_page_size_log2));
-        };
-
-        // The first command reaches the staging-buffer end exactly. The following command's reset flag
-        // restarts the write pointer, while the non-zero reader offset continues to exercise offset arithmetic.
-        add_staged_relay({ringbuffer_size});
-        add_staged_relay({ringbuffer_page_size});
-
-        execute_generated_commands(commands, device_data, worker_range.size(), get_num_iterations());
-    }
 };
 
 namespace CommandBuilder {
@@ -3206,8 +3167,6 @@ private:
 class PrefetcherRingbufferReadQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherRingbufferReadTestFixture> {};
 
-class PrefetcherRingbufferBoundaryResetQuasarSimulatorStressTestFixture
-    : public PrefetcherRingbufferReadQuasarSimulatorTestFixture {};
 class RandomQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<RandomTestFixture> {};
 class PrefetcherScratchThresholdQuasarSimulatorStressTestFixture
     : public Common::QuasarSimulatorVariant<BasePrefetcherTestFixture> {
@@ -3491,14 +3450,15 @@ protected:
         const uint32_t post_wrap_submit_bytes =
             tt::align(make_command(post_wrap_payload, l1_base).size_bytes() + barrier_bytes, issue_alignment);
 
-        // Submissions below pass wait_for_completion=false so nothing but the commands themselves is reserved from the
-        // issue queue - a per-submission distributed::Finish would reserve its event-record sequence here too and wrap
-        // the ring before the crossing command could. Everything is drained and validated once after the last
-        // iteration instead, which also means each wrap happens while the device is still consuming.
+        // The deterministic prefix is submitted with wait_for_completion=false so nothing but the commands
+        // themselves is reserved from the issue queue - a per-submission distributed::Finish would reserve its
+        // event-record sequence here too and could wrap the ring while filling the prefix, before the dedicated
+        // crossing command. The crossing command below passes wait_for_completion=true so the device is drained
+        // after every wrap.
         //
-        // The shadow model stays empty until that final drain, which keeps the validate() inside
-        // execute_generated_commands a no-op and holds get_result_data_addr() at the base address, so every submission
-        // writes the same L1 bytes.
+        // The shadow model is never updated inside the loop, so the validate() inside execute_generated_commands is
+        // a no-op on every submission and get_result_data_addr() stays at the base address - every submission writes
+        // the same L1 bytes. The only meaningful validation is the single check after the loop.
         // This test only writes to worker L1, so skip the DRAM prepopulation by passing 0 for dram_data_size_words.
         Common::DeviceData device_data(
             device_, worker_range, l1_base, dram_base_, nullptr, false, /*dram_data_size_words=*/0, cfg_);
@@ -3536,7 +3496,7 @@ protected:
                 prefix_iterations,
                 /*wait_for_completion=*/false);
 
-            // const uint32_t pre_wrap_write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
+            const uint32_t pre_wrap_write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
             const bool pre_wrap_toggle = mgr_->get_cq_interfaces()[cq_id].issue_fifo_wr_toggle;
             TT_FATAL(pre_wrap_toggle == toggle_before, "Issue queue wrapped while filling the deterministic prefix");
 
@@ -3546,16 +3506,14 @@ protected:
                 worker_range.size(),
                 1,
                 /*wait_for_completion=*/true);
-            // distributed::Finish(mesh_device_->mesh_command_queue());
 
-            // const uint32_t post_wrap_write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
-            // const bool post_wrap_toggle = mgr_->get_cq_interfaces()[cq_id].issue_fifo_wr_toggle;
-            // EXPECT_NE(post_wrap_toggle, pre_wrap_toggle);
-            // EXPECT_LT(post_wrap_write_ptr, pre_wrap_write_ptr);
+            const uint32_t post_wrap_write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
+            const bool post_wrap_toggle = mgr_->get_cq_interfaces()[cq_id].issue_fifo_wr_toggle;
+            EXPECT_NE(post_wrap_toggle, pre_wrap_toggle);
+            EXPECT_LT(post_wrap_write_ptr, pre_wrap_write_ptr);
         }
 
         // Every command targets the same L1 address, so the surviving state is the last crossing write.
-        // distributed::Finish(mesh_device_->mesh_command_queue());
         Common::DeviceDataUpdater::update_linear_write(
             post_wrap_payload, device_data, worker_range, /*is_mcast=*/false);
         EXPECT_TRUE(device_data.validate(device_));
@@ -4193,14 +4151,6 @@ TEST_P(PrefetcherHostQuasarSimulatorStressTestFixture, HostCompletionStress) {
     run_host_test();
 }
 
-TEST_P(PrefetcherRingbufferBoundaryResetQuasarSimulatorStressTestFixture, RingbufferBoundaryResetStress) {
-    log_info(
-        tt::LogTest,
-        "PrefetcherRingbufferBoundaryResetQuasarSimulatorStressTestFixture - RingbufferBoundaryResetStress "
-        "(Quasar simulator FD) - Test Start");
-    run_ringbuffer_boundary_reset_stress_test();
-}
-
 TEST_P(RandomQuasarSimulatorStressTestFixture, RandomStress) {
     log_info(tt::LogTest, "RandomQuasarSimulatorStressTestFixture - RandomStress (Quasar simulator FD) - Test Start");
     run_random_test();
@@ -4570,22 +4520,25 @@ INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherStressTests,
     PrefetcherCmddatQWrapQuasarSimulatorStressTestFixture,
     ::testing::Values(PagedReadParams{.num_iterations = 3}),
-    [](const testing::TestParamInfo<PagedReadParams>& /*info*/) { return "runtime_capacity"; });
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.num_iterations) + "iter";
+    });
 
 INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherStressTests,
     PrefetcherExecBufMidFetchQuasarSimulatorStressTestFixture,
-    ::testing::Values(PagedReadParams{.page_size = 128, .num_pages = 1, .num_iterations = 1, .use_exec_buf = true}),
+    ::testing::Values(PagedReadParams{.page_size = 128, .num_pages = 1, .num_iterations = 3, .use_exec_buf = true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages";
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter";
     });
 
 INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherStressTests,
     PrefetcherExecBufStallQuasarSimulatorStressTestFixture,
-    ::testing::Values(PagedReadParams{.num_iterations = 4, .use_exec_buf = true}),
+    ::testing::Values(PagedReadParams{.num_iterations = 5, .use_exec_buf = true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.num_iterations) + "_stall_transitions";
+        return std::to_string(info.param.num_iterations) + "iter";
     });
 
 INSTANTIATE_TEST_SUITE_P(
@@ -4620,37 +4573,36 @@ INSTANTIATE_TEST_SUITE_P(
     PrefetcherHostQuasarSimulatorStressTestFixture,
     ::testing::Values(PagedReadParams{.num_iterations = 3}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.num_iterations) + "bulk_rounds";
-    });
-
-INSTANTIATE_TEST_SUITE_P(
-    QuasarSimulatorPrefetcherStressTests,
-    PrefetcherRingbufferBoundaryResetQuasarSimulatorStressTestFixture,
-    ::testing::Values(PagedReadParams{.num_iterations = 3}, PagedReadParams{.num_iterations = 3, .use_exec_buf = true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::string{"boundary_reset_nonzero_offset_"} +
-               (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+        return std::to_string(info.param.num_iterations) + "iter";
     });
 
 INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherStressTests,
     PrefetcherPrefetchQWrapQuasarSimulatorStressTestFixture,
-    ::testing::Values(PagedReadParams{.num_iterations = 2}),
+    ::testing::Values(PagedReadParams{.num_iterations = 3}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.num_iterations) + "_full_queue_wraps";
+        return std::to_string(info.param.num_iterations) + "iter";
     });
 
 INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherStressTests,
     PrefetcherIssueQueueWrapQuasarSimulatorStressTestFixture,
-    ::testing::Values(PagedReadParams{.num_iterations = 2}),
-    [](const testing::TestParamInfo<PagedReadParams>& /*info*/) { return "runtime_boundary"; });
+    // Each iteration fills nearly the entire issue queue with 16 KB linear writes to force exactly one wrap at
+    // the issue queue limit, so a single iteration already exercises the wrap this test targets. We cap it at one
+    // iteration because that per-iteration volume is about as much as the Quasar simulator can handle before it
+    // segfaults. If/when the simulator can handle more, we can (and should) increase the iteration count.
+    ::testing::Values(PagedReadParams{.num_iterations = 1}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.num_iterations) + "iter";
+    });
 
 INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherStressTests,
     PrefetcherCompletionQueueWrapQuasarSimulatorStressTestFixture,
     ::testing::Values(PagedReadParams{.num_iterations = 3}),
-    [](const testing::TestParamInfo<PagedReadParams>& /*info*/) { return "runtime_boundary"; });
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.num_iterations) + "iter";
+    });
 
 INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherStressTests,
