@@ -600,3 +600,11 @@ The complete later checkpoint sequence omitted by the earlier ledger is:
 - `1774f50bf8c` — Review North Mini optimized decoder closure.
 
 No commit was pushed.
+
+48. Fixed review-6's checkpoint-ledger finding in `8bd1bf9e318` (`Log North
+    Mini final review checkpoints`). Fresh `STAGE_REVIEW_7.md` rereviewed that
+    exact commit and confirms the ledger finding is closed, the prefill
+    optimization remains intact, and no additional model-code or evidence
+    defect exists. Its sole remaining P1 is the externally blocked mandatory
+    OPT-015 advisor run. The rereview report is committed as `57e7f984220`
+    (`Rereview North Mini optimized decoder closure`). No commit was pushed.

@@ -22,7 +22,7 @@
   ],
   "independent_stage_review": {
     "verdict": "more-work-needed",
-    "report": "optimized_decoder/STAGE_REVIEW_6.md",
+    "report": "optimized_decoder/STAGE_REVIEW_7.md",
     "required_work": [
       "Complete mandatory OPT-015 shard-advisor capture and candidate comparison after external operator setup installs ttnn-advise and ttnn_jit."
     ]
