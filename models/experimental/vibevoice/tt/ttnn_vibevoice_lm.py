@@ -594,8 +594,12 @@ class TTVibeVoiceLM:
         self._fused_rope = _FUSED_ROPE
         if not self._fused_rope:
             self._cos_tt, self._sin_tt = _build_rope_cache_tt(max_len, self.cfg.head_dim, device, self.cfg.rope_theta)
-        # Causal-mask cache for the fp32 prefill path, keyed by (S, S_total).
-        self._mask_cache: Dict[Tuple[int, int], ttnn.Tensor] = {}
+        # Causal-mask state for the fp32 prefill path (see _causal_mask).  The host builds only
+        # the [S, S] triangular block, keyed by chunk length; the widened per-chunk mask lives in
+        # a single slot so device DRAM stays flat across a chunked prefill.
+        self._tri_cache: Dict[int, ttnn.Tensor] = {}
+        self._mask_key: Optional[Tuple[int, int]] = None
+        self._mask_tt: Optional[ttnn.Tensor] = None
 
         # ── Trace-safe decode state (Phase C) ──────────────────────────────
         # Host RoPE rows: the traced decode writes a per-position [1,1,1,hd] cos/sin
@@ -714,6 +718,57 @@ class TTVibeVoiceLM:
         emb = ttnn.embedding(ids_tt, self.w.tok_embeddings_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Reshape [B, S, hidden] → [B, 1, S, hidden] and convert to TILE
         return _reshape_tt(emb, [B, 1, S, self.cfg.hidden_size])
+
+    def _causal_mask(self, S: int, S_total: int) -> ttnn.Tensor:
+        """Additive causal mask [1, 1, S, S_total] for a prefill chunk at ``start_pos = S_total - S``.
+
+        Only the trailing S columns are triangular: every column left of them is the chunk's
+        strict past, so it is 0.0 for all S rows.  The host therefore builds one [S, S] block —
+        the same block for every chunk of the same length — and the zero prefix is prepended on
+        device.  Byte-identical to the per-chunk ``np.triu((S, S_total), k=S_total - S + 1)``
+        upload it replaces (verified maxabsdiff 0.0, matching -inf counts, S_total up to 23040).
+
+        Chunked prefill walks S_total monotonically and all 28 layers of a chunk share one key, so
+        the widened mask is held in a single slot rather than a per-key dict: device DRAM stays at
+        one mask instead of growing by [S, S_total] fp32 for all ~90 chunks.
+        """
+        if self._mask_key == (S, S_total):
+            return self._mask_tt
+
+        tri = self._tri_cache.get(S)
+        if tri is None:
+            tri = ttnn.as_tensor(
+                np.triu(np.full((S, S), float("-inf"), dtype=np.float32), k=1)[np.newaxis, np.newaxis, :, :],
+                device=self.device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._tri_cache[S] = tri
+
+        if S_total == S:
+            mask = tri  # no prefix to prepend (single-shot prefill)
+        else:
+            zeros = ttnn.zeros(
+                [1, 1, S, S_total - S],
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            mask = ttnn.concat([zeros, tri], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(zeros)
+
+        self._release_causal_mask()  # the previous chunk's layers are all done with it
+        self._mask_key, self._mask_tt = (S, S_total), mask
+        return mask
+
+    def _release_causal_mask(self) -> None:
+        """Free the widened mask slot.  A slot whose key had ``S_total == S`` aliases a cached
+        [S, S] block, which is kept (256 KB total) for the next prefill."""
+        if self._mask_tt is not None and self._mask_key[0] != self._mask_key[1]:
+            ttnn.deallocate(self._mask_tt)
+        self._mask_key = self._mask_tt = None
 
     def _attention_layer(
         self,
@@ -841,17 +896,7 @@ class TTVibeVoiceLM:
             scores = ttnn.matmul(q_f32, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             scores = ttnn.mul(scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-            cache_key = (S, S_total)
-            if cache_key not in self._mask_cache:
-                mask = np.triu(np.full((S, S_total), float("-inf"), dtype=np.float32), k=S_total - S + 1)
-                self._mask_cache[cache_key] = ttnn.as_tensor(
-                    mask[np.newaxis, np.newaxis, :, :],
-                    device=self.device,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            scores = ttnn.add(scores, self._mask_cache[cache_key], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.add(scores, self._causal_mask(S, S_total), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1522,6 +1567,7 @@ class TTVibeVoiceLM:
                 return_last_hidden=return_last_hidden,
                 compute_logits=(end >= S),  # only the final chunk's logits are consumed
             )
+        self._release_causal_mask()  # decode never reads it; don't hold [S, S_total] fp32 for the run
         return logits, last_hidden
 
     def decode_step(
