@@ -124,6 +124,13 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             {"seq_id", kSeqRepeat},
             {"cb_id", 0},
             {"batch", kReadBatch},
+            // reader_tile_interleaved_unified.cpp unconditionally reads this named
+            // arg in kernel_main() (not gated by SEQ_ID), falling back to the
+            // TensorAccessorArgs page size when 0. builder_utils.py always injects
+            // ("src_page_pitch", 0) for this shared template even though spec.py's
+            // reader_named_ct only lists seq_id/cb_id/batch -- see porting guide's
+            // "NAMED-CT-arg trap".
+            {"src_page_pitch", 0},
         };
         reader_desc.config = ReaderConfigDescriptor{};
 
