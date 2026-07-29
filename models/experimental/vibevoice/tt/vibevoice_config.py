@@ -4,10 +4,9 @@
 """VibeVoice-1.5B architecture configuration parsed from config.json."""
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional
-
-from models.experimental.vibevoice.common.safe_paths import safe_join
 
 
 @dataclass
@@ -77,10 +76,15 @@ class VibeVoiceModelConfig:
 def load_vibevoice_model_config(model_path: str) -> VibeVoiceModelConfig:
     """Parse VibeVoice config.json into structured dataclasses.
 
-    ``model_path`` is operator-supplied (env var / CLI), so the join is pinned under it.
+    ``model_path`` is operator-supplied (env var / CLI). The join and the containment
+    check are written out here rather than delegated, so the path reaching ``open`` is
+    visibly constrained to the absolute checkpoint directory at this call site.
     """
-    cfg_path = safe_join(model_path, "config.json")
-    if not cfg_path.exists():
+    base_dir = os.path.abspath(str(model_path))
+    cfg_path = os.path.abspath(os.path.join(base_dir, "config.json"))
+    if not cfg_path.startswith(base_dir + os.sep):
+        raise ValueError(f"refusing path {cfg_path!r}: outside checkpoint directory {base_dir!r}")
+    if not os.path.exists(cfg_path):
         # Return defaults for the 1.5B variant when no config.json is present
         return VibeVoiceModelConfig()
 

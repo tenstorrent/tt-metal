@@ -15,7 +15,7 @@ from typing import Iterable, Optional, Union
 
 from loguru import logger
 
-from models.experimental.vibevoice.common.safe_paths import safe_join, safe_output_path
+from models.experimental.vibevoice.common.safe_paths import safe_join
 from models.experimental.vibevoice.common.config import (
     DEFAULT_TXT_PATH,
     DEFAULT_VOICE_PATH,
@@ -434,9 +434,13 @@ def build_voice_samples(
 
 
 def load_script(text_path: Optional[PathLike] = None) -> str:
-    """Load and normalize a speaker script (default: upstream 1p_vibevoice.txt)."""
-    path = safe_output_path(text_path) if text_path is not None else DEFAULT_TXT_PATH
-    if not path.is_file():
-        raise FileNotFoundError(f"Script not found: {path}. Call ensure_demo_resources() first.")
-    with open(path, encoding="utf-8") as handle:
+    """Load and normalize a speaker script (default: upstream 1p_vibevoice.txt).
+
+    The caller names the script file outright, so there is no base to pin it under.
+    Absolutized inline, so the path reaching ``open`` is a normalized script path.
+    """
+    script_path = os.path.abspath(str(text_path)) if text_path is not None else str(DEFAULT_TXT_PATH)
+    if not os.path.isfile(script_path):
+        raise FileNotFoundError(f"Script not found: {script_path}. Call ensure_demo_resources() first.")
+    with open(script_path, encoding="utf-8") as handle:
         return normalize_script(handle.read())
