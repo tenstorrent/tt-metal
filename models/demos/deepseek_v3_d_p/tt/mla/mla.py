@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     indexer_layer_is_reused,
     resolve_has_indexer,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_SDPA_CONFIG, resolve_gated_matmul_config
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
@@ -304,18 +304,8 @@ class ttMLA:
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
 
-        # Store per-matmul and SDPA config dicts keyed by local seq_len for runtime lookup
-        self.mm_configs = {
-            name: MLA_MATMUL_CONFIG.get(name, {})
-            for name in [
-                "q_a_proj",
-                "q_b_proj",
-                "wkv_b1",
-                "kv_a_proj_with_mqa",
-                "wkv_b2",
-                "o_proj",
-            ]
-        }
+        # Store the SDPA config dict for runtime lookup (matmul configs are resolved on demand via
+        # _resolve_mm_cfg -> mla_config.resolve_gated_matmul_config, keyed by local seq_len).
         self.sdpa_configs = MLA_SDPA_CONFIG
 
         # Extract dimensions from config
@@ -567,32 +557,26 @@ class ttMLA:
         The gating *tags* (num_heads / q_lora_rank / chunked_only) are declared in the config
         (mla_config.py); only the *match* is resolved here at runtime, because it depends on this live
         ttMLA. chunked_only in particular is a per-instance property (single-shot vs chunked runner) that
-        the static, shared config can't know — so keeping all three checks together at this single
-        consume-time point is more cohesive than splitting head/q_lora filtering into the config and
-        leaving chunked here.
-        """
-        entry = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
-        if entry is None:
-            return None
-        # A seq_len slot may hold a single config (dict) or, when multiple model variants share the
-        # same seq_len_local, a list of candidates disambiguated by the gating tags below. The 640
-        # (chunked) slot carries both the Kimi (64 heads, q_lora 1536) and GLM-5.2 (64 heads, q_lora
-        # 2048) sets, so pick the first candidate that matches this ttMLA. Gating tags:
+        the static, shared config can't know. Gating tags:
         #   num_heads    — several program_configs overflow the grid at DeepSeek's 128 heads.
         #   q_lora_rank  — the 640 program_configs are valid at Kimi's 1536 but overflow at GLM's 2048.
         #   chunked_only — the 640 set is only dimensionally valid in chunked mode (wkv_b1/wkv_b2 are
         #                  true batched per-head matmuls over the per-head SDPA output; single-shot
         #                  applies them to a batch=1 latent).
-        candidates = entry if isinstance(entry, list) else [entry]
-        for cfg in candidates:
-            if cfg.get("num_heads") not in (None, self.num_heads):
-                continue
-            if cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
-                continue
-            if cfg.get("chunked_only") and not self.is_chunked:
-                continue
-            return cfg
-        return None
+
+        The actual candidate-list resolution (a seq_len slot may hold one dict or several,
+        disambiguated by these tags) is shared with TtIndexer via
+        mla_config.resolve_gated_matmul_config, since both consume MLA_MATMUL_CONFIG.
+        """
+        if not is_blackhole():
+            return None
+        return resolve_gated_matmul_config(
+            weight_name,
+            seq_len_local,
+            num_heads=self.num_heads,
+            q_lora_rank=self.q_lora_rank,
+            is_chunked=self.is_chunked,
+        )
 
     def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
         """Memory config for the activation (in0) feeding this weight's matmul, as tuned in the mm

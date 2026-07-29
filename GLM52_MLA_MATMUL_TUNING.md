@@ -107,26 +107,63 @@ util% = tiles*32 / CORE_COUNT / 1.35 / measured_ns * 100.
 - Batched matmuls MUST use `MatmulMultiCoreReuseProgramConfig` (non-mcast). The 1D-mcast path
   serializes to 5 cores (258/330 us).
 
-## Wiring status (task 5 — IN PROGRESS)
+## Wiring status (task 5 — DONE, program_configs; act/out L1 placement is next)
 
-**DONE:** `mla.py::_resolve_mm_cfg` now accepts a **list of candidate configs** per seq_len slot (not
-just a single dict), picking the first whose `num_heads`/`q_lora_rank`/`chunked_only` tags match this
-ttMLA. This lets the 640 slot hold BOTH the Kimi (q_lora 1536) and GLM-5.2 (q_lora 2048) configs.
-Backward-compatible (dict entries still work).
+**Config plumbing:** `mla_config.py MLA_MATMUL_CONFIG`'s `640:` slot for the 6 base weights is now a
+**list** `[<kimi dict>, <glm dict>]`; the GLM dict is tagged `num_heads=64, q_lora_rank=2048,
+chunked_only=True` with the tuned program_config/act/out/dtype from BEST above. Added 3 new
+top-level keys (`indexer.wq_b`, `indexer.wk`, `indexer.weights_proj`) for the DSA indexer linears —
+tagged `num_heads=64, q_lora_rank=2048` (no `chunked_only`: the indexer's write_k/forward are always
+block-cyclic, single-shot folds onto the same shape, so there's no separate single-shot shape to
+exclude). The candidate-list resolution logic is now a shared function,
+`mla_config.resolve_gated_matmul_config`, used by both `ttMLA._resolve_mm_cfg` (refactored to a thin
+wrapper) and a new `TtIndexer._resolve_mm_cfg` in `indexer.py`. `indexer.py`'s three `ttnn.linear`
+calls (write_k's `wk`, forward's `wq_b`/`weights_proj`) now pass `program_config` + `memory_config`
+from the resolved config when one applies (defaulting to the old DRAM/auto behavior otherwise).
+**Note:** `wq_b`'s output keeps its existing hardcoded `dtype=bfloat8_b` regardless of the resolved
+config's `out_dtype` (BF16) — that's a deliberate downstream-scoring requirement unrelated to the
+matmul-tuning test's measured shape, so the config's `out_dtype` is intentionally NOT applied there.
 
-**TODO:**
-1. `mla_config.py MLA_MATMUL_CONFIG`: for the 6 base weights, change the `640:` value from the single
-   Kimi dict into a **list** `[<kimi dict>, <glm dict>]`. GLM dict tagged `num_heads=64,
-   q_lora_rank=2048, chunked_only=True` with the tuned program_config/act/out/dtype from BEST above.
-2. Indexer linears (`indexer.py` forward: wq_b L570, wk L480, weights_proj L584): they currently pass
-   NO program_config (DRAM + auto). Wire the tuned configs. Need a config source (e.g. add a small
-   `DSA_INDEXER_MM_CONFIG` in mla_config.py keyed by seq_len, or read MLA_MATMUL_CONFIG). wq_b config
-   == q_b_proj. The dtype switch itself already landed via #51005 (wq_b/wk → bfloat8_b; weights_proj
-   stays bfloat16) — no dtype changes left to make here, only program_config wiring.
-3. Gating check: ensure Kimi (q_lora 1536) + DeepSeek (128 heads) still resolve their own/no config
-   after the list change (the tag match handles it, but run test_mla / test_sparse_mla to confirm).
-4. Validate on device: `test_mla.py` chunked GLM path (or test_sparse_mla) — but note per memory,
-   full GLM chunked needs 32-chip Galaxy; validate what's possible on the 8-chip loudbox.
+**Bug caught by an isolated gating sanity check before touching hardware:** the indexer entries were
+first written with `**_GLM_TAGS` (which includes `chunked_only=True`), silently excluding them
+whenever a caller wasn't built `is_chunked=True` — contradicting the "no chunked_only" comment.
+Fixed with a separate `_GLM_INDEXER_TAGS` (no `chunked_only`). Caught by calling
+`resolve_gated_matmul_config` directly in a throwaway script and asserting the expected candidate
+came back for each (weight, num_heads, q_lora_rank, is_chunked) combination — before any device run.
+
+**act/out L1 placement — NOT done, and needs a decision, not a mechanical wire-up:** program_config +
+out_mem_config are fully local per matmul (safe to set unconditionally). ACT (input) residency is
+different: `hidden_states` (post-attn_norm) is a **shared** input to 4 of these matmuls —
+q_a_proj (DRAM-tuned) and indexer.wk (DRAM-tuned) want DRAM; kv_a_proj_with_mqa and
+indexer.weights_proj (both L1-tuned) want L1 — and its residency is set by the CALLER
+(`TtPrefillBlock`'s attn_norm output config), not by mla.py/indexer.py (see the existing "hidden
+states memory config is set outside the module" comments at `mla.py` `_q_a_latent`/`_kv_stem`).
+Forcing it either way helps two consumers and hurts the other two; q_a_proj is by far the biggest of
+the four (22.8us vs 11.2/13.8/6.2us) so DRAM (today's default) is likely still the right overall
+choice, but that's a measured trade-off to make, not a default to flip. The **qr** latent (feeding
+q_b_proj + indexer.wq_b) has NO such conflict — both want L1 and qr's residency is already
+auto-wired via the existing `_get_act_mem_config("q_b_proj", ...)` -> `norm_memory_config` mechanism,
+so it needs no further work once the q_b_proj GLM config entry exists (it now does).
+
+**Validated on the 2x4 Blackhole loudbox** (new test `test_sparse_mla_chunked_mm_tuned_shape` in
+test_sparse_mla.py, seq_len=1280/chunk=1280 -> per-chip seq_len_local=640, the exact tuned shape —
+nothing else in this file hits it, SPARSE_ANCHOR_CASES runs seq=5120/chunk=1024 -> local=512):
+glm_5_1 + glm_5_2 (now resolving the wired GLM configs) and deepseek_v32 (correctly falls through to
+`None` / defaults — num_heads=128/q_lora=1536 matches neither Kimi nor GLM tags) all pass against the
+CPU reference. Full `test_sparse_mla.py` regression: 35 passed, 0 failed. Full Galaxy 8x4 validation
+is out of reach here (per memory, needs the 32-chip machine).
+
+**Gotcha hit along the way:** switching branches (from the KV-TP-sharding branch, rebased onto much
+newer `main`, to this one, based on older `d4e579756ad`) without rebuilding caused the FIRST test
+that actually exercised `update_padded_kv_cache`'s reader kernel (`test_sparse_mla_chunked_mm_tuned_shape`
+new test) to fail with a kernel-compile error (`reader_update_padded_kv_cache.cpp`, a
+`TensorAccessorArgs` mismatch) — all 3 variants failed identically including deepseek_v32, which my
+config changes don't even touch, so it was clearly a build/branch mismatch, not a real bug. Fixed by
+`./build_metal.sh` on this branch before retrying. Matmul-only tests (`test_glm_mla_mm`) never
+touched this kernel so didn't surface it earlier.
+
+**Still open:** the act/out L1 placement decision above; production adapter/runtime-config wiring
+(same scope note as the KV-TP-sharding workstream — out of scope here too); Galaxy 8x4 validation.
 
 ## Scratch / artifacts
 - Shape+theoretical scratch: (session scratchpad) `glm52_mla_mm_shapes.md`

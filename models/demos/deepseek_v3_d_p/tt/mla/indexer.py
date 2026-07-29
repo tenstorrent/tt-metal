@@ -19,7 +19,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, resolve_gated_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
@@ -493,6 +494,21 @@ class TtIndexer:
             ttnn.deallocate(cache_i)
         return full
 
+    def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
+        """Tuned matmul config lookup for the indexer's own linears (wq_b/wk/weights_proj), gated by
+        num_heads/q_lora_rank so a GLM-shaped config is never misapplied to DeepSeek v3.2 (also
+        sparse, but 128 heads / q_lora 1536 vs GLM's 64 / 2048). Shares the resolution logic (and the
+        MLA_MATMUL_CONFIG table) with ttMLA._resolve_mm_cfg via mla_config.resolve_gated_matmul_config.
+        Returns None when no tuned config applies (caller falls back to defaults)."""
+        if not is_blackhole():
+            return None
+        return resolve_gated_matmul_config(
+            weight_name,
+            seq_len_local,
+            num_heads=self.config.num_attention_heads,
+            q_lora_rank=getattr(self.config, "q_lora_rank", None),
+        )
+
     def write_k(
         self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
     ):
@@ -503,11 +519,13 @@ class TtIndexer:
         start_pos=0): rope the PER-CHIP shard at its block-cyclic positions, then write it in place via
         update_padded_kv_cache (per-(user,layer) slot, pad-aware kv_actual_global offset) — no SP
         all-gather, no O(n^2) concat; the cache stays SP-sharded."""
+        wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
         k = ttnn.linear(
             hidden_states,
             self._idx_wk,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
         )  # per-chip partial [1, 1, S/sp, D_idx]
         k = self._tp_rs_ag(k)  # all-reduce over TP
         k = ttnn.layer_norm(
@@ -592,13 +610,19 @@ class TtIndexer:
             index_kbuf=index_kv_cache,
         )
 
-        # Q stem: the shared q_a latent (qr) -> indexer wq_b.
+        # Q stem: the shared q_a latent (qr) -> indexer wq_b. Identical per-chip shape to q_b_proj, so
+        # qr already arrives in q_b_proj's tuned act_mem_config (mla.py::_q_a_latent's
+        # norm_memory_config) — no separate act wiring needed here.
+        wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", seq_len)
         q = ttnn.linear(
             qr,
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # Keep indexer Q in BFP8 from its first materialization through scoring.
+            memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
+            # Keep indexer Q in BFP8 from its first materialization through scoring -- independent of
+            # the tuned config's out_dtype (measured for the generic q_b_proj shape, BF16), which
+            # does not apply to this specific downstream-scoring requirement.
             dtype=ttnn.bfloat8_b,
         )  # [1, 1, S/sp, H_idx*D_idx] — ALL heads (wq_b replicated); queries stay SP-sharded (rotation-safe)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -609,11 +633,13 @@ class TtIndexer:
 
         # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
         # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
+        wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
         wts = ttnn.linear(
             hidden_states,
             self._idx_wproj,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
         )
         # H_idx=32 doesn't divide evenly into tile-sized TP=4 shards (8 < tile width), so _tp_rs_ag's
         # dim-3 reduce-scatter would hit ttnn's composite fallback (~30 extra tilize/pad/slice ops, see

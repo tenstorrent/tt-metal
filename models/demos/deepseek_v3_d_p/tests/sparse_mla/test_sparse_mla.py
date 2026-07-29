@@ -838,6 +838,39 @@ def test_sparse_mla_chunked(
     )
 
 
+# seq_len=1280 -> chunk=1280 (single chunk) at this box's anchor mesh (2,4) gives per-chip
+# seq_len_local=640 (chunk_local = chunk/sp = 1280/2) -- the exact shape
+# op_unit_tests/test_mla_matmuls_glm_chunked.py hand-tuned and mla_config.py/indexer.py now wire in
+# for GLM at seq_len_local=640 (see GLM52_MLA_MATMUL_TUNING.md). Nothing else in this file hits that
+# per-chip shape (SPARSE_ANCHOR_CASES / test_sparse_mla_chunked run seq=5120/chunk=1024 -> local=512),
+# so this is the only end-to-end exercise of the wired program_configs against a CPU reference.
+SPARSE_MM_TUNED_CASES = _sparse_cases([1280], anchor_only=True)
+
+
+@pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_MM_TUNED_CASES, indirect=["variant", "mesh_device"])
+@pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
+@pytest.mark.parametrize("chunk", [1280], ids=["c1280"])
+@pytest.mark.parametrize("cache_format", [MlaKvCacheFormat.BF16_RM], ids=["kv_bf16"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_chunked_mm_tuned_shape(
+    mesh_device,
+    seq_len,
+    chunk,
+    cache_format,
+    device_params,
+    variant,
+    config_only,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
+):
+    run_sparse_mla_chunked_case(
+        variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    )
+
+
 SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_1" in c.id]
 
 
