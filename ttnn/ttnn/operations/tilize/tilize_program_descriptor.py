@@ -114,6 +114,10 @@ DEPTH1_MAX_BLOCKS_PER_CORE = 4
 # Sweep hook: probes set this to force a core cap while re-measuring the knee.
 # None => A0_KNEE_CORES decides. Never set in production.
 CORE_CAP_OVERRIDE = None
+# Sweep hook: force a smaller chunk width, i.e. MORE chunk-blocks per core at the
+# same core count. Refinement 2b uses it to sweep the read/write-overlap gate
+# (`chunk_blocks_pays`) without changing the shape. Never set in production.
+CHUNK_CAP_OVERRIDE = None
 
 CB_RM_INPUT = 0
 # Refinement 2b staging buffer -- one `piece_bytes` window, allocated ONLY on the
@@ -293,6 +297,40 @@ SEM_FANIN_READY = 0
 L1_CB_BUDGET_FANIN_BYTES = 196608
 
 
+# --- Refinement 2b, second lever: per-core transaction-order rotation ----------
+#
+# An interleaved tensor puts page p in DRAM bank `p % NUM_DRAM_BANKS` (12 on WH B0),
+# and every core issues its transactions in the same page order. On the wide-short
+# regime (`nt_h == 1`) all `ncores` cores read the SAME 32 source pages, so at issue
+# step r every core hits ONE bank while the other 11 idle: the requests are spread
+# across banks in aggregate but CLUSTERED in time. The write side has the same shape
+# for a different reason -- a core writes `chunk_wt` consecutive output tile pages, so
+# with chunk_wt = 8 over 12 banks the 64 cores only ever start on 3 distinct banks.
+#
+# `stagger` rotates each work unit's issue order (`row_rot` on the read side,
+# `col_rot` on the write side) so step 0 is spread over the banks. It is a pure index
+# permutation -- same transactions, same count, same size, same L1 addresses, no extra
+# L1 and no extra state -- which is what makes it counterfactualable at zero risk.
+# The payoff gate below is MEASURED.
+# `stagger` is a BITMASK, and the two halves are measured separately because they
+# de-cluster two different things: the READ rotation only matters when several cores
+# read the SAME source pages (`n_w > 1`, i.e. the tile-row is split by column), while
+# the WRITE rotation is about a core's own run of consecutive output pages.
+STAGGER_READ = 1
+STAGGER_WRITE = 2
+
+
+def stagger_pays(ncores: int, n_w: int, chunk_wt: int) -> int:
+    """Refinement 2b gate: which halves of the issue-order rotation pay?
+
+    Returns a ``STAGGER_READ | STAGGER_WRITE`` bitmask. Clauses set by the device
+    sweep recorded in ``changelog.md`` § "Refinement 2b".
+    """
+    if ncores <= 1:
+        return 0  # one core cannot cluster against itself
+    return STAGGER_READ | STAGGER_WRITE
+
+
 def _lever_flags():
     """Env counterfactual switches for the read-path levers (Mode-C ledger).
 
@@ -312,6 +350,7 @@ def _lever_flags():
         b10=int(os.environ.get("TILIZE_LEVER_B10", "1")),
         a3=int(os.environ.get("TILIZE_LEVER_A3", "1")),
         r2b=int(os.environ.get("TILIZE_LEVER_R2B", "1")),
+        stg=int(os.environ.get("TILIZE_LEVER_STG", "1")),
     )
 
 
@@ -790,6 +829,7 @@ def _plan_alias(plan, geo):
             "bank_placement": 0,
             "read_vcs": None,
             "write_vcs": None,
+            "stagger": 0,
             "fanin_mode": 0,
             "fanin_groups": 0,
             "fanin_group_rows": 0,
@@ -866,6 +906,8 @@ def _plan_generic(
     max_chunk = min(WT_CHUNK_MAX, max_chunk_l1, max_chunk_par)
     if chunk_cap is not None:
         max_chunk = min(max_chunk, chunk_cap)
+    if CHUNK_CAP_OVERRIDE is not None:  # sweep hook, never set in production
+        max_chunk = min(max_chunk, int(CHUNK_CAP_OVERRIDE))
 
     chunk_wt = _largest_divisor_le(chunk_unit, max_chunk)
     assert wt % chunk_wt == 0, f"chunk_wt={chunk_wt} must divide Wt={wt}"
@@ -1045,6 +1087,36 @@ def _plan_generic(
                         f"kernel's rectangle indexing gives ({want.x},{want.y})"
                     )
 
+    # --- Refinement 2b: per-core transaction-order rotation --------------------
+    # Structurally it only needs the row loop to be this kernel's own (so not B8 /
+    # C7 / B13 / fan-in, each of which owns it) and more than one core (with one core
+    # there is nothing to de-cluster).
+    # Force values mirror B10's convention: 2 = both halves, 3 = read only,
+    # 4 = write only, so the ledger can attribute the delta to one mechanism.
+    stg = levers["stg"]
+    stagger_ok = (
+        row_page_stride == 1
+        and fanin_mode == 0
+        and not split_read
+        and prefetch_blocks == 1
+        and not stateful_read
+        and ncores > 1
+    )
+    if not stagger_ok or stg == 0:
+        stagger = 0
+    elif stg == 2:
+        stagger = STAGGER_READ | STAGGER_WRITE
+    elif stg == 3:
+        stagger = STAGGER_READ
+    elif stg == 4:
+        stagger = STAGGER_WRITE
+    else:
+        stagger = stagger_pays(ncores, n_w, chunk_wt)
+    # The write rotation is a no-op with a single page per block; keep the plan value
+    # honest so the bench column and the tests report what actually happens.
+    if chunk_wt == 1:
+        stagger &= ~STAGGER_WRITE
+
     # --- lever B10: per-reader / per-writer static unicast VC -----------------
     # `vc_spread` is a BITMASK -- bit 0 = spread the reads, bit 1 = spread the
     # writes. Read and write live on different NoCs (B9) and are programmed by
@@ -1090,6 +1162,7 @@ def _plan_generic(
             "bank_placement": bank_placement,
             "read_vcs": read_vcs,
             "write_vcs": write_vcs,
+            "stagger": stagger,
             "fanin_mode": fanin_mode,
             "fanin_groups": fanin_groups if fanin_mode else 0,
             "fanin_group_rows": FANIN_GROUP_ROWS if fanin_mode else 0,
@@ -1248,6 +1321,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["fanin_grid_x"],
         SEM_FANIN_READY,
         CB_STAGE,
+        plan["stagger"] & STAGGER_READ,  # Refinement 2b: rotate the read issue order
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1269,6 +1343,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         SEM_SPLIT_RESERVE,
         SEM_SPLIT_DONE,
         vc_spread,  # lever B10: write VC comes from runtime arg 6
+        1 if (plan["stagger"] & STAGGER_WRITE) else 0,  # Refinement 2b: write order
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -1309,6 +1384,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 # lever B10 (arg 5). Always emitted so the arg layout does not
                 # depend on the lever; only read when `vc_spread`.
                 read_vcs[index] if read_vcs is not None else DEFAULT_UNICAST_VC,
+                # Refinement 2b (arg 6): rotation of this core's 32 stick reads.
+                # Rotating by the work-unit index de-clusters the instantaneous bank
+                # demand; TILE_HW is the period of the row loop.
+                index % TILE_HW,
             ]
             if fanin_mode:
                 # Refinement 2b. Work unit `index` lives in group `g` at slot `slot`;
@@ -1336,6 +1415,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 chunk_count,
                 src_addr,
                 write_vcs[index] if write_vcs is not None else DEFAULT_UNICAST_VC,
+                # Refinement 2b (arg 7): rotation of this core's chunk_wt tile writes.
+                index % chunk_wt,
             ]
             compute_rt[core.x][core.y] = [row_count * chunk_count]
 

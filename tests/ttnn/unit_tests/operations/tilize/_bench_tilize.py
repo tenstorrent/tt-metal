@@ -309,6 +309,88 @@ REGIMES = {
     "p_wide_short_4k_r2b_off": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0)),
     "x_wide_short_4k_r2b_probe": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=3, b13=0)),
     "x_wide_short_4k_r2b_forced": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=2, b13=0)),
+    # --- Refinement 2b, second lever: read/write OVERLAP on the wide-short regime.
+    # The one-sided DM decomposition of b_wide_short (TILIZE_BENCH_SPLIT_DM=1) prices
+    # the read leg at 5 966 ns and the WRITE leg at 7 751 ns, while the whole op takes
+    # 13 461 -- i.e. the two legs overlap by only 2 482 of a possible ~5 966 ns,
+    # because `nt_h == 1` gives every core exactly ONE chunk-block and a single block
+    # has no successor to overlap with. `chunk_cap` forces a narrower chunk => MORE
+    # blocks per core at the SAME 64 cores, which is the only way to create a block
+    # boundary on this shape. The cost is a smaller read transaction
+    # (512 -> 256/128/64 B); the sweep is what decides whether the overlap pays for it.
+    # All rows keep B13/B8 off so the blocking effect is isolated; the `*_gated` rows
+    # add them back at the sizes where their own gates fire.
+    "p_wide_short_chunk8": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, b8=0)),
+    "x_wide_short_chunk4": dict(
+        shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, chunk_cap=4, levers=dict(r2b=0, b13=0, b8=0)
+    ),
+    "x_wide_short_chunk2": dict(
+        shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, chunk_cap=2, levers=dict(r2b=0, b13=0, b8=0)
+    ),
+    "x_wide_short_chunk1": dict(
+        shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, chunk_cap=1, levers=dict(r2b=0, b13=0, b8=0)
+    ),
+    "x_wide_short_chunk4_d2": dict(
+        shape=(1, 1, 32, 16384),
+        dtype=ttnn.bfloat16,
+        chunk_cap=4,
+        double_buffer=True,
+        levers=dict(r2b=0, b13=0, b8=0),
+    ),
+    "x_wide_short_chunk2_d2": dict(
+        shape=(1, 1, 32, 16384),
+        dtype=ttnn.bfloat16,
+        chunk_cap=2,
+        double_buffer=True,
+        levers=dict(r2b=0, b13=0, b8=0),
+    ),
+    "x_wide_short_chunk1_d2": dict(
+        shape=(1, 1, 32, 16384),
+        dtype=ttnn.bfloat16,
+        chunk_cap=1,
+        double_buffer=True,
+        levers=dict(r2b=0, b13=0, b8=0),
+    ),
+    "x_wide_short_chunk2_gated": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, chunk_cap=2, levers=dict(r2b=0)),
+    "x_wide_short_chunk1_gated": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, chunk_cap=1, levers=dict(r2b=0)),
+    # --- Refinement 2b, per-core transaction-order rotation (`stg`) -------------
+    # 0 = off, 1 = gated, 2 = forced. Read and write rotations are decided by the
+    # SAME flag in the planner, so the isolation rows use the one-sided DM ablation
+    # (TILIZE_BENCH_SPLIT_DM=1) to attribute the delta to a leg.
+    "p_wide_short_stg_off": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=0)),
+    "x_wide_short_stg": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=2)),
+    "x_wide_short_stg_read_only": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=3)),
+    "x_wide_short_stg_write_only": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=4)),
+    "x_wide_short_8k_stg_read_only": dict(
+        shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=3)
+    ),
+    "x_wide_short_8k_stg_write_only": dict(
+        shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=4)
+    ),
+    "p_wide_short_4k_stg_off": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=0)),
+    "x_wide_short_4k_stg": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=2)),
+    "p_square_stg_off": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(stg=0)),
+    "x_square_stg_read_only": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(stg=3)),
+    "x_square_stg_write_only": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(stg=4)),
+    "p_g_to_sharded_stg_off": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(stg=0),
+    ),
+    "x_g_to_sharded_stg": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(stg=2),
+    ),
+    "p_square_fp32_stg_off": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.float32, levers=dict(stg=0)),
+    "x_square_fp32_stg": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.float32, levers=dict(stg=2)),
+    "x_square_stg": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(stg=2)),
+    "p_tall_narrow_stg_off": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0, stg=0)),
+    "x_tall_narrow_stg": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0, stg=2)),
+    "p_wide_short_8k_stg_off": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=0)),
+    "x_wide_short_8k_stg": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=2)),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
@@ -489,11 +571,12 @@ def test_bench_tilize(device):
         spec = REGIMES[name]
         # A0 counterfactual rows force a core cap through the planner's sweep hook.
         tpd.CORE_CAP_OVERRIDE = spec.get("core_cap")
+        tpd.CHUNK_CAP_OVERRIDE = spec.get("chunk_cap")
         # Refinement-1c lever counterfactual rows (B13 stateful reads, C7 split
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
         levers = spec.get("levers") or {}
-        for key in ("b13", "c7", "b8", "b10", "a3", "r2b"):
+        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg"):
             os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, 1))
         tt_input, out_cfg = _build(device, spec)
         plan = _plan_for(device, tt_input, spec, out_cfg)
@@ -532,6 +615,7 @@ def test_bench_tilize(device):
                     b10=plan["vc_spread"],
                     a3=plan["bank_placement"],
                     r2b=plan["fanin_mode"],
+                    stg=plan["stagger"],
                     cb_bytes=plan["cb_bytes_per_core"],
                     ns=ns,
                     cv=(std / ns * 100.0) if ns else 0.0,
@@ -541,9 +625,10 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
-        for key in ("B13", "C7", "B8", "B10", "A3", "R2B"):
+        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG"):
             os.environ[f"TILIZE_LEVER_{key}"] = "1"
         tpd.CORE_CAP_OVERRIDE = None
+        tpd.CHUNK_CAP_OVERRIDE = None
 
     arch = os.environ.get("ARCH_NAME", "unknown")
     lines = [
@@ -555,7 +640,7 @@ def test_bench_tilize(device):
         f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
         f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
         f"    {'regime':<34} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
-        f"{'blk':>4} {'B13':>4} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'cbB/core':>9} "
+        f"{'blk':>4} {'B13':>4} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'cbB/core':>9} "
         f"{'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
@@ -563,7 +648,7 @@ def test_bench_tilize(device):
         lines.append(
             f"    {r['regime']:<34} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
             f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['c7']:>3} "
-            f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} "
+            f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} {r['stg']:>4} "
             f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )
     print("\n".join(lines))

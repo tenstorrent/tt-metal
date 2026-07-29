@@ -12,6 +12,14 @@
 //       Whole-TILE-page writes through the output TensorAccessor, chunk_wt
 //       writes per barrier (lever B7).
 //
+//   stagger == 1  (Refinement 2b — per-core write-order rotation)
+//       Output tile page p lives in DRAM bank `p % NUM_DRAM_BANKS`, and every core
+//       writes its `chunk_wt` pages in ascending order, so the instantaneous bank
+//       demand is clustered on a few banks (with chunk_wt = 8 over 12 banks the 64
+//       cores only ever start on 3 distinct banks). Rotating each core's write order
+//       by `col_rot` spreads step 0 across the banks. Pure index permutation: same
+//       pages, same size, same count, same CB bookkeeping.
+//
 //   split_read == 1  (lever C7 — this kernel also READS)
 //       With one chunk-block per core BRISC would sit in cb_wait_front for the
 //       whole read window (~1.5-3 us) and then work for ~1.4 us, so its NoC
@@ -63,7 +71,8 @@ void kernel_main() {
     constexpr uint32_t sem_done_id = get_compile_time_arg_val(10);
     constexpr uint32_t vc_spread = get_compile_time_arg_val(11);  // lever B10 (bitmask)
     constexpr bool write_vc_spread = (vc_spread & 2u) != 0;       // bit 1 == spread the writes
-    constexpr auto dst_args = TensorAccessorArgs<12>();
+    constexpr uint32_t stagger = get_compile_time_arg_val(12);    // Refinement 2b
+    constexpr auto dst_args = TensorAccessorArgs<13>();
     // Declared unconditionally (never inside `if constexpr`) so the CT arg offsets
     // are the same in both configurations; only used when split_read.
     [[maybe_unused]] constexpr auto src_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
@@ -91,6 +100,9 @@ void kernel_main() {
         // stops the compiler folding NOC_CMD_STATIC_VC(vc) into the constant
         // NOC_CTRL word, i.e. it would make the lever cost something even when off.
         [[maybe_unused]] const uint32_t write_vc = write_vc_spread ? get_arg_val<uint32_t>(6) : NOC_UNICAST_WRITE_VC;
+        // Refinement 2b: this core's rotation of the in-block write order. Read as a
+        // constant 0 when the lever is off, so the loop below folds back to `k`.
+        const uint32_t col_rot = stagger ? get_arg_val<uint32_t>(7) : 0;
 
         for (uint32_t c = 0; c < chunk_count; ++c) {
             const uint32_t col0 = (chunk_start + c) * chunk_wt;
@@ -124,18 +136,20 @@ void kernel_main() {
                 const uint32_t base_page = (row_start + r) * wt + col0;
 
                 cb_wait_front(cb_tiled_output, chunk_wt);
-                uint32_t l1_addr = get_read_ptr(cb_tiled_output);
-                for (uint32_t k = 0; k < chunk_wt; ++k) {
+                const uint32_t l1_addr = get_read_ptr(cb_tiled_output);
+                for (uint32_t i = 0; i < chunk_wt; ++i) {
+                    // `k` is the tile inside the block; the rotation only changes the
+                    // ISSUE ORDER, never the (page, L1 address) pairing.
+                    const uint32_t k = (i + col_rot) < chunk_wt ? (i + col_rot) : (i + col_rot - chunk_wt);
                     const uint64_t noc_addr = accessor.get_noc_addr(base_page + k);
                     if constexpr (skip_dm) {
                         volatile uint32_t sink = static_cast<uint32_t>(noc_addr);
                         (void)sink;
                     } else if constexpr (write_vc_spread) {
-                        noc_async_write(l1_addr, noc_addr, tile_bytes, noc_index, write_vc);
+                        noc_async_write(l1_addr + k * tile_bytes, noc_addr, tile_bytes, noc_index, write_vc);
                     } else {
-                        noc_async_write(l1_addr, noc_addr, tile_bytes);
+                        noc_async_write(l1_addr + k * tile_bytes, noc_addr, tile_bytes);
                     }
-                    l1_addr += tile_bytes;
                 }
                 // Recycling the CB pages only requires the writes to have DEPARTED
                 // (the data read out of L1), not to have been acked by the

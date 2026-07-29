@@ -73,6 +73,19 @@
 //       or the next program on this core inherits the custom VC and loses DRAM
 //       bandwidth (same hazard the dram-sharded matmul reader documents).
 //
+//   stagger == 1  (Refinement 2b — per-core transaction-order rotation)
+//       An interleaved tensor puts page p in DRAM bank `p % NUM_DRAM_BANKS`, and
+//       every core issues its 32 stick reads in the SAME page order (row 0 first).
+//       With `nt_h == 1` all cores read the same 32 pages, so at issue step r all
+//       64 cores hit ONE bank while the other 11 idle -- the requests are spread
+//       over the banks in aggregate but CLUSTERED in time. This lever rotates each
+//       core's issue order by `row_rot` (and the writer's by `col_rot`), so step 0
+//       is spread over the banks instead of piling onto one. It is a pure index
+//       permutation: same transactions, same count, same size, same L1
+//       destinations, zero extra state. The rotation is expressed as TWO
+//       `read_stick_rows_for_tilize` calls over the two row runs, so the helper
+//       still owns the address generation.
+//
 //   fanin_mode != 0  (Refinement 2b — whole-page staged read + L1 redistribution)
 //       Only fires on the wide-short fan-in regime (`nt_h == 1`, one chunk-block per
 //       core), where all `ncores` cores read disjoint `chunk_row_bytes` slices of the
@@ -147,7 +160,8 @@ void kernel_main() {
     constexpr uint32_t grp_w = get_compile_time_arg_val(20);
     constexpr uint32_t sem_fanin_id = get_compile_time_arg_val(21);
     constexpr uint32_t cb_stage = get_compile_time_arg_val(22);
-    constexpr auto src_args = TensorAccessorArgs<23>();
+    constexpr uint32_t stagger = get_compile_time_arg_val(23);  // Refinement 2b
+    constexpr auto src_args = TensorAccessorArgs<24>();
 
     using dataflow_kernel_lib::StickReadMode;
     constexpr StickReadMode read_mode = stateful_read ? StickReadMode::Stateful : StickReadMode::Generic;
@@ -168,6 +182,11 @@ void kernel_main() {
         !fanin_mode || (row_page_stride == 1 && !split_read && prefetch_blocks == 1 && !stateful_read),
         "the fan-in redistribution replaces the stick reads; B13/C7/B8 cannot also own them");
     static_assert(fanin_mode != 1 || group_size % grp_w == 0, "the fan-in group must be a core rectangle");
+    // The rotation owns the row loop, so it cannot coexist with a lever that also
+    // owns it (B8 flattens the block sequence, C7 splits it, B13 forces bank-major).
+    static_assert(
+        !stagger || (prefetch_blocks == 1 && !split_read && !stateful_read && !fanin_mode),
+        "the read-order rotation owns the row loop; B8/C7/B13/fan-in cannot also own it");
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -193,8 +212,8 @@ void kernel_main() {
 
         if constexpr (fanin_mode != 0) {
             // --- Refinement 2b: whole-page staged read (+ L1 redistribution) ------
-            const uint32_t stage_page = get_arg_val<uint32_t>(6);
-            const uint32_t stage_offset = get_arg_val<uint32_t>(7);
+            const uint32_t stage_page = get_arg_val<uint32_t>(7);
+            const uint32_t stage_offset = get_arg_val<uint32_t>(8);
 
             if constexpr (fanin_mode == 2) {
                 // Measurement probe: the staged read alone, straight into the CB
@@ -212,9 +231,9 @@ void kernel_main() {
             }
 
             constexpr uint32_t grp_h = group_size / grp_w;
-            const uint32_t my_slot = get_arg_val<uint32_t>(8);
-            tt_l1_ptr uint32_t* grp_x = (tt_l1_ptr uint32_t*)get_arg_addr(9);
-            tt_l1_ptr uint32_t* grp_y = (tt_l1_ptr uint32_t*)get_arg_addr(9 + grp_w);
+            const uint32_t my_slot = get_arg_val<uint32_t>(9);
+            tt_l1_ptr uint32_t* grp_x = (tt_l1_ptr uint32_t*)get_arg_addr(10);
+            tt_l1_ptr uint32_t* grp_y = (tt_l1_ptr uint32_t*)get_arg_addr(10 + grp_w);
 
             // Phase 1 -- ONE contiguous read of this core's piece of one source page.
             const uint32_t stage_addr = get_write_ptr(cb_stage);
@@ -334,7 +353,40 @@ void kernel_main() {
         for (uint32_t c = 0; c < chunk_count; ++c) {
             const uint32_t byte_offset = (chunk_start + c) * chunk_row_bytes;
 
-            if constexpr (row_page_stride == 1 && !split_read && !skip_dm) {
+            if constexpr (row_page_stride == 1 && stagger && !split_read) {
+                // --- Refinement 2b: rotated issue order (see the header) ---------
+                // Two helper calls == the two row runs [rot, 32) and [0, rot). The
+                // L1 destination still follows the row index, so the block the
+                // compute kernel sees is byte-identical to the unrotated one.
+                const uint32_t rot = get_arg_val<uint32_t>(6);
+                for (uint32_t block = 0; block < num_rows / tile_height; ++block) {
+                    const uint32_t row0 = start_row + block * tile_height;
+                    cb_reserve_back(cb_rm_input, chunk_wt);
+                    const uint32_t l1_addr = get_write_ptr(cb_rm_input);
+                    if constexpr (!skip_dm) {
+                        dataflow_kernel_lib::read_stick_rows_for_tilize<StickReadMode::Generic, 1>(
+                            accessor,
+                            row0 + rot,
+                            chunk_row_bytes,
+                            byte_offset,
+                            l1_addr + rot * chunk_row_bytes,
+                            chunk_row_bytes,
+                            tile_height - rot);
+                        if (rot != 0) {
+                            dataflow_kernel_lib::read_stick_rows_for_tilize<StickReadMode::Generic, 1>(
+                                accessor, row0, chunk_row_bytes, byte_offset, l1_addr, chunk_row_bytes, rot);
+                        }
+                    } else {
+                        for (uint32_t row = 0; row < tile_height; ++row) {
+                            volatile uint32_t sink =
+                                static_cast<uint32_t>(accessor.get_noc_addr(row0 + row, byte_offset));
+                            (void)sink;
+                        }
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_rm_input, chunk_wt);
+                }
+            } else if constexpr (row_page_stride == 1 && !split_read && !skip_dm) {
                 dataflow_kernel_lib::
                     read_sticks_for_tilize<cb_rm_input, dataflow_kernel_lib::TilizeGranularity::TILE, read_mode>(
                         accessor, num_rows, chunk_row_bytes, start_row, byte_offset);
