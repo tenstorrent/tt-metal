@@ -41,7 +41,7 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
     // arg type (H2DStreamService vs D2DStreamServiceReceiver). The now-overloaded
     // function address must be disambiguated via these typedefs.
     using H2DReceiverFn = std::vector<ttnn::Tensor> (*)(const tt::tt_metal::H2DStreamService&, uint32_t);
-    using D2DReceiverFn = std::vector<ttnn::Tensor> (*)(const tt::tt_metal::D2DStreamServiceReceiver&, uint32_t);
+    using D2DReceiverFn = std::vector<ttnn::Tensor> (*)(const ttnn::D2DStreamServiceReceiver&, uint32_t);
 
     ttnn::bind_function<"inbound_socket_service_sync", "ttnn.experimental.deepseek_prefill.">(
         mod,

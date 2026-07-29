@@ -56,7 +56,7 @@ enum class ConvT2dExecutionPath {
 // Helper function to determine which conv2d execution path to take based on
 // slice configuration and input tensor properties
 ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
-    const tt::tt_metal::StorageType& storage_type,
+    const ttnn::StorageType& storage_type,
     const MemoryConfig& memory_config,
     const std::optional<const op_slicing::Op2DSliceConfig>& slice_config);
 

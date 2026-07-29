@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 
 namespace test_utils {
 
@@ -24,7 +25,7 @@ void test_tensor_on_device(
     tt::tt_metal::distributed::MeshDevice& device) {
     using namespace tt::tt_metal;
 
-    const auto input_buf_size = layout.compute_packed_buffer_size_bytes(input_shape);
+    const auto input_buf_size = layout.impl().compute_packed_buffer_size_bytes(input_shape);
 
     std::vector<std::byte> host_data(input_buf_size);
     std::vector<std::byte> readback_data(input_buf_size);

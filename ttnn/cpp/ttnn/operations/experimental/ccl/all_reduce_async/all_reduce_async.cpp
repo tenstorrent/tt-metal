@@ -179,7 +179,7 @@ ttnn::Tensor all_reduce_async(
     const bool change_mem_config = input_is_sharded;
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
-            ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
         interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
     // .value_or() returns by value, .value() returns by reference
@@ -201,10 +201,13 @@ ttnn::Tensor all_reduce_async(
 
         // AllGather (1, B, C, H, W) -> (num_devices, B, C, H, W)
         composite_dim = 0;
+        // TODO(#30798): pass topology=nullopt for best perf (there's multiple places in this file).
+        // Needs to be verified.
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
             resolved_num_links,
+            ttnn::ccl::Topology::Linear,
             out_memory_config,
             worker_subdevice_id_opt,
             std::nullopt);
@@ -297,7 +300,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<ttnn::Tensor> interleaved_input_tensor;
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
-            ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
         interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
     // .value_or() returns by value, .value() returns by reference
@@ -328,6 +331,7 @@ ttnn::Tensor all_reduce_async(
             reshaped_tensor,
             composite_dim,
             resolved_num_links,
+            ttnn::ccl::Topology::Linear,
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             worker_subdevice_id_opt,
             cluster_axis);

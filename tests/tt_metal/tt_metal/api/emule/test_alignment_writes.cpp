@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Noc*"
+// To run (from the tt-metal repo root, after an emule build):
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Noc*"
 //
 // The DRAM-read tests are arch-specific (`_WH` = 32 B rule, `_BH` = 64 B rule).
 // Each one queries the device arch at runtime and GTEST_SKIPs when it doesn't

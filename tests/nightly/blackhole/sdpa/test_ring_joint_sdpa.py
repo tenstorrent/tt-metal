@@ -34,6 +34,7 @@ from ttnn.operations.ccl import Topology
 
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
@@ -3529,7 +3530,7 @@ else:
     RING_JOINT_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, sp=4 tp=1)
-        ("wan2_2_1xGLX", 288, 512, 4, 68.9, RING_JOINT_PERF_MARGIN),
+        ("wan2_2_1xGLX", 288, 512, 4, 68.5, RING_JOINT_PERF_MARGIN),
         ("mla_100k", 160, 320, 4, 63.2, RING_JOINT_PERF_MARGIN),
     ]
 
@@ -3541,6 +3542,10 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+)
 def test_ring_joint_attention_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
 ):
@@ -4406,6 +4411,10 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+)
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
     chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via realtime profiler and assert

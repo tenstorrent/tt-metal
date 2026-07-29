@@ -39,7 +39,7 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
     return Conv2dShardedProgramFactory{};
 }
 
-TensorSpec Conv2dDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
@@ -67,7 +67,7 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
             tt::tt_metal::ShardSpec{shard_grid, shard_shape, args.memory_config.shard_spec().value().orientation};
         auto mem_config = tt::tt_metal::MemoryConfig(
             args.memory_config.memory_layout(), args.memory_config.buffer_type(), shard_spec);
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 args.dtype,
@@ -79,7 +79,7 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
                                                   // Row Major.
                 ));
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             args.dtype,

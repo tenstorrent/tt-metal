@@ -32,7 +32,8 @@ struct NlpCreateHeadsBoltzDeviceOperation {
         std::vector<std::optional<Tensor>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::TensorSpec>;
+    using spec_return_value_t =
+        std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
     struct Interleaved {

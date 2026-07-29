@@ -46,7 +46,7 @@ void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_hit(
 
 DramPrefetcherValidatorDeviceOperation::spec_return_value_t
 DramPrefetcherValidatorDeviceOperation::compute_output_specs(const operation_attributes_t&, const tensor_args_t&) {
-    return std::vector<ttnn::TensorSpec>{};
+    return std::vector<tt::tt_metal::TensorSpec>{};
 }
 
 DramPrefetcherValidatorDeviceOperation::tensor_return_value_t

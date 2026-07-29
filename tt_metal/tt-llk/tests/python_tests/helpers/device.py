@@ -20,11 +20,10 @@ from ttexalens.tt_exalens_lib import (
     check_context,
     convert_coordinate,
     parse_elf,
-    read_from_device,
     read_word_from_device,
-    write_words_to_device,
 )
 
+from .device_io import read_from_device, write_words_to_device
 from .llk_params import BriscCmd
 from .logger import logger
 

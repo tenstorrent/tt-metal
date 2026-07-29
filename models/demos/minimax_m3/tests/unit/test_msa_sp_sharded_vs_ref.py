@@ -87,7 +87,7 @@ def test_msa_sp_sharded(mesh_device, device_params, chunk_local, reset_seeds):
         scale=scale,
         block_size=BLOCK,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
-        cluster_axis=sp_axis,
+        seq_shard_axes=[sp_axis],
     )
     bs_dev = ttnn.get_device_tensors(block_scores)
     # Per SP row r, the LAST local query (row 639) is at global r*640+639. Its causal frontier = the count

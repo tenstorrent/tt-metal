@@ -32,7 +32,7 @@ void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
     }
 
     log_debug(tt::LogOp, "rank {}", rank);
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (auto i = 0; i < ttnn::MAX_NUM_DIMENSIONS; ++i) {
         log_debug(tt::LogOp, "dim[{}] = {}", i, dim[i]);
     }
 }
@@ -62,8 +62,8 @@ inline void moreh_linear_backward_validate(
 }
 
 ttsl::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
-    ttsl::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    ttsl::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> a_dim(ttnn::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> b_dim(ttnn::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
     get_tensor_dim(b_dim, b_shape);
     int32_t rank = std::max(a_shape.rank(), b_shape.rank());
@@ -85,11 +85,11 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
     const auto& a_shape = tensor_a.padded_shape();
     const auto& b_shape = tensor_b.padded_shape();
-    ttsl::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    ttsl::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> a_dim(ttnn::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> b_dim(ttnn::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
     get_tensor_dim(b_dim, b_shape);
-    for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (auto i = 2; i < ttnn::MAX_NUM_DIMENSIONS; ++i) {
         if (a_dim[i] != b_dim[i]) {
             log_debug(tt::LogOp, "{}:{} {} a_dim {} - b_dim {}", __func__, __LINE__, i, a_dim[i], b_dim[i]);
             return false;

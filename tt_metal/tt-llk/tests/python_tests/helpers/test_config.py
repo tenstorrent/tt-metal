@@ -22,10 +22,7 @@ from ttexalens.tt_exalens_lib import (
     TTException,
     load_elf,
     parse_elf,
-    read_from_device,
     read_word_from_device,
-    write_to_device,
-    write_words_to_device,
 )
 
 from . import device as device_module
@@ -46,6 +43,7 @@ from .device import (
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
 )
+from .device_io import read_from_device, write_to_device, write_words_to_device
 from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -1148,7 +1146,7 @@ class TestConfig:
 
         if self.formats_config is None:
             header_content.append(
-                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.value};"
+                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
             )
         else:
             header_content.append(
@@ -1559,14 +1557,24 @@ class TestConfig:
             else timeout
         )
 
+        # Poll every mailbox in a single NoC transaction. They occupy one
+        # contiguous block (Unpacker, +4, +8, plus +12 on Quasar), so reading the
+        # whole span costs one round trip per iteration instead of one per TRISC.
+        # Taking min/max rather than assuming adjacency keeps this correct even
+        # if the layout gains a gap; it would just read a slightly wider span.
+        base = min(mailbox.value for mailbox in mailboxes)
+        span = max(mailbox.value for mailbox in mailboxes) + 4 - base
+        word_index = {mailbox: (mailbox.value - base) // 4 for mailbox in mailboxes}
+
         completed = set()
         end_time = time.time() + timeout
         while time.time() < end_time:
+            words = np.frombuffer(
+                read_from_device(TestConfig.TENSIX_LOCATION, base, num_bytes=span),
+                dtype=np.uint32,
+            )
             for mailbox in mailboxes - completed:
-                if (
-                    read_word_from_device(TestConfig.TENSIX_LOCATION, mailbox.value)
-                    == KERNEL_COMPLETE
-                ):
+                if words[word_index[mailbox]] == KERNEL_COMPLETE:
                     completed.add(mailbox)
 
             if poll_callback is not None:

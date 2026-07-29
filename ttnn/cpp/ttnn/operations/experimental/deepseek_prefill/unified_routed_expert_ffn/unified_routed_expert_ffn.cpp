@@ -25,46 +25,25 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<uint32_t>& input_m_tiles,
     bool read_x_at_offset,
     bool x_is_row_major,
-    RoutedExpertActivation activation) {
+    RoutedExpertActivation activation,
+    const std::optional<ttnn::Tensor>& gate_bias,
+    const std::optional<ttnn::Tensor>& up_bias,
+    const std::optional<ttnn::Tensor>& down_bias) {
     // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
-    // device-side at entry and bounds its chunk loop to
-    // ceil(count / chunk_M_tiles) — chunks past the actual token count are
-    // skipped entirely (no matmul, no mcast).
+    // device-side at entry and, from that runtime count, PICKS chunk_M_tiles /
+    // per_core_M / num_chunks itself (adaptive_chunk.hpp) — sizing the per-core
+    // work to the actual token count with no expected-token argument. chunks
+    // past the count are skipped entirely (no matmul, no mcast).
     //
-    // chunk_M_tiles: any value in {16, 24, 32, 40, 48, 56, 64} (per_core_M =
-    // chunk_M_tiles / GRID_Y, must be >= 2 and <= 8). M_tiles_full does NOT
-    // need to be a multiple of chunk_M_tiles — the kernel runs
-    // ceil(M_tiles_full / chunk_M_tiles) chunks, reader zero-fills L1 rows
-    // past M_tiles_full in the last chunk, writer skips OOB output writes.
-    //
-    // Picker minimizes the number of chunks first (= ceil(M / chunk)). Each
-    // chunk pays ~25 K-block handshakes (14 gate/up + 11 down) regardless of
-    // per_core_M, so fewer chunks wins more than waste hurts compute. On tie
-    // (same num_chunks), prefers smaller waste = closer to-aligned. For
-    // DS-V3 this picks 64 for nearly all sizes; 5k → 64 (3 chunks, was 40
-    // with 4 chunks); 25k → 64 (13 chunks, was 40 with 20 chunks).
-    constexpr uint32_t kGridY = 8;
-    constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
-    constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
+    // The host only sets the CB-sized MAXIMUM chunk (kMaxChunkMTiles => per_core_M
+    // 8). The program factory's L1 guard may lower it for large models; the
+    // device picker never exceeds whatever max the CBs were sized to.
+    constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M_max = 8 (L1 cap)
     // This expert's M in tiles. Defaults to x's allocated M; a caller passing a
     // shared x buffer (wider than one region) supplies the per-expert value.
     const uint32_t M_tiles_full = input_m_tiles.value_or(x.padded_shape()[-2] / 32);
-    uint32_t chunk_M_tiles = kMaxChunkMTiles;
-    uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
-    uint32_t best_waste = kMaxChunkMTiles + 1;
-    for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
-        const uint32_t num_chunks = (M_tiles_full + cand - 1) / cand;
-        const uint32_t rem = M_tiles_full % cand;
-        const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
-        const bool better = (num_chunks < best_num_chunks) || (num_chunks == best_num_chunks && waste < best_waste);
-        if (better) {
-            best_num_chunks = num_chunks;
-            best_waste = waste;
-            chunk_M_tiles = cand;
-        }
-    }
 
     return ttnn::prim::unified_routed_expert_ffn(
         x,
@@ -74,7 +53,7 @@ ttnn::Tensor unified_routed_expert_ffn(
         counts,
         global_expert_idx_table,
         local_expert_id,
-        chunk_M_tiles,
+        kMaxChunkMTiles,
         M_tiles_full,
         read_x_at_offset,
         x_is_row_major,
@@ -82,7 +61,10 @@ ttnn::Tensor unified_routed_expert_ffn(
                                           : std::nullopt,
         output,
         expert_region_offsets,
-        activation);
+        activation,
+        gate_bias,
+        up_bias,
+        down_bias);
 }
 
 ttnn::Tensor unified_routed_expert_moe(
@@ -95,7 +77,10 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    RoutedExpertActivation activation) {
+    RoutedExpertActivation activation,
+    const std::optional<std::vector<ttnn::Tensor>>& gate_biases,
+    const std::optional<std::vector<ttnn::Tensor>>& up_biases,
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -104,6 +89,26 @@ ttnn::Tensor unified_routed_expert_moe(
         down_projs.size());
     const uint32_t experts_per_chip = static_cast<uint32_t>(gate_projs.size());
     TT_FATAL(experts_per_chip > 0, "Need at least one expert per chip");
+
+    // Optional per-expert biases (gpt-oss): all three lists together or none,
+    // each the same length as the weight lists (one bias per local expert).
+    const int bias_lists = static_cast<int>(gate_biases.has_value()) + static_cast<int>(up_biases.has_value()) +
+                           static_cast<int>(down_biases.has_value());
+    TT_FATAL(
+        bias_lists == 0 || bias_lists == 3,
+        "gate/up/down bias lists must all be provided together or all omitted (got {} of 3)",
+        bias_lists);
+    const bool has_bias = bias_lists == 3;
+    if (has_bias) {
+        TT_FATAL(
+            gate_biases->size() == experts_per_chip && up_biases->size() == experts_per_chip &&
+                down_biases->size() == experts_per_chip,
+            "bias lists must have one entry per local expert ({}), got ({}, {}, {})",
+            experts_per_chip,
+            gate_biases->size(),
+            up_biases->size(),
+            down_biases->size());
+    }
 
     // Per-expert composite: run the unified FFN on each expert's slice of the
     // dispatched buffer at that expert's region offset (read_x_at_offset for the
@@ -154,7 +159,10 @@ ttnn::Tensor unified_routed_expert_moe(
             m_tiles,
             /*read_x_at_offset=*/true,
             x_is_row_major,
-            activation);
+            activation,
+            has_bias ? std::optional<ttnn::Tensor>((*gate_biases)[local_expert]) : std::nullopt,
+            has_bias ? std::optional<ttnn::Tensor>((*up_biases)[local_expert]) : std::nullopt,
+            has_bias ? std::optional<ttnn::Tensor>((*down_biases)[local_expert]) : std::nullopt);
     }
     return output;
 }
