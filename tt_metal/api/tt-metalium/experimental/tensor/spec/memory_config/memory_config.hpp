@@ -47,12 +47,18 @@ public:
     bool is_dram() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "memory_layout", "buffer_type", "shard_spec", "nd_shard_spec", "created_with_nd_shard_spec");
+        "memory_layout",
+        "buffer_type",
+        "shard_spec",
+        "nd_shard_spec",
+        "created_with_nd_shard_spec",
+        "per_core_allocation");
     std::tuple<
         const TensorMemoryLayout&,
         const BufferType&,
         const std::optional<ShardSpec>&,
         const std::optional<NdShardSpec>&,
+        const bool&,
         const bool&>
     attribute_values() const;
 
