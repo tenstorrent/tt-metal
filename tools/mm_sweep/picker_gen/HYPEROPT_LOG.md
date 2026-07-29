@@ -1144,3 +1144,50 @@ NOT a regression from this campaign: the earlier corpus snapshot in `regime_a_cu
 this shape as `cls: "picker_infeasible", cfg: null`. The fix is contained -- fall back to searching Sm>1 in the
 anchor step when no Sm=1 config is feasible -- but it is a picker-coverage fix rather than a perf change, so it
 is left un-implemented pending a decision.
+
+### FPU utilization added to the sweep table
+
+Chip FLOPs are DOCUMENTED in this repo, so no guessing was needed:
+`tech_reports/GEMM_FLOPS/GEMM_FLOPS.md` states the BH matrix engine computes `8x16 x 16x16` in a single cycle =
+`2*8*16*16 = 4096` FLOP/cycle, that MATH_FIDELITY divides that, and gives the per-engine table
+(LoFi ~5.4 / HiFi2 ~2.7 / HiFi4 ~1.35 TFLOPS at 1.35 GHz). This op is bf16 in/out at **HiFi2** with fp32
+accumulation, so its peak is **2048 FLOP/cycle/core = 2.765 TFLOP/s per core**. fp32 dest accumulation costs DST
+capacity, not MAC throughput.
+
+Grid: device-queried `compute_with_storage_grid_size` = **11x10 = 110 cores** on this board => **304 TFLOP/s**
+full-grid peak. Deliberately NOT the 13x10 = 130 the tech report quotes for Blackhole generally -- this board has
+harvested columns, and using 130 would understate utilization by 18%.
+
+Two columns, because they answer different questions:
+- **FPU%grid** = achieved / 304 TFLOP/s -- utilization of the whole chip.
+- **FPU%core** = achieved / (allocated cores x 2.765 TFLOP/s) -- utilization of the cores the op actually used.
+The gap between them is purely "grid not fully used" (the op picks 24-96 of 110 cores).
+
+| metric | value |
+|---|---|
+| achieved | min 9.2, median **30.5**, max 160.9 TFLOP/s |
+| FPU util vs full 110-core grid | median **10.0%**, max 52.9% (512x6144x4608) |
+| FPU util vs allocated cores | median **20.3%**, max 60.6% (512x6144x4608) |
+
+**This is the expected shape of a DRAM-bandwidth-optimal matmul and not a defect:** median 85% of peak DRAM
+against median 10% of peak FPU. These are low-arithmetic-intensity shapes (M<<N), so the roofline says they are
+memory-bound by a wide margin; the FPU is idle because there is nothing for it to do while the data streams. The
+one shape with high FPU utilization, 512x6144x4608 at 60.6% of its allocated cores, is exactly the one shape the
+earlier roofline work found to be COMPUTE-floor-bound rather than DRAM-bound -- an independent confirmation from
+a completely different measurement.
+
+**Cross-check of the peak against measured data.** Comparing the theoretical FPU time against the
+independently-measured compute floors (diag mask 2101, from the ablation campaign):
+
+| shape | theoretical us | measured compute-only | ratio | compute/wall | FPU%wall |
+|---|---|---|---|---|---|
+| 512x6144x4608 | 109.2 | 139.2 | 1.27 | 77% | 60.6% |
+| 512x6144x2304 | 54.6 | 70.0 | 1.28 | 64% | 49.7% |
+| 256x6144x6144 | 72.8 | 90.2 | 1.24 | 48% | 38.8% |
+| 256x6144x4608 | 54.6 | 68.6 | 1.26 | 49% | 38.6% |
+| 256x15360x1536 | 45.5 | 55.5 | 1.22 | 41% | 33.6% |
+| 256x6080x4640 | 54.4 | 86.1 | 1.58 | 58% | 36.6% |
+
+The ratio is a consistent 1.22-1.28x (one outlier at 1.58x), i.e. **60-80% FPU efficiency inside the compute
+phase**, the balance being unpack/pack/reconfig overhead. That consistency is the validation: a wrong peak would
+give ratios below 1.0 (physically impossible) or scatter wildly across shapes.

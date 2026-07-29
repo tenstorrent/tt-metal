@@ -25,6 +25,18 @@ path = next((a for a in sys.argv[1:] if not a.startswith("--")), f"{S}/prod_swee
 AS_MD = "--md" in sys.argv
 PEAK = 512.0  # GB/s, measured BH DRAM ceiling used throughout this campaign
 
+# FPU peak, from tech_reports/GEMM_FLOPS/GEMM_FLOPS.md: the BH matrix engine computes 8x16 x 16x16 per cycle
+# = 2*8*16*16 = 4096 FLOPs/cycle, and MATH_FIDELITY divides that. This op runs bf16 in/out at HiFi2 with fp32
+# accumulation, so HiFi2 (divisor 2) => 2048 FLOPs/cycle/core; at 1.35 GHz that is 2.765 TFLOPS per core (the
+# report rounds it to 2.7). fp32 dest accumulation costs DST capacity, not MAC throughput.
+# GRID_CORES is this BOARD's compute_with_storage_grid_size (11x10), device-queried -- NOT the 13x10 the report
+# quotes for Blackhole generally, since this board has harvested columns.
+FLOPS_PER_CYCLE_HIFI2 = 4096 / 2
+CLOCK_HZ = 1.35e9
+CORE_PEAK = FLOPS_PER_CYCLE_HIFI2 * CLOCK_HZ  # 2.765e12 FLOP/s
+GRID_CORES = 110
+GRID_PEAK = GRID_CORES * CORE_PEAK
+
 CFG_RE = re.compile(
     r"regime_a_cfg M=(\d+) K=(\d+) N=(\d+) pick=\((\d+),(\d+),(\d+),(\d+),(\d+)\) cores=(\d+) "
     r"reduction=(\S+) placement=(\S+)"
@@ -57,6 +69,10 @@ for line in open(path):
 
     eff = (Ns * M * K * 2) + (K * N * 2) + (M * N * 2)
     eff_gbps = eff / (wall * 1e-6) / 1e9
+    flops = 2.0 * M * N * K
+    tflops = flops / (wall * 1e-6) / 1e12
+    fpu_grid = 100.0 * flops / GRID_PEAK / (wall * 1e-6)  # vs the whole 110-core grid
+    fpu_alloc = 100.0 * flops / (cores * CORE_PEAK) / (wall * 1e-6)  # vs only the cores the op allocated
 
     Mt, Kt, Nt = cd(M), cd(K), cd(N)
     K_slice = -(-(-(-Kt // Pk)) // (kb * 8)) * (kb * 8)
@@ -86,6 +102,9 @@ for line in open(path):
             spread=spread,
             ispread=iter_spread,
             sov=sched / eff,
+            tflops=tflops,
+            fpu_grid=fpu_grid,
+            fpu_alloc=fpu_alloc,
             ok=r.get("pcc", 0) >= 0.999,
         )
     )
@@ -102,6 +121,9 @@ hdr = [
     "dev us",
     "eff GB/s",
     "%pk",
+    "TFLOP/s",
+    "FPU%grid",
+    "FPU%core",
     "sch/val",
     "PCC",
     "blk%",
@@ -113,17 +135,22 @@ if AS_MD:
     for r in rows:
         print(
             "| {name} | {Mt} | {cfg} | {cores} | {red} | {place} | {wall:.2f} | {eff:.1f} | {pct:.0f}% | "
-            "{sov:.2f} | {pcc:.5f} | {spread:.1f} | {ispread:.1f} |".format(**r)
+            "{tflops:.1f} | {fpu_grid:.1f}% | {fpu_alloc:.1f}% | {sov:.2f} | {pcc:.5f} | {spread:.1f} | "
+            "{ispread:.1f} |".format(**r)
         )
 else:
-    print("{:16s} {:>3s} {:>16s} {:>5s} {:>15s} {:>11s} {:>8s} {:>9s} {:>5s} {:>8s} {:>9s} {:>6s} {:>6s}".format(*hdr))
-    print("-" * 140)
+    print(
+        "{:16s} {:>3s} {:>16s} {:>4s} {:>15s} {:>11s} {:>8s} {:>9s} {:>4s} {:>8s} {:>9s} {:>9s} {:>8s} "
+        "{:>8s} {:>5s} {:>5s}".format(*hdr)
+    )
+    print("-" * 172)
     for r in rows:
         print(
-            "{name:16s} {Mt:3d} {cfg:>16s} {cores:5d} {red:>15s} {place:>11s} {wall:8.2f} {eff:9.1f} "
-            "{pct:4.0f}% {sov:8.2f} {pcc:9.5f} {spread:6.1f} {ispread:6.1f}".format(**r)
+            "{name:16s} {Mt:3d} {cfg:>16s} {cores:4d} {red:>15s} {place:>11s} {wall:8.2f} {eff:9.1f} "
+            "{pct:3.0f}% {tflops:8.1f} {fpu_grid:8.1f}% {fpu_alloc:8.1f}% {sov:8.2f} {pcc:8.5f} "
+            "{spread:5.1f} {ispread:5.1f}".format(**r)
         )
-    print("-" * 140)
+    print("-" * 172)
 
 n = len(rows)
 if n:
@@ -138,6 +165,32 @@ if n:
             statistics.median([r["pct"] for r in rows]),
             sum(1 for r in rows if r["pct"] < 50),
             sum(1 for r in rows if r["pct"] > 80),
+        )
+    )
+    print(
+        "FPU (bf16 HiFi2 = {:.0f} FLOP/cycle/core, {:.3f} TFLOP/s per core, {}-core grid = {:.0f} TFLOP/s):".format(
+            FLOPS_PER_CYCLE_HIFI2, CORE_PEAK / 1e12, GRID_CORES, GRID_PEAK / 1e12
+        )
+    )
+    print(
+        "  achieved: min {:.1f}  median {:.1f}  max {:.1f} TFLOP/s".format(
+            min(r["tflops"] for r in rows),
+            statistics.median([r["tflops"] for r in rows]),
+            max(r["tflops"] for r in rows),
+        )
+    )
+    print(
+        "  FPU util vs FULL 110-core grid: median {:.1f}%  max {:.1f}% ({})".format(
+            statistics.median([r["fpu_grid"] for r in rows]),
+            max(r["fpu_grid"] for r in rows),
+            max(rows, key=lambda z: z["fpu_grid"])["name"],
+        )
+    )
+    print(
+        "  FPU util vs ALLOCATED cores:    median {:.1f}%  max {:.1f}% ({})".format(
+            statistics.median([r["fpu_alloc"] for r in rows]),
+            max(r["fpu_alloc"] for r in rows),
+            max(rows, key=lambda z: z["fpu_alloc"])["name"],
         )
     )
     print(
