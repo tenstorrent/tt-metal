@@ -495,9 +495,10 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
     ttnn.synchronize_device(runtime.mesh_device)
-    logger.info(
-        f"[pp rank {rank}] E2E_CLOCK first_compute_start={first_compute_start:.6f} last_compute_end={time.time():.6f}"
-    )
+    # first_compute_start is None if the loop exited before any chunk was computed (e.g. an immediate
+    # shutdown sentinel, or SIGINT during the initial socket wait) — guard the float format.
+    fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
+    logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
     logger.info(f"[pp rank {rank}] processed {n_done} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
 
 
@@ -584,7 +585,7 @@ def run_request_loop(
                 "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
             )
         pcc_check(
-            kv_cache,
+            kv_caches,
             slot_id=slot_id,
             n_chunks=c,
             trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
@@ -812,7 +813,7 @@ def _serve_standalone(
     # allocated before the trace records, or it corrupts replay on the last rank) and before the chunk loop,
     # so the one-time capture stays out of the timed loop.
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
-        runtime.capture_trace(kv_cache)
+        runtime.capture_trace(kv_caches)
 
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
     run_standalone_loop(runtime, kv_caches, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
@@ -934,7 +935,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # Capture the trace (use_trace) after D2D endpoints + LayerAck are set up, before the request loop
     # (one-time, out of the loop; correct memory + ack ordering). See _serve_standalone / capture_trace().
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
-        runtime.capture_trace(kv_cache)
+        runtime.capture_trace(kv_caches)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     chunks_per_slot, real_end_per_slot, total_chunks = run_request_loop(

@@ -300,7 +300,7 @@ class TtPrefillRuntime:
         over D2D), or the last/single rank's ignored KV-only tuple."""
         return self.model.forward(
             self._trace_input,
-            kv_cache,
+            kv_cache.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
             actual_isl=self.config.chunk_size,
             on_layer_complete=self._on_layer_complete,
             actual_start=None,
