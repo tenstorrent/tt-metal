@@ -72,7 +72,8 @@ def tt_device_lock(lock_path: str = _TT_DEVICE_LOCK_PATH, timeout: float = _TT_D
     if lock_dir and not os.path.exists(lock_dir):
         os.makedirs(lock_dir, exist_ok=True)
 
-    lock_file = open(lock_path, "a+")  # open the file in append mode to avoid truncation race condition among processes
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    lock_file = os.fdopen(lock_fd, "a+")
     start_time = time.monotonic()
     lock_acquired = False
 
