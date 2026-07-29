@@ -439,26 +439,9 @@ class LTXAttention(Module):
                 parallel_config=kv_parallel_config,
             )
 
-        # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device)
-        # and with RoPE, which the norm applies after its weight — same order as a
-        # trailing rotary_embedding_llama. Q always folds: nothing touches it in between.
-        # K only folds for self-attention; a cross-attn K/V all-gather (and a distinct
-        # K-rope) sits between the norm and K's rotation.
-        fuse_k_rope = rope_cos is not None and prompt_1BLP is None and k_rope_cos is None
-        q_BHNE = self.norm_q(
-            q_1BNF,
-            num_heads_per_device=self.n_local_heads,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-            trans_mat=trans_mat if rope_cos is not None else None,
-        )
-        k_BHNE = self.norm_k(
-            k_1BNF,
-            num_heads_per_device=self.n_local_heads,
-            rope_cos=rope_cos if fuse_k_rope else None,
-            rope_sin=rope_sin if fuse_k_rope else None,
-            trans_mat=trans_mat if fuse_k_rope else None,
-        )
+        # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device).
+        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
+        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -489,9 +472,12 @@ class LTXAttention(Module):
                 k_BHNE = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
-        if rope_cos is not None and not fuse_k_rope:
+        if rope_cos is not None:
             _k_cos = _k_cos_pe
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
+            q_BHNE = ttnn.experimental.rotary_embedding_llama(
+                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+            )
             k_BHNE = ttnn.experimental.rotary_embedding_llama(
                 k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
             )
