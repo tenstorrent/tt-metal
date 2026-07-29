@@ -67,8 +67,14 @@ Optional:
                                         reads the config's baseline counts and prints what fraction of the
                                         default per-sender packet volume you're running. e.g. 1000 for a
                                         quick run.
-    --mpi-if <interface>                Network interface for MPI TCP transport
-                                        (auto-detected if not specified)
+    --mpi-if <interface|none>           Network interface for MPI TCP transport
+                                        (auto-detected if not specified).
+                                        "none" disables interface pinning entirely: no probing
+                                        and no --mca btl_tcp_if_include. Use it when the host
+                                        launching the run is not itself a rank (e.g. CI driving
+                                        ttop workers), where a locally detected interface name
+                                        may not exist on the hosts that run the test.
+                                        Requires --image none.
     --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
                                         e.g. --mpi-args "--tag-output"
     --skip-reorder                      Use --hosts exactly as given; skip the canonical ring
@@ -265,10 +271,25 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     exit 1
 fi
 
-# Validate/auto-detect MPI interface with first host from the list
+# Validate/auto-detect MPI interface with first host from the list.
+#
+# --mpi-if none turns interface pinning off entirely: no probing, and no
+# --mca btl_tcp_if_include on the launch. That is the right mode when the
+# launching host is not one of the ranks -- e.g. a CI runner driving ttop
+# workers, where detection would find a *runner* interface whose name may not
+# even exist on the worker hosts. tt-run pins nothing there for the same reason.
+MPI_IF_ARGS=()
 FIRST_HOST="${HOSTS%%,*}"
-if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+if [[ "$MPI_IF" == "none" ]]; then
+    if [[ "$DOCKER_IMAGE" != "none" ]]; then
+        echo "Error: --mpi-if none is only supported with --image none" >&2
+        echo "(mpi-docker requires a concrete interface for its container networking)" >&2
+        exit 1
+    fi
+    echo "MPI interface pinning disabled (--mpi-if none); letting MPI pick its own transport."
+elif [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
     validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+    MPI_IF_ARGS=(--mca btl_tcp_if_include "$MPI_IF")
 else
     MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
     # Check if validation failed (command substitution only exits subshell, not parent)
@@ -276,6 +297,7 @@ else
         echo "Error: MPI interface auto-detection failed" >&2
         exit 1
     fi
+    MPI_IF_ARGS=(--mca btl_tcp_if_include "$MPI_IF")
 fi
 
 # Launcher for the no-docker paths. Exabox hosts ship ULFM OpenMPI as
@@ -1026,7 +1048,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
         "$MPI_LAUNCHER" \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_IF_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             "${Z_GLOBAL_HOST[@]}" \
@@ -1051,7 +1073,7 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
         "$MPI_LAUNCHER" \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_IF_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             --host "$SINGLE_HOST" \
@@ -1067,7 +1089,7 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
         "$MPI_LAUNCHER" \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_IF_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             --host "$HOSTS" \

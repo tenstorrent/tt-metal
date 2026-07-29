@@ -396,10 +396,9 @@ jobs:
         run: |
           mpirun --pernode tt-smi -glx_reset || echo "WARNING: glx_reset failed; continuing"
 
-      # run_fabric_tests.sh validates/auto-detects the MPI interface with `ip`
-      # (iproute2), which the exabox runner image does not ship -- without it the
-      # script aborts with "ip: command not found" before launching anything.
-      - name: Install iproute2 (run_fabric_tests.sh MPI interface detection)
+      # iproute2 for the interface dump below; the run itself uses --mpi-if none,
+      # so nothing depends on `ip` being present.
+      - name: Install iproute2
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2
           echo "--- available interfaces ---"; ip -br link || true
@@ -456,6 +455,7 @@ jobs:
             --test-config "$WORKER_HOME/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml" \
             --mesh-graph-desc-path "$WORKER_HOME/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto" \
             --filter name.2DTorusXYNeighborExchange \
+            --mpi-if none \
             --mpi-args "--wdir $WORKER_HOME" 2>&1 | tee dc_quad_result.log
           # `set -o pipefail` above plus the script's exit status (non-zero unless
           # every rank reported success) is the pass/fail signal. Do NOT grep the
