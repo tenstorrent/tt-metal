@@ -132,6 +132,22 @@ role. The example shrinks the NoC transaction size only to *create* that bottlen
 effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) — transaction size is
 the knob, not the point.
 
+## ⭐⭐ T2 — [`zero_copy_fold`](zero_copy_fold/README.md)
+**Concept:** program structure — folding the reader + writer into the compute kernel is **slower**,
+not faster, because the dataflow reader/writer run on their own RISC-Vs (NCRISC/BRISC) and arm/drain
+the CBs *concurrently* with compute on TRISC; folding serializes that onto the compute thread.
+**Situation:** you are tempted to merge dataflow kernels into compute ("fewer kernels = less
+overhead") — especially on a resident/zero-copy op where the reader/writer do no NoC work, just CB
+arm/drain.
+**Does NOT solve:** this is not a "make the kernel faster" trick; it only governs how arm/drain
+overlaps compute. The fixed per-launch cost it exposes dominates only on **small work-per-core** and
+amortizes as tiles/core grows.
+**Gist:** keep reader/compute/writer separate unless you have measured the dataflow RISCs are idle
+*and* the handshake dominates. The payload (a same-spec zero-copy sharded tilize, CBs aliased onto the
+resident L1 shards → no DRAM/NoC) is incidental — chosen only to isolate pure program structure; any
+reader/compute/writer op shows the same effect (~0.74× at 2 tiles/core → ~0.95× at 64, WH B0; see
+[`report.md`](zero_copy_fold/report.md)).
+
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
 **Situation:** you wrote a tiled matmul that produces **one output tile per block-matmul** (a `1×1` subblock), so every output tile re-loads both its A and B operand into the SRC registers; you wonder whether a bigger output subblock is worth it.
