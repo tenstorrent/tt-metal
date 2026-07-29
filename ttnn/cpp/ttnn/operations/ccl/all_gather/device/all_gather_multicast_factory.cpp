@@ -183,8 +183,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         log_warning(
             tt::LogOp,
             "Using {} out of {} Fabric links due to limited {} worker cores. This may lead to performance loss.",
-            min_num_links,
             fitted_links,
+            min_num_links,
             num_available_cores);
         min_num_links = fitted_links;
     }

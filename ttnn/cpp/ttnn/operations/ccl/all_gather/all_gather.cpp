@@ -89,7 +89,8 @@ std::pair<bool, std::string> use_composite_all_gather(
                 input_page_size,
                 input_tensor.buffer()->alignment())};
     }
-    // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES = 16 B on Wormhole/Blackhole).
+    // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES): 16 B on Wormhole/Blackhole, 1 B on Quasar.
+    // Ideally this should be queried (Hal::get_write_alignment(HalMemType) is currently unreachable from TTNN).
     constexpr uint32_t noc_write_alignment = 16;
     if (input_page_size > output_page_size && output_page_size % noc_write_alignment != 0) {
         return {
