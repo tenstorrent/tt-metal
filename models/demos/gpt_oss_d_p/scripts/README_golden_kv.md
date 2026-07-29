@@ -4,11 +4,23 @@ This guide explains how to generate golden reference KV cache traces for validat
 
 ## Prerequisites
 
-- **Machine**: 100GB+ RAM recommended (120B model mmap'd via `low_cpu_mem_usage`)
+- **Machine**: ~100GB+ free RAM recommended for weights+activations; 55k one-shot needs tiled attention (below), not 500GB+ for score matrices
 - **Model**: GPT-OSS checkpoint (mxfp4-quantized weights on disk, bf16 compute for attention)
   - Official: `https://huggingface.co/openai/gpt-oss-120b` or `gpt-oss-20b`
 - **Prompt**: JSON file or text
 - **Time**: Expect several minutes to hours depending on model size and prompt length
+
+### Why 55k used to OOM (and why we do **not** chunk the prompt)
+
+GPT-OSS sets `_supports_sdpa=False` (attention sinks need concat-then-softmax). Stock eager
+attention allocates full `[Hq, S, S]` scores — at S=55k / Hq=64 / bf16 that alone is ~387 GB.
+
+**Fix (MiniMax-style true one-shot):** query-row tiling (`REF_ATTN_Q_CHUNK`, default 256) +
+MoE token tiling (`REF_FFN_TOKEN_CHUNK`, default 4096). Same causal/sliding/sinks/MoE math as
+one big forward; scores peak at `[H, chunk, S]` and are deleted each chunk.
+
+**Do not** split the prompt into 2k chunks with `use_cache=True` — that is chunked prefill and
+diverges via sinks + MoE top-k. `--chunk-size` is rejected.
 
 ## Quick Start
 
@@ -91,8 +103,8 @@ The safetensors golden trace here is the portable, MiniMax-style format for `PRE
 
 ## Options
 
-| Flag | Description |
-|------|-------------|
+| Flag / env | Description |
+|------------|-------------|
 | `--prompt-json` / `--prompt` | Input prompt |
 | `--max-tokens N` | Truncate to N tokens |
 | `--chat-template` | Apply chat template (off by default) |
@@ -101,6 +113,10 @@ The safetensors golden trace here is the portable, MiniMax-style format for `PRE
 | `--zero-sinks` | Zero attention sinks (diagnostic) |
 | `--disable-sliding-window` | Force full attention everywhere (diagnostic) |
 | `--model-path` | HF dir, or `$HF_MODEL` / `$DEEPSEEK_V3_HF_MODEL` |
+| `REF_ATTN_Q_CHUNK` | Query-row tile size (default 256); lower if still OOM |
+| `REF_FFN_TOKEN_CHUNK` | MoE token tile size (default 4096) |
+
+`--chunk-size` is **removed** (prompt-chunked prefill is not golden).
 
 ## Tokenization Consistency
 
@@ -131,8 +147,9 @@ python3 models/demos/gpt_oss_d_p/scripts/generate_golden_kv_cache.py \
 # Verify
 python3 models/demos/gpt_oss_d_p/scripts/verify_golden_kv.py $OUT_DIR/test_1k
 
-# Full run (overnight)
-nohup python3 models/demos/gpt_oss_d_p/scripts/generate_golden_kv_cache.py \
+# Full 55k one-shot (tiled attn/MoE — no prompt chunking)
+nohup env REF_ATTN_Q_CHUNK=256 REF_FFN_TOKEN_CHUNK=4096 \
+    python3 models/demos/gpt_oss_d_p/scripts/generate_golden_kv_cache.py \
     --prompt-json prompt.json \
     --out $OUT_DIR/longbook_full \
     --max-tokens 56320 \

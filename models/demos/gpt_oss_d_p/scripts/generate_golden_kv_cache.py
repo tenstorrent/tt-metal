@@ -11,10 +11,16 @@ golden trace layout and ``scripts/verify_golden_kv.py``.
 GPT-OSS uses alternating sliding/full attention; the reference captures full-length K/V via
 ``FullKVCapture`` before sliding-window truncation.
 
-Memory approach:
+Memory approach (true one-shot — NOT prompt-chunked prefill):
 - Model weights mmap'd via ``low_cpu_mem_usage=True``
 - Computes in bfloat16 (matches device cache dtype)
+- ``--attn-mode tiled`` (default): query-row + MoE token tiling (never allocates [H,S,S]
+  scores). Tune with ``REF_ATTN_Q_CHUNK`` / ``REF_FFN_TOKEN_CHUNK`` (defaults 256 / 4096).
+- ``--attn-mode eager``: stock HF eager (matches older short-seq goldens; OOMs on long seq).
 - Saves layer-by-layer via streaming callback during the forward pass
+
+Do **not** use ``--chunk-size``: splitting the prompt into 2k forwards diverges via sinks
++ MoE top-k. GPT-OSS also cannot use stock SDPA (``_supports_sdpa=False`` because of sinks).
 
 Output format:
     {trace_dir}/
@@ -29,6 +35,16 @@ Usage:
         --prompt-json prompt.json \\
         --out /mnt/models/gpt-oss-cache/golden/longbook_full \\
         --max-tokens 56320
+
+    # Stock HF eager (old short-seq golden path; no REF_* tiling)
+    python3 models/demos/gpt_oss_d_p/scripts/generate_golden_kv_cache.py \\
+        --prompt-json prompt.json --out /tmp/gpt_oss_2k_eager \\
+        --max-tokens 2000 --attn-mode eager
+
+    # Optional: lower peak RAM further (slower; tiled mode only)
+    REF_ATTN_Q_CHUNK=128 REF_FFN_TOKEN_CHUNK=2048 \\
+      python3 models/demos/gpt_oss_d_p/scripts/generate_golden_kv_cache.py \\
+        --prompt-json prompt.json --out /tmp/gpt_oss_55k --max-tokens 55000
 
     python3 models/demos/gpt_oss_d_p/scripts/generate_golden_kv_cache.py \\
         --prompt "What are the prime factors of 1?" \\
@@ -114,6 +130,22 @@ def parse_args():
         action="store_true",
         help="Force full causal attention on all layers (diagnostic)",
     )
+    ap.add_argument(
+        "--attn-mode",
+        choices=["tiled", "eager"],
+        default="tiled",
+        help=(
+            "Attention/MoE path: 'tiled' (default) installs MiniMax-style tiling controlled by "
+            "REF_ATTN_Q_CHUNK / REF_FFN_TOKEN_CHUNK; 'eager' uses stock HF eager (old short-seq "
+            "golden path, may OOM on long sequences)"
+        ),
+    )
+    ap.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help=argparse.SUPPRESS,  # removed: chunked prefill diverges; keep flag to error clearly
+    )
 
     return ap.parse_args()
 
@@ -151,6 +183,18 @@ def main():
     args = parse_args()
     _raise_cpu_time_limit()
 
+    if args.chunk_size is not None:
+        print(
+            "ERROR: --chunk-size (prompt-chunked prefill) is not supported for golden KV — "
+            "it diverges via sinks + MoE top-k.\n"
+            "Use one-shot prefill (--attn-mode tiled for long sequences).\n"
+            "  Tiled knobs: REF_ATTN_Q_CHUNK / REF_FFN_TOKEN_CHUNK (never split the prompt).",
+            file=sys.stderr,
+        )
+        return 1
+
+    use_tiled_ops = args.attn_mode == "tiled"
+
     model_path = args.model_path or os.environ.get("HF_MODEL") or os.environ.get("DEEPSEEK_V3_HF_MODEL")
     if not model_path:
         print("ERROR: Must provide --model-path or set $HF_MODEL / $DEEPSEEK_V3_HF_MODEL", file=sys.stderr)
@@ -181,6 +225,14 @@ def main():
     print(f"\n{'=' * 70}", flush=True)
     print(f"[load] Building golden reference from {model_path}", flush=True)
     print(f"[load] compute dtype={dtype}; weights mmap'd (low_cpu_mem_usage)", flush=True)
+    if use_tiled_ops:
+        print("[load] one-shot prefill with tiled attn/MoE (--attn-mode tiled)", flush=True)
+    else:
+        print(
+            "[load] one-shot prefill with stock HF eager (--attn-mode eager); "
+            "full [H,S,S] scores — use only for short sequences",
+            flush=True,
+        )
     print(f"{'=' * 70}\n", flush=True)
 
     torch.set_num_threads(os.cpu_count() or 32)
@@ -192,6 +244,7 @@ def main():
         compute_dtype=dtype,
         zero_sinks=args.zero_sinks,
         disable_sliding_window=args.disable_sliding_window,
+        use_tiled_ops=use_tiled_ops,
     )
     num_layers = model.cfg.num_hidden_layers
     num_kv_heads = model.cfg.num_key_value_heads
@@ -209,7 +262,15 @@ def main():
         )
 
     print(f"\n{'=' * 70}", flush=True)
-    print(f"[forward] Running prefill forward pass for {seq_len} tokens", flush=True)
+    print(f"[forward] Running one-shot prefill for {seq_len} tokens", flush=True)
+    if use_tiled_ops:
+        print(
+            f"[forward] tiling: ATTN_Q_CHUNK={model.attn_q_chunk} "
+            f"FFN_TOKEN_CHUNK={model.ffn_token_chunk} (not prompt-chunked)",
+            flush=True,
+        )
+    else:
+        print("[forward] stock HF eager (no tiling / not prompt-chunked)", flush=True)
     print("[forward] WARNING: CPU inference is SLOW — can take many minutes for long prompts!", flush=True)
     print(f"{'=' * 70}\n", flush=True)
 
@@ -249,9 +310,16 @@ def main():
     print(f"\n[forward] completed in {mins}m {secs}s ({seq_len / forward_time:.2f} tok/s)", flush=True)
     print(f"[save] saved all {num_layers} layers to {kv_cache_dir}/", flush=True)
 
+    if use_tiled_ops:
+        reference = "models.demos.gpt_oss_d_p.reference.model (HF AutoModelForCausalLM golden, tiled ops)"
+        prefill_mode = "one_shot_tiled"
+    else:
+        reference = "models.demos.gpt_oss_d_p.reference.model (HF AutoModelForCausalLM golden)"
+        prefill_mode = "one_shot"
+
     metadata = {
         "model_path": str(model_path),
-        "reference": "models.demos.gpt_oss_d_p.reference.model (HF AutoModelForCausalLM golden)",
+        "reference": reference,
         "prompt_source": str(args.prompt_json) if args.prompt_json else "direct",
         "prompt": prompt[:500] + "..." if len(prompt) > 500 else prompt,
         "prompt_length_chars": len(prompt),
@@ -266,6 +334,11 @@ def main():
         "zero_sinks": args.zero_sinks,
         "dtype": args.dtype,
         "chat_template": args.chat_template,
+        "chunk_size": None,
+        "prefill_mode": prefill_mode,
+        "attn_mode": args.attn_mode,
+        "attn_q_chunk": model.attn_q_chunk,
+        "ffn_token_chunk": model.ffn_token_chunk,
         "forward_time_seconds": forward_time,
         "tokens_per_second": seq_len / forward_time,
         "kv_cache_format": "separate_k_v",

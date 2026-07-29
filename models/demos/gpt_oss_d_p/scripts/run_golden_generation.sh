@@ -66,12 +66,12 @@ check_memory() {
     log_info "Available memory: ${available_gb}GB"
 
     if [ "$available_gb" -lt 64 ]; then
-        log_error "Insufficient memory! Need ~100GB+ available for gpt-oss-120b mmap, have ${available_gb}GB"
+        log_error "Insufficient memory! Need ~100GB+ available for gpt-oss-120b mmap + tiled activations, have ${available_gb}GB"
         exit 1
     fi
 
     if [ "$available_gb" -lt 128 ]; then
-        log_warn "Low memory (${available_gb}GB). Consider reducing --max-tokens or enabling swap."
+        log_warn "Low memory (${available_gb}GB). One-shot uses tiled attn/MoE (REF_ATTN_Q_CHUNK / REF_FFN_TOKEN_CHUNK); lower those if needed — do not prompt-chunk."
     fi
 }
 
