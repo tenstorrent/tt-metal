@@ -260,6 +260,13 @@ class TTVibeVoiceGenerator:
         self._enc_step: Optional[Tuple[int, ttnn.Tensor]] = None
         self._enc_final: Optional[Tuple[int, ttnn.Tensor]] = None
         self._enc_in: Optional[ttnn.Tensor] = None
+        # Device-side encode audio (VV_DEV_ENC_AUDIO=1, default on): upload a voice row ONCE as a
+        # [n_chunks, chunk] table and gather the chunk row inside the capture from a self-advancing
+        # device index — 4 host uploads for the climate prompts instead of ~663.  =0 keeps the
+        # per-chunk host write (A/B + rollback).
+        self._enc_dev_audio = os.environ.get("VV_DEV_ENC_AUDIO", "1") == "1"
+        self._enc_table: Optional[ttnn.Tensor] = None
+        self._enc_idx: Optional[ttnn.Tensor] = None
         self._sf_tid = None
         self._sf_warm = 0
         self._sf_hidden_buf: Optional[ttnn.Tensor] = None  # loop-carried cond_pos source
@@ -269,6 +276,13 @@ class TTVibeVoiceGenerator:
         self._sf_pos_pos: Optional[ttnn.Tensor] = None
         self._sf_neg_pos: Optional[ttnn.Tensor] = None
         self._sf_noise: Optional[ttnn.Tensor] = None
+        # Device-side diffusion noise (VV_DEV_NOISE=1, default on): the whole run's pre-drawn noise
+        # is uploaded once as a [max_steps, 64] table and the frame's row is gathered INSIDE the
+        # capture from a device index that self-advances — so a replayed frame does no host work for
+        # noise at all.  =0 restores the per-frame host write (A/B + rollback).
+        self._sf_dev_noise = os.environ.get("VV_DEV_NOISE", "1") == "1"
+        self._sf_noise_table: Optional[ttnn.Tensor] = None
+        self._sf_noise_idx: Optional[ttnn.Tensor] = None
         self._sf_t_tensors: Optional[list] = None
         # Schedule-constant timestep embeddings (embed_timestep(t) per DPM step).  Built once with
         # `_sf_t_tensors` and reused every frame — byte-identical to per-step embed inside the head.
@@ -311,6 +325,12 @@ class TTVibeVoiceGenerator:
         # is byte-identical to its B=1 forward.  Requires cap-split token semantics (in-trace
         # constrained argmax).
         self._sf_cfg_b2 = self._sf_cap_split and os.environ.get("VV_CFG_BATCH2", "1") == "1"
+        # Fused frame output (VV_FUSE_FRAME_OUT=1, default on): append the constrained-argmax index
+        # to this frame's audio inside _lm2trace, so ONE D2H returns both.  The audio and the token
+        # are complete at the same point in the queue (dp2 is enqueued before lm2), and reading the
+        # 4-byte token separately costs ~0.06 ms of per-call overhead on every frame.  =0 keeps the
+        # two reads (A/B + rollback).
+        self._sf_out_fused = self._sf_cfg_b2 and os.environ.get("VV_FUSE_FRAME_OUT", "1") == "1"
         self._sf_dp2trace_tid = None
         self._sf_lm2trace_tid = None
         # Diagnostic (VV_TRACE_NOCAPTURE=1): run the frame graph eagerly, with no ttnn
@@ -398,7 +418,7 @@ class TTVibeVoiceGenerator:
             return out.unsqueeze(0)
         return out
 
-    def _ensure_encode_trace(self, chunk: int) -> bool:
+    def _ensure_encode_trace(self, chunk: int, n_rows: int = 0) -> bool:
         """Capture the streaming acoustic-encode chunk graph once; replayed for every chunk.
 
         The voice-clone encode dispatches the whole conv encoder per 3200-sample chunk (~663
@@ -432,18 +452,64 @@ class TTVibeVoiceGenerator:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if self._enc_dev_audio and n_rows:
+            # Row table + index, allocated BEFORE the capture so their addresses are stable for it.
+            # Sized to the longest row (rows are processor-padded to a common length), with a floor
+            # of the warmup count so the eager warmup gathers stay in bounds.
+            self._enc_table = ttnn.zeros(
+                [max(n_rows, 4), chunk],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._enc_idx = ttnn.zeros(
+                [1],
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         self.acoustic_tok._encoder_tt.reset_cache()
         for _final in (False, False, True, True):
-            self.acoustic_tok.encode(self._enc_in, use_cache=True, is_final_chunk=_final)
+            self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=_final)
         ts = ttnn.begin_trace_capture(dev, cq_id=0)
-        out_s = self.acoustic_tok.encode(self._enc_in, use_cache=True, is_final_chunk=False)
+        out_s = self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=False)
         ttnn.end_trace_capture(dev, ts, cq_id=0)
         tf = ttnn.begin_trace_capture(dev, cq_id=0)
-        out_f = self.acoustic_tok.encode(self._enc_in, use_cache=True, is_final_chunk=True)
+        out_f = self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=True)
         ttnn.end_trace_capture(dev, tf, cq_id=0)
         self._enc_step, self._enc_final = (ts, out_s), (tf, out_f)
         _vv_debug(f"acoustic encode: captured chunk trace (chunk={chunk})")
         return True
+
+    def _enc_input(self, chunk: int) -> ttnn.Tensor:
+        """The chunk graph's audio input: this chunk's row gathered on device from the pre-uploaded
+        row table, with the index self-advancing so a replay needs no host write.  Falls back to the
+        host-written buffer when VV_DEV_ENC_AUDIO=0.  Bit-identical either way — the table holds the
+        same bf16 samples, zero-padded exactly as the per-chunk path padded its tail, and
+        ``ttnn.embedding`` is pure data movement (verified byte-equal at every row)."""
+        if self._enc_table is None:
+            return self._enc_in
+        idx = ttnn.reshape(ttnn.typecast(self._enc_idx, ttnn.uint32), [1, 1])
+        row = ttnn.embedding(idx, self._enc_table, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.plus_one(self._enc_idx)
+        return ttnn.reshape(row, [1, 1, 1, chunk])
+
+    def _enc_upload_row(self, wav: torch.Tensor, chunk: int, n_chunks: int) -> None:
+        """One H2D for a whole voice row, replacing one per chunk, and rewind the gather index.
+
+        Written into the persistent table address (so the capture stays valid across rows).  The row
+        is zero-padded to the table's full height; rows past this voice's ``n_chunks`` are never
+        gathered."""
+        rows = torch.nn.functional.pad(wav, (0, n_chunks * chunk - wav.numel())).reshape(n_chunks, chunk)
+        table_rows = self._enc_table.shape[0]
+        if n_chunks < table_rows:
+            rows = torch.nn.functional.pad(rows, (0, 0, 0, table_rows - n_chunks))
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(rows, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), self._enc_table
+        )
+        self._sf_write_int(self._enc_idx, 0)
 
     def _release_encode_trace(self) -> None:
         """Drop the encode traces.  Called once the voice prompts are encoded, so the eager LM
@@ -454,7 +520,7 @@ class TTVibeVoiceGenerator:
         ttnn.release_trace(self.device, self._enc_step[0])
         ttnn.release_trace(self.device, self._enc_final[0])
         self._enc_step = self._enc_final = None
-        self._enc_in = None
+        self._enc_in = self._enc_table = self._enc_idx = None
         # Free the fixed-address streaming caches too: nothing references their addresses now, and
         # the decode path allocates its own.
         self.acoustic_tok._encoder_tt.reset_cache()
@@ -472,6 +538,11 @@ class TTVibeVoiceGenerator:
         if total_samples == 0:
             return torch.zeros(0, 0)
 
+        # One bf16 cast for the whole row instead of one per chunk.  The cast is elementwise, so
+        # slicing it and zero-padding it below are bit-identical to casting each chunk (0.0 is
+        # exact in bf16); the trim above still runs on the fp32 samples.
+        wav = wav.to(torch.bfloat16)
+
         if total_samples <= chunk:
             self._release_encode_trace()  # reset_cache() below would move the captured addresses
             self.acoustic_tok._encoder_tt.reset_cache()
@@ -482,31 +553,39 @@ class TTVibeVoiceGenerator:
             )
             lat = self._latents_from_encode_output(lat_tt)
         else:
-            traced = self._ensure_encode_trace(chunk)
+            n_chunks = -(-total_samples // chunk)
+            # Size the table from the UNTRIMMED length: rows are processor-padded to a common
+            # length, so the first row's bound covers every later row (the capture pins the address).
+            traced = self._ensure_encode_trace(chunk, -(-wav_1d.numel() // chunk))
             if traced:
                 # Zero the streaming caches IN PLACE (the fresh-alloc state is ttnn.zeros, so this
                 # is exactly equivalent) — reset_cache() would free them out from under the trace.
                 self.acoustic_tok._encoder_tt.reset_cache_inplace()
+                if self._enc_table is not None:
+                    self._enc_upload_row(wav, chunk, n_chunks)
             else:
                 self.acoustic_tok._encoder_tt.reset_cache()
             frames: List[torch.Tensor] = []
             pos = 0
             while pos < total_samples:
                 n = min(chunk, total_samples - pos)
-                chunk_wav = wav[pos : pos + n]
                 is_final = pos + n >= total_samples
-                if chunk_wav.numel() < chunk:
-                    # conv2d caches prepared weights per input width; keep chunks fixed-size.
-                    chunk_wav = torch.nn.functional.pad(chunk_wav, (0, chunk - chunk_wav.numel()))
+                if self._enc_table is None or not traced:
+                    chunk_wav = wav[pos : pos + n]
+                    if chunk_wav.numel() < chunk:
+                        # conv2d caches prepared weights per input width; keep chunks fixed-size.
+                        chunk_wav = torch.nn.functional.pad(chunk_wav, (0, chunk - chunk_wav.numel()))
                 if traced:
-                    ttnn.copy_host_to_device_tensor(
-                        ttnn.from_torch(
-                            chunk_wav.to(torch.bfloat16).view(1, 1, 1, -1),
-                            dtype=ttnn.bfloat16,
-                            layout=ttnn.ROW_MAJOR_LAYOUT,
-                        ),
-                        self._enc_in,
-                    )
+                    if self._enc_table is None:
+                        ttnn.copy_host_to_device_tensor(
+                            ttnn.from_torch(
+                                chunk_wav.view(1, 1, 1, -1),
+                                dtype=ttnn.bfloat16,
+                                layout=ttnn.ROW_MAJOR_LAYOUT,
+                            ),
+                            self._enc_in,
+                        )
+                    # else: the replay gathers its own row (index self-advances on device)
                     tid, lat_tt = self._enc_final if is_final else self._enc_step
                     ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
                 else:
@@ -774,6 +853,40 @@ class TTVibeVoiceGenerator:
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(cos, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), cos_buf)
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(sin, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), sin_buf)
 
+    def _sf_noise_row(self) -> ttnn.Tensor:
+        """Gather this frame's diffusion init-noise row on device and advance the index.
+
+        Called from INSIDE the frame capture, so on replay the noise costs no host work: the whole
+        run's noise is pre-drawn on host and uploaded once (``_sf_upload_noise_table``), and the row
+        index self-advances here exactly like the device positions do.  The index is rewound by
+        ``_sf_set_inputs_b2(0, ...)``, which runs before every warmup / capture / segment-start
+        frame, so it stays in lockstep with the AR loop's ``diffusion_frames``.
+
+        Bit-identical to the per-frame host write it replaces: the same pre-drawn bf16 values, and
+        ``ttnn.embedding`` on a bf16 table is pure data movement (verified equal at every index).
+        ``embedding`` requires a uint32 [1, 1] index, hence the typecast+reshape (as in the LM's
+        on-device RoPE row gather)."""
+        idx = ttnn.reshape(ttnn.typecast(self._sf_noise_idx, ttnn.uint32), [1, 1])
+        row = ttnn.embedding(idx, self._sf_noise_table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.plus_one(self._sf_noise_idx)
+        return ttnn.reshape(row, [1, 1, 1, row.shape[-1]])
+
+    def _sf_upload_noise_table(self, diffusion_noise: torch.Tensor) -> None:
+        """Upload the run's pre-drawn diffusion noise as a [max_steps, 64] bf16 gather table.
+
+        ``diffusion_noise`` is [max_steps, 2, 1, 1, 64]; only row 0 of the CFG pair is consumed per
+        frame (``noise_2x[:1]``), so the table holds exactly the values the host used to upload."""
+        if not (self._sf_dev_noise and self._trace_segment and self._sf_cfg_b2) or diffusion_noise is None:
+            return  # only the cfg_b2 frame graph gathers it; other paths keep the host write
+        rows = diffusion_noise[:, 0].reshape(diffusion_noise.shape[0], -1)
+        self._sf_noise_table = ttnn.from_torch(
+            rows,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def _sf_set_inputs(self, seg_frame_idx: int, start_pos: int, noise_2x) -> None:
         """Per-frame non-allocating writes into the persistent trace buffers.  A segment's first
         frame (seg_frame_idx==0) rewinds the device positions, re-seeds the loop-carried hidden from
@@ -838,7 +951,7 @@ class TTVibeVoiceGenerator:
         if frame_idx % 64 == 0:
             self._traj_fh.flush()
 
-    def _sf_set_inputs_b2(self, seg_frame_idx: int, start_pos: int, noise_2x) -> None:
+    def _sf_set_inputs_b2(self, seg_frame_idx: int, start_pos: int, noise_2x, noise_idx: int = 0) -> None:
         """Per-frame input writes for the CFG batch-2 path.  Sets ONLY the lm2/dp2 inputs — the
         neg row's embed (speech_diffusion) and neg RoPE are managed by _sf_boot at frame 0.  Frame 0
         rewinds device positions + reseeds the loop-carried hidden; the batched forward's pos row
@@ -846,23 +959,31 @@ class TTVibeVoiceGenerator:
         if seg_frame_idx == 0:
             self._sf_write_int(self._sf_pos_pos, start_pos)
             self._sf_write_int(self._sf_neg_pos, 0)
-            self._sf_pos_pos_host = start_pos
-            self._sf_neg_pos_host = 0  # boot advances the device tensor + this mirror to 1
             ttnn.copy(input_a=self._sf_hidden_seed, input_b=self._sf_hidden_buf)  # cond_pos(0) seed
             if not self.lm._fused_rope:
+                # The host position mirrors exist ONLY to index the fp32 RoPE tables.  On the fused
+                # path the rows are gathered on device from the device positions, so there is nothing
+                # to mirror — the device counters are the only positions that matter.
+                self._sf_pos_pos_host = start_pos
+                self._sf_neg_pos_host = 0  # boot advances the device tensor + this mirror to 1
                 self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
-        else:
+            if self._sf_noise_table is not None:
+                # Rewind the device noise index.  Frame 0 is the one place this runs, and it runs
+                # before every warmup / capture / reset replay, so the in-trace plus_one stays in
+                # lockstep with the AR loop's frame counter.
+                self._sf_write_int(self._sf_noise_idx, noise_idx)
+        elif not self.lm._fused_rope:
             self._sf_pos_pos_host += 1  # mirror the on-device plus_one from the prior frame's lm2
             self._sf_neg_pos_host += 1
-            if not self.lm._fused_rope:
-                self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
-                self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(noise_2x[:1].to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            self._sf_noise,
-        )
+            self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
+            self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
+        if self._sf_noise_table is None:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(noise_2x[:1].to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+                self._sf_noise,
+            )
 
-    def _run_segment_frame_cfg_b2(self, seg_frame_idx, start_pos, noise_2x, kv_pos, kv_neg):
+    def _run_segment_frame_cfg_b2(self, seg_frame_idx, start_pos, noise_2x, kv_pos, kv_neg, noise_idx=0):
         """CFG batch-2 fused speech-diffusion frame.  Two captured traces per frame:
             _dp2trace : diffusion (cond_pos/cond_neg from persistent buffers) + post → audio, fused
             _lm2trace : ONE batch-2 LM decode = pos-LM(k) [row0] + neg-LM(k+1) [row1], reading each
@@ -894,19 +1015,22 @@ class TTVibeVoiceGenerator:
             else:
                 ttnn.copy(input_a=nh, input_b=self._sf_neg_hidden)
             ttnn.plus_one(self._sf_neg_pos)  # device neg_pos → 1
-            self._sf_neg_pos_host = 1
             if not self.lm._fused_rope:
+                self._sf_neg_pos_host = 1
                 self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
 
         def _dp2trace():
             cond_pos = _condition_from_hidden(self._sf_hidden_buf)
             cond_neg = _condition_from_hidden(self._sf_neg_hidden)
+            # Noise: gathered on device from the pre-uploaded table (index self-advances in-capture),
+            # or read from the host-written buffer when VV_DEV_NOISE=0.
+            noise_in = self._sf_noise_row() if self._sf_noise_table is not None else self._sf_noise
             latent = sample_speech_latents(
                 self.diffusion_head,
                 cond_pos,
                 cond_neg,
                 self.scheduler,
-                self._sf_noise,
+                noise_in,
                 cfg_scale=self.cfg_scale,
                 num_steps=self.num_diffusion_steps,
                 head_runner=None,
@@ -945,18 +1069,28 @@ class TTVibeVoiceGenerator:
             ttnn.copy(input_a=h1, input_b=self._sf_neg_hidden)  # cond_neg(k+1)
             ttnn.plus_one(self._sf_pos_pos)
             ttnn.plus_one(self._sf_neg_pos)
-            return ttnn.argmax(logits0, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            tok = ttnn.argmax(logits0, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # 1 elem, LOCAL idx
+            if not self._sf_out_fused:
+                return tok
+            # Append the token index to this frame's audio (written by the dp2 replay that ran just
+            # before this trace) so the host reads one tensor instead of two.  Casting the index to
+            # the audio dtype is exact: it indexes _sf_valid_ids_sorted, i.e. the handful of control
+            # tokens, and every small integer is exactly representable in bf16/fp32.
+            tok_cast = ttnn.typecast(ttnn.reshape(tok, [1, 1, 1, 1]), self._sf_audio_out.dtype)
+            return ttnn.concat([self._sf_audio_out, tok_cast], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if self._sf_lm2trace_tid is None:
             # First frame-0 after a (re)capture: warmup (eager), capture dp2+lm2 (boot stays eager),
             # reset, then the real frame-0 replay — all internal, so warmup/capture frames are
             # discarded and never emitted.
             for _ in range(self._SF_WARMUP):
-                self._sf_set_inputs_b2(0, start_pos, noise_2x)
+                self._sf_set_inputs_b2(0, start_pos, noise_2x, noise_idx)
                 _boot()
-                _dp2trace()
+                # Keep the warmup's audio handle: _lm2trace reads it when the frame output is fused
+                # (the capture below re-points it at the captured dp2's output before lm2 records).
+                self._sf_audio_out = _dp2trace()
                 _lm2trace()
-            self._sf_set_inputs_b2(0, start_pos, noise_2x)
+            self._sf_set_inputs_b2(0, start_pos, noise_2x, noise_idx)
             _boot()  # seed neg_hidden for the captured dp2
             tb = ttnn.begin_trace_capture(dev, cq_id=0)
             self._sf_audio_out = _dp2trace()
@@ -966,7 +1100,7 @@ class TTVibeVoiceGenerator:
             ttnn.end_trace_capture(dev, tc, cq_id=0)
             self._sf_dp2trace_tid, self._sf_lm2trace_tid = tb, tc
             # RESET for the real frame 0: rewind positions/hidden, zero conv, re-run boot.
-            self._sf_set_inputs_b2(0, start_pos, noise_2x)
+            self._sf_set_inputs_b2(0, start_pos, noise_2x, noise_idx)
             self._sf_zero_conv()
             _boot()
             ttnn.execute_trace(dev, self._sf_dp2trace_tid, cq_id=0, blocking=False)
@@ -975,11 +1109,11 @@ class TTVibeVoiceGenerator:
             return self._sf_audio_out, self._sf_tok_out
 
         if seg_frame_idx == 0:
-            self._sf_set_inputs_b2(0, start_pos, noise_2x)
+            self._sf_set_inputs_b2(0, start_pos, noise_2x, noise_idx)
             self._sf_zero_conv()
             _boot()
         else:
-            self._sf_set_inputs_b2(1, start_pos, noise_2x)
+            self._sf_set_inputs_b2(1, start_pos, noise_2x, noise_idx)
         ttnn.execute_trace(dev, self._sf_dp2trace_tid, cq_id=0, blocking=False)
         ttnn.execute_trace(dev, self._sf_lm2trace_tid, cq_id=0, blocking=False)
         return self._sf_audio_out, self._sf_tok_out
@@ -990,7 +1124,7 @@ class TTVibeVoiceGenerator:
         self.acoustic_tok.reset_decode_cache_inplace()
         self.semantic_tok.reset_cache_inplace()
 
-    def _run_segment_frame_traced(self, seg_frame_idx, step_hidden, start_pos, noise_2x, kv_pos, kv_neg):
+    def _run_segment_frame_traced(self, seg_frame_idx, step_hidden, start_pos, noise_2x, kv_pos, kv_neg, noise_idx=0):
         """One speech-diffusion frame as ONE device-driven trace (Option 1, llama shape), replayed
         for the WHOLE segment.  Returns (audio_chunk, logits).  Frame graph:
             cond_pos = condition(hidden_buf);  neg_hidden = LM_dev_rope(neg_embed @ neg_pos, kv_neg)
@@ -1027,6 +1161,7 @@ class TTVibeVoiceGenerator:
             self._sf_valid_ids_sorted = sorted(self.valid_token_ids)
             self._sf_lm_head_valid = lm.build_lm_head_subset(self._sf_valid_ids_sorted)
             self._sf_noise = _z([1, 1, 1, 64], ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            self._sf_noise_idx = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)  # device noise row index
             # Schedule-constant t scalars + embeddings (outside capture; reused every frame).
             self._ensure_diffusion_t_embs()
 
@@ -1039,7 +1174,7 @@ class TTVibeVoiceGenerator:
             ttnn.copy(input_a=_condition_from_hidden(step_hidden), input_b=self._sf_hidden_seed)
 
         if self._sf_cfg_b2:
-            return self._run_segment_frame_cfg_b2(seg_frame_idx, start_pos, noise_2x, kv_pos, kv_neg)
+            return self._run_segment_frame_cfg_b2(seg_frame_idx, start_pos, noise_2x, kv_pos, kv_neg, noise_idx)
 
         self._sf_set_inputs(seg_frame_idx, start_pos, noise_2x)
 
@@ -1528,6 +1663,8 @@ class TTVibeVoiceGenerator:
         diffusion_noise: Optional[torch.Tensor] = None
         if self.ref_inference is None:
             diffusion_noise = torch.randn(max_steps, 2, 1, 1, 64, dtype=torch.float32, generator=rng).to(torch.bfloat16)
+            # Upload it once as a gather table so the traced frame picks its row on device.
+            self._sf_upload_noise_table(diffusion_noise)
 
         diffusion_frames = 0
         # Steady-state decode timing (cf. tt_transformers/llama demos): time ONLY the fused-frame
@@ -1551,18 +1688,40 @@ class TTVibeVoiceGenerator:
                 _sf_replay = self._sf_tid is not None
                 _frame_t0 = time.perf_counter() if _sf_replay else None
                 diffusion_frames += 1
-                noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
+                # With the device noise table the traced frame gathers its own row, so only the row
+                # INDEX is needed here — don't slice the host block for a value nobody reads.
+                noise_2x = (
+                    None
+                    if self._sf_noise_table is not None or diffusion_noise is None
+                    else diffusion_noise[diffusion_frames - 1]
+                )
                 start_pos = prefill_len + step
                 with prof.section("segment_frame"):
                     audio_chunk, _tok_or_logits = self._run_segment_frame_traced(
-                        seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg
+                        seg_frame_idx,
+                        step_hidden,
+                        start_pos,
+                        noise_2x,
+                        kv_cache_pos,
+                        kv_cache_neg,
+                        noise_idx=diffusion_frames - 1,
                     )
                 neg_prev_diffusion_token = current_token
-                _frame_audio = ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)  # syncs frame
+                _local_idx = None
+                if self._sf_out_fused:
+                    # ONE D2H returns [audio ..., token_idx] (see _lm2trace).
+                    with prof.section("argmax"):
+                        _out = ttnn.to_torch(_tok_or_logits).reshape(-1)  # syncs frame
+                    _frame_audio = _out[:-1].to(torch.float32)
+                    _local_idx = int(_out[-1].item())
+                else:
+                    _frame_audio = ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)  # syncs frame
                 if self._traj_path:
                     self._log_traj(diffusion_frames, start_pos, _frame_audio)
                 _emit_audio(_frame_audio)
-                if self._sf_cap_split:
+                if _local_idx is not None:
+                    next_token = self._sf_valid_ids_sorted[_local_idx]
+                elif self._sf_cap_split:
                     # Split-capture folds the constrained argmax into the trace → LOCAL index.
                     with prof.section("argmax"):
                         _local_idx = int(ttnn.to_torch(_tok_or_logits).reshape(-1)[-1].item())  # syncs frame
