@@ -2774,6 +2774,8 @@ def _record_committed_win(message: str) -> None:
                 "op_signature": op,
                 "kernel_kind": rung,
                 "measured_ms": t.get("measured_ms"),
+                "fullpipe_ms": (_fullpipe_ms_now() or (None, None))[0],
+                "fullpipe_best_ms": (_fullpipe_ms_now() or (None, None))[1],
                 "beat_baseline": True,
                 "wedged": False,
                 "kernel_detected_in_source": True,
@@ -2872,6 +2874,29 @@ def _capture_attempt_diff(max_lines: int = 40) -> str:
         return ""
 
 
+def _fullpipe_ms_now():
+    """The end-to-end full-pipeline ms behind the CURRENT gate verdict, or None.
+
+    Stamped onto every attempt so the report can rank wins by the number the win definition is stated
+    in. Without it the ranking falls back to `measured_ms`, which means a different thing depending on
+    which lever was measured -- per-token for a host/dispatch lever, per-profile device_ms for an op
+    lever -- and one staircase over both disqualifies the larger-scoped rows.
+    """
+    try:
+        fp = gate_verdicts().get("full_pipeline") or {}
+        v = float(fp.get("full_pipeline_ms"))
+        if v <= 0:
+            return None
+        try:
+            prev = float(fp.get("best_ms"))
+            prev = prev if prev > 0 else None
+        except (TypeError, ValueError):
+            prev = None
+        return (v, prev)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 @mcp.tool()
 def record_kernel_attempt(
     op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = "", stages_json: str = ""
@@ -2936,6 +2961,10 @@ def record_kernel_attempt(
         # gate's own recorded verdict; the parameter is kept only as the caller's CLAIM, for the note.
         "beat_baseline": bool(gate_set_new_best()) and _ledger().is_win({"beat_baseline": True, "measured_ms": _ms}),
         "claimed_beat_baseline": bool(beat_baseline),
+        # The end-to-end reading this attempt is judged against -- one ruler for every row -- and the
+        # gate's own previous best, so the staircase never needs a reference from a different ruler.
+        "fullpipe_ms": (_fullpipe_ms_now() or (None, None))[0],
+        "fullpipe_best_ms": (_fullpipe_ms_now() or (None, None))[1],
         "note": note,
         "stages": stages,
         "kernel_detected_in_source": detected,

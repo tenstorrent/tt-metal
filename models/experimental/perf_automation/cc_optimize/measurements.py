@@ -92,6 +92,28 @@ def is_win(attempt) -> bool:
     return math.isfinite(ms) and ms > 0
 
 
+def staircase_value(attempt) -> tuple:
+    """(value, ruler) an attempt's win may be judged on. The RULER matters as much as the value.
+
+    `measured_ms` is whatever the caller measured, and callers measure different things: a per-token
+    trace reading for a host/dispatch lever, a per-profile device_ms sum for an op lever. Comparing
+    them in one staircase is how a per-token 21.11 became the running best and every later per-profile
+    290-354 row rendered "no gain" -- four git-committed wins shown as failures in one report.
+
+    `fullpipe_ms` is the end-to-end number the win DEFINITION is already stated in (gate_set_new_best:
+    full_pipeline_ms below the previous best), so when it is present it is the correct and
+    unit-consistent thing to rank by. Otherwise fall back to measured_ms, in its own separate ruler.
+    """
+    for key, ruler in (("fullpipe_ms", "fullpipe"), ("measured_ms", "measured")):
+        try:
+            v = float(attempt.get(key))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            return v, ruler
+    return None, ""
+
+
 def winning_indices(attempts, baseline_ms=None) -> set:
     """Indices of the attempts that ACTUALLY made the model faster. THE ONE win rule for a sequence.
 
@@ -106,21 +128,37 @@ def winning_indices(attempts, baseline_ms=None) -> set:
 
     Order matters, so this takes the attempt list rather than one row; callers must not re-derive it.
     """
-    best = None
+    # ONE STAIRCASE PER RULER. A single `best` across mixed units let the smallest-scoped reading win
+    # once and then disqualify everything else; see staircase_value.
+    best: dict = {}
     try:
         b = float(baseline_ms)
         if math.isfinite(b) and b > 0:
-            best = b
+            best["measured"] = b
     except (TypeError, ValueError):
         pass
     out = set()
     for i, a in enumerate(attempts or []):
         if not is_win(a):
             continue
-        ms = float(a.get("measured_ms"))
-        if best is None or ms < best:
+        ms, ruler = staircase_value(a)
+        if ms is None:
+            continue
+        prev = best.get(ruler)
+        if prev is None and ruler == "fullpipe":
+            # SEED FROM THE GATE'S OWN PREVIOUS BEST -- same ruler, same scope. Crediting the first
+            # end-to-end attempt unconditionally would mark a lever that merely held steady.
+            try:
+                _pb = float(a.get("fullpipe_best_ms"))
+                prev = _pb if math.isfinite(_pb) and _pb > 0 else None
+            except (TypeError, ValueError):
+                prev = None
+        # prev may still be None (no baseline, no gate best): the first timed attempt then STARTS this
+        # ruler's staircase, which is deliberate -- test_without_a_baseline_the_first_timed_commit_starts
+        # _the_staircase pins it, so a run with no recorded baseline still shows relative progress.
+        if prev is None or ms < prev:
             out.add(i)
-            best = ms
+            best[ruler] = ms
     return out
 
 
