@@ -28,6 +28,7 @@ class ExpertWeights:
     # Fused gate+up weight (concat along N) built ON-DEVICE from the cached gate/up
     # tensors, so one sparse_matmul produces [gate|up]; output splits [..,:I]/[..,I:].
     gate_up_proj: ttnn.Tensor = None
+    gateup_bias: ttnn.Tensor = None  # concat[gate_bias|up_bias] [1,E,1,2I] for fused SwiGLU
 
 
 def load_expert_weights(
@@ -173,7 +174,16 @@ def load_expert_weights(
     # at model build. Halves the gate/up sparse_matmul launches at inference.
     gate_up_proj_tt = ttnn.concat([gate_proj_tt, up_proj_tt], dim=3)
 
+    # Prebuild concat[gate_bias|up_bias] as [1,E,1,2I] for the fused SwiGLU (one-time
+    # at model build, OUTSIDE the traced decode path). gate/up bias are [1,E,I].
+    _E = config.num_experts
+    _I = intermediate_size_per_device
+    gateup_bias_tt = ttnn.concat(
+        [ttnn.reshape(gate_proj_bias_tt, (1, _E, 1, _I)), ttnn.reshape(up_proj_bias_tt, (1, _E, 1, _I))], dim=3
+    )
+
     return ExpertWeights(
+        gateup_bias=gateup_bias_tt,
         gate_proj=gate_proj_tt,
         up_proj=up_proj_tt,
         down_proj=down_proj_tt,

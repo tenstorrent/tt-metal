@@ -149,6 +149,7 @@ class Experts:
                 mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
                 program_config=self.program_config,
+                topk_expert_indices=topk_expert_indices,
             )
         else:
             return prefill_forward(

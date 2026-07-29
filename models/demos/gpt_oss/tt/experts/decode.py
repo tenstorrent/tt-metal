@@ -7,7 +7,7 @@ import ttnn
 from models.demos.gpt_oss.config import Mode
 
 from .config import ExpertConfig, ProgramConfig
-from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_tensor_parallel_allreduce
+from .operations import apply_expert_parallel_allreduce, apply_tensor_parallel_allreduce
 from .weights import ExpertWeights
 
 
@@ -20,6 +20,7 @@ def decode_forward(
     mesh_device,
     ccl_manager,
     program_config: ProgramConfig,
+    topk_expert_indices=None,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -88,21 +89,33 @@ def decode_forward(
     # Fused output is [.., 2*I]; split into gate/up along the last dim after the
     # shared reshape/transpose (halves the gate/up sparse_matmul launches).
     I = weights.intermediate_size_per_device
-    gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, 2 * I))
-    gate = ttnn.transpose(gate, 1, 2)
-    gate = ttnn.reshape(gate, (batch_size, config.num_experts, 2 * I))
-    gate_up = gate
-    gate = ttnn.slice(gate_up, (0, 0, 0), (batch_size, config.num_experts, I))
-    up = ttnn.slice(gate_up, (0, 0, I), (batch_size, config.num_experts, 2 * I))
-    gate_up.deallocate(True)
-    gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
-    up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
+    # Fused expert-tail SwiGLU (custom generic_op): transpose-eliminating +
+    # expert-skipping + scatter. Reads gate/up directly from the raw fused matmul
+    # output [1,E,1,2I] (native layout, no transpose/slice), processes ONLY the
+    # active experts (ids from the router top-k device tensor), and scatters
+    # silu(clamp(gate,max=a*lim))*(clamp(up,-lim,lim)+1) to the active expert slots
+    # of down_input [1,E,1,I]. Bias (concat[gate|up]) added once via the prebuilt
+    # weights.gateup_bias. Replaces ~10 ops/layer (transpose+slice x2+2 bias+clamp x2
+    # +silu+ (+1)+mul) with a single generic_op over the active experts.
+    from models.demos.gpt_oss.kernels.swiglu_final_op import fused_swiglu_final
 
-    # Apply SwiGLU activation (consumes gate and up internally)
-    down_input = apply_swiglu(gate, up, config)
-    # Note: transpose/reshape operations return views - do not deallocate originals
-    down_input = ttnn.transpose(down_input, 1, 0)
-    down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    raw = ttnn.reshape(gate, (batch_size, config.num_experts, 1, 2 * I))
+    # Prep active-expert id list -> [1,1,1,nact] uint32 ROW_MAJOR device tensor.
+    _nact = config.num_experts_per_tok
+    _idx = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+    _idx = ttnn.typecast(_idx, ttnn.uint32)
+    _idx = ttnn.reshape(_idx, (1, 1, 1, _nact))
+    down_input = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, config.num_experts, seq_len, I]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        mesh_device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    _cap = config.alpha * config.swiglu_limit
+    # Bias folded inside the kernel (weights.gateup_bias), only for active experts.
+    fused_swiglu_final(raw, weights.gateup_bias, _idx, down_input, _nact, _cap, config.swiglu_limit)
+    raw.deallocate(True)
     # Down projection
     down = ttnn.sparse_matmul(
         down_input,
