@@ -124,6 +124,11 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             {"seq_id", kSeqRepeat},
             {"cb_id", 0},
             {"batch", kReadBatch},
+            // reader_tile_interleaved_unified.cpp unconditionally reads this named CT arg
+            // (0 => absent, use the accessor's own page size). builder_utils.py's
+            // _TILE_READER_DEFAULTS injects it centrally for every op using this reader;
+            // repeat never supplies a pitch override, so it must still be present as 0.
+            {"src_page_pitch", 0},
         };
         reader_desc.config = ReaderConfigDescriptor{};
 

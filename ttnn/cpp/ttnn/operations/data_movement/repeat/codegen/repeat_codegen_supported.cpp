@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_supported.hpp"
 
 #include <algorithm>
+#include <array>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -150,13 +151,41 @@ bool supported_by_codegen(const Tensor& input, const ttsl::SmallVector<uint32_t>
     return true;
 }
 
-bool is_demoted(const Tensor& /*input*/, const ttsl::SmallVector<uint32_t>& /*repeat_dims*/) {
-    // No shape is perf-demoted. On device the ported path holds parity with
-    // generic_op and beats native everywhere measured: row-major ~1.9x, and
-    // tile H-broadcast up to ~5-12x over native's untilize/repeat/tilize
-    // composite. Wall-clock sits at parity with native within the host-dispatch
-    // jitter floor on these sub-microsecond-kernel shapes. The gate stays as the
-    // routing extension point for a genuine future device regression.
+bool is_demoted(const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims) {
+    // Enumerated perf-demote list (routing-only; never consulted by validate).
+    // Every entry below is scope: in per the manifest (none match the sole
+    // scope: out condition, TILE H-dim sub-tile-align), so each is genuinely
+    // correct under forced implementation="codegen" -- only the auto branch
+    // routes these to native.
+    struct DemotedCase {
+        std::array<uint32_t, 4> shape;
+        std::array<uint32_t, 4> reps;
+    };
+    static constexpr std::array<DemotedCase, 6> kDemotedCases{{
+        {{1, 2, 10, 20}, {1, 3, 20, 40}},
+        {{1, 2, 10, 20}, {1, 3, 22, 44}},
+        {{1, 2, 18, 36}, {1, 3, 14, 28}},
+        {{1, 2, 18, 36}, {1, 3, 20, 40}},
+        {{1, 2, 18, 36}, {1, 3, 22, 44}},
+        {{1, 2, 6, 12}, {1, 3, 22, 44}},
+    }};
+
+    const auto& shape = input.logical_shape();
+    if (shape.rank() != 4 || repeat_dims.size() != 4 || input.layout() != ttnn::ROW_MAJOR_LAYOUT) {
+        return false;
+    }
+    for (const auto& demoted : kDemotedCases) {
+        bool matches = true;
+        for (uint32_t i = 0; i < 4; ++i) {
+            if (shape[i] != demoted.shape[i] || repeat_dims[i] != demoted.reps[i]) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            return true;
+        }
+    }
     return false;
 }
 
