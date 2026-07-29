@@ -1304,7 +1304,20 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // each owner sums Pk-1 partials of rs_T/S tiles, i.e. (Pk-1)*rs_T/S tile-adds against a chain core's rs_T,
     // a Pk/S imbalance. Zones measure which side wins.
     const uint32_t rs_stripe_code = (diag_mask >> 27u) & 0x3u;
-    const uint32_t rs_S = rs_stripe_code ? (rs_stripe_code + 1u) : 0u;
+    // Cap S so every owner gets a NON-EMPTY stripe. With rs_T=6 and S=4 the split is 2,2,2,0: the fourth owner
+    // owns nothing yet still runs the whole protocol (arrival waits, credits, and zero-byte NoC writes from
+    // every sender). Measured +26.6% on 256x2048x512 before this cap. ceil(rs_T/S) >= 1 is not enough -- the
+    // requirement is S <= rs_T so that j*ceil(rs_T/S) < rs_T for every j.
+    uint32_t rs_S = rs_stripe_code ? (rs_stripe_code + 1u) : 0u;
+    if (rs_S) {
+        const uint32_t rs_T_pre = geo.M_block_capacity * geo.N_sub;
+        while (rs_S > 1u && (rs_S - 1u) * ((rs_T_pre + rs_S - 1u) / rs_S) >= rs_T_pre) {
+            --rs_S;  // last stripe would be empty
+        }
+        if (rs_S > Pk) {
+            rs_S = Pk;
+        }
+    }
     const bool rs_striped = (rs_S != 0u);
     TT_FATAL(
         !rs_striped || (rs_feasible && !rs_direct && rs_S <= Pk),
@@ -1332,8 +1345,14 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         if (rs_striped) {
             wdefs["RS_STRIPED"] = "1";
             ddefs_compute["RS_STRIPED"] = "1";
-            wdefs["RA_PROFILE_ZONES"] = "1";  // per-phase timing zones (payload/arrival/credit/reduce)
-            ddefs_compute["RA_PROFILE_ZONES"] = "1";
+            // Zones and DPRINT markers are OPT-IN: leaving zones always on would bias every striped perf
+            // measurement against the chain/ring baselines, which carry no instrumentation.
+            if (std::getenv("TT_REGIME_A_RS_ZONES") != nullptr) {
+                wdefs["RA_PROFILE_ZONES"] = "1";  // payload / arrival / credit / reduce-wait / output-write
+            }
+            if (std::getenv("TT_REGIME_A_RS_DBG") != nullptr) {
+                wdefs["RA_DBG"] = "1";  // hang-diagnosis markers
+            }
         }
     }
 
@@ -1600,6 +1619,9 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         //       generation nb while the owner is still reducing generation nb-1.
         mkcb(program, all_cores, 4, 2u * out_blk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
         mkcb(program, all_cores, 5, 2u * Pk * rs_stripe_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
+        // c_6 = bf16 copy of an owner's OWN stripe, so its reduction has a single input format (a mixed
+        // fp32-seed / bf16-add reduce measured PCC 0.26). Spare CB when unfused.
+        mkcb(program, all_cores, 6, rs_stripe_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
     } else if (rscatter && rs_direct) {
         // c_4 = bf16 image of this core's WHOLE sub-block partial (2 deep, so compute can build the next one
         //       while the writer is still scattering the current one); the writer sends slice q of it to peer q.
@@ -1622,6 +1644,21 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t fwd_sem = CreateSemaphore(program, all_cores, 0u);      // in0 ring recv
     const uint32_t red_sem = CreateSemaphore(program, all_cores, 0u);      // reduction recv (shared counter)
     const uint32_t redfree_sem = CreateSemaphore(program, all_cores, 0u);  // cb_reduce reverse credit
+    // Striped owner-gather splits arrivals across TWO counters (by sender position) so an owner can start
+    // reducing the first half of its partials while the second half is still in flight.
+    uint32_t rs_b_sem = 0u;
+    // PER-OWNER credit counters. One shared counter is WRONG: an owner that runs ahead accumulates credits that
+    // satisfy a sender's threshold even when a DIFFERENT owner has not yet freed its receive buffer, so the
+    // sender overwrites live data (measured: PCC 0.996 / nan once N_bpc > 1). Each owner therefore gets its own
+    // counter and a sender must see nb-1 on EVERY owner it writes to. redfree_sem serves as owner 0's counter.
+    std::vector<uint32_t> rs_cred_sem;
+    if (rscatter && rs_striped) {
+        rs_b_sem = CreateSemaphore(program, all_cores, 0u);
+        rs_cred_sem.push_back(redfree_sem);
+        for (uint32_t j = 1; j < rs_S; ++j) {
+            rs_cred_sem.push_back(CreateSemaphore(program, all_cores, 0u));
+        }
+    }
     uint32_t in1valid_sem = 0u, in1ready_sem = 0u;                         // M-split reader<->slaves
     if (Sm > 1u) {
         in1valid_sem = CreateSemaphore(program, all_cores, 0u);
@@ -1916,7 +1953,30 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             wa.push_back(cp.rs_own_chunk);  // 21 tile-chunk index this core owns + writes
             wa.push_back(Pk);               // 22 cycle size
             wa.push_back(rs_T);             // 23 sub-block tiles (kernel derives the chunk sizes)
-            if (rs_direct) {
+            if (rs_striped) {
+                // 24+: S, my group position, my owned stripe (== S when this core owns none), the A/B sender
+                // split point, the B-arrival semaphore id, then the S owner POSITIONS, then all Pk group-member
+                // coords in position order. Senders index members by position; there is no loopback write.
+                const uint32_t bnk = i / geo.preaders;
+                const uint32_t sub = (i % geo.preaders) % geo.mfac;
+                const uint32_t gkey = (bnk * geo.mfac + sub) * rs_S;
+                wa.push_back(rs_S);             // 24
+                wa.push_back(cp.rs_pos);        // 25
+                wa.push_back(rs_stripe_of[i]);  // 26
+                wa.push_back(Pk / 2u);          // 27
+                wa.push_back(rs_b_sem);         // 28
+                for (uint32_t j = 0; j < rs_S; ++j) {
+                    wa.push_back(rs_owner_of[gkey + j]);
+                }
+                for (uint32_t j = 0; j < rs_S; ++j) {
+                    wa.push_back(rs_cred_sem[j]);  // per-owner credit counter ids
+                }
+                for (uint32_t kk = 0; kk < Pk; ++kk) {
+                    const auto pc = phys(bnk * geo.preaders + kk * geo.mfac + sub);
+                    wa.push_back(pc.x);
+                    wa.push_back(pc.y);
+                }
+            } else if (rs_direct) {
                 // 24+: coords of ALL Pk group members in position order, INCLUDING this core itself. The
                 // writer loops over every position and writes slice q to member q, so the loopback write
                 // fills its own receive slot and every slot the reduce reads is a uniform partial.

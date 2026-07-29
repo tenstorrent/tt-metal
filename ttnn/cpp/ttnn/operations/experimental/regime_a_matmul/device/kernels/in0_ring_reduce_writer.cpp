@@ -27,6 +27,14 @@
 #define RA_ZONE(n)
 #endif
 
+// Temporary hang-diagnosis markers (compile-gated, never on in production).
+#if defined(RA_DBG)
+#include "api/debug/dprint.h"
+#define RA_DBG_P(tag, v) DPRINT(tag "={}\n", (uint32_t)(v))
+#else
+#define RA_DBG_P(tag, v)
+#endif
+
 void kernel_main() {
     constexpr uint32_t M_block = get_compile_time_arg_val(0);
     constexpr uint32_t K_block = get_compile_time_arg_val(1);       // kb
@@ -375,36 +383,50 @@ void kernel_main() {
     constexpr uint32_t cb_send = 4;
     constexpr uint32_t cb_recv = 5;
     const uint32_t recv_base = get_write_ptr(cb_recv);  // identical offset on every core
-    const uint32_t a_addr = get_semaphore(red_sem_id);
-    volatile tt_l1_ptr uint32_t* a_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a_addr);
-    const uint32_t b_addr = get_semaphore(b_sem_id);
-    volatile tt_l1_ptr uint32_t* b_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(b_addr);
-    const uint32_t credit_addr = get_semaphore(redfree_sem_id);
-    volatile tt_l1_ptr uint32_t* credit_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_addr);
+    // ARRIVAL counters are PER GENERATION (gen = nb & 1) and are RESET by the owner once consumed. A single
+    // cumulative counter is WRONG: the credit wait only engages at nb>=2, so one sender may advance to nb=1
+    // unimpeded and its second increment alone satisfies the owner's nb=0 threshold while a slower sender's slot
+    // still holds garbage. Per-generation counters make the threshold mean "this many DISTINCT senders arrived
+    // for THIS generation", because a sender increments a given generation's counter exactly once.
+    const uint32_t arr_addr[2] = {get_semaphore(red_sem_id), get_semaphore(b_sem_id)};
     auto owner_pos = [&](uint32_t j) { return get_arg_val<uint32_t>(29 + j); };
-    auto gcx = [&](uint32_t p) { return get_arg_val<uint32_t>(29 + S + p * 2u); };
-    auto gcy = [&](uint32_t p) { return get_arg_val<uint32_t>(30 + S + p * 2u); };
-    // partials this owner expects per sub-block, split by the sender's counter
-    const uint32_t exp_a = is_owner ? (na - (my_pos < na ? 1u : 0u)) : 0u;
-    const uint32_t exp_b = is_owner ? ((P - na) - (my_pos >= na ? 1u : 0u)) : 0u;
-    // Credits an owner sends go to every group member EXCEPT itself, so an owner receives one fewer credit per
-    // sub-block than a non-owner. Getting this wrong deadlocks every owner from sub-block 2 onward.
-    const uint32_t cred_per_sb = S - (is_owner ? 1u : 0u);
+    auto cred_sem = [&](uint32_t j) { return get_arg_val<uint32_t>(29 + S + j); };
+    auto gcx = [&](uint32_t p) { return get_arg_val<uint32_t>(29 + 2u * S + p * 2u); };
+    auto gcy = [&](uint32_t p) { return get_arg_val<uint32_t>(30 + 2u * S + p * 2u); };
     const uint32_t own_beg = is_owner ? (my_stripe * stripe_tiles) : 0u;
     const uint32_t own_end = is_owner ? ((own_beg + stripe_tiles < rs_T) ? own_beg + stripe_tiles : rs_T) : 0u;
 
+    RA_DBG_P("RSS_start pos", my_pos);
+    RA_DBG_P("  stripe", my_stripe);
+    RA_DBG_P("  S", S);
+    RA_DBG_P("  P", P);
+    RA_DBG_P("  st_tiles", stripe_tiles);
+    RA_DBG_P("  Nbpc", N_bpc);
     for (uint32_t nb = 0; nb < N_bpc; ++nb) {
         const uint32_t n_base = nb * N_block;
+        RA_DBG_P("A_top nb", nb);
         if (nb >= 2u) {
             RA_ZONE("Z_RSS_CREDITWAIT");
-            noc_semaphore_wait_min(credit_ptr, (nb - 1u) * cred_per_sb);  // generation nb-2 consumed everywhere
+            // EVERY owner we write to must have consumed generation nb-2. Checking each owner's own counter is
+            // required: a summed counter lets one fast owner cover for a slow one and the slow owner's live
+            // buffer then gets overwritten.
+            for (uint32_t j = 0; j < S; ++j) {
+                if (owner_pos(j) != my_pos) {
+                    volatile tt_l1_ptr uint32_t* cp =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cred_sem(j)));
+                    noc_semaphore_wait_min(cp, nb - 1u);
+                }
+            }
         }
+        RA_DBG_P("B_waitsend nb", nb);
         cb_wait_front(cb_send, rs_T);  // compute staged the bf16 image of our whole partial
         const uint32_t img = get_read_ptr(cb_send);
         const uint32_t gen = (nb & 1u) * gen_bytes;
+        RA_DBG_P("C_gotsend nb", nb);
         if (is_owner) {
             cb_reserve_back(cb_recv, P * stripe_tiles);
         }
+        RA_DBG_P("D_reserved nb", nb);
         {
             RA_ZONE("Z_RSS_PAYLOAD");
             for (uint32_t j = 0; j < S; ++j) {
@@ -420,29 +442,25 @@ void kernel_main() {
                     nby);
             }
             // readiness AFTER payload, same peer + same NoC (ordered), so no owner sees a partial early
-            const uint32_t my_sem = (my_pos < na) ? a_addr : b_addr;
             for (uint32_t j = 0; j < S; ++j) {
                 const uint32_t op = owner_pos(j);
                 if (op != my_pos) {
-                    noc_semaphore_inc(get_noc_addr(gcx(op), gcy(op), my_sem), 1);
+                    noc_semaphore_inc(get_noc_addr(gcx(op), gcy(op), arr_addr[nb & 1u]), 1);
                 }
             }
             noc_async_writes_flushed();  // payload departed cb_send -> compute may refill it
         }
+        RA_DBG_P("E_sent nb", nb);
         cb_pop_front(cb_send, rs_T);
 
         if (is_owner) {
-            // Incremental: release the A half to compute as soon as it lands, then the B half.
+            volatile tt_l1_ptr uint32_t* gen_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arr_addr[nb & 1u]);
             {
-                RA_ZONE("Z_RSS_ARRIVE_A");
-                noc_semaphore_wait_min(a_ptr, (nb + 1u) * exp_a);
+                RA_ZONE("Z_RSS_ARRIVE");
+                noc_semaphore_wait_min(gen_ptr, P - 1u);  // every peer's partial for THIS generation has landed
             }
-            cb_push_back(cb_recv, na * stripe_tiles);
-            {
-                RA_ZONE("Z_RSS_ARRIVE_B");
-                noc_semaphore_wait_min(b_ptr, (nb + 1u) * exp_b);
-            }
-            cb_push_back(cb_recv, (P - na) * stripe_tiles);
+            RA_DBG_P("F_arrived nb", nb);
+            cb_push_back(cb_recv, P * stripe_tiles);
 
             {
                 // Blocks until compute has finished reducing this stripe, so this zone IS the reduction cost as
@@ -450,6 +468,7 @@ void kernel_main() {
                 RA_ZONE("Z_RSS_REDUCEWAIT");
                 cb_wait_front(out_cb, stripe_tiles);
             }
+            RA_DBG_P("H_reduced nb", nb);
             {
                 RA_ZONE("Z_RSS_OUTWRITE");
                 const uint32_t rr = get_read_ptr(out_cb);
@@ -466,9 +485,14 @@ void kernel_main() {
             }
             {
                 RA_ZONE("Z_RSS_CREDITSEND");
+                // Clear this generation's arrival counter BEFORE crediting. A sender may run two sub-blocks
+                // ahead and reuse this same counter, but only after receiving the credit below, so the reset can
+                // never swallow its increment.
+                noc_semaphore_set(gen_ptr, 0);
+                const uint32_t my_cred = get_semaphore(cred_sem(my_stripe));
                 for (uint32_t p = 0; p < P; ++p) {
                     if (p != my_pos) {
-                        noc_semaphore_inc(get_noc_addr(gcx(p), gcy(p), credit_addr), 1);
+                        noc_semaphore_inc(get_noc_addr(gcx(p), gcy(p), my_cred), 1);
                     }
                 }
             }

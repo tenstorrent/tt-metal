@@ -107,22 +107,23 @@ void reduce_add_block(uint32_t a_cb, uint32_t b_cb, uint32_t out_cb, uint32_t M_
 // at most kDstTiles tiles, so a stripe longer than that is processed in successive DST-sized groups
 // ("incremental where practical" on the compute side); each group pays 2 inits, not 2 per source.
 void rss_reduce_stripe(
-    uint32_t acc_cb,       // fp32 intermediate holding this core's whole sub-block partial
-    uint32_t acc_beg,      // first tile of MY stripe within that partial
+    uint32_t self_cb,      // bf16 copy of THIS owner's own stripe (tiles 0..ntiles-1)
     uint32_t ntiles,       // tiles in my stripe
     uint32_t recv_cb,      // bf16 peer partials, slot-major
     uint32_t slot_stride,  // tiles per slot
-    uint32_t nslots,       // Pk (slot my_pos is skipped)
-    uint32_t skip_slot,    // my own position: nothing was sent to us for it
+    uint32_t nslots,       // Pk (slot skip_slot holds nothing -- no loopback)
+    uint32_t skip_slot,    // my own position
     uint32_t out_cb) {
     constexpr uint32_t kDstTiles = 4;  // fp32 DST capacity
     for (uint32_t base = 0; base < ntiles; base += kDstTiles) {
         const uint32_t n = (ntiles - base < kDstTiles) ? (ntiles - base) : kDstTiles;
         acquire_dst();
-        copy_tile_to_dst_init_short(acc_cb);
-        reconfig_data_format_srca(acc_cb);
+        // Seed DST from our OWN stripe. self_cb is bf16, exactly like the peer slots, so every source in this
+        // reduction has one format -- the mixed fp32-seed/bf16-add version produced PCC 0.26.
+        copy_tile_to_dst_init_short(self_cb);
+        reconfig_data_format_srca(self_cb);
         for (uint32_t i = 0; i < n; ++i) {
-            copy_tile(acc_cb, acc_beg + base + i, i);  // seed DST with our own partial
+            copy_tile(self_cb, base + i, i);
         }
         binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(recv_cb);
         for (uint32_t s = 0; s < nslots; ++s) {
@@ -661,13 +662,19 @@ void kernel_main() {
                 if (rs_my_stripe < S) {
                     const uint32_t beg = rs_my_stripe * stripe_tiles;
                     const uint32_t end = (beg + stripe_tiles < rs_T) ? (beg + stripe_tiles) : rs_T;
-                    // The writer releases the A half of the arrivals first, so waiting on it separately lets the
-                    // unpacker start touching peer data before the B half has landed.
-                    cb_wait_front(cb_recv_cb, rs_na_arg * stripe_tiles);
+                    constexpr uint32_t cb_self_cb = tt::CBIndex::c_6;  // spare when unfused
+                    // Convert our own stripe fp32 -> bf16 into c_6 so the reduction below is single-format.
+                    // This is a LOCAL pack, not a NoC loopback.
+                    cb_reserve_back(cb_self_cb, stripe_tiles);
+                    rs_copy_chunk(intermediate_cb, beg, cb_self_cb, end - beg);
+                    cb_push_back(cb_self_cb, stripe_tiles);
+                    cb_wait_front(cb_self_cb, stripe_tiles);
+                    // The writer publishes all P slots at once, once every peer's partial for this generation
+                    // has landed (per-generation arrival counter).
                     cb_wait_front(cb_recv_cb, P * stripe_tiles);
                     cb_reserve_back(out_cb, stripe_tiles);
-                    rss_reduce_stripe(
-                        intermediate_cb, beg, end - beg, cb_recv_cb, stripe_tiles, P, rs_ring_pos, out_cb);
+                    rss_reduce_stripe(cb_self_cb, end - beg, cb_recv_cb, stripe_tiles, P, rs_ring_pos, out_cb);
+                    cb_pop_front(cb_self_cb, stripe_tiles);
                     cb_pop_front(cb_recv_cb, P * stripe_tiles);
                     cb_push_back(out_cb, stripe_tiles);
                 }
