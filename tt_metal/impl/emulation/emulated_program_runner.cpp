@@ -314,6 +314,44 @@ static uint64_t get_pcie_base_cached(uint32_t device_id) {
     return pcie_base;
 }
 
+// §14 Out-of-Bounds Write (DRAM). Normalizes the in-bank NOC offset back to allocator
+// space before the live-extent test; unknown view => skip. See SANITIZER_CHECKS.md §14.
+static inline void emule_asan_check_oob_dram(uint32_t noc_x, uint32_t noc_y, uint64_t in_bank_off, uint64_t key) {
+    const auto& san = __emule_self->san;
+    if (san.dram_tensor_ranges == nullptr || !__emule_asan_check_enabled(EmuleAsanCheck::OobDram)) {
+        return;
+    }
+    if (__emule_self->dram_view_offsets == nullptr) {
+        return;
+    }
+    auto off_it = __emule_self->dram_view_offsets->find(key);
+    if (off_it == __emule_self->dram_view_offsets->end()) {
+        return;
+    }
+    const uint64_t view_base = off_it->second;
+    if (in_bank_off < view_base) {
+        return;
+    }
+    const uint32_t addr = static_cast<uint32_t>(in_bank_off - view_base);
+    if (addr < san.dram_unreserved_base) {
+        return;
+    }
+    for (uint32_t i = 0; i < san.dram_tensor_ranges_count; ++i) {
+        const uint64_t packed = san.dram_tensor_ranges[i];
+        if (addr >= static_cast<uint32_t>(packed >> 32) && addr < static_cast<uint32_t>(packed)) {
+            return;
+        }
+    }
+    __emule_asan_panic(
+        "[ASAN ERROR] Out-of-Bounds Write: Attempted to access DRAM address 0x%x which is not part of any "
+        "allocated tensor (via NOC to DRAM core (%u,%u), in-bank offset 0x%llx, view base 0x%llx)\n",
+        addr,
+        noc_x,
+        noc_y,
+        static_cast<unsigned long long>(in_bank_off),
+        static_cast<unsigned long long>(view_base));
+}
+
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     emule_require_self(__func__);
 
@@ -346,13 +384,14 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
             const bool is_worker = it->second->role() == tt_emule::CoreRole::WORKER;
             uint32_t offset =
                 is_worker ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK) : static_cast<uint32_t>(local_addr);
-            // §13 Launch-Mailbox Clobber. Worker L1 only — a DRAM offset is not an
-            // L1 offset and would alias the mailbox range numerically. This is the
-            // cross-core arm of the check: the local chokepoint never sees this
-            // path (see asan_l1_checks.h), so without it a Gather/socket write that
-            // lands on a receiver's run message is silent.
+            // §13/§14 cross-core arms — the local chokepoint never sees this path.
+            // Worker L1 only for §13: a DRAM offset would alias the mailbox range.
             if (is_worker && tt::tt_metal::emule::emule_asan_enabled()) {
                 __emule_asan_check_mailbox(offset, "NOC write");
+            } else if (
+                !is_worker && it->second->role() == tt_emule::CoreRole::DRAM &&
+                tt::tt_metal::emule::emule_asan_enabled()) {
+                emule_asan_check_oob_dram(noc_x, noc_y, local_addr, key);
             }
             return it->second->l1_ptr(offset);
         }
@@ -403,10 +442,7 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
         return;
     }
 
-    // §13 Launch-Mailbox Clobber. The offset is identical for every delivery
-    // target, so one test before the rectangle walk covers all of them — this is
-    // the "reduced mcast target buffer" shape, where the rectangle reaches cores
-    // the target CB was never allocated on.
+    // §13: the offset is identical for every delivery target, so one test covers all.
     if (tt::tt_metal::emule::emule_asan_enabled()) {
         __emule_asan_check_mailbox(static_cast<uint32_t>(l1_offset), "multicast write");
     }
@@ -2058,6 +2094,15 @@ static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t,
 // that worker's own fiber (built from the CURRENT chip in setup_core_state) reads —
 // cross-core sems never observed → deadlock. Rebuild when the chip identity changes.
 static std::unordered_map<uint32_t, tt::umd::SWEmuleChip*> g_core_map_sw_emu;
+// Per-device NOC(x,y) -> dram-view base offset, for §14 (SANITIZER_CHECKS.md §14).
+static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, uint32_t>>> g_dram_view_offset_cache;
+
+// Offset map from the most recent build_core_map for this device; same lock.
+static std::unordered_map<uint64_t, uint32_t>* dram_view_offsets_for(ChipId device_id) {
+    std::lock_guard<std::mutex> lock(g_core_map_mutex);
+    auto it = g_dram_view_offset_cache.find(device_id);
+    return it != g_dram_view_offset_cache.end() && it->second ? it->second.get() : nullptr;
+}
 
 static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
     tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
@@ -2103,6 +2148,8 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
         {
             auto& umd = sw_emu->get_soc_descriptor();
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+            auto& view_offsets = g_dram_view_offset_cache[device_id];
+            view_offsets = std::make_shared<std::unordered_map<uint64_t, uint32_t>>();
             for (uint32_t view = 0; view < msoc.get_num_dram_views() && view < MAX_NUM_BANKS; view++) {
                 for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
                     auto dc = msoc.get_preferred_worker_core_for_dram_view(view, noc);
@@ -2111,6 +2158,8 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
                     auto* core = sw_emu->get_dram_channel_backing(static_cast<uint32_t>(lg.x));
                     uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
                     (*core_map)[key] = core;
+                    // Keyed by the view's coord — views sharing a channel differ only there.
+                    (*view_offsets)[key] = static_cast<uint32_t>(msoc.get_address_offset(view));
                 }
             }
         }
@@ -3241,13 +3290,11 @@ static void launch_cores(
     // deferred mesh path skips OI — per-fiber ASAN state is single-device-scoped and
     // the trackers must not outlive this frame across a deferred run_mesh_dispatch.
     // Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241 / docs/ASAN.md.
+    // §14: populated by the build_core_map that precedes every launch_cores.
+    auto* dram_view_offsets_ptr = dram_view_offsets_for(device_id);
+
     std::vector<std::unique_ptr<tt::tt_metal::emule::ObjectIntentTracker>> intent_trackers;
-    // §12 Object Intent is also excluded from the Blaze profile. On Blaze `defer_run`
-    // already closes this gate, so the profile test changes no observed behaviour
-    // today — it turns an accidental silence into a stated decision, and keeps the
-    // exclusion true if the deferred path ever changes. Its premise needs one kernel
-    // per core and stable buffer ownership; Blaze has three kernels per core and
-    // reuses arena memory both spatially and temporally. See asan/asan_profile.h.
+    // §12 is metal-only (see asan/asan_profile.h); on Blaze defer_run also closes it.
     const bool object_intent_active =
         !defer_run && oob_state.object_intent_strict && __emule_asan_check_enabled(EmuleAsanCheck::ObjectIntent);
 
@@ -3319,6 +3366,7 @@ static void launch_cores(
             ctx->device = nullptr;
             ctx->chip_id = static_cast<uint32_t>(device_id);
             ctx->core_map = core_map_ptr;
+            ctx->dram_view_offsets = dram_view_offsets_ptr;
             ctx->neo_id = ki.is_tensix ? ki.processor_id : 0;
             ctx->trisc_id = 0;
             ctx->num_threads = ki.num_threads;

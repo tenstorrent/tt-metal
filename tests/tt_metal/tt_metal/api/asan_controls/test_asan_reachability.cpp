@@ -141,37 +141,27 @@ TEST_F(MeshDeviceFixture, Reach_OobL1_AcrossAdjacentCb_Unreachable) {
     std::printf("[CONTROL] wrote past cb0 into adjacent cb1 — NO abort (OOB-L1/CB-Boundary gap)\n");
 }
 
-// §4 OOB-DRAM — public API, currently NOT detected, and for an emule-side reason.
 //
-// The kernel writes to a DRAM bank address far past the end of the only
-// allocated DRAM buffer, using the public bank addrgen + noc_async_write.
-//
-// Nothing fires, because the check lives inside `__emule_dram_ptr` and emule no
-// longer routes DRAM access through it — `noc_traits.h` resolves DRAM through
-// `__emule_resolve_noc_addr` instead (deliberately, so multi-bank Quasar banks
-// don't all alias Core(0,0)). `__emule_dram_ptr` has zero call sites, so the
-// check is orphaned for EVERY workload, ttnn included — this is not a Blaze
-// issue.
-//
-// Contrast `OOB_Tensor_Gap_DRAM_SanityCheck`, which passes only because its
-// kernel declares and calls `__emule_dram_ptr` itself.
-//
-// To fix: move the DRAM range test into `__emule_resolve_noc_addr` for
-// CoreRole::DRAM targets (alongside the §13 mailbox guard already hooked there).
-// Flip to EXPECT_DEATH when that lands.
-TEST_F(MeshDeviceFixture, Reach_OobDram_ViaPublicApi_Unreachable) {
+// The kernel writes to a DRAM bank address far past the end of the only allocated
+// DRAM buffer, using the public bank addrgen + noc_async_write. Nothing names an
+// __emule_* internal, so this proves the check is reachable from real kernel code —
+// the property that was missing while the check sat in the orphaned
+// __emule_dram_ptr (zero call sites) and its own death test called that function
+// directly.
+TEST_F(MeshDeviceFixture, Reach_OobDram_ViaPublicApi_Reachable) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_OOB_DRAM");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
-    constexpr uint32_t kBufSize = 1024;
-    auto dram_buf = Buffer::create(device, kBufSize, kBufSize, BufferType::DRAM);
-    auto l1_src = Buffer::create(device, kBufSize, kBufSize, BufferType::L1);
+    constexpr uint32_t kDramBufSize = 1024;
+    auto dram_buf = Buffer::create(device, kDramBufSize, kDramBufSize, BufferType::DRAM);
+    auto l1_src = Buffer::create(device, kDramBufSize, kDramBufSize, BufferType::L1);
 
-    // 8 MB past the buffer: comfortably outside any allocated DRAM extent, while
-    // staying inside the emulated bank's backing store.
+    // 8 MB past the buffer: outside any allocated DRAM extent, still inside the
+    // emulated bank's backing store.
     const uint32_t bad_dram_addr = static_cast<uint32_t>(dram_buf->address()) + (8u << 20);
 
     std::string kernel_src = R"(
@@ -179,7 +169,6 @@ TEST_F(MeshDeviceFixture, Reach_OobDram_ViaPublicApi_Unreachable) {
         void kernel_main() {
             uint32_t src      = get_arg_val<uint32_t>(0);
             uint32_t dram_off = get_arg_val<uint32_t>(1);
-            // Public DRAM addressing: bank 0 of the DRAM allocator.
             uint64_t dst = get_noc_addr_from_bank_id<true>(0, dram_off);
             noc_async_write(src, dst, 16);
             noc_async_write_barrier();
@@ -193,10 +182,55 @@ TEST_F(MeshDeviceFixture, Reach_OobDram_ViaPublicApi_Unreachable) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     SetRuntimeArgs(program, kernel, logical_core, {static_cast<uint32_t>(l1_src->address()), bad_dram_addr});
 
+    EXPECT_DEATH(
+        detail::LaunchProgram(device, program),
+        ".*Out-of-Bounds Write: Attempted to access DRAM address.*not part of any allocated tensor.*");
+}
+
+// §14 in-bounds NoViolation control — must stay SILENT.
+//
+// The single most important test for this check. §14 compares an allocator address
+// against the live-extent list, but the kernel puts an *in-bank NOC offset* on the
+// wire, which already includes the dram view's base offset. The check subtracts that
+// offset to get back to allocator space. If the sign, the key, or the view lookup is
+// wrong, a perfectly legal DRAM write starts aborting — and this test is what catches
+// it. A passing Reachable test above says nothing about that, because a check that
+// fires on *everything* also fires on the bad address.
+TEST_F(MeshDeviceFixture, Reach_OobDram_InBounds_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    ::unsetenv("TT_METAL_EMULE_ASAN_CHECK_OOB_DRAM");
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    constexpr uint32_t kDramBufSize = 2048;
+    auto dram_buf = Buffer::create(device, kDramBufSize, kDramBufSize, BufferType::DRAM);
+    auto l1_src = Buffer::create(device, kDramBufSize, kDramBufSize, BufferType::L1);
+
+    // Squarely inside the buffer.
+    const uint32_t good_dram_addr = static_cast<uint32_t>(dram_buf->address());
+
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            uint32_t src      = get_arg_val<uint32_t>(0);
+            uint32_t dram_off = get_arg_val<uint32_t>(1);
+            uint64_t dst = get_noc_addr_from_bank_id<true>(0, dram_off);
+            noc_async_write(src, dst, 16);
+            noc_async_write_barrier();
+        }
+    )";
+
+    auto kernel = CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, logical_core, {static_cast<uint32_t>(l1_src->address()), good_dram_addr});
+
     detail::LaunchProgram(device, program);
-    std::printf(
-        "[CONTROL] wrote 8MB past the only DRAM buffer via public API — NO abort "
-        "(__emule_dram_ptr is orphaned; check never reached)\n");
+    std::printf("[CONTROL] in-bounds DRAM write completed with no abort (normalization is sane)\n");
 }
 
 }  // namespace tt::tt_metal

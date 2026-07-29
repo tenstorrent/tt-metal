@@ -242,10 +242,7 @@ void sweep_per_kernel_dirty_cbs(
     if (!oob.asan_enabled || cb_array == nullptr) {
         return;
     }
-    // Excluded from the Blaze profile: "unmatched reserve/wait at kernel exit" has
-    // no meaning for a `while(true)` stage whose CB state is deliberately reset by
-    // CbReconfig / CbScratchReset, and whose contract prescribes CBReconfigs as the
-    // remedy for the imbalance this reports. See asan/asan_profile.h.
+    // §11 is metal-only. See ASAN.md "Profiles".
     if (!__emule_asan_check_enabled(EmuleAsanCheck::DirtyCb)) {
         return;
     }
@@ -288,10 +285,8 @@ OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
     owner.state.l1_unreserved_base =
         static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
 
-    // §13 Launch-Mailbox Clobber window, from the HAL rather than the per-arch
-    // MEM_MAILBOX_* macros: this TU is compiled once for the host and has no
-    // ARCH_* define, so a compile-time constant would use the wrong arch's
-    // bounds. TENSIX is the right core type — the check guards worker L1 only.
+    // §13 window from the HAL, not the per-arch MEM_MAILBOX_* macros: this TU has no
+    // ARCH_* define. TENSIX — the check guards worker L1 only.
     {
         const auto& hal = MetalContext::instance().hal();
         const auto mb_base =
@@ -311,10 +306,8 @@ OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
     owner.state.dram_tensor_ranges_count = static_cast<uint32_t>(owner.dram_live_ranges.size());
     owner.state.object_intent_strict = true;
 
-    // §5 Tensor Padding: excluded from the Blaze profile by not arming its extents
-    // — the kernel-side check early-returns on a null list, so it costs no kernel
-    // edit. (On Blaze nothing declares a logical size, so the list is empty anyway;
-    // gating it here makes that a stated decision rather than an accident.)
+    // §5 is metal-only: leaving the extents un-armed disables it (the kernel-side
+    // check early-returns on a null list). See ASAN.md "Profiles".
     owner.padding_ranges = __emule_asan_check_enabled(EmuleAsanCheck::TensorPadding)
                                ? tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id)
                                : std::vector<uint64_t>{};

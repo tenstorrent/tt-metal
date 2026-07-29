@@ -94,7 +94,8 @@ happens to the core the `abort()` would otherwise produce:
 | Use-After-Free | host | both | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host access through a deallocated `Buffer` |
 | Host L1 / DRAM Alignment | host | both | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host poke address not aligned to the transfer's real requirement |
 | Metadata Overflow | host | both | `[metal] host_api/tt_metal.cpp` | program's static CB region overruns the reserved L1 window |
-| Out-of-Bounds Write (L1/DRAM) | kernel + runner | both | `[emule] asan/asan_l1_checks.h` (L1); `[metal] emulated_program_runner.cpp` (`__emule_dram_ptr`) | access lands in no live buffer extent |
+| Out-of-Bounds Write (L1) | kernel | both | `[emule] asan/asan_l1_checks.h` | access lands in no live L1 extent |
+| Out-of-Bounds Write (DRAM) | runner | both | `[metal] emulated_program_runner.cpp` (`__emule_resolve_noc_addr`) | access lands in no live DRAM extent — see §14 |
 | Tensor Padding Violation *(test skipped — see §5)* | kernel | **metal only** | `[emule] asan/asan_l1_checks.h` | write into a buffer's `[logical_end, physical_end)` pad band |
 | Illegal Semaphore Access | kernel | both | `[emule] asan/asan_l1_checks.h` | scalar access into the reserved semaphore region |
 | CB Boundary Violation | kernel | **metal only** | `[emule] asan/asan_l1_checks.h` (window counters in `asan/asan_cb.h`) | access to a CB page outside an **active** reserve/wait window |
@@ -200,8 +201,8 @@ fitting-CB positive control).
 ### 4. Out-of-Bounds Write (L1 and DRAM)
 **Lives in:** L1 — `__emule_asan_check_oob_tensor` in
 `[emule] include/jit_hw/asan/asan_l1_checks.h` (dispatched by the
-`__emule_local_l1_to_ptr` chokepoint, `internal/emule_l1_to_ptr.h`). DRAM — `__emule_dram_ptr` in
-`[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`. Live extents:
+`__emule_local_l1_to_ptr` chokepoint, `internal/emule_l1_to_ptr.h`). The DRAM half moved
+to the NOC path — see §14. Live extents:
 `[metal] emule_live_ranges.{hpp,cpp}`, fed from `[metal] tt_metal/impl/buffers/buffer.cpp`.
 **What it catches:** a kernel writing to L1/DRAM at or above the unreserved base
 but inside no live buffer — scribbling on memory it never legitimately addressed.
@@ -284,11 +285,8 @@ Two properties make this safe:
   by Object Intent — so a host-NOC write into a poked destination can't be
   misread as an "unintended write."
 
-This is L1-only. The DRAM OOB check (`__emule_dram_ptr`) uses a per-bank/flattened
-address convention distinct from the per-channel address `WriteToDeviceDRAMChannel`
-takes, so the same registration is not yet wired for DRAM; if a `dram_*` raw-DRAM
-benchmark surfaces the analogous false positive, it needs that convention resolved
-first.
+This is L1-only. The DRAM equivalent (§14) normalizes an in-bank NOC offset back to
+allocator space instead, so the host-poke convention question does not arise there.
 
 ### 5. Tensor Padding Violation
 **Lives in:** `__emule_asan_check_padding` in
@@ -580,6 +578,70 @@ which needs per-core liveness in `LiveL1Ranges`.
 
 ---
 
+## 14. Out-of-Bounds Write (DRAM)
+
+**Lives in:** `emule_asan_check_oob_dram`, called from `__emule_resolve_noc_addr` for
+`CoreRole::DRAM` targets (`[metal] emulated_program_runner.cpp`).
+**What it catches:** a kernel accessing a DRAM address in no live DRAM extent — §4's
+idea, for DRAM. **Profile:** both.
+
+**Why it is on the NOC path.** It used to live in `__emule_dram_ptr`. emule migrated
+DRAM resolution to `__emule_resolve_noc_addr` so multi-bank parts route per bank
+rather than aliasing Core(0,0) (`[emule] api/tensor/noc_traits.h`), and the check did
+not move with it — `__emule_dram_ptr` was left with **zero call sites**, so the check
+was unreachable for every workload, ttnn included. Its death test kept passing
+because that test's kernel declared and called the orphaned function itself. A check
+reachable only from its own test is not coverage; `asan_controls/` exists to catch
+that class.
+
+**The two address spaces.** `LiveDramRanges` holds metal **allocator** addresses. A
+kernel puts an **in-bank offset** on the NOC, which already includes the dram view's
+base offset (`add_bank_offset_to_address()` does
+`address += get_address_offset(dram_view)`). The check subtracts it before comparing.
+
+Recovering that offset needs the **view**, not the core: several views alias one
+physical channel at different offsets, so the destination core does not determine it.
+The core map is keyed by **NOC coord** and built per `(view, noc)` from each view's
+preferred worker coord, so views land under distinct keys and the view is recoverable
+from the coord. A sibling `noc_key -> view offset` map is built in that same loop,
+cached per device, and reached from a kernel via `__emule_self->dram_view_offsets`.
+An unknown coord means the offset cannot be established, so the check **skips** — a
+false negative is acceptable, a false positive is not.
+
+**Registration.** Extents come from `LiveDramRanges`, fed by both `allocate_impl()`
+and the explicit-address (non-owning) `Buffer::create` path in
+`[metal] impl/buffers/buffer.cpp`. The explicit-address path originally registered L1
+only, so a program handing out explicit DRAM addresses (all of Blaze's DRAM buffers
+do) left the registry empty and this check fired on the first legitimate access. Both
+paths now register DRAM.
+
+*Known gap:* `allocate_impl()` registers the **aggregate** `size_` for DRAM while the
+explicit-address path registers `aligned_size_per_bank()`. A NOC offset is per bank,
+so the aggregate extent is ~`num_banks`x too wide and overruns inside it are missed.
+
+*Caveats:*
+- The view base is `0` on Blackhole, so the subtraction is a no-op there and the
+  arithmetic is untested for non-zero offsets (Quasar).
+- The extent test is done in 32 bits to match the live-range registry
+  (`uint32_t` start/end), so it assumes a DRAM address fits in 32 bits — true for
+  every WH/BH config today, but a bank larger than 4 GB would alias. Carried over
+  from the check's previous home.
+- Like §4, it triggers from address *translation*, so it covers reads as well as
+  writes despite the "Out-of-Bounds Write" wording (DRAM reads are the common case —
+  a streaming matmul reads its weights through this path).
+
+*Diagnostic:* `Out-of-Bounds Write: Attempted to access DRAM address 0x… which is not
+part of any allocated tensor (via NOC to DRAM core (x,y), in-bank offset 0x…, view
+base 0x…)`.
+*Opt-out:* `TT_METAL_EMULE_ASAN_CHECK_OOB_DRAM=0`.
+*Exercised by:* `asan_controls/test_asan_reachability.cpp` —
+`Reach_OobDram_ViaPublicApi_Reachable` (a violation through the public API must
+abort) and `Reach_OobDram_InBounds_NoViolation` (a legal write must stay silent —
+this is what catches a wrong sign/key/view, which the death test alone cannot, since
+a check that fires on everything also passes it).
+
+---
+
 ## Each check's core mechanism + home, in one line
 
 | Check | Lives in | The trick |
@@ -587,7 +649,8 @@ which needs per-core liveness in `LiveL1Ranges`.
 | Use-After-Free | `[metal] host_sanitizers.hpp` | `buffer.is_allocated()` at host entry |
 | Host L1/DRAM Alignment | `[metal] host_sanitizers.hpp` | `address % get_alignment_requirements(device, size)` (1 ⇒ no-op on emule) |
 | Metadata Overflow | `[metal] host_api/tt_metal.cpp` | static CB region vs lowest L1 alloc, at configure time |
-| Out-of-Bounds Write | `[emule] asan/asan_l1_checks.h`; `[metal] emulated_program_runner.cpp` | normalized offset ∉ any live `LiveL1Ranges`/`LiveDramRanges` extent |
+| Out-of-Bounds Write (L1) | `[emule] asan/asan_l1_checks.h` | normalized offset ∉ any live `LiveL1Ranges` extent |
+| Out-of-Bounds Write (DRAM) | `[metal] emulated_program_runner.cpp` | (in-bank NOC offset − view base) ∉ any live `LiveDramRanges` extent; unknown view ⇒ skip |
 | Tensor Padding *(test skipped — see §5)* | `[emule] asan/asan_l1_checks.h` | offset ∈ `[logical_end, physical_end)` padding band |
 | Illegal Semaphore | `[emule] asan/asan_l1_checks.h` | offset ∈ reserved semaphore L1 range |
 | CB Boundary | `[emule] asan/asan_l1_checks.h` (counters in `asan/asan_cb.h`) | accessed page outside an **active** reserve/wait window |
