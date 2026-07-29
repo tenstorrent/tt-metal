@@ -60,4 +60,5 @@ Date: 2026-07-29 UTC
   - round 2: `more-work-needed` for one stale 20-replay README sentence;
   - focused final rereview: `clean-pass`, with no required work or hard-check
     gaps.
-- Local checkpoint commit SHA is recorded below after commit creation.
+- Local implementation/evidence checkpoint:
+  `tt-metal` branch `skillexp-fuse-advise`, commit `145ed2b5d80`.
