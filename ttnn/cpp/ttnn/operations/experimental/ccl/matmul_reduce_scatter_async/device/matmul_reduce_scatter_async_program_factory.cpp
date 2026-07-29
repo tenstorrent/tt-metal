@@ -77,6 +77,9 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         ttnn::experimental::ccl::ReduceScatterFusedOpSignaler();
     reduce_scatter_fused_op_signaler->init_fused_op();
 
+    auto resolved_reduce_scatter_compute_kernel_config =
+        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(std::nullopt, output_tensors.mm.dtype());
+
     // Reduce Scatter - use the new artifacts-based helper
     auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
         program,
@@ -100,7 +103,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         std::nullopt,
         std::nullopt,
         args.reduce_scatter_core_grid_offset,
-        std::nullopt);
+        resolved_reduce_scatter_compute_kernel_config);
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =

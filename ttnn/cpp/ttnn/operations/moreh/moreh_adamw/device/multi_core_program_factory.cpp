@@ -22,6 +22,36 @@ static constexpr const char* WRITER_KERNEL_PATH =
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/moreh_adamw.cpp";
 
+namespace {
+
+// Work split used by create_descriptor to derive the core list and group membership.
+struct AdamwWorkSplit {
+    uint32_t num_cores = 0;
+    uint32_t num_cores_y = 0;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_units_per_core_group_1 = 0;
+    uint32_t num_units_per_core_group_2 = 0;
+};
+
+AdamwWorkSplit compute_adamw_work_split(const Tensor& param_in) {
+    auto grid = param_in.device()->compute_with_storage_grid_size();
+    uint32_t num_units = param_in.physical_volume() / tt::constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
+        split_work_to_cores(grid, num_units);
+    return {
+        num_cores,
+        grid.y,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_units_per_core_group_1,
+        num_units_per_core_group_2};
+}
+
+}  // namespace
+
 ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -39,8 +69,6 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     uint32_t step = operation_attributes.step;
     bool amsgrad = operation_attributes.amsgrad;
 
-    uint32_t num_units = param_in.physical_volume() / tt::constants::TILE_HW;
-
     const std::optional<Tensor>& max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
 
     // It's guarantee that param_out, exp_avg_out, exp_avg_sq_out are created.
@@ -54,12 +82,14 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = param_in.device();
-    auto grid = device->compute_with_storage_grid_size();
-    const auto num_cores_y = grid.y;
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-        split_work_to_cores(grid, num_units);
+    const auto
+        [num_cores,
+         num_cores_y,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_units_per_core_group_1,
+         num_units_per_core_group_2] = compute_adamw_work_split(param_in);
 
     auto arch = param_in.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -237,14 +267,15 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     auto* const grad_buf = grad.buffer();
     auto* const exp_avg_in_buf = exp_avg_in.buffer();
     auto* const exp_avg_sq_in_buf = exp_avg_sq_in.buffer();
-    const uint32_t max_exp_avg_sq_in_addr =
-        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer()->address() : 0u;
+    // Register max_exp_avg_sq as a BufferBinding so the framework patches its address on
+    // cache hit. A raw Buffer::address() write here would go stale across cache hits because
+    // the program hash zeros out step+lr, so the same cached program is reused with new tensors.
+    auto* const max_exp_avg_sq_in_buf = max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer() : nullptr;
 
     auto* const param_out_buf = param_out.buffer();
     auto* const exp_avg_out_buf = exp_avg_out.buffer();
     auto* const exp_avg_sq_out_buf = exp_avg_sq_out.buffer();
-    const uint32_t max_exp_avg_sq_out_addr =
-        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer()->address() : 0u;
+    auto* const max_exp_avg_sq_out_buf = max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer() : nullptr;
     float beta1_exponent = std::pow(beta1, step);
     float beta2_exponent = std::pow(beta2, step);
 
@@ -274,7 +305,7 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
              grad_buf,
              exp_avg_in_buf,
              exp_avg_sq_in_buf,
-             max_exp_avg_sq_in_addr,
+             max_exp_avg_sq_in_buf,
              f2u_lr,
              f2u_beta1,
              f2u_beta2,
@@ -292,7 +323,7 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
             {param_out_buf,
              exp_avg_out_buf,
              exp_avg_sq_out_buf,
-             max_exp_avg_sq_out_addr,
+             max_exp_avg_sq_out_buf,
              num_tiles_per_core,
              tile_offset});
 
@@ -314,6 +345,19 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     }
 
     return desc;
+}
+
+void MorehAdamWDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
+    // args + tensor-backed CB/buffer addresses to the cached program. No rebuild; supersedes
+    // get_dynamic/resolve_bindings.
+    auto desc = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adamw

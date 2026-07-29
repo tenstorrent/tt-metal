@@ -4,8 +4,15 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     uint32_t rt_args_idx = 0;
     const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
     if (!has_work) {
@@ -48,7 +55,7 @@ void kernel_main() {
     constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(18);
 
     const uint32_t St = get_compile_time_arg_val(19);
-    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(20));  // semaphore for receiver
+    constexpr uint32_t receiver_sem_id = get_compile_time_arg_val(20);  // semaphore for receiver
     constexpr uint32_t batch_size = get_compile_time_arg_val(21);
 
     constexpr auto s0_args = TensorAccessorArgs<22>();
@@ -57,9 +64,14 @@ void kernel_main() {
 
     constexpr uint32_t head_offset_t = Wt * St;
 
+    CircularBuffer cb_input(input_cb_id);
+    CircularBuffer cb_cache(cache_cb_id);
+    CircularBuffer cb_index(cb_index_id);
+    CircularBuffer cb_page_table(page_table_cb_id);
+
     // Kick off compute
-    cb_reserve_back(input_cb_id, Wt);
-    cb_push_back(input_cb_id, Wt);
+    cb_input.reserve_back(Wt);
+    cb_input.push_back(Wt);
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const DataFormat cache_data_format = get_dataformat(cache_cb_id);
@@ -74,15 +86,14 @@ void kernel_main() {
 
     if constexpr (use_index_tensor) {
         const auto addrg = TensorAccessor(index_tensor_args, index_tensor_addr);
-        cb_reserve_back(cb_index_id, 1);
-        uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
+        cb_index.reserve_back(1);
+        uint32_t index_cb_wr_ptr = cb_index.get_write_ptr();
         if constexpr (index_is_dram) {
             // index_tensor has one page to read
-            uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
-            noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-            noc_async_read_barrier();
+            noc.async_read(addrg, CoreLocalMem<uint32_t>(index_cb_wr_ptr), index_stick_size_B, {.page_id = 0}, {});
+            noc.async_read_barrier();
         }
-        cb_push_back(cb_index_id, 1);
+        cb_index.push_back(1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
 
         const uint32_t update_idx = index_ptr[my_batch_idx];
@@ -92,19 +103,23 @@ void kernel_main() {
         } else {
             if constexpr (is_paged_cache) {
                 uint32_t num_pages_to_read = page_table_is_dram ? 1 : batch_size;
-                cb_reserve_back(page_table_cb_id, num_pages_to_read);
-                uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
+                cb_page_table.reserve_back(num_pages_to_read);
+                uint32_t page_table_cb_wr_ptr = cb_page_table.get_write_ptr();
 
                 if constexpr (page_table_is_dram) {
                     const auto page_table_gen = TensorAccessor(page_table_args, page_table_tensor_addr);
-                    uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(my_batch_idx);
-                    noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-                    noc_async_read_barrier();
+                    noc.async_read(
+                        page_table_gen,
+                        CoreLocalMem<uint32_t>(page_table_cb_wr_ptr),
+                        page_table_stick_size,
+                        {.page_id = my_batch_idx},
+                        {});
+                    noc.async_read_barrier();
                 } else {
                     page_table_cb_wr_ptr += my_batch_idx * page_table_stick_size;
                 }
 
-                cb_push_back(page_table_cb_id, num_pages_to_read);
+                cb_page_table.push_back(num_pages_to_read);
                 // DRAM uses uint32 entries; L1-sharded page table uses uint16 entries
                 volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
                 volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
@@ -134,25 +149,25 @@ void kernel_main() {
     }
 
     if (wait_to_start_signal) {
-        // wait for signal to start pushing tensor
-        volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
-        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, 1);
-        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
+        // wait for signal from writer that it has finished using the input CB
+        Semaphore<> receiver_sem(receiver_sem_id);
+        receiver_sem.wait(1);
+        receiver_sem.set(0);
     }
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        cb_reserve_back(cache_cb_id, Wt);
+        cb_cache.reserve_back(Wt);
         if (!skip_update) {
-            uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
+            uint32_t cache_l1_write_addr = cb_cache.get_write_ptr();
             for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
+                noc.async_read(
+                    s0, CoreLocalMem<uint32_t>(cache_l1_write_addr), cache_tile_bytes, {.page_id = curr_cache_id}, {});
                 cache_l1_write_addr += cache_tile_bytes;
             }
 
-            noc_async_read_barrier();
+            noc.async_read_barrier();
         }
-        cb_push_back(cache_cb_id, Wt);
+        cb_cache.push_back(Wt);
 
         cache_id += head_offset_t;
     }

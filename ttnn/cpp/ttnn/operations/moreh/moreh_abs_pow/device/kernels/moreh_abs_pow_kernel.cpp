@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/debug/dprint.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -39,33 +39,37 @@ void kernel_main() {
 
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
-    CircularBuffer cb_x_obj(cb_x);
-    CircularBuffer cb_one_obj(cb_one);
-    CircularBuffer cb_decimal_obj(cb_decimal);
-    CircularBuffer cb_mask_w_obj(cb_mask_w);
-    CircularBuffer cb_xabs_obj(cb_xabs);
+    DataflowBuffer dfb_x_obj(cb_x);
+    DataflowBuffer dfb_one_obj(cb_one);
+    DataflowBuffer dfb_decimal_obj(cb_decimal);
+    DataflowBuffer dfb_mask_w_obj(cb_mask_w);
+    DataflowBuffer dfb_y_obj(cb_y);
+    DataflowBuffer dfb_xabs_obj(cb_xabs);
+    DataflowBuffer dfb_xpow_obj(cb_xpow);
+    DataflowBuffer dfb_logx_obj(cb_logx);
+    DataflowBuffer dfb_exp_lxmd_obj(cb_exp_lxmd);
 
-    cb_one_obj.wait_front(onetile);
-    cb_decimal_obj.wait_front(onetile);
+    dfb_one_obj.wait_front(onetile);
+    dfb_decimal_obj.wait_front(onetile);
 
     constexpr uint32_t TILE_W = 32;
     const bool do_mask_w = (origin_w % TILE_W) != 0;
     const auto mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
 
     if (do_mask_w) {
-        cb_mask_w_obj.wait_front(onetile);
+        dfb_mask_w_obj.wait_front(onetile);
     }
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
             tile_regs_acquire();
-            cb_x_obj.wait_front(onetile);
-            cb_xabs_obj.reserve_back(onetile);
+            dfb_x_obj.wait_front(onetile);
+            dfb_xabs_obj.reserve_back(onetile);
 
-            copy_tile_init_with_dt(cb_x);
+            copy_tile_init_with_dt(dfb_x_obj);
             copy_tile(cb_x, 0, dst0);
 
             if (do_mask_w && (col_idx == Wt - 1)) {
-                copy_tile_init_with_dt(cb_mask_w);
+                copy_tile_init_with_dt(dfb_mask_w_obj);
                 copy_tile(cb_mask_w, 0, dst1);
 
                 mask_tile_init();
@@ -77,19 +81,27 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_xabs);
+            pack_tile_with_dt(dst0, dfb_xabs_obj);
             tile_regs_release();
 
-            cb_x_obj.pop_front(onetile);
-            cb_xabs_obj.push_back(onetile);
+            dfb_x_obj.pop_front(onetile);
+            dfb_xabs_obj.push_back(onetile);
 
-            power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
+            power_tile_to_cb(
+                dfb_xabs_obj,
+                dfb_xpow_obj,
+                dfb_logx_obj,
+                dfb_decimal_obj,
+                dfb_exp_lxmd_obj,
+                dfb_y_obj,
+                p,
+                p_is_negative);
         }
     }
 
-    cb_one_obj.pop_front(onetile);
-    cb_decimal_obj.pop_front(onetile);
+    dfb_one_obj.pop_front(onetile);
+    dfb_decimal_obj.pop_front(onetile);
     if (do_mask_w) {
-        cb_mask_w_obj.pop_front(onetile);
+        dfb_mask_w_obj.pop_front(onetile);
     }
 }

@@ -18,9 +18,6 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -30,92 +27,108 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
+    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_reduce_id = tt::CBIndex::c_1;
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t dfb_out = tt::CBIndex::c_16;
 
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
-    constexpr uint32_t cb_zero = tt::CBIndex::c_13;
-    constexpr uint32_t cb_res = tt::CBIndex::c_5;                          // residual b (unused when !FUSE_PRE_ADD)
-    constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;  // fused a + b, or just a
+    constexpr uint32_t dfb_x2_id = tt::CBIndex::c_6;  // x**2
+    constexpr uint32_t dfb_zero_id = tt::CBIndex::c_13;
+    constexpr uint32_t dfb_res_id = tt::CBIndex::c_5;  // residual b (unused when !FUSE_PRE_ADD)
+    constexpr uint32_t dfb_inp_id = FUSE_PRE_ADD ? tt::CBIndex::c_3 : dfb_in0_id;  // fused a + b, or just a
 
     if constexpr (FUSE_PRE_ADD) {
-        binary_op_init_common(cb_in0, cb_res, cb_inp);
+        binary_op_init_common(dfb_in0_id, dfb_res_id, dfb_inp_id);
     } else {
-        binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+        binary_op_init_common(dfb_inp_id, dfb_reduce_id, dfb_x2_id);
     }
 
+    DataflowBuffer dfb_in0(dfb_in0_id);
+    DataflowBuffer dfb_res(dfb_res_id);
+    DataflowBuffer dfb_inp(dfb_inp_id);
+    DataflowBuffer dfb_x2(dfb_x2_id);
+    DataflowBuffer dfb_reduce(dfb_reduce_id);
+    DataflowBuffer dfb_zero(dfb_zero_id);
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD)
-        pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
+        // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD)
+        pre_add::one_row<FUSE_PRE_ADD>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
 
         /*
          * x**2
          */
-        reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
-        mul_tiles_init(cb_inp, cb_inp);
+        reconfig_data_format(dfb_inp_id, dfb_inp_id);
+        pack_reconfig_data_format(dfb_x2_id);
+        mul_tiles_init(dfb_inp_id, dfb_inp_id);
 
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
+            dfb_inp.wait_front(wt + blk);  // cumulative wait
 
-            cb_reserve_back(cb_x2, blk);
-            ACQ();
-
+            tile_regs_acquire();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2, wt + wtr);
+                mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
             }
-            REL();
+            tile_regs_commit();
 
-            cb_push_back(cb_x2, blk);
+            dfb_x2.reserve_back(blk);
+
+            tile_regs_wait();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                pack_tile(wtr, dfb_x2_id, wt + wtr);
+            }
+            tile_regs_release();
+
+            dfb_x2.push_back(blk);
         }
 
         /*
          * sum(x**2)
          */
         // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
-        compute_kernel_lib::
-            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-        cb_pop_front(cb_inp, Wt);
-        cb_pop_front(cb_reduce, 1);
+        compute_kernel_lib::reduce<
+            PoolType::AVG,
+            ReduceDim::REDUCE_ROW,
+            dfb_x2_id,
+            dfb_reduce_id,
+            dfb_out,
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        dfb_inp.pop_front(Wt);
+        dfb_reduce.pop_front(1);
     }
 
-    // if merge core, we need to do a final sum on the tile in cb_x2 and then write the result to cb_out_final
+    // if merge core, we need to do a final sum on the tile in cb_x2_id and then write the result to cb_out_final_id
     if (is_merge_core) {
-        constexpr uint32_t cb_x2_merge = tt::CBIndex::c_15;
-        constexpr uint32_t cb_out_final = tt::CBIndex::c_14;
+        constexpr uint32_t dfb_x2_merge_id = tt::CBIndex::c_15;
+        constexpr uint32_t dfb_out_final_id = tt::CBIndex::c_14;
+        DataflowBuffer dfb_x2_merge(dfb_x2_merge_id);
+        DataflowBuffer dfb_out_final(dfb_out_final_id);
         constexpr int dst0 = 0;
 
         // Wait for all num_cores_y tiles
-        cb_wait_front(cb_x2_merge, num_cores_y);
-        cb_wait_front(cb_zero, 1);
-
-        // Reserve output space
-        cb_reserve_back(cb_out_final, onetile);
+        dfb_x2_merge.wait_front(num_cores_y);
+        dfb_zero.wait_front(1);
 
         // Initialize accumulation
-        binary_op_init_common(cb_x2_merge, cb_zero, cb_out_final);
-        reconfig_data_format(cb_x2_merge, cb_zero);
-        pack_reconfig_data_format(cb_out_final);
-        add_tiles_init(cb_x2_merge, cb_zero, true);
+        binary_op_init_common(dfb_x2_merge_id, dfb_zero_id, dfb_out_final_id);
+        reconfig_data_format(dfb_x2_merge_id, dfb_zero_id);
+        pack_reconfig_data_format(dfb_out_final_id);
+        add_tiles_init(dfb_x2_merge_id, dfb_zero_id, true);
 
-        // Acquire registers
-        ACQ();
-
+        tile_regs_acquire();
         // Add all 8 tiles together
         for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(cb_x2_merge, cb_zero, i, 0, dst0);
+            add_tiles(dfb_x2_merge_id, dfb_zero_id, i, 0, dst0);
         }
+        tile_regs_commit();
 
-        // Pack result
-        pack_tile(dst0, cb_out_final);
-        REL();
+        dfb_x2_merge.pop_front(num_cores_y);
 
-        // Push output and pop input
-        cb_push_back(cb_out_final, onetile);
-        cb_pop_front(cb_x2_merge, num_cores_y);
+        dfb_out_final.reserve_back(onetile);
+
+        tile_regs_wait();
+        pack_tile(dst0, dfb_out_final_id);
+        tile_regs_release();
+
+        dfb_out_final.push_back(onetile);
     }
 }

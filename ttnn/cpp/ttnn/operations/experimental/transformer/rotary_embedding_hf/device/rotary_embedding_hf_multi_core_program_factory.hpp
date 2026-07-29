@@ -7,37 +7,15 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/device/rotary_embedding_hf_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
-using namespace tt::tt_metal;
-
 struct RotaryEmbeddingHfMultiCore {
-    struct shared_variables_t {
-        KernelHandle unary_reader_kernel_id;
-        KernelHandle unary_writer_kernel_id;
-        CBHandle cb_input;
-        CBHandle cb_output;
-        std::vector<CoreCoord> cores;
-        uint32_t g1_numcores;
-        uint32_t num_rows_per_core_group_1;
-        uint32_t num_rows_per_core_group_2;
-        uint32_t Wt;
-        uint32_t Ht;
-        uint32_t HtWt;
-        bool single_tile;
-        bool single_tile_reader_uses_sharded_args;
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const RotaryEmbeddingHfParams& operation_attributes,
-        const RotaryEmbeddingHfInputs& tensor_args,
-        Tensor& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    // Contract (1): single ProgramDescriptor.  Sharded variants set CBDescriptor::buffer
+    // so the framework patches the dynamic address on cache hit.  Per-core reader/writer
+    // runtime args are re-applied by the framework via apply_descriptor_runtime_args.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const RotaryEmbeddingHfParams& operation_attributes,
         const RotaryEmbeddingHfInputs& tensor_args,
         Tensor& output);

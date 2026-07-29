@@ -107,6 +107,24 @@ def pytorch_reference(logits_np, targets_np):
     return loss.item(), logits_t.grad.numpy()
 
 
+def pytorch_reference_per_position(logits_np, targets_np, grad_per_pos_np):
+    """Compute PyTorch reference for ReduceType.NONE.
+
+    Returns (per_position_loss [B,1,S,1], logits_grad [B,1,S,V]) where
+    per_position_loss is F.cross_entropy(reduction="none") reshaped to
+    [B,1,S,1] and logits_grad is the gradient propagated back through that
+    NONE-reduction with the supplied [B,1,S,1] upstream gradient.
+    """
+    logits_t = torch.from_numpy(logits_np).float().requires_grad_(True)
+    targets_t = torch.from_numpy(targets_np.astype(np.int64))
+    grad_t = torch.from_numpy(grad_per_pos_np).float()
+
+    B, _, S, V = logits_t.shape
+    per_pos = F.cross_entropy(logits_t.reshape(B * S, V), targets_t.reshape(-1), reduction="none").reshape(B, 1, S, 1)
+    per_pos.backward(grad_t)
+    return per_pos.detach().numpy(), logits_t.grad.numpy()
+
+
 # ---------------------------------------------------------------------------
 # Main test runner
 # ---------------------------------------------------------------------------
@@ -272,6 +290,105 @@ def run_test(ctx, device, mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
             else:
                 failed += 1
             print(f"  C++ dist CE backward: {tag}  max_diff={max_diff:.6f}  " f"mean_diff={mean_diff:.6f}")
+
+    # ==================================================================
+    # 4. C++ vocab_parallel_cross_entropy_loss with ReduceType.NONE
+    # ==================================================================
+    if tp_size > 1:
+        # Per-position output is replicated across the TP axis (every TP rank
+        # holds the same [B/dp, 1, S, 1] tensor).  The grad_composer above
+        # concats along TP-axis dim 3, producing tp_size identical columns;
+        # take any one of them to recover the natural [dp*B, 1, S, 1] tensor.
+        np.random.seed(43)
+        grad_per_pos_global = np.random.randn(global_batch, 1, seq_len, 1).astype(np.float32)
+        ref_per_pos, ref_grad_none = pytorch_reference_per_position(logits_np, targets_np, grad_per_pos_global)
+
+        print("\n--- C++ vocab_parallel_cross_entropy_loss: NONE forward ---")
+
+        def test_cpp_ce_none_forward():
+            ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
+            logits = ttml.autograd.Tensor.from_numpy(
+                logits_np,
+                ttnn.Layout.TILE,
+                ttnn.DataType.BFLOAT16,
+                logits_mapper,
+            )
+            tgt = make_cpp_targets_tensor()
+            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                logits, tgt, cluster_axis=1, reduce=ttml.ops.ReduceType.NONE
+            )
+            full = ttnn.to_torch(loss.get_value(), mesh_composer=grad_composer).float().numpy()
+            # Drop the TP-replication along dim 3 — every column is identical.
+            per_pos = full[..., 0:1]
+            ctx.reset_graph()
+            return float(np.abs(per_pos - ref_per_pos).max())
+
+        max_diff, err = try_op(test_cpp_ce_none_forward)
+        total += 1
+        if err is not None:
+            failed += 1
+            print(f"  C++ dist CE NONE forward: FAIL (crashed: {err})")
+        else:
+            ok = max_diff < 0.1
+            tag = "PASS" if ok else "FAIL"
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+            print(f"  C++ dist CE NONE forward: {tag}  max_diff={max_diff:.6f}")
+
+        print("\n--- C++ vocab_parallel_cross_entropy_loss: NONE backward ---")
+
+        def test_cpp_ce_none_backward():
+            ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+            logits = ttml.autograd.Tensor.from_numpy(
+                logits_np,
+                ttnn.Layout.TILE,
+                ttnn.DataType.BFLOAT16,
+                logits_mapper,
+            )
+            logits.set_requires_grad(True)
+            tgt = make_cpp_targets_tensor()
+            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                logits, tgt, cluster_axis=1, reduce=ttml.ops.ReduceType.NONE
+            )
+            # Upstream grad: replicated across both DP and TP — all devices
+            # contribute the same per-position weighting.
+            grad_t = ttml.autograd.Tensor.from_numpy(
+                grad_per_pos_global,
+                ttnn.Layout.TILE,
+                ttnn.DataType.BFLOAT16,
+            )
+            loss.set_grad(grad_t.get_value())
+            loss.backward(False)
+
+            grad_full = reconstruct_full_grad_from_mesh(logits.get_grad())
+            # PyTorch reference uses NONE so there is no implicit 1/N; the
+            # dp_size compensation in reconstruct_full_grad_from_mesh assumes
+            # the C++ op divides by per-DP B*S (true for MEAN, NOT true for
+            # NONE), so undo it here.
+            if dp_size > 1:
+                grad_full = grad_full * dp_size
+
+            max_diff = float(np.abs(grad_full - ref_grad_none).max())
+            mean_diff = float(np.abs(grad_full - ref_grad_none).mean())
+            ctx.reset_graph()
+            return max_diff, mean_diff
+
+        val, err = try_op(test_cpp_ce_none_backward)
+        total += 1
+        if err is not None:
+            failed += 1
+            print(f"  C++ dist CE NONE backward: FAIL (crashed: {err})")
+        else:
+            max_diff, mean_diff = val
+            ok = max_diff < 0.05
+            tag = "PASS" if ok else "FAIL"
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+            print(f"  C++ dist CE NONE backward: {tag}  max_diff={max_diff:.6f}  mean_diff={mean_diff:.6f}")
 
     # ==================================================================
     # Summary

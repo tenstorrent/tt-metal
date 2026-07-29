@@ -6,8 +6,8 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
@@ -36,15 +36,24 @@ class UnpackerA(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             tensor_b = tensor_a
             tensor_a = None
+            src_a_tile_dims = (
+                compute_unit.src_a.tile_shape.total_row_dim(),
+                compute_unit.src_a.tile_shape.total_col_dim(),
+            )
+            src_a_num_faces = compute_unit.src_a.tile_shape.total_num_faces()
             tensor_b = tilize_block(
-                tensor_b, compute_unit.src_a.dimensions, compute_unit.src_a.data_format
+                tensor_b,
+                compute_unit.src_a.dimensions,
+                compute_unit.src_a.data_format,
+                num_faces=src_a_num_faces,
+                tile_dimensions=src_a_tile_dims,
             )
             broadcast_golden = get_golden_generator(BroadcastGolden)
             tensor_b = broadcast_golden(
@@ -59,6 +68,8 @@ class UnpackerA(Unpacker):
                 tensor_b,
                 compute_unit.src_a.data_format,
                 compute_unit.src_a.dimensions,
+                tile_dimensions=src_a_tile_dims,
+                num_faces=src_a_num_faces,
             )
         else:
             if compute_unit.unpack_transpose_faces == Transpose.Yes:
@@ -92,7 +103,7 @@ class UnpackerA(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         if compute_unit.broadcast_type == BroadcastType.Scalar:
@@ -112,7 +123,7 @@ class UnpackerA(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         if compute_unit.broadcast_type == BroadcastType.Scalar:
@@ -132,21 +143,22 @@ class UnpackerA(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        from helpers.tile_shape import cpp_tensor_shape
+
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        tensor_shape = cpp_tensor_shape(compute_unit.src_a.tile_shape)
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
         transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
         acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
 
         return (
             f"_llk_unpack_A_init_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"    {transpose_faces}, {transpose_within_face}, {face_r_dim}, {num_faces}, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
+            f"    {transpose_faces}, {transpose_within_face}, {tensor_shape}, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
             f");\n"
         )
 
@@ -154,7 +166,7 @@ class UnpackerA(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
@@ -173,10 +185,8 @@ class UnpackerA(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-
-        return f"_llk_unpack_A_uninit_<{broadcast_type}>({face_r_dim});\n"
+        return f"_llk_unpack_A_uninit_<{broadcast_type}>();\n"

@@ -5,6 +5,7 @@
 #include "paged_update_cache_device_operation.hpp"
 #include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 
@@ -64,6 +65,11 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             page_table.has_value(),
             "num_kv_heads_override is only supported in paged mode (when page_table is provided)");
     }
+    if (operation_attributes.cache_position_modulo.has_value()) {
+        TT_FATAL(
+            page_table.has_value(),
+            "cache_position_modulo is only supported in paged mode (when page_table is provided)");
+    }
 
     // Per-block element-count consistency. The program factory wires the kernel's
     // per-block stride from (num_heads, effective_block_size, input_head_dim) read off
@@ -103,6 +109,15 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             "effective block_size ({}) must be a multiple of TILE_HEIGHT ({})",
             effective_block_size,
             tt::constants::TILE_HEIGHT);
+        if (operation_attributes.cache_position_modulo.has_value()) {
+            const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value();
+            TT_FATAL(
+                cache_position_modulo > 0 && cache_position_modulo % effective_block_size == 0,
+                "cache_position_modulo ({}) must be a positive multiple of effective block_size ({}); "
+                "otherwise a wrapped position would split across blocks and the kernel can't address it.",
+                cache_position_modulo,
+                effective_block_size);
+        }
     } else {
         TT_FATAL(
             input_head_dim == cache_tensor.padded_shape()[-1],
@@ -156,12 +171,28 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 page_table_val.padded_shape()[0] == input_tensor.padded_shape()[1],
                 "Batch size between page_table and input_tensor must match");
         }
-        TT_FATAL(
-            page_table_val.padded_shape()[1] <= cache_tensor.padded_shape()[0],
-            "max_num_blocks_per_seq must be less than max_num_blocks: max_num_blocks_per_seq={}, "
-            "max_num_blocks={}",
-            page_table_val.padded_shape()[1],
-            cache_tensor.padded_shape()[0]);
+        if (operation_attributes.cache_position_modulo.has_value()) {
+            // Bounded-pool path (vLLM SlidingWindowSpec): page_table is right-padded
+            // out to max_model_len/block_size, but the kernel wraps positions into
+            // [0, modulo) before the page_table lookup, so the tail is never read.
+            // Only the bounded prefix needs to fit in the physical pool.
+            const uint32_t effective_block_size =
+                operation_attributes.block_size_override.value_or(cache_tensor.padded_shape()[2]);
+            const uint32_t modulo = operation_attributes.cache_position_modulo.value();
+            const uint32_t bounded_blocks_per_seq = modulo / effective_block_size;
+            TT_FATAL(
+                bounded_blocks_per_seq <= cache_tensor.padded_shape()[0],
+                "cache_position_modulo/block_size ({}) must be <= max_num_blocks ({})",
+                bounded_blocks_per_seq,
+                cache_tensor.padded_shape()[0]);
+        } else {
+            TT_FATAL(
+                page_table_val.padded_shape()[1] <= cache_tensor.padded_shape()[0],
+                "max_num_blocks_per_seq must be less than max_num_blocks: max_num_blocks_per_seq={}, "
+                "max_num_blocks={}",
+                page_table_val.padded_shape()[1],
+                cache_tensor.padded_shape()[0]);
+        }
     }
 
     // Update indices validation
@@ -243,6 +274,20 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
             "Only ROW_MAJOR sharding is supported");
+        // The program factory dispatches one user per core (cores[i] is assigned update_idxs[i]
+        // and reads a shard whose height is exactly one user's worth of kv-heads). A grid with
+        // num_cores != num_users splits or duplicates a user's data across cores and silently
+        // corrupts the cache (issue #44923). Canonical layout is a {num_users, 1} grid, but any
+        // grid with num_cores == num_users works.
+        const uint32_t num_users = input_tensor.padded_shape()[1];
+        const uint32_t input_num_shards = input_tensor.shard_spec().value().grid.num_cores();
+        TT_FATAL(
+            input_num_shards == num_users,
+            "Input tensor shard grid must have num_cores ({}) equal to the number of users / "
+            "batch ({}). The kernel dispatches one user per core; use a {{num_users, 1}} grid "
+            "(or any CoreRangeSet whose num_cores == num_users).",
+            input_num_shards,
+            num_users);
     }
 
     // Data type validation
@@ -279,12 +324,14 @@ ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     // - mesh_coords: affects program factory selection
     // - block_size_override: enters compile-time args
     // - num_kv_heads_override: enters compile-time args
+    // - cache_position_modulo: enters compile-time args
     return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
         args.compute_kernel_config,
         args.share_cache,
         args.mesh_coords,
         args.block_size_override,
         args.num_kv_heads_override,
+        args.cache_position_modulo,
         tensor_args,
         program_factory.index());
 }
@@ -304,7 +351,8 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> num_kv_heads_override) {
+    std::optional<uint32_t> num_kv_heads_override,
+    std::optional<uint32_t> cache_position_modulo) {
     using OperationType = ttnn::experimental::prim::PagedUpdateCacheDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
@@ -317,7 +365,8 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
         .share_cache = share_cache_arg,
         .mesh_coords = mesh_coords,
         .block_size_override = block_size_override,
-        .num_kv_heads_override = num_kv_heads_override};
+        .num_kv_heads_override = num_kv_heads_override,
+        .cache_position_modulo = cache_position_modulo};
 
     auto tensor_args = OperationType::tensor_args_t{
         .cache_tensor = cache_tensor,

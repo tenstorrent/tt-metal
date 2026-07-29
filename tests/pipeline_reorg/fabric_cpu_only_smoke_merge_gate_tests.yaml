@@ -1,0 +1,21 @@
+# Fabric CPU-only merge-gate smoke matrix (subset of fabric_cpu_only_unit_tests.yaml).
+#
+# Each entry: name, cmd, skus, team, arch, owner_id.
+# Commands are kept in sync with tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh.
+# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> smoke).
+#
+# Empty until merge gate re-enables fabric CPU tests (see #47987). Uncomment the example
+# below before removing `if: false` on the merge-gate job.
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
+
+[]
+
+# - id: scaleout-cpu-unit-smoke
+#   name: scaleout cpu unit tests (unit)
+#   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group unit
+#   skus:
+#     cpu_medium:
+#       timeout: 10
+#   team: scaleout
+#   arch: wormhole_b0
+#   owner_id: U03FJB5TM5Y # Ridvan Song

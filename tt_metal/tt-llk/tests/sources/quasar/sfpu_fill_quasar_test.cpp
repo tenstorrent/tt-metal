@@ -84,8 +84,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Configure unpacker → init unary operand path → unpack tile 0 from L1 into DEST.
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Release DEST section to the SFPU consumer.
     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -99,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cmath_common.h"
 #include "experimental/ckernel_sfpu_fill.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -129,9 +129,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
     }
 
-    // SFPU iterates SFP_ROWS rows at a time; one face is FACE_R_DIM rows tall.
-    constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
-
     _llk_math_eltwise_sfpu_init_();
 
     if (is_int_fill)
@@ -144,8 +141,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Walk every tile in DEST starting at DST_INDEX, filling all lanes with FILL_INT_VALUE.
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_sfpu_params_(
-                [](std::uint32_t v) { ckernel::sfpu::_calculate_fill_int_<FILL_INT_FORMAT, num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_INT_VALUE);
+            SFPU_UNARY_CALL(
+                dest_sync, is_fp32_dest_acc_en, _calculate_fill_int_, (FILL_INT_FORMAT, SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, FILL_INT_VALUE);
         }
     }
     else
@@ -157,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Walk every tile in DEST starting at DST_INDEX, filling all lanes with FILL_CONST.
         for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
         {
-            _llk_math_eltwise_unary_sfpu_params_([](float v) { _calculate_fill_<num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_CONST);
+            SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_fill_, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, FILL_CONST);
         }
     }
 
@@ -208,9 +205,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
     // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, num_tiles_per_pack);
-    _llk_pack_(params.DST_INDEX, 0);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+    _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

@@ -124,7 +124,7 @@ struct RMSNorm {
 #if defined(COMPILE_FOR_TRISC)
         void compute_rmsnorm(const ComputeArgs& args) {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
-            reconfig_data_format<false, true>(CTArgs::input_cb, CTArgs::input_cb);
+            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::input_cb, CTArgs::input_cb);
             pack_reconfig_data_format<true>(CTArgs::output_cb);
             pack_block_contiguous_init(CTArgs::output_cb);
             {
@@ -133,7 +133,8 @@ struct RMSNorm {
                 add_rsqrt_tile_init();
                 cb_wait_front(CTArgs::input_cb, num_tiles);
                 tile_regs_acquire();
-                mul_reduce_scalar_tile<PoolType::SUM>(CTArgs::input_cb, CTArgs::input_cb, num_tiles, args.scalar);
+                mul_reduce_scalar_tile<PoolType::SUM>(
+                    CTArgs::input_cb, CTArgs::input_cb, CTArgs::output_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();
             }
             {
@@ -148,9 +149,10 @@ struct RMSNorm {
                 // Multiply by the weight
                 cb_reserve_back(CTArgs::output_cb, num_tiles);
                 if constexpr (CTArgs::do_gamma) {
-                    binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
+                    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        CTArgs::gamma_cb);
                     for (uint32_t i = 0; i < num_tiles; i++) {
-                        binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                             CTArgs::gamma_cb, i, i);
                     }
                 }

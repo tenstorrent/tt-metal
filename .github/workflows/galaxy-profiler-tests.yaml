@@ -1,4 +1,4 @@
-name: "(Galaxy) profiler tests"
+name: "(Galaxy) Profiler tests"
 
 on:
   workflow_dispatch:
@@ -27,25 +27,31 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-  # schedule: removed (no nightly autoruns)
 
 jobs:
-  build-artifact-profiler:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+
   galaxy-profiler-tests:
-    needs: build-artifact-profiler
-    secrets: inherit
+    needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/galaxy-profiler-tests-impl.yaml
+    secrets: inherit
     with:
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

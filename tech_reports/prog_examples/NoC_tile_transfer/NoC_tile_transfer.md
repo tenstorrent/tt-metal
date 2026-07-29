@@ -189,7 +189,7 @@ mesh_device->close();
 ```cpp
 cb_reserve_back(src0_cb_index, one_tile);
 const uint32_t l1_write_addr = get_write_ptr(src0_cb_index);
-noc_async_read_tile(0, interleaved_accessor, l1_write_addr);
+noc_async_read_page(0, interleaved_accessor, l1_write_addr);
 noc_async_read_barrier();
 cb_push_back(src0_cb_index, one_tile);
 ```
@@ -235,7 +235,7 @@ noc_semaphore_set(sem_ptr, 0);
 
 ```cpp
 cb_wait_front(src1_cb_index, one_tile);
-noc_async_write_tile(0, output_tensor_dram, l1_write_addr_output);
+noc_async_write_page(0, output_tensor_dram, l1_write_addr_output);
 noc_async_write_barrier();
 cb_pop_front(src1_cb_index, one_tile);
 ```

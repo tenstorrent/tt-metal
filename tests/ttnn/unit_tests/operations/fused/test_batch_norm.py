@@ -11,7 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_results_batch_norm,
 )
 from itertools import product
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -498,10 +498,6 @@ def test_batch_norm_output_Default(input_shapes, device):
     "input_dtype, param_dtype", [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")]
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
-    if input_dtype == "float32" and os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip(
-            "Skipping float32 batch_norm compute_config on ttsim - fp16a untested functionality (ttsim-private issue #324)"
-        )
     N, H, W, C = input_shapes
     torch.manual_seed(0)
 
@@ -576,7 +572,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     # Execute low-accuracy groupnorm
     config_low = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
     )
@@ -751,3 +747,271 @@ def test_batch_norm_mixed_precision(
             comp_BN_running_var = tt_updated_var is None
         comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
     assert comp_BN_Output
+
+
+def test_batch_norm_aliased_running_and_affine_tensors(device):
+    """Covers #41127: batch_norm must normalize before updating the running stats.
+
+    A traced graph can pass the same tensor as both running_mean and bias (and as both running_var
+    and weight). Since the running stats are updated in place, doing that update first overwrote
+    weight and bias before batch_norm used them.
+    """
+    input_shape = torch.Size([1, 152, 24, 32])
+    channels = input_shape[1]
+    eps = 9.99999996e-13
+    momentum = 1.0
+
+    # Config matches the traced graph: math_fidelity=hifi4, fp32_dest_acc_en=True.
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+
+    in_data, input_tensor = data_gen_with_range_batch_norm(input_shape, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    weight_data = torch.zeros(channels, dtype=torch.bfloat16)
+    bias_data = torch.ones(channels, dtype=torch.bfloat16)
+    weight_tensor = ttnn.from_torch(
+        weight_data.view(1, channels, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    bias_tensor = ttnn.from_torch(
+        bias_data.view(1, channels, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # Same tensor in two roles: bias_tensor as bias and running_mean, weight_tensor as weight and running_var.
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        running_mean=bias_tensor,
+        running_var=weight_tensor,
+        training=True,
+        eps=eps,
+        momentum=momentum,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor)
+
+    # PyTorch would also overwrite these buffers if we passed the same tensor twice, so the reference
+    # uses separate running stat tensors that start with the same values as bias and weight.
+    running_mean_ref = torch.ones(channels, dtype=torch.bfloat16)
+    running_var_ref = torch.zeros(channels, dtype=torch.bfloat16)
+    torch_output = torch.nn.functional.batch_norm(
+        input=in_data,
+        running_mean=running_mean_ref,
+        running_var=running_var_ref,
+        weight=weight_data,
+        bias=bias_data,
+        training=True,
+        eps=eps,
+        momentum=momentum,
+    )
+    # weight is all zeros, so the normalized term is zeroed out and the output collapses to the
+    # bias (all ones) on both backends - the comparison is therefore exact.
+    assert_numeric_metrics(torch_output, tt_output, pcc_threshold=1.0, rtol=0.0, atol=0.0, frobenius_threshold=0.0)
+
+
+def test_batch_norm_program_cache_shape_collision(device):
+    """Covers #46018: program cache collision in BatchNormOperation.
+
+    BatchNormOperation::compute_program_hash keys only on operation attributes and tensor
+    dtype/memory_config, not on tensor shape/layout/padded shape. Two batch_norm calls that
+    differ only in shape therefore share a program cache entry, and with the program cache
+    enabled the second call silently reuses the first call's program.
+
+    This runs a sequence of distinct shapes (all sharing dtype/memory_config/eps, so they only
+    differ in shape) with a freshly-cleared program cache and asserts each distinct shape adds
+    its own cache entry. On buggy main the shapes collide and the cache stays at a single entry,
+    so this test FAILS. Once the hash includes tensor shape/layout the cache grows by one per
+    distinct shape and the test PASSES. Outputs are also validated to be numerically correct.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    # Distinct shapes, all bfloat16 / TILE / DRAM-interleaved / same eps -> identical buggy hash.
+    # NOTE: deliberately do NOT call fill_implicit_tile_padding here - that op adds its own
+    # shape-dependent program cache entries which would mask the batch_norm collision we test.
+    # With plain batch_norm, ttnn.batch_norm contributes exactly one program per distinct shape.
+    shapes = [
+        torch.Size([1, 8, 32, 32]),
+        torch.Size([2, 16, 64, 120]),
+        torch.Size([4, 32, 128, 128]),
+        torch.Size([1, 128, 14, 14]),
+        torch.Size([3, 2, 64, 96]),
+    ]
+    eps = 1e-05
+
+    try:
+        for idx, input_shapes in enumerate(shapes, start=1):
+            in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+            mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
+            var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
+
+            tt_output_tensor_on_device = ttnn.batch_norm(
+                input_tensor,
+                running_mean=mean_tensor,
+                running_var=var_tensor,
+                eps=eps,
+            )
+            tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+            torch_result = torch.nn.functional.batch_norm(
+                input=in_data, running_mean=mean_data, running_var=var_data, eps=eps
+            )
+            assert_numeric_metrics(
+                torch_result,
+                tt_output,
+                pcc_threshold=0.99,
+                rtol=0.1,
+                atol=4.0,
+                frobenius_threshold=0.15,
+            )
+
+            # Each distinct shape must create a distinct program cache entry. If the hash ignores
+            # shape (the #46018 bug) the entry count stays at 1 and this assertion fails.
+            entries = device.num_program_cache_entries()
+            assert entries == idx, (
+                f"Program cache collision (#46018): after {idx} distinct shapes the cache holds "
+                f"{entries} entries, expected {idx}. Shape {tuple(input_shapes)} reused a program "
+                f"built for a different shape."
+            )
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+def test_batch_norm_training_avoids_variance_cancellation(device):
+    """Regression test for #45968: avoid bf16 E[x^2] - E[x]^2 cancellation in training mode."""
+
+    input_shape = torch.Size([2, 64, 32, 32])
+    channels = input_shape[1]
+    eps = 1e-5
+
+    torch.manual_seed(0)
+    channel_offsets = torch.where(torch.arange(channels, dtype=torch.float32) % 2 == 0, 5.0, -5.0).view(
+        1, channels, 1, 1
+    )
+    in_data = (channel_offsets + 0.1 * torch.randn(input_shape, dtype=torch.float32)).to(torch.bfloat16)
+
+    def to_tt(tensor):
+        return ttnn.from_torch(tensor.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_tensor = to_tt(in_data)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    running_mean_tensor = to_tt(torch.zeros(1, channels, 1, 1))
+    running_var_tensor = to_tt(torch.ones(1, channels, 1, 1))
+    weight_tensor = to_tt(torch.ones(1, channels, 1, 1))
+    bias_tensor = to_tt(torch.zeros(1, channels, 1, 1))
+
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=running_mean_tensor,
+        running_var=running_var_tensor,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        training=True,
+        eps=eps,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor).float()
+    tt_running_var = ttnn.to_torch(running_var_tensor)
+
+    torch_output = torch.nn.functional.batch_norm(
+        input=in_data.float(),
+        running_mean=None,
+        running_var=None,
+        weight=torch.ones(channels),
+        bias=torch.zeros(channels),
+        training=True,
+        eps=eps,
+    )
+
+    assert torch.isfinite(tt_output).all()
+    assert torch.isfinite(tt_running_var).all()
+    assert_numeric_metrics(torch_output, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
+    ],
+)
+@pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize(
+    "input_dtype, param_dtype, needs_output_typecast",
+    [
+        ("bfloat16", "float32", True),
+        ("float32", "float32", False),
+    ],
+)
+def test_batch_norm_fp32_acc_output_typecast(
+    input_shapes, weight, bias, input_dtype, param_dtype, needs_output_typecast, device
+):
+    """Regression test for missing output_tensor_cb in the UnpackToDestFp32 list.
+
+    needs_output_typecast is true when interm_data_format is Float32 (any tensor is
+    float32) but the output dtype is not (input/output are bfloat16). In that config
+    the SFPU compute kernel uses output_tensor_cb (c_2) as an fp32 staging buffer and
+    unpacks it back via copy_tile for dtype conversion — c_2 must be in the
+    UnpackToDestFp32 list or the unpack/DST precision mismatch degrades output accuracy.
+
+    Two parametrized cases:
+      - bf16 I/O + fp32 params (needs_output_typecast=True): hits the typecast self-loop.
+      - all fp32 (needs_output_typecast=False): control — no typecast, c_2 is plain output.
+    """
+    in_data, input_tensor = data_gen_with_range_batch_norm(
+        input_shapes, 5, 10, device, is_input=True, testing_dtype=input_dtype
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype)
+    var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=param_dtype)
+    weight_data, weight_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype)
+        if weight
+        else (None, None)
+    )
+    bias_data, bias_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype) if bias else (None, None)
+    )
+
+    # Explicit fp32_dest_acc_en pins the bug path; HiFi3 matches batch_norm_utils default on Wormhole.
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor)
+
+    in_ref = in_data.float()
+    mean_ref = mean_data.float()
+    var_ref = var_data.float()
+    weight_ref = weight_data.float() if weight_data is not None else None
+    bias_ref = bias_data.float() if bias_data is not None else None
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_ref,
+        running_mean=mean_ref,
+        running_var=var_ref,
+        weight=weight_ref,
+        bias=bias_ref,
+    ).to(tt_output.dtype)
+
+    if needs_output_typecast:
+        assert_numeric_metrics(
+            torch_result, tt_output, pcc_threshold=0.999, rtol=1e-2, atol=0.1, frobenius_threshold=0.02
+        )
+    else:
+        assert_numeric_metrics(
+            torch_result, tt_output, pcc_threshold=0.999, rtol=1e-2, atol=0.5, frobenius_threshold=0.05
+        )

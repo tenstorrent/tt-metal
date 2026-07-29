@@ -123,6 +123,8 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 // ======================================================================================
 
 HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
+HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile);
+HostTensor to_row_major_layout(const HostTensor& tensor);
 
 // ======================================================================================
 //                                  .pad() and .unpad()
@@ -143,6 +145,14 @@ HostTensor unpad_from_tile(const HostTensor& input_tensor, const Shape& output_t
 
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
+// Same convention as HostTensor::from_vector: no default T; pad_value defaults to 0.
+// T is the logical encode / pad element type.
+// Unlike from_vector (T deduced from the buffer), callers must supply T explicitly
+// (to_tensor_spec<float>(t, spec)) or pass a typed pad_value for deduction.
+// Explicit instantiations: float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t (same as from_vector).
+template <typename T>
+HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec, T pad_value = 0);
+
 // ======================================================================================
 //                                  Utility functions
 // ======================================================================================
@@ -161,16 +171,16 @@ namespace host_buffer {
 HostBuffer get_host_buffer(const HostTensor& tensor);
 
 template <typename T>
-tt::stl::Span<const T> get_as(const HostBuffer& buffer);
+ttsl::Span<const T> get_as(const HostBuffer& buffer);
 
 template <typename T>
-tt::stl::Span<T> get_as(HostBuffer& buffer);
+ttsl::Span<T> get_as(HostBuffer& buffer);
 
 template <typename T>
-tt::stl::Span<const T> get_as(const HostTensor& tensor);
+ttsl::Span<const T> get_as(const HostTensor& tensor);
 
 template <typename T>
-tt::stl::Span<T> get_as(HostTensor& tensor);
+ttsl::Span<T> get_as(HostTensor& tensor);
 
 }  // namespace host_buffer
 

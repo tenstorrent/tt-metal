@@ -9,7 +9,9 @@
 
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
+#include "tt-metalium/buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
+#include "tt-metalium/program_descriptors.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -122,6 +124,37 @@ void post_conv2d_op_memory_checks(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
     Tensor& output_tensor,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+
+// Builds CBDescriptor entries from a vector of CBInfo onto the supplied
+// ProgramDescriptor, mirroring allocate_cbs() but emitting onto the descriptor
+// data structures instead of a realised Program.  The set of globally-allocated
+// CBs (ACT_SHARDED/OUT/MATMUL_PARTIALS/READER_INDICES) is wired to the supplied
+// raw Buffer*s, which is what the framework's fast cache-hit path patches.
+// This single helper is used by both the sharded and width-sharded conv2d
+// program factories to avoid divergence in CB emission logic.
+void emit_cb_descriptors(
+    std::vector<CBInfo>& cb_info,
+    tt::tt_metal::ProgramDescriptor& desc,
+    const CoreRangeSet& all_cores_set,
+    tt::tt_metal::Buffer* input_buffer,
+    tt::tt_metal::Buffer* output_buffer,
+    tt::tt_metal::Buffer* indices_buffer);
+
+// Descriptor-path equivalent of post_conv2d_op_memory_checks().  Verifies that
+// the sum of non-globally-allocated CB sizes emitted on `desc` matches the L1
+// usage predicted by calculate_L1_usage() — the same equality the legacy
+// program-based check enforced via calculate_total_cb_size().  The L1
+// allocator-tracking half of post_conv2d_op_memory_checks() can't be performed
+// here because the framework realises the Program after this function returns,
+// so post_op_l1_allocation_size isn't observable.  When that check is wanted
+// against a realised Program, post_conv2d_op_memory_checks() should be used
+// instead.  Fails fast (TT_FATAL) on CB-size mismatch so misconfigured CB
+// footprints surface in the same way as on the legacy path.
+void post_conv2d_op_memory_checks_descriptor(
+    const tt::tt_metal::ProgramDescriptor& desc,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
     std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
 
 }  // namespace ttnn::prim

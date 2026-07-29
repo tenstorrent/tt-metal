@@ -31,6 +31,7 @@ jobs:
     steps:
       - name: "⬇️ Checkout repository"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           fetch-depth: 0
@@ -80,13 +81,21 @@ jobs:
           clang-20 --version
           clang++-20 --version
 
-      - name: "📦 Cache CPM source packages"
+      - name: "📦 Restore CPM source cache"
         id: cpm-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: .cpmcache
-          key: cpm-aarch64-ubuntu2404-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt') }}
-          restore-keys: cpm-aarch64-ubuntu2404-
+          path: .cpmcache.tar.zst
+          key: >-
+            cpm-z22-${{ hashFiles(
+              'third_party/CMakeLists.txt',
+              'tt_metal/third_party/umd/third_party/CMakeLists.txt',
+              'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-z22-
+
+      - name: "📦 Unpack CPM cache"
+        run: |
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
 
       - name: "⚙️ Configure ccache"
         uses: hendrikmuhs/ccache-action@v1.2
@@ -104,6 +113,18 @@ jobs:
             --enable-ccache \
             --without-distributed \
             --without-python-bindings
+
+      - name: "📦 Pack CPM cache"
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        run: |
+          [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
+
+      - name: "📦 Save CPM source cache"
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .cpmcache.tar.zst
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
 
       - name: "📊 ccache statistics"
         if: always()

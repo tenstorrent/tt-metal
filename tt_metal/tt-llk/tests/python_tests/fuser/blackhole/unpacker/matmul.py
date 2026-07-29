@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopBlock
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
@@ -17,6 +17,7 @@ from helpers.llk_params import Transpose
 
 class MatmulUnpacker(Unpacker):
     loop: FusedLoop = LoopBlock()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
@@ -28,7 +29,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
@@ -41,7 +42,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
@@ -56,7 +57,7 @@ class MatmulUnpacker(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
 
@@ -84,7 +85,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
@@ -100,7 +101,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         rt_dim = block.block_tiles_y
@@ -109,7 +110,10 @@ class MatmulUnpacker(Unpacker):
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         unpack_tile_size_a = compute_unit.src_a.tile_size
         unpack_tile_size_b = compute_unit.src_b.tile_size
-        full_ct_dim = compute_unit.src_b.dimensions[1] // 32
+        full_ct_dim = (
+            compute_unit.src_b.dimensions[1]
+            // compute_unit.src_b.tile_shape.total_col_dim()
+        )
         output_ct_dim = compute_unit.src_a.tile_count_x
         src_a_partial_face = compute_unit.src_a.partial_face.cpp_enum_value
         src_b_partial_face = compute_unit.src_b.partial_face.cpp_enum_value
@@ -138,9 +142,7 @@ class MatmulUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        face_r_dim_a = compute_unit.src_a.tile_shape.face_r_dim
-        face_r_dim_b = compute_unit.src_b.tile_shape.face_r_dim
-        return f"_llk_unpack_AB_matmul_uninit_({face_r_dim_a}, {face_r_dim_b});\n"
+        return f"_llk_unpack_AB_matmul_uninit_();\n"

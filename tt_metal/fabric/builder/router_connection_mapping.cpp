@@ -52,7 +52,7 @@ RoutingDirection RouterConnectionMapping::get_opposite_direction(RoutingDirectio
 }
 
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
-    Topology topology, RoutingDirection direction, bool has_z, bool enable_vc1) {
+    Topology topology, RoutingDirection direction, bool has_z, bool enable_vc1, bool enable_mesh_pass_through) {
     RouterConnectionMapping mapping;
 
     // VC0 receiver_channel channels for mesh routers
@@ -169,6 +169,28 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
                 0,  // Target Z router VC0
                 mesh_to_z_channel,  // Target sender channel (resolved by Z router)
                 RoutingDirection::Z));  // Target is Z router
+
+        // EXPERIMENTAL: inter-mesh pass-through (A->B->C).
+        // In the default (full_mesh) mode, inter-mesh traffic that has been crossed over to VC1
+        // sinks within the receiving mesh. To let it pass through toward a further mesh, the mesh
+        // router must also forward VC1 traffic to the local Z router, which re-exports it across
+        // the next inter-mesh link. This wires the 4th VC1 sender channel that the channel mapping
+        // already reserves on Z-stacked devices (has_z => mesh_vc1_sender_count == 4).
+        // NOTE: only valid in pass-through mode; in full_mesh the Z router does not service VC1
+        // (FABRIC_2D_VC1_SERVICED is gated on requires_vc1_mesh_pass_through for inter-mesh routers),
+        // so feeding its VC1 sender otherwise would create an undrained channel.
+        if (enable_vc1 && enable_mesh_pass_through && (topology == Topology::Mesh || topology == Topology::Torus)) {
+            // VC1 sender channels are 0-based (no local worker channel); slot 3 is reserved for Z.
+            constexpr uint32_t vc1_mesh_to_z_channel = builder_config::num_downstream_edms_2d_vc1;  // 3
+            mapping.add_target(
+                1,  // VC1
+                0,  // Receiver channel 0 (VC1 only has one receiver channel)
+                ConnectionTarget(
+                    ConnectionType::MESH_TO_Z,
+                    1,                      // Target Z router VC1
+                    vc1_mesh_to_z_channel,  // Target sender channel (resolved by Z router)
+                    RoutingDirection::Z));  // Target is Z router
+        }
     }
 
     return mapping;

@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <numeric>
@@ -535,6 +536,73 @@ inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, c
     solver.add(0);
 }
 
+// ── Host-Usage Budget (minimize distinct same-rank global groups used) ────────
+//
+// Adds a hard "at most k_hosts distinct same-rank global groups (host partitions) are used" constraint.
+// For every host group p that has at least one assignment literal, introduce an indicator h_p and add
+// (¬x_{t,g} v h_p) for each assign literal whose global g belongs to group p — so using any global in p
+// forces h_p true. Bounding the number of true h_p to k_hosts is encoded as "at least (P - k_hosts) of the
+// h_p are false" via the existing at-least-k machinery over the negated indicator literals.
+//
+// Returns true if the budget was encoded (or is non-binding); false only if the at-least-k encoding reports
+// the bound is trivially impossible (caller then tries a larger budget).
+bool topology_sat_encode_host_group_budget(
+    TopologySatSolver& solver,
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc,
+    size_t k_hosts) {
+    const auto& global_to_host = constraint_data.global_to_same_rank_group;
+    const size_t num_groups = constraint_data.same_rank_groups.size();
+    if (global_to_host.empty() || num_groups == 0) {
+        return true;
+    }
+
+    // Collect assignment literals per host group (group labels are dense ids in [0, num_groups)).
+    std::vector<std::vector<int>> host_assign_lits(num_groups);
+    const size_t nt = enc.assign_lit.size();
+    for (size_t t = 0; t < nt; ++t) {
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        for (size_t k = 0; k < globs.size(); ++k) {
+            const size_t g = globs[k];
+            if (g >= global_to_host.size()) {
+                continue;
+            }
+            const int label = global_to_host[g];
+            if (label < 0 || static_cast<size_t>(label) >= num_groups) {
+                continue;
+            }
+            host_assign_lits[static_cast<size_t>(label)].push_back(lits[k]);
+        }
+    }
+
+    // One "host used" indicator per non-empty group, with backward implication (used global => host used).
+    std::vector<int> neg_host_lits;
+    neg_host_lits.reserve(num_groups);
+    for (size_t p = 0; p < num_groups; ++p) {
+        if (host_assign_lits[p].empty()) {
+            continue;
+        }
+        const int h = solver.declare_one_more_variable();
+        for (int a : host_assign_lits[p]) {
+            solver.add(-a);
+            solver.add(h);
+            solver.add(0);
+        }
+        neg_host_lits.push_back(-h);
+    }
+
+    const size_t num_present = neg_host_lits.size();
+    if (num_present == 0 || k_hosts >= num_present) {
+        return true;  // budget is not binding
+    }
+
+    static constexpr size_t kHostBudgetCombClauses = 500000;
+    std::string reason;
+    return topology_sat_add_at_least_k_literals(
+        solver, neg_host_lits, num_present - k_hosts, kHostBudgetCombClauses, &reason);
+}
+
 // ── Hard Constraint Encoding Sub-functions ────────────────────────────────────
 //
 // The following functions collectively implement topology_sat_encode_hard_constraints,
@@ -739,6 +807,43 @@ void topology_sat_encode_injectivity(
     for (size_t g = 0; g < ng; ++g) {
         topology_sat_add_at_most_one_sequential(solver, lits_per_global[g]);
     }
+}
+
+// Step 5b: Bijection completeness. When |targets| == |globals| an injective mapping is necessarily surjective, so
+// every global must be used by exactly one target. The at-least-one-per-global clauses (the dual of injectivity)
+// are logically redundant given exactly-one-per-target + injectivity, but they give the SAT solver the
+// permutation/pigeonhole propagation it otherwise lacks -- which is what makes otherwise-intractable bijection
+// instances (e.g. a logical ring embedded into a sparse physical graph, i.e. a Hamiltonian-cycle search) converge.
+// Returns false (trivial UNSAT) if some global has no candidate target: no bijection can then exist.
+bool topology_sat_encode_bijection_completeness(
+    TopologySatSolver& solver, const TopologySatGraphView& graph_data, TopologySatHardEncoding& enc) {
+    if (graph_data.n_target != graph_data.n_global) {
+        return true;
+    }
+    const size_t nt = enc.assign_lit.size();
+    const size_t ng = graph_data.n_global;
+    std::vector<std::vector<int>> lits_per_global(ng);
+    for (size_t t = 0; t < nt; ++t) {
+        for (size_t k = 0; k < enc.assign_lit[t].size(); ++k) {
+            lits_per_global[enc.allowed_global_idx[t][k]].push_back(enc.assign_lit[t][k]);
+        }
+    }
+    for (size_t g = 0; g < ng; ++g) {
+        if (lits_per_global[g].empty()) {
+            enc.trivial_unsat = true;
+            enc.trivial_reason = fmt::format(
+                "Topology SAT: global node {} has no candidate target, so no bijection exists (n_target == n_global == "
+                "{})",
+                g,
+                ng);
+            return false;
+        }
+        for (int lit : lits_per_global[g]) {
+            solver.add(lit);
+        }
+        solver.add(0);
+    }
+    return true;
 }
 
 // Step 6: Adjacency preservation via support encoding.
@@ -976,6 +1081,12 @@ bool topology_sat_encode_hard_constraints(
 
     // 5. Injective: each global node used by at most one target.
     topology_sat_encode_injectivity(solver, graph_data, enc);
+
+    // 5b. Bijection completeness (only binds when n_target == n_global): every global must be used. Strengthens
+    // propagation for permutation-shaped instances and detects globals with no candidate target as trivial UNSAT.
+    if (!topology_sat_encode_bijection_completeness(solver, graph_data, enc)) {
+        return false;
+    }
 
     // 6. Adjacency preservation via support encoding.
     topology_sat_encode_adjacency_support(solver, graph_data, enc, validation_mode);
@@ -1254,6 +1365,24 @@ bool topology_sat_decode_hard_solution(
     return true;
 }
 
+// Value-symmetry-breaking hint for equal-size (bijection) instances. Embedding a logical graph into an equal-size
+// physical graph (e.g. a ring -> a Hamiltonian cycle) has large value symmetry -- any automorphism of the
+// physical graph maps one solution to another -- which makes generic CDCL re-derive the same conflicts under each
+// symmetric image and thrash. Fixing one target to one candidate collapses that symmetry. We return the literal
+// to *assume* (not assert): assumptions are retracted after each solve(), so the caller re-solves without it if it
+// proves the instance UNSAT. That makes this sound for any instance with no graph-shape detection -- the only
+// precondition is a bijection, where this symmetry (and the resulting hardness) actually arises. Returns 0 when no
+// hint applies.
+int topology_sat_symmetry_assumption_lit(const TopologySatGraphView& graph_data, const TopologySatHardEncoding& enc) {
+    if (graph_data.n_target != graph_data.n_global) {
+        return 0;
+    }
+    if (enc.assign_lit.empty() || enc.assign_lit[0].empty()) {
+        return 0;
+    }
+    return enc.assign_lit[0][0];
+}
+
 bool topology_sat_search(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
@@ -1281,6 +1410,21 @@ bool topology_sat_search(
     if (graph_data.n_target == 0) {
         return true;
     }
+
+    // Solve with a value-symmetry-breaking assumption (collapses the symmetric models that make a bijection
+    // embedding -- a Hamiltonian-cycle search -- thrash). The assumption is only a hint: if it makes the instance
+    // UNSAT we re-solve without it, so this never turns a solvable instance UNSAT regardless of graph shape.
+    auto solve_with_symmetry_break = [&](TopologySatSolver& solver, const TopologySatHardEncoding& enc) -> int {
+        const int assumption = topology_sat_symmetry_assumption_lit(graph_data, enc);
+        if (assumption != 0) {
+            solver.assume(assumption);
+            const int status = solver.solve();
+            if (status == TopologySatSolver::kSat) {
+                return status;
+            }
+        }
+        return solver.solve();
+    };
 
     auto finalize_success = [&](TopologySatSolver& solver, const TopologySatHardEncoding& enc) -> bool {
         if (!topology_sat_decode_hard_solution(solver, enc, state.mapping)) {
@@ -1314,7 +1458,7 @@ bool topology_sat_search(
             }
             return false;
         }
-        const int status = solver.solve();
+        const int status = solve_with_symmetry_break(solver, enc);
         if (status != TopologySatSolver::kSat) {
             state.error_message = fmt::format(
                 "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} "
@@ -1330,6 +1474,55 @@ bool topology_sat_search(
         }
         return finalize_success(solver, enc);
     };
+
+    // Opt-in objective: minimize the number of distinct same-rank global groups (host partitions) the mapping
+    // touches. Walk a host-usage budget upward from the capacity-based lower bound (ceil(n_target / max group
+    // capacity)) and return the first budget that is satisfiable — that is the minimum number of hosts. This is a
+    // complete (not greedy) search, so it finds the true minimum host count when one exists. It is best-effort:
+    // if no budget below the total group count is satisfiable we fall through to the normal unconstrained solve,
+    // so enabling the objective can never turn a solvable instance UNSAT.
+    if (constraint_data.minimize_same_rank_groups_used) {
+        size_t num_host_groups = 0;
+        size_t max_group_capacity = 0;
+        for (const auto& grp : constraint_data.same_rank_groups) {
+            if (!grp.empty()) {
+                ++num_host_groups;
+                max_group_capacity = std::max(max_group_capacity, grp.size());
+            }
+        }
+        if (num_host_groups >= 2 && max_group_capacity > 0) {
+            const size_t k_min = (graph_data.n_target + max_group_capacity - 1) / max_group_capacity;
+            // Each tight host-budget solve is conflict-capped. Proving the minimum host count for a ring/chain
+            // embedded into a strictly larger physical graph (e.g. a 64-mesh decode ring on an 80-mesh / 20-host
+            // supercluster) is a Hamiltonian-cycle-with-cardinality search the SAT engine can spin on for minutes;
+            // the cap lets an intractable budget be abandoned so the loop (and then the unconstrained fall-through
+            // below) still returns a valid mapping quickly. Tractable budgets finish well within the cap and return
+            // the identical model they would unbounded, so existing golden mappings are unchanged.
+            static constexpr int kHostMinimizeConflictBudget = 300'000;
+            for (size_t k = std::max<size_t>(k_min, 1); k < num_host_groups; ++k) {
+                TopologySatSolver solver;
+                TopologySatHardEncoding enc;
+                if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+                    break;  // hard constraints alone are UNSAT; defer to the normal path for error messaging
+                }
+                if (!topology_sat_encode_host_group_budget(solver, constraint_data, enc, k)) {
+                    continue;  // this budget is trivially unencodable; try a larger one
+                }
+                if (solver.solve_limited(kHostMinimizeConflictBudget) == TopologySatSolver::kSat &&
+                    finalize_success(solver, enc)) {
+                    if (!quiet_mode) {
+                        log_info(
+                            tt::LogFabric,
+                            "Topology SAT: minimized host-group usage to {} group(s) (capacity lower bound {})",
+                            k,
+                            k_min);
+                    }
+                    return true;
+                }
+            }
+            // No binding budget was satisfiable within the conflict cap; fall through to the unconstrained solve.
+        }
+    }
 
     bool has_preferred = false;
     for (size_t t = 0; t < graph_data.n_target && !has_preferred; ++t) {
@@ -1409,7 +1602,7 @@ bool topology_sat_search(
                 kMaxRelaxedChannelLiteralsSingleSolve);
         }
     }
-    const int status = solver.solve();
+    const int status = solve_with_symmetry_break(solver, enc);
     if (status != TopologySatSolver::kSat) {
         state.error_message = fmt::format(
             "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} "

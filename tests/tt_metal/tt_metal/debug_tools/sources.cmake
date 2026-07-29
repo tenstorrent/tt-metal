@@ -18,20 +18,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_print_tile.cpp
     device_print/test_print_tiles_multiple.cpp
     device_print/test_checkpoint.cpp
-    dprint/test_dprint_mesh_coords.cpp
-    dprint/test_dram_cores.cpp
-    dprint/test_eth_cores.cpp
-    dprint/test_invalid_print_core.cpp
-    dprint/test_mute_device.cpp
-    dprint/test_mute_print_server.cpp
-    dprint/test_print_buffering.cpp
-    dprint/test_print_all_harts.cpp
-    dprint/test_print_before_finish.cpp
-    dprint/test_print_prepend_device_core_risc.cpp
-    dprint/test_print_tensix_dest.cpp
-    dprint/test_print_tile.cpp
-    dprint/test_print_tiles_multiple.cpp
-    dprint/test_print_config_register.cpp
+    device_print/test_cb_hash.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
     watcher/test_mcast_wrap_around.cpp
@@ -44,6 +31,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     watcher/test_waypoint.cpp
     watcher/test_runtime_args_known_garbage.cpp
     watcher/test_tile_counters_log.cpp
+    watcher/test_zero_mode_guard.cpp
 )
 
 set(UNIT_TESTS_INSPECTOR_SRC inspector/test_rpc_startup.cpp)

@@ -10,9 +10,9 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
-#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -21,7 +21,16 @@ struct JointSDPADeviceOperation {
     using tensor_args_t = JointSDPAInputs;
     using spec_return_value_t = JointSDPAResultSpec;
     using tensor_return_value_t = JointSDPAResult;
+
+    struct JointSDPAProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
     using program_factory_t = std::variant<JointSDPAProgramFactory>;
+
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

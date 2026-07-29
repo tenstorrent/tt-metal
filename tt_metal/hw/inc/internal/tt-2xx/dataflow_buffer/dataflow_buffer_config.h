@@ -27,6 +27,10 @@ constexpr uint8_t TC_TENSIX_POOL_START = NUM_TENSIX_TILE_COUNTERS_FOR_DM;  // = 
 constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
 constexpr uint8_t NUM_TXN_IDS = 4;
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 6;
+// Max tile counter ids that can be collected for one side (producer or consumer) of a DFB during
+// init, summed across that side's riscs. Bounded by TxnDFBDescriptor::tile_counters, the ISR
+// descriptor the collected ids are copied into, so the two must never diverge.
+constexpr uint8_t MAX_TILE_COUNTERS_PER_SIDE = 18;
 
 constexpr uint16_t TENSIX_RISC_OFFSET = 8; // First 8 represent DMs
 
@@ -81,6 +85,7 @@ struct dfb_initializer_t {  // 36 bytes
     uint32_t entry_size;
     uint32_t stride_in_entries;
     uint16_t capacity;
+    uint16_t num_entries;
     struct {
         uint16_t dm_mask : 8;         // bits 0-7: DM RISC mask
         uint16_t tensix_mask : 4;     // bits 8-11: Neo RISC mask
@@ -91,7 +96,6 @@ struct dfb_initializer_t {  // 36 bytes
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
     uint8_t implicit_sync_configured; // 0: init state, 1: configured
-    uint8_t padding[2];
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 62 bytes

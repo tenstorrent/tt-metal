@@ -848,3 +848,89 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
+
+
+@pytest.mark.parametrize(
+    # Conv3d-style dim names. N=batch, D=depth, H=height, W=width, C=channels.
+    "N,D,H,W,C",
+    [
+        # [1, 128, 240, 240, 1],
+        # [1, 32, 40, 40, 1],
+        # [1, 8, 12, 12, 1],
+        # [1, 1, 12, 12, 1],
+        [1, 1, 8, 8, 1],
+        # [1, 1, 24, 24, 1],
+        # [1, 8, 24, 24, 1],
+    ],
+)
+def test_reshape_conv2d(device, N, D, H, W, C):
+    torch.manual_seed(0)
+    x = torch.randn(N, D, H, W, C, dtype=torch.bfloat16)
+    ref = x.float().permute(0, 4, 1, 2, 3).contiguous()  # NDHWC -> NCDHW
+
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    t = ttnn.reshape(t, (N, C, D, H, W))
+    out = ttnn.to_torch(t, device=device).to(torch.float32)
+
+    assert_with_pcc(ref, out, 0.99)
+
+
+@pytest.mark.parametrize(
+    "H,W,C",
+    [
+        [8, 8, 1],
+    ],
+)
+def test_reshape_conv2d_rank3(device, H, W, C):
+    torch.manual_seed(0)
+    x = torch.randn(H, W, C, dtype=torch.bfloat16)
+    ref = x.float().permute(0, 2, 1).contiguous()  # HWC -> NCDHW
+    import logging
+
+    logging.info(f"{ref.shape}")
+
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    t = ttnn.reshape(t, (H, C, W))
+    out = ttnn.to_torch(t, device=device).to(torch.float32)
+
+    assert_with_pcc(ref, out, 0.99)
+
+
+def test_reshape_4d_5d_layout(device):
+    # https://github.com/tenstorrent/tt-metal/issues/41102
+    x = torch.arange(1 * 5 * 16 * 128, dtype=torch.float32).reshape(1, 5, 16, 128)
+    expected = x.reshape(1, 5, 8, 2, 128)
+
+    x_tt = ttnn.from_torch(x, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x_tt = ttnn.to_layout(x_tt, layout=ttnn.TILE_LAYOUT)
+    result = ttnn.to_torch(ttnn.reshape(x_tt, (1, 5, 8, 2, 128)))
+
+    diff = (result.float() - expected.float()).abs().max().item()
+    assert diff == 0.0
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((128, 4096), (64, 8192)),  # 128 source rows -> >1 page per core; wide rows (multi-packet writes)
+        ((256, 2048), (128, 4096)),
+    ],
+)
+def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shape):
+    """
+    Correctness guard for the row-major interleaved reshape data-movement kernel (rm_reshape_interleaved)
+    on the wide multi-page path: DRAM row-major input, 16B-aligned wide rows (the clean async_write
+    branch), and >1 source page per core.
+
+    The kernel reuses a single L1 source_buffer slot every iteration, so correct output relies on each
+    async_write draining before the next iteration's read reuses that slot; otherwise the read would
+    overwrite the buffer while the prior write is still sourcing from it (WAR) and corrupt the result.
+    This checks the wide multi-page RM path produces the expected reshape.
+    """
+    torch.manual_seed(0)
+    t = torch.randn(*input_shape, dtype=torch.bfloat16)
+    x = ttnn.from_torch(
+        t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    y = ttnn.reshape(x, output_shape)
+    assert_equal(t.reshape(*output_shape), ttnn.to_torch(y))

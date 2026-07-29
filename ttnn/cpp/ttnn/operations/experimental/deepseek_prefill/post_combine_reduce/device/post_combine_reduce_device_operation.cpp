@@ -89,13 +89,18 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
 
     if (indices.has_value()) {
         TT_FATAL(indices->layout() == ttnn::Layout::ROW_MAJOR, "indices must be ROW_MAJOR");
-        TT_FATAL(indices->dtype() == DataType::INT32, "indices must be int32");
+        // #44928: indices come straight from moe_grouped_topk as UINT16. The
+        // writer expands them to int32 in L1 before the compute kernel reads.
+        TT_FATAL(
+            indices->dtype() == DataType::UINT16,
+            "indices must be uint16 (matching moe_grouped_topk output), got {}",
+            indices->dtype());
         TT_FATAL(expert_dispatch_table->layout() == ttnn::Layout::ROW_MAJOR, "expert_dispatch_table must be ROW_MAJOR");
         TT_FATAL(expert_dispatch_table->dtype() == DataType::INT32, "expert_dispatch_table must be int32");
     }
 }
 
-ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
     const auto& input_shape = combine_output.padded_shape();
@@ -114,7 +119,7 @@ ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     // Use TILE layout for hardware tilization output
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));

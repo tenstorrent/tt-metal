@@ -16,6 +16,7 @@
 #include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
 #include <algorithm>
+#include <optional>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -61,14 +62,14 @@ bool increment_indices(const ttsl::SmallVector<int>& limits, ttsl::SmallVector<i
 
 // Computes tensor spec for shards supplied in `xtensor_shards_views`.
 // Note the shapes of all shards must be the same; resulting in a uniform tensor spec.
-TensorSpec compute_tensor_spec_for_shards(
+tt::tt_metal::TensorSpec compute_tensor_spec_for_shards(
     const auto& xtensor_shards_views, const tt::tt_metal::TensorLayout& global_layout) {
     std::optional<Shape> shard_shape;
     for (const auto& [_, xtensor_view] : xtensor_shards_views) {
         if (!xtensor_view.has_value()) {
             continue;
         }
-        auto xtensor_shard_shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
+        auto xtensor_shard_shape = ttnn::experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
         if (shard_shape.has_value()) {
             TT_FATAL(
                 shard_shape.value() == xtensor_shard_shape,
@@ -80,7 +81,7 @@ TensorSpec compute_tensor_spec_for_shards(
         }
     }
     TT_FATAL(shard_shape.has_value(), "No shards were produced");
-    return TensorSpec(*shard_shape, global_layout);
+    return tt::tt_metal::TensorSpec(*shard_shape, global_layout);
 }
 
 // Creates a host buffer from a span, with the following optimizations:
@@ -88,7 +89,10 @@ TensorSpec compute_tensor_spec_for_shards(
 // - Otherwise, a copy of the data is created.
 template <typename T>
 tt::tt_metal::HostBuffer create_host_buffer_from_span(
-    ttsl::Span<T> span, const tt::tt_metal::MemoryPin& buffer_pin, const TensorSpec& tensor_spec, T pad_value) {
+    ttsl::Span<T> span,
+    const tt::tt_metal::MemoryPin& buffer_pin,
+    const tt::tt_metal::TensorSpec& tensor_spec,
+    T pad_value) {
     if constexpr (!std::is_const_v<T>) {
         if (tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
             tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
@@ -109,19 +113,47 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
 
 class TensorToMesh::Impl {
 public:
+    // Retains the device view so multi-host distribution drops remote shards on each host.
     Impl(
         const MeshDevice& mesh_device,
         DistributionMode distribution_mode,
         const MeshShape& distribution_shape,
         const MeshMapperConfig& config) :
         mesh_device_view_(mesh_device.get_view()),
-        global_range_(mesh_device_view_.shape()),
+        mesh_shape_(mesh_device.shape()),
+        global_range_(mesh_shape_),
         distribution_mode_(distribution_mode),
         distribution_shape_(distribution_shape),
         config_(config) {}
 
+    // Shape-only ctor for callers without a `MeshDevice` handle; single-host buffer creation only.
+    Impl(
+        const MeshShape& mesh_shape,
+        DistributionMode distribution_mode,
+        const MeshShape& distribution_shape,
+        const MeshMapperConfig& config) :
+        mesh_device_view_(std::nullopt),
+        mesh_shape_(mesh_shape),
+        global_range_(mesh_shape_),
+        distribution_mode_(distribution_mode),
+        distribution_shape_(distribution_shape),
+        config_(config) {}
+
+    // Shape-only path passes a nullptr context to avoid the 1-arg shortcut, which acquires the
+    // exclusive PCIe chip lock via MetalContext::instance().
+    tt::tt_metal::DistributedHostBuffer make_distributed_host_buffer() const {
+        if (mesh_device_view_.has_value()) {
+            return tt::tt_metal::DistributedHostBuffer::create(*mesh_device_view_);
+        }
+        return tt::tt_metal::DistributedHostBuffer::create(
+            mesh_shape_,
+            mesh_shape_,
+            tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_shape_.dims()),
+            /*context=*/nullptr);
+    }
+
     Tensor operator()(const Tensor& tensor) const {
-        auto extract_logical_data = [this]<typename T>(const tt::tt_metal::Tensor& tensor) -> Tensor {
+        auto extract_logical_data = [this]<typename T>(const ttnn::Tensor& tensor) -> Tensor {
             const bool data_viewable = tensor.tensor_spec().layout() == tt::tt_metal::Layout::ROW_MAJOR &&
                                        tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape();
             tt::tt_metal::HostBuffer host_buffer = data_viewable ? tt::tt_metal::host_buffer::get_host_buffer(tensor)
@@ -139,6 +171,7 @@ public:
             case tt::tt_metal::DataType::FLOAT32: return extract_logical_data.template operator()<float>(tensor);
             case tt::tt_metal::DataType::BFLOAT16: return extract_logical_data.template operator()<bfloat16>(tensor);
             case tt::tt_metal::DataType::UINT32: return extract_logical_data.template operator()<uint32_t>(tensor);
+            case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 ingestion via TensorToMesh is not supported");
             case tt::tt_metal::DataType::UINT8: return extract_logical_data.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return extract_logical_data.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return extract_logical_data.template operator()<int32_t>(tensor);
@@ -178,10 +211,10 @@ public:
 
         // Optimize a fully replicated path, which can use the same buffer for all shards.
         if (shard_dims.empty()) {
-            const TensorSpec tensor_spec(shape, layout);
+            const tt::tt_metal::TensorSpec tensor_spec(shape, layout);
             auto replicated_buffer = create_host_buffer_from_span<T>(span, buffer_pin, tensor_spec, pad_value);
 
-            auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(mesh_device_view_);
+            auto distributed_buffer = make_distributed_host_buffer();
             auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
             std::vector<MeshCoordinate> buffer_coords;
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
@@ -193,14 +226,15 @@ public:
             const auto tensor_topology =
                 tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
 
-            return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), tensor_spec, tensor_topology));
+            return Tensor(
+                tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), tensor_spec, tensor_topology));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
         auto input_xtensor =
-            tt::tt_metal::experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
+            ttnn::experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
 
-        auto chunks = tt::tt_metal::experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
+        auto chunks = ttnn::experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
         TT_FATAL(chunks.size() >= 1, "No chunks were produced");
         TT_FATAL(
             distribution_shape_.dims() == 1 || chunks.size() == sharded_mesh_size,
@@ -209,7 +243,7 @@ public:
             sharded_mesh_size);
 
         using StridedViewRef =
-            std::reference_wrapper<tt::tt_metal::experimental::xtensor::StridedView<decltype(input_xtensor)>>;
+            std::reference_wrapper<ttnn::experimental::xtensor::StridedView<decltype(input_xtensor)>>;
         tt::tt_metal::distributed::MeshContainer<std::optional<StridedViewRef>> sharded_xtensor_views(
             distribution_shape_, std::nullopt);
 
@@ -268,7 +302,7 @@ private:
         T pad_value,
         const tt::tt_metal::MemoryPin& buffer_pin,
         const ttsl::SmallVector<int>& shard_dims) const {
-        const TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
+        const tt::tt_metal::TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
 
         // Determine whether we can borrow directly from the source buffer instead of copying.
         // Requirements:
@@ -306,7 +340,7 @@ private:
             return true;
         }();
 
-        auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(mesh_device_view_);
+        auto distributed_buffer = make_distributed_host_buffer();
         auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
 
         // Deduplicate processing of replicated buffers, by keeping a cache of already converted buffers.
@@ -365,11 +399,13 @@ private:
         const auto tensor_topology =
             tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
 
-        return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), shard_spec, tensor_topology));
+        return Tensor(
+            tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), shard_spec, tensor_topology));
     }
 
-    // MeshDevice parameters.
-    MeshDeviceView mesh_device_view_;
+    // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.
+    std::optional<MeshDeviceView> mesh_device_view_;
+    MeshShape mesh_shape_;
     MeshCoordinateRange global_range_;
     DistributionMode distribution_mode_ = DistributionMode::ROW_MAJOR;
 
@@ -407,20 +443,31 @@ public:
         }
 
         // Convert individual shards to logical data of the correct type `T`, if needed.
-        if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
-            dst_buffer = dst_buffer.transform(
-                [&tensor](const tt::tt_metal::HostBuffer& shard) {
-                    return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
-                },
-                tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+        // FP8 (float8_e4m3) is row-major-only, so logical == physical always holds and the
+        // conversion path (which would require Tensor::to_vector<float8_e4m3>, not instantiated)
+        // is never reached. Guard explicitly so a future regression fails loudly instead of
+        // silently skipping the conversion.
+        if constexpr (std::is_same_v<T, float8_e4m3>) {
+            TT_FATAL(
+                tt::tt_metal::logical_matches_physical(tensor.tensor_spec()),
+                "float8_e4m3 tensors must have logical layout matching physical (row-major-only); "
+                "logical-to-physical conversion is not supported for FP8");
+        } else {
+            if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
+                dst_buffer = dst_buffer.transform(
+                    [&tensor](const tt::tt_metal::HostBuffer& shard) {
+                        return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
+                    },
+                    tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+            }
         }
 
         // Convert shards into a linear buffer of xtensor views.
-        std::vector<tt::tt_metal::experimental::xtensor::AdaptedView<const T>> xtensor_views;
+        std::vector<ttnn::experimental::xtensor::AdaptedView<const T>> xtensor_views;
         xtensor_views.reserve(distribution_shape_.mesh_size());
         std::vector<size_t> shard_shape(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
         dst_buffer.apply([&xtensor_views, &shard_shape](const tt::tt_metal::HostBuffer& shard) {
-            xtensor_views.push_back(tt::tt_metal::experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
+            xtensor_views.push_back(ttnn::experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
         });
 
         ttsl::SmallVector<int> num_chunks;
@@ -441,16 +488,15 @@ public:
             }
         }
 
-        auto xtensor_adapter =
-            tt::tt_metal::experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
-        auto&& shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
+        auto xtensor_adapter = ttnn::experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
+        auto&& shape = ttnn::experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
         return {std::move(xtensor_adapter).data(), std::move(shape)};
     }
 
     Tensor compose(const Tensor& tensor) const {
         auto dispatch_to_concrete = [this]<typename T>(const Tensor& tensor) {
             auto [data, shape] = compose<T>(tensor);
-            TensorSpec spec(shape, tensor.tensor_spec().tensor_layout());
+            tt::tt_metal::TensorSpec spec(shape, tensor.tensor_spec().tensor_layout());
             return Tensor::from_vector(std::move(data), spec);
         };
 
@@ -460,6 +506,8 @@ public:
             case tt::tt_metal::DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tensor);
             case tt::tt_metal::DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tensor);
             case tt::tt_metal::DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(tensor);
+            case tt::tt_metal::DataType::FP8_E4M3:
+                TT_THROW("FP8_E4M3 aggregation via aggregate_tensor is not supported");
             case tt::tt_metal::DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tensor);
@@ -492,6 +540,27 @@ Tensor TensorToMesh::operator()(
     const tt::tt_metal::TensorLayout& layout,
     T pad_value) const {
     return (*impl_).template operator()<T>(buffer, shape, buffer_pin, layout, pad_value);
+}
+
+TensorToMesh TensorToMesh::create(const MeshShape& mesh_shape, const MeshMapperConfig& config) {
+    const auto distributed_shape = config.mesh_shape_override.value_or(mesh_shape);
+    TT_FATAL(
+        distributed_shape.mesh_size() <= mesh_shape.mesh_size(),
+        "The size of the supplied mesh shape {} does not match the device shape size {}",
+        distributed_shape,
+        mesh_shape);
+    TT_FATAL(
+        distributed_shape.dims() == config.placements.size(),
+        "The number of dimensions in the mesh shape {} does not match the "
+        "number of placements in the config {}",
+        distributed_shape,
+        config);
+
+    return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
+        mesh_shape,
+        compute_distribution_mode(config.mesh_shape_override, mesh_shape),
+        distributed_shape,
+        config));
 }
 
 TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMapperConfig& config) {
@@ -583,6 +652,10 @@ std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const 
     return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_device, config));
 }
 
+std::unique_ptr<TensorToMesh> create_mesh_mapper(const MeshShape& mesh_shape, const MeshMapperConfig& config) {
+    return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_shape, config));
+}
+
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {
     return std::make_unique<MeshToTensor>(MeshToTensor::create(
         mesh_device, MeshComposerConfig{.dims = {dim}, .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
@@ -598,7 +671,7 @@ Tensor distribute_tensor(
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     std::optional<ttnn::QueueId> cq_id) {
     TT_FATAL(
-        tensor.storage_type() == tt::tt_metal::StorageType::HOST,
+        tensor.storage_type() == ttnn::StorageType::HOST,
         "TensorToMesh only supports host tensors; got storage type: {}",
         tensor.storage_type());
     Tensor output = mapper(tensor);
@@ -678,5 +751,6 @@ template std::pair<std::vector<bfloat16>, Shape> MeshToTensor::compose<bfloat16>
 template std::pair<std::vector<int32_t>, Shape> MeshToTensor::compose<int32_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint8_t>, Shape> MeshToTensor::compose<uint8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint16_t>, Shape> MeshToTensor::compose<uint16_t>(const Tensor& tensor) const;
+template std::pair<std::vector<float8_e4m3>, Shape> MeshToTensor::compose<float8_e4m3>(const Tensor& tensor) const;
 
 }  // namespace ttnn::distributed

@@ -6,35 +6,23 @@
 
 #include <cstdint>
 
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "deepseek_moe_fast_reduce_nc_fused_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
+// Contract-2 mesh-workload factory: builds one ProgramDescriptor per mesh
+// coordinate (the per-coord reader RT args embed the (row, col) mesh
+// coordinate, so a single replicated descriptor would not be correct).
 struct DeepseekMoEFastReduceNCFusedMeshWorkloadFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
-        std::vector<tt::tt_metal::CoreCoord> all_cores;
-        uint32_t ncores;
-    };
-
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    // Per-device program construction. The framework iterates the mesh's coordinate range set and
-    // assembles the MeshWorkload by calling this for each coordinate.
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const DeepseekMoEFastReduceNCFusedParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const DeepseekMoEFastReduceNCFusedInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const DeepseekMoEFastReduceNCFusedParams& operation_attributes,
         const DeepseekMoEFastReduceNCFusedInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        std::vector<ttnn::Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim

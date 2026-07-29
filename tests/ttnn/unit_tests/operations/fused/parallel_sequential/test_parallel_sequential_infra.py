@@ -1051,7 +1051,6 @@ class TestHasWriterFlag:
             _barrier_mod._emit_init_coordinator(
                 has_compute=has_compute,
                 num_segments=0,
-                op_semaphore_info=None,
                 has_writer=has_writer,
             )
         )

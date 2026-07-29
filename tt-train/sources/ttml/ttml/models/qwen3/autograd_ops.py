@@ -5,8 +5,6 @@
 """Custom autograd operations for Qwen3.
 
 ConcatLastDim: concatenation with correct backward gradient split.
-RMSNormFunction: explicit rsqrt-based RMSNorm that works around L1 size
-limits on Tenstorrent devices for large hidden dimensions.
 """
 
 from __future__ import annotations
@@ -37,43 +35,3 @@ class ConcatLastDim(ttml.autograd.Function):
             [b_shape[0], b_shape[1], b_shape[2], a_last + b_shape[-1]],
         )
         return grad_a, grad_b
-
-
-class RMSNormFunction(ttml.autograd.Function):
-    """RMSNorm via explicit rsqrt for direct control of forward/backward.
-
-    Works around L1 size limits that the fused rmsnorm_bw hits on large
-    hidden dimensions (14B/32B scale).
-    """
-
-    @staticmethod
-    def forward(ctx, x, weight, eps):
-        x_val = x.get_value()
-        w_val = weight.get_value()
-
-        x_sq = ttnn.mul(x_val, x_val)
-        mean_sq = ttnn.mean(x_sq, dim=-1, keepdim=True)
-        variance = ttnn.add(mean_sq, eps)
-        rrms = ttnn.rsqrt(variance)
-
-        x_hat = ttnn.mul(x_val, rrms)
-        out = ttnn.mul(x_hat, w_val)
-
-        ctx.save_for_backward(x_hat, rrms, w_val)
-        return ttml.autograd.create_tensor(out)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        x_hat, rrms, w_val = ctx.saved_tensors
-
-        grad_w = ttnn.mul(grad_output, x_hat)
-        for d in range(3):
-            grad_w = ttnn.sum(grad_w, dim=d, keepdim=True)
-
-        gw = ttnn.mul(grad_output, w_val)
-        dot = ttnn.mul(gw, x_hat)
-        dot_mean = ttnn.mean(dot, dim=-1, keepdim=True)
-        correction = ttnn.mul(x_hat, dot_mean)
-        grad_x = ttnn.mul(ttnn.subtract(gw, correction), rrms)
-
-        return grad_x, grad_w

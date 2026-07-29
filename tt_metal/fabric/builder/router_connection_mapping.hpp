@@ -90,10 +90,18 @@ public:
      * @param topology Mesh topology (1D or 2D)
      * @param direction Router's direction (NORTH, EAST, SOUTH, WEST)
      * @param has_z Whether this device has a Z router (enables MESH_TO_Z connections)
+     * @param enable_vc1 Whether VC1 (inter-mesh) connections should be created
+     * @param enable_mesh_pass_through EXPERIMENTAL: when set (and has_z), also forwards VC1 traffic to
+     *        the local Z router (MESH_TO_Z on VC1) so inter-mesh traffic can pass through this mesh
+     *        toward a further mesh (A->B->C) instead of sinking here. Reuses VC1; not deadlock-safe.
      * @return Configured RouterConnectionMapping for mesh router
      */
     static RouterConnectionMapping for_mesh_router(
-        Topology topology, RoutingDirection direction, bool has_z, bool enable_vc1 = false);
+        Topology topology,
+        RoutingDirection direction,
+        bool has_z,
+        bool enable_vc1 = false,
+        bool enable_mesh_pass_through = false);
 
     /**
      * @brief Factory method for Z router connection mapping

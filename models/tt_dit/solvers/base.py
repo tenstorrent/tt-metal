@@ -5,49 +5,28 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-
-import torch
-from diffusers.schedulers.scheduling_utils import SchedulerMixin
+from typing import TYPE_CHECKING
 
 import ttnn
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 
 class Solver(ABC):
-    def __init__(self, scheduler: SchedulerMixin) -> None:
-        if not isinstance(scheduler, SchedulerMixin):
-            msg = f"scheduler must be a diffusers SchedulerMixin, got {type(scheduler).__name__}"
-            raise ValueError(msg)
-        self._scheduler = scheduler
+    def __init__(self) -> None:
         self._sigmas = None
         self._alphas = None
-        self._timesteps = None
 
-    @property
-    def scheduler(self) -> SchedulerMixin:
-        return self._scheduler
+    def set_schedule(self, sigmas: Sequence[float], alphas: Sequence[float] | None = None) -> None:
+        """Set the noise and signal schedules.
 
-    @property
-    def sigmas(self) -> list[float] | None:
-        """Returns the active sigma schedule, or None when no schedule has been provided."""
-        return self._sigmas
-
-    @property
-    def alphas(self) -> list[float] | None:
-        """Returns the active alpha schedule, or None when no schedule has been provided."""
-        return self._alphas
-
-    @property
-    def timesteps(self) -> torch.Tensor | None:
-        """Returns the active timesteps, or None when no timesteps have been provided."""
-        return self._timesteps
-
-    def set_schedule(self, num_inference_steps: int | None = None, *, device: object = None, **kwargs: object) -> None:
-        """Forward to ``scheduler.set_timesteps`` and cache sigmas/alphas for device stepping."""
-        self._scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-        sigmas = self._scheduler.sigmas
-        self._sigmas = sigmas.tolist()
-        self._alphas = (1.0 - sigmas).tolist()
-        self._timesteps = self._scheduler.timesteps
+        Args:
+            sigmas: Full noise schedule (length = number of steps + 1).
+            alphas: Full signal schedule (length = number of steps + 1). Defaults to 1 - sigmas.
+        """
+        self._sigmas = list(sigmas)
+        self._alphas = list(alphas) if alphas is not None else [1.0 - s for s in self._sigmas]
 
     @abstractmethod
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:

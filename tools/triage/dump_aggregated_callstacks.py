@@ -8,7 +8,7 @@ Usage:
     dump_aggregated_callstacks [--all-cores] [--device-visualization]
 
 Options:
-    --all-cores                      Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
+    --all-cores                      Show all cores, including those with Go Message = DONE and RISCs not enabled by the running program. By default, both are filtered out.
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 
 Description:
@@ -136,7 +136,7 @@ class AggregationBucket:
         self.core_locations.add(f"{device_label}:{coord_str}")
         self.device_labels.add(device_label)
 
-        dev_id = location._device.id
+        dev_id = location.device.id
         x, y = location._noc0_coord
         self.per_core_hits[dev_id].add((x, y))
 
@@ -189,11 +189,9 @@ def _collect_aggregated(
         try:
             if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
                 return None
-            # Filter DONE cores, like dump_callstacks.py does
-            if not show_all_cores:
-                d = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
-                if d.go_message == "DONE":
-                    return None
+            # Filter DONE / not-enabled-by-design cores, like dump_callstacks.py does
+            if not show_all_cores and callstack_provider.dispatcher_data.is_idle_in_default_view(location, risc_name):
+                return None
 
             return callstack_provider.get_cached_callstacks(location, risc_name)
         except TimeoutDeviceRegisterError:

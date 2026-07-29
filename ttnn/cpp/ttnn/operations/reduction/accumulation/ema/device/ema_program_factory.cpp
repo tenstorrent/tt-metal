@@ -20,9 +20,9 @@ constexpr auto ema_buffer_depth = 2;
 
 tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_descriptor(
     const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& input = tensor_args.input;
-    auto& output = tensor_return_value;
-    IDevice* device = input.device();
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
+    IDevice* device = &input.mutable_device();
 
     // Grid sizing
     // -----------
@@ -52,7 +52,7 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
 
     validate_reduce_op_program_grid(
-        "EMA", all_cores, device->compute_with_storage_grid_size(), nullptr, false, {{&output, "output"}});
+        "EMA", all_cores, device->compute_with_storage_grid_size(), nullptr, false, {{&tensor_return_value, "output"}});
     log_debug(
         tt::LogOp,
         "EmaProgramFactory: grid_size=({}, {}), num_cores={}, total_batch_channel_tiles={}",
@@ -122,10 +122,10 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     // Compile time args for the kernels
     // ---------------------------------
     std::vector<uint32_t> reader_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    TensorAccessorArgs(input).append_to(reader_compile_args);
 
     std::vector<uint32_t> writer_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
+    TensorAccessorArgs(output).append_to(writer_compile_args);
 
     std::vector<uint32_t> compute_compile_args = {
         total_batch_channel_tiles_per_core,
@@ -176,15 +176,13 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
 
     // Set runtime args
     // ---------------
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
 
     uint32_t src_start_tile = 0;
     uint32_t dst_start_tile = 0;
     for (const auto& range : all_cores.ranges()) {
         for (const auto& core : range) {
-            reader_desc.emplace_runtime_args(core, {src_buffer, src_start_tile});
-            writer_desc.emplace_runtime_args(core, {dst_buffer, dst_start_tile});
+            reader_desc.emplace_runtime_args(core, {input, src_start_tile});
+            writer_desc.emplace_runtime_args(core, {output, dst_start_tile});
             src_start_tile += total_tiles_per_core;
             dst_start_tile += total_tiles_per_core;
         }

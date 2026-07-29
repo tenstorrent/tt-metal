@@ -37,6 +37,9 @@ def _make_vllm_config(layer_types, sliding_window=1024, num_kv_heads=8, head_siz
 
 
 def test_spec_emits_one_entry_per_layer():
+    """KV cache groups temporarily disabled: every layer is FullAttentionSpec
+    regardless of layer_types entry. Reverts to one uniform spec until the
+    bounded-sliding-cache decode bug is fixed."""
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
     from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
@@ -45,20 +48,15 @@ def test_spec_emits_one_entry_per_layer():
     spec = HybridAttentionForCausalLM.get_kv_cache_spec(_make_vllm_config(layers))
 
     assert len(spec) == len(layers)
-    for i, expected_type in enumerate(layers):
+    for i in range(len(layers)):
         name = f"model.layers.{i}.self_attn"
         assert name in spec
-        if expected_type == "sliding_attention":
-            assert isinstance(spec[name], SlidingWindowSpec)
-            assert spec[name].sliding_window == 1024
-        else:
-            assert isinstance(spec[name], FullAttentionSpec)
+        assert isinstance(spec[name], FullAttentionSpec)
+        assert not isinstance(spec[name], SlidingWindowSpec)
 
 
 def test_spec_gemma3_27b_pattern():
-    """Gemma3-27b: 5 sliding then 1 full, 10x → 50 sliding + 10 full + ...
-    (its actual config is 52 sliding + 10 full but the structure is the
-    same; just verify the per-layer outputs flow without errors)."""
+    """All layers are FullAttentionSpec while kv cache groups are disabled."""
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
     from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
@@ -69,8 +67,8 @@ def test_spec_gemma3_27b_pattern():
 
     full_count = sum(isinstance(v, FullAttentionSpec) for v in spec.values())
     sliding_count = sum(isinstance(v, SlidingWindowSpec) for v in spec.values())
-    assert full_count == 10
-    assert sliding_count == 50
+    assert full_count == 60
+    assert sliding_count == 0
 
 
 def test_spec_gpt_oss_alternating_pattern():
@@ -83,14 +81,12 @@ def test_spec_gpt_oss_alternating_pattern():
 
     full_count = sum(isinstance(v, FullAttentionSpec) for v in spec.values())
     sliding_count = sum(isinstance(v, SlidingWindowSpec) for v in spec.values())
-    assert full_count == 12
-    assert sliding_count == 12
+    assert full_count == 24
+    assert sliding_count == 0
 
 
 def test_spec_uniform_full_attention_still_works():
-    """All-full layer_types → single-type config; spec generation still
-    succeeds (upstream's grouping later detects uniform-spec and uses
-    the simpler single-group path)."""
+    """All-full layer_types → single-type config; spec generation still succeeds."""
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
     from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
@@ -121,15 +117,6 @@ def test_spec_missing_layer_types_raises():
     cfg.model_config.hf_config.text_config.layer_types = None
 
     with pytest.raises(ValueError, match="layer_types"):
-        HybridAttentionForCausalLM.get_kv_cache_spec(cfg)
-
-
-def test_spec_sliding_layer_without_window_raises():
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
-
-    cfg = _make_vllm_config(["sliding_attention"], sliding_window=None)
-
-    with pytest.raises(ValueError, match="sliding_window is None"):
         HybridAttentionForCausalLM.get_kv_cache_spec(cfg)
 
 

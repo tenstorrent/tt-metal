@@ -33,7 +33,7 @@ struct GridSampleNearestProgramFactory {
 struct GridSampleOperation {
     using operation_attributes_t = GridSampleParams;
     using tensor_args_t = GridSampleInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<GridSampleBilinearProgramFactory, GridSampleNearestProgramFactory>;
 
@@ -54,5 +54,6 @@ ttnn::Tensor grid_sample(
     bool align_corners = false,
     bool use_precomputed_grid = false,
     bool batch_output_channels = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim

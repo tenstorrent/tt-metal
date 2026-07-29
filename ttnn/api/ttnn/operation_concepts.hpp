@@ -14,6 +14,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <cstdint>
 
@@ -72,23 +73,65 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
-// Metal 2.0 factory concept: factories that return ProgramArtifacts (a ProgramSpec +
-// ProgramRunParams) from create_program_spec. The framework adapter stamps a Program
-// from the spec onto each mesh coordinate range on cache miss, and patches TensorArgs
-// via metal2_host_api::UpdateTensorArgs on cache hit.
+// Metal 2.0 op-porting stepping-stone factory concept: factories that return
+// ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
+// create_program_artifacts. The framework adapter stamps a Program from the spec onto
+// each mesh coordinate range on cache miss, and patches every TensorArg (io and
+// op-owned alike) via experimental::UpdateTensorArgs on cache hit.
 //
-// NOTE: Each TensorArg.tensor in ProgramRunParams MUST reference a MeshTensor reachable
-// from the factory's `tensor_args` / `tensor_return_value` parameters — the adapter
-// matches by pointer identity. Constructing or copying a MeshTensor and referencing the
-// copy will TT_FATAL at runtime.
+// NOTE: Each TensorArgument in ProgramRunArgs MUST reference a MeshTensor reachable from
+// the factory's `tensor_args` / `tensor_return_value` parameters, OR one of the
+// MeshTensors the factory places in `ProgramArtifacts::op_owned_tensors` — the adapter
+// matches by pointer identity. Referencing a copy or any other MeshTensor will TT_FATAL
+// at runtime.
 //
-// NOTE: A separate MeshWorkloadSpecFactoryConcept is planned for ops whose programs vary
-// across the mesh (CCL-style); that one will require a multi-program artifact.
-// Alternatively, we could have only a single, common MeshWorkloadSpecFactoryConcept.
-// (Should follow whatever style ProgramDescriptor port ends up using.)
+// NOTE: This is a stepping-stone concept for incremental migration of operations to
+// Metal 2.0. It is not designed for production use — the cache-hit fast path re-patches
+// op-owned tensors redundantly rather than skipping them.
+//
+namespace detail {
+template <typename F>
+struct static_fn_return {};
+template <typename R, typename... A>
+struct static_fn_return<R (*)(A...)> {
+    using type = R;
+};
+// noexcept-qualified static override: its pointer type is a distinct type, so it needs its own
+// specialization or a noexcept override would be silently misclassified (base instead of custom).
+template <typename R, typename... A>
+struct static_fn_return<R (*)(A...) noexcept> {
+    using type = R;
+};
+
+// True iff T has a single static override_runtime_arguments returning ProgramRunArgs. Keyed on the
+// return type, not presence, so the legacy void-returning override_runtime_arguments (some matmul
+// factories) doesn't match. The requires-wrap makes any ill-formed step leave it unsatisfied.
 template <typename T>
-concept ProgramSpecFactoryConcept = requires { &T::create_program_spec; } && !ProgramFactoryConcept<T> &&
-                                    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+concept HasSpecRuntimeArgsOverride = requires {
+    requires std::same_as<
+        typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
+        tt::tt_metal::experimental::ProgramRunArgs>;
+};
+}  // namespace detail
+
+// Base spec factory: cache hit refreshes only tensor bindings.
+template <typename T>
+concept ProgramSpecFactoryConcept =
+    requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
+    !ProgramDescriptorFactoryConcept<T> && !detail::HasSpecRuntimeArgsOverride<T>;
+
+// Spec factory that additionally re-applies per-dispatch runtime args on every cache hit: its
+// override_runtime_arguments returns a ProgramRunArgs applied via UpdateProgramRunArgs (the
+// spec-path analog of the ProgramDescriptor path's get_dynamic_runtime_args). Args it omits are
+// retained from the cache-miss SetProgramRunArgs, so they must be enqueue-loop invariant. Full
+// signature (only the return type is concept-enforced):
+//   static ProgramRunArgs override_runtime_arguments(
+//       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+//       const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
+template <typename T>
+concept CustomProgramSpecFactoryConcept =
+    requires { &T::create_program_artifacts; } && detail::HasSpecRuntimeArgsOverride<T> && !ProgramFactoryConcept<T> &&
+    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
@@ -127,7 +170,7 @@ concept HasSelectProgramFactory = requires(
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
 // ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
-// or ProgramSpecFactoryConcept.
+// ProgramSpecFactoryConcept, or CustomProgramSpecFactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
@@ -135,7 +178,8 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
         ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail

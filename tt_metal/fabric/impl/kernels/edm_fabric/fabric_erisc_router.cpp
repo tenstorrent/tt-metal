@@ -2196,14 +2196,17 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
     receiver_channel_pointers_ch0.reset();
 
-#if defined(FABRIC_2D_VC1_ACTIVE)
-    // VC1 receiver channel pointer for inter-mesh routing
+#if defined(FABRIC_2D_VC1_SERVICED)
+    // VC1 receiver channel pointer for inter-mesh routing. Gated on _SERVICED (not _ACTIVE) because
+    // these locals are only consumed inside the FABRIC_2D_VC1_SERVICED block further down; on routers
+    // that have VC1 channels (ACTIVE) but do not service them (e.g. inter-mesh routers without
+    // pass-through), defining them here trips -Wunused-but-set-variable in the kernel JIT compile.
     auto outbound_to_receiver_channel_pointer_ch1 =
         outbound_to_receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>();
 
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<1>();
     receiver_channel_pointers_ch1.reset();
-#endif  // FABRIC_2D_VC1_ACTIVE
+#endif  // FABRIC_2D_VC1_SERVICED
 
 #if defined(FABRIC_2D_VC2_SERVICED)
     auto outbound_to_receiver_channel_pointer_ch2 =
@@ -2683,7 +2686,7 @@ void
         std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
         volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
-        if (!sender_ch_live_check_skip[sender_channel_idx]) {
+        if (!sender_ch_wait_static_connection[sender_channel_idx]) {
             return;
         }
         uint32_t count = 0;

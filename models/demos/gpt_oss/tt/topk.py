@@ -49,8 +49,11 @@ class TopKRouter:
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
+        self.tensor_cache_path = tensor_cache_path
+        torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
+        torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
         self.weight = ttnn.as_tensor(
-            state_dict["weight"].transpose(0, 1),
+            torch_weight,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -58,7 +61,7 @@ class TopKRouter:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.bias = ttnn.as_tensor(
-            state_dict["bias"].unsqueeze(0),
+            torch_bias,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -87,7 +90,7 @@ class TopKRouter:
         # Keep the original unsharded bias for fused op initialization
         # (ttnn.as_tensor shards self.bias across the mesh, but the fused op
         # needs the full [1, num_experts] bias replicated on every device)
-        if self.use_fused_op:
+        if self.use_fused_op and state_dict:
             self._bias_torch = state_dict["bias"].unsqueeze(0).to(torch.bfloat16)
         else:
             self._bias_torch = None
@@ -97,16 +100,20 @@ class TopKRouter:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
 
         if self._fused_bias is None:
-            # Use the original unsharded bias (self._bias_torch is [1, num_experts])
-            # and broadcast to [B, num_experts] so every tile row has the bias vector.
-            bias_bcast = self._bias_torch.expand(B, -1).contiguous()
-            self._fused_bias = ttnn.from_torch(
+            if self._bias_torch is not None:
+                # Use the original unsharded bias (self._bias_torch is [1, num_experts])
+                # and broadcast to [B, num_experts] so every tile row has the bias vector.
+                bias_bcast = self._bias_torch.expand(B, -1).contiguous()
+            else:
+                bias_bcast = None
+            self._fused_bias = ttnn.as_tensor(
                 bias_bcast,
                 dtype=ttnn.bfloat16,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
+                cache_file_name=get_cache_file_name(self.tensor_cache_path, f"fused_bias_B{B}"),
             )
 
     def __call__(self, hidden_states, use_throughput_experts):

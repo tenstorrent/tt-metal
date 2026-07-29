@@ -5,6 +5,7 @@
 #pragma once
 
 #include "grid_sample_prepare_grid.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -24,7 +25,10 @@ namespace operations::grid_sample {
  *   padding_mode: How to handle out-of-bounds coordinates, currently only "zeros" is supported
  *   align_corners: Whether to align corners when mapping normalized coordinates to pixel indices
  *   use_precomputed_grid: Whether to use precomputed grid coordinates, currently only false is supported
+ *   batch_output_channels: If true, fold output channels into the batch dimension
  *   memory_config: Memory configuration for the output tensor
+ *   compute_kernel_config: Optional compute kernel configuration (math fidelity, fp32 dest
+ *     accumulation, etc.). Defaults are arch-specific.
  *
  * Returns:
  *   Output tensor of shape (N, C, H_out, W_out)
@@ -37,7 +41,8 @@ ttnn::Tensor grid_sample(
     bool align_corners = false,
     bool use_precomputed_grid = false,
     bool batch_output_channels = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 }  // namespace operations::grid_sample
 

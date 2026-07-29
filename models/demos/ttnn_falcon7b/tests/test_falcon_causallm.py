@@ -9,7 +9,11 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
+from models.demos.ttnn_falcon7b.tt.common import (
+    build_past_key_values_cache,
+    create_custom_preprocessor,
+    create_kv_cache,
+)
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -56,9 +60,13 @@ def test_falcon_causal_lm(
     torch.manual_seed(0)
     configuration = transformers.FalconConfig.from_pretrained(model_version)
     configuration.num_hidden_layers = num_layers
-    model = transformers.models.falcon.modeling_falcon.FalconForCausalLM.from_pretrained(
-        model_version, config=configuration
-    ).eval()
+    model = (
+        transformers.models.falcon.modeling_falcon.FalconForCausalLM.from_pretrained(
+            model_version, config=configuration
+        )
+        .eval()
+        .to(torch.float32)
+    )
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]
     kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
@@ -92,7 +100,7 @@ def test_falcon_causal_lm(
     pytorch_out, pytorch_layer_present = model(
         input_ids=model_input,
         attention_mask=None,  # when attention_mask is None, a causal mask is created under the hood
-        past_key_values=past_key_values,
+        past_key_values=build_past_key_values_cache(past_key_values),
         use_cache=True,
         return_dict=False,
     )

@@ -50,7 +50,7 @@ private:
         uint64_t total_skipped = 0;
         uint64_t suppressed_since_last_summary = 0;
         bool logged_first_detail = false;
-        std::unordered_map<uint64_t, uint64_t> count_by_program_id;
+        std::unordered_map<uint32_t, uint64_t> count_by_runtime_id;
         std::unordered_map<uint32_t, uint64_t> count_by_chip_id;
         std::chrono::steady_clock::time_point last_summary_time{};
         static constexpr std::chrono::seconds kSummaryInterval{30};
@@ -59,7 +59,9 @@ private:
     std::mutex mutex_;
     std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
+#if defined(TRACY_ENABLE)
     tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;
+#endif
 };
 
 }  // namespace tt::tt_metal

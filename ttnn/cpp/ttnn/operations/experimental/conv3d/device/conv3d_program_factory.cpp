@@ -8,6 +8,7 @@
 #include "kernels/conv3d_weight_share.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -28,8 +29,18 @@ static uint32_t largest_divisor_up_to(uint32_t n, uint32_t cap) {
     return 1;
 }
 
-Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
+tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args, Tensor& tensor_return_value) {
+    using tt::tt_metal::CBDescriptor;
+    using tt::tt_metal::CBFormatDescriptor;
+    using tt::tt_metal::ComputeConfigDescriptor;
+    using tt::tt_metal::DataMovementConfigDescriptor;
+    using tt::tt_metal::KernelDescriptor;
+    using tt::tt_metal::ProgramDescriptor;
+    using tt::tt_metal::ReaderConfigDescriptor;
+    using tt::tt_metal::SemaphoreDescriptor;
+    using tt::tt_metal::WriterConfigDescriptor;
+
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
@@ -38,7 +49,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // Extract config from operation_attributes
     const auto& config = operation_attributes.config;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    ProgramDescriptor desc;
 
     auto grid_size = config.compute_with_storage_grid_size;
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
@@ -162,15 +173,37 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
                                     ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
                                     : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
     uint32_t cb_vol2col_rm_id = next_cb_index++;
-    tt::tt_metal::create_cb(
-        cb_vol2col_rm_id, program, core_grid, padded_patch_size_bytes, vol2col_rm_pages, data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = vol2col_rm_pages * padded_patch_size_bytes,
+        .core_ranges = CoreRangeSet(core_grid),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_vol2col_rm_id),
+            .data_format = data_format,
+            .page_size = padded_patch_size_bytes,
+        }}},
+    });
 
     uint32_t cb_vol2col_tiled_id = next_cb_index++;
-    tt::tt_metal::create_cb(
-        cb_vol2col_tiled_id, program, core_grid, tile_size, out_subblock_h * matmul_K_t, data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_subblock_h * matmul_K_t * tile_size,
+        .core_ranges = CoreRangeSet(core_grid),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_vol2col_tiled_id),
+            .data_format = data_format,
+            .page_size = tile_size,
+        }}},
+    });
 
     uint32_t cb_weight_tiled_id = next_cb_index++;
-    tt::tt_metal::create_cb(cb_weight_tiled_id, program, core_grid, tile_size, matmul_K_t * matmul_N_t, data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = matmul_K_t * matmul_N_t * tile_size,
+        .core_ranges = CoreRangeSet(core_grid),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_weight_tiled_id),
+            .data_format = data_format,
+            .page_size = tile_size,
+        }}},
+    });
 
     // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
     // This eliminates bf16 truncation between C_in block partial sums.
@@ -179,19 +212,29 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     auto partial_tile_size = tt::tile_size(partial_data_format);
 
     uint32_t cb_matmul_interm_tiled_id = next_cb_index++;
-    tt::tt_metal::create_cb(
-        cb_matmul_interm_tiled_id, program, core_grid, partial_tile_size, matmul_M_t * matmul_N_t, partial_data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = matmul_M_t * matmul_N_t * partial_tile_size,
+        .core_ranges = CoreRangeSet(core_grid),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_matmul_interm_tiled_id),
+            .data_format = partial_data_format,
+            .page_size = partial_tile_size,
+        }}},
+    });
 
     // NOTE: Most kernels create RM CB with tile_size pages and num_tile number of pages.
     // Using stick pages led to PCC issues.
     uint32_t cb_matmul_result_rm_id = next_cb_index++;
-    tt::tt_metal::create_cb(
-        cb_matmul_result_rm_id,
-        program,
-        core_grid,
-        tile_size,
-        matmul_M_t * matmul_N_t,  // untilize will write padded rows, so this must be sized to avoid overflowing CB
-        data_format);
+    desc.cbs.push_back(CBDescriptor{
+        // untilize will write padded rows, so this must be sized to avoid overflowing CB
+        .total_size = matmul_M_t * matmul_N_t * tile_size,
+        .core_ranges = CoreRangeSet(core_grid),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_matmul_result_rm_id),
+            .data_format = data_format,
+            .page_size = tile_size,
+        }}},
+    });
 
     uint32_t cb_reduction_tiled_id =
         32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
@@ -201,18 +244,41 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         // Multi-core reduction step: each core computes a partial sum, then they reduce
         // Use same format as partials CB so reduction adds matching formats
         cb_reduction_tiled_id = next_cb_index++;
-        tt::tt_metal::create_cb(
-            cb_reduction_tiled_id, program, core_grid, partial_tile_size, matmul_M_t * matmul_N_t, partial_data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = matmul_M_t * matmul_N_t * partial_tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_reduction_tiled_id),
+                .data_format = partial_data_format,
+                .page_size = partial_tile_size,
+            }}},
+        });
 
         cb_worker_ack_back_id = next_cb_index++;
-        tt::tt_metal::create_cb(cb_worker_ack_back_id, program, core_grid, tile_size, 1, data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_worker_ack_back_id),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
     }
 
     uint32_t cb_bias_tiled_id =
         32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     if (use_bias) {
         cb_bias_tiled_id = next_cb_index++;
-        tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = matmul_N_t * tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_bias_tiled_id),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
     }
 
     log_debug(
@@ -253,8 +319,15 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t cb_dram_read_scratch_id = 32;  // Invalid; set below if DRAM read staging is needed
     if (enable_dram_read_staging) {
         cb_dram_read_scratch_id = next_cb_index++;
-        tt::tt_metal::create_cb(
-            cb_dram_read_scratch_id, program, core_grid, dram_read_scratch_page_bytes, 1, data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = dram_read_scratch_page_bytes,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_dram_read_scratch_id),
+                .data_format = data_format,
+                .page_size = dram_read_scratch_page_bytes,
+            }}},
+        });
     }
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
@@ -343,8 +416,15 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
                 shard_positions_max + coalesced_scratch_rows * coalesced_scratch_pages_per_row;
             const uint32_t shard_bytes_alloc = shard_positions_alloc * C_in_block_bytes;
             cb_input_shard_id = next_cb_index++;
-            tt::tt_metal::create_cb(
-                cb_input_shard_id, program, core_grid, C_in_block_bytes, shard_positions_alloc, data_format);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = shard_positions_alloc * C_in_block_bytes,
+                .core_ranges = CoreRangeSet(core_grid),
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(cb_input_shard_id),
+                    .data_format = data_format,
+                    .page_size = C_in_block_bytes,
+                }}},
+            });
 
             log_debug(
                 tt::LogOp,
@@ -534,12 +614,27 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // Set up semaphore for synchronization. It is dual-purpose.
     // On the reducer core, it tracks the number of workers that are done with an output block.
     // On the worker core, it is a valid bit indicating the worker can continue.
-    auto semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    uint32_t semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = semaphore_id,
+        .core_ranges = CoreRangeSet(core_grid),
+        .initial_value = 0,
+    });
 
     // Weight-mcast semaphores. Always created so writer kernel can take their ids as compile-time
     // constants. They are only used when enable_weight_mcast is true at runtime.
-    auto weights_mcast_sender_sem_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto weights_mcast_receiver_sem_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    uint32_t weights_mcast_sender_sem_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = weights_mcast_sender_sem_id,
+        .core_ranges = CoreRangeSet(core_grid),
+        .initial_value = INVALID,
+    });
+    uint32_t weights_mcast_receiver_sem_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = weights_mcast_receiver_sem_id,
+        .core_ranges = CoreRangeSet(core_grid),
+        .initial_value = INVALID,
+    });
 
     // Trid-ring depth for gather_rows_to_shard.  Per-shape autotune (see
     // conv3d_trid_pipeline_findings.md).  Cutoff constants live in
@@ -640,11 +735,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         dram_read_alignment};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = CoreRangeSet(core_grid);
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Matmul parameters (out_subblock_h, out_subblock_w, dst_size computed earlier for CB sizing)
     const uint32_t in0_block_w = matmul_K_t;
@@ -701,16 +797,17 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         // Stream final output rows only for many small output writes when there is a writer tail to overlap.
         (uint32_t)(enable_streaming_output ? 1 : 0)};
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args});
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = CoreRangeSet(core_grid);
+    compute_desc.compile_time_args = std::move(compute_compile_time_args);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb_matmul_result_rm_id,
@@ -744,16 +841,17 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = CoreRangeSet(core_grid);
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
-    uint32_t input_addr = input_tensor.buffer()->address();
-    uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t weight_addr = weight_tensor.buffer()->address();
-    uint32_t bias_addr = bias_tensor.has_value() ? bias_tensor.value().buffer()->address() : 0;
+    tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
+    tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
+    tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
+    tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
 
     // Per-core work assignment via the original core_id row-major mapping. See WeightShareRole
     // in conv3d_weight_share.hpp for the role values.
@@ -1070,76 +1168,91 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     }
 
     // Build and set runtime args.
+    reader_desc.runtime_args.reserve(num_cores);
+    compute_desc.runtime_args.reserve(num_cores);
+    writer_desc.runtime_args.reserve(num_cores);
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
         const CoreWork& cw = core_work[core_id];
         const uint32_t group_id = cw.reduction_group_id;
 
-        std::vector<uint32_t> reader_args = {
-            input_addr,
-            cw.c_in_block_start,
-            cw.c_in_block_end,
-            cw.c_out_block_start,
-            cw.c_out_block_end,
-            cw.t_out_start,
-            cw.t_out_end,
-            cw.h_out_start,
-            cw.h_out_end,
-            cw.w_out_start,
-            cw.w_out_end,
-        };
-
         const uint32_t num_workers = cw.has_work ? (uint32_t)worker_core_ids[group_id].size() : 0u;
 
-        std::vector<uint32_t> compute_args = {
-            cw.c_in_block_start,
-            cw.c_in_block_end,
-            cw.c_out_block_start,
-            cw.c_out_block_end,
-            cw.t_out_start,
-            cw.t_out_end,
-            cw.h_out_start,
-            cw.h_out_end,
-            cw.w_out_start,
-            cw.w_out_end,
-            (uint32_t)cw.is_reducer,
-            num_workers};
+        // Reader pos[0] is the input buffer address (patched on cache hit via emplace_runtime_args).
+        reader_desc.emplace_runtime_args(
+            core,
+            {input_buffer,
+             cw.c_in_block_start,
+             cw.c_in_block_end,
+             cw.c_out_block_start,
+             cw.c_out_block_end,
+             cw.t_out_start,
+             cw.t_out_end,
+             cw.h_out_start,
+             cw.h_out_end,
+             cw.w_out_start,
+             cw.w_out_end});
 
-        std::vector<uint32_t> writer_args = {
-            out_addr,
-            weight_addr,
-            bias_addr,
-            cw.c_in_block_start,
-            cw.c_in_block_end,
-            cw.c_out_block_start,
-            cw.c_out_block_end,
-            cw.t_out_start,
-            cw.t_out_end,
-            cw.h_out_start,
-            cw.h_out_end,
-            cw.w_out_start,
-            cw.w_out_end,
-            (uint32_t)cw.is_reducer,
-            static_cast<uint32_t>(cw.weight_share_role),
-            cw.weight_src_noc_x,
-            cw.weight_src_noc_y,
-            cw.chain_succ_noc_x,
-            cw.chain_succ_noc_y,
-            cw.mcast_bbox_start_x,
-            cw.mcast_bbox_start_y,
-            cw.mcast_bbox_end_x,
-            cw.mcast_bbox_end_y,
-            cw.mcast_num_dests,
-            cw.mcast_num_iters,
-            num_workers};
+        compute_desc.runtime_args.emplace_back(
+            core,
+            std::vector<uint32_t>{
+                cw.c_in_block_start,
+                cw.c_in_block_end,
+                cw.c_out_block_start,
+                cw.c_out_block_end,
+                cw.t_out_start,
+                cw.t_out_end,
+                cw.h_out_start,
+                cw.h_out_end,
+                cw.w_out_start,
+                cw.w_out_end,
+                (uint32_t)cw.is_reducer,
+                num_workers});
+
+        // Writer pos[0..2] are the output, weight, and bias buffer addresses. nullptr bias becomes
+        // an embedded 0 so the kernel-side address is still well-defined.
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.reserve(26 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
+        writer_args.push_back(out_buffer);
+        writer_args.push_back(weight_buffer);
+        if (bias_buffer != nullptr) {
+            writer_args.push_back(bias_buffer);
+        } else {
+            writer_args.push_back(uint32_t{0});
+        }
+        writer_args.push_back(cw.c_in_block_start);
+        writer_args.push_back(cw.c_in_block_end);
+        writer_args.push_back(cw.c_out_block_start);
+        writer_args.push_back(cw.c_out_block_end);
+        writer_args.push_back(cw.t_out_start);
+        writer_args.push_back(cw.t_out_end);
+        writer_args.push_back(cw.h_out_start);
+        writer_args.push_back(cw.h_out_end);
+        writer_args.push_back(cw.w_out_start);
+        writer_args.push_back(cw.w_out_end);
+        writer_args.push_back((uint32_t)cw.is_reducer);
+        writer_args.push_back(static_cast<uint32_t>(cw.weight_share_role));
+        writer_args.push_back(cw.weight_src_noc_x);
+        writer_args.push_back(cw.weight_src_noc_y);
+        writer_args.push_back(cw.chain_succ_noc_x);
+        writer_args.push_back(cw.chain_succ_noc_y);
+        writer_args.push_back(cw.mcast_bbox_start_x);
+        writer_args.push_back(cw.mcast_bbox_start_y);
+        writer_args.push_back(cw.mcast_bbox_end_x);
+        writer_args.push_back(cw.mcast_bbox_end_y);
+        writer_args.push_back(cw.mcast_num_dests);
+        writer_args.push_back(cw.mcast_num_iters);
+        writer_args.push_back(num_workers);
 
         if (num_workers > 0) {
             writer_args.push_back(reducer_core_physical_xs[group_id]);
             writer_args.push_back(reducer_core_physical_ys[group_id]);
-            writer_args.insert(
-                writer_args.end(), worker_core_physical_xs[group_id].begin(), worker_core_physical_xs[group_id].end());
-            writer_args.insert(
-                writer_args.end(), worker_core_physical_ys[group_id].begin(), worker_core_physical_ys[group_id].end());
+            for (uint32_t v : worker_core_physical_xs[group_id]) {
+                writer_args.push_back(v);
+            }
+            for (uint32_t v : worker_core_physical_ys[group_id]) {
+                writer_args.push_back(v);
+            }
         }
 
         log_debug(
@@ -1156,53 +1269,14 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
             cw.c_out_idx,
             num_workers);
 
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
-        SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+        writer_desc.emplace_runtime_args(core, writer_args);
     }
 
-    // Return cached program with shared variables
-    return cached_program_t{
-        std::move(program),
-        {/* num_cores = */ num_cores,
-         /* cores = */ cores,
-         /* grid_size = */ grid_size,
-         /* reader_kernels_id = */ reader_kernels_id,
-         /* writer_kernels_id = */ writer_kernels_id,
-         /* compute_kernels_id = */ compute_kernels_id}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void Conv3dProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const Conv3dParams& /*operation_attributes*/,
-    const Conv3dInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
-
-    auto& shared_vars = cached_program.shared_variables;
-    auto& reader_kernels_id = shared_vars.reader_kernels_id;
-    auto& writer_kernels_id = shared_vars.writer_kernels_id;
-    auto& num_cores = shared_vars.num_cores;
-    auto& cores = shared_vars.cores;
-    auto& program = cached_program.program;
-
-    auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-    auto input_addr = tensor_args.input_tensor.buffer()->address();
-    auto weight_addr = tensor_args.weight_tensor.buffer()->address();
-    auto output_addr = tensor_return_value.buffer()->address();
-    auto bias_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = cores.at(i);
-        auto& reader_args = reader_args_by_core[core.x][core.y];
-        auto& writer_args = writer_args_by_core[core.x][core.y];
-        reader_args[0] = input_addr;
-        writer_args[0] = output_addr;
-        writer_args[1] = weight_addr;
-        writer_args[2] = bias_addr;
-    }
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

@@ -158,8 +158,8 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  */
 ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -181,11 +181,9 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-    const tt::tt_metal::IDevice* device = output.device();
+    const tt::tt_metal::IDevice* device = &output.mutable_device();
 
-    auto* const src_buffer = input.buffer();
-    auto* const dst_buffer = output.buffer();
-    const auto src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const auto src_is_dram = input.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
 
     // NOC transactions need to be aligned.
     // So, for bfloat16 dtype, we need at least 16/32 units per core (depending on alignment) to avoid unaligned
@@ -372,8 +370,8 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
         start_sem_idx,
         done_sem_idx,
     };
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(reader_compile_args);
 
     KernelDescriptor reader_desc0;
     reader_desc0.kernel_source =
@@ -395,12 +393,12 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
         const CoreCoord& core = cores_coords0.at(i);
         reader_desc0.emplace_runtime_args(
             core,
-            {src_buffer,
-             dst_buffer,
+            {input,
+             output,
              i,
-             i * src_read_size0,
+             static_cast<uint32_t>(i * src_read_size0),
              i * red_dim_units0,
-             (i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0,
+             static_cast<uint32_t>((i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0),
              (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
     }
 
@@ -425,12 +423,12 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
             const CoreCoord& core = cores_coords1.at(i);
             reader_desc1.emplace_runtime_args(
                 core,
-                {src_buffer,
-                 dst_buffer,
+                {input,
+                 output,
                  static_cast<uint32_t>(num_cores0 + i),
-                 src_offset1 + (i * src_read_size1),
+                 static_cast<uint32_t>(src_offset1 + (i * src_read_size1)),
                  red_dim_offset1 + (i * red_dim_units1),
-                 (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
+                 static_cast<uint32_t>((i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1),
                  (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
         }
 

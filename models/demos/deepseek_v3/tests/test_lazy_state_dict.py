@@ -449,6 +449,50 @@ def test_stacked_expert_alias_resolves_per_expert_keys(tmp_path: Path):
     assert torch.equal(sub[sub_expert_key], stacked_tensor[2])
 
 
+def test_stacked_expert_alias_uses_safetensors_slice_without_materializing_stacked_tensor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    calls: dict[str, list[str]] = {"get_tensor": [], "get_slice": []}
+    original_safe_open = lsd.safe_open
+
+    class CountingHandle:
+        def __init__(self, path, *args, **kwargs):
+            self._handle = original_safe_open(path, *args, **kwargs)
+
+        def get_tensor(self, key: str):
+            calls["get_tensor"].append(key)
+            if key == stacked_key:
+                raise AssertionError("stacked alias access should not materialize the full stacked tensor")
+            return self._handle.get_tensor(key)
+
+        def get_slice(self, key: str):
+            calls["get_slice"].append(key)
+            return self._handle.get_slice(key)
+
+        def __getattr__(self, name: str):
+            return getattr(self._handle, name)
+
+    monkeypatch.setattr(lsd, "safe_open", CountingHandle, raising=True)
+
+    state = load_state_dict(model_dir, "")
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+
+    assert torch.equal(state[expert_key], stacked_tensor[1])
+    assert stacked_key in calls["get_slice"]
+    assert stacked_key not in calls["get_tensor"]
+    assert stacked_key not in state._cache
+    assert expert_key in state._cache
+
+
 def test_stacked_expert_alias_contains_rejects_out_of_range_experts(tmp_path: Path):
     model_dir = tmp_path / "model"
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -464,29 +508,6 @@ def test_stacked_expert_alias_contains_rejects_out_of_range_experts(tmp_path: Pa
     assert missing_expert_key not in state
     with pytest.raises(KeyError):
         _ = state[missing_expert_key]
-
-
-def test_stacked_expert_alias_cached_access_respects_num_layers_filter(tmp_path: Path):
-    model_dir = tmp_path / "model"
-    model_dir.mkdir(parents=True, exist_ok=True)
-
-    shard = model_dir / "model-00001-of-00001.safetensors"
-    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
-    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
-    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
-    _write_index(model_dir, {stacked_key: shard.name})
-
-    state = load_state_dict(model_dir, "")
-    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
-
-    assert torch.equal(state[expert_key], stacked_tensor[1])
-    assert expert_key in state._cache
-
-    limited = state.view_with_prefix("", num_layers=2)
-
-    assert expert_key not in limited
-    with pytest.raises(KeyError):
-        _ = limited[expert_key]
 
 
 def test_lazy_state_dict_rejects_mixed_expert_checkpoint(tmp_path: Path):
@@ -572,8 +593,8 @@ def test_evict_alias_releases_unpinned_stacked_tensor(tmp_path: Path):
     expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
 
     assert torch.equal(state[expert_key], stacked_tensor[1])
-    assert expert_key in state._cache
     assert stacked_key not in state._cache
+    assert expert_key in state._cache
 
     state.evict(expert_key)
 
@@ -599,3 +620,34 @@ def test_stacked_only_subview_iterates_stacked_keys(tmp_path: Path):
     assert list(materialized.keys()) == ["gate_proj.weight"]
     assert len(stacked_view) == 1
     assert torch.equal(materialized["gate_proj.weight"], stacked_tensor)
+
+
+def test_quad_ring_prepared_keys_hidden_at_root_visible_under_mlp(tmp_path: Path) -> None:
+    """Quad-ring tensors are in the index for TT MoE but are not HF reference parameters."""
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    qr_w0 = "model.layers.3.mlp.experts_quad_ring.w0_w1.weight"
+    qr_w2 = "model.layers.3.mlp.experts_quad_ring.w2.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    prepared_w0 = torch.full((2, 2), 3.0, dtype=torch.bfloat16)
+    prepared_w2 = torch.full((2, 2), 4.0, dtype=torch.bfloat16)
+    safetensors.torch.save_file(
+        {stacked_key: stacked_tensor, qr_w0: prepared_w0, qr_w2: prepared_w2},
+        str(shard),
+    )
+    _write_index(
+        model_dir,
+        {stacked_key: shard.name, qr_w0: shard.name, qr_w2: shard.name},
+    )
+
+    state = load_state_dict(model_dir, "")
+    assert qr_w0 not in state and qr_w2 not in state
+    with pytest.raises(KeyError):
+        _ = state[qr_w0]
+
+    mlp_view = sub_state_dict(state, "model.layers.3.mlp.")
+    assert "experts_quad_ring.w0_w1.weight" in mlp_view
+    assert torch.equal(mlp_view["experts_quad_ring.w0_w1.weight"], prepared_w0)

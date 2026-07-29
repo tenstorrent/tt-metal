@@ -14,11 +14,13 @@ from ttml.modules import (
     AbstractModuleBase,
     ColumnParallelLinear,
     Embedding,
+    FeatureParallelEmbedding,
     LinearLayer,
     ModuleList,
+    VocabParallelEmbedding,
 )
 
-from .. import RunnerType, WeightTyingType, memory_efficient_runner
+from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
@@ -41,9 +43,12 @@ class LlamaConfig:
     size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
     and ``intermediate_size`` — this is validated in ``__post_init__``.  The
     vocab does *not* need to be TP-divisible: the embedding and LM-head
-    weights are padded internally to ``lcm(32, tp_size)`` and the padded logit
-    columns are sliced away before returning.  The effective pre-slice width
-    is exposed as ``Llama.padded_vocab_size``.
+    weights are padded internally to ``lcm(32, tp_size)``, exposed as
+    ``Llama.padded_vocab_size``.
+
+    ``embedding_placement`` selects how the token-embedding table is placed across the
+    TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
+    sharding) and is ignored when ``use_tp=False``.
     """
 
     hidden_size: int = 384
@@ -61,6 +66,7 @@ class LlamaConfig:
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
     use_tp: bool = False
+    embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -94,11 +100,15 @@ class LlamaConfig:
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
         if self.use_tp:
-            if self.weight_tying == WeightTyingType.Enabled:
+            if (
+                self.weight_tying == WeightTyingType.Enabled
+                and self.embedding_placement != EmbeddingPlacement.VocabParallel
+            ):
                 raise ValueError(
-                    "weight_tying=Enabled is not supported with use_tp=True: "
-                    "tok_emb is replicated but fc is sharded on dim 2, so they "
-                    "cannot share a single Parameter."
+                    "weight tying ties the token embedding to the vocab-parallel LM head, so "
+                    "the embedding must share that layout: embedding_placement must be "
+                    f"VocabParallel, got {self.embedding_placement.name}. Set "
+                    "embedding_placement=VocabParallel or weight_tying=Disabled."
                 )
             tp_size = ttml.mesh().axis_size("tp")
             if self.num_attention_heads % tp_size != 0:
@@ -132,21 +142,44 @@ class Llama(AbstractModuleBase):
         if config.use_tp:
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
-            # each shard needs to be divisible by 32.  Forward slices the
-            # padded logit columns away before returning, so
-            # ``config.vocab_size`` is free to be arbitrary.
+            # each shard needs to be divisible by 32.  The trailing padded
+            # columns are kept on-device and handled by the downstream
+            # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
+            # free to be arbitrary.
             tp_size = ttml.mesh().axis_size("tp")
             align = lcm(32, tp_size)
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
-            # gather_output=True: the LM head must produce full-vocab logits
-            # on every device so the loss can be computed without further CCL.
+            # gather_output=False: keep the LM head output vocab-sharded
+            # ([B,1,S,padded_V/tp_size] per device) so callers can route through
+            # ttml.ops.distributed.vocab_parallel_cross_entropy_loss without an
+            # all-gather of the full vocab dimension.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
-                gather_output=True,
+                gather_output=False,
                 axis_name="tp",
             )
+            if config.embedding_placement == EmbeddingPlacement.VocabParallel:
+                self.tok_emb = VocabParallelEmbedding(
+                    self.padded_vocab_size,
+                    config.hidden_size,
+                    weight_init=ttml.init.normal(0.0, 0.02),
+                    axis_name="tp",
+                )
+            elif config.embedding_placement == EmbeddingPlacement.FeatureParallel:
+                self.tok_emb = FeatureParallelEmbedding(
+                    self.padded_vocab_size,
+                    config.hidden_size,
+                    weight_init=ttml.init.normal(0.0, 0.02),
+                    axis_name="tp",
+                )
+            else:
+                self.tok_emb = Embedding(
+                    self.padded_vocab_size,
+                    config.hidden_size,
+                    weight_init=ttml.init.normal(0.0, 0.02),
+                )
         else:
             self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
             self.fc = LinearLayer(
@@ -154,12 +187,11 @@ class Llama(AbstractModuleBase):
                 self.padded_vocab_size,
                 False,
             )
-
-        self.tok_emb = Embedding(
-            self.padded_vocab_size,
-            config.hidden_size,
-            weight_init=ttml.init.normal(0.0, 0.02),
-        )
+            self.tok_emb = Embedding(
+                self.padded_vocab_size,
+                config.hidden_size,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
@@ -246,7 +278,11 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
-        if self.padded_vocab_size != self.config.vocab_size:
+        # In TP mode the LM head output stays vocab-sharded; the trailing
+        # padded columns are handled by vocab_parallel_cross_entropy_loss.
+        # The non-TP path returns full-vocab logits, so we still need to drop
+        # the tile-alignment padding before handing them off to the caller.
+        if not self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 

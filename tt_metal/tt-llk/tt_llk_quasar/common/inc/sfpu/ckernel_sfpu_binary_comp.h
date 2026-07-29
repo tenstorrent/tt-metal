@@ -21,9 +21,13 @@ namespace sfpu
 // inversion:
 //   lt(A,B) = LT(A,B)           gt(A,B) = LT(B,A)
 //   ge(A,B) = NOT LT(A,B)       le(A,B) = NOT LT(B,A)
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
-inline void calculate_binary_comp_int32(
-    const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS,
+    SfpuType RELATIONAL_OP,
+    bool SIGN_MAGNITUDE_FORMAT     = false,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     static_assert(
         RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge,
@@ -37,38 +41,58 @@ inline void calculate_binary_comp_int32(
         TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
-    const std::uint32_t idx_x = swap_operands ? dst_index_in1 : dst_index_in0;
-    const std::uint32_t idx_y = swap_operands ? dst_index_in0 : dst_index_in1;
+    constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
+    const std::uint32_t idx_x           = (swap_operands ? dst_index_in1 : dst_index_in0) * tile_stride;
+    const std::uint32_t idx_y           = (swap_operands ? dst_index_in0 : dst_index_in1) * tile_stride;
+    const std::uint32_t out_offset      = dst_index_out * tile_stride;
 
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, idx_x + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, idx_y + (d << 1));
 
-        TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG2, 0);
-        TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG3, 0);
-        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
-        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-
-        TTI_SFPXOR(p_sfpu::LREG2, p_sfpu::LREG3);
-
-        // Same-sign path: subtract and extract sign bit.
-        TTI_SFPSETCC(0, p_sfpu::LREG3, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        // imod 6 = subtract (lreg_c - lreg_dest) with CC output disabled
-        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
-        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
-
-        // Different-sign path: result = sign bit of X.
-        TTI_SFPCOMPC;
-        TTI_SFPMOV(p_sfpu::LREG2, p_sfpu::LREG1, 0);
-        TTI_SFPENCC(0, 0);
-
-        if constexpr (invert_result)
+        if constexpr (SIGN_MAGNITUDE_FORMAT)
         {
-            TTI_SFPXOR(p_sfpu::LREG7, p_sfpu::LREG1);
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
+            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
+
+            // LT(X,Y): sign(X - Y); no overflow for Int8-promoted [-127,127] range.
+            TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+
+            if constexpr (invert_result)
+            {
+                TTI_SFPXOR(p_sfpu::LREG7, p_sfpu::LREG1);
+            }
+
+            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);
+        }
+        else
+        {
+            TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG2, 0);
+            TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG3, 0);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+
+            TTI_SFPXOR(p_sfpu::LREG2, p_sfpu::LREG3);
+
+            // Same-sign path: subtract and extract sign bit.
+            TTI_SFPSETCC(0, p_sfpu::LREG3, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+            TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+
+            // Different-sign path: result = sign bit of X.
+            TTI_SFPCOMPC;
+            TTI_SFPMOV(p_sfpu::LREG2, p_sfpu::LREG1, 0);
+            TTI_SFPENCC(0, 0);
+
+            if constexpr (invert_result)
+            {
+                TTI_SFPXOR(p_sfpu::LREG7, p_sfpu::LREG1);
+            }
         }
 
-        TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_out + (d << 1));
+        TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, out_offset + (d << 1));
     }
 }
 

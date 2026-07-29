@@ -35,7 +35,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 #include "fill_pad_dataflow_common.hpp"
 
 void kernel_main() {
@@ -60,26 +62,26 @@ void kernel_main() {
     }
 
     Noc noc;
-    CircularBuffer cb_right_mask(cb_right_mask_idx);
-    CircularBuffer cb_bot_mask(cb_bot_mask_idx);
-    CircularBuffer cb_data_out(cb_data_out_idx);
+    DataflowBuffer dfb_right_mask(cb_right_mask_idx);
+    DataflowBuffer dfb_bot_mask(cb_bot_mask_idx);
+    DataflowBuffer dfb_data_out(cb_data_out_idx);
 
     // ---- Phase 1: generate and push mask tile(s) ----
     using mask_t = MASK_ELEM_UINT;
     constexpr uint32_t TILE = 32;
     if constexpr (has_right_pad) {
-        push_right_mask_tile<mask_t, W_mod32, TILE>(cb_right_mask, static_cast<mask_t>(MASK_VALUE));
+        push_right_mask_tile<mask_t, W_mod32, TILE>(dfb_right_mask, static_cast<mask_t>(MASK_VALUE));
     }
     if (has_bottom_pad_core) {
-        push_bottom_mask_tile<mask_t, H_mod32, TILE>(cb_bot_mask, static_cast<mask_t>(MASK_VALUE));
+        push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));
     }
 
     // ---- Phase 2: write-back loop ----
     // Tiles arrive in the same order as the reader and compute kernels.
     //
-    // Local-L1 self-write: no address-generator trait is applicable, so fall back
-    // to raw noc_async_write(..., get_noc_addr(addr), ...). CB wait/pop and the
-    // writes-flushed barrier still go through the experimental API.
+    // Local-L1 self-write via the Noc wrapper's UnicastEndpoint form: no
+    // address-generator trait is applicable, so the endpoint carries explicit
+    // noc_x/noc_y/addr. CB wait/pop and the writes-flushed barrier use the Device 2.0 API.
 
     if (has_bottom_pad_core) {
         // ---- Mode B ----
@@ -88,10 +90,17 @@ void kernel_main() {
         if constexpr (has_right_pad) {
             for (uint32_t r = 0; r < shard_H_tiles - 1u; r++) {
                 const uint32_t dst = shard_l1_base + (r * W_tiles + local_right_col) * tile_bytes;
-                cb_data_out.wait_front(1);
-                noc_async_write(cb_data_out.get_read_ptr(), get_noc_addr(dst), tile_bytes);
+                dfb_data_out.wait_front(1);
+                noc.async_write(
+                    dfb_data_out,
+                    UnicastEndpoint{},
+                    tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = dst});
                 noc.async_writes_flushed();
-                cb_data_out.pop_front(1);
+                dfb_data_out.pop_front(1);
             }
         }
 
@@ -100,24 +109,43 @@ void kernel_main() {
             // Non-corner bottom tiles: cols 0..local_right_col-1
             for (uint32_t c = 0; c < local_right_col; c++) {
                 const uint32_t dst = shard_l1_base + ((shard_H_tiles - 1u) * W_tiles + c) * tile_bytes;
-                cb_data_out.wait_front(1);
-                noc_async_write(cb_data_out.get_read_ptr(), get_noc_addr(dst), tile_bytes);
+                dfb_data_out.wait_front(1);
+                noc.async_write(
+                    dfb_data_out,
+                    UnicastEndpoint{},
+                    tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = dst});
                 noc.async_writes_flushed();
-                cb_data_out.pop_front(1);
+                dfb_data_out.pop_front(1);
             }
             // Corner tile: col local_right_col
             const uint32_t dst = shard_l1_base + ((shard_H_tiles - 1u) * W_tiles + local_right_col) * tile_bytes;
-            cb_data_out.wait_front(1);
-            noc_async_write(cb_data_out.get_read_ptr(), get_noc_addr(dst), tile_bytes);
+            dfb_data_out.wait_front(1);
+            noc.async_write(
+                dfb_data_out,
+                UnicastEndpoint{},
+                tile_bytes,
+                {.offset_bytes = 0},
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = dst});
             noc.async_writes_flushed();
-            cb_data_out.pop_front(1);
+            dfb_data_out.pop_front(1);
         } else {
             for (uint32_t c = 0; c <= local_right_col; c++) {
                 const uint32_t dst = shard_l1_base + ((shard_H_tiles - 1u) * W_tiles + c) * tile_bytes;
-                cb_data_out.wait_front(1);
-                noc_async_write(cb_data_out.get_read_ptr(), get_noc_addr(dst), tile_bytes);
+                dfb_data_out.wait_front(1);
+                noc.async_write(
+                    dfb_data_out,
+                    UnicastEndpoint{},
+                    tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = dst});
                 noc.async_writes_flushed();
-                cb_data_out.pop_front(1);
+                dfb_data_out.pop_front(1);
             }
         }
 
@@ -127,10 +155,17 @@ void kernel_main() {
         if constexpr (has_right_pad) {
             for (uint32_t r = 0; r < shard_H_tiles; r++) {
                 const uint32_t dst = shard_l1_base + (r * W_tiles + local_right_col) * tile_bytes;
-                cb_data_out.wait_front(1);
-                noc_async_write(cb_data_out.get_read_ptr(), get_noc_addr(dst), tile_bytes);
+                dfb_data_out.wait_front(1);
+                noc.async_write(
+                    dfb_data_out,
+                    UnicastEndpoint{},
+                    tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = dst});
                 noc.async_writes_flushed();
-                cb_data_out.pop_front(1);
+                dfb_data_out.pop_front(1);
             }
         }
     }

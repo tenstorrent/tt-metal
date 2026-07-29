@@ -544,7 +544,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         static_cast<uint32_t>(sender_worker_flow_control_semaphore_id),
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -557,7 +557,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -572,7 +572,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     chan_id_t eth_channel =
         tt::tt_metal::MetalContext::instance()
             .get_cluster()
-            .get_logical_ethernet_core_from_virtual(chip_id, CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
+            .get_logical_ethernet_core_from_virtual(chip_id, tt::tt_metal::CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
             .y;
 
     // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
@@ -588,6 +588,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
+    // This non-device-init path is the local worker-style VC0 contract, so preserve
+    // the standard sender-channel-0 free-slots stream id when rewriting the entry.
+    connection_info.worker_free_slots_stream_id =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
     // NOTE: valid_connections_mask is not copied to L1 from performance reason
     //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
     //       we want to reduce the number of write_core calls
@@ -596,9 +600,9 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, read_only) +
                                (eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t));
     // Write to Tensix cores
-    std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
+    std::vector<tt::tt_metal::CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
     for (const auto& logical_core : worker_core_coords) {
-        CoreCoord tensix_core =
+        tt::tt_metal::CoreCoord tensix_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 chip_id, logical_core, CoreType::WORKER);
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -614,7 +618,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -643,7 +647,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(
 }
 
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
-    const CoreCoord& my_eth_core_logical,
+    const tt::tt_metal::CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
     size_t my_noc_y,
     const FabricNodeId& local_fabric_node_id,
@@ -1027,6 +1031,25 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
+        if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
+            return false;
+        }
+
+        if (!this->is_sender_channel_serviced_[risc_id][channel_id]) {
+            return false;
+        }
+
+        const size_t worker_channel = get_worker_connected_sender_channel();
+        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
+        const bool is_worker_channel = channel_id == worker_channel;
+        const bool is_vc2_channel = channel_id >= vc2_start && channel_id < vc2_end;
+        const bool has_static_peer = this->sender_channel_connection_liveness_check_disable_array[channel_id];
+
+        return !is_worker_channel && !is_vc2_channel && !has_static_peer;
+    };
+
     const auto& builder_context = fabric_context.get_builder_context();
     const auto& global_overrides = builder_context.get_channel_trimming_global_overrides();
     const bool router_has_real_capture_entry = has_real_channel_trimming_capture_entry(
@@ -1240,7 +1263,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Sender channel per-channel arrays (always emit MAX entries; 0 for unused) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        const bool has_static_peer =
+            (i < num_sender_channels) ? this->sender_channel_connection_liveness_check_disable_array[i] : false;
         named_args[fmt::format("SENDER_CH_{}_LIVE_CHECK_SKIP", i)] =
+            (i < num_sender_channels) ? static_cast<uint32_t>(has_static_peer || should_force_internal_sender_skip(i))
+                                      : 0;
+    }
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_WAIT_STATIC_CONNECTION", i)] =
             (i < num_sender_channels)
                 ? static_cast<uint32_t>(this->sender_channel_connection_liveness_check_disable_array[i])
                 : 0;
@@ -1359,7 +1389,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
     static_alloc_ptr->emit_channel_allocations_ct_args(
-        ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
+        ct_args,
+        actual_sender_channels_vc0,
+        actual_sender_channels_vc1,
+        actual_sender_channels_vc2,
+        num_receiver_channels);
 
     // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);
@@ -1461,7 +1495,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
-    const CoreCoord& ethernet_core,
+    const tt::tt_metal::CoreCoord& ethernet_core,
     ChipId local_physical_chip_id,
     ChipId peer_physical_chip_id,
     const FabricEriscDatamoverConfig& config,
@@ -1503,7 +1537,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& /*program*/,
-    const CoreCoord& ethernet_core,
+    const tt::tt_metal::CoreCoord& ethernet_core,
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,
     const FabricEriscDatamoverConfig& config,
@@ -1717,7 +1751,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(
-        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
@@ -1739,7 +1773,7 @@ void FabricEriscDatamoverBuilder::teardown_from_host(
     std::vector<uint32_t> val(1, termination_signal);
     tt::tt_metal::detail::WriteToDeviceL1(
         d,
-        d->logical_core_from_ethernet_core(CoreCoord(this->noc_x_, this->noc_y_)),
+        d->logical_core_from_ethernet_core(tt::tt_metal::CoreCoord(this->noc_x_, this->noc_y_)),
         config.termination_signal_address,
         val,
         CoreType::ETH);

@@ -5,10 +5,14 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #include <cstdint>
-
-using sem_ptr_t = volatile tt_l1_ptr uint32_t*;
 
 /**
  * @brief Computes the integer base-2 logarithm of a 32-bit unsigned integer.
@@ -29,6 +33,8 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  * and then receives Wt tiles from the peer, writing them into the specified peer circular buffers.
  * Synchronization is handled using NoC semaphores to ensure correct ordering of tile transfers.
  *
+ * @param noc                          Reference to the Noc object for NoC operations.
+ * @param sem_self                     This core's exchange semaphore (Device 2.0 wrapper).
  * @param value_tensor_this_cb_index   Circular buffer index for this core's value tensor tiles (read from).
  * @param index_tensor_this_cb_index   Circular buffer index for this core's index tensor tiles (read from).
  * @param cb_value_peer_index          Circular buffer index for peer's value tensor tiles (write to).
@@ -38,10 +44,11 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  * @param index_cb_tile_size           Size (in bytes) of each tile in index buffers.
  * @param other_core_x                 Physical X coordinate of the peer core.
  * @param other_core_y                 Physical Y coordinate of the peer core.
- * @param sem_self_ptr                 Pointer to this core's semaphore for synchronization.
  */
 FORCE_INLINE
 void sort_noc_exchange_Wt_tiles(
+    Noc& noc,
+    Semaphore<>& sem_self,
     uint32_t value_tensor_this_cb_index,
     uint32_t index_tensor_this_cb_index,
     uint32_t cb_value_peer_index,
@@ -50,57 +57,66 @@ void sort_noc_exchange_Wt_tiles(
     uint32_t value_cb_tile_size,
     uint32_t index_cb_tile_size,
     uint32_t other_core_x,
-    uint32_t other_core_y,
-    sem_ptr_t sem_self_ptr) {
+    uint32_t other_core_y) {
     constexpr uint32_t ONE_TILE = 1;
 
-    const uint64_t sem_noc_addr = get_noc_addr(other_core_x, other_core_y, reinterpret_cast<uint32_t>(sem_self_ptr));
+    DataflowBuffer value_tensor_this_dfb(value_tensor_this_cb_index);
+    DataflowBuffer index_tensor_this_dfb(index_tensor_this_cb_index);
+    DataflowBuffer dfb_value_peer(cb_value_peer_index);
+    DataflowBuffer dfb_index_peer(cb_index_peer_index);
 
     for (uint32_t w = 0, sem_counter = 1; w < Wt; w++, sem_counter += 2) {
         // Reserve space for new tiles
-        cb_reserve_back(cb_value_peer_index, ONE_TILE);
-        cb_reserve_back(cb_index_peer_index, ONE_TILE);
+        dfb_value_peer.reserve_back(ONE_TILE);
+        dfb_index_peer.reserve_back(ONE_TILE);
 
-        uint32_t cb_value_peer_local_write_addr = get_write_ptr(cb_value_peer_index);
-        uint32_t cb_index_peer_local_write_addr = get_write_ptr(cb_index_peer_index);
+        uint32_t cb_value_peer_local_write_addr = dfb_value_peer.get_write_ptr();
+        uint32_t cb_index_peer_local_write_addr = dfb_index_peer.get_write_ptr();
 
-        uint64_t cb_value_peer_noc_write_addr =
-            get_noc_addr(other_core_x, other_core_y, cb_value_peer_local_write_addr);
-        uint64_t cb_index_peer_noc_write_addr =
-            get_noc_addr(other_core_x, other_core_y, cb_index_peer_local_write_addr);
-
-        // Handshake for tile exchange
-        noc_semaphore_inc(sem_noc_addr, 1);
-        noc_async_atomic_barrier();
-        noc_semaphore_wait(sem_self_ptr, sem_counter);
+        // Handshake for tile exchange (signal peer that we are ready)
+        sem_self.up(noc, other_core_x, other_core_y, 1);
+        noc.async_atomic_barrier();
+        sem_self.wait(sem_counter);
 
         // Send local indices and values to peer
-        cb_wait_front(value_tensor_this_cb_index, ONE_TILE);
-        cb_wait_front(index_tensor_this_cb_index, ONE_TILE);
-        uint32_t value_cb_self_read_addr = get_read_ptr(value_tensor_this_cb_index);
-        uint32_t index_cb_self_read_addr = get_read_ptr(index_tensor_this_cb_index);
+        value_tensor_this_dfb.wait_front(ONE_TILE);
+        index_tensor_this_dfb.wait_front(ONE_TILE);
+        uint32_t value_cb_self_read_addr = value_tensor_this_dfb.get_read_ptr();
+        uint32_t index_cb_self_read_addr = index_tensor_this_dfb.get_read_ptr();
 
-        // Write tiles to peer core
-        noc_async_write(value_cb_self_read_addr, cb_value_peer_noc_write_addr, value_cb_tile_size);
-        noc_async_write(index_cb_self_read_addr, cb_index_peer_noc_write_addr, index_cb_tile_size);
+        // Write tiles to peer core (local L1 -> peer L1)
+        CoreLocalMem<uint32_t> value_src(value_cb_self_read_addr);
+        CoreLocalMem<uint32_t> index_src(index_cb_self_read_addr);
+        noc.async_write(
+            value_src,
+            UnicastEndpoint{},
+            value_cb_tile_size,
+            {.offset_bytes = 0},
+            {.noc_x = other_core_x, .noc_y = other_core_y, .addr = cb_value_peer_local_write_addr});
+        noc.async_write(
+            index_src,
+            UnicastEndpoint{},
+            index_cb_tile_size,
+            {.offset_bytes = 0},
+            {.noc_x = other_core_x, .noc_y = other_core_y, .addr = cb_index_peer_local_write_addr});
 
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
-        cb_pop_front(value_tensor_this_cb_index, ONE_TILE);
-        cb_pop_front(index_tensor_this_cb_index, ONE_TILE);
+        value_tensor_this_dfb.pop_front(ONE_TILE);
+        index_tensor_this_dfb.pop_front(ONE_TILE);
 
         // Indicate finish reading and wait for other core to finish
-        noc_semaphore_inc(sem_noc_addr, 1);
-        noc_async_atomic_barrier();
-        noc_semaphore_wait(sem_self_ptr, sem_counter + 1);
+        sem_self.up(noc, other_core_x, other_core_y, 1);
+        noc.async_atomic_barrier();
+        sem_self.wait(sem_counter + 1);
 
         // Push incoming tiles to compute buffers
-        cb_push_back(cb_value_peer_index, ONE_TILE);
-        cb_push_back(cb_index_peer_index, ONE_TILE);
+        dfb_value_peer.push_back(ONE_TILE);
+        dfb_index_peer.push_back(ONE_TILE);
     }  // Wt
 
     // Reset semaphore value
-    noc_semaphore_set(sem_self_ptr, 0);
+    sem_self.set(0);
 }
 
 /**
@@ -127,7 +143,8 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
         return {core_x, core_y};  // Invalid core ID
     }
 
-    const uint32_t l1_read_addr = get_read_ptr(lookup_table_buffer_cb_index);
+    DataflowBuffer lookup_table_buffer_dfb(lookup_table_buffer_cb_index);
+    const uint32_t l1_read_addr = lookup_table_buffer_dfb.get_read_ptr();
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr);
 
     core_x = ptr[core_id * 2];
@@ -144,20 +161,21 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
  * Once all non-leader cores have signaled their arrival, the leader broadcasts a release signal,
  * allowing all cores to proceed past the barrier.
  *
- * @param physical_core_lookup_table_cb_index Index to the lookup table for physical core coordinates.
- * @param sem_barrier_addr Address of the semaphore used for the barrier.
- * @param this_core_id ID of the current core executing the function.
- * @param leader_core_id ID of the leader core responsible for coordinating the barrier.
- * @param num_cores Total number of participating cores in the barrier.
- * @param start_core_id ID of the first core in the participating group.
+ * @param noc                                   Reference to the Noc object for NoC operations.
+ * @param sem_barrier                           The barrier semaphore (Device 2.0 wrapper).
+ * @param physical_core_lookup_table_cb_index   Index to the lookup table for physical core coordinates.
+ * @param this_core_id                          ID of the current core executing the function.
+ * @param leader_core_id                        ID of the leader core responsible for coordinating the barrier.
+ * @param num_cores                             Total number of participating cores in the barrier.
+ * @param start_core_id                         ID of the first core in the participating group.
  *
  * @note If only one core is participating, the function returns immediately.
- * @note Assumes the existence of helper functions for semaphore and NoC operations.
  */
 FORCE_INLINE
 void sort_barrier(
+    Noc& noc,
+    Semaphore<>& sem_barrier,
     uint32_t physical_core_lookup_table_cb_index,
-    uint32_t sem_barrier_addr,
     uint32_t this_core_id,
     uint32_t leader_core_id,
     uint32_t num_cores,
@@ -167,14 +185,11 @@ void sort_barrier(
         return;
     }
 
-    // Get semaphore pointer
-    sem_ptr_t sem_self_barrier_ptr = reinterpret_cast<sem_ptr_t>(sem_barrier_addr);
-
     if (this_core_id == leader_core_id) {
         // Leader core logic - control other cores
         // Wait for all other cores to reach the barrier
-        noc_semaphore_wait(sem_self_barrier_ptr, num_cores - 1);
-        noc_semaphore_set(sem_self_barrier_ptr, 0);
+        sem_barrier.wait(num_cores - 1);
+        sem_barrier.set(0);
 
         // Broadcast to all other cores
         for (uint32_t core_id = start_core_id; core_id < num_cores; core_id++) {
@@ -184,20 +199,16 @@ void sort_barrier(
 
             const std::pair<uint32_t, uint32_t> remote_core_physical =
                 get_core_physical_coordinates(core_id, physical_core_lookup_table_cb_index);
-            uint64_t sem_barrier_noc_addr =
-                get_noc_addr(remote_core_physical.first, remote_core_physical.second, sem_barrier_addr);
-            noc_semaphore_inc(sem_barrier_noc_addr, 1);
-            noc_async_atomic_barrier();
+            sem_barrier.up(noc, remote_core_physical.first, remote_core_physical.second, 1);
+            noc.async_atomic_barrier();
         }
     } else {
         // Indicate finish reading and wait for leader core to signal
         const std::pair<uint32_t, uint32_t> remote_core_physical =
             get_core_physical_coordinates(leader_core_id, physical_core_lookup_table_cb_index);
-        uint64_t sem_barrier_noc_addr =
-            get_noc_addr(remote_core_physical.first, remote_core_physical.second, sem_barrier_addr);
-        noc_semaphore_inc(sem_barrier_noc_addr, 1);
-        noc_async_atomic_barrier();
-        noc_semaphore_wait(sem_self_barrier_ptr, 1);
-        noc_semaphore_set(sem_self_barrier_ptr, 0);
+        sem_barrier.up(noc, remote_core_physical.first, remote_core_physical.second, 1);
+        noc.async_atomic_barrier();
+        sem_barrier.wait(1);
+        sem_barrier.set(0);
     }
 }

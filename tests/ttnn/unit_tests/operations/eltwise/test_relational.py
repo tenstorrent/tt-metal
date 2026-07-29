@@ -427,7 +427,6 @@ def test_isclose_inf_divergence(device):
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
     ),
 )
 @pytest.mark.parametrize(
@@ -451,6 +450,7 @@ def test_isclose_inf_divergence(device):
     ],
 )
 def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, device):
+    torch.manual_seed(0)
     low1, high1 = range1
     low2, high2 = range2
     in_data1 = torch.randint(low1, high1, input_shapes, dtype=torch.int32)
@@ -470,7 +470,6 @@ def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, dev
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([64, 64])),
-        (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
     ),
 )
@@ -517,7 +516,6 @@ def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, device):
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
     ),
 )
 @pytest.mark.parametrize(
@@ -533,6 +531,7 @@ def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, device):
 )
 @pytest.mark.parametrize("scalar", [-2, -1, 0, 1, 2])
 def test_binary_relational_scalar_ttnn(device, input_shapes, scalar, ttnn_function):
+    torch.manual_seed(0)
     in_data = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 

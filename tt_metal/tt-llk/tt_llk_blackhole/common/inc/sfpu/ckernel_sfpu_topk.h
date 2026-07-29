@@ -32,7 +32,7 @@ template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
-    constexpr std::uint8_t instr_mod_index     = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
@@ -50,7 +50,7 @@ template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
-    constexpr std::uint8_t instr_mod_index     = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
@@ -68,7 +68,7 @@ template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
-    constexpr std::uint8_t instr_mod_index     = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
 
     // Load 16 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
@@ -105,7 +105,7 @@ template <bool is_fp32_dest_acc_en, bool alt_addr_mod = false>
 inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
-    constexpr std::uint8_t instr_mod_index     = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
 
     // Load 16 consecutive numbers
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);

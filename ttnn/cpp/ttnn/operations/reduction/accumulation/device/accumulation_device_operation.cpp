@@ -89,7 +89,7 @@ AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::co
             : ((attributes.dtype == DataType::INVALID) ? tensor_args.input_tensor.dtype() : attributes.dtype);
 
     const auto output_shape{tensor_args.input_tensor.logical_shape()};
-    return TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};
+    return tt::tt_metal::TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};
 }
 
 AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::create_output_tensors(
@@ -100,22 +100,6 @@ AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::
     }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
-
-operation::Hash AccumulationDeviceOperation::compute_program_hash(
-    const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
-    return operation::hash_operation<AccumulationDeviceOperation>(
-        op_args.dim,
-        op_args.output_memory_config,
-        op_args.flip,
-        op_args.dtype,
-        op_args.op,
-        tensor_args.input_tensor.logical_shape(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.memory_config(),
-        tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().logical_shape() : Shape{},
-        tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().memory_config() : MemoryConfig{},
-        tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().dtype() : DataType{});
 }
 
 ttnn::Tensor accumulation(

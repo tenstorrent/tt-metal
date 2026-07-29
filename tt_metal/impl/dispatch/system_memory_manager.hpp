@@ -20,6 +20,10 @@ using ChipId = int;
 namespace tt::tt_metal {
 
 class Buffer;
+class MetalContext;
+
+// True when the host can't pin D2H memory (no 64-bit PCIe addressing and no IOMMU).
+bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
 
 class SystemMemoryManager {
 public:
@@ -137,6 +141,8 @@ private:
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
 
+    // Bump-allocated tail of CQ sysmem (after all per-CQ issue/completion buffers). Device and host
+    // addresses are returned together by allocate_region() for PCIe/D2H consumers.
     uint32_t free_region_start_ = 0;
     uint32_t free_region_size_ = 0;
     uint32_t free_region_bump_ = 0;

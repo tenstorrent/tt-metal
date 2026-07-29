@@ -5,12 +5,16 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt_stl/small_vector.hpp>
+
+#include <functional>
 
 // UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).
 #include <umd/device/types/core_coordinates.hpp>
@@ -18,6 +22,7 @@
 #include <bitset>
 #include <filesystem>
 #include <optional>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -33,6 +38,8 @@ namespace tt::tt_metal {
 struct Tile;
 class Buffer;
 class Program;
+class MeshTensor;
+
 namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
@@ -57,6 +64,7 @@ struct CBFormatDescriptor {
     tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
+    std::optional<FaceGeometry> face_geometry;
 };
 
 struct CBDescriptor {
@@ -69,6 +77,7 @@ struct CBDescriptor {
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
+    const MeshTensor* tensor = nullptr;
     uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
@@ -143,6 +152,8 @@ struct KernelDescriptor {
     // runtime args for that core
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
+    // EXPERIMENTAL: named kernel args
+    experimental::blaze::NamedKernelArgs blaze_named_args;
 
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 
@@ -150,7 +161,7 @@ struct KernelDescriptor {
 
     IncludePaths compiler_include_paths;
 
-    // Buffer args declared via emplace_runtime_args() / emplace_common_runtime_args().
+    // Buffer/MeshTensor args declared via emplace_runtime_args() / emplace_common_runtime_args().
     // The framework resolves these to direct pointers into the cached Program on cache miss,
     // enabling O(1) patching on cache hits without calling create_descriptor() again.
     BufferBindings buffer_bindings;
@@ -162,6 +173,7 @@ struct KernelDescriptor {
     struct RTArgList {
         void push_back(uint32_t v) { items_.emplace_back(v); }
         void push_back(Buffer* b) { items_.emplace_back(b); }
+        void push_back(const MeshTensor& t) { items_.emplace_back(t); }
         void reserve(size_t n) { items_.reserve(n); }
         // Append a plain uint32_t range (e.g. from fused-op signaler helpers).
         void append(const std::vector<uint32_t>& v) {
@@ -171,21 +183,31 @@ struct KernelDescriptor {
         }
 
     private:
-        std::vector<std::variant<uint32_t, Buffer*>> items_;
+        std::vector<std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>> items_;
         friend struct KernelDescriptor;
     };
 
     // Push a core's runtime args, automatically registering any Buffer* entries
     // as buffer bindings at their position.  Use this instead of
     // runtime_args.emplace_back() when some args are buffer base addresses.
+    void emplace_runtime_args(const CoreCoord& core, std::initializer_list<uint32_t> args);
     void emplace_runtime_args(const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args);
+    void emplace_runtime_args(
+        const CoreCoord& core,
+        std::initializer_list<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> args);
     void emplace_runtime_args(const CoreCoord& core, const RTArgList& args);
     // Vector overload for dynamically-built arg lists.
+    void emplace_runtime_args(
+        const CoreCoord& core,
+        const std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>>& args);
     void emplace_runtime_args(const CoreCoord& core, const std::vector<std::variant<uint32_t, Buffer*>>& args);
 
-    // Push common runtime args, automatically registering any Buffer* entries
+    // Push common runtime args, automatically registering any Buffer* or MeshTensor& entries
     // as common buffer bindings.  Use this instead of assigning common_runtime_args
     // directly when some args are buffer base addresses.
+    void emplace_common_runtime_args(std::initializer_list<uint32_t> args);
+    void emplace_common_runtime_args(
+        std::initializer_list<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> args);
     void emplace_common_runtime_args(std::initializer_list<std::variant<uint32_t, Buffer*>> args);
     void emplace_common_runtime_args(const RTArgList& args);
 };

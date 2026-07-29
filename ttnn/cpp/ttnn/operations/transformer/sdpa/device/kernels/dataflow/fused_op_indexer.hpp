@@ -12,7 +12,20 @@ struct RingSDPAOpIndexer {
     RingIdSequencer seq;
     bool initialized = false;
 
-    RingSDPAOpIndexer() {}
+private:
+    void initialize(
+        uint32_t ring_size, uint32_t ring_index, uint32_t forward_writes_expected, uint32_t backward_writes_expected) {
+        seq = RingIdSequencer(ring_index, ring_size, backward_writes_expected, forward_writes_expected);
+        initialized = true;
+    }
+
+public:
+    RingSDPAOpIndexer() = default;
+
+    RingSDPAOpIndexer(
+        uint32_t ring_size, uint32_t ring_index, uint32_t forward_writes_expected, uint32_t backward_writes_expected) {
+        initialize(ring_size, ring_index, forward_writes_expected, backward_writes_expected);
+    }
 
     RingSDPAOpIndexer(uint32_t& rt_args_idx) {
         uint32_t ring_size = get_arg_val<uint32_t>(rt_args_idx++);
@@ -22,8 +35,7 @@ struct RingSDPAOpIndexer {
 
         rt_args_idx += 2;  // Skip the semaphore addresses
 
-        seq = RingIdSequencer(ring_index, ring_size, backward_writes_expected, forward_writes_expected);
-        initialized = true;
+        initialize(ring_size, ring_index, forward_writes_expected, backward_writes_expected);
     }
 
     uint32_t get_next_ring_id_and_sync() {

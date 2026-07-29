@@ -6,6 +6,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import diffusers
+import torch
+
 import ttnn
 
 from ...blocks.transformer_block import TransformerBlock
@@ -13,14 +16,13 @@ from ...layers.embeddings import SD35CombinedTimestepTextProjEmbeddings
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm, RMSNorm
+from ...utils import cache
+from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
 
 if TYPE_CHECKING:
-    import torch
-
     from ...parallel.config import DiTParallelConfig
     from ...parallel.manager import CCLManager
-    from ...utils.padding import PaddingConfig
 
 
 class QwenImageTransformerBlock(TransformerBlock):
@@ -218,3 +220,80 @@ class QwenImageTransformer(Module):
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
+
+
+class QwenImageCheckpoint:
+    """A QwenImage checkpoint: fetches weights and builds loaded transformers."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(
+            name,
+            subfolder="transformer",
+            torch_dtype=torch.bfloat16,
+        )
+        torch_transformer.eval()
+        self._config = torch_transformer.config
+        self._state_dict = torch_transformer.state_dict()
+
+        # The torch pos embedding is reused on CPU at call time; keep the reference.
+        self.pos_embed = torch_transformer.pos_embed
+        self.patch_size: int = self._config.patch_size
+
+    def build(
+        self,
+        *,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+    ) -> QwenImageTransformer:
+        """Construct a ``QwenImageTransformer`` for this checkpoint (weights NOT loaded).
+
+        Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+        """
+        device = ccl_manager.mesh_device
+        c = self._config
+
+        if c.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
+            padding_config = PaddingConfig.from_tensor_parallel_factor(
+                c.num_attention_heads,
+                c.attention_head_dim,
+                parallel_config.tensor_parallel.factor,
+            )
+        else:
+            padding_config = None
+
+        return QwenImageTransformer(
+            patch_size=c.patch_size,
+            in_channels=c.in_channels,
+            num_layers=c.num_layers,
+            attention_head_dim=c.attention_head_dim,
+            num_attention_heads=c.num_attention_heads,
+            joint_attention_dim=c.joint_attention_dim,
+            out_channels=c.out_channels,
+            device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            padding_config=padding_config,
+            is_fsdp=is_fsdp,
+        )
+
+    def load(
+        self,
+        model: QwenImageTransformer,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+    ) -> None:
+        """Load (or reload) weights for a previously-built transformer."""
+        cache.load_model(
+            tt_model=model,
+            get_torch_state_dict=lambda: self._state_dict,
+            model_name=self._name,
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
+            is_fsdp=is_fsdp,
+        )

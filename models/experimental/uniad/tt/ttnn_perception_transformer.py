@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
+import torch
+from torchvision.transforms.functional import rotate
 
 import ttnn
 
 from models.experimental.uniad.tt.ttnn_encoder import TtBEVFormerEncoder
 from models.experimental.uniad.tt.ttnn_decoder import TtDetectionTransformerDecoder
-from torchvision.transforms.functional import rotate
 
 
 class TtPerceptionTransformer:
@@ -59,8 +60,13 @@ class TtPerceptionTransformer:
         self.rotate_center = rotate_center
 
     def init_layers(self):
-        self.level_embeds = self.parameters["level_embeds"]
-        self.cams_embeds = self.parameters["cams_embeds"]
+        # cams_embeds / level_embeds are model parameters (loaded once,
+        # never written). The hot path used to call ttnn.to_layout on them
+        # every encoder level inside get_bev_features, which was pure
+        # overhead since their layout never changes. Convert to TILE once
+        # here and reuse.
+        self.level_embeds = ttnn.to_layout(self.parameters["level_embeds"], layout=ttnn.TILE_LAYOUT)
+        self.cams_embeds = ttnn.to_layout(self.parameters["cams_embeds"], layout=ttnn.TILE_LAYOUT)
         self.can_bus_mlp = [
             ttnn.linear,
             ttnn.relu,
@@ -103,16 +109,27 @@ class TtPerceptionTransformer:
         shift = ttnn.permute(shift, (1, 0))  # xy, bs -> bs, xy
 
         if prev_bev is not None:
-            assert False, "In our case prev_bev is None, So ttnn for the below is not supported"
+            # Bring prev_bev into the (bev_h*bev_w, bs, C) layout if it isn't already.
             if prev_bev.shape[1] == bev_h * bev_w:
                 prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             if self.rotate_prev_bev:
+                # Rotation by can_bus angle: TTNN has no native rotation op and
+                # the tensor is small (bev_h × bev_w × C, batch-1), so we do the
+                # rotation on host with torchvision and reupload.
+                prev_bev_dtype = prev_bev.dtype
+                prev_bev_torch = ttnn.to_torch(prev_bev).to(torch.float32)
                 for i in range(bs):
                     rotation_angle = img_metas[i]["can_bus"][-1]
-                    tmp_prev_bev = prev_bev[:, i].reshape(bev_h, bev_w, -1).permute(2, 0, 1)
+                    tmp_prev_bev = prev_bev_torch[:, i].reshape(bev_h, bev_w, -1).permute(2, 0, 1)
                     tmp_prev_bev = rotate(tmp_prev_bev, rotation_angle, center=self.rotate_center)
                     tmp_prev_bev = tmp_prev_bev.permute(1, 2, 0).reshape(bev_h * bev_w, 1, -1)
-                    prev_bev[:, i] = tmp_prev_bev[:, 0]
+                    prev_bev_torch[:, i] = tmp_prev_bev[:, 0]
+                prev_bev = ttnn.from_torch(
+                    prev_bev_torch,
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=prev_bev_dtype,
+                )
 
         # add can bus signals
         can_bus = ttnn.Tensor(
@@ -141,19 +158,22 @@ class TtPerceptionTransformer:
 
         feat_flatten = []
         spatial_shapes = []
+        # cams_embeds is constant; reshape it once outside the loop instead
+        # of inside the level iteration.
+        cams_embeds_bcast = (
+            ttnn.reshape(self.cams_embeds, (self.cams_embeds.shape[0], 1, 1, self.cams_embeds.shape[1]))
+            if self.use_cams_embeds
+            else None
+        )
         for lvl, feat in enumerate(mlvl_feats):
             bs, num_cam, c, h, w = feat.shape
             spatial_shape = (h, w)
             feat = ttnn.reshape(feat, (feat.shape[0], feat.shape[1], feat.shape[2], feat.shape[3] * feat.shape[4]))
             feat = ttnn.permute(feat, (1, 0, 3, 2))
-            self.cams_embeds = ttnn.to_layout(self.cams_embeds, layout=ttnn.TILE_LAYOUT)
             if self.use_cams_embeds:
-                feat = feat + ttnn.reshape(
-                    self.cams_embeds, (self.cams_embeds.shape[0], 1, 1, self.cams_embeds.shape[1])
-                )
+                feat = feat + cams_embeds_bcast
 
-            level_embeds = ttnn.to_layout(self.level_embeds, layout=ttnn.TILE_LAYOUT)
-            level_embeds = level_embeds[lvl : lvl + 1, :]
+            level_embeds = self.level_embeds[lvl : lvl + 1, :]
             level_embeds = ttnn.reshape(level_embeds, (1, 1, level_embeds.shape[0], level_embeds.shape[-1]))
             feat = feat + level_embeds
             ttnn.deallocate(level_embeds)
@@ -166,11 +186,15 @@ class TtPerceptionTransformer:
         level_start_index = ttnn.zeros((1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device)
 
         feat_flatten = ttnn.permute(feat_flatten, (0, 2, 1, 3))  # (num_cam, H*W, bs, embed_dims)
+        # Compute the encoder's key/value ROW_MAJOR view once — the original
+        # code called ttnn.to_layout on the same feat_flatten tensor twice
+        # in adjacent kwargs.
+        feat_flatten_rm = ttnn.to_layout(feat_flatten, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         bev_embed = self.encoder(
             bev_queries,
-            ttnn.to_layout(feat_flatten, layout=ttnn.ROW_MAJOR_LAYOUT),
-            ttnn.to_layout(feat_flatten, layout=ttnn.ROW_MAJOR_LAYOUT),
+            feat_flatten_rm,
+            feat_flatten_rm,
             bev_h=bev_h,
             bev_w=bev_w,
             bev_pos=ttnn.to_layout(bev_pos, layout=ttnn.ROW_MAJOR_LAYOUT),

@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -133,11 +133,11 @@ void kernel_main() {
 #define INDEX_SIZE (4)
 
     Noc noc;
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_in1_obj(cb_in1);
-    CircularBuffer cb_in2_obj(cb_in2);
-    CircularBuffer cb_in3_obj(cb_in3);
-    CircularBuffer cb_in4_obj(cb_in4);
+    DataflowBuffer dfb_in0_obj(cb_in0);
+    DataflowBuffer dfb_in1_obj(cb_in1);
+    DataflowBuffer dfb_in2_obj(cb_in2);
+    DataflowBuffer dfb_in3_obj(cb_in3);
+    DataflowBuffer dfb_in4_obj(cb_in4);
 
     uint32_t end_id = start_id + num_sticks;
 
@@ -160,24 +160,28 @@ void kernel_main() {
 #ifdef TILIZE_INDEX
                 uint32_t index_noc_id = index_index / TILE_HEIGHT;
                 if (dim == 0) {
-                    cb_in1_obj.reserve_back(1);
-                    index_l1_addr = cb_in1_obj.get_write_ptr();
-                    noc.async_read(index0, cb_in1_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
+                    dfb_in1_obj.reserve_back(1);
+                    index_l1_addr = dfb_in1_obj.get_write_ptr();
+                    noc.async_read(
+                        index0, dfb_in1_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
                 }
                 if (dim == 1) {
-                    cb_in2_obj.reserve_back(1);
-                    index_l1_addr = cb_in2_obj.get_write_ptr();
-                    noc.async_read(index1, cb_in2_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
+                    dfb_in2_obj.reserve_back(1);
+                    index_l1_addr = dfb_in2_obj.get_write_ptr();
+                    noc.async_read(
+                        index1, dfb_in2_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
                 }
                 if (dim == 2) {
-                    cb_in3_obj.reserve_back(1);
-                    index_l1_addr = cb_in3_obj.get_write_ptr();
-                    noc.async_read(index2, cb_in3_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
+                    dfb_in3_obj.reserve_back(1);
+                    index_l1_addr = dfb_in3_obj.get_write_ptr();
+                    noc.async_read(
+                        index2, dfb_in3_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
                 }
                 if (dim == 3) {
-                    cb_in4_obj.reserve_back(1);
-                    index_l1_addr = cb_in4_obj.get_write_ptr();
-                    noc.async_read(index3, cb_in4_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
+                    dfb_in4_obj.reserve_back(1);
+                    index_l1_addr = dfb_in4_obj.get_write_ptr();
+                    noc.async_read(
+                        index3, dfb_in4_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
                 }
                 noc.async_read_barrier();
 
@@ -196,41 +200,41 @@ void kernel_main() {
                 uint32_t noc_offset =
                     ((uint32_t)((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
                 if (dim == 0) {
-                    cb_in1_obj.reserve_back(1);
-                    index_l1_addr = cb_in1_obj.get_write_ptr();
+                    dfb_in1_obj.reserve_back(1);
+                    index_l1_addr = dfb_in1_obj.get_write_ptr();
                     noc.async_read(
                         index0,
-                        cb_in1_obj,
+                        dfb_in1_obj,
                         NOC_MINIMUM_READ_SIZE,
                         {.page_id = 0, .offset_bytes = noc_offset},
                         {.offset_bytes = 0});
                 }
                 if (dim == 1) {
-                    cb_in2_obj.reserve_back(1);
-                    index_l1_addr = cb_in2_obj.get_write_ptr();
+                    dfb_in2_obj.reserve_back(1);
+                    index_l1_addr = dfb_in2_obj.get_write_ptr();
                     noc.async_read(
                         index1,
-                        cb_in2_obj,
+                        dfb_in2_obj,
                         NOC_MINIMUM_READ_SIZE,
                         {.page_id = 0, .offset_bytes = noc_offset},
                         {.offset_bytes = 0});
                 }
                 if (dim == 2) {
-                    cb_in3_obj.reserve_back(1);
-                    index_l1_addr = cb_in3_obj.get_write_ptr();
+                    dfb_in3_obj.reserve_back(1);
+                    index_l1_addr = dfb_in3_obj.get_write_ptr();
                     noc.async_read(
                         index2,
-                        cb_in3_obj,
+                        dfb_in3_obj,
                         NOC_MINIMUM_READ_SIZE,
                         {.page_id = 0, .offset_bytes = noc_offset},
                         {.offset_bytes = 0});
                 }
                 if (dim == 3) {
-                    cb_in4_obj.reserve_back(1);
-                    index_l1_addr = cb_in4_obj.get_write_ptr();
+                    dfb_in4_obj.reserve_back(1);
+                    index_l1_addr = dfb_in4_obj.get_write_ptr();
                     noc.async_read(
                         index3,
-                        cb_in4_obj,
+                        dfb_in4_obj,
                         NOC_MINIMUM_READ_SIZE,
                         {.page_id = 0, .offset_bytes = noc_offset},
                         {.offset_bytes = 0});
@@ -269,7 +273,7 @@ void kernel_main() {
             }
         }
 
-        cb_in0_obj.reserve_back(1);
+        dfb_in0_obj.reserve_back(1);
 
         Idx5d stick_index_5d = get_stick_indices(
             input_stick_idx,
@@ -286,8 +290,8 @@ void kernel_main() {
         uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
         noc.async_read(
-            s0, cb_in0_obj, stick_size, {.page_id = noc_id, .offset_bytes = noc_offset}, {.offset_bytes = 0});
+            s0, dfb_in0_obj, stick_size, {.page_id = noc_id, .offset_bytes = noc_offset}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0_obj.push_back(1);
+        dfb_in0_obj.push_back(1);
     }
 }

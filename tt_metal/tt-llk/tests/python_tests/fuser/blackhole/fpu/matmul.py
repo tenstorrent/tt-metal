@@ -6,9 +6,9 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_fpu import Fpu
 from fuser.fused_loop import FusedLoop, LoopBlock
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -16,6 +16,7 @@ from helpers.golden_generators import MatmulGolden, get_golden_generator
 
 class MatmulFpu(Fpu):
     loop: FusedLoop = LoopBlock()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
@@ -30,9 +31,9 @@ class MatmulFpu(Fpu):
         tensor_dst: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = operation.output.data_format
+        output_format = config.sentinel.golden_math_format
         math_fidelity = compute_unit.math_fidelity
 
         generate_golden = get_golden_generator(MatmulGolden)
@@ -54,12 +55,12 @@ class MatmulFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        transpose = "true" if compute_unit.unpack_transpose_faces.value else "false"
+        transpose = compute_unit.unpack_transpose_faces.cpp_enum_value
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
 
@@ -80,7 +81,7 @@ class MatmulFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         rt_dim = block.block_tiles_y
@@ -100,7 +101,7 @@ class MatmulFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         return "_llk_math_matmul_uninit_();\n"

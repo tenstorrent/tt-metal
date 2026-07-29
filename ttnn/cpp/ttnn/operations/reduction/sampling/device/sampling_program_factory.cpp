@@ -21,22 +21,35 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor) {
     using namespace tt::tt_metal;
 
-    const auto& input_values_tensor = tensor_args.input_values;
-    const auto& input_indices_tensor = tensor_args.input_indices;
-    const auto& k = tensor_args.k;
-    const auto& p = tensor_args.p;
-    const auto& temp = tensor_args.temp;
+    const auto& input_values_tensor = tensor_args.input_values.mesh_tensor();
+    const auto& input_indices_tensor = tensor_args.input_indices.mesh_tensor();
+    const auto& k = tensor_args.k.mesh_tensor();
+    const auto& p = tensor_args.p.mesh_tensor();
+    const auto& temp = tensor_args.temp.mesh_tensor();
 
     const auto& seed = operation_attributes.seed;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     uint32_t random_seed = 0;
 
+    auto* device = &input_values_tensor.mutable_device();
+
+    // The bitonic top-k LLK carries sort indices through the dest register, and the index
+    // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). WH/BH
+    // support the cheaper 16-bit (UInt16) path with fp32 dest accumulation disabled (unchanged
+    // behaviour) so that WH/BH does not suffer any restrictions on the dest register. Every other
+    // architecture (e.g. Quasar, which additionally lacks UInt16/UInt32 tile (DFB) metadata
+    // support) uses 32-bit (Int32) index intermediates with fp32 dest accumulation enabled. This
+    // is gated on !(WH || BH) so new architectures default to the safe 32-bit path.
+    const bool use_32bit_index = !(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
+
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
     tt::DataFormat input_indices_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
-    tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
+    tt::DataFormat index_cb_data_format = use_32bit_index ? tt::DataFormat::Int32 : tt::DataFormat::UInt16;
+    // On the 32-bit path (e.g. Quasar), validation already requires k to be INT32 (UInt32 DFB
+    // metadata is unsupported there), so the dtype-derived format is correct as-is.
     tt::DataFormat k_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
     tt::DataFormat p_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(p.dtype());
     tt::DataFormat temp_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(temp.dtype());
@@ -44,21 +57,20 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
-    auto* input_values_buffer = input_values_tensor.buffer();
-    auto* input_indices_buffer = input_indices_tensor.buffer();
-    auto* k_buffer = k.buffer();
-    auto* p_buffer = p.buffer();
-    auto* temp_buffer = temp.buffer();
-    auto* output_buffer = output_tensor.buffer();
-
-    auto* device = input_values_tensor.device();
+    const auto& output_mesh = output_tensor.mesh_tensor();
 
     auto input_shape = input_values_tensor.logical_shape();
     const uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_width = input_values_tensor.tensor_spec().tile().get_width();
-    uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
+    // `num_users` is the logical user count (rows in dim 2) in the range [1, 32]; validation
+    // guarantees N == C == 1, so it is just input_shape[2]. The data still occupies a single padded
+    // row-tile (Ht == 1) and only `num_users` cores run. Decoupling num_cores from Ht*tile_height is
+    // what lets <32 users work: the old `(.../tile_height)` would integer-divide to Ht == 0 (and
+    // num_cores == 0) for fewer than tile_height users.
+    const uint32_t num_users = input_shape[2];
+    uint32_t Ht = (num_users + tile_height - 1) / tile_height;  // == 1 for 1..32 users
     uint32_t Wt = input_shape[3] / tile_width;
-    auto num_cores = Ht * tile_height;
+    auto num_cores = num_users;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     CoreRangeSet core_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
@@ -67,6 +79,18 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         core_grid = sub_core_grids.value();
     }
     auto cores = corerange_to_cores(core_grid, num_cores, true);
+
+    // `sub_core_grids` may be over-provisioned (more cores than users); only the first `num_cores`
+    // cores actually run. Confine CB allocation and the reader kernel to exactly those cores so we
+    // don't place a reader (with unset runtime args) on the unused cores.
+    if (core_grid.num_cores() != num_cores) {
+        std::vector<CoreRange> active_core_ranges;
+        active_core_ranges.reserve(cores.size());
+        for (const auto& core : cores) {
+            active_core_ranges.emplace_back(core);
+        }
+        core_grid = CoreRangeSet(std::move(active_core_ranges));
+    }
 
     validate_reduce_op_program_grid(
         "Sampling",
@@ -262,7 +286,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     });
 
     // Output sampling indices
-    uint32_t output_unit_size = output_tensor.element_size();
+    uint32_t output_unit_size = output_mesh.element_size();
     uint32_t aligned_out0_unit_size = Ht * tile_height * output_unit_size;
     uint32_t output_cb_index = tt::CBIndex::c_13;
     desc.cbs.push_back(CBDescriptor{
@@ -325,9 +349,11 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         Ht,
         Wt,
         aligned_final_indices_rm_unit_size,
-        tile_height};
-    tt::tt_metal::TensorAccessorArgs(input_values_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_compile_time_args);
+        tile_height,
+        static_cast<uint32_t>(use_32bit_index),
+        num_users};
+    tt::tt_metal::TensorAccessorArgs(input_values_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_indices_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -341,8 +367,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         reader_desc.emplace_runtime_args(
             core,
             {
-                input_values_buffer,
-                input_indices_buffer,
+                input_values_tensor,
+                input_indices_tensor,
             });
     }
     desc.kernels.push_back(std::move(reader_desc));
@@ -352,10 +378,10 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         CoreRangeSet single_core{CoreRange(core, core)};
 
         std::vector<uint32_t> writer_compile_time_args;
-        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(temp_buffer).append_to(writer_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(p_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_mesh).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(temp).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(k).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(p).append_to(writer_compile_time_args);
         writer_compile_time_args.insert(
             writer_compile_time_args.end(),
             {
@@ -375,6 +401,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
                 i,
                 tile_width,
                 num_cores,
+                static_cast<uint32_t>(use_32bit_index),
+                num_users,
             });
 
         KernelDescriptor writer_desc;
@@ -384,7 +412,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         writer_desc.core_ranges = single_core;
         writer_desc.compile_time_args = writer_compile_time_args;
         writer_desc.config = WriterConfigDescriptor{};
-        writer_desc.emplace_runtime_args(core, {output_buffer, temp_buffer, k_buffer, p_buffer});
+        writer_desc.emplace_runtime_args(core, {output_mesh, temp, k, p});
         desc.kernels.push_back(std::move(writer_desc));
 
         std::vector<uint32_t> compute_args = {
@@ -413,7 +441,11 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = single_core;
         compute_desc.compile_time_args = compute_args;
-        compute_desc.config = ComputeConfigDescriptor{};
+        // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores
+        // indices in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off.
+        compute_desc.config = ComputeConfigDescriptor{
+            .fp32_dest_acc_en = use_32bit_index,
+        };
         desc.kernels.push_back(std::move(compute_desc));
     }
 

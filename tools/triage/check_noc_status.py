@@ -15,9 +15,9 @@ Owner:
     jbaumanTT
 """
 
-from ttexalens.context import Context
+from ttexalens.context import Context, NocId, to_noc_id
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.memory_access import MemoryAccess
+from ttexalens.memory_access import create_memory_access
 from ttexalens.tt_exalens_lib import read_register
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -37,7 +37,7 @@ def check_noc_status(
     dispatcher_data: DispatcherData,
     var_to_reg_map: dict[str, str],
     elfs_cache: ElfsCache,
-    noc_id: int = 0,
+    noc_id: NocId = NocId.NOC0,
 ):
     """
     Checks for mismatches between variables and registers that store number of NOC transactions
@@ -52,10 +52,10 @@ def check_noc_status(
     if dispatcher_core_data.kernel_path is not None:
         kernel_elf = elfs_cache[dispatcher_core_data.kernel_path]
 
-    message = f"{risc_name} NOC{noc_id}: "
+    message = f"{risc_name} {noc_id.name}: "
     passed = True
 
-    loc_mem_access = MemoryAccess.create(location.noc_block.get_risc_debug(risc_name))
+    loc_mem_access = create_memory_access(location.noc_block.get_risc_debug(risc_name))
 
     # Skip check when operating in dynamic NOC mode.
     # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).
@@ -68,7 +68,7 @@ def check_noc_status(
             return
 
         # Also validate that BRISC's runtime-selected NOC matches the NOC being checked.
-        active_noc_index = fw_elf.get_global("noc_index", loc_mem_access).read_value()
+        active_noc_index = to_noc_id(int(fw_elf.get_global("noc_index", loc_mem_access).read_value()))
         if active_noc_index != noc_id:
             return
     elif kernel_elf is not None:
@@ -78,7 +78,7 @@ def check_noc_status(
             message += "    Skipping NOC status check: noc_mode != DM_DEDICATED_NOC\n"
             log_check_location(location, True, message)
             return
-        noc_index = kernel_elf.get_global("noc_index", loc_mem_access).read_value()
+        noc_index = to_noc_id(int(kernel_elf.get_global("noc_index", loc_mem_access).read_value()))
         if noc_index != noc_id:
             return
 
@@ -88,7 +88,7 @@ def check_noc_status(
         # If reading fails, write error message and skip to next core
         try:
             reg_val = read_register(location=location, register=reg, noc_id=noc_id)
-            var_val = fw_elf.get_global(var, loc_mem_access)[noc_id]
+            var_val = fw_elf.get_global(var, loc_mem_access)[noc_id.value]
         except TimeoutDeviceRegisterError:
             raise
         except Exception as e:
@@ -113,7 +113,6 @@ def check_noc_status(
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
-    NOC_IDS = [0, 1]
     # Dictionary of corresponding variables and registers to check
     VAR_TO_REG_MAP = {
         "noc_reads_num_issued": "NIU_MST_RD_RESP_RECEIVED",
@@ -126,7 +125,7 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
-    for noc_id in NOC_IDS:
+    for noc_id in (NocId.NOC0, NocId.NOC1):
         run_checks.run_per_core_check(
             lambda location, risc_name, _noc_id=noc_id: check_noc_status(
                 location, risc_name, dispatcher_data, VAR_TO_REG_MAP, elfs_cache, _noc_id

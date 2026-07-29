@@ -38,6 +38,12 @@ public:
     const TensorSpec& spec() const { return spec_; }
     const TensorTopology& topology() const { return topology_; }
     void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
+    void update_spec(TensorSpec spec) {
+        TT_FATAL(
+            mesh_buffer_->size() >= spec.compute_packed_buffer_size_bytes(),
+            "MeshBuffer must be large enough to hold the tensor.");
+        spec_ = std::move(spec);
+    }
 
 private:
     // Invariant:

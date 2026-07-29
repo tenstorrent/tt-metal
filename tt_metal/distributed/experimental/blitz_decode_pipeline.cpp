@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
+#include "tt-metalium/experimental/internal/blitz_decode_pipeline.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <unordered_set>
 #include <vector>
 
@@ -22,12 +24,14 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::experimental::blitz {
+namespace tt::tt_metal::internal::blitz {
 
 using ::tt::tt_fabric::FabricNodeId;
+using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
 using ::tt::tt_metal::distributed::MeshCoordinate;
 
@@ -44,7 +48,192 @@ const char* eth_chan_dir_cstr(tt::tt_fabric::eth_chan_directions d) {
     }
 }
 
-std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initialize_loopback) {
+// Convert one mesh-local host-rank partition into the public stage/host binding record.
+BlitzDecodeStageHostBinding make_host_binding(
+    const tt::tt_fabric::TopologyMapper& topology_mapper, MeshId mesh_id, MeshHostRankId mesh_host_rank) {
+    return BlitzDecodeStageHostBinding{
+        .rank = topology_mapper.get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank),
+        .mesh_host_rank = static_cast<std::size_t>(*mesh_host_rank)};
+}
+
+// Resolve ownership for a selected endpoint inside a stage mesh.
+BlitzDecodeEndpointPlacement make_endpoint_placement(
+    const tt::tt_fabric::TopologyMapper& topology_mapper, MeshId mesh_id, const MeshCoordinate& mesh_coord) {
+    auto mesh_host_rank = topology_mapper.get_host_rank_for_coord(mesh_id, mesh_coord);
+    TT_FATAL(
+        mesh_host_rank.has_value(),
+        "Could not determine mesh host rank for mesh {} endpoint at coord {}",
+        *mesh_id,
+        mesh_coord);
+
+    return BlitzDecodeEndpointPlacement{
+        .host_binding = make_host_binding(topology_mapper, mesh_id, *mesh_host_rank), .mesh_coord = mesh_coord};
+}
+
+// Enumerate every host contribution that participates in the resolved logical stage.
+std::vector<BlitzDecodeStageHostBinding> collect_stage_host_bindings(
+    const tt::tt_fabric::MeshGraph& mesh_graph, const tt::tt_fabric::TopologyMapper& topology_mapper, MeshId mesh_id) {
+    const auto& host_ranks = mesh_graph.get_host_ranks(mesh_id);
+    std::vector<BlitzDecodeStageHostBinding> host_bindings;
+    host_bindings.reserve(host_ranks.size());
+    for (const auto& [_, mesh_host_rank] : host_ranks) {
+        host_bindings.push_back(make_host_binding(topology_mapper, mesh_id, mesh_host_rank));
+    }
+    std::sort(
+        host_bindings.begin(),
+        host_bindings.end(),
+        [](const BlitzDecodeStageHostBinding& lhs, const BlitzDecodeStageHostBinding& rhs) {
+            return lhs.mesh_host_rank < rhs.mesh_host_rank;
+        });
+    return host_bindings;
+}
+
+// Compare two public host-binding records without depending on container ordering.
+bool same_host_binding(const BlitzDecodeStageHostBinding& lhs, const BlitzDecodeStageHostBinding& rhs) {
+    return lhs.rank == rhs.rank && lhs.mesh_host_rank == rhs.mesh_host_rank;
+}
+
+// Check whether an endpoint owner is one of the host contributions declared for the stage.
+bool contains_host_binding(
+    const std::vector<BlitzDecodeStageHostBinding>& host_bindings, const BlitzDecodeStageHostBinding& host_binding) {
+    return std::any_of(host_bindings.begin(), host_bindings.end(), [&](const BlitzDecodeStageHostBinding& candidate) {
+        return same_host_binding(candidate, host_binding);
+    });
+}
+
+// Validate that one endpoint placement is internally consistent with the stage allocation it belongs to.
+void validate_endpoint_placement(
+    const tt::tt_fabric::TopologyMapper& topology_mapper,
+    const ResolvedBlitzDecodeStageAllocation& stage,
+    const BlitzDecodeEndpointPlacement& endpoint,
+    const char* endpoint_name) {
+    TT_FATAL(
+        contains_host_binding(stage.host_bindings, endpoint.host_binding),
+        "Stage [{}] {} endpoint host binding (rank={}, mesh_host_rank={}) is not part of the stage host bindings",
+        stage.logical_stage_index,
+        endpoint_name,
+        endpoint.host_binding.rank,
+        endpoint.host_binding.mesh_host_rank);
+
+    auto mesh_id = MeshId{static_cast<uint32_t>(stage.mesh_id)};
+    auto mesh_host_rank = MeshHostRankId{static_cast<uint32_t>(endpoint.host_binding.mesh_host_rank)};
+    TT_FATAL(
+        topology_mapper.get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank) == endpoint.host_binding.rank,
+        "Stage [{}] {} endpoint binding mismatch for mesh {} host rank {}",
+        stage.logical_stage_index,
+        endpoint_name,
+        stage.mesh_id,
+        endpoint.host_binding.mesh_host_rank);
+
+    auto coord_range = topology_mapper.get_coord_range(mesh_id, mesh_host_rank);
+    TT_FATAL(
+        coord_range.contains(endpoint.mesh_coord),
+        "Stage [{}] {} endpoint mesh coord {} is not owned by mesh host rank {}",
+        stage.logical_stage_index,
+        endpoint_name,
+        endpoint.mesh_coord,
+        endpoint.host_binding.mesh_host_rank);
+}
+
+// Sanity-check the richer resolved allocation before projecting it back to the legacy API.
+void validate_pipeline_allocation(const ResolvedBlitzDecodePipelineAllocation& allocation) {
+    TT_FATAL(!allocation.stages.empty(), "Resolved Blitz decode pipeline allocation is empty");
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+
+    for (std::size_t i = 0; i < allocation.stages.size(); i++) {
+        const auto& stage = allocation.stages[i];
+        TT_FATAL(
+            stage.logical_stage_index == i,
+            "Resolved Blitz decode stage ordering mismatch: stages[{}] reports logical_stage_index={}",
+            i,
+            stage.logical_stage_index);
+        TT_FATAL(
+            !stage.host_bindings.empty(),
+            "Resolved Blitz decode stage [{}] (mesh_id={}) has no host bindings",
+            stage.logical_stage_index,
+            stage.mesh_id);
+
+        validate_endpoint_placement(topology_mapper, stage, stage.entry_endpoint, "entry");
+        if (stage.exit_endpoint.has_value()) {
+            validate_endpoint_placement(topology_mapper, stage, *stage.exit_endpoint, "exit");
+        }
+    }
+
+    if (allocation.initialize_loopback) {
+        TT_FATAL(
+            allocation.loopback_entry_stage_index.has_value() && allocation.loopback_entry_endpoint.has_value(),
+            "Resolved Blitz decode pipeline allocation is missing loopback entry metadata");
+        TT_FATAL(
+            *allocation.loopback_entry_stage_index < allocation.stages.size(),
+            "Resolved Blitz decode pipeline loopback stage index {} is out of range",
+            *allocation.loopback_entry_stage_index);
+        const auto& loopback_stage = allocation.stages[*allocation.loopback_entry_stage_index];
+        validate_endpoint_placement(topology_mapper, loopback_stage, *allocation.loopback_entry_endpoint, "loopback");
+        TT_FATAL(
+            allocation.host_egress_stage_index == 0,
+            "Resolved Blitz decode pipeline host egress stage index must be 0 when loopback is enabled");
+    } else {
+        TT_FATAL(
+            !allocation.loopback_entry_stage_index.has_value() && !allocation.loopback_entry_endpoint.has_value(),
+            "Resolved Blitz decode pipeline allocation should not expose loopback metadata when loopback is disabled");
+        TT_FATAL(
+            allocation.host_egress_stage_index == allocation.stages.size() - 1,
+            "Resolved Blitz decode pipeline host egress stage index must reference the last stage when loopback is "
+            "disabled");
+    }
+
+    TT_FATAL(
+        allocation.host_egress_stage_index < allocation.stages.size(),
+        "Resolved Blitz decode pipeline host egress stage index {} is out of range",
+        allocation.host_egress_stage_index);
+    const auto& host_egress_stage = allocation.stages[allocation.host_egress_stage_index];
+    validate_endpoint_placement(topology_mapper, host_egress_stage, allocation.host_egress_endpoint, "host egress");
+}
+
+// Reconstruct the historical stage vector so existing callers see the same API shape as before.
+std::vector<BlitzDecodePipelineStage> project_legacy_pipeline_stages(
+    const ResolvedBlitzDecodePipelineAllocation& allocation) {
+    std::vector<BlitzDecodePipelineStage> stages;
+    stages.reserve(allocation.initialize_loopback ? allocation.stages.size() + 1 : allocation.stages.size());
+
+    for (const auto& stage : allocation.stages) {
+        stages.push_back(BlitzDecodePipelineStage{
+            .stage_index = stage.mesh_id,
+            .entry_node_coord = stage.entry_endpoint.mesh_coord,
+            .exit_node_coord =
+                stage.exit_endpoint.has_value() ? stage.exit_endpoint->mesh_coord : stage.entry_endpoint.mesh_coord});
+    }
+
+    if (allocation.initialize_loopback) {
+        TT_FATAL(
+            allocation.loopback_entry_stage_index.has_value() && allocation.loopback_entry_endpoint.has_value(),
+            "Resolved Blitz decode pipeline allocation is missing loopback entry metadata");
+        const auto& loopback_stage = allocation.stages[*allocation.loopback_entry_stage_index];
+        stages.push_back(BlitzDecodePipelineStage{
+            .stage_index = loopback_stage.mesh_id,
+            .entry_node_coord = allocation.loopback_entry_endpoint->mesh_coord,
+            .exit_node_coord = allocation.host_egress_endpoint.mesh_coord});
+    }
+
+    return stages;
+}
+
+// Keep the post-generation barrier in one place so both the legacy and resolved APIs synchronize identically.
+void synchronize_pipeline_generation() {
+    // Synchronize all ranks before returning so that downstream socket creation
+    // (which cascades sequentially through stages) starts from a common point.
+    // The old implementation had implicit synchronization via MPI broadcasts in
+    // get_asic_id_to_mesh_coord_map / create_physical_system_descriptor; without
+    // this barrier the initialization-time variance across ranks can push the
+    // sequential handshake cascade past the 10-second MeshSocket timeout.
+    const auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    ctx->barrier();
+}
+
+// Choose inter-stage hops and mesh-0 ingress/egress nodes, then package the result as a resolved allocation object.
+ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bool initialize_loopback) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
     auto mesh_ids = mesh_graph.get_mesh_ids();
@@ -60,36 +249,39 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
     // When selecting a pair for each hop, skip any pair that would reuse an already-claimed node.
     std::set<tt::tt_fabric::FabricNodeId> used_nodes;
 
-    // Select one inter-mesh pair per hop, avoiding collisions.
+    // Select one inter-mesh pair per hop such that NO FabricNodeId is reused across hops.
     // With loopback:    N hops: mesh_0→mesh_1→...→mesh_{N-1}→mesh_0
     // Without loopback: N-1 hops: mesh_0→mesh_1→...→mesh_{N-1} (no return)
+    //
+    // Greedy first-fit can strand a mid-chain hop on rings with few cable pairs per boundary, so
+    // tt_fabric::assign_non_colliding_hops() (topology_mapper_utils) does a backtracking global
+    // assignment (distinct representatives, most-constrained-hop-first) that succeeds whenever a valid
+    // layout exists.
     const std::size_t num_hops = initialize_loopback ? num_meshes : num_meshes - 1;
-    std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops;
-    hops.reserve(num_hops);
+    using HopPair = std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>;
+
+    // Gather candidate exit/peer pairs for every hop, indexed by ring position.
+    std::vector<std::vector<HopPair>> candidates(num_hops);
     for (std::size_t i = 0; i < num_hops; i++) {
         const auto next = initialize_loopback ? (i + 1) % num_meshes : i + 1;
-        auto pairs =
+        candidates[i] =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(mesh_ids[i], mesh_ids[next]);
-        TT_FATAL(!pairs.empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
-
-        bool found = false;
-        for (const auto& pair : pairs) {
-            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
-                continue;
-            }
-            hops.push_back(pair);
-            used_nodes.insert(pair.first);
-            used_nodes.insert(pair.second);
-            found = true;
-            break;
-        }
         TT_FATAL(
-            found,
-            "No non-colliding inter-mesh pair from mesh {} to mesh {} "
-            "(all {} candidate pairs overlap with already-claimed nodes)",
-            *mesh_ids[i],
-            *mesh_ids[next],
-            pairs.size());
+            !candidates[i].empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
+    }
+
+    auto assignment = ::tt::tt_metal::experimental::tt_fabric::assign_non_colliding_hops(candidates);
+    TT_FATAL(
+        assignment.has_value(),
+        "Could not assign non-colliding inter-mesh pairs for all {} hops of the blitz decode pipeline ring "
+        "(each hop needs a distinct exit/peer chip pair; the inter-mesh cabling is overconstrained for this MGD).",
+        num_hops);
+    std::vector<HopPair>& hops = *assignment;
+
+    // Mark all chosen nodes used; the downstream mesh_0 entry/loopback search relies on `used_nodes`.
+    for (const auto& [exit_node, peer_node] : hops) {
+        used_nodes.insert(exit_node);
+        used_nodes.insert(peer_node);
     }
 
     // Pipeline data flow (with loopback):
@@ -157,35 +349,46 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
         "Could not find a directly-connected unclaimed pair on mesh {} for loopback exit -> stage 0 entry",
         *mesh_ids[0]);
 
-    std::vector<BlitzDecodePipelineStage> stages;
-    stages.reserve(initialize_loopback ? num_meshes + 1 : num_meshes);
+    std::vector<ResolvedBlitzDecodeStageAllocation> stage_allocations;
+    stage_allocations.reserve(num_meshes);
 
-    // Stage 0: entry is intra-mesh, exit goes to mesh_1 via hop[0]
-    stages.emplace_back(BlitzDecodePipelineStage{
-        .stage_index = static_cast<std::size_t>(*mesh_ids[0]),
-        .entry_node_coord = fn_to_coord(*stage_0_entry_fn),
-        .exit_node_coord = fn_to_coord(hops[0].first)});
-
-    // Stages 1..N-1: entry from previous hop's peer, exit from current hop.
-    // For the last stage without loopback there is no downstream exit; use entry as a placeholder
-    // (exit_node_coord is not used by the no-loopback last-stage path in PipelineBlock).
-    for (std::size_t i = 1; i < num_meshes; i++) {
-        const auto entry = fn_to_coord(hops[i - 1].second);
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        const auto mesh_id = mesh_ids[i];
+        const auto entry_coord = (i == 0) ? fn_to_coord(*stage_0_entry_fn) : fn_to_coord(hops[i - 1].second);
         const bool is_last_no_loopback = !initialize_loopback && (i == num_meshes - 1);
-        stages.emplace_back(BlitzDecodePipelineStage{
-            .stage_index = static_cast<std::size_t>(*mesh_ids[i]),
-            .entry_node_coord = entry,
-            .exit_node_coord = is_last_no_loopback ? entry : fn_to_coord(hops[i].first)});
+        std::optional<MeshCoordinate> exit_coord =
+            is_last_no_loopback ? std::nullopt : std::make_optional(fn_to_coord(hops[i].first));
+
+        stage_allocations.push_back(ResolvedBlitzDecodeStageAllocation{
+            .logical_stage_index = i,
+            .mesh_id = static_cast<std::size_t>(*mesh_id),
+            .host_bindings = collect_stage_host_bindings(mesh_graph, control_plane.get_topology_mapper(), mesh_id),
+            .entry_endpoint = make_endpoint_placement(control_plane.get_topology_mapper(), mesh_id, entry_coord),
+            .exit_endpoint = exit_coord.has_value() ? std::make_optional(make_endpoint_placement(
+                                                          control_plane.get_topology_mapper(), mesh_id, *exit_coord))
+                                                    : std::nullopt});
     }
 
     if (initialize_loopback) {
-        stages.emplace_back(BlitzDecodePipelineStage{
-            .stage_index = static_cast<std::size_t>(*mesh_ids[0]),
-            .entry_node_coord = fn_to_coord(hops[num_meshes - 1].second),
-            .exit_node_coord = fn_to_coord(*loopback_exit_fn)});
+        return ResolvedBlitzDecodePipelineAllocation{
+            .initialize_loopback = initialize_loopback,
+            .stages = std::move(stage_allocations),
+            .loopback_entry_stage_index = 0,
+            .loopback_entry_endpoint = make_endpoint_placement(
+                control_plane.get_topology_mapper(), mesh_ids[0], fn_to_coord(hops[num_meshes - 1].second)),
+            .host_egress_stage_index = 0,
+            .host_egress_endpoint = make_endpoint_placement(
+                control_plane.get_topology_mapper(), mesh_ids[0], fn_to_coord(*loopback_exit_fn))};
     }
 
-    return stages;
+    auto host_egress_endpoint = stage_allocations.back().entry_endpoint;
+    return ResolvedBlitzDecodePipelineAllocation{
+        .initialize_loopback = initialize_loopback,
+        .stages = std::move(stage_allocations),
+        .loopback_entry_stage_index = std::nullopt,
+        .loopback_entry_endpoint = std::nullopt,
+        .host_egress_stage_index = num_meshes - 1,
+        .host_egress_endpoint = host_egress_endpoint};
 }
 
 void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool initialize_loopback) {
@@ -243,23 +446,28 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
     }
 
     // 2b. Entry/exit fabric nodes chosen for the pipeline are not reused across stages.
+    // Skip the last stage's exit when !initialize_loopback — it has no downstream exit
+    // (exit_node_coord is a placeholder == entry_node_coord), matching checks 1 and 2.
     std::unordered_set<FabricNodeId> used_fabric_nodes;
     used_fabric_nodes.reserve(stages.size() * 2);
     for (std::size_t i = 0; i < stages.size(); i++) {
         const auto& s = stages[i];
+        const bool skip_exit = !initialize_loopback && (i == stages.size() - 1);
         auto mesh_id = MeshId{static_cast<uint32_t>(s.stage_index)};
         FabricNodeId entry_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.entry_node_coord));
-        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.exit_node_coord));
         TT_FATAL(
             used_fabric_nodes.insert(entry_fn).second,
             "Stage [{}] entry fabric node {} is reused across stages",
             i,
             entry_fn);
-        TT_FATAL(
-            used_fabric_nodes.insert(exit_fn).second,
-            "Stage [{}] exit fabric node {} is reused across stages",
-            i,
-            exit_fn);
+        if (!skip_exit) {
+            FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.exit_node_coord));
+            TT_FATAL(
+                used_fabric_nodes.insert(exit_fn).second,
+                "Stage [{}] exit fabric node {} is reused across stages",
+                i,
+                exit_fn);
+        }
     }
 
     // 3a. Each stage entry and exit must have at least one active fabric ethernet channel (none empty).
@@ -337,6 +545,11 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
         const auto& stage = stages[i];
         const std::size_t next_i = (i + 1) % stages.size();
         const auto& next_stage = stages[next_i];
+
+        // Linear (host-loopback) pipeline has no last-stage -> stage 0 fabric hop.
+        if (!initialize_loopback && i == stages.size() - 1) {
+            continue;
+        }
 
         auto mesh_id = MeshId{static_cast<uint32_t>(stage.stage_index)};
         auto next_mesh_id = MeshId{static_cast<uint32_t>(next_stage.stage_index)};
@@ -418,6 +631,11 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
         const auto& stage = stages[i];
         const std::size_t next_i = (i + 1) % stages.size();
         const auto& next_stage = stages[next_i];
+
+        // Linear (host-loopback) pipeline has no last-stage -> stage 0 fabric hop.
+        if (!initialize_loopback && i == stages.size() - 1) {
+            continue;
+        }
 
         auto curr_mesh_id = MeshId{static_cast<uint32_t>(stage.stage_index)};
         auto next_mesh_id = MeshId{static_cast<uint32_t>(next_stage.stage_index)};
@@ -673,20 +891,26 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
 
 }  // namespace
 
-std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initialize_loopback) {
-    auto stages = build_pipeline_from_topology(initialize_loopback);
-    validate_pipeline(stages, initialize_loopback);
+ResolvedBlitzDecodePipelineAllocation resolve_blitz_decode_pipeline_allocation(bool initialize_loopback) {
+    auto allocation = build_pipeline_allocation_from_topology(initialize_loopback);
+    validate_pipeline_allocation(allocation);
 
-    // Synchronize all ranks before returning so that downstream socket creation
-    // (which cascades sequentially through stages) starts from a common point.
-    // The old implementation had implicit synchronization via MPI broadcasts in
-    // get_asic_id_to_mesh_coord_map / create_physical_system_descriptor; without
-    // this barrier the initialization-time variance across ranks can push the
-    // sequential handshake cascade past the 10-second MeshSocket timeout.
-    const auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    ctx->barrier();
+    auto legacy_stages = project_legacy_pipeline_stages(allocation);
+    validate_pipeline(legacy_stages, initialize_loopback);
+    synchronize_pipeline_generation();
+
+    return allocation;
+}
+
+std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initialize_loopback) {
+    auto allocation = build_pipeline_allocation_from_topology(initialize_loopback);
+    validate_pipeline_allocation(allocation);
+
+    auto stages = project_legacy_pipeline_stages(allocation);
+    validate_pipeline(stages, initialize_loopback);
+    synchronize_pipeline_generation();
 
     return stages;
 }
 
-}  // namespace tt::tt_metal::experimental::blitz
+}  // namespace tt::tt_metal::internal::blitz

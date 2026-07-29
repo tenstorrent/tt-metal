@@ -48,6 +48,8 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 
 5. **TensixDataMovementOneToOnePacketSizes2_0** (Test ID: 158) - Device 2.0 API version of the packet sizes test. Tests the same packet size variations as test ID 4 but uses the NOC API with structured endpoints and virtual channel support.
 
+6. **TensixDataMovementOneToOneDirectedIdeal2_0** (Test ID: 160) - Device 2.0 API version of the directed ideal test.
+
 ## Device 2.0 API Tests
 This test suite now includes tests using the new device 2.0 NOC API. These tests provide the same functionality as the original tests but use an updated API design:
 
@@ -60,3 +62,6 @@ This test suite now includes tests using the new device 2.0 NOC API. These tests
 - `sender.cpp`: Original sender kernel for comparison
 
 Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new API.
+
+## Quasar Notes
+`TensixDataMovementOneToOnePacketSizes` and `TensixDataMovementOneToOneDirectedIdeal` include Quasar-specific code paths inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).

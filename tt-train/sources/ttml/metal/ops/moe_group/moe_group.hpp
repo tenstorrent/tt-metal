@@ -44,8 +44,9 @@ namespace ttml::metal {
 // T_cap is the upper bound on the number of rows written. Host must allocate
 // for the worst case because actual routing is only known after phase 1:
 //
-//   T_cap = min(E_local, K) · T_total  +  E_local · (32 + (cursor_align-1) · N)
-//           └── worst-case active ──┘     └────── padding ──────┘
+//   T_cap = round_up_32(min(E_local, K) · T_total
+//                       + E_local · (32 + (cursor_align-1) · N))
+//                       └──── worst-case active + padding ────┘
 //
 //   T_total      = D · B · S        (total dispatched tokens)
 //   N            = num_total_cores  (worker grid size, typically 72 on WH Galaxy)
@@ -59,7 +60,9 @@ namespace ttml::metal {
 // - Padding: up to 32 rows per expert for per-expert tile alignment in
 //   grouped, plus up to (cursor_align-1)·N SENTINEL rows per expert to keep
 //   per-core write boundaries 16 B-aligned for NOC L1→DRAM writes of all
-//   three side tensors (plan, grouped_scores, k_slot).
+//   three side tensors (plan, grouped_scores, k_slot). The final capacity is
+//   also rounded to a 32-row tile boundary because downstream kernels consume
+//   plan/grouped_scores/expert_out in 32-row chunks.
 using MoeGroupResult = std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>;
 
 MoeGroupResult moe_group(

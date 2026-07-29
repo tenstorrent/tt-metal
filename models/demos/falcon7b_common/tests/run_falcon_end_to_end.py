@@ -10,7 +10,7 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
-from models.common.utility_functions import profiler, tt_tensors_to_torch_tensors
+from models.common.utility_functions import hf_cache_layer_kv, profiler, tt_tensors_to_torch_tensors
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
     get_num_devices,
@@ -328,13 +328,16 @@ def run_test_FalconCausalLM_end_to_end(
     device_pcc_k = 1.0
     device_pcc_v = 1.0
     for i in range(num_layers):
+        # transformers 5.x returns a Cache object (no legacy [i][0]/[i][1] subscripting);
+        # hf_cache_layer_kv yields (key, value) across legacy tuples and 4.x/5.x Cache.
+        pytorch_layer_key, pytorch_layer_value = hf_cache_layer_kv(pytorch_layer_present, i)
         if llm_mode == "prefill":
-            pytorch_layer_pres = (pytorch_layer_present[i][0].squeeze(1), pytorch_layer_present[i][1].squeeze(1))
+            pytorch_layer_pres = (pytorch_layer_key.squeeze(1), pytorch_layer_value.squeeze(1))
             tt_layer_pres = concat_device_out_layer_present(mesh_device, tt_layer_present[i], kv_len)
         elif llm_mode == "decode":
             pytorch_layer_pres = (
-                pytorch_layer_present[i][0].squeeze(1)[:, kv_cache_len, :],
-                pytorch_layer_present[i][1].squeeze(1)[:, kv_cache_len, :],
+                pytorch_layer_key.squeeze(1)[:, kv_cache_len, :],
+                pytorch_layer_value.squeeze(1)[:, kv_cache_len, :],
             )
             tt_layer_pres = concat_device_out_layer_present(
                 mesh_device, tt_layer_present[i], kv_cache_len, end_idx_only=True

@@ -138,8 +138,9 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
-    reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
-    mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
+    matmul_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_sum_idx,
         cb_scaler_idx,
@@ -216,8 +217,9 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
-    reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
-    mm_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx, 0);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
+    matmul_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_xnorm_sum_idx,
         cb_scaler_idx,
@@ -296,8 +298,9 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
-    reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
-    mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
+    matmul_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_sum_idx,
         cb_scaler_idx,
@@ -390,8 +393,9 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
-    reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
-    mm_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx, 0);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
+    matmul_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_xnorm_sum_idx,
         cb_scaler_idx,
@@ -472,6 +476,7 @@ void kernel_main() {
 
     init_sfpu(cb_x_hat_idx, cb_dx_idx);
     binary_op_init_common(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         // Wait for rstd and mean (per row)

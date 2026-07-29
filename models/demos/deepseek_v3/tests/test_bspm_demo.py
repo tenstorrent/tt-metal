@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """BSPM vs uniform-BFP4 output comparison for the deepseek_v3 demo (5 layers).
@@ -59,7 +59,7 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel,
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.hf_model_utils import default_stacked_dequantized_model_path
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.run_config import create_run_config, deallocate_weight_config_tensors
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
     get_rope_tensors,
@@ -1037,6 +1037,7 @@ def _run_one_decode_step(
     ttnn.deallocate(tt_output)
     ttnn.deallocate(tt_input)
     ttnn.deallocate(position_ids_tt)
+    deallocate_weight_config_tensors((tt_page_tables, rope_tensors, run_config, model_state, model_shared_state))
     return logits
 
 
