@@ -122,6 +122,28 @@ bool tc_unique_enabled() {
     static const bool v = (std::getenv("TT_METAL_QSR_TC_UNIQUE") != nullptr);
     return v;
 }
+
+// [#48552 DEBUG -- remove before merge] Allow the Tensix-only pool to start at a different physical tile
+// counter. The default remains 16; setting TT_METAL_QSR_TC_POOL_START=20 moves the first INTRA DFB counter
+// to tc20 without changing the DM-visible pool or any DFB capacity.
+uint8_t tc_tensix_pool_start() {
+    static const uint8_t v = [] {
+        const char* value = std::getenv("TT_METAL_QSR_TC_POOL_START");
+        if (value == nullptr) {
+            return ::dfb::TC_TENSIX_POOL_START;
+        }
+        const int parsed = std::atoi(value);
+        TT_FATAL(
+            parsed >= ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM && parsed < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
+            "TT_METAL_QSR_TC_POOL_START={} out of range [{}, {})",
+            parsed,
+            static_cast<int>(::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM),
+            static_cast<int>(::dfb::NUM_TILE_COUNTERS_PER_TENSIX));
+        return static_cast<uint8_t>(parsed);
+    }();
+    return v;
+}
+
 // Used-mask physical pool for the UNIQUE mode: per (core,tensix), a bitmask of counters currently held by a
 // live program (bit i => physical counter i in use). Reserved at finalize, cleared on program destruction.
 struct UniqueTcPool {
@@ -159,7 +181,7 @@ struct FifoTcPool {
             for (uint8_t i = 0; i < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM; ++i) {
                 pt.dm_free.push_back(i);
             }
-            for (uint8_t i = ::dfb::TC_TENSIX_POOL_START; i < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX; ++i) {
+            for (uint8_t i = tc_tensix_pool_start(); i < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX; ++i) {
                 pt.t6_free.push_back(i);
             }
             pt.inited = true;
@@ -182,7 +204,7 @@ static_assert(::dfb::NUM_TILE_COUNTERS_PER_TENSIX <= 32, "tc id fits in the pool
         // this program's lifetime (freed in ~TileCounterAllocator). Never reuses a live counter, so it can't
         // hit the incoherent-reuse hang; if a (core,tensix) pool is exhausted it FATALs with a clear message
         // (correlate with the op being built) instead of silently colliding/hanging.
-        const uint8_t lo = use_t6_only ? ::dfb::TC_TENSIX_POOL_START : 0;
+        const uint8_t lo = use_t6_only ? tc_tensix_pool_start() : 0;
         const uint8_t hi = use_t6_only ? ::dfb::NUM_TILE_COUNTERS_PER_TENSIX : ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
         auto& pool = unique_tc_pool();
         std::lock_guard<std::mutex> lk(pool.mu);
@@ -216,12 +238,12 @@ static_assert(::dfb::NUM_TILE_COUNTERS_PER_TENSIX <= 32, "tc id fits in the pool
     uint8_t tc_id;
     if (use_t6_only) {
         TT_FATAL(
-            ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
+            tc_tensix_pool_start() + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
             "Out of Tensix-only tile counters for tensix {} on core ({}, {})",
             tensix_id,
             core.x,
             core.y);
-        tc_id = ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id]++;
+        tc_id = tc_tensix_pool_start() + counters.t6_only_next[tensix_id]++;
     } else {
         TT_FATAL(
             counters.dm_next[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
@@ -1202,7 +1224,7 @@ void ProgramImpl::qsr_rebase_dispatch_tile_counters() {
                     if (it != remap.end()) {
                         new_tc = it->second;
                     } else {
-                        const bool is_t6 = old_tc >= ::dfb::TC_TENSIX_POOL_START;
+                        const bool is_t6 = old_tc >= tt::tt_metal::experimental::dfb::detail::tc_tensix_pool_start();
                         auto& q = is_t6 ? pool.tensix(tensix).t6_free : pool.tensix(tensix).dm_free;
                         TT_FATAL(
                             !q.empty(),
