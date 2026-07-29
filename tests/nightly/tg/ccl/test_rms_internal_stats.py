@@ -3,25 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-The op-allocated stats scratch in ttnn.fused_rms_minimal (the rms_allgather op).
+Test the op-allocated stats scratch in ttnn.fused_rms_minimal (the rms_allgather op).
 
-fused_rms_minimal computes a per-device E(x^2) partial, all-gathers the partials across cluster_axis
-and averages them for the global E(x^2). The count of partials averaged used to be inferred from the
-caller-provided stats buffer's tile width, so a 1-tile-wide buffer silently collapsed it to 1 and
-each device normalized by its own E(x^2). The op now derives the count from ring_size and allocates
-the scratch itself when stats is omitted.
-
-Covered here:
-  * the averaging is correct across all devices on cluster_axis. Every device's E(x^2) is roughly
-    equal on near-homogeneous data, which is why the bug was invisible, so these tests scale device
-    d's hidden slice by (d + 1) to spread E(x^2) by ~64x and compare against both a full-hidden and
-    a per-device golden.
-  * the scratch survives program cache hits, where a fresh allocation must be repointed.
-  * the scratch survives trace capture and replay, which is the case the optional-stats change
-    exists for.
-  * a stats buffer too narrow per core is rejected rather than silently degraded.
-
-Requires a TG (8x4 wormhole_b0) galaxy.
+Covers cross-device E(x^2) averaging, program cache hits and trace replay against a freshly
+allocated scratch, and rejection of an undersized caller-provided buffer. Requires a TG (8x4).
 """
 
 import torch
@@ -40,10 +25,7 @@ def get_torch_rms(x, gamma, eps):
 
 
 def get_torch_rms_per_device(x, gamma, eps, num_devices):
-    """RMSNorm where each device's hidden slice is normalized by only that device's E(x^2).
-
-    Reproduces what the op computed when the averaged device count collapsed to 1.
-    """
+    """RMSNorm where each device's slice is normalized by only its own E(x^2), i.e. the buggy output."""
     x = x.to(torch.float32)
     per = x.shape[-1] // num_devices
     out = torch.empty_like(x)
@@ -131,12 +113,7 @@ def build_heterogeneous_inputs(mesh_device, num_devices, hidden_size, seq_len, i
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("num_iters", [3])
 def test_rms_heterogeneous_internal_stats(mesh_device, topology, num_iters, function_level_defaults):
-    """Omitting stats lets the op allocate a correctly sized scratch, so the output matches the golden.
-
-    Runs several iterations so that every call after the first is a program cache hit: the op-allocated
-    scratch is a fresh tensor each time, so override_runtime_arguments has to repoint both the writer's
-    stats address and the cb_stats CB. Outputs are held alive to keep the allocator moving between calls.
-    """
+    """Omitting stats gives a correctly sized scratch, on the first call and on program cache hits."""
     num_devices = 8  # cluster_axis=0 -> 8 rows on the 8x4 mesh
     hidden_size = 896 * num_devices
     seq_len = 32
@@ -171,9 +148,8 @@ def test_rms_heterogeneous_internal_stats(mesh_device, topology, num_iters, func
         cache_entries.append(mesh_device.num_program_cache_entries())
     ttnn.synchronize_device(mesh_device)
 
-    # Every call after the first must reuse the cached program, which is what forces
-    # override_runtime_arguments to repoint the freshly allocated scratch. Without this the loop
-    # could silently be recompiling each time and never exercise that path.
+    # Assert the calls were cache hits, otherwise the loop could be recompiling each time and never
+    # exercise override_runtime_arguments repointing the freshly allocated scratch.
     logger.info(f"program cache entries per iteration: {cache_entries}")
     assert (
         cache_entries[1:] == cache_entries[:-1]
@@ -190,9 +166,8 @@ def test_rms_heterogeneous_internal_stats(mesh_device, topology, num_iters, func
         logger.info(f"[iter {i}] PCC vs full-hidden golden: {pcc}, vs per-device golden: {pcc_per_device}")
 
         assert passing, f"iter {i}: {output}"
-        # The two references are far apart on 64x-heterogeneous data, so tracking the full-hidden one is
-        # a decisive check that all devices on cluster_axis were averaged. There is no Python-visible
-        # device count to assert on directly.
+        # The two goldens are far apart on 64x-heterogeneous data, so tracking the full-hidden one
+        # shows all devices were averaged. There is no Python-visible device count to assert on.
         assert pcc > pcc_per_device + 0.05, (
             f"iter {i}: output is not clearly closer to the full-hidden golden ({pcc}) than to the "
             f"single-device reference ({pcc_per_device}); cross-device averaging may have collapsed"
@@ -213,11 +188,8 @@ def test_rms_heterogeneous_internal_stats(mesh_device, topology, num_iters, func
 def test_rms_internal_stats_trace(mesh_device, topology, num_iters, function_level_defaults):
     """The op-allocated scratch survives trace capture and replay.
 
-    This is the case the optional-stats change exists for: under trace the caller cannot allocate or
-    free anything, so the scratch is allocated during capture and the recorded program keeps its
-    address. Unlike the existing trace tests, this checks the output *after* execute_trace, so a stale
-    cb_stats/writer address or a scratch whose L1 was reissued between capture and replay would fail
-    here rather than pass silently.
+    Checks the output after execute_trace, unlike the existing trace tests, so a stale cb_stats or
+    writer address would fail here rather than pass silently.
     """
     num_devices = 8
     hidden_size = 896 * num_devices
