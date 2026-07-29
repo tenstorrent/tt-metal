@@ -695,3 +695,71 @@ Shallow K deliberately keeps NO chunk-size floor: it still wins with single-tile
 128x2048x512 -8.2%) because compute there is only 30-40% of the wall rather than 47-77%.
 
 PCC 0.99999-1.000000 on all 6 new shapes plus 2 excluded controls; 111/111 correctness tests pass.
+
+### F11. FAILED (three NoC micro-optimisations): the in1 stream is BANDWIDTH-bound, not latency- or issue-bound
+
+Sizing first. On the top-5 slack shapes the in1 read is 84% of the DRAM floor, and the ablations show how much
+of it is EXPOSED (i.e. not hidden behind compute):
+
+| shape | wall | in1 exposed | in1 DRAM time | output write exposed |
+|---|---|---|---|---|
+| 512x6144x4608 | 179.9 | 6.8 (3.8%) | 110.6 | 1.2 (0.7%) |
+| 512x6144x2304 | 110.1 | 6.6 (6.0%) | 55.3 | 1.2 (1.1%) |
+| 256x6080x4640 | 148.8 | **50.6 (34.0%)** | 110.2 | 0.4 (0.3%) |
+| 256x6144x6144 | 194.5 | **78.3 (40.3%)** | 147.5 | 14.5 (7.5%) |
+| 256x15360x1536 | 141.6 | 28.2 (19.9%) | 92.2 | 0.5 (0.3%) |
+
+That also explains 256x6080x4640, whose in0+reduction components only accounted for 9.1 us of its 27.9 us of
+slack: the rest is in1. **The per-tile output write is already hidden (0.3-1.1% on four of five), so that micro-
+optimisation was dead before writing any code.**
+
+**Attempt 1 - TRID-pipelined in1 read (bit24). FAILED, 3.8-10.0% SLOWER.** The production reader issues one
+block then takes a FULL read barrier before pushing, so exactly one block is ever in flight and each pays the
+whole DRAM latency; the dram-sharded matmul reference instead tags each block with a TRID and waits only on the
+oldest. Implemented for the solo (Sm==1) path.
+
+| shape | prod | TRID pipeline | change |
+|---|---|---|---|
+| 512x6144x4608 | 180.28 | 198.28 | 10.0% slower |
+| 512x6144x2304 | 109.92 | 118.41 | 7.7% slower |
+| 256x6080x4640 | 148.96 | 154.63 | 3.8% slower |
+| 256x15360x1536 (Sm=2 control) | 136.14 | 136.72 | +0.4% (unaffected) |
+| 256x6144x6144 (Sm=2 control) | 187.39 | 187.62 | +0.1% (unaffected) |
+
+Prior work already measured in1 reads at 76-98% of peak DRAM in isolation. Running 4 blocks ahead on 96 cores
+cannot raise throughput on a saturated stream - it just multiplies outstanding requests and adds queueing, on
+top of the extra per-block reserve/TRID setup. **The per-block barrier was acting as free pacing.**
+
+**Attempt 2 - wider N_sub for DRAM locality. FAILED, 3.0-43.8% SLOWER.** With N_sub=1 and a shard stride of 19
+tiles, 256x6080x4640 makes 19 separate passes over the same K range taking one 2 KB column each - the worst
+possible DRAM row locality. Widening N_sub makes each row read cover N_sub contiguous tiles and cuts the number
+of passes:
+
+| N_sub | read size | K passes | wall | in1 exposed |
+|---|---|---|---|---|
+| **1 (deployed)** | 2 KB | 19 | **148.4** | 50.2 |
+| 2 | 4 KB | 10 | 152.9 | 48.1 |
+| 4 | 8 KB | 5 | 163.9 | **45.0** |
+| 5 | 10 KB | 4 | 170.0 | 46.7 |
+| 10 | 20 KB | 2 | 213.5 | 53.1 |
+
+The locality mechanism WORKS - exposure falls 50.2 -> 45.0 us as predicted - but the wall rises anyway, because
+N_bpc is also the pipelining depth of the whole output/reduction phase and dropping from 19 output blocks to 5
+destroys that overlap. On 256x6144x6144 locality did not even improve (77.6 -> 112.3 us exposure).
+
+**Attempt 3 - stateful one-packet in1 reads (bit25). NULL, -0.13% mean (-0.37% best, +0.13% worst).** Every read
+a core issues targets the same DRAM bank and full-width rows share one size, so the NoC size/config registers
+can be written once instead of per transaction. This variant changes ONLY per-call issue cost - access pattern,
+CB sizes and pipeline depth are all identical, unlike attempts 1 and 2 - so it isolates the question cleanly.
+Bit-exact output (PCC 1.000000). **The reader is not issue-bound; there is no per-transaction overhead to
+reclaim.**
+
+**Conclusion: NoC micro-optimisation is closed for the in1 path.** All three attempts point at the same wall -
+the in1 stream is bandwidth-bound. The "50.6 us exposed" on 256x6080x4640 is not recoverable latency; it is real
+DRAM time that cannot hide because compute (86.1 us) is shorter than the in1 read (110.2 us). For that shape the
+only remaining lever is reducing in1 BYTES or raising achieved DRAM efficiency, not restructuring the transfers.
+
+Kept behind default-off diagnostic bits (both compile out entirely at mask 0): bit24 IN1_TRID_PIPELINE, bit25
+IN1_ONE_PACKET. The shared per-block read sequence was factored into one `issue_block_reads` lambda used by all
+three policies - measured neutral (every mask-0 wall reproduces its pre-refactor value within noise) and 111/111
+correctness tests pass.

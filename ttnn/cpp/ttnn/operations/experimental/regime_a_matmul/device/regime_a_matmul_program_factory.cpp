@@ -1528,7 +1528,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         geo.N_bpc,               // 5 N_bpc
         geo.in1_shard_stride_n,  // 6 in1_shard_stride_n (physical per-bank width)
         in1valid_sem,            // 7
-        in1ready_sem};           // 8
+        in1ready_sem,            // 8
+        // 9 cb1 depth in BLOCKS. The TRID read pipeline writes up to depth-1 blocks ahead of the block it is
+        // waiting on, and its slot address arithmetic assumes cb1 is exactly this many blocks (which it is, by
+        // construction: cb1_tiles = depth * kb * N_sub).
+        cb.cb1_tiles / (kb * geo.N_sub)};
 
     auto mk = [&](const char* src,
                   const CoreRangeSet& g,
@@ -1577,6 +1581,20 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     std::map<std::string, std::string> rdefs;
     if (diag_mask & 0x800u) {
         rdefs["SKIP_IN1_READ"] = "1";
+    }
+    // bit24: TRID-pipelined in1 read. The production reader issues one block's reads then takes a FULL
+    // noc_async_read_barrier before pushing, so exactly one block is ever in flight and each block pays the
+    // full DRAM latency. With per-transaction TRIDs the reader can run up to cb1_depth-1 blocks ahead and wait
+    // only on the oldest. Correctness-preserving (same reads, same order, same CB contents).
+    if (diag_mask & 0x1000000u) {
+        rdefs["IN1_TRID_PIPELINE"] = "1";
+    }
+    // bit25: stateful one-packet in1 row reads. Every read a core issues targets the same DRAM bank and
+    // full-width rows share one size, so the NoC size/config registers are written once instead of per
+    // transaction. Isolates pure per-call issue overhead: access pattern, CB sizes and pipeline depth are all
+    // unchanged, unlike bit24 (pipeline depth) and the nsb sweep (access pattern).
+    if (diag_mask & 0x2000000u) {
+        rdefs["IN1_ONE_PACKET"] = "1";
     }
     KernelHandle readerA = mk(kIn1ReaderKernel, g0, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, rct, rdefs);
     KernelHandle readerB = mk(kIn1ReaderKernel, g1, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, rct, rdefs);
