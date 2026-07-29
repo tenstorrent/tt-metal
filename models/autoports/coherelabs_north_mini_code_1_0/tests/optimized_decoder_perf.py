@@ -71,6 +71,7 @@ def _policy(args):
         "sparse_gate_up_in0_block_w",
         "sparse_down_in0_block_w",
         "moe_chunk_size",
+        "prefill_moe_chunk_size",
         "serving_decode_qkv_cores",
         "serving_decode_o_cores",
         "serving_decode_dense_gate_up_cores",
@@ -105,6 +106,12 @@ def _policy(args):
         overrides["fused_kv_update"] = False
     if args.sparse_intermediate_dram:
         overrides["sparse_intermediate_dram"] = True
+    if args.prefill_sparse_intermediate_dram:
+        overrides["prefill_sparse_intermediate_dram"] = True
+    if args.legacy_token_prefill_sparse:
+        overrides["prefill_grouped_sparse"] = False
+    if args.batch1_prefill_dense_experts:
+        overrides["batch1_prefill_active_experts"] = False
     if args.serving_fused_kv_update:
         overrides["serving_fused_kv_update"] = True
     if args.default_sdpa:
@@ -181,6 +188,7 @@ def main():
         "sparse-gate-up-in0-block-w",
         "sparse-down-in0-block-w",
         "moe-chunk-size",
+        "prefill-moe-chunk-size",
         "serving-decode-qkv-cores",
         "serving-decode-o-cores",
         "serving-decode-dense-gate-up-cores",
@@ -209,6 +217,9 @@ def main():
     parser.add_argument("--packed-dense-gate-up", action="store_true")
     parser.add_argument("--separate-kv-update", action="store_true")
     parser.add_argument("--sparse-intermediate-dram", action="store_true")
+    parser.add_argument("--prefill-sparse-intermediate-dram", action="store_true")
+    parser.add_argument("--legacy-token-prefill-sparse", action="store_true")
+    parser.add_argument("--batch1-prefill-dense-experts", action="store_true")
     parser.add_argument("--serving-fused-kv-update", action="store_true")
     parser.add_argument("--default-sdpa", action="store_true")
     parser.add_argument("--direct-o-input", action="store_true")
@@ -263,6 +274,11 @@ def main():
             "layer": args.layer,
             "model_revision": REAL_REVISION,
             "policy": _render_policy(decoder.optimization_config),
+            "weights_source": "deterministic_synthetic_full_shape_recorded_marginals",
+            "activations_source": "deterministic_synthetic",
+            "warmups": args.warmups,
+            "iterations": args.iterations,
+            "decode_is_trace_replay": args.mode == "decode",
         }
     )
     rendered = json.dumps(result, indent=2)

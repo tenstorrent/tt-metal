@@ -19,27 +19,29 @@
   "completion_status": "complete",
   "pending_gates": [],
   "independent_stage_review": {
-    "verdict": "clean-pass",
-    "required_work": []
+    "verdict": "pending-final-review",
+    "required_work": [
+      "Run a fresh stage review against the review-3 closure."
+    ]
   },
   "context_probe_evidence": {
     "prefill_500000_batch_1": {
       "layer_kind": "dense full attention with forced RoPE",
       "result": "pass",
       "finite_output": true,
-      "single_pass_ms": 159559.73756699677,
-      "artifact": "functional_decoder/prefill_layer0_context500000.json"
+      "single_pass_ms": 159869.562,
+      "artifact": "optimized_decoder/prefill_layer0_context500000_review3.json",
+      "implementation": "optimized"
     },
-    "prefill_499999_all_layer_kinds": {
-      "dense_full_forced_rope_ms": 159650.63683899643,
-      "sliding_rope_moe_ms": 22634.39638899581,
-      "full_no_rope_moe_ms": 176343.69263300323,
+    "prefill_499999_moe_layer_kinds": {
       "result": "pass with finite outputs",
       "artifacts": [
-        "functional_decoder/prefill_layer0_context499999.json",
-        "functional_decoder/prefill_layer1_context499999.json",
-        "functional_decoder/prefill_layer4_context499999.json"
-      ]
+        "optimized_decoder/prefill_layer1_context499999_review3.json",
+        "optimized_decoder/prefill_layer4_context499999_review3.json"
+      ],
+      "implementation": "optimized",
+      "sliding_rope_moe_ms": 193125.821,
+      "full_no_rope_moe_ms": 347770.355
     },
     "decode_500000_batch_1_all_layer_kinds": {
       "position": 499999,
@@ -58,8 +60,9 @@
       "position": 499999,
       "traced": true,
       "result": "pass",
-      "trace_replay_ms": 135.98619600088568,
-      "artifact": "functional_decoder/decode_layer0_context500000_batch32.json"
+      "trace_replay_ms": 131.10462100303266,
+      "artifact": "optimized_decoder/context500000_decode_b32_review3.json",
+      "implementation": "optimized-final-policy"
     },
     "non_aligned_prefill": [
       1,
@@ -90,6 +93,6 @@
     "kv_bytes_formula": "batch * context * 2 caches * 4 kv heads * 128 head dim * 2 BF16 bytes",
     "batch_1_context_500000_kv_bytes": 1024000000,
     "batch_32_context_500000_kv_bytes": 32768000000,
-    "note": "All three layer kinds passed near-limit nonaligned prefill and batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced dense decode passed; no capability reduction is applied."
+    "note": "The final optimized policy passed advertised-limit dense prefill and near-limit nonaligned MoE prefill after adding large-M automatic programs and interleaved QKV/O copies. All three layer kinds also passed batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced dense decode passed; no capability reduction is applied."
   }
 }

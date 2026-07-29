@@ -1,0 +1,11 @@
+{
+  "trace_replay_ms": 131.10462100303266,
+  "finite": true,
+  "mode": "decode",
+  "batch": 32,
+  "context": 500000,
+  "layer": 0,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "kv_cache_dtype": "bfloat16",
+  "kv_cache_bytes": 32768000000
+}

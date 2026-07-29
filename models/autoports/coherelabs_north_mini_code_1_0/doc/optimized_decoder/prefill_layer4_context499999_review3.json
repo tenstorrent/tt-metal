@@ -1,0 +1,11 @@
+{
+  "single_pass_ms": 347770.3546709963,
+  "finite": true,
+  "mode": "prefill",
+  "batch": 1,
+  "context": 499999,
+  "layer": 4,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "kv_cache_dtype": "bfloat16",
+  "kv_cache_bytes": 1023997952
+}
