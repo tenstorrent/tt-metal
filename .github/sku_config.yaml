@@ -42,7 +42,6 @@ skus:
       - arch-wormhole_b0
       - pipeline-functional
       - topology-6u
-      - in-service-dedicated-merge-gate
       # TEST-ONLY (SYS-4772) -- DO NOT MERGE.
       # Pin this SKU to the single faulty board OM1-01A04-STGWH01 instead of letting the
       # pool pick between STGWH01 and its healthy twin STGWH02. runs_on is the only routing
@@ -55,6 +54,7 @@ skus:
       # (better a queued job than a run on the healthy board). If the real label differs,
       # change the line below to whatever infra reports.
       - OM1-01A04-STGWH01
+      - out-service-dedicated-merge-gate
 
   wh_galaxy_perf:
     runs_on:
