@@ -183,13 +183,9 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          # Per-job NFS source tree (no build unpack — that is slow on NFS).
-          # SC16 automapper launches from here so Phase 1 writes generated/ttrun/
-          # on shared storage; generate_rank_bindings comes from TT_METAL_HOME
-          # (/home/user/tt-metal) which has the local build.
+          # Per-job NFS scratch (ranklogs, automapper cwd). Do NOT copy the full
+          # tt-metal tree here — that OOMs the 4Gi Actions runner.
           mkdir -p "$PIPELINE_DIR"
-          rm -rf "$PIPELINE_DIR/tt-metal-src"
-          cp -a /ci/tt-metal "$PIPELINE_DIR/tt-metal-src"
 
           # Workers + runner local copy for Phase 2 --wdir / runtime (local disk).
           sudo rm -rf /home/user/tt-metal
@@ -358,7 +354,7 @@ jobs:
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
         # SC4 (legacy rank-binding) stays on local /home/user/tt-metal.
-        # SC16 automapper cmds cd to $PIPELINE_DIR/tt-metal-src (NFS) themselves.
+        # SC16 automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
         working-directory: /home/user/tt-metal
         run: |
           # Store command safely using heredoc
@@ -381,7 +377,6 @@ jobs:
           retention-days: 14
           path: |
             ${{ env.PIPELINE_DIR }}/
-            ${{ env.PIPELINE_DIR }}/tt-metal-src/generated/ttrun/
             /tmp/cluster_validation_logs/
 
       - name: Delete test environment
