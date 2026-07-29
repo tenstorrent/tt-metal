@@ -422,7 +422,7 @@ def test_optimized_real_weight_moe_decode(mesh_device, layer_idx):
     "layer_idx,batch,mode",
     [(layer, batch, mode) for layer in (1, 4) for batch in (1, 32) for mode in ("prefill", "decode")],
 )
-def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batch, mode):
+def test_optimized_real_weight_moe_precision_matrix(mesh_device, monkeypatch, layer_idx, batch, mode):
     """Exercise selected mixed or explicitly requested dense-expert precision on authentic activations."""
     config = _config()
     sequence = 33 if mode == "prefill" else 34
@@ -443,6 +443,10 @@ def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batc
         expert_gate_up_fidelity=expert_fidelity,
         expert_down_fidelity=expert_fidelity,
         dense_expert_batch_threshold=1,
+        # The default matrix proves the selected mixed topology. Explicit
+        # dtype sweeps force dense execution so every row exercises the dense
+        # precision named by NORTH_MINI_AUTHENTIC_EXPERT_DTYPE.
+        batch1_prefill_active_experts=expert_dtype_name == "selected",
         dense_expert_chunk_size=int(os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_CHUNK", "1024")),
         serving_fused_kv_update=os.environ.get("NORTH_MINI_AUTHENTIC_FUSED_KV", "0") == "1",
     )
@@ -466,6 +470,20 @@ def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batc
         assert decoder.weights["expert_down"].dtype == ttnn.bfloat8_b
         assert decoder.weights["dense_expert_gate"].dtype == ttnn.bfloat4_b
         assert decoder.weights["dense_expert_down"].dtype == ttnn.bfloat4_b
+    branch_calls = {"dense": 0, "active_prefill": 0}
+    original_dense = decoder._dense_expert_moe_chunk
+    original_active_prefill = decoder._sparse_moe_prefill_chunk
+
+    def counted_dense(*args, **kwargs):
+        branch_calls["dense"] += 1
+        return original_dense(*args, **kwargs)
+
+    def counted_active_prefill(*args, **kwargs):
+        branch_calls["active_prefill"] += 1
+        return original_active_prefill(*args, **kwargs)
+
+    monkeypatch.setattr(decoder, "_dense_expert_moe_chunk", counted_dense)
+    monkeypatch.setattr(decoder, "_sparse_moe_prefill_chunk", counted_active_prefill)
     key_cache, value_cache = decoder.create_paged_kv_cache()
     page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -513,6 +531,8 @@ def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batc
             position_cos=_to_tt(cos, mesh_device) if decoder.use_rope else None,
             position_sin=_to_tt(sin, mesh_device) if decoder.use_rope else None,
         )
+        branch_calls["dense"] = 0
+        branch_calls["active_prefill"] = 0
         hidden_tt = _to_tt(decode_hidden.unsqueeze(0), mesh_device)
         current, cos_tt, sin_tt = _decode_inputs(decoder, config, mesh_device, [sequence - 1] * batch)
         kwargs = dict(
@@ -537,6 +557,13 @@ def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batc
     if mode == "prefill":
         actual_host = ttnn.to_torch(actual).squeeze(0)
 
+    selected_active_prefill = expert_dtype_name == "selected" and batch == 1 and mode == "prefill"
+    if selected_active_prefill:
+        assert branch_calls["active_prefill"] > 0
+        assert branch_calls["dense"] == 0
+    else:
+        assert branch_calls["dense"] > 0
+        assert branch_calls["active_prefill"] == 0
     _assert_pcc(
         f"optimized-real-{expert_dtype_name}-layer{layer_idx}-{mode}-b{batch}",
         reference,
@@ -659,16 +686,34 @@ def _real_expert_group(state, layer_idx, projection, start, end):
     )
 
 
-def _materialize_dram_expert_groups(mesh_device, state, layer_idx, group_count, dtype):
+def _materialize_dram_expert_groups(mesh_device, state, layer_idx, group_count, dtype, topology):
     mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     _, gate_weight_memory, _gate_output_memory, num_banks = _dram_expert_memory_configs(
         mesh_device, group_count, 2048, 768
+    )
+    _, packed_weight_memory, _packed_output_memory, _ = _dram_expert_memory_configs(
+        mesh_device, group_count, 2048, 1536
     )
     _, down_weight_memory, _down_output_memory, _ = _dram_expert_memory_configs(mesh_device, group_count, 768, 2048)
     groups = []
     for start in range(0, 128, group_count):
         materialized = {}
-        for projection in ("gate", "up", "down"):
+        if topology == "packed":
+            gate = _real_expert_group(state, layer_idx, "gate", start, start + group_count)
+            up = _real_expert_group(state, layer_idx, "up", start, start + group_count)
+            materialized["gate_up"] = ttnn.from_torch(
+                torch.cat((gate, up), dim=-1).unsqueeze(0),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=packed_weight_memory,
+                mesh_mapper=mapper,
+            )
+            del gate, up
+            projections = ("down",)
+        else:
+            projections = ("gate", "up", "down")
+        for projection in projections:
             host = _real_expert_group(state, layer_idx, projection, start, start + group_count)
             materialized[projection] = ttnn.from_torch(
                 host.unsqueeze(0),
@@ -742,10 +787,14 @@ def _dram_expert_candidate_operation(
     group_count,
     gate_up_block_w,
     down_block_w,
+    topology,
 ):
     mesh_device = decoder.mesh_device
     input_memory, _gate_weight_memory, gate_output_memory, _ = _dram_expert_memory_configs(
         mesh_device, group_count, decoder.hidden_size, decoder.intermediate_size
+    )
+    _packed_input_memory, _packed_weight_memory, packed_output_memory, _ = _dram_expert_memory_configs(
+        mesh_device, group_count, decoder.hidden_size, 2 * decoder.intermediate_size
     )
     down_input_memory, _down_weight_memory, down_output_memory, _ = _dram_expert_memory_configs(
         mesh_device, group_count, decoder.intermediate_size, decoder.hidden_size
@@ -755,7 +804,7 @@ def _dram_expert_candidate_operation(
     gate_program = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
         in0_block_w=gate_up_block_w,
         per_core_M=1,
-        per_core_N=decoder.intermediate_size // ttnn.TILE_SIZE,
+        per_core_N=(2 if topology == "packed" else 1) * decoder.intermediate_size // ttnn.TILE_SIZE,
         fused_activation=None,
     )
     down_program = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
@@ -794,24 +843,50 @@ def _dram_expert_candidate_operation(
             accumulator = None
             for group_index, weights in enumerate(grouped_weights):
                 start = group_index * group_count
-                stage = f"group_{group_index}_gate"
-                gate = ttnn.matmul(
-                    expert_input,
-                    weights["gate"],
-                    dtype=ttnn.bfloat16,
-                    memory_config=gate_output_memory,
-                    program_config=gate_program,
-                    compute_kernel_config=decoder.expert_gate_up_compute,
-                )
-                stage = f"group_{group_index}_up"
-                up = ttnn.matmul(
-                    expert_input,
-                    weights["up"],
-                    dtype=ttnn.bfloat16,
-                    memory_config=gate_output_memory,
-                    program_config=gate_program,
-                    compute_kernel_config=decoder.expert_gate_up_compute,
-                )
+                if topology == "packed":
+                    stage = f"group_{group_index}_packed_gate_up"
+                    packed = ttnn.matmul(
+                        expert_input,
+                        weights["gate_up"],
+                        dtype=ttnn.bfloat16,
+                        memory_config=packed_output_memory,
+                        program_config=gate_program,
+                        compute_kernel_config=decoder.expert_gate_up_compute,
+                    )
+                    stage = f"group_{group_index}_packed_gate_slice"
+                    gate = ttnn.slice(
+                        packed,
+                        (0, 0, 0, 0),
+                        (1, group_count, decoder.batch, decoder.intermediate_size),
+                        memory_config=gate_output_memory,
+                    )
+                    stage = f"group_{group_index}_packed_up_slice"
+                    up = ttnn.slice(
+                        packed,
+                        (0, 0, 0, decoder.intermediate_size),
+                        (1, group_count, decoder.batch, 2 * decoder.intermediate_size),
+                        memory_config=gate_output_memory,
+                    )
+                    packed.deallocate(True)
+                else:
+                    stage = f"group_{group_index}_gate"
+                    gate = ttnn.matmul(
+                        expert_input,
+                        weights["gate"],
+                        dtype=ttnn.bfloat16,
+                        memory_config=gate_output_memory,
+                        program_config=gate_program,
+                        compute_kernel_config=decoder.expert_gate_up_compute,
+                    )
+                    stage = f"group_{group_index}_up"
+                    up = ttnn.matmul(
+                        expert_input,
+                        weights["up"],
+                        dtype=ttnn.bfloat16,
+                        memory_config=gate_output_memory,
+                        program_config=gate_program,
+                        compute_kernel_config=decoder.expert_gate_up_compute,
+                    )
                 stage = f"group_{group_index}_silu_multiply"
                 activated = ttnn.multiply(
                     gate,
@@ -884,7 +959,7 @@ def _write_dram_expert_sweep_record(record):
         return
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    name = f"layer{record['layer_idx']}_g{record['group_count']}_{record['weight_dtype']}.json"
+    name = f"layer{record['layer_idx']}_g{record['group_count']}_" f"{record['weight_dtype']}_{record['topology']}.json"
     (output_path / name).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 
 
@@ -909,6 +984,11 @@ def test_dram_sharded_expert_full_chain_candidate(
         pytest.skip("group filtered by NORTH_MINI_DRAM_EXPERT_GROUPS")
     if not _dram_expert_selected(weight_dtype_name, "NORTH_MINI_DRAM_EXPERT_DTYPES"):
         pytest.skip("dtype filtered by NORTH_MINI_DRAM_EXPERT_DTYPES")
+    topology = os.environ.get("NORTH_MINI_DRAM_EXPERT_TOPOLOGY", "split")
+    if topology not in {"split", "packed"}:
+        raise ValueError("NORTH_MINI_DRAM_EXPERT_TOPOLOGY must be split or packed")
+    if topology == "packed" and (group_count != 8 or weight_dtype_name != "bfp4"):
+        pytest.skip("the scoped packed candidate is restricted to real G8 BFP4")
 
     config = _config()
     batch = 32
@@ -961,6 +1041,7 @@ def test_dram_sharded_expert_full_chain_candidate(
         layer_idx,
         group_count,
         weight_dtype,
+        topology,
     )
     assert len(grouped_weights) * group_count == config.num_experts
     record = {
@@ -971,11 +1052,24 @@ def test_dram_sharded_expert_full_chain_candidate(
         "experts_executed": 128,
         "num_dram_banks": num_banks,
         "weight_dtype": weight_dtype_name,
+        "topology": topology,
         "activation_dtype": "bfloat16",
         "math_fidelity": "LoFi",
         "input_shape": [1, group_count, 32, 2048],
         "gate_up_weight_shape": [1, group_count, 2048, 768],
+        "packed_gate_up_weight_shape": [1, group_count, 2048, 1536] if topology == "packed" else None,
         "down_weight_shape": [1, group_count, 768, 2048],
+        "gate_up_matmuls_per_group": 1 if topology == "packed" else 2,
+        "gate_up_per_core_n": (1536 if topology == "packed" else 768) // ttnn.TILE_SIZE,
+        "packed_split": (
+            {
+                "api": "two tile-aligned ttnn.slice calls",
+                "ttnn_split_supported": False,
+                "output_memory_layout": "HEIGHT_SHARDED_L1",
+            }
+            if topology == "packed"
+            else None
+        ),
         "baseline": {
             "path": "OptimizedDecoder._dense_expert_moe_chunk",
             "weight_dtype": "bfp4",
@@ -987,6 +1081,7 @@ def test_dram_sharded_expert_full_chain_candidate(
 
     for gate_up_block_w, down_block_w in _dram_expert_block_pairs():
         row = {
+            "topology": topology,
             "gate_up_in0_block_w": gate_up_block_w,
             "down_in0_block_w": down_block_w,
         }
@@ -997,6 +1092,7 @@ def test_dram_sharded_expert_full_chain_candidate(
             group_count,
             gate_up_block_w,
             down_block_w,
+            topology,
         )
         try:
             latency_ms, actual, candidate_timing_kind = _measure_warmed_expert_chain(
@@ -1035,7 +1131,7 @@ def test_dram_sharded_expert_full_chain_candidate(
             weight.deallocate(True)
     correct = [row for row in record["candidates"] if row["status"] == "correct"]
     runtime_failures = [row for row in record["candidates"] if row["status"] == "runtime_rejected"]
-    if group_count == 8 and weight_dtype_name == "bfp4":
+    if group_count == 8 and weight_dtype_name == "bfp4" and topology == "split":
         assert correct, (
             f"no correct real-weight full-chain candidate survived for layer={layer_idx}, "
             f"group_count={group_count}, dtype={weight_dtype_name}: {record['candidates']}"

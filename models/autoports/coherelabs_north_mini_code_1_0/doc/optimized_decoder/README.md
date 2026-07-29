@@ -20,8 +20,9 @@ vLLM work.
   failed authentic non-aligned prefill.
 - MoE routing is BF16/HiFi2. Sparse active-expert weights are BFP8/LoFi.
   Dense serving-batch expert weights are independently selected BFP4/LoFi:
-  all eight authentic layer-1/layer-4 prefill/decode rows pass, and BFP4 is
-  materially faster than BFP8.
+  the branch-proven selected matrix passes two active-sparse prefill and six
+  dense-BFP4 rows, while a separate forced-dense BFP4 matrix passes all eight
+  rows. BFP4 is materially faster than BFP8.
 - Batch-1 decode and prefill execute active experts. Prefill groups routed
   tiles in chunks of 24, keeps intermediate values in L1, and performs
   device-side down projection, routing, and reduction. Batch 32 retains the
@@ -118,9 +119,10 @@ regresses. Exact distributions and selected policies are in
 | prefill programs | default, 8x8, 10x10, chunked, automatic large-M | 10x10 aligned large-prefill and 512-row compatibility chunks selected; automatic large-M plus interleaved QKV/O selected beyond 8192 after exact CB and sharding failures. |
 | RoPE layout | rectangular versus exact row-wise sub-core order | Exact order selected; rectangular layout corrupted decode lanes 8–31. |
 | MoE router | lower fidelity; BF16/HiFi2; FP32 accumulation | BF16/HiFi2 with FP32 destination accumulation preserves authentic top-k. |
-| sparse MoE | token-at-a-time, grouped active tiles, DRAM/L1 intermediates, chunk 4–128 | Grouped chunk 24/L1 selected for b1 prefill: 14.191/14.264 ms versus functional 14.908/14.655 ms. |
-| expert precision | sparse/dense BFP8 and BFP4 | Sparse BFP8 retained. Authentic dense BFP4 passes PCC 0.997234–0.999990 and reduces b32 decode from about 3.39 to 2.22 ms. |
-| DRAM-sharded dense experts | real full chain; groups 8/16/32/64; BFP4/BFP8; legal blocks | G8 BFP4 passes PCC 0.99981–0.99985 but traces at 2.818 ms versus selected dense-expert-chain 1.883 ms. G16 is numerically invalid (PCC 0.675–0.687); G32/G64 hit exact L1/CB capacity limits. Rejected after compatible full-chain evidence, not a first API error. |
+| sparse MoE | token-at-a-time, grouped active tiles, DRAM/L1 intermediates, chunk 4–128 | Grouped chunk 24/L1 selected for b1 prefill: 14.191/14.264 ms versus functional 14.908/14.655 ms. Chunk 128 screens at 10.331 ms on synthetic routes but collapses the route union across the entire sequence toward dense execution and lacks equivalent authentic correctness, so it is not an eligible active-expert selection. |
+| expert precision | sparse/dense BFP8 and BFP4 | Sparse BFP8 retained. A branch-proven selected mixed matrix passes 8/8; an independently forced-dense BFP4 matrix also passes 8/8 at PCC 0.997234–0.999990. BFP4 reduces b32 decode from about 3.39 to 2.22 ms. |
+| final dense-expert geometry | BFP4 auto; explicit 64/80/100 cores; gate/down widths 4/3, 8/6, 16/4, 16/12; split/packed | Auto split remains selected at 2.218/2.215 ms for layers 1/4. Best explicit is 2.243/2.244 ms; auto packed is 2.294/2.291 ms. This directly closes the final profile's `in0_block_w>=2` advice under selected precision. |
+| DRAM-sharded dense experts | real full chain; split/packed gate-up; groups 8/16/32/64; BFP4/BFP8; legal blocks | Split G8 BFP4 traces at 2.818 ms; packed G8 BFP4 passes PCC 0.99981–0.99985 and traces at 2.827 ms, versus selected 1.887–1.888 ms. G16 is numerically invalid (PCC 0.675–0.687); G32/G64 hit exact L1/CB capacity limits. Rejected after compatible full-chain evidence, not a first API error. |
 | composites | top-k, sigmoid, scatter, paged cache, SDPA | Kept device-resident. Scatter's internal untilize/scatter/tilize is intrinsic to its row-major mask contract. |
 | collectives | none | Not applicable to this single-device stage. |
 
@@ -140,11 +142,15 @@ batch-1 MoE rows.
 | layer-4 MoE decode b1 / b32 | 43 / 46 | 764.7 / 2190.3 us | 826.7 / 2259.8 us | 62.0 / 69.6 us | 14.6% / 31.8% | sparse/dense matmul 58.0% / 46.0% |
 
 The final profiles contain no Torch, `from_torch`, `to_torch`, or host
-fallback operation in the measured windows. Raw ops CSVs, filtered CSVs,
-advice logs, runtime JSON, and summary CSV/PNG are under
+fallback operation in the measured windows. Gzip-compressed raw ops CSVs,
+filtered CSVs, full human-readable tables/advice in `human_report.txt`,
+runtime JSON, and summary CSV/PNG are under
 `tracy/review3_selected/`. The profile confirms batch-1 MoE is limited by
 active sparse matmuls (85% of prefill device time across DRAM/L1 sparse
 rows), while batch-32 MoE is limited by dense expert matmuls and routing.
+The report's suggestion to increase dense-expert `in0_block_w` was swept
+under final BFP4/LoFi across legal explicit widths and core counts; automatic
+split remains 1.2% faster than the best explicit candidate.
 
 ## Watcher and artifacts
 
@@ -166,6 +172,19 @@ DRAM healthy, live heartbeats, zero GDDR errors, and zero thermal trips.
 - `artifacts/review3_{full,watcher}.xml`: final suite evidence.
 - `artifacts/review3_selected_authentic_matrix.xml`: eight authentic mixed
   precision rows.
+- `artifacts/review4_selected_mixed_matrix.xml` and
+  `review4_forced_dense_bfp4_matrix.xml`: branch-proven selected and
+  all-dense authentic matrices.
+- `artifacts/review4_full.xml`: revised full suite, 30 passed and 16 opt-in
+  candidate skips.
+- `artifacts/review4_dense_bfp4_watcher.xml` and
+  `watcher/review4_dense_bfp4/`: layer-1/layer-4 forced-dense BFP4 serving
+  decode passed under watcher with no fault signature.
+- `artifacts/review4_dram_packed.xml` and
+  `candidates/review4_dram_full_chain_packed/`: packed DRAM full-chain PCC
+  and trace evidence.
+- `candidates/review4_dense_bfp4/`: final-precision geometry and packing
+  sweep.
 - `candidates/review3_final_runtime/`: final 3-warmup/20-sample wall matrix.
 - `candidates/review3_dram_full_chain_*`: compatible DRAM-sharded sweep.
 - `prefill_layer{0,1,4}_context*_review3.json`: final optimized capacity.

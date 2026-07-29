@@ -352,8 +352,9 @@ findings were diagnosed in `AUTODEBUG_REVIEW3.md` and repaired under the
 AutoFix isolation loop:
 
 22. Split sparse and dense expert precision policy. Sparse active experts
-    retain BFP8/LoFi. Dense experts now select BFP4/LoFi because all eight
-    authentic real-weight/propagated-activation rows pass: layer-1
+    retain BFP8/LoFi. Dense experts now select BFP4/LoFi. The original
+    selected-policy matrix passed two active-sparse batch-1 prefill rows and
+    six naturally dense rows: layer-1
     prefill/decode PCC 0.999428/0.997995 at b1 and b32; layer-4
     prefill/decode PCC 0.999990–0.999941/0.997234. Matched b32 decode improves
     from about 3.39 ms with BFP8 to about 2.22 ms with BFP4. Synthetic random
@@ -446,3 +447,55 @@ Optimization checkpoints before this closure:
 - `c7e024e8faa` — Log North Mini optimization checkpoint.
 
 No commit was pushed.
+
+## Independent review 4 AutoFix closure
+
+`STAGE_REVIEW_4.md` returned `more-work-needed`. AutoFix addressed every
+required item and both secondary concerns:
+
+30. Retuned the ordinary dense-expert family under the final BFP4/LoFi
+    policy, including automatic split/packed and legal explicit 64/80/100-core
+    programs with gate/down block widths 4/3, 8/6, 16/4, and 16/12. At
+    layer 1, automatic split is 2.218 ms, the best explicit program is
+    2.243 ms, and automatic packed is 2.294 ms. The layer-4 control confirms
+    2.215/2.244/2.291 ms. Automatic split remains selected and is 1.2%
+    faster than the best explicit candidate. This directly tests and rejects
+    the final profile's `in0_block_w >= 2` advice under selected precision.
+    Evidence is in `candidates/review4_dense_bfp4/`.
+31. Added a compatible packed gate/up topology to the real DRAM-sharded
+    full-chain harness. It performs one packed batched matmul per G8 expert
+    group, then tile-aligned device slices into the existing L1 activation
+    chain. Layer 1/4 pass at PCC 0.999849/0.999806 and trace at
+    2.828/2.827 ms, versus the selected ordinary expert-chain
+    1.887/1.888 ms. The packed alternative is therefore correct but slower.
+    Evidence is in `artifacts/review4_dram_packed.xml` and
+    `candidates/review4_dram_full_chain_packed/`.
+32. Added runtime branch counters to the authentic precision gate. The
+    selected matrix proves that batch-1 prefill enters only the active-sparse
+    path while the other six rows enter only the dense path. A separate
+    forced-dense BFP4/LoFi matrix proves dense execution for all eight rows.
+    Both matrices pass 8/8 with the established PCC range
+    0.997234–0.999990
+    (`artifacts/review4_{selected_mixed,forced_dense_bfp4}_matrix.xml`).
+33. Recorded why synthetic active-expert chunk 128 is ineligible despite its
+    10.331-ms screening result: one sequence-wide route union collapses
+    toward dense execution and lacks equivalent authentic-output evidence.
+    The selected chunk 24 retains active-expert semantics and has real
+    sequence-33/128 correctness.
+34. Regenerated all 12 final Tracy analyses as retained, human-readable
+    operation tables plus advice. Each profile directory under
+    `tracy/review3_selected/` now contains `human_report.txt` in addition to
+    compressed raw CSV, filtered CSV, runtime JSON, and summary CSV/PNG.
+35. Re-ran the revised full suite: `30 passed, 16 skipped in 310.391s`.
+    The skips are opt-in DRAM candidates
+    (`artifacts/review4_full.xml`). A focused watcher run of the final-policy
+    forced-dense BFP4 layer-1/layer-4 batch-32 decode rows passed 2/2 in
+    27.262s with no watcher fault signature
+    (`artifacts/review4_dense_bfp4_watcher.xml`,
+    `watcher/review4_dense_bfp4/`). Post-run `tt-smi -s` reported four live
+    p300c devices with healthy heartbeats, zero GDDR errors, and no thermal
+    trip.
+
+The stage history is isolated onto the functional checkpoint before the
+fresh final review; the resulting model-only SHAs are recorded below after
+that rewrite. No commit was pushed.
