@@ -274,6 +274,7 @@ Local checkpoint (never pushed):
 - repo: `/home/mvasiljevic/tt-metal`
 - branch: `mvasiljevic/qb2/skillexp/base`
 - implementation commit: `8e09249fae8012e98f437446f9a5a8f48174ede6`
+- evidence commit: `ef4ae2d1b43`
 
 Two fallback-audit runs set `ttnn.CONFIG.throw_exception_on_fallback = True`;
 both nonzero traced layer kinds pass. Hardware recovery during AutoFix reset
