@@ -38,7 +38,7 @@ from typing import Optional
 import torch
 import ttnn
 
-from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, TEXT_EXAMPLES_DIR
+from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, TEXT_EXAMPLES_DIR, VIBEVOICE_ROOT
 from models.experimental.vibevoice.common.model_utils import ensure_model_weights
 from models.experimental.vibevoice.common.resource_utils import (
     DEMO_VOICE_CLONES,
@@ -118,7 +118,7 @@ def main() -> int:
     )
     ap.add_argument(
         "--output_dir",
-        default=str(_VV_ROOT / "output"),
+        default=str(VIBEVOICE_ROOT / "output"),
         help="Root output dir; writes {output_dir}/{demo_id}/{demo_id}_tt.wav etc.",
     )
     ap.add_argument("--model_path", default=None, help="VibeVoice checkpoint (auto-download if omitted)")

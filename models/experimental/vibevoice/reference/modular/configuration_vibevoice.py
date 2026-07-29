@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Vendored from the VibeVoice reference implementation:
+# https://github.com/microsoft/VibeVoice
+
 """ VibeVoice_AcousticTokenizer model configuration"""
 
 from typing import List, Optional

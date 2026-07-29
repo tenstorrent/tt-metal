@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Vendored from the VibeVoice reference implementation:
+# https://github.com/microsoft/VibeVoice
+
 # Copyright 2024 TSAIL Team and The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
