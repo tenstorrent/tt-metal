@@ -33,8 +33,8 @@ _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
 # (sample_speech_latents concats [neg,pos] on dim0), on auto, so each head weight is read TWICE per
 # step x 10 steps/frame — the same weight-read-twice waste the LM FFN had.  per_core_M=2 folds both
 # CFG rows into M so the weights are read once.  in0_block_w=2 is auto's K-reduction block for these
-# shapes (proven maxabsdiff==0 vs auto for both fp32 and bf16 inputs in
-# tests/perf/diffusion_byteident_ibw_sweep.py) => same reduction order => long-form-safe (Tier-0),
+# shapes (proven maxabsdiff==0 vs auto for both fp32 and bf16 inputs)
+# => same reduction order => long-form-safe (Tier-0),
 # ~1.6-1.9x per matmul.  Applied only when B==2; a B=1 PCC-test call falls back to auto.
 def _diff_b2_cfg(cx, cy, pn):
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -54,7 +54,7 @@ _DIFF_N4608_B2 = _diff_b2_cfg(8, 9, 2)  # gate / up / head-layer modulation  (K=
 _DIFF_N1536_B2 = _diff_b2_cfg(8, 3, 2)  # swiglu down                        (K=4608, N=1536)
 _DIFF_N3072_B2 = _diff_b2_cfg(8, 6, 2)  # final-layer modulation             (K=1536, N=3072)
 # final_linear 1536→64: auto runs on 2 cores (~36 µs, SLOW).  in0_block_w=2 matches auto's
-# K-reduction (maxabsdiff==0 vs auto; tests/perf/diffusion_final_linear_byteident_sweep.py).
+# K-reduction (maxabsdiff==0 vs auto).
 # Device: 36→21 µs (diffusion_exp3).  ibw≠2 is math-CHANGING (long-form-unsafe).
 _DIFF_N64_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(1, 2),
@@ -273,7 +273,7 @@ class TTDiffusionHead:
         # Place the SwiGLU product (down_proj's in0) in L1: the down_proj is the SLOW head matmul
         # (K=4608, 24c, ~37% DRAM BW) and reads in0 ~9 us faster from L1 than DRAM.  Memory placement
         # only changes WHERE the tensor lives, not its bits (same in0_block_w reduction) => byte-identical
-        # (proven maxabsdiff==0 in tests/perf/diffusion_l1_input_sweep.py: 79.4->70.7 us).  Only down
+        # (proven maxabsdiff==0; 79.4->70.7 us).  Only down
         # benefits; L1 in0 REGRESSES final_adaLN (41->108 us) so it stays DRAM.
         hidden = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.linear(

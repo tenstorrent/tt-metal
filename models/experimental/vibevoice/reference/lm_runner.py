@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU fp32 reference LM runner — matches HuggingFace hidden states in generate()."""
+"""CPU fp32 reference LM runner — matches HuggingFace hidden states in generate().
+
+Unlike the rest of ``reference/``, this file is not vendored from the upstream VibeVoice
+repo: it is a tt-metal-side adapter that swaps the TT LM out for the torch reference one
+inside the generator, so PCC tests can isolate the diffusion path from LM drift.
+"""
 
 from typing import Optional, Tuple
 

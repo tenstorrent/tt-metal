@@ -82,7 +82,7 @@ _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 )
 
 # Decode-only fused-KV projection (32 x 1536 x 512).  Auto lands on 16 cores / ~22 µs SLOW.
-# Sweep winner (tests/perf/_probe_wkv_devtime.py): 1D mcast_in0, 8x1=8 cores, in0_block_w=2
+# Sweep winner: 1D mcast_in0, 8x1=8 cores, in0_block_w=2
 # (matches auto's K-reduction → maxabsdiff==0), per_core_N=2, out_subblock 1x2, width-sharded
 # L1 out + L1 in0 (attn rms_norm) → ~16 µs.  Bias-add then reshard to DRAM for NlpCreateHeads;
 # full q/k/v path stays byte-identical.  Prefill (S>1) keeps auto.
@@ -111,8 +111,8 @@ _WKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 _WKV_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
 # Decode-only FFN program configs (S==1).  BYTE-IDENTICAL to the auto config (in0_block_w=2 is the
-# K-reduction block auto uses for these shapes — proven maxabsdiff==0 vs auto in
-# tests/perf/ffn_byteident_ibw_sweep.py), so the K-reduction order — hence the bf16 rounding — is
+# K-reduction block auto uses for these shapes — proven maxabsdiff==0 vs
+# auto), so the K-reduction order — hence the bf16 rounding — is
 # preserved.  The win is the cfg-batch-2 weight-read-once pattern extended to the FFN: the cfg-b2
 # LM fusion batched the wq/wo matmuls (per_core_M=2) but left the FFN on auto, which reads each
 # FFN weight matrix TWICE (once per CFG row).  per_core_M=2 folds both rows into M so the weights
@@ -485,10 +485,10 @@ def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
 
     For a TILE input (every attention head-split / head-merge), ttnn.reshape reshapes it
     directly — byte-identical to the ROW_MAJOR round-trip (reshape is value-preserving;
-    verified maxabsdiff==0 across the decode + prefill shapes in
-    tests/perf/reshape_byteident_probe.py) and ~3x cheaper on the decode path (drops the
-    per-reshape untilize + tilize, ~1.6 ms / B=2 LM forward).  A non-TILE input (the
-    ROW_MAJOR embedding output) keeps the round-trip that also lands the result in TILE.
+    verified maxabsdiff==0 across the decode + prefill shapes) and ~3x cheaper on the
+    decode path (drops the per-reshape untilize + tilize, ~1.6 ms / B=2 LM forward).
+    A non-TILE input (the ROW_MAJOR embedding output) keeps the round-trip that also
+    lands the result in TILE.
     """
     if x.layout == ttnn.TILE_LAYOUT:
         r = ttnn.reshape(x, shape)
@@ -865,7 +865,7 @@ class TTVibeVoiceLM:
             # TTS that is a different-but-valid generation, not degraded audio — validated
             # by a forced-token audio-parity check.  A grouped
             # fp32 manual decode matches tokens exactly but measured 358 ms/step (slower
-            # than the old 202 ms), so it is not used.  See PERF_OPTIMIZATION_NOTES.md.
+            # than the old 202 ms), so it is not used.
             assert kv_cache is not None and kv_cache.keys[layer_idx] is not None, "decode needs an allocated KV cache"
             ttnn.update_cache(kv_cache.keys[layer_idx], k, start_pos)  # k: [1, n_kv, 1, hd]
             ttnn.update_cache(kv_cache.values[layer_idx], v, start_pos)
