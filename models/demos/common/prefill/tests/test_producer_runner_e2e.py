@@ -121,6 +121,25 @@ SCENARIOS = {
     },
 }
 
+# Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
+# user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
+# PREFILL_PROMPT_FILE at a prompt JSON. The host reference forward uses chunked-SDPA MLA, so its memory
+# stays bounded and PREFILL_PROMPT_CHUNKS chunks (default 1) can be validated — the correctness gate for
+# arbitrary prompts. Runtime is still O(seq^2) in the sequence length, so deeper runs take longer.
+_PROMPT_FILE = os.environ.get("PREFILL_PROMPT_FILE")
+if _PROMPT_FILE:
+    _PROMPT_CHUNKS = int(os.environ.get("PREFILL_PROMPT_CHUNKS", "1"))
+    SCENARIOS["prompt_single_user"] = {
+        "users": 1,
+        # Cache width must exceed the deepest single push (Q.seq == CHUNK_SIZE): the chunked-attention
+        # SDPA gate requires Q.seq < cache-width, so a 1-chunk prompt still needs a 2-chunk cache. For
+        # N>=2 the accumulated fill N*CHUNK_SIZE already exceeds one chunk, so N*CHUNK_SIZE suffices.
+        "max_seq_len": max(2, _PROMPT_CHUNKS) * CHUNK_SIZE,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": str(_PROMPT_CHUNKS), "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+        "prompt_file": _PROMPT_FILE,
+        "isl": _PROMPT_CHUNKS * CHUNK_SIZE,
+    }
+
 
 def _transport_env(num_users: int, max_seq_len: int, **extra) -> dict:
     """Inherit the CI/dev env (weights cache, HF, golden trace) and add the shared orchestration knobs
@@ -179,13 +198,13 @@ def _emit_log_group(title: str, path: str, n: int = _LOG_TAIL_LINES) -> None:
 
 
 @contextlib.contextmanager
-def _running_runner(tag: str, num_users: int, max_seq_len: int):
+def _running_runner(tag: str, num_users: int, max_seq_len: int, **extra):
     """Spin up ONE runner (mock-migration, request mode) for a scenario and tear it down. Yields once
     it has published the H2D descriptor + KV table + device map (i.e. it is serving)."""
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _transport_env(num_users, max_seq_len, PREFILL_MOCK_MIGRATION="1")
+    env = _transport_env(num_users, max_seq_len, PREFILL_MOCK_MIGRATION="1", **extra)
     mode = _launch_mode()
     if mode == "ci":
         print(
@@ -220,14 +239,39 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int):
         _cleanup_ipc()
 
 
+def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str, model: str) -> None:
+    """Host-only pre-step: build a reference-KV trace dir from a prompt. The generator is device-free,
+    so it runs in-process — no subprocess / OS command. A bad prompt or model surfaces as the
+    generator's own exception, so a bad reference is never mistaken for a device PCC failure."""
+    # Lazy import: the generator pulls in torch / transformers / the reference model, which must not
+    # load at test-collection time.
+    from models.demos.deepseek_v3_d_p.tt.runners.generate_prompt_trace import _load_prompt_text, generate
+
+    generate(model, _load_prompt_text(None, prompt_file), isl, NUM_LAYERS, out_dir)
+
+
+@pytest.mark.timeout(_READY_TIMEOUT_S + 2 * _PRODUCER_TIMEOUT_S + 300)
 @pytest.mark.parametrize("scenario", list(SCENARIOS))
-def test_producer_runner_pcc(scenario):
+def test_producer_runner_pcc(scenario, tmp_path):
     """Spin up a fresh runner for the scenario, drive it with the producer, and require the per-slot
     KV PCC gate to pass (the producer exits non-zero if any resident slot is below threshold)."""
     sc = SCENARIOS[scenario]
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
-    with _running_runner(scenario, sc["users"], sc["max_seq_len"]) as runner_log:
-        env = _transport_env(sc["users"], sc["max_seq_len"], PREFILL_PRODUCER_CHECK_PCC="1", **sc["producer"])
+    trace_env = {}
+    if "prompt_file" in sc:
+        model = os.environ.get("PREFILL_MODEL", "kimi_k2_7")
+        trace_env["PREFILL_MODEL"] = model
+        reuse_dir = os.environ.get("PREFILL_REUSE_TRACE_DIR")
+        if reuse_dir and os.path.exists(os.path.join(reuse_dir, "metadata.json")):
+            trace_dir = reuse_dir
+        else:
+            trace_dir = str(tmp_path / "prompt_trace")
+            _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"], model)
+        trace_env["PREFILL_TRACE_DIR"] = trace_dir
+    with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_log:
+        env = _transport_env(
+            sc["users"], sc["max_seq_len"], PREFILL_PRODUCER_CHECK_PCC="1", **trace_env, **sc["producer"]
+        )
         try:
             with open(prod_log, "w") as f:
                 result = subprocess.run(
