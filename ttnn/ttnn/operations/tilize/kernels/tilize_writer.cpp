@@ -79,6 +79,10 @@ void kernel_main() {
 
     using dataflow_kernel_lib::StickReadMode;
     constexpr StickReadMode read_mode = stateful_read ? StickReadMode::Stateful : StickReadMode::Generic;
+    // The write rotation and the C7 read half touch disjoint CBs and disjoint
+    // semaphores, so the combination is harmless today -- but the host never produces
+    // it, and this is the compile-time tripwire if a future gate loosens.
+    static_assert(!stagger || !split_read, "the write-order rotation and the C7 split reader are not paired");
 
     if constexpr (alias_mode) {
         cb_wait_front(cb_tiled_output, shard_tiles);

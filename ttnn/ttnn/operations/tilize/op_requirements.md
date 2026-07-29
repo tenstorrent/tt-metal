@@ -286,7 +286,35 @@ bench regime; golden suite still 126/126.
 
 ---
 
-### [ ] Refinement 2b — `b_wide_short`'s 64-way partial-page fan-in: whole-page reads + L1 redistribution
+### [x] Refinement 2b — `b_wide_short`'s 64-way partial-page fan-in: whole-page reads + L1 redistribution
+
+> **Outcome (2026-07-29): COMPLETE via the second gate clause.** The entry's named algorithm was
+> implemented **in full** — 3 phases, bit-exact on first light — and is **refuted with its
+> counterfactual number and a re-pinned tt-npe DRAM-util figure**: **18 468 ns vs 13 416 = 1.377×
+> SLOWER**. The decisive number is its own **read-side ceiling probe** (phase 1 only, no exchange):
+> the read leg is **5 966 → 5 985 ns**, i.e. a **32× bigger transaction moves the same bytes in the
+> same time**, so this entry's premise — that a partial-page fan-in costs DRAM bandwidth — is **false
+> on this hardware**. The 156.9-vs-179.3 GB/s gap it rests on is between two shapes with different
+> bytes-per-fixed-overhead ratios, not two page-access patterns. The whole algorithm's ceiling is
+> **5.9 %** (the 32 saved read *issues*), and its L1 leg (+4 676 ns) plus 32-core barrier (+1 217 ns)
+> spend that three times over.
+>
+> A **one-sided DM ablation** (new `TILIZE_SKIP_DM=2/3`) built to produce that verdict found the real
+> residual on the side nobody had measured: the **WRITE** leg is the slower one (135 vs 176 GB/s), and
+> the two legs overlap by only 2 482 of a possible 5 966 ns because `nt_h == 1` gives one chunk-block
+> per core. That pointed at the issue **order** rather than its size, and a **per-core
+> transaction-order rotation** landed: **`b_wide_short` 13 367 → 12 554 ns (1.065×)**,
+> **`m_wide_short_8k` 8 124 → 7 208 (1.127×)**, 32k member 1.082×, at **zero L1 cost** — i.e. it beats
+> the refuted algorithm's own theoretical ceiling. Both halves are **superadditive** (0.992/0.985 alone
+> vs 0.929 together), which is why they ship as one gate. Re-blocking to create the missing overlap was
+> also measured and refuted (1.019 / 1.153 / 1.892 at chunk 4 / 2 / 1).
+>
+> The ≥ 1.14× clause is **not met and is shown unreachable**: 11 700 ns needs the DM at **222 GB/s =
+> 1.15× the measured achievable 64-core DRAM copy**, on a regime tt-npe now pins at **116.5 % DRAM BW
+> utilisation with 0.2 % congestion** (up from 102.3 % / 0.7 %). The residual is the launch + tilize-LLK
+> floor (`no_dm` = 17.9 % of the runtime on a one-block kernel) — Refinement 4's lever, not a DM one.
+> Zero regressions across all **81** carried bench regimes; golden 126/126 (240 passed / 0 failed);
+> unit suite 253/253 in both modes. Full ledger: `changelog.md` § "Refinement 2b".
 
 **Goal**: `b_wide_short` `[1,1,32,16384]` from **13 367 ns / 156.9 GB/s** toward the **179.3 GB/s** the
 same 512 B transaction already achieves when it reaches *private* source pages, i.e. ≥ 1.14× (≤ 11 700

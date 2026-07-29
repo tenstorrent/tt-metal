@@ -1465,3 +1465,443 @@ Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **194 passed** (153 p
    understands the 256 B dip could reclaim ~3 % on the 512 B / multi-block family.
 4. Refinements 3–5 unchanged. Refinement 4's `InitUninitMode` clause still has zero headroom
    (Refinement 1 finding 3).
+
+---
+
+## Refinement 2b — `b_wide_short`'s 64-way partial-page fan-in: whole-page reads + L1 redistribution
+
+- **Date**: 2026-07-29
+- **Outcome**: **full (`[x]`)** via the entry's second gate clause. The entry's named
+  algorithm was implemented **completely** (and bit-exactly) and is **refuted with its
+  counterfactual number and a re-pinned tt-npe DRAM-util figure**: 18 468 ns vs
+  13 416 = **1.377× SLOWER**, and its own read-side ceiling probe shows the whole-page
+  read buys **zero** DRAM time — the entry's premise is false on this hardware. The
+  decomposition that produced that verdict also produced a **different** lever, which
+  landed and pays: a per-core transaction-order **stagger** takes `b_wide_short`
+  **13 367 → 12 554 ns (1.065×)** and `m_wide_short_8k` **8 124 → 7 208 (1.127×)** at
+  **zero L1 cost**. The ≥ 1.14× clause is not met and is shown unreachable: tt-npe
+  pins the regime at **116.5 % DRAM bandwidth utilisation with 0.2 % congestion**
+  after the stagger. Zero regressions across all **81** carried bench regimes.
+
+### What was done
+
+**1. The entry's algorithm — whole-page staged read + L1 redistribution. IMPLEMENTED IN
+FULL, MEASURED, REFUTED.**
+
+`b_wide_short` `[1,1,32,16384]` has `nt_h == 1`, so all 64 cores own tile-*columns* of
+one tile-row and every core reads a 512 B slice of each of the **same 32** source pages
+(a bf16 `W=16384` ROW_MAJOR row *is* one 32 768 B DRAM page). The entry's lever breaks
+the coupling between "which bytes a core reads" and "which tiles a core owns":
+
+| phase | what happens |
+|---|---|
+| 1 | each core issues **ONE** contiguous `piece_bytes = 32 × chunk_row_bytes` read of ONE source page into `cb_stage` — **32× fewer, 32× bigger** DRAM transactions for exactly the same bytes. Cores form groups of `FANIN_GROUP_ROWS = 32` (one per source row); group *g* stages source piece *g*. |
+| 2 | all-to-all ready handshake inside the group: one **posted** `noc_semaphore_inc` per group-mate *including self* (a local `+=` would race the 31 inbound atomics and drop increments), then `noc_semaphore_wait_min(sem, 32)`. |
+| 3 | each core **PULLS** its own `chunk_row_bytes` slice out of every group-mate's staging buffer into its own `cb_rm_input` window, stick *r* at offset `r × chunk_row_bytes`. Pull, not push, keeps every core the sole writer of its own CB memory. |
+
+Group-mate *r* is logical core `(grp_x[r % grp_w], grp_y[r / grp_w])`; the host passes the
+group's **physical coordinate axes** (`grid.x + group_rows/grid.x` words instead of
+`2 × group_size`), and asserts that its own work→core order agrees with the kernel's
+rectangle indexing, so a future `grid_to_cores` change cannot silently transpose the
+exchange. It is **bit-exact on first light** and on every shape in the family, which is
+what makes the refutation a *perf* verdict on a working implementation rather than an
+implementation failure.
+
+**2. A one-sided DM ablation, which is what located the real residual.** `TILIZE_SKIP_DM`
+gained two new values — **2 = drop the READ leg only**, **3 = drop the WRITE leg only** —
+so a serialized (depth-1, one-block) regime can be split into its two DM legs. This is
+the measurement the entry was missing.
+
+**3. The lever that actually paid — per-core transaction-order `stagger`.** An interleaved
+tensor puts page *p* in bank `p % NUM_DRAM_BANKS` (12 on WH B0), and every core issues its
+transactions in the *same* page order. With `nt_h == 1` all 64 cores read the same 32
+pages, so at issue step *r* every core hits **ONE** bank while the other 11 idle: the
+requests are spread across banks *in aggregate* but **clustered in time**. The write side
+has the same shape for a different reason — a core writes `chunk_wt` *consecutive* output
+pages, so with `chunk_wt = 8` over 12 banks the 64 cores only ever start on **3** distinct
+banks. `stagger` rotates each work unit's issue order (`row_rot = index % TILE_HW`,
+`col_rot = index % chunk_wt`). It is a **pure index permutation** — same transactions,
+same count, same size, same L1 destinations, **zero extra L1 and zero extra state** — and
+the read half is expressed as two `read_stick_rows_for_tilize` calls over the two row
+runs, so the helper still owns the address generation.
+
+### Accuracy achieved
+
+Unchanged and **bit-exact** — neither lever moves any arithmetic; one reorders NoC issue,
+the other moves bytes through an extra L1 hop. `torch.equal` (PCC = 1.0, rtol = atol = 0,
+0 mismatching elements) on `[1,1,32,4096]`, `[1,1,32,8192]`, `[1,1,32,16384]`,
+`[1,1,32,32768]`, `[1,1,64,16384]`, `[1,1,2048,2048]`, `[1,1,2048,32]`, `[1,1,96,96]`,
+`[2,3,128,64]` — for the **forced fan-in path**, for **all five `stagger` bitmask values**
+(off / gated / both / read-only / write-only), for **both rotation moduli**, on
+DRAM- and L1-interleaved, and over 5 repeated launches. Inputs are `arange`, not `randn`:
+every element is unique, so a stick pulled from the wrong group-mate — or a rotation that
+permuted the *data* instead of the *issue order* — cannot cancel out. bf8b / narrowing-cast
+tolerances untouched (Phase-0 precision baseline still 20/20).
+
+### Golden test progress
+
+**126 / 126** registry cells (90 INVALID-skipped) — unchanged, 0 xfail / xpass / drift.
+`SUPPORTED` is **unchanged** (this is a perf refinement; it unlocks no cell and declares
+no axis value). Whole golden dir minus `test_translated.py`, **run to completion with no
+`-k` filter**: **240 passed, 118 skipped, 0 failed**, byte-identical to the Phase-0 / R1 /
+R1b / R1c / R2 baselines. The 2 collection ERRORs are the pre-existing `use_module_device`
+× `device_params` conflict inside the reference file (Phase-0 issue 6's sibling), present
+in every prior phase. **No hangs** in either mode.
+
+### Perf gate
+
+#### 1. The one-sided DM decomposition — this entry's key measurement
+
+`b_wide_short`, 7 rounds × 10 launches, CV ≤ 1.6 %. `full − no_read` / `full − no_write`
+are marginal costs; `no_read − no_dm` / `no_write − no_dm` are the legs alone:
+
+| variant | ns | leg alone |
+|---|---|---|
+| full | **13 461** | — |
+| `no_read` (read payload dropped) | 9 977 | **write leg = 7 751 ns → 135 GB/s** |
+| `no_write` (write payload dropped) | 8 192 | **read leg = 5 966 ns → 176 GB/s** |
+| `no_dm` (both dropped) | 2 226 | compute + sync |
+
+Two findings, both of which overturn the entry's framing:
+
+- **The WRITE leg is the weaker one**, not the read — 135 GB/s vs 176 GB/s, on
+  already-whole-page 2 048 B writes. The entry (and R2) looked only at the read.
+- **The legs overlap by only 2 482 of a possible ~5 966 ns**, because `nt_h == 1` gives
+  every core exactly ONE chunk-block and a single block has no successor to overlap with.
+
+#### 2. The entry's algorithm, priced by its own read-side ceiling probe
+
+`fanin_mode == 2` is a **measurement probe**: phase 1 only, straight into the CB, no
+exchange. It moves the same bytes with the same cores in **1 transaction instead of 32**,
+so `probe / off` is *the most this algorithm can ever buy* and `forced / probe` is what
+the L1 hop plus barrier costs. All rows stagger-free so the comparison is clean:
+
+| shape | read | off ns | **probe** ns | probe/off | **forced** ns | forced/off |
+|---|---|---|---|---|---|---|
+| `[1,1,32,16384]` | 512 B | 13 416 | **12 627** | **0.941** | **18 468** | **1.377** |
+| `[1,1,32,8192]` | 256 B | 8 148 | 6 909 | 0.848 | 10 208 | 1.253 |
+| `[1,1,32,4096]` | 128 B | 5 003 | 3 645 | 0.729 | 6 578 | 1.315 |
+
+And the ablation says *where* the probe's gain comes from — **not** from DRAM:
+
+| leg | off | probe | verdict |
+|---|---|---|---|
+| read alone | 5 966 ns | **5 985 ns** | **IDENTICAL** — a 32× bigger transaction moves the same bytes in the same time |
+| write alone | 7 785 ns | 7 765 ns | untouched, as expected |
+| compute + sync | 2 226 ns | 1 684 ns | the whole probe gain is the 32 read **ISSUES** |
+
+**So the entry's premise is false on this hardware: 512 B slices of a shared 32 768 B page
+cost exactly what 512 B whole pages cost.** The 5.9 % ceiling the probe does show on the
+target shape is issue overhead — already below the entry's 14 % gate — and the
+redistribution's own L1 exchange leg (**+4 676 ns**) plus its 32-core barrier (**+1 217 ns**
+of `no_dm`) spend it three times over. The shipped stagger delivers **7.0 %**, i.e. it
+**beats the refuted algorithm's own theoretical ceiling** while costing no L1.
+
+#### 3. Re-blocking, also measured and also refuted
+
+The other way to create the missing read/write overlap is more blocks per core. Forced via
+the planner's new `chunk_cap` sweep hook, at the same 64 cores (`b_wide_short`):
+
+| chunk | read B | blk/core | ns | vs chunk 8 | `no_dm` |
+|---|---|---|---|---|---|
+| **8** | 512 B | 1 | **13 344** | **1.000** | 2 228 |
+| 4 | 256 B | 2 | 13 594 | 1.019 | 2 622 |
+| 2 | 128 B | 4 | 15 390 | 1.153 | 3 881 |
+| 1 | 64 B | 8 | 25 249 | 1.892 | 6 005 |
+
+The per-block sync floor grows **~400–500 ns per block** (R1 measured `590 + 612 × blocks`),
+which swamps the overlap a second block buys. Stacked on top of the stagger it is still a
+wash (`chunk4 + stg` 12 548 vs `chunk8 + stg` 12 549), so the shipped plan keeps chunk 8.
+NB R2 recorded "finer chunking to 2 blocks × 256 B: +1.3 % (`p_2blk_256B` 13 536 vs
+13 367)" — but `p_2blk_256B` is `[1,1,4096,128]`, a **different shape** with whole-page
+256 B reads, not `b_wide_short` chunked. That comparison is now done properly on the
+regime itself.
+
+#### 4. The stagger gate — two device sweeps
+
+Both halves ship **together**, because they are measured **superadditive** and neither is
+worth much alone (in-run A/B, 7 rounds × 10 launches):
+
+| shape | chunk | read only | write only | **BOTH** |
+|---|---|---|---|---|
+| `[1,1,32,16384]` | 8 | 0.992 | 0.985 | **0.929** |
+| `[1,1,32,8192]` | 4 | 0.993 | 0.924 | **0.897** |
+
+Mechanism, and it explains the interaction: the instantaneous demand on a bank is read
+demand **plus** write demand. Spreading only the reads leaves the writes piled on a few
+banks, so the *busiest* bank — which is what sets the time — barely moves. Only when both
+streams are spread does the per-bank load flatten. (Returning a single half from the gate
+would ship ~1 % of a 7 % win.)
+
+Where it pays — the clause is `nt_h == 1`, i.e. **every** core reads the **same** 32 source
+pages, plus a wide enough chunk:
+
+| shape | nt_h | n_w | chunk | read B | off ns | stg ns | ratio |
+|---|---|---|---|---|---|---|---|
+| `[1,1,32,4096]` | 1 | 64 | 2 | 128 B | 4 989 | 4 972 | 0.997 |
+| `[1,1,32,8192]` | 1 | 64 | 4 | 256 B | 8 046 | **7 194** | **0.894** |
+| `[1,1,32,16384]` | 1 | 64 | 8 | 512 B | 13 433 | **12 543** | **0.934** |
+| `[1,1,32,32768]` | 1 | 64 | 16 | 1024 B | 25 394 | **23 820** | **0.938** |
+| `[1,1,64,16384]` | **2** | 32 | 16 | 1024 B | 24 669 | 24 447 | 0.991 |
+| `a_square` | 64 | **1** | 16 | 1024 B | 86 058 | 86 591 | 1.006 |
+| `d_tall_narrow` | 64 | **1** | 1 | 64 B | 3 609 | 3 627 | 1.005 |
+| `g_dram_to_sharded` | 64 | **1** | 16 | 1024 B | 19 049 | 19 402 | 1.019 |
+| `e_square_fp32` | 64 | **1** | 8 | 1024 B | 182 908 | 183 178 | 1.001 |
+
+At `nt_h == 2` only half the grid shares each page set — which already halves the
+clustering — and the win is gone. At `n_w == 1` each core reads its **own** rows, so there
+is nothing to de-cluster. ⇒ `stagger_pays = ncores > 1 ∧ nt_h == 1 ∧ chunk_wt ≥ 4`.
+
+Also swept and **rejected**: rotating by `NUM_DRAM_BANKS` (12), which makes the per-core
+*starting* bank perfectly uniform instead of uniform-mod-32 — **12 766 vs 12 505 (+2.1 %)**
+and **7 173 vs 7 176 (0.0 %)**. The row-loop period wins; the sweep hook stays (and is
+covered by a bit-exactness test) so the verdict is re-measurable.
+
+#### 5. Ceiling vs measured, and why ≥ 1.14× is unreachable
+
+| | before | **after** |
+|---|---|---|
+| `b_wide_short` measured | 13 367 ns @ 156.9 GB/s | **12 554 ns @ 167.1 GB/s** |
+| vs the in-tree measured 64-core DRAM→DRAM copy (193.8 GB/s) | 0.810 | **0.862** |
+| **tt-npe golden cycles** | 14 477 | **12 714** |
+| **tt-npe DRAM BW util** | 102.3 % | **116.5 %** |
+| **tt-npe congestion impact** | 0.7 % | **0.2 %** |
+| tt-npe avg / max link util | 30.0 % / 59.5 % | 35.2 % / 63.7 % |
+| tt-npe max link demand | 183.2 % | 322.1 % |
+
+Traces captured with `TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1` +
+`..._RPT_PATH` (the documented `profile_this.py --collect-noc-traces` path is still a dead
+end on this box — R2 issue 5); congestion isolated with `--cong none` (12 695 vs 12 724 =
+0.2 %). Prediction error −2.4 % / +0.1 %.
+
+**The gate is unreachable, and the arithmetic is short:** 11 700 ns would require the DM
+to run at `2.10 MB / (11 700 − 2 250) = 222 GB/s`, i.e. **1.15× the measured achievable
+64-core DRAM copy rate** — on a regime tt-npe already places at **116.5 %** of its modeled
+DRAM bandwidth with **0.2 %** congestion left. The residual `0.862 → 1.0` is not DM at
+all: it is the launch + tilize-LLK floor that a 2.10 MB, one-block-per-core kernel cannot
+amortize (`no_dm` alone is 2 250 ns = **17.9 %** of the runtime), and R1c already priced
+the bare launch at 735–764 ns of that. That floor is Refinement 4's territory
+(kernel-count reduction), not a data-movement lever's.
+
+#### 6. Cumulative bench set — non-regression (median of 7 × 10 launches, WH B0 8×8)
+
+Whole set re-measured — **81 carried regimes**, not a subset. Headline rows:
+
+| regime | shape | cores | chk | blk | STG | R2 ns | **now ns** | Δ |
+|---|---|---|---|---|---|---|---|---|
+| a_square | `[1,1,2048,2048]` | 64 | 16 | 4 | 0 | 85 960 | **85 501** | −0.5 % |
+| **b_wide_short** | `[1,1,32,16384]` | 64 | 8 | 1 | **3** | 13 367 | **12 554** | **−6.1 %** |
+| c_single_core | `[1,1,512,512]` | 1 | 16 | 16 | 0 | 27 343 | **27 364** | +0.1 % |
+| d_tall_narrow | `[1,1,2048,32]` | 64 | 1 | 1 | 0 | 3 472 | **3 401** | −2.0 % |
+| e_square_fp32 | `[1,1,2048,2048]` fp32 | 64 | 8 | 8 | 0 | 182 733 | **182 564** | −0.1 % |
+| e_square_bf8b_out | `[1,1,2048,2048]`→bf8b | 64 | 16 | 4 | 0 | 64 662 | **64 606** | −0.1 % |
+| e_square_fp32_to_bf16 | `[1,1,2048,2048]` fp32→bf16 | 64 | 8 | 8 | 0 | 121 078 | **121 082** | +0.0 % |
+| f_sharded_small | `[1,1,512,64]` H-shard | 4 | 2 | 4 | — | 1 372 | **1 356** | −1.1 % |
+| f_sharded_large | `[1,1,2048,512]` B-shard | 64 | 2 | 8 | — | 2 070 | **2 073** | +0.1 % |
+| g_dram_to_sharded | `[1,1,2048,512]`→B-shard | 64 | 16 | 1 | 0 | 18 988 | **18 939** | −0.3 % |
+| g_sharded_to_dram | `[1,1,2048,512]` B-shard→ | 64 | 2 | 8 | 0 | 19 753 | **19 741** | −0.1 % |
+| **m_wide_short_8k** | `[1,1,32,8192]` | 64 | 4 | 1 | **3** | 8 124 | **7 208** | **−11.3 %** |
+| m_wide_short_4k | `[1,1,32,4096]` | 64 | 2 | 1 | 0 | 4 769 | **4 808** | +0.8 % |
+| n_tall_narrow_4blk | `[1,1,8192,32]` | 64 | 1 | 4 | 0 | 11 199 | **11 242** | +0.4 % |
+| x_wide_short_1core | `[1,1,32,16384]` 1c | 1 | 16 | 32 | 0 | 50 892 | **50 750** | −0.3 % |
+| x_square_depth1 / depth2 | — | 64 | 16 | 4 | 0 | 85 795 / 85 445 | **85 813 / 85 828** | +0.0 / +0.4 % |
+| x_tall_narrow_16c | `[1,1,2048,32]` 16c | 16 | 1 | 4 | 0 | 7 550 | **7 581** | +0.4 % |
+| x_sharded_small_depth1 | alias, forced d1 | 4 | 2 | 4 | — | 1 361 | **1 362** | +0.0 % |
+
+**Zero regressions.** Over all 81 carried regimes the spread is **−11.3 % … +2.0 %** with
+exactly one row beyond +2 %: `x_square_b10_write_only` at **+4.2 %**, a *refuted*-lever
+counterfactual (B10's write-VC half). R2 itself recorded that row family at **CV 3.7–4.7 %,
+"itself a symptom — a saturated write VC is unstable"**, and three consecutive
+re-measurements of the identical plan in one session gave **167 253 / 170 689 / 167 209 ns
+(CV 2.2–3.5 %, ±2.1 % spread)**, so the cross-session delta is inside its own scatter. The
+decisive independent check that the writer's loop rewrite cost nothing is that **every
+shipped write-heavy regime is flat or faster** (a_square −0.5 %, x_square_depth1 +0.0 %,
+e_square_bf8b_out −0.1 %, e_square_fp32 −0.1 %, g_dram_to_sharded −0.3 %,
+p_2blk_1024B −0.6 %).
+
+Per-core CB L1: **unchanged on every regime** — the stagger is a pure index permutation and
+costs 0 B (`test_stagger_costs_no_l1`). The refuted fan-in path would add `piece_bytes`
+(32 768 B on `b_wide_short`, 49 152 B total), still a constant in `W`
+(≤ `TILE_HW × WT_CHUNK_MAX × TILE_HW × 4` = 65 536 B), which is why
+`PROPERTIES["bounded_cb"]` survives on that path too — asserted at four widths.
+
+New rows added to the cumulative set for future phases: `p_wide_short_r2b_off` 13 416 ·
+`x_wide_short_r2b_probe` 12 627 · `x_wide_short_r2b_forced` 18 468 ·
+`p_wide_short_8k_r2b_off` 8 148 · `x_wide_short_8k_r2b_probe` 6 909 ·
+`x_wide_short_8k_r2b_forced` 10 208 · `p_wide_short_4k_r2b_off` 5 003 ·
+`x_wide_short_4k_r2b_probe` 3 645 · `x_wide_short_4k_r2b_forced` 6 578 ·
+`p_wide_short_stg_off` 13 453 · `x_wide_short_stg` 12 505 ·
+`x_wide_short_stg_read_only` 13 459 · `x_wide_short_stg_write_only` 13 272 ·
+`x_wide_short_stg_mod12` 12 766 · `p_wide_short_8k_stg_off` 8 111 · `x_wide_short_8k_stg`
+7 176 · `x_wide_short_8k_stg_read_only` 7 988 · `x_wide_short_8k_stg_write_only` 7 329 ·
+`x_wide_short_8k_stg_mod12` 7 173 · `p_wide_short_4k_stg_off` 4 971 · `x_wide_short_4k_stg`
+4 979 · `p_wide_short_32k_stg_off` 25 633 · **`n_wide_short_32k` 23 690** ·
+`p_wide_short_2row_stg_off` 24 704 · `n_wide_short_2row` 24 535 · `p_square_stg_off`
+85 779 · `x_square_stg` 86 644 · `x_square_stg_read_only` 85 242 ·
+`x_square_stg_write_only` 87 014 · `p_tall_narrow_stg_off` 3 618 · `x_tall_narrow_stg`
+3 625 · `p_g_to_sharded_stg_off` 19 006 · `x_g_to_sharded_stg` 19 438 ·
+`p_square_fp32_stg_off` 182 051 · `x_square_fp32_stg` 183 476 · `p_wide_short_chunk8`
+12 356 · `x_wide_short_chunk4` 12 550 · `x_wide_short_chunk2` 15 224 · `x_wide_short_chunk1`
+25 337 · `x_wide_short_chunk4_d2` / `chunk2_d2` / `chunk1_d2` · `x_wide_short_chunk2_gated` /
+`chunk1_gated` · `x_wide_short_chunk4_stg` 12 548 · `x_wide_short_chunk2_stg` 15 310.
+
+#### 7. Mode-C used-optimization ledger
+
+| lever | id | predicted Δ | **measured Δ (lever/none)** | verdict |
+|---|---|---|---|---|
+| whole-page staged read + L1 redistribution | **R2b algorithm** | NPE Mode A: full-contention bracket 21 598 → 15 621 ns (0.72) — read `32×512 B` 14 564 → `1×16 384 B` 7 589 (0.52), + 998 ns L1 leg | **1.377 / 1.253 / 1.315** (16k / 8k / 4k). Its own read-side probe: **0.941 / 0.848 / 0.729**, and the ablation shows the read leg is **5 966 → 5 985 ns, i.e. unchanged** | **DROP — refuted.** The NPE bracket's 0.52 read factor does not exist on silicon: partial-page reads of a shared page cost what whole pages cost, so the algorithm's *entire* upside is the 32 saved read issues (≤ 5.9 % on the target shape) and its L1 leg (+4 676 ns) plus 32-core barrier (+1 217 ns of sync) spend that three times over. Gate identity-false; code + 9 bench rows retained. |
+| — sub-lever: the whole-page read **alone** (no exchange) | R2b probe | "the bigger transaction is what pays" | **0.941** on the target shape — and the *shipped stagger beats it at 0.930 for 0 B of L1* | **DROP as a path** — it cannot exist without the exchange (a tile needs all 32 rows, so a core that reads whole pages reads bytes it does not own). Kept as the ceiling row. |
+| — sub-lever: re-blocking to create read/write overlap | B0 / C16 | "a second block lets the write of block *i* overlap the read of *i+1*" | **1.019 / 1.153 / 1.892** (chunk 4 / 2 / 1); with the stagger 12 548 vs 12 549 = **1.000** | **DROP** — the per-block sync floor (~400–500 ns/block) exceeds the overlap it buys. `chunk_cap` sweep hook retained. |
+| **per-core transaction-order rotation** | **A3′ / B5-adjacent** (new) | de-cluster the instantaneous per-bank demand: with `nt_h == 1` all 64 cores hit one bank per issue step | **0.929 / 0.894 / 0.938** (16k / 8k / 32k) · halves alone **0.992 / 0.985** and **0.993 / 0.924** · **0.997** at chunk 2 · **0.991** at `nt_h = 2` · **1.001–1.019** at `n_w == 1` | **KEEP, gated** to `ncores > 1 ∧ nt_h == 1 ∧ chunk_wt ≥ 4`. −6.1 % on `b_wide_short`, −11.3 % on `m_wide_short_8k`, −7.6 % on the 32k member, at **0 B/core** of extra L1. |
+| — sub-lever: rotate by `NUM_DRAM_BANKS` instead of `TILE_HW` | — | "a perfectly uniform starting bank should beat uniform-mod-32" | **+2.1 %** (12 766 vs 12 505) and **0.0 %** (7 173 vs 7 176) | **DROP** — the row-loop period wins. Sweep hook retained. |
+
+#### 8. DM lever checklist review (`master.md` Part 2)
+
+Applied this pass: the **per-core issue-order rotation** — a lever the checklist does not
+yet carry. It is adjacent to **A3** (which is about *which core* talks to which bank, and
+is refuted here) and to **B5/B6** (which are about transaction *size*, also refuted here),
+but it is a third axis: the **temporal order** in which a fixed set of transactions is
+issued, at fixed size and fixed placement. Worth promoting to the catalog: it costs
+nothing, it is a pure permutation, and it is worth 7–11 % wherever many cores stream the
+same interleaved pages in the same order (`nt_h == 1` here, but the shape is generic).
+
+Re-confirmed still applied: B7 one barrier per block, B5/B6 width coalescing, A0 2D
+height-first split, A1 `row_wise`, B8 (gated), B9 reads NoC0 / writes NoC1, B13 (gated
+≤ 128 B), C7 (gated 64 B), C14 alias, C16 gated depth, D18/D19 program-cache args.
+**Measured-no-payoff, cumulative: B10, A3** (R2) and now **the whole-page + L1
+redistribution algorithm** and **re-blocking** on the wide-short regime. Deliberately not
+applied and left to their owners: C14 one-sided aliasing (R3), B5/B6 on the sharded read
+(R3), C7 on DRAM→sharded (R3), kernel-count reduction on Path B (R4).
+
+### Issues encountered
+
+1. **The entry's premise is falsifiable on device, and the probe is what falsified it.**
+   "A 64-way *partial-page* fan-in costs DRAM bandwidth" — measured, it does not: 512 B
+   slices of a shared 32 768 B page cost **exactly** what 512 B whole pages cost
+   (read leg 5 966 → 5 985 ns for a 32× bigger transaction). The 156.9 vs 179.3 GB/s
+   comparison the entry rests on is between two shapes with different
+   bytes-per-fixed-overhead ratios (2.10 MB / 1 block vs 4.19 MB / 2 blocks), not between
+   two page-access patterns. Implementing the read-side **ceiling probe before the full
+   algorithm** is what surfaced that for ~30 lines of kernel; the full 3-phase
+   implementation then only confirmed it.
+2. **The residual was on the side nobody had measured.** R2 spent its whole budget on the
+   read path; the one-sided ablation says the **write** leg is the slower one (135 vs
+   176 GB/s). It also says the two legs barely overlap (2 482 of 5 966 ns) — which is what
+   pointed at the issue *order* rather than the issue *size*.
+3. **The two rotation halves are superadditive, and measuring only one would have killed
+   the lever.** Read-only is 0.992 and write-only 0.985 — both inside the noise floor a
+   reviewer would dismiss — while together they are 0.929. The reason is that the busiest
+   bank sees read *plus* write demand, so spreading one stream alone barely moves the
+   maximum. A per-lever audit that tests halves independently and drops anything under the
+   noise floor would have discarded a 7 % win.
+4. **R2's re-blocking refutation compared the wrong thing.** `p_2blk_256B` is
+   `[1,1,4096,128]`, a different shape with *whole-page* 256 B reads — not `b_wide_short`
+   chunked. Re-blocking is still refuted on the regime itself (1.019 / 1.153 / 1.892), but
+   it needed the `chunk_cap` hook to be measured properly, and the hook is now permanent.
+5. **`ttnn-static-analyzer` found one real UB and three diagnostic gaps** — see below.
+
+### Static-analysis pass on both new paths (`ttnn-static-analyzer`, this entry)
+
+The fan-in path is a hand-rolled cross-core L1 gather with a semaphore barrier, and the
+stagger rewrites the shipped write loop for *every* regime — both are the class of change
+that passes a bit-exactness suite and fails later under different timing, so both were
+reviewed with a fresh context after the tests were green.
+
+**One finding, acted on:**
+
+| # | finding | action |
+|---|---|---|
+| F1 | **UNDEFINED_BEHAVIOR (bench-reachable).** Both `fanin_mode` exits `return` early and skipped B10's `NOC_CTRL` **sticky** read-VC restore, so `TILIZE_LEVER_B10=2\|3` together with `R2B=2\|3` leaks this core's custom static read VC into the next, *unrelated* program on that core — the exact hazard the other two exits restore against. Nothing on the host pairs the two gates (both are identity-false, so it is bench-only, which is precisely where the counterfactuals are re-measured). | **Fixed** on both exits, plus an 8-cell regression test (forced `R2B × B10`, asserting the *next* default call is still bit-exact — the leak is cross-program, so the second call is the observable). |
+
+**Three advisories, all applied:**
+
+| # | advisory | action |
+|---|---|---|
+| O1 | `blocks_per_core == 1` is a **host** gate and cannot be a `static_assert`, but the runtime args that encode it are in the kernel. Without a check, a future second block would surface as a `cb_wait_front` hang preceded by wrong data — and if someone also added the outer loop, the single un-flow-controlled staging window becomes a genuine **silent-corruption** source (a mate overwrites its `cb_stage` with block 2's piece while this core is still pulling block 1). | **`ASSERT(chunk_count == 1 && num_rows == tile_height)`** added inside the fan-in block (watcher builds), matching how B13 guards its own bank identity. |
+| O2 | No `static_assert(!stagger \|\| row_page_stride == 1)`, so a multi-page source row would make the host report the lever ON while the kernel silently took the raw strided fallback — correct output, lever quietly lost, no diagnostic. This is the exact gap B8 guards. | **`static_assert` added.** |
+| O3 | `tilize_writer.cpp` carried **no** `static_assert` at all, so the write rotation had no compile-time tripwire against `split_read` / `stateful_read` (harmless today — disjoint CBs and semaphores — but unguarded). | **`static_assert(!stagger \|\| !split_read)` added.** |
+
+**Zero structural findings on everything else.** Four premises the review was pointed at
+turn out to be *guaranteed*, and the proofs are worth recording:
+
+1. **No launch-skew hazard on the fan-in gather.** Mate *r* pulls only after its own
+   `noc_semaphore_wait_min` returns, which requires this core's increment, which is issued
+   only after its phase-1 `noc_async_read_barrier()`. Phase 2 uses the *write* atomic
+   command buffer and phase 3 the *read* one, so there is no in-order cmd-buf aliasing.
+2. **A next-launch overwrite of `cb_stage` while a lagging mate still pulls is impossible.**
+   `process_go_signal_mcast_cmd` does not multicast program *N+1*'s go signal until **all**
+   workers of programs 1..N have reported done, and N+1's config writes (including
+   semaphore initial values) precede it in the dispatch stream — so no core can be a launch
+   ahead, and `sem = 0` has landed everywhere before any increment can be issued.
+3. **The posted self-increment through the NoC is necessary, not sloppy.** A local
+   `*sem += 1` is a non-atomic RISC-V read-modify-write racing 31 inbound NoC atomics; it
+   can drop increments and hang the whole group. Corollary worth knowing: because posted
+   atomics are not counted, `noc_async_atomic_barrier()` here would be a no-op — the wait
+   *is* the barrier, so the usual "always barrier after `noc_semaphore_inc`" rule does not
+   apply on this path.
+4. **The stagger's manual CB bookkeeping is an exact match for `read_sticks_for_tilize`**
+   (`width_in_tiles == chunk_wt` and `padded_row_bytes == chunk_row_bytes` identically, one
+   barrier and one push of `chunk_wt` per block, `div_up` and `/` agree because `num_rows`
+   is always a multiple of 32), and the two rotated helper calls reproduce the *same*
+   (source page → L1 offset) pairs — only the issue order moves. The writer's
+   `k = (i + col_rot) mod chunk_wt` is a bijection on `[0, chunk_wt)` reusing the same
+   `(l1_addr + k·tile_bytes → base_page + k)` pairing, so `noc_async_writes_flushed()` plus
+   the single trailing barrier is still sufficient.
+
+### Tests added
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement2b.py` — **59 cells**.
+  For the **refuted** fan-in path: the identity-false gate with the measurement in the
+  assert message (so re-enabling it fails here with the numbers attached); the plan never
+  selects it by default and leaves **no staging CB and no semaphore** behind when off; its
+  structure when forced (one group per source piece, piece exactly `FANIN_GROUP_ROWS`
+  chunks wide, the pieces tiling the source row exactly, group axes consistent, bounded
+  CB); its **bit-exactness** on three shapes over repeated launches, so the refutation
+  reads as a perf verdict on a working implementation; the garbage-producing probe mode is
+  unreachable by default; the structural preconditions hold even when forced; mutual
+  exclusion with B13/C7/B8/stagger; and **F1** — the sticky read-VC restore across all 8
+  forced `R2B × B10` combinations. For the **shipped** stagger: both gate clauses pinned to
+  the sweep table in the docstring; the superadditivity that makes it all-or-nothing; the
+  `chunk_wt == 1` write-half mask; off on the zero-copy path; **zero L1 and an unchanged
+  transaction shape**; never coexisting with a lever that owns the row loop (all levers
+  forced at once, the adversarial case); bit-exactness on 7 shapes × 5 bitmask values ×
+  both rotation moduli × L1-interleaved × 5 repeated launches; the program-cache hit; the
+  rotation being a genuine permutation that still covers the tensor exactly; and A0 +
+  bounded-CB at four widths for both levers.
+- `_bench_tilize.py` — an `r2b` lever key (`0` off, `1` gated, `2` force, **`3` = the
+  read-side ceiling probe**) and an `stg` key (`0`/`1`/`2` plus `3` read-only, `4`
+  write-only, mirroring B10's convention); `R2B`/`STG` report columns; a fan-in CB-budget
+  assert and a **stagger-gate assert** (narrowing either gate now fails the bench);
+  `chunk_cap` and `stagger_mod` sweep hooks; the `TILIZE_BENCH_SPLIT_DM=1` variant set
+  (`no_read` / `no_write`, the one-sided DM ablation); and **41 new regimes**.
+- `probes/probe_016.py` (fan-in first-light plan + bit-exactness across the family),
+  `probes/probe_017.py` (stagger bit-exactness on 6 shapes × 2 lever values).
+
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **253 passed** (194 prior + 59
+new) in **both** default and `--dev` mode.
+
+### Ranked follow-ups
+
+1. **`b_wide_short` is now at its ceiling; the remaining 0.862 → 1.0 is the launch +
+   compute floor, which is Refinement 4's lever, not a DM one.** `no_dm` is 2 250 ns =
+   17.9 % of the 12 554 ns runtime on a one-block-per-core kernel, and R1c priced the bare
+   launch at 735–764 ns of that. Refinement 4's kernel-count reduction is the only entry in
+   the queue that attacks it. Note its scope says "Path B (same-spec sharded)" — the same
+   lever applies to any one-block-per-core interleaved regime, which is worth widening.
+2. **Promote the per-core issue-order rotation to `master.md` Part 2.** It is a third axis
+   next to A3 (placement) and B5/B6 (size) — the temporal *order* of a fixed transaction
+   set — costs nothing, and is worth 7–11 % wherever many cores stream the same interleaved
+   pages in the same order. Refinement 5's Mode-D audit should carry it.
+3. **The write leg is the weaker one on every interleaved regime** (135–152 GB/s vs
+   176–224 GB/s for reads), and nothing in the queue targets it. Consecutive output tile
+   pages land on *different* banks so they cannot be coalesced — but pages `p` and
+   `p + NUM_DRAM_BANKS` are *contiguous inside one bank*, so a bank-aware page grouping
+   could write several tiles in one transaction. It inverts the read-side coalescing, so it
+   is a real trade to measure, not an obvious win.
+4. **The stagger's `chunk_wt >= 4` clause has an unexplored corner.** At chunk 2 the
+   rotation is neutral (0.997) while the read-side probe shows a **0.729** ceiling on the
+   same shape — i.e. `[1,1,32,4096]` has 27 % of headroom that neither lever reaches, and
+   it is issue-count bound (32 × 128 B reads). B13 already ships there (0.968); a phase
+   that understands the 128 B issue floor could reclaim more.
+5. Refinements 3–5 unchanged. Refinement 4's `InitUninitMode` clause still has zero
+   headroom (Refinement 1 finding 3).

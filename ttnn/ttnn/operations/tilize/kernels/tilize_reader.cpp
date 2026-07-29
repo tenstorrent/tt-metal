@@ -187,6 +187,10 @@ void kernel_main() {
     static_assert(
         !stagger || (prefetch_blocks == 1 && !split_read && !stateful_read && !fanin_mode),
         "the read-order rotation owns the row loop; B8/C7/B13/fan-in cannot also own it");
+    // Same diagnostic gap B8 guards against: with a multi-page source row the branch
+    // condition below is false, so the host would report the lever ON while the kernel
+    // silently took the raw strided fallback -- correct output, lever quietly lost.
+    static_assert(!stagger || row_page_stride == 1, "the read-order rotation needs one source page per row");
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -214,6 +218,14 @@ void kernel_main() {
             // --- Refinement 2b: whole-page staged read (+ L1 redistribution) ------
             const uint32_t stage_page = get_arg_val<uint32_t>(7);
             const uint32_t stage_offset = get_arg_val<uint32_t>(8);
+            // `blocks_per_core == 1` is a HOST gate and cannot be a static_assert (it
+            // is not a compile-time arg), but the two runtime args that encode it are
+            // right here. Without this a future host change that allowed a second block
+            // would surface as a `cb_wait_front(cb_rm_input)` hang preceded by wrong
+            // data -- and the single un-flow-controlled staging window would become a
+            // genuine silent-corruption source (a mate would overwrite its cb_stage
+            // with block 2's piece while this core is still pulling block 1).
+            ASSERT(chunk_count == 1 && num_rows == tile_height);
 
             if constexpr (fanin_mode == 2) {
                 // Measurement probe: the staged read alone, straight into the CB
@@ -227,6 +239,13 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_rm_input, chunk_wt);
+                // NOC_CTRL is sticky ACROSS KERNEL LAUNCHES, so every exit from this
+                // kernel owes the restore -- an early `return` that skips it leaks this
+                // core's custom read VC into the next, unrelated program on this core.
+                if constexpr (read_vc_spread) {
+                    noc_async_read_one_packet_set_state<true>(
+                        accessor.get_noc_addr(start_row), chunk_row_bytes, default_read_vc);
+                }
                 return;
             }
 
@@ -267,6 +286,10 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_rm_input, chunk_wt);
+            if constexpr (read_vc_spread) {  // see the probe exit above
+                noc_async_read_one_packet_set_state<true>(
+                    accessor.get_noc_addr(start_row), chunk_row_bytes, default_read_vc);
+            }
             return;
         }
 

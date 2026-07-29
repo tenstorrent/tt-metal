@@ -283,6 +283,35 @@ def test_fanin_and_the_other_read_levers_are_mutually_exclusive(device, monkeypa
         assert plan["stagger"] == 0
 
 
+@pytest.mark.parametrize("b10_env", [0, 2, 3, 4])
+@pytest.mark.parametrize("r2b_env", [2, 3])
+def test_fanin_restores_the_sticky_read_vc_on_every_exit(device, monkeypatch, r2b_env, b10_env):
+    """`ttnn-static-analyzer` F1: both fan-in exits `return` early.
+
+    B10 arms a per-core static read VC in the STICKY `NOC_CTRL` register, which
+    survives the kernel launch, so every exit owes the restore. An early `return`
+    that skips it leaks a custom read VC into the next, unrelated program on that
+    core and silently changes ITS NoC behaviour. Nothing on the host pairs the two
+    gates (both are identity-false, so the combination is only reachable from the
+    bench -- which is exactly where the counterfactuals are re-measured).
+
+    The leak is cross-program, so the check is: run the forced combination, then run
+    a plain default tilize on the same cores and require it to still be bit-exact and
+    unchanged. Correctness on the SECOND call is the observable.
+    """
+    _levers(monkeypatch, r2b=r2b_env, b10=b10_env)
+    n = WS_16K[2] * WS_16K[3]
+    torch_input = (torch.arange(n, dtype=torch.float32) % 8192.0).reshape(WS_16K).bfloat16()
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tilize(tt_input)  # the forced combination; output is garbage when r2b == 3
+    _levers(monkeypatch)  # back to the shipped default
+    result = ttnn.to_torch(tilize(tt_input))
+    assert torch.equal(result.float(), torch_input.float()), (
+        "the program after a forced fan-in + B10 run is no longer bit-exact -- the "
+        "sticky NOC_CTRL read VC leaked past the fan-in path's early return"
+    )
+
+
 # ---------------------------------------------------------------------------
 # The SHIPPED lever — `stagger` (per-core transaction-order rotation)
 # ---------------------------------------------------------------------------
