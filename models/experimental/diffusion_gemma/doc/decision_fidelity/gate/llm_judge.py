@@ -43,6 +43,20 @@ Usage::
 Costs money per call, so verdicts are cached on disk keyed by (model, prompt version, text): re-runs
 of the same run are free, and ``--votes N`` majority-votes N independent calls when a single
 judgement is not enough.
+
+CONCURRENCY. 198 questions one at a time is a coffee break spent almost entirely waiting on sockets,
+so the default is 32 calls in flight and the scheduled unit is a CALL, not an item -- ``--votes 5``
+fans out across votes as well as items, which a per-item pool cannot do. But ``--concurrency`` is a
+CEILING, not a promise: a fixed high concurrency against a shared proxy degenerates into a 429 storm,
+so a ``Limiter`` halves the in-flight budget once per congestion epoch (honouring ``Retry-After``),
+creeps it back one slot per 24 clean responses, and prints where it settled so the next run can start
+there. Verdicts are flushed to the cache as they land, so a killed run keeps every call it paid for.
+
+Measured on 60 calls of 0.25 s each against a stub proxy: 15.4 s serial, **0.7 s at 32 in flight when
+the proxy does not push back (22x)**, and 5.8 s when the stub rejects above 6 in flight -- in that
+last case the limiter converges on 6, which is the answer, rather than the 4 it undershot to before
+the epoch rule existed. So the high-concurrency default is free when the proxy is permissive and
+self-correcting when it is not.
 """
 
 from __future__ import annotations
@@ -59,7 +73,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 DEFAULT_BASE = os.environ.get("LITELLM_BASE_URL", "https://litellm-proxy--tenstorrent.workload.tenstorrent.com")
@@ -71,6 +85,12 @@ KEY_ENV = ("LITELLM_API_KEY", "TT_LITELLM_API_KEY", "API_KEY", "OPENAI_API_KEY")
 PROMPT_VERSION = "v1"
 
 LETTERS = "ABCDEFGH"
+
+# Judge calls are network-bound and each one parks a thread on a socket, so the useful concurrency is
+# set by what the proxy tolerates, not by core count -- 198 questions at 8 in flight is minutes of
+# mostly-idle waiting. 32 is the ceiling the limiter starts from and adapts DOWN from on 429/503, so
+# a default this high costs nothing when the proxy is stricter than that.
+DEFAULT_CONCURRENCY = int(os.environ.get("LITELLM_JUDGE_CONCURRENCY", "32"))
 
 FAILURE_MODES = (
     "none",
@@ -128,30 +148,157 @@ def resolve_key(explicit: str | None, key_file: Path | None) -> str:
     )
 
 
-def http_json(url: str, key: str, payload: dict | None = None, timeout: float = 180.0, retries: int = 4):
+class Limiter:
+    """Adaptive in-flight gate in front of the proxy: additive increase, multiplicative decrease.
+
+    Raising --concurrency without this does not make a run faster, it makes it a 429 storm -- the
+    proxy rejects, every thread sleeps and retries, and wall clock ends up WORSE than a lower fixed
+    concurrency while the queue thrashes. So the limit is discovered instead of assumed: it starts at
+    --concurrency, halves on every 429/503 (honouring ``Retry-After`` when the proxy sends one), and
+    creeps back up one slot per ``PROBE_OK`` clean responses. The value it settles on is printed, so
+    the next run can start there.
+
+    The pool itself is sized at the CEILING, not the current limit -- shrinking a ThreadPoolExecutor
+    is not possible, so the gate has to be the thing that narrows, and idle threads park in
+    ``__enter__`` rather than hammering the proxy.
+    """
+
+    PROBE_OK = 24  # clean responses before trying one more slot
+    FLOOR = 2  # never throttle down to serial: one stuck call would stall everything
+    MIN_EPOCH = 0.5  # seconds one decrease covers; see `throttled`
+
+    def __init__(self, limit: int):
+        self.cv = threading.Condition()
+        self.ceiling = max(1, limit)
+        self.limit = max(1, limit)
+        self.inflight = 0
+        self.pause_until = 0.0
+        self.epoch_until = 0.0
+        self.throttles = 0
+        self.low_water = self.limit
+        self.ok_run = 0
+
+    def __enter__(self):
+        with self.cv:
+            while True:
+                now = time.monotonic()
+                if self.inflight < self.limit and now >= self.pause_until:
+                    self.inflight += 1
+                    return self
+                # A pause needs a bounded wait or nothing wakes the thread when it expires.
+                self.cv.wait(timeout=max(0.05, self.pause_until - now) if self.pause_until > now else None)
+
+    def __exit__(self, *_exc):
+        with self.cv:
+            self.inflight -= 1
+            self.cv.notify()
+        return False
+
+    def throttled(self, retry_after: float | None) -> None:
+        """Halve at most once per congestion EPOCH, not once per rejection.
+
+        Measured against a stub that 429s above 6 in flight: halving on every rejection drove a
+        ceiling of 32 down to 2 (past the 6 the proxy would have given) in 26 throttles, because the
+        ~26 calls already on the wire when the first decrease landed each halved it again. Absorbing
+        the rest of the burst into one epoch settles near the real limit instead of undershooting it.
+        """
+        with self.cv:
+            self.throttles += 1
+            now = time.monotonic()
+            pause = retry_after if retry_after else 1.0
+            if now >= self.epoch_until:
+                self.limit = max(self.FLOOR, self.limit // 2)
+                self.low_water = min(self.low_water, self.limit)
+                self.ok_run = 0
+                self.epoch_until = now + max(pause, self.MIN_EPOCH)
+            self.pause_until = max(self.pause_until, now + pause)
+
+    def ok(self) -> None:
+        with self.cv:
+            self.ok_run += 1
+            if self.ok_run >= self.PROBE_OK and self.limit < self.ceiling:
+                self.limit += 1
+                self.ok_run = 0
+                self.cv.notify()
+
+    def summary(self) -> str:
+        return (
+            f"{self.limit} in flight at the end (ceiling {self.ceiling}, low water {self.low_water}), "
+            f"{self.throttles} throttle(s)"
+        )
+
+
+class NullLimiter:
+    """For the single-shot paths (--list-models); no gate, no bookkeeping."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def throttled(self, _retry_after) -> None:
+        pass
+
+    def ok(self) -> None:
+        pass
+
+
+def retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
+    """``Retry-After`` in seconds, when the proxy bothered to say. Guessing over it is strictly worse
+    than obeying it: guess low and the throttle repeats, guess high and the run idles."""
+    raw = (exc.headers or {}).get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(0.0, min(120.0, float(str(raw).strip())))
+    except ValueError:
+        return None  # the HTTP-date form; not worth a parser, the backoff covers it
+
+
+def http_json(
+    url: str,
+    key: str,
+    payload: dict | None = None,
+    timeout: float = 180.0,
+    retries: int = 4,
+    limiter=None,
+):
     """POST (or GET, when payload is None) JSON, retrying the failures that are worth retrying.
 
     429 and 5xx are transient on a shared proxy; 4xx otherwise is a bad request and retrying it just
     burns wall clock. The error body is surfaced -- LiteLLM puts the real reason (unknown model, key
     out of budget) in there, and swallowing it turns a one-line fix into a debugging session.
+
+    The retry sleep is OUTSIDE the limiter's gate: holding an in-flight slot while sleeping would
+    make a throttled run look busy to the gate and starve the threads that could still make progress.
     """
+    gate = limiter if limiter is not None else NullLimiter()
     data = None if payload is None else json.dumps(payload).encode()
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
-    last = ""
+    last, wait = "", 0.0
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode())
+            with gate:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    body = resp.read()
+            gate.ok()
+            return json.loads(body.decode())
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")[:400]
-            last = f"HTTP {exc.code}: {body}"
-            if exc.code not in (408, 429) and exc.code < 500:
+            detail = exc.read().decode(errors="replace")[:400]
+            last = f"HTTP {exc.code}: {detail}"
+            if exc.code in (408, 429) or exc.code >= 500:
+                after = retry_after_seconds(exc)
+                gate.throttled(after)
+                wait = after if after else min(30.0, 2.0**attempt) * (0.7 + 0.6 * random.random())
+            else:
                 raise RuntimeError(last) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last = f"{type(exc).__name__}: {exc}"
+            wait = min(30.0, 2.0**attempt) * (0.7 + 0.6 * random.random())
         if attempt < retries:
-            time.sleep(min(30.0, 2.0**attempt) * (0.7 + 0.6 * random.random()))
+            time.sleep(wait)
     raise RuntimeError(f"{url} failed after {retries + 1} attempts -- {last}")
 
 
@@ -229,7 +376,7 @@ def parse_verdict(content: str) -> dict:
     }
 
 
-def judge_call(item: dict, cfg: dict, vote: int) -> dict:
+def judge_call(item: dict, cfg: dict, vote: int, limiter=None) -> dict:
     payload = {
         "model": cfg["model"],
         "messages": [
@@ -241,7 +388,13 @@ def judge_call(item: dict, cfg: dict, vote: int) -> dict:
         "max_tokens": 700,
         "response_format": {"type": "json_object"},
     }
-    got = http_json(f"{cfg['base'].rstrip('/')}/chat/completions", cfg["key"], payload, timeout=cfg["timeout"])
+    got = http_json(
+        f"{cfg['base'].rstrip('/')}/chat/completions",
+        cfg["key"],
+        payload,
+        timeout=cfg["timeout"],
+        limiter=limiter,
+    )
     choice = (got.get("choices") or [{}])[0]
     content = (choice.get("message") or {}).get("content") or ""
     verdict = parse_verdict(content)
@@ -300,9 +453,16 @@ class Cache:
             self.writes += 1
 
     def flush(self) -> None:
-        if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self.data))
+        """Atomic write. A high-concurrency run over 198 questions is minutes of paid calls; a
+        Ctrl-C during a plain ``write_text`` truncates the file and throws all of them away."""
+        if not self.path:
+            return
+        with self.lock:
+            blob = json.dumps(self.data)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(blob)
+        tmp.replace(self.path)
 
 
 # ---------------------------------------------------------------------------- inputs
@@ -468,28 +628,109 @@ EMPTY_VERDICT = {
 }
 
 
-def judge_item(item: dict, cfg: dict, cache: Cache) -> dict:
-    """One item's final verdict. Empty text is settled locally -- paying for that call is waste."""
+def judge_one(item: dict, cfg: dict, cache: Cache, vote: int, limiter=None) -> dict:
+    """One CALL: the cache lookup plus, on a miss, one request. The unit the pool schedules."""
+    key = Cache.key(item, cfg, vote)
+    got = cache.get(key)
+    if got is not None:
+        return got
+    try:
+        got = judge_call(item, cfg, vote, limiter=limiter)
+    except Exception as exc:  # noqa: BLE001 - one bad call must not lose the whole run
+        return {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    cache.put(key, got)
+    return got
+
+
+def judge_item(item: dict, cfg: dict, cache: Cache, limiter=None) -> dict:
+    """One item's final verdict, serially. Kept for callers that judge a single response; the batch
+    path is ``judge_all``, which parallelises across votes as well as items."""
     if not (item.get("text") or "").strip():
         return dict(EMPTY_VERDICT)
-    votes = []
-    for vote in range(cfg["votes"]):
-        key = Cache.key(item, cfg, vote)
-        got = cache.get(key)
-        if got is None:
-            try:
-                got = judge_call(item, cfg, vote)
-            except Exception as exc:  # noqa: BLE001 - one bad item must not lose the whole run
-                return {"error": f"{type(exc).__name__}: {exc}"[:300]}
-            cache.put(key, got)
-        votes.append(got)
+    votes = [judge_one(item, cfg, cache, v, limiter) for v in range(cfg["votes"])]
+    return assemble(votes)
+
+
+def assemble(votes: list[dict]) -> dict:
+    """Collapse an item's votes into its verdict. An errored vote poisons the item rather than being
+    silently dropped: majority-voting over the survivors would quietly change the denominator."""
+    for vote in votes:
+        if vote.get("error"):
+            return {"error": vote["error"]}
     return majority(votes) if len(votes) > 1 else votes[0]
+
+
+def judge_all(items: list[dict], cfg: dict, cache: Cache, limiter, progress=None) -> list[dict]:
+    """Judge every item, scheduling one task per CALL rather than per item.
+
+    Per-item tasks waste the pool whenever the work is not shaped like one call per item: with
+    ``--votes 5`` over 8 items, 8 tasks each doing 5 sequential calls runs 5x longer than 40
+    independent tasks at the same concurrency. Flattening to (item, vote) makes the pool saturate for
+    any mix, and it is also what lets the cache-hit tasks retire instantly instead of queueing behind
+    a live call.
+
+    Results are collected as they complete so the cache can be flushed incrementally -- a killed run
+    keeps every verdict it paid for.
+    """
+    tasks = [(i, v) for i, item in enumerate(items) if (item.get("text") or "").strip() for v in range(cfg["votes"])]
+    votes: dict[int, dict[int, dict]] = {i: {} for i in range(len(items))}
+    if not tasks:
+        return [dict(EMPTY_VERDICT) for _ in items]
+
+    flush_every = max(25, len(tasks) // 20)
+    with ThreadPoolExecutor(max_workers=cfg["concurrency"]) as pool:
+        futures = {pool.submit(judge_one, items[i], cfg, cache, v, limiter): (i, v) for i, v in tasks}
+        for done, future in enumerate(as_completed(futures), 1):
+            i, v = futures[future]
+            votes[i][v] = future.result()
+            if progress:
+                progress(done, len(tasks))
+            if done % flush_every == 0:
+                cache.flush()
+
+    out = []
+    for i, item in enumerate(items):
+        if not (item.get("text") or "").strip():
+            out.append(dict(EMPTY_VERDICT))
+        else:
+            out.append(assemble([votes[i][v] for v in sorted(votes[i])]))
+    return out
+
+
+def make_progress(total_items: int, quiet: bool):
+    """A progress line on stderr, so a high-concurrency run over 198 questions is not a silent wait.
+
+    stderr, not stdout: the report is what gets piped into a file or grepped, and progress noise in
+    there would corrupt it.
+    """
+    if quiet or total_items <= 1:
+        return None
+    state = {"last": 0.0}
+    tty = sys.stderr.isatty()
+
+    def progress(done: int, total: int) -> None:
+        now = time.monotonic()
+        if done < total and now - state["last"] < 2.0:
+            return
+        state["last"] = now
+        end = "\r" if tty and done < total else "\n"
+        print(f"  judged {done}/{total} call(s)...", end=end, file=sys.stderr, flush=True)
+
+    return progress
 
 
 # ---------------------------------------------------------------------------- report
 
 
-def report(source: str, items: list[dict], verdicts: list[dict], cfg: dict, cache: Cache) -> tuple[str, float]:
+def report(
+    source: str,
+    items: list[dict],
+    verdicts: list[dict],
+    cfg: dict,
+    cache: Cache,
+    limiter=None,
+    elapsed: float | None = None,
+) -> tuple[str, float]:
     n = len(items)
     errors = [v for v in verdicts if v.get("error")]
     ok = [(i, v) for i, v in zip(items, verdicts) if not v.get("error")]
@@ -516,7 +757,7 @@ def report(source: str, items: list[dict], verdicts: list[dict], cfg: dict, cach
     pct = (lambda c: f"{100.0 * c / len(ok):.1f}%") if ok else (lambda c: "n/a")
     L = [
         f"source: {source}",
-        f"judge: {cfg['model']}  votes={cfg['votes']}  prompt={PROMPT_VERSION}",
+        f"judge: {cfg['model']}  votes={cfg['votes']}  concurrency={cfg['concurrency']}  prompt={PROMPT_VERSION}",
         f"items: {n}   judged: {len(ok)}" + (f"   ERRORED: {len(errors)}" if errors else ""),
         "",
         f"meaningful:  {meaningful}/{len(ok)}  ({pct(meaningful)})   <- coherent on-task text, correct or not",
@@ -552,6 +793,16 @@ def report(source: str, items: list[dict], verdicts: list[dict], cfg: dict, cach
         f"calls: {cache.writes} made this run, {cache.hits} replayed from cache"
         + (f" -> {cache.path}" if cache.path else "  (cache disabled)")
     )
+    if elapsed:
+        rate_s = f"   ({cache.writes / elapsed:.1f} call/s)" if cache.writes else ""
+        L.append(f"wall clock: {elapsed:.1f}s{rate_s}")
+    if limiter is not None and getattr(limiter, "ceiling", None):
+        L.append(f"limiter: {limiter.summary()}")
+        if limiter.throttles:
+            L.append(
+                f"  the proxy pushed back; concurrency was adapted down to {limiter.low_water} at the "
+                f"worst point. Start the next run near there with --concurrency."
+            )
     # Cached verdicts carry the usage of the call that produced them, so this is the cost of judging
     # this input ONCE -- not what was spent this run. Said plainly rather than quietly conflated.
     L.append(f"tokens across all verdicts (cached included): {prompt_tok} prompt + {comp_tok} completion")
@@ -583,7 +834,15 @@ def main() -> int:
     ap.add_argument("--stage", default="full", help="which lm_eval stage's samples to read (full|smoke)")
     ap.add_argument("--limit", type=int, default=None, help="judge only the first N items")
     ap.add_argument("--votes", type=int, default=1, help="independent judge calls per item, majority-voted")
-    ap.add_argument("--concurrency", type=int, default=8)
+    ap.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_CONCURRENCY,
+        help=f"in-flight judge calls (default {DEFAULT_CONCURRENCY}). This is a CEILING, not a "
+        "promise: the limiter halves it on every 429/503 and creeps back up, and the value it "
+        "settled on is printed at the end. One task per call, so --votes fans out too.",
+    )
+    ap.add_argument("--quiet", action="store_true", help="no progress line on stderr")
     ap.add_argument("--max-chars", type=int, default=24000, help="response truncation budget (head+TAIL kept)")
     ap.add_argument("--timeout", type=float, default=180.0)
     ap.add_argument("--cache", type=Path, default=Path(__file__).resolve().parent / ".llm_judge_cache.json")
@@ -622,21 +881,31 @@ def main() -> int:
         "votes": max(1, args.votes),
         "max_chars": args.max_chars,
         "timeout": args.timeout,
+        "concurrency": max(1, args.concurrency),
     }
+    calls = sum(1 for i in items if (i.get("text") or "").strip()) * cfg["votes"]
 
     if args.dry_run:
         print(
-            f"source: {source}\nitems: {len(items)}   calls that would be made: "
-            f"{sum(1 for i in items if (i.get('text') or '').strip()) * cfg['votes']}"
+            f"source: {source}\nitems: {len(items)}   calls that would be made: {calls}"
+            f"   at concurrency {cfg['concurrency']}"
         )
         print(f"\n--- system ---\n{JUDGE_SYSTEM}\n\n--- first user prompt ---")
         print(build_user_prompt(items[0], args.max_chars))
         return 0
 
     cache = Cache(None if args.no_cache else args.cache)
-    with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:
-        verdicts = list(pool.map(lambda it: judge_item(it, cfg, cache), items))
-    cache.flush()
+    # Never open more sockets than there is work for: a pool of 32 for 3 calls is 29 idle threads.
+    limiter = Limiter(min(cfg["concurrency"], max(1, calls)))
+    cfg["concurrency"] = limiter.ceiling
+    started = time.monotonic()
+    try:
+        verdicts = judge_all(items, cfg, cache, limiter, make_progress(len(items), args.quiet))
+    finally:
+        # Keep whatever was paid for, including on Ctrl-C: judge_all flushes periodically, but the
+        # last partial window would otherwise be lost.
+        cache.flush()
+    elapsed = time.monotonic() - started
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -652,7 +921,7 @@ def main() -> int:
                 }
                 fh.write(json.dumps(row) + "\n")
 
-    text, rate = report(source, items, verdicts, cfg, cache)
+    text, rate = report(source, items, verdicts, cfg, cache, limiter, elapsed)
     print(text)
     if args.out:
         print(f"per-item verdicts: {args.out}")

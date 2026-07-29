@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -28,7 +30,15 @@ def judge():
 
 
 def _cfg(judge, **over):
-    cfg = {"model": "azure/gpt-4o", "base": "https://x", "key": "k", "votes": 1, "max_chars": 24000, "timeout": 5.0}
+    cfg = {
+        "model": "azure/gpt-4o",
+        "base": "https://x",
+        "key": "k",
+        "votes": 1,
+        "max_chars": 24000,
+        "timeout": 5.0,
+        "concurrency": 4,
+    }
     cfg.update(over)
     return cfg
 
@@ -141,7 +151,7 @@ def test_empty_response_is_settled_locally_with_no_api_call(judge, monkeypatch):
 def test_cache_avoids_a_second_call_and_persists(judge, tmp_path, monkeypatch):
     calls = []
 
-    def fake(item, cfg, vote):
+    def fake(item, cfg, vote, **_kw):
         calls.append(vote)
         return {**judge.parse_verdict('{"meaningful": true, "failure_mode": "none", "answered": true}'), "_usage": {}}
 
@@ -185,6 +195,243 @@ def test_votes_take_the_majority_and_flag_the_split(judge, monkeypatch):
     got = judge.judge_item(_item(), _cfg(judge, votes=3), judge.Cache(None))
     assert got["meaningful"] and got["selected_letter"] == "C" and got["failure_mode"] == "none"
     assert got["_split"] is True and got["_votes"] == 3
+
+
+# ------------------------------------------------------------------ concurrency
+
+
+def test_judge_all_fans_out_across_votes_not_just_items(judge, monkeypatch):
+    """The point of scheduling per CALL: 3 items x 3 votes must reach 9 in flight, which a per-item
+    pool structurally cannot do -- it would cap at 3 and the barrier would break."""
+    barrier = threading.Barrier(9, timeout=10)
+
+    def fake(item, cfg, vote, **_kw):
+        barrier.wait()  # BrokenBarrierError if fewer than 9 calls are ever concurrent
+        return {"meaningful": True, "failure_mode": "none", "answered": True, "_usage": {}}
+
+    monkeypatch.setattr(judge, "judge_call", fake)
+    items = [_item(text=f"answer {i}") for i in range(3)]
+    got = judge.judge_all(items, _cfg(judge, votes=3, concurrency=9), judge.Cache(None), None)
+    assert len(got) == 3 and not any(v.get("error") for v in got)
+
+
+def test_judge_all_keeps_verdicts_aligned_with_items_despite_completion_order(judge, monkeypatch):
+    """Results arrive out of order under as_completed; index i must still be item i's verdict."""
+
+    def fake(item, cfg, vote, **_kw):
+        time.sleep(0.02 if "slow" in item["text"] else 0.0)  # invert completion order
+        return {
+            "meaningful": True,
+            "failure_mode": "none",
+            "answered": True,
+            "selected_answer_text": item["text"],
+            "_usage": {},
+        }
+
+    monkeypatch.setattr(judge, "judge_call", fake)
+    items = [_item(text="slow one"), _item(text="fast one"), _item(text="  ")]
+    got = judge.judge_all(items, _cfg(judge, concurrency=4), judge.Cache(None), None)
+    assert got[0]["selected_answer_text"] == "slow one"
+    assert got[1]["selected_answer_text"] == "fast one"
+    assert got[2]["failure_mode"] == "empty"  # blank text never reached the pool
+
+
+def test_judge_all_flushes_the_cache_before_it_finishes(judge, tmp_path, monkeypatch):
+    """A killed high-concurrency run must keep the calls it already paid for."""
+    monkeypatch.setattr(judge, "judge_call", lambda *a, **k: {"meaningful": True, "failure_mode": "none", "_usage": {}})
+    path = tmp_path / "c.json"
+    cache = judge.Cache(path)
+    items = [_item(text=f"response {i}") for i in range(60)]
+    judge.judge_all(items, _cfg(judge, concurrency=8), cache, None)
+    # 60 calls with flush_every = max(25, 3) = 25, so at least two flushes happened mid-run.
+    assert path.exists() and len(json.loads(path.read_text())) >= 50
+
+
+def test_an_errored_vote_poisons_its_item_rather_than_shrinking_the_denominator(judge):
+    votes = [
+        {"meaningful": True, "failure_mode": "none", "_usage": {}},
+        {"error": "HTTP 500: boom"},
+        {"meaningful": True, "failure_mode": "none", "_usage": {}},
+    ]
+    assert judge.assemble(votes) == {"error": "HTTP 500: boom"}
+
+
+def test_limiter_caps_calls_in_flight(judge):
+    limiter = judge.Limiter(3)
+    peak, live, lock = [0], [0], threading.Lock()
+
+    def worker():
+        with limiter:
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.01)
+            with lock:
+                live[0] -= 1
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert peak[0] <= 3 and peak[0] >= 2  # gated, but genuinely concurrent
+
+
+def test_limiter_halves_on_throttle_and_creeps_back(judge):
+    limiter = judge.Limiter(16)
+    limiter.throttled(None)
+    assert limiter.limit == 8
+    limiter.epoch_until = 0.0  # a genuinely new congestion epoch
+    limiter.throttled(None)
+    assert limiter.limit == 4 and limiter.low_water == 4 and limiter.throttles == 2
+    for _ in range(judge.Limiter.PROBE_OK):
+        limiter.ok()
+    assert limiter.limit == 5  # additive increase, one slot per clean window
+    assert "low water 4" in limiter.summary() and "2 throttle(s)" in limiter.summary()
+
+
+def test_limiter_halves_once_per_burst_not_once_per_rejection(judge):
+    """The overshoot that a stub proxy exposed: 26 rejections from one burst drove 32 down to 2,
+    below the 6 the proxy would have granted."""
+    limiter = judge.Limiter(32)
+    for _ in range(26):  # one burst: all inside the same epoch
+        limiter.throttled(1.0)
+    assert limiter.limit == 16 and limiter.throttles == 26
+    assert limiter.pause_until > 0  # the burst still extends the pause
+
+
+def test_limiter_never_throttles_below_the_floor(judge):
+    limiter = judge.Limiter(4)
+    for _ in range(10):
+        limiter.throttled(None)
+        limiter.epoch_until = 0.0  # force each one to count as its own epoch
+    assert limiter.limit == judge.Limiter.FLOOR
+
+
+def test_limiter_never_probes_above_its_ceiling(judge):
+    limiter = judge.Limiter(2)
+    for _ in range(judge.Limiter.PROBE_OK * 5):
+        limiter.ok()
+    assert limiter.limit == 2
+
+
+def test_limiter_pause_blocks_then_expires(judge):
+    limiter = judge.Limiter(4)
+    limiter.throttled(0.2)
+    started = time.monotonic()
+    with limiter:
+        waited = time.monotonic() - started
+    assert 0.15 <= waited < 3.0  # honoured the pause, then let the call through
+
+
+@pytest.mark.parametrize("code,expect_throttle", [(429, True), (503, True), (500, True), (400, False)])
+def test_http_json_only_throttles_on_pushback(judge, monkeypatch, code, expect_throttle):
+    import io
+    import urllib.error
+
+    class Limited:
+        def __init__(self):
+            self.throttled_with = []
+            self.oks = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def throttled(self, after):
+            self.throttled_with.append(after)
+
+        def ok(self):
+            self.oks += 1
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, code, "no", {"Retry-After": "3"}, io.BytesIO(b"{}"))
+
+    monkeypatch.setattr(judge.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(judge.time, "sleep", lambda _s: None)
+    limiter = Limited()
+    with pytest.raises(RuntimeError):
+        judge.http_json("https://x/chat/completions", "k", {"a": 1}, retries=1, limiter=limiter)
+    assert bool(limiter.throttled_with) is expect_throttle
+    if expect_throttle:
+        assert limiter.throttled_with[0] == 3.0  # Retry-After obeyed, not guessed over
+    assert limiter.oks == 0
+
+
+def test_http_json_releases_the_gate_while_backing_off(judge, monkeypatch):
+    """Sleeping inside the gate would make a throttled run look busy and starve live threads."""
+    import io
+    import urllib.error
+
+    inflight, peak = [0], [0]
+
+    class Gate:
+        def __enter__(self):
+            inflight[0] += 1
+            peak[0] = max(peak[0], inflight[0])
+            return self
+
+        def __exit__(self, *a):
+            inflight[0] -= 1
+            return False
+
+        def throttled(self, _after):
+            pass
+
+        def ok(self):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 429, "slow down", {}, io.BytesIO(b"{}"))
+
+    slept = []
+    monkeypatch.setattr(judge.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(judge.time, "sleep", lambda s: slept.append(inflight[0]))
+    with pytest.raises(RuntimeError):
+        judge.http_json("https://x/chat/completions", "k", {"a": 1}, retries=2, limiter=Gate())
+    assert slept and all(held == 0 for held in slept), "backoff held an in-flight slot"
+
+
+def test_retry_after_parsing(judge):
+    import urllib.error
+
+    def exc(value):
+        return urllib.error.HTTPError("u", 429, "m", {"Retry-After": value} if value is not None else {}, None)
+
+    assert judge.retry_after_seconds(exc("5")) == 5.0
+    assert judge.retry_after_seconds(exc("9999")) == 120.0  # clamped; never idle for hours
+    assert judge.retry_after_seconds(exc("Wed, 21 Oct 2026 07:28:00 GMT")) is None
+    assert judge.retry_after_seconds(exc(None)) is None
+
+
+def test_progress_goes_to_stderr_not_stdout(judge, capsys):
+    progress = judge.make_progress(total_items=10, quiet=False)
+    progress(5, 10)
+    progress(10, 10)
+    out, err = capsys.readouterr()
+    assert out == "" and "10/10" in err
+
+
+def test_progress_is_silent_when_quiet_or_single_item(judge):
+    assert judge.make_progress(10, quiet=True) is None
+    assert judge.make_progress(1, quiet=False) is None
+
+
+def test_flush_is_atomic_and_leaves_no_tmp_file(judge, tmp_path):
+    path = tmp_path / "c.json"
+    cache = judge.Cache(path)
+    cache.put("k", {"meaningful": True})
+    cache.flush()
+    assert json.loads(path.read_text()) == {"k": {"meaningful": True}}
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_corrupt_cache_is_rebuilt_not_fatal(judge, tmp_path):
+    path = tmp_path / "c.json"
+    path.write_text('{"k": {"meaning')  # truncated by a kill mid-write
+    assert judge.Cache(path).data == {}
 
 
 def test_report_counts_the_laundered_regex_credits(judge):
