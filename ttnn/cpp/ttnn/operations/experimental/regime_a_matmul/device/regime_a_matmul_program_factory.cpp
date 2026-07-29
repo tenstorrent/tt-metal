@@ -1235,6 +1235,43 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const bool diag_read_skip_arg = (diag_mask & 0x3u) != 0u;  // bit0/bit1 => per-core read-skip flag at arg 17
     const bool diag_near_arg = (diag_mask & 0x40u) != 0u;      // bit6 => per-core nearest-peer coords follow
 
+    // ---- INTERNAL REDUCTION STRATEGY: linear chain (default) vs ring REDUCE-SCATTER. ----
+    // The chain sends each of the Pk-1 non-root bands' FULL output block one hop up, so the last partial only
+    // starts moving after Pk-2 earlier hops and the root alone writes all the output. Reduce-scatter instead
+    // tile-partitions the block into Pk chunks and rotates them around the Pk cores: the same total number of
+    // adds and the same total bytes, but every core sends concurrently every round, and each core ends up
+    // owning + writing ONE fully-reduced chunk, so the output write is spread over Pk cores instead of 1.
+    //
+    // Adopted only on the regime where it was MEASURED to win 5-9% with zero regressions (five corpus shapes:
+    // 64/128/256 x 2048 x 1024/2048): Pk>=4, shallow K (the deep-K shapes are in1-read-bound, so the reduction
+    // is not on the critical path), wide enough N, N_sub>=2, and a block that partitions evenly over Pk.
+    // Unfused + single-chunk only: the fused epilogue must be applied exactly once at a single root, which the
+    // scatter topology has by construction no longer got, and CBs 4/5 are the fusion operands.
+    //
+    // NOTE: reduce-scatter re-associates the K-sum (each owner adds the Pk partials in ring order instead of
+    // bottom-to-top), so it is PCC-preserving but NOT bit-identical to the chain. Every add stays in FP32 and
+    // no operand narrows, so this is a different summation ORDER, not a precision reduction.
+    //
+    // bit22 = FORCE_CHAIN (A/B the chain baseline), bit23 = FORCE_RSCATTER (test it outside the gate). Any
+    // kernel-behaviour diagnostic (ablations, meet) keeps the chain so the ablation floors stay comparable.
+    const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles per output sub-block
+    const bool rs_feasible = (Pk > 1u) && (rs_T % Pk == 0u) && (rs_T >= Pk) && !has_bias && !has_ternary &&
+                             !has_activation && (n_chunks == 1u) && ((diag_mask & kDiagKernelBits) == 0u);
+    const bool rs_gate = rs_feasible && (Pk >= 4u) && (Kt_r <= 64u) && (Nt_r >= 32u) && (geo.N_sub >= 2u);
+    const bool diag_force_chain = (diag_mask & 0x400000u) != 0u;     // bit22
+    const bool diag_force_rscatter = (diag_mask & 0x800000u) != 0u;  // bit23
+    TT_FATAL(
+        !diag_force_rscatter || rs_feasible,
+        "regime_a_matmul diag bit23 (FORCE_RSCATTER) needs Pk>1, unfused, single-chunk and a sub-block of "
+        "{} tiles divisible by Pk={}",
+        rs_T,
+        Pk);
+    const bool rscatter = !diag_force_chain && (diag_force_rscatter || rs_gate);
+    if (rscatter) {
+        wdefs["RSCATTER"] = "1";
+        ddefs_compute["RSCATTER"] = "1";
+    }
+
     // ---- M-split worker PLACEMENT (Sm>1): IN1_NEAR. Overrides only P.cores[i].coord; MUST run BEFORE the ring
     // reorder so the ring order recomputes on the placed coords. No-op at Sm==1. ----
     const bool diag_place_in1 = (diag_mask & 0x1000u) != 0u;   // bit12: in1-read-optimal placement (diag)
@@ -1286,6 +1323,84 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         balance_in0_ring_order(P, device, geo, Sm, device->compute_with_storage_grid_size());
     } else {
         optimize_in0_ring_order(P, device, geo, Sm);
+    }
+
+    // ---- REDUCE-SCATTER cyclic order over each group's Pk cores (runs AFTER placement + ring ordering, so it
+    // sees the final coords). For each (bank b, within-bank sub) group, order the Pk k-slice cores into a
+    // Hamiltonian CYCLE minimizing the worst DIRECTED NoC hop: one bad wraparound edge would serialize every
+    // round of the ring, so the max edge matters more than the total. The edge cost a->c is measured on the
+    // SENDER's writer NoC (writer runs opposite the core's in1-reader NoC), which is asymmetric on the torus
+    // and therefore cannot be approximated by a coordinate distance. Pk==4 searches all 3! orders exactly;
+    // larger Pk uses greedy nearest-neighbour (P! is infeasible). Mutates only the rs_* fields. ----
+    if (rscatter) {
+        namespace expdev = tt::tt_metal::experimental::Device;
+        for (uint32_t b = 0; b < 8u; ++b) {
+            for (uint32_t sub = 0; sub < geo.mfac; ++sub) {
+                std::vector<uint32_t> idx(Pk);
+                for (uint32_t kk = 0; kk < Pk; ++kk) {
+                    idx[kk] = b * geo.preaders + kk * geo.mfac + sub;
+                }
+                auto lc = [&](uint32_t li) {
+                    const auto& c = P.cores[idx[li]].coord;
+                    return CoreCoord{c.x, c.y};
+                };
+                auto dist = [&](uint32_t a, uint32_t c) -> uint32_t {
+                    if (a == c) {
+                        return 0u;
+                    }
+                    const NOC wnoc = (P.cores[idx[a]].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+                    return expdev::get_worker_noc_hop_distance(device, lc(a), lc(c), wnoc);
+                };
+                std::vector<uint32_t> ord(Pk);
+                if (Pk == 4u) {
+                    // exact min-(maxedge, total) cycle over the 3! orderings of {1,2,3} (position 0 fixed)
+                    const uint32_t perms[6][3] = {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}};
+                    uint32_t best_max = ~0u, best_tot = ~0u;
+                    for (const auto& pm : perms) {
+                        const uint32_t o[4] = {0u, pm[0], pm[1], pm[2]};
+                        uint32_t mx = 0, tot = 0;
+                        for (uint32_t p = 0; p < 4u; ++p) {
+                            const uint32_t e = dist(o[p], o[(p + 1u) % 4u]);
+                            mx = std::max(mx, e);
+                            tot += e;
+                        }
+                        if (mx < best_max || (mx == best_max && tot < best_tot)) {
+                            best_max = mx;
+                            best_tot = tot;
+                            for (uint32_t p = 0; p < 4u; ++p) {
+                                ord[p] = o[p];
+                            }
+                        }
+                    }
+                } else {
+                    std::vector<bool> vis(Pk, false);
+                    ord[0] = 0u;
+                    vis[0] = true;
+                    for (uint32_t p = 1; p < Pk; ++p) {
+                        uint32_t best = 0, bestd = ~0u;
+                        for (uint32_t cand = 0; cand < Pk; ++cand) {
+                            if (vis[cand]) {
+                                continue;
+                            }
+                            const uint32_t dd = dist(ord[p - 1], cand);
+                            if (dd < bestd) {
+                                bestd = dd;
+                                best = cand;
+                            }
+                        }
+                        ord[p] = best;
+                        vis[best] = true;
+                    }
+                }
+                for (uint32_t p = 0; p < Pk; ++p) {
+                    auto& cp = P.cores[idx[ord[p]]];
+                    cp.rs_pos = p;
+                    cp.rs_next_idx = idx[ord[(p + 1u) % Pk]];
+                    cp.rs_prev_idx = idx[ord[(p + Pk - 1u) % Pk]];
+                    cp.rs_own_chunk = (p + 1u) % Pk;
+                }
+            }
+        }
     }
 
     // ---- Fused-epilogue / output-split kernel defines (empty => byte-identical no-fusion compile). ----
@@ -1356,6 +1471,14 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         const uint32_t gtsz = gate_is_fp32 ? kTileBytesFp32 : kTileBytesBf16;
         const uint32_t gate_tiles = broadcast_gate ? geo.N_sub : out_blk_tiles;
         mkcb(program, all_cores, 6, gate_tiles, gfmt, gtsz);
+    }
+    // REDUCE-SCATTER chunk CBs (unfused only, so c_4/c_5 cannot collide with the fusion operands above).
+    // c_4 = compute->writer send chunk, c_5 = incoming chunk. EXACTLY 2 slots each: the kernel's slot index is
+    // the global epoch mod 2, so the FIFO period and the remote write offset are the same value by construction.
+    const uint32_t rs_chunk_tiles = rscatter ? (out_blk_tiles / Pk) : 0u;
+    if (rscatter) {
+        mkcb(program, all_cores, 4, 2u * rs_chunk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, all_cores, 5, 2u * rs_chunk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
     }
 
     // ---- Semaphores ----
@@ -1630,6 +1753,18 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             wa.push_back(p2.y);
             wa.push_back(dest_slots == 0u ? 1u : dest_slots);
         }
+        // REDUCE-SCATTER writer args (index 17+; unfused/single-chunk/no-diag, so index 17 is free here).
+        if (rscatter) {
+            const auto rn = phys(cp.rs_next_idx);
+            const auto rp = phys(cp.rs_prev_idx);
+            wa.push_back(rn.x);             // 17 next core in the Pk cycle (I send to it)
+            wa.push_back(rn.y);             // 18
+            wa.push_back(rp.x);             // 19 prev core (it sends to me)
+            wa.push_back(rp.y);             // 20
+            wa.push_back(cp.rs_own_chunk);  // 21 tile-chunk index this core owns + writes
+            wa.push_back(Pk);               // 22 cycle size
+            wa.push_back(rs_chunk_tiles);   // 23 tiles per chunk = M_block*N_sub / Pk
+        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
@@ -1638,6 +1773,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
         if (diag_reduce_meet) {
             ca.push_back(cp.red_nrecv);  // 0 at a chain end, 1 normally, 2 at the meet root
+        }
+        if (rscatter) {
+            ca.push_back(cp.rs_pos);       // my position in the Pk cycle
+            ca.push_back(Pk);              // cycle size
+            ca.push_back(rs_chunk_tiles);  // tiles per chunk
         }
         if (has_bias || has_ternary || has_activation) {
             ca.push_back(cp.is_top ? 1u : 0u);
