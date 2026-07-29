@@ -16,7 +16,8 @@ ttnn::Tensor combine_fabric2d(
     uint32_t axis,
     uint32_t stall_telemetry,
     uint32_t variant,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_fabric::Topology> topology,
+    const std::optional<ttnn::Tensor>& input) {
     return ttnn::prim::combine_fabric2d(
         &device,
         num_links,
@@ -26,7 +27,8 @@ ttnn::Tensor combine_fabric2d(
         axis,
         stall_telemetry,
         variant,
-        topology.value_or(tt::tt_fabric::Topology::Mesh));
+        topology.value_or(tt::tt_fabric::Topology::Mesh),
+        input);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
