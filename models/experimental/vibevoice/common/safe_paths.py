@@ -15,10 +15,19 @@ Containment is checked on the *lexical* absolute path (``os.path.abspath``) rath
 sibling ``blobs/`` tree, and resolving them would make every legitimate shard look like an
 escape.
 
-Scope: these helpers cover path *construction* — existence checks, ``open`` targets,
-mkdir targets. Use ``safe_join`` whenever a path component comes from outside the code
-(env var, CLI argument, checkpoint JSON); use ``safe_output_path`` when the operator names
-an artifact file outright and there is no enclosing base to pin it to.
+Scope: these helpers cover path *construction* — existence checks, mkdir targets,
+``sf.write`` targets. Use ``safe_join`` whenever a path component comes from outside the
+code (env var, CLI argument, checkpoint JSON, or a filename out of an API response); use
+``safe_output_path`` when the operator names an artifact file outright and there is no
+enclosing base to pin it to.
+
+The call sites that hand such a path straight to ``open`` write the same join-and-check
+out inline instead, so the constraint is visible in the same function as the read or write
+— which is also what static analysis can follow, since it does not track sanitization
+across a helper call. See ``load_weights._read_weight_index``,
+``vibevoice_config.load_vibevoice_model_config``, ``resource_utils.load_script``,
+``ttnn_vibevoice_generator._log_traj``, and the four ``open`` sites in
+``reference/processor/vibevoice_processor.py``. Keep the two in step if this logic changes.
 """
 
 from __future__ import annotations
