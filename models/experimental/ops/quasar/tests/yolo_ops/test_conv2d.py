@@ -118,7 +118,7 @@ CONV_CASES = [
     # (b,4,16,a), softmaxes, permutes to (b,4,a,16) => NHWC N=1,H=4,W=a,C=16, then conv2d
     # in=16 out=1 k1s1p0. a = #anchors = 80*80+40*40+20*20 = 8400 @640. Non-square (H=4).
     pytest.param(8400, 16, 1, 1, 1, 0, 4, 8400, 0, id="l-model.22.dfl-8400"),
-    pytest.param(640, 16, 32, 3, 2, 1, 640, 640, 8, id="s-model.0-640"),
+    pytest.param(640, 16, 32, 3, 2, 1, 640, 640, 3, id="s-model.0-640"),
     pytest.param(320, 32, 64, 3, 2, 1, 320, 320, 0, id="s-model.1-320"),
     pytest.param(160, 64, 128, 3, 2, 1, 160, 160, 0, id="s-model.3-160"),
     pytest.param(80, 128, 256, 3, 2, 1, 80, 80, 0, id="s-model.5-80"),
