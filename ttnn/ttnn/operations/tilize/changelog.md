@@ -1905,3 +1905,401 @@ new) in **both** default and `--dev` mode.
    that understands the 128 B issue floor could reclaim more.
 5. Refinements 3–5 unchanged. Refinement 4's `InitUninitMode` clause still has zero
    headroom (Refinement 1 finding 3).
+
+---
+
+## Refinement 3 — Crossover paths: one-sided zero-copy + bigger sharded-side read transactions
+
+- **Date**: 2026-07-29
+- **Outcome**: **partial (`[~]`)**. Both named levers landed on **both** crossover
+  directions and a third (a new one) was implemented, measured and refuted. One of the
+  two numeric gate clauses is **met** — `g_sharded_to_dram` **19 780 → 15 112 ns
+  (1.309×)** against a ≥ 1.2× bar — and the other is **not**: `g_dram_to_sharded`
+  **19 158 → 16 006 ns (1.197×)** against a ≥ 1.4× bar. The residual on that regime is
+  decomposed to the ns by a one-sided ablation and handed to **Refinement 3b** with the
+  one measurement this pass did not take. Both directions now show **zero traffic on
+  the sharded side** in three independent ways (kernel CT arg, device ablation, tt-npe
+  per-NoC demand). Two HANGS were found and fixed on the way — one of them reachable
+  from a plain public call. Zero regressions across all **155** carried bench rows;
+  golden 240 / 240 (126 / 126 registry cells), `test_translated.py` 275 passed, unit
+  suite **321 / 321** in both default and `--dev` mode.
+
+### What was done
+
+**1. C14 one-sided CB aliasing — LANDED, both directions.**
+
+Phase 0 routed both sides of a crossover through the generic `TensorAccessor`, so the
+sharded side paid a full NoC leg it does not need. The sharded side's CB is now built
+with `cb_descriptor_from_sharded_tensor` and **the work split is the shard map**: each
+core owns exactly its own shard's tiles, so CB page *k* IS shard tile *k*.
+
+| path | direction | who is aliased | what disappears |
+|---|---|---|---|
+| `alias_out` | interleaved RM → sharded TILE | the OUTPUT CB | the tilize LLK packs straight into the shard: **no write leg** |
+| `alias_in` | sharded RM → interleaved TILE | the INPUT CB | the unpacker reads the shard in place: **no read leg** |
+
+The whole difficulty is the map, and it is *derived*, not guessed: legacy 2D shard
+specs take their core list from `corerange_to_cores(grid, num_cores, row_wise =
+orientation == ROW_MAJOR)` (`buffer.cpp:271`) and `core_to_host_pages`
+(`buffer.cpp:119-180`) walks shards column-inner / row-outer while paging each shard
+row-major — so shard `(sh, sw)` is linear index `sh*n_sw + sw` and its pages are its own
+tiles in row-major order. Two consequences the kernels had to absorb:
+
+- a shard wider than one chunk forces the reader to iterate tile-row-**outer** /
+  chunk-**inner** (`blocks_row_major`), the opposite of the generic path's order, or the
+  aliased CB is filled transposed with every CB count still balanced;
+- `alias_in` cannot chunk at all (`chunk_wt == shard_wt`), because the unpacker reads 32
+  whole shard rows in place — so it declines (to the generic path) when that block does
+  not fit the L1 budget, instead of OOMing.
+
+`use_multicore=False`, cross-spec reshards, DRAM-sharded sides and genuinely-ND specs
+all keep the generic path. ND turned out to be a non-issue *in practice*: the allocator
+**normalises** every 2D-representable ND request to a legacy layout (measured,
+`probes/probe_024.py` — including the dangerous-looking case where a leading dim is
+split while the row dim is whole), so those cells alias correctly; what is left as ND
+is e.g. a round-robin with more shards than cores, which the one-shard-per-core clause
+declines anyway.
+
+**2. B5/B6 coalesced sharded read — LANDED.** A ROW_MAJOR-*sharded* source stores one
+page per logical row and exactly ONE page column per shard, so a chunk-block's 32 pages
+are 32 **consecutive** pages inside a single core's L1. When the chunk covers the whole
+source page the L1 destination is contiguous too, so the whole block is **one read of
+`32 × page_bytes`** instead of 32 reads. Measured on its own (alias forced off), it
+takes the L1 read leg of `g_sharded_to_dram` from **12 749 → 5 553 ns (2.30×)** and the
+regime from 19 639 → 17 337 ns (1.133×). It is the fallback for every sharded-RM input
+the alias declines (wide shards, ND, `use_multicore=False`, cross-spec reshards).
+
+**3. C7 generalised to depth ≥ 2 — machinery LANDED, lever REFUTED.** C7 was
+depth-1-only because BRISC read the reserved window out of `get_write_ptr`; it now
+**derives** it as `cb_base + (block % depth) * window_bytes` (the identity lever B8
+already relies on), and the writer's *alias* branch grew its own copy of the hand-off
+(with the output aliased, BRISC has no writes left, so its whole job is the read half).
+That is what made the lever measurable at the depth the alias actually wants — and the
+measurement refutes it (below). The generalisation is kept and tested, because it is
+also what a future depth-2 C7 user needs.
+
+**4. B7' one barrier per GROUP of blocks — NEW lever, implemented, REFUTED.** Reserve G
+windows, issue 32·G reads, ONE barrier. Monotonically worse in G.
+
+### Accuracy achieved
+
+Unchanged and **bit-exact** — this refinement moves no arithmetic, it moves *which
+memory the CB points at*. `torch.equal` (PCC = 1.0, rtol = atol = 0, 0 mismatching
+elements) on **11 crossover geometries** — HEIGHT / WIDTH / BLOCK × ROW_MAJOR /
+COL_MAJOR × both directions, plus the width-chunked (`blocks_row_major`) and widest
+aliasable shards — plus 6 ND geometries, bf16 and fp32, over repeated launches. Inputs
+are `arange`, not `randn`: every element is unique, so a shard map that transposes
+blocks cannot cancel out (this is the class of bug that cost Phase 0 26 reference
+cells). The bf8b cast through an aliased output CB: PCC 0.999.
+
+### Golden test progress
+
+**126 / 126** registry cells (90 INVALID-skipped) — unchanged, 0 xfail / xpass / drift.
+`SUPPORTED` is **unchanged**: this is a perf refinement, it unlocks no cell and declares
+no axis value. Whole golden dir minus `test_translated.py`, run to completion with no
+`-k` filter: **240 passed, 118 skipped, 0 failed**, byte-identical to the Phase-0 / R1 /
+R1b / R1c / R2 / R2b baselines; the 2 collection ERRORs are the pre-existing
+`use_module_device` × `device_params` conflict inside the reference file.
+`test_translated.py`: **275 passed, 1 failed** — the same reference-file device-
+portability bug as Phase 0 (an L1 shard grid derived from `dram_grid_size().x = 12`).
+The golden crossover cells (`[1,1,128,64]` DRAM→HEIGHT and HEIGHT→DRAM) now run on the
+aliased paths and the cross-spec reshard cell still runs generic. **No hangs** in either
+mode.
+
+### Perf gate
+
+#### 1. The one-sided DM ablation — the zero-traffic proof, and the decomposition
+
+`TILIZE_BENCH_SPLIT_DM=1`, 7 rounds × 10 launches, CV ≤ 1.3 %. On an aliased side there
+is no payload to drop, so the ablation for that side must come back **equal to full** —
+the same instrument Phase 0 used to prove Path B:
+
+| regime | full | no_read | no_write | no_dm | reading |
+|---|---|---|---|---|---|
+| `g_dram_to_sharded` (`alias_out`) | **16 006** | 5 945 | **16 098 (= full, +0.6 %)** | 5 951 | **no write payload exists**; read leg = 10 055 ns |
+| `g_sharded_to_dram` (`alias_in`) | **15 112** | **15 067 (= full, −0.3 %)** | 2 152 | 2 150 | **no read payload exists**; write leg = 12 962 ns |
+| `x_sharded_to_dram_coal_only` (generic + B5/B6) | 17 313 | 16 322 | 7 895 | 2 342 | read leg **5 553** (was 12 749 uncoalesced) |
+
+Rates: `alias_out`'s read leg is 2.10 MB / 10 055 ns = **209 GB/s**, within 2.3 % of the
+best DRAM read rate this op has ever measured (214 GB/s for its 1024 B reads).
+`alias_in`'s write leg is 2.10 MB / 12 962 ns = **162 GB/s** (vs 135 GB/s for
+`b_wide_short`'s one-block write leg).
+
+#### 2. tt-npe pins — and one of them is a model failure worth recording
+
+Traces captured per direction with `TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1` +
+`..._RPT_PATH`, pinned through `tt_npe_pybind` (the `tt_npe.py` CLI aborts on a
+`wallclock_runtime_us` attribute mismatch on this build — use the pybind directly):
+
+| trace | est. cycles | golden | pred. err | DRAM BW util | congestion | **NoC0 demand** | **NoC1 demand** |
+|---|---|---|---|---|---|---|---|
+| generic (Phase 0, both sides via the accessor) | 19 333 | 19 338 | −0.0 % | 76.6 % | 0.38 % | 54.1 | 49.5 |
+| **`alias_out`** | 88 718 | 36 769 | **+141 %** | 40.3 % | 0.01 % | 78.1 | **0.0** |
+| **`alias_in`** | 14 862 | 15 099 | −1.6 % | **98.1 %** | 0.39 % | **0.0** | 139.4 |
+
+- **The gate's "zero DRAM traffic on the sharded side" clause is met in the model as
+  well as on device**: reads live on NoC0 and writes on NoC1 (lever B9), and the aliased
+  side's NoC demand is exactly **0.0** in each direction, where the generic path has
+  both non-zero.
+- `alias_in` is pinned at **98.1 % DRAM bandwidth utilisation with 0.39 % congestion**
+  and predicted within −1.6 %: it is *at* its DRAM write bound.
+- `alias_out`'s pin is **not usable** (+141 %). Two reasons, both mechanical: the trace
+  is a single **cold** launch (the warm median is 16 006 ns, i.e. ~15 800 cycles, not
+  36 769), and NoC-event tracing instruments **every** transaction — `alias_out` issues
+  16 384 × 128 B reads where the generic plan issues 2 048 × 1024 B, so the
+  instrumentation cost lands 8× harder on exactly the plan being measured. Recorded as
+  a model/instrument limitation, with the device ablation as ground truth. (R2 hit the
+  mirror-image case: the model predicted a read factor that silicon did not have.)
+
+#### 3. Why `g_dram_to_sharded` does not reach 1.4×, priced term by term
+
+The gate is ≤ 13 517 ns; the plan measures 16 006. The ablation splits that as **read
+payload 10 055 + 5 951 of everything else**, and the "everything else" splits again by
+comparing two ablation variants whose `skip_dm` path differs in whether it keeps the
+address generation (`x_g_alias_d2_bare`'s 5 948 vs the C7 row's 2 133):
+
+| term | ns | share | can it move? |
+|---|---|---|---|
+| DRAM read payload | **10 055** | 63 % | **no** — 209 GB/s of a 214 GB/s measured best |
+| 256 × `accessor.get_noc_addr` per core | **3 815** | 24 % | mostly hidden already — see below |
+| launch + per-block CB handshakes | **~2 136** | 13 % | Refinement 4's lever, not a DM one |
+| tilize LLK (marginal) | 334 | 2 % | overlapped |
+
+Every lever that could touch the top two terms was implemented and measured on this
+exact operating point (128 B reads × 8 blocks × 64 cores — a NEW operating point for all
+of them, since they were calibrated where the same core also writes). In-run A/B,
+7 rounds × 10 launches, CV ≤ 1.5 %:
+
+| variant | ns | vs shipped | verdict |
+|---|---|---|---|
+| **d2 + B13 (shipped)** | **15 866** | **1.000** | KEEP |
+| d2 bare | 16 796 | 1.059 | B13 pays 5.5 %, reproduced in 3 sessions |
+| d1 + B13 | 16 480 | 1.039 | depth-2 pays 3.9 % (reader ↔ LLK overlap) |
+| d1 bare | 17 685 | 1.115 | — |
+| **d2 + C7** | 17 699 | **1.116** | DROP |
+| d1 + C7 | 18 113 | 1.141 | DROP |
+| **d3 + B8** | 17 440 | **1.099** | DROP |
+| **B7' group 2 / 4 / 8** | 16 187 / 17 706 / 19 750 | **1.020 / 1.116 / 1.245** | DROP (monotone) |
+
+**One mechanism explains all four negatives: the read leg is DRAM-BANK bound, not
+issue-rate bound.** Three independent measurements say so — (a) C7 halves the reads each
+RISC-V issues and costs 11.6 %; (b) B8 doubles the reads in flight and costs 9.9 %;
+(c) the address-generation probe, which reuses ONE address per block, collapses 12 banks
+onto 1 and costs **2.80×** (46 851 vs 16 743) — i.e. bank parallelism is worth 2.8× while
+issue capacity is worth nothing. B7' fails for a fourth, structural reason: grouping
+delays the first push by G blocks and serializes the LLK behind the reads.
+
+**And the address-generation term is already ~70 % hidden**, which is what bounds the
+one lever left. B13 removes 20 of every 32 accessor calls (it arms once per bank group),
+so if the 3 815 ns were exposed it would have saved ~2 400 ns; it saved **930**. Same
+ratio R1c measured on `d_tall_narrow` ("≈73 % of the address-gen prize is hidden behind
+DRAM service latency"). So a *better* address generator — 12 accessor calls per **core**
+instead of per block, keeping row-major issue order — has a ceiling of roughly
+**400 ns (2.5 %)** on top of what B13 already takes, not the 3 900 ns the gate needs.
+
+**What is left unexplained, and it is the handoff:** 10 055 + 2 136 + 30 % of 3 815 +
+334 = **13 670 ns**, so ~2 340 ns of the measured 16 006 is not attributed by this
+pass's instruments. That is the *one* measurement Refinement 3b needs (a per-RISC Tracy
+timeline on the aliased plan, which no ablation variant can substitute for), and it is
+also the only place a 1.4× still lives: with the read payload irreducible at 10 055 and
+the launch/CB floor at ~2 136, the arithmetic floor for this regime is **~12 200 ns
+(1.57×)** — so the gate is *not* provably unreachable, it is unreachable **with this
+refinement's lever set**, which is a different and more useful statement.
+
+#### 4. Cumulative bench set — non-regression (155 rows, median of 5 × 10 launches)
+
+Whole set re-measured, not a subset. Headline rows against R2b:
+
+| regime | R2b ns | **now ns** | Δ |
+|---|---|---|---|
+| a_square | 85 501 | **85 826** | +0.4 % |
+| b_wide_short | 12 554 | **12 552** | −0.0 % |
+| c_single_core | 27 364 | **27 364** | 0.0 % |
+| d_tall_narrow | 3 401 | **3 460** | +1.7 % (7-round re-measure; the 5-round sweep read 3 513 = its own scatter) |
+| e_square_fp32 | 182 564 | **182 303** | −0.1 % |
+| e_square_bf8b_out | 64 606 | **64 680** | +0.1 % |
+| e_square_fp32_to_bf16 | 121 082 | **120 992** | −0.1 % |
+| f_sharded_small | 1 356 | **1 361** | +0.4 % |
+| f_sharded_large | 2 073 | **2 069** | −0.2 % |
+| **g_dram_to_sharded** | 18 939 | **16 006** | **−15.5 %** |
+| **g_sharded_to_dram** | 19 741 | **15 112** | **−23.4 %** |
+| m_wide_short_8k | 7 208 | **7 188** | −0.3 % |
+| m_wide_short_4k | 4 808 | **4 799** | −0.2 % |
+| n_tall_narrow_4blk | 11 242 | **11 337** | +0.8 % |
+| x_wide_short_1core | 50 750 | **50 822** | +0.1 % |
+| x_tall_narrow_16c | 7 581 | **7 560** | −0.3 % |
+| x_sharded_small_depth1 | 1 362 | **1 371** | +0.7 % |
+| x_sharded_to_dram_depth2 | — | **14 977** | now `alias_in`, forced depth 2 |
+
+**Zero regressions.** Every carried row with a prior value is inside ±2 % except the two
+`g_*` regimes (which improved 15-23 %) and the `x_g_to_sharded_*` counterfactual rows,
+which improved for the same reason — they are now measured on the *aliased* plan
+(`x_g_to_sharded_b13_forced` 16 289, `_c7_forced` 17 707, `_b10_forced` 16 677,
+`p_g_to_sharded_stg_off` 15 976, `x_g_to_sharded_stg` 16 050 — the stagger stays gated
+off there, `nt_h == 64`). The B10 write-VC rows remain the only high-CV family
+(3.7-3.9 %), exactly as R2 and R2b recorded.
+
+Per-core CB L1 **falls** on both crossover regimes, because only the plain side is
+allocated: `g_dram_to_sharded` 65 536 → **8 192 B/core**, `g_sharded_to_dram` 16 384 →
+**8 192 B/core**. The aliased side is the tensor's own shard (reported separately as
+`alias_cb_bytes`), so `PROPERTIES["bounded_cb"]` keeps meaning what it says — asserted at
+four widths, and the alias declines rather than growing a block past the budget.
+
+#### 5. Mode-C used-optimization ledger
+
+| lever | id | predicted Δ | **measured Δ** | verdict |
+|---|---|---|---|---|
+| one-sided alias, DRAM→sharded | **C14** | delete the 6 786 ns write leg (35 % of the runtime) | **19 158 → 16 006 = 1.197×**; ablation confirms the write payload is gone (`no_write == full`) and tt-npe puts NoC1 demand at **0.0** | **KEEP** |
+| one-sided alias, sharded→DRAM | **C14** | delete the 12 749 ns read leg (65 %) | **19 639 → 15 112 = 1.300×**; `no_read == full`, tt-npe NoC0 demand **0.0**, DRAM util **98.1 %** | **KEEP** |
+| coalesced 32-page sharded read | **B5/B6** | fold 32 × 128 B into 1 × 4 096 B | read leg **12 749 → 5 553 ns (2.30×)**; regime 19 639 → 17 337 = 1.133× on its own | **KEEP** (it is what every alias-declining sharded input gets) |
+| B13 stateful reads on the alias path | B13 | cheaper per-read address arithmetic | **0.945** (16 796 → 15 866), reproduced in 3 sessions | **KEEP** |
+| depth-2 on the alias path | C16 | overlap the reader with the LLK (there is no writer left) | **0.962** (16 480 → 15 866) | **KEEP** (the existing C16 gate already picks it) |
+| C7 split reader on the alias path | **C7** | "BRISC is idle once the write side is aliased; `examples/split_reader` measures up to 1.7×" | **1.116** at depth 2, **1.141** at depth 1 | **DROP — refuted.** The freed BRISC is genuinely idle; the read leg is bank-bound, so a second issuer wins nothing and its hand-off costs. |
+| B8 trid double-issue on the alias path | B8 | its own ≤ 128 B size clause fires here | **1.099** | **DROP — refuted** (same mechanism) |
+| one barrier per GROUP of blocks | **B7' (new)** | hide the per-block barrier drain; 32·G reads in flight | **1.020 / 1.116 / 1.245** at G = 2 / 4 / 8 | **DROP — refuted, monotone.** There is no drain to hide (the read is at the DRAM rate) and grouping serializes the LLK behind the reads. |
+| — instrument: address-gen probe | — | price the 3 815 ns address-gen term | **2.80× SLOWER** (46 851 vs 16 743) | **instrument refuted** — reusing one address collapses 12 banks to 1, so it prices bank serialization. Kept: it is the third proof that the read is bank-bound. |
+
+#### 6. DM lever checklist review (`master.md` Part 2)
+
+Applied this pass: **C14** on both crossover directions (the checklist's "alias the CB
+onto the shard so the LLK reads/writes its final address" — Phase 0 had it only for
+same-spec sharded) and **B5/B6** on a *sharded* source, which is a case the checklist
+states for interleaved sources only: contiguity there comes from the shard layout
+(`core_to_host_pages` pages a shard row-major), not from the page index.
+Re-confirmed still applied: B7 one barrier per block, A0 2D split, A1 `row_wise`, B8
+(gated), B9 reads NoC0 / writes NoC1 — now *visible* in the tt-npe per-NoC demand,
+B13 (gated), C16 gated depth, the R2b issue-order rotation (gated), D18/D19
+program-cache args. **Measured-no-payoff, cumulative**: B10, A3 (R2), the whole-page +
+L1 redistribution algorithm and re-blocking (R2b), and now **C7 on the alias path, B8
+on the alias path, and read grouping (B7')**. Deliberately left to their owners:
+kernel-count reduction on the alias paths (R4 — and see the follow-up below, it now has
+a *provably safe* form on `alias_out`), the run-closing Mode-D audit (R5).
+
+### Issues encountered
+
+1. **`ttnn-static-analyzer` found a hang reachable from a plain public call (F1).** C7 is
+   a two-party protocol keyed on `alias_mode` being the same lever on both kernels: on
+   `alias_out` the reader (alias_mode 0) reserves and signals while the writer
+   (alias_mode 1) does the read half. On **`alias_in` the two values are swapped**, so
+   the signalling party is compiled out and BRISC waits on `sem_reserve` forever.
+   Reachable from `tilize(HEIGHT-sharded RM input with a 32-WIDE shard)` →
+   interleaved: that gives `chunk_row_bytes == 64` and one block per core, i.e. exactly
+   `split_read_pays`. **Invisible to a 316-test suite whose sharded cells are all 64
+   wide.** Fixed structurally (`not alias_in`) rather than by wiring the reader in — on
+   that path the CB *is* the input shard, so a second reader would overwrite the source
+   — plus a `static_assert` and the cell itself as a regression test (its observable is
+   a timeout, so the test must stay).
+2. **A second hang, `--dev`-only, found by re-running `--dev` after fix #1.** The grouped
+   read loop pushed `group * chunk_wt` pages in ONE `cb_push_back`, and a single push
+   may not **straddle** the end of the FIFO — `cb_push_back` handles only the exact-hit
+   wrap ("no other wrap is legal", `dataflow_api.h:213-222`). With `depth == group + 1`
+   a group straddles it every other iteration. The lightweight
+   `ASSERT(fifo_wr_ptr <= fifo_limit)` turned that into an ebreak (a hang) under
+   `--dev`, while the **default build silently ran the write pointer past the limit**.
+   Now one push per window. Two lessons: `--dev` is not optional after a CB-arithmetic
+   change, and a refuted lever's code still has to be correct because its counterfactual
+   rows keep running it.
+3. **The alias's *cost* is that it takes the work split's freedom away.** A BLOCK-sharded
+   output on 8×8 has 64-column shards, so a core that owns its own shard reads 128 B
+   rows where the generic 2D split reads 1024 B. That is why this refinement's
+   prediction row (`x_g_to_sharded_chunk2`, the same transaction shape on the generic
+   path) was measured **before** any kernel was written — and it is why the alias buys
+   1.20× rather than the 1.4× the entry projected from the write leg alone.
+4. **tt-npe's `alias_out` pin is unusable and it is instructive.** NoC-event tracing
+   instruments every transaction, so a plan with 32× more transactions pays 32× more
+   instrumentation: +141 % prediction error on the traced cold launch. The model is fine
+   on the other two traces (−0.0 % / −1.6 %). Use the device ablation when the plan's
+   transaction *count* is what changed.
+5. **An ND worry that measurement dissolved.** The ND shard→core order (row-major over
+   the ND grid, round-robin cores) can disagree with the flattened 2D map in principle;
+   in practice the allocator normalises every 2D-representable ND request to a legacy
+   layout, including the split-leading-dim case. The `nd` guard stays for the specs that
+   do not normalise, but the ND crossover cells alias correctly and are tested.
+
+### Static-analysis pass (`ttnn-static-analyzer`, this entry)
+
+Four new code paths, all of the "passes bit-exactness today, breaks later" class, so all
+four were reviewed with a fresh context after the tests were green. **Two findings, both
+fixed** (F1 above, and F2: the grouped read loop and the address probe also return
+without signalling C7's hand-off — latent, now each with its own `static_assert`).
+Explicitly cleared, with the proofs worth keeping:
+
+- **CB accounting on both aliased paths.** `alias_out`: compute pushes exactly
+  `shard_tiles` pages into a CB with exactly `shard_tiles` pages, so `cb_reserve_back`
+  never blocks and the writer's single wait/pop drains precisely what was pushed — and
+  because the aliased output can absorb *every* block without the writer running,
+  compute always drains `cb_rm_input` and the reader always makes progress.
+  `alias_in` is the mirror image.
+- **The derived C7 window is the reserved window at any depth**, including across a
+  chunk boundary and on an uneven split, because `seq - 1` equals the number of pushes
+  NCRISC has made and the FIFO write pointer after *k* pushes is
+  `base + (k % depth) * window_bytes`. `cb_in_base` is the true base on a cached
+  program's second launch (`brisc.cc:503` re-runs `setup_local_cb_read_write_interfaces`
+  per launch and BRISC never advances the pointer).
+- **The grouped loop's `depth == read_group + 1` is sufficient, not merely necessary**,
+  and the ragged last group is safe.
+- **The coalesced read's "one page column per shard" is structural, not lucky**:
+  `RowMajorPageConfig::get_page_shape` returns `(1, physical_shard_width)` and RM
+  sharded tensors are padded to a whole number of shard widths, so
+  `shard_in_pages[1] == 1` always. The reviewer's one caveat — the accessor strides by
+  the *aligned* page size, so the gate should be the allocator alignment rather than 32 —
+  was **applied**: the gate is now `page % 64`, which covers L1 (16), WH DRAM (32) and
+  BH DRAM (64) and is free for every supported dtype.
+
+### Tests added
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement3.py` — **68 cells.**
+  The shard→global-tile map on 11 geometries (HEIGHT / WIDTH / BLOCK × ROW / COL × both
+  directions + width-chunked + widest aliasable), each asserted to tile the tensor
+  **exactly** (no overlap, no gap, every unit's rectangle inside the tensor) and to be
+  `torch.equal` on `arange`; per-dtype and cast-through-the-aliased-CB variants;
+  zero-copy asserted **structurally** (the aliased side's kernel CT arg 0 == 1);
+  program-cache re-binding on both one-sided paths; every decline boundary (genuinely-ND,
+  cross-spec reshard, single-core, DRAM-sharded side, a shard too wide for one aliased
+  block); the ND-normalisation fact the ND cells rest on; the coalesced read across four
+  schemes plus both sides of its "chunk must cover a whole page" gate; each refuted
+  lever pinned to its counterfactual numbers **and** still bit-exact when forced (C7 at
+  depth 2 is what exercises the new derived-window arithmetic); the two analyzer
+  findings, including the exact cell that hung; and the three interleaved bench plans
+  asserted untouched.
+- `_bench_tilize.py` — an `r3` lever key (0 = the Phase-0 generic path on both sides of
+  the crossover, 1 = gated, 2 = force) and a `coal` key; a `read_group` sweep hook and a
+  `GRP` report column; the A0 assert extended to the one-sided paths (asserted
+  **non-tautologically**: the shards must tile the tensor exactly) and a B7' depth
+  invariant; **20 new regimes** — the prediction rows measured before the kernel existed
+  (`x_g_to_sharded_chunk2*`), the depth × lever sweep (`x_g_alias_d{1,2,3}_*`), the group
+  sweep (`x_g_alias_g{1,2,4,8}[_b13]`), the address-gen probe, and the counterfactuals
+  for both directions.
+- `probes/probe_019.py` (first light on 12 crossover geometries),
+  `probe_023.py`/`probe_024.py` (the ND normalisation question, answered on device),
+  `probe_025.py` (the tt-npe trace capture).
+
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **321 passed** (253 prior + 68
+new) in **both** default and `--dev` mode.
+
+### Ranked follow-ups
+
+1. **`g_dram_to_sharded`'s unattributed 2 340 ns is the only place a 1.4× still lives —
+   and it needs a per-RISC timeline, not another lever.** See Refinement 3b: the read
+   payload is irreducible (209 of 214 GB/s), the launch/CB floor is ~2 136 ns, and
+   30 % of the address-gen term is ~1 145 ns, which sums to 13 670 of a measured 16 006.
+   Every DM lever has been measured on this operating point; what has not been measured
+   is where the residual goes.
+2. **Dropping the writer kernel on `alias_out` is now provably safe** and is the one
+   R4-shaped lever this pass can hand over with its precondition already verified: the
+   aliased output CB has exactly `shard_tiles` pages and compute pushes exactly
+   `shard_tiles`, so the CB **never needs recycling** — the writer's single
+   `cb_wait_front`/`cb_pop_front` exists only to close the loop. Worth ~200-400 ns from
+   R1c's bare-launch price, and it removes a whole kernel launch from every DRAM→sharded
+   call.
+3. **The coalesced sharded read has a wider audience than this refinement gave it.** It
+   is gated to `chunk_row_bytes == source_page_bytes`; a sharded source whose 2D split
+   picks a *narrower* chunk (e.g. `[1,1,512,64]` HEIGHT-sharded, chunk 1 vs a 128 B page)
+   gets nothing. Reading `k` whole pages and letting the tilize block be `k` chunks wide
+   would extend it, at the cost of coupling the chunk width to the page width.
+4. **`alias_in` is at its DRAM write bound (98.1 % util, 0.39 % congestion, −1.6 %
+   prediction error).** Nothing in the DM space is left on that direction; its residual
+   is the 162 GB/s DRAM *write* rate, which is the same write-side gap R2b flagged as
+   unowned across the whole op.
+5. Refinements 4-5 unchanged. R4's `InitUninitMode` clause still has zero headroom
+   (Refinement 1 finding 3).

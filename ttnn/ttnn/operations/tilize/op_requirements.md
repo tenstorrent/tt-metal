@@ -365,7 +365,28 @@ and `--dev` mode.
 
 ---
 
-### [ ] Refinement 3 — Crossover paths: one-sided zero-copy + bigger sharded-side read transactions
+### [~] Refinement 3 — Crossover paths: one-sided zero-copy + bigger sharded-side read transactions
+
+> **Outcome (2026-07-29): PARTIAL.** Both named levers landed on **both** crossover directions, plus
+> the coalesced sharded read, and three further levers were implemented and refuted with
+> counterfactuals. **One of the two numeric clauses is met**: `g_sharded_to_dram` **19 780 → 15 112 ns
+> = 1.309×** (bar 1.2×), pinned by tt-npe at **98.1 % DRAM BW util / 0.39 % congestion** with a −1.6 %
+> prediction error, i.e. at its DRAM write bound. **The other is not**: `g_dram_to_sharded`
+> **19 158 → 16 006 ns = 1.197×** (bar 1.4×). Everything else in the gate holds — zero DRAM traffic on
+> the sharded side of each, proven three ways (kernel CT arg, `no_write == full` / `no_read == full`
+> ablation, tt-npe per-NoC demand **0.0**); golden crossover + cross-spec cells pass (126/126, 240/240);
+> `test_translated.py` 275; no hangs in either mode (two were *found and fixed*, one reachable from a
+> plain public call); a Mode-C ledger row per lever.
+>
+> Why the 1.4× is not met, priced by ablation: the read payload is **10 055 ns for 2.10 MB = 209 GB/s**,
+> within 2.3 % of the best DRAM read rate this op has ever measured — so the DM is done. The residual is
+> address generation (3 815 ns, already ~70 % hidden — B13 removes 62 % of the calls and saves only
+> 930 ns) plus a ~2 136 ns launch/CB floor. Every issue-side lever was measured on this exact operating
+> point and refuted: **C7 +11.6 %, B8 +9.9 %, read-grouping 1.020/1.116/1.245**, because the read is
+> **bank**-bound, not issue-bound (the address probe that collapses 12 banks onto 1 costs **2.80×**).
+> **2 340 ns of the 16 006 is not attributed by any ablation variant**, and that is where a 1.4× would
+> have to come from — handed to **Refinement 3b** with the one measurement this pass did not take.
+> Full ledger, sweeps, tt-npe pins and the two hang post-mortems: `changelog.md` § "Refinement 3".
 
 **Goal**: apply the two levers Phase 0 deferred on the interleaved↔sharded crossover (the design's
 R3b/R3c; `changelog.md` records them as advisory deviations):
@@ -402,6 +423,71 @@ than 19 780 ns, with tt-npe showing **zero DRAM traffic on the sharded side** of
 crossover and cross-spec-reshard cells (`[1,1,128,64]` DRAM→HEIGHT, HEIGHT→DRAM, HEIGHT→HEIGHT with a
 different grid) still pass, and `test_translated.py` stays at 275 passed; no hangs under `--dev`; a
 Mode-C ledger row per lever.
+
+---
+
+### [ ] Refinement 3b — `g_dram_to_sharded`'s unattributed 2 340 ns: per-RISC timeline, then the writer-kernel drop
+
+**Goal**: the remaining half of Refinement 3 — get `g_dram_to_sharded` `[1,1,2048,512]` → BLOCK-sharded
+below **13 517 ns** (the parent's 1.4× gate) from its measured **16 006 ns**. Unlike the parent, this
+entry starts from a decomposition rather than a lever list, because Refinement 3 measured **every**
+DM lever on this operating point (128 B reads × 8 blocks × 64 cores) and refuted all of them:
+
+| term | ns | share | status |
+|---|---|---|---|
+| DRAM read payload | **10 055** | 63 % | **irreducible** — 209 GB/s of a 214 GB/s measured best |
+| launch + per-block CB handshakes | ~2 136 | 13 % | this entry's lever 2 |
+| exposed share of the 3 815 ns address generation (~30 %) | ~1 145 | 7 % | ceiling ~400 ns, see below |
+| tilize LLK (marginal) | 334 | 2 % | overlapped |
+| **unattributed** | **~2 340** | **15 %** | **this entry's lever 1** |
+
+Arithmetic floor with the read irreducible and the launch/CB floor intact: **~12 200 ns = 1.57×**. So
+the gate is reachable *if and only if* the unattributed term is recoverable — which is why the first
+deliverable is a measurement, not a code change.
+
+- **Lever 1 — a per-RISC Tracy timeline on the aliased plan.** No `TILIZE_SKIP_*` ablation variant can
+  attribute the residual: `no_dm` keeps the address-gen sink, `no_compute` keeps the CB dance, and the
+  read payload's marginal cost already accounts for 10 055 of the 16 006. What is missing is *which
+  RISC is waiting when* — NCRISC blocked in `cb_reserve_back` (compute is the bound), TRISC blocked in
+  `cb_wait_front` (the reads are), or neither (a per-block handshake latency that neither side
+  attributes). Instrument with `DeviceZoneScopedN` around the reader's per-block reserve / read / push
+  and the compute's wait / LLK / push, then read the zones per RISC. **The answer selects the next
+  lever; do not guess it.**
+- **Lever 2 — drop the writer kernel on `alias_out` (kernel-count reduction, B0).** Refinement 3
+  verified the precondition rather than assuming it: the aliased output CB has exactly `shard_tiles`
+  pages and compute pushes exactly `shard_tiles`, so **the CB never needs recycling** — the writer's
+  single `cb_wait_front`/`cb_pop_front` exists only to close the loop. Worth ~200-400 ns from R1c's
+  bare-launch price, on every DRAM→sharded call. Two traps, both already priced by prior phases:
+  `WaitMode::NoWait` suppresses only `wait_front` (`op_design.md` Risk #13), and the base-address
+  runtime arg must move onto a surviving kernel or program-cache re-binding breaks (Refinement 4's
+  verifier note, and `test_alias_program_cache_rebinding` is the probe that would catch it).
+- **Lever 3 — row-major incremental interleaved address generation.** 12 accessor calls per **core**
+  (not per block): compute the 12 bank base addresses once, then row *r* is
+  `base[(p0+r) % 12] + ((p0+r) / 12) * aligned_page`, keeping **row-major** issue order (which is what
+  B13 gives up, and why B13's bank-major order costs it its own saving). **Its ceiling is already
+  priced at ~400 ns / 2.5 %** by B13's measured delta (B13 removes 62 % of the calls and saves 930 of a
+  3 815 ns term ⇒ ~70 % of the term is hidden), so this is a *combination* lever, not a standalone one.
+
+**Do not re-try on this regime** (all measured by Refinement 3, counterfactual rows retained):
+C7 split reader (+11.6 %), B8 trid double-issue (+9.9 %), read-grouping B7' (1.020 / 1.116 / 1.245 at
+G = 2 / 4 / 8), a bigger read transaction (the shard is 64 columns wide — the transaction size is the
+work split's, and the read is bank-bound anyway: collapsing 12 banks onto 1 costs 2.80×).
+
+**Implementation skill**: /perf-measure, /perf-ceiling-dm
+
+**Verifier notes**: ordered immediately after its parent and **before Refinement 4**, because lever 2
+*is* R4's kernel-count reduction with its precondition already verified on this path — landing it here
+gives R4 a working precedent on the simpler (one-sided) alias before it attempts the same on Path B,
+where the reader must also go. Keep `x_g_alias_*` and `p_g_to_sharded_r3_off` as the counterfactual
+rows so the parent's refutations stay re-measurable, and re-run `--dev` after any CB-arithmetic change:
+Refinement 3's second hang (a `cb_push_back` that straddled the FIFO end) was **silent** in the default
+build and only surfaced as an ebreak under the lightweight asserts.
+
+**Done when**: `g_dram_to_sharded` ≥ 1.4× faster than 18 923 ns **or** the per-RISC timeline attributes
+the ~2 340 ns residual to a named term with a measured number, and each of levers 2 and 3 carries its
+own measured verdict (kept or refuted with a counterfactual row); no regression beyond noise on any
+regime in the cumulative bench set (155 rows); golden suite still 126/126;
+`tests/ttnn/unit_tests/operations/tilize/` still green in both default and `--dev` mode.
 
 ---
 
