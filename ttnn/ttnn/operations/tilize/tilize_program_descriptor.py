@@ -149,11 +149,37 @@ CB_TILED_OUTPUT = 16
 # Both are gated per plan and both have an env counterfactual switch so the
 # Mode-C ledger rows are re-measurable (`_bench_tilize.py` x_* rows).
 #
-# The C7 payoff gate is a MEASURED transaction-size threshold: splitting the
-# issue work only helps while the per-read RISC-V issue cost is a large share of
-# the read, and BRISC pays for it with a stall in front of its own write stage.
-# See `changelog.md` § "Refinement 1c" for the per-regime sweep behind the number.
+# Both payoff gates are MEASURED, and both turned out to be **read-transaction
+# size** gates -- i.e. each lever pays only in the sub-one-packet regime this
+# refinement was scoped to, and costs real time outside it. Measured ratio
+# lever/none at 64 cores, 1 block per core (7 rounds x 10 launches, CV <= 2.1 %):
+#
+#   read bytes | shape             | B13   | C7    | verdict
+#   -----------|-------------------|-------|-------|------------------------------
+#         64 B | [1,1,2048,32]     | 0.980 | 0.956 | both pay  (together 0.948)
+#        128 B | [1,1,32,4096]     | 0.968 | 1.018 | B13 only
+#        256 B | [1,1,32,8192]     | 1.023 | 1.056 | neither
+#        512 B | [1,1,32,16384]    | 1.177 | 1.146 | neither (worst case)
+#       1024 B | [1,1,2048,512]->B | 1.057 | 1.045 | neither
+#
+# and at 64 B with 4 blocks per core: B13 **0.950**, C7 **1.145**.
+#
+# Why each turns over:
+#
+#  * B13 forces **bank-major** issue order, because `set_state` pins the NoC
+#    coordinate and only pages num_banks apart share a bank. That is free when the
+#    read is one 64 B packet (the saved per-read command programming and address
+#    arithmetic dominate), but from 256 B on, queueing 2-3 consecutive same-bank
+#    reads costs more DRAM-endpoint serialization than the issue saving buys.
+#  * C7 costs the read/write overlap across the block boundary (BRISC's read of
+#    block i+1 queues behind its write of block i) -- free only at 1 block per
+#    core -- and it doubles the number of read issuers per core, which is a win
+#    only while each core reads its OWN rows. Every regime above 64 B here has
+#    `nt_h == 1`, i.e. all 64 cores read the same 32 source pages, so a second
+#    issuer per core just deepens an existing DRAM hot spot.
+STATEFUL_READ_MAX_ROW_BYTES = 128
 SPLIT_READ_MAX_ROW_BYTES = 64
+SPLIT_READ_MAX_BLOCKS_PER_CORE = 1
 SEM_SPLIT_RESERVE = 0
 SEM_SPLIT_DONE = 1
 
@@ -171,20 +197,34 @@ def _lever_flags():
     )
 
 
-def split_read_pays(depth: int, chunk_row_bytes: int) -> bool:
+def stateful_read_pays(chunk_row_bytes: int) -> bool:
+    """B13 gate: is arming the command buffer per bank worth the bank-major order?
+
+    One measured clause: the read must be at most ``STATEFUL_READ_MAX_ROW_BYTES``.
+    Measured 0.980 at 64 B and 0.968 at 128 B, then 1.023 / 1.177 / 1.057 at
+    256 / 512 / 1024 B — see the table above ``STATEFUL_READ_MAX_ROW_BYTES``.
+    """
+    return chunk_row_bytes <= STATEFUL_READ_MAX_ROW_BYTES
+
+
+def split_read_pays(depth: int, blocks_per_core: int, chunk_row_bytes: int) -> bool:
     """C7 gate: is handing BRISC half the stick reads worth its stall + handshake?
 
-    Two clauses:
+    Three clauses:
 
     1. ``depth == 1`` is **structural**, not a payoff question: BRISC writes into
        the window NCRISC reserved without touching the CB pointers, so the window
        must be at the CB base address on every block.
-    2. the read must be small enough that the per-read *issue* cost still
-       dominates it (``SPLIT_READ_MAX_ROW_BYTES``). Past that the reads are
-       DRAM-service bound, the split buys nothing, and BRISC's stall in front of
-       its write stage is a net cost.
+    2. **one block per core** — measured. The split costs the read/write overlap
+       across the block boundary (BRISC's read of block i+1 queues behind its
+       write of block i), which is free only when there is no boundary. Measured
+       0.956 on `[1,1,2048,32]` (1 block) vs 1.145 on `[1,1,8192,32]` (4 blocks).
+    3. **64 B reads only** — measured. 0.956 at 64 B, then 1.018 / 1.056 / 1.146 /
+       1.045 at 128 / 256 / 512 / 1024 B.
     """
-    return depth == 1 and chunk_row_bytes <= SPLIT_READ_MAX_ROW_BYTES
+    return (
+        depth == 1 and blocks_per_core <= SPLIT_READ_MAX_BLOCKS_PER_CORE and chunk_row_bytes <= SPLIT_READ_MAX_ROW_BYTES
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -522,15 +562,6 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
     n_w = min(n_chunks, max(1, max_cores // n_h))
     ncores = n_h * n_w
 
-    # --- Refinement 1c read-path levers (see the module header) ---------------
-    # Both need one source page per logical row: the helpers' page index advances
-    # by exactly 1 per row, and B13's "p and p+num_banks share a bank" identity is
-    # only a bank *increment* for consecutive pages.
-    b13, c7 = _lever_flags()
-    chunk_row_bytes = chunk_wt * TILE_HW * elem_in
-    stateful_read = int(bool(b13) and row_page_stride == 1)
-    split_read = int(bool(c7) and row_page_stride == 1 and split_read_pays(depth, chunk_row_bytes))
-
     cores = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
     core_ranges = ttnn.num_cores_to_corerangeset(ncores, grid, True)
 
@@ -552,6 +583,22 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
                 }
             )
 
+    # --- Refinement 1c read-path levers (see the module header) ---------------
+    # Both need one source page per logical row: the helpers' page index advances
+    # by exactly 1 per row, and B13's "p and p+num_banks share a bank" identity is
+    # only a bank *increment* for consecutive pages.
+    b13, c7 = _lever_flags()
+    chunk_row_bytes = chunk_wt * TILE_HW * elem_in
+    blocks_per_core = max(u["row_count"] * u["chunk_count"] for u in work)
+    # b13 / c7 == 2 force the lever past its payoff gate (the structural conditions
+    # still apply) so the bench can measure it on regimes the gate excludes.
+    stateful_read = int(row_page_stride == 1 and (b13 == 2 or (b13 == 1 and stateful_read_pays(chunk_row_bytes))))
+    split_read = int(
+        row_page_stride == 1
+        and depth == 1
+        and (c7 == 2 or (c7 == 1 and split_read_pays(depth, blocks_per_core, chunk_row_bytes)))
+    )
+
     plan.update(
         {
             "path": "generic",
@@ -572,7 +619,7 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_re
             # Busiest core's chunk-block count -- the C16 gate's "is there
             # anything to pipeline?" input, and the per-block sync cost's
             # multiplier (measured ~612 ns/block, see A0_KNEE_CORES).
-            "blocks_per_core": max(u["row_count"] * u["chunk_count"] for u in work),
+            "blocks_per_core": blocks_per_core,
             "cb_bytes_per_core": depth * chunk_wt * bytes_per_chunk_tile,
         }
     )

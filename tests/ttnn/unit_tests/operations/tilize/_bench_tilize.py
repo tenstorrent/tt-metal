@@ -158,21 +158,49 @@ REGIMES = {
     # which is exactly what a height-only split_work_to_cores(nt_h) would do.
     "x_wide_short_1core": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, multicore=False),
     # --- Refinement 1c: per-lever counterfactuals on the sub-one-packet read
-    # path. `d_tall_narrow` above measures the shipped default (both levers on);
-    # these three are the same plan with one/both turned off, measured IN THE SAME
-    # RUN so a few-percent delta is resolvable against the cross-session scatter.
+    # path (B13 stateful bank-major reads, C7 split reader). Every row below is
+    # measured IN THE SAME RUN as the regime it is the counterfactual for, because
+    # a few-percent delta is not resolvable against the cross-session scatter.
+    # `levers=dict(b13=2)` / `c7=2` FORCE the lever past its own payoff gate --
+    # that is what makes the gate itself re-measurable instead of a claim.
+    #
+    # 64 B reads, 1 block/core: both levers pay (this is the target regime).
     "x_tall_narrow_no_levers": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
     "x_tall_narrow_b13_only": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=1, c7=0)),
     "x_tall_narrow_c7_only": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=1)),
-    # B13 on the two biggest-transaction interleaved regimes: the lever is offered
-    # to every interleaved plan, so its no-regression witness has to be measured
-    # where the reads are 1024 B and already DRAM-service bound.
-    "x_square_no_b13": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
-    "x_wide_short_no_b13": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
-    # A tall-narrow shape with 4 blocks/core: the C7 handshake runs per block, so
-    # its cost has to be seen with more than one block as well.
+    # 64 B reads, 4 blocks/core: B13 still pays, C7 turns over (it spends the
+    # read/write overlap across the block boundary). Default here is B13 only.
     "n_tall_narrow_4blk": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16),
     "x_tall_narrow_4blk_no_levers": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
+    "x_tall_narrow_4blk_c7_forced": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=2)),
+    # Read-size sweep at a fixed 64 cores x 1 block/core (nt_h == 1, Wt = 128/256
+    # makes the planner pick chunk_wt 2/4 => 128 B / 256 B reads). 128 B is the
+    # largest read where B13 still pays; C7 is already negative there.
+    "m_wide_short_4k": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16),
+    "x_wide_short_4k_no_levers": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
+    "x_wide_short_4k_c7_forced": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=2)),
+    "m_wide_short_8k": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16),
+    "x_wide_short_8k_b13_forced": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(b13=2, c7=0)),
+    "x_wide_short_8k_c7_forced": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=2)),
+    # 512 B (b_wide_short) is the worst case for both levers, and 1024 B
+    # (g_dram_to_sharded, a_square) is where B13 costs ~5 % on the crossover and
+    # disappears into the DRAM-bandwidth floor on the square. All three keep BOTH
+    # levers off by default; these rows are what that decision is based on.
+    "x_wide_short_b13_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b13=2, c7=0)),
+    "x_wide_short_c7_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=2)),
+    "x_square_b13_forced": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(b13=2, c7=0)),
+    "x_g_to_sharded_b13_forced": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(b13=2, c7=0),
+    ),
+    "x_g_to_sharded_c7_forced": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(b13=0, c7=2),
+    ),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
