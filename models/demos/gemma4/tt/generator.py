@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
+import ttnn
 from models.common.sampling import slice_sampling_params
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
@@ -198,12 +199,14 @@ def _patch_model_args(
 
 
 class ChunkedPrefillPageTableGuardMixin:
-    """Gemma4 prefill guards + eager multi-chunk path (no ``tt_transformers`` edits).
+    """Gemma4 prefill guards + async decode continuity (no ``tt_transformers`` edits).
 
     - Trim over-wide page tables so pad width stays non-negative (vLLM hybrid).
     - Own the eager single-/multi-chunk loop (``_prefill_forward_single_user_text_eager``)
       for bounded last-token length, ring-aligned last-chunk expand, and
       intermediate ``get_last_token=-1``.
+    - Eager on-device sampling writeback into padded decode tokens (#51186) so
+      non-PLI async decode stays coherent without shared-generator changes.
     - Mixed into demo (:class:`Gemma4Generator`) and vLLM (``Gemma4ForCausalLM``).
     """
 
@@ -244,24 +247,26 @@ class ChunkedPrefillPageTableGuardMixin:
         return bool(getattr(model, "bounded_sliding_kv_cache", False))
 
     def _prefill_get_last_token(self, last_token_idx):
-        """True last-token index when bounded (fill length); else tile-align."""
-        if self._uses_bounded_sliding_kv():
-            return int(last_token_idx)
-        return (int(last_token_idx) // 32) * 32
+        """True last-token index; lm_head tile-aligns separately in the model.
+
+        Always pass the real index so unbounded ``paged_fill_cache`` can cap at
+        ``valid_seq_len = last+1`` and skip power-of-2 pad rows (vLLM / eager
+        pad page-table columns with 0 → writing pad KV into physical block 0
+        causes the ~9k/16k garbage cliff on TP=8 12B).
+        """
+        return int(last_token_idx)
 
     def _chunk_prefill_get_last_token(self, *, is_last_chunk, last_token_idx_in_chunk, chunk_size):
         """Per-chunk ``get_last_token`` for Gemma4 multi-chunk prefill.
 
         Intermediate → ``-1`` (skip lm_head; skip bounded ring stash — last chunk
-        overwrites). Last chunk → true index when bounded (model tile-aligns for
-        lm_head); else legacy tile-align.
+        overwrites). Last chunk → true index (model tile-aligns for lm_head;
+        fill uses ``valid_seq_len = last+1`` to exclude pad).
         """
         del chunk_size
         if not is_last_chunk:
             return -1
-        if self._uses_bounded_sliding_kv():
-            return int(last_token_idx_in_chunk)
-        return (int(last_token_idx_in_chunk) // 32) * 32
+        return int(last_token_idx_in_chunk)
 
     def _adjust_last_prefill_chunk(
         self,
@@ -649,9 +654,18 @@ class ChunkedPrefillPageTableGuardMixin:
         if page_table_user.shape[1] > needed_blocks:
             page_table_user = page_table_user[:, :needed_blocks]
         num_padding_blocks = needed_blocks - page_table_user.shape[1]
-        page_table_user_padded = torch.cat(
-            [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
-        )
+        # Pad with -1 (skip), never 0 (physical block 0). Same invariant as the
+        # eager multi-chunk path — zeros let pad KV clobber the prompt prefix.
+        if num_padding_blocks > 0:
+            page_table_user_padded = torch.cat(
+                [
+                    page_table_user,
+                    torch.full((1, num_padding_blocks), -1, dtype=torch.int32),
+                ],
+                dim=-1,
+            )
+        else:
+            page_table_user_padded = page_table_user
         CHUNK_USER_ID = 0
 
         logger.info(
@@ -743,13 +757,27 @@ class ChunkedPrefillPageTableGuardMixin:
                 model_id=model_id,
             )
             page_table_user = chunk_source_page_table[user_id : user_id + 1, :]
-            needed_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
+            # Cap page-table width to the *real* (unpadded) sequence so pad
+            # tokens in the last power-of-2 chunk cannot address real blocks.
+            # Extra columns required by the padded chunk grid use -1 (skip),
+            # never 0 (physical block 0) — zeros clobber the prompt prefix
+            # (#51186 LB 12B ~9k garbage cliff).
+            real_seq_len = int(last_token_idx) + 1
+            needed_blocks = num_blocks_in_seq(real_seq_len, block_size)
+            chunk_grid_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
             if page_table_user.shape[1] > needed_blocks:
                 page_table_user = page_table_user[:, :needed_blocks]
-            num_padding_blocks = needed_blocks - page_table_user.shape[1]
-            page_table_user_padded = torch.cat(
-                [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
-            )
+            num_padding_blocks = max(0, chunk_grid_blocks - page_table_user.shape[1])
+            if num_padding_blocks > 0:
+                page_table_user_padded = torch.cat(
+                    [
+                        page_table_user,
+                        torch.full((1, num_padding_blocks), -1, dtype=torch.int32),
+                    ],
+                    dim=-1,
+                )
+            else:
+                page_table_user_padded = page_table_user
             CHUNK_USER_ID = 0
 
             # Inject an expanded last start when adjust moves it off the chunk grid.
@@ -769,6 +797,23 @@ class ChunkedPrefillPageTableGuardMixin:
                     chunk_tokens = torch.nn.functional.pad(chunk_tokens, (0, chunk_size - chunk_tokens.shape[-1]))
 
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
+                # Continuation chunks must see real block IDs. All -1 means the
+                # source table was truncated to the first scheduler chunk width
+                # (vLLM APC / #51186) — fill would skip and full-attn KV for
+                # tokens past that point would be empty.
+                if chunk_start > 0 and chunk_page_table.numel() > 0:
+                    n_valid = int((chunk_page_table >= 0).sum().item())
+                    if n_valid == 0:
+                        logger.warning(
+                            "Gemma4 APC chunk_page_table all -1 at chunk_start={} "
+                            "(page_table_cols={} needed≈{} block_size={}). "
+                            "Continuation KV will not be written — check "
+                            "_get_prefill_user_page_table full-prompt width.",
+                            chunk_start,
+                            int(page_table_user_padded.shape[1]),
+                            needed_blocks,
+                            block_size,
+                        )
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
@@ -826,6 +871,112 @@ class ChunkedPrefillPageTableGuardMixin:
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
+
+    def _gemma4_eager_token_feedback_buffer(self, model_id: int):
+        """Padded decode-token buffer for async-safe eager sampling writeback (#51186).
+
+        Non-PLI Gemma4 pads tokens to ``[1,1,1,_DECODE_TOKEN_FEEDBACK_WIDTH]`` so
+        ``ttnn.sampling`` can write the next id into the captured decode-trace
+        input. Returns None for PLI / missing traces / incompatible shapes.
+        """
+        model = self.model[model_id]
+        if getattr(model, "_tt_vllm_always_refresh_decode_trace_inputs", False):
+            return None
+        pad_w = getattr(model, "_DECODE_TOKEN_FEEDBACK_WIDTH", None)
+        if pad_w is None:
+            return None
+        sampling_trace_key = (True, self._prev_decode_batch) if self._prev_decode_batch is not None else None
+        if sampling_trace_key is None or not self.trace_inputs_decode[sampling_trace_key]:
+            return None
+        feedback = self._decode_token_feedback_buffer(model, self.trace_inputs_decode[sampling_trace_key][model_id])
+        if feedback is None:
+            return None
+        fb_shape = list(feedback.shape)
+        if len(fb_shape) == 4 and fb_shape[-1] >= int(pad_w):
+            return feedback
+        return None
+
+    def sample_decode_on_device(
+        self,
+        tt_logits,
+        sampling_params,
+        start_pos=None,
+        reset_batch=False,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
+        enable_trace=False,
+    ):
+        """Eager sampling writeback into padded decode tokens (Gemma4-only, #51186).
+
+        Shared ``Generator.sample_decode_on_device`` only passes ``tt_out_tok`` when
+        the sampling *trace* is enabled. Gemma4 skips sampling traces for non-max
+        decode batches (B=1) and non-PLI disables host restage — without writeback
+        the decode token buffer stays stale under ``async_scheduling``.
+
+        Implemented here (not in ``tt_transformers``) by injecting the feedback
+        buffer into ``sampling.sample`` for the duration of the parent call.
+
+        After an eager writeback we ``synchronize_device`` so the next
+        non-blocking decode trace on multi-chip (esp. P150x8) cannot race the
+        sampling all-gather / argmax that fills the feedback buffer — that race
+        showed up as long-prefill decode garbage on LB 12B (#51186).
+        """
+        restores = []
+        wrote_feedback = False
+        try:
+            for i in range(self.data_parallel):
+                sampling_module = getattr(self.model[i], "sampling", None)
+                if sampling_module is None:
+                    continue
+                feedback = self._gemma4_eager_token_feedback_buffer(i)
+                if feedback is None:
+                    continue
+                orig_sample = sampling_module.sample
+
+                def _make_sample(orig, fb):
+                    def _sample(logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False):
+                        nonlocal wrote_feedback
+                        # Inject whenever the parent omitted writeback. Traced
+                        # sampling already bound tt_out_tok at capture time; eager
+                        # B=1 (and any path that passes tt_out_tok=None) needs it.
+                        if tt_out_tok is None:
+                            tt_out_tok = fb
+                            if not enable_trace:
+                                wrote_feedback = True
+                        return orig(
+                            logits,
+                            enable_trace=enable_trace,
+                            tt_out_tok=tt_out_tok,
+                            skip_precompile=skip_precompile,
+                        )
+
+                    return _sample
+
+                sampling_module.sample = _make_sample(orig_sample, feedback)
+                restores.append((sampling_module, orig_sample))
+
+            out = super().sample_decode_on_device(
+                tt_logits,
+                sampling_params,
+                start_pos=start_pos,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                enable_trace=enable_trace,
+            )
+            if wrote_feedback:
+                try:
+                    mesh = getattr(self.model_args[0], "mesh_device", None)
+                    if mesh is not None:
+                        ttnn.synchronize_device(mesh)
+                except Exception:
+                    pass
+            return out
+        finally:
+            for sampling_module, orig_sample in restores:
+                sampling_module.sample = orig_sample
 
 
 class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):

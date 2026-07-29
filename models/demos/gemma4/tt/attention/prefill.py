@@ -10,6 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -355,8 +356,30 @@ def _prefill_forward_single(
                         valid_dev.deallocate(True)
                 # else: intermediate multi-chunk — skip ring (last chunk overwrites)
             else:
-                # Unbounded: previous in-forward fill.
+                # Unbounded: in-forward fill. When ``valid_seq_len`` is known
+                # (last multi-chunk with true last-token index), slice away
+                # power-of-2 pad rows before fill. Pad rows otherwise write
+                # through page-table zeros into physical block 0 and corrupt
+                # the prompt prefix (LB 12B ~9k / 16k garbage cliff).
                 k_fill, v_fill = tt_k, tt_v
+                if valid_seq_len is not None:
+                    v = min(int(valid_seq_len), int(tt_k.shape[-2]))
+                    # Tile-ceil so the writer sees a legal RM height; unused
+                    # rows inside the last tile must be -1 in the page table
+                    # (generator pads with -1, not 0).
+                    tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
+                    tile_end = min(tile_end, int(tt_k.shape[-2]))
+                    if 0 < tile_end < int(tt_k.shape[-2]):
+                        k_fill = ttnn.slice(
+                            tt_k,
+                            [0, 0, 0, 0],
+                            [tt_k.shape[0], tt_k.shape[1], tile_end, tt_k.shape[3]],
+                        )
+                        v_fill = ttnn.slice(
+                            tt_v,
+                            [0, 0, 0, 0],
+                            [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
+                        )
                 ttnn.experimental.paged_fill_cache(
                     k_cache,
                     k_fill,
@@ -448,8 +471,18 @@ def _prefill_forward_single(
             tt_sdpa = ttnn.slice(sdpa_full, [0, 0, hist, 0], [1, nqh, hist + seq_len, config.head_dim])
             sdpa_full.deallocate(True)
         else:
-            # First chunk (chunk_offset==0): no history, window lies inside the
-            # chunk (seq_len=chunk_size >= sliding_window). Standard windowed SDPA.
+            # No in-memory tail. Correct for the first chunk (chunk_offset==0).
+            # Continuation without a tail (e.g. prior scheduler chunk took the
+            # single-chunk path and failed to stash — see post-SDPA stash below)
+            # silently drops the prior window; log so the ~9k remnant cliff is
+            # diagnosable if it regresses.
+            if chunk_offset is not None and chunk_offset > 0:
+                logger.warning(
+                    "Gemma4 sliding prefill: chunk_start={} without sliding_tail_in; "
+                    "windowed SDPA will miss prior-chunk K/V (vLLM chunked prefill "
+                    "remnant < sliding_window).",
+                    chunk_offset,
+                )
             tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
                 tt_q,
                 tt_k,
@@ -557,6 +590,40 @@ def _prefill_forward_single(
             program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
             compute_kernel_config=sdpa_compute_kernel_config,
         )
+    # Persist sliding-window K/V tail after *any* sliding prefill, not only
+    # generator-level ``sliding_chunked``. vLLM token-chunked prefill
+    # (``enable_chunked_prefill``) often runs the first scheduler chunk through
+    # the single-chunk path (no ``chunk_page_table``); without this stash the
+    # next call's sliding SDPA has no prior-window K/V. When that next chunk is
+    # shorter than ``sliding_window`` (remnant after ``max_num_batched_tokens``),
+    # decode collapses — LB 12B ~9k cliff (#51186). Clone so the tail outlives
+    # tt_k/tt_v dealloc (#51041). Default prefill-trace buckets omit 4096 so
+    # the common vLLM chunk size stays eager and this Python-side stash stays
+    # live (see ``_DEFAULT_TRACE_PREFILL_SEQ_LENS``).
+    if (
+        sliding_tail_out is None
+        and config.is_sliding
+        and sliding_window is not None
+        and tt_k is not None
+        and shared_kv is None
+    ):
+        hist = ((sliding_window + 31) // 32) * 32
+        kseq = int(tt_k.shape[-2])
+        if valid_seq_len is not None:
+            kseq = min(kseq, max(0, int(valid_seq_len)))
+        if kseq >= hist:
+            nkv = tt_k.shape[1]
+            tail_start = kseq - hist
+            sliding_tail_out = (
+                ttnn.clone(
+                    ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ttnn.clone(
+                    ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            )
     tt_q.deallocate(True)
     kept_kv = None
     if shared_kv is None and not keep_kv:

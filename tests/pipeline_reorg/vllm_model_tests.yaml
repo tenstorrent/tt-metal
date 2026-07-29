@@ -136,13 +136,15 @@
 # fill (run 30291376571); 256k pool OOMs at KV init (30270375854).
 # Serve 16k with chunked prefill=2048; GEMMA4_MAX_TOKENS_ALL_USERS
 # must match max_model_len (Run server step). Decode hang #49494.
+# trace_region_size=80MB: decode-trace warmup needs ~55.7MB; vLLM's
+# 50MB default OOMs EngineCore (run 30333621682).
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   server-timeout: 45
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
   additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:

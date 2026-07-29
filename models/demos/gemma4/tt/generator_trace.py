@@ -25,7 +25,15 @@ from models.tt_transformers.tt.generator import (
 # directly shrinks the required ``trace_region_size``. The override drives both
 # warmup capture (``patch_gemma4_trace_model_args``) and runtime eligibility
 # (``can_gemma4_enable_prefill_trace``) so they stay consistent.
-_DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
+# Omit 4096 by default: vLLM ``enable_chunked_prefill`` + ``max_num_batched_tokens=4096``
+# runs the first scheduler chunk through a *traced* 4k prefill, but continuations
+# are eager (``num_cached_tokens>0``). Traced replay does not refresh Python-side
+# sliding K/V tails, so a remnant chunk shorter than ``sliding_window`` (1024)
+# drops prior-window context — LB 12B ~9k garbage (#51186). Keeping 4k eager
+# lets the single-chunk sliding-tail stash in ``attention/prefill.py`` stay live
+# across vLLM chunk boundaries. Override with ``GEMMA4_TRACE_PREFILL_SEQ_LENS``
+# if a deployment needs traced 4k and does not use token-chunked prefill.
+_DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048]
 
 
 def _resolve_trace_prefill_seq_lens() -> list[int]:
