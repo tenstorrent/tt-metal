@@ -1,0 +1,18 @@
+{
+  "last_scan_date": "2026-07-29",
+  "scanned_run_ids": ["30387358745", "30493606319"],
+  "workflows_sampled": ["pr-gate.yaml", "runtime-unit-tests.yaml"],
+  "in_flight_prs": [
+    {
+      "branch": "silencer/matmul-allowed-worker-cores-spam",
+      "pattern": "allowed_worker_cores not populated",
+      "issue": "#48660",
+      "status": "pr-opening",
+      "commit": "4c427c67"
+    }
+  ],
+  "backlog_cursor": {
+    "next_category": 1,
+    "note": "Scan compile warnings next - issue #47891 was closed, check for remaining compile warnings in latest runs"
+  }
+}
