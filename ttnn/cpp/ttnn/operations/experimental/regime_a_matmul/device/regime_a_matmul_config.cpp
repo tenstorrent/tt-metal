@@ -139,6 +139,10 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
         // winners for the M-scaling shapes, +3..+32% vs the old fallback, all zero-regression (stability /
         // exhaustive-expand / validate confirmed; single-run entries re-validated by the gated corpus re-run).
         {{8, 64, 32}, {4, 1, 2, 2, 4}},    // 256x2048x1024 +5% (was {4,1,2,2,2})
+        // 256x2048x6144: the fallback picks nsb=1; nsb=2 measured 5.4% faster post-mesh (80.8 -> 76.4 us),
+        // because a 1-tile-wide sub-block makes every output write a lone page. nsb=4 is 2% worse than 2 and
+        // nsb=8 is 25% worse, so 2 is a genuine optimum rather than "bigger is better".
+        {{8, 64, 192}, {4, 3, 1, 2, 2}},   // 256x2048x6144 +5.4%
         {{8, 480, 48}, {6, 1, 2, 2, 6}},   // 256x15360x1536 +32%
         {{8, 64, 16}, {4, 1, 3, 2, 2}},    // 256x2048x512 +24%
         {{1, 480, 24}, {6, 1, 1, 2, 3}},   // 32x15360x768 +24%
