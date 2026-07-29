@@ -233,6 +233,38 @@ def _check_structure(input_tensor) -> None:
         )
 
 
+def _check_l1_shard_grid(device, memory_config, what: str) -> None:
+    """An L1 shard can only live on cores that exist.
+
+    The allocator accepts an L1 ShardSpec whose grid runs past the compute grid
+    (e.g. a grid sized from ``device.dram_grid_size().x`` = 12 on an 8x8 box),
+    and the failure then surfaces much later inside
+    ``TensorAccessorArgs::get_compile_time_args()`` as
+    "No core coordinate found at location: (8, 0, TENSIX, LOGICAL)" — thrown
+    *after* the output buffer was allocated and the program was partway built,
+    which leaves the command queue wedged (TT_FATAL on the next
+    synchronize_device). Check it up front so the caller gets a clean error and
+    the device stays healthy.
+    """
+    if memory_config is None or not memory_config.is_sharded():
+        return
+    if memory_config.buffer_type != ttnn.BufferType.L1:
+        return  # DRAM shard grids are bank coordinates, not Tensix cores.
+
+    spec = memory_config.shard_spec or memory_config.nd_shard_spec
+    if spec is None:
+        return
+
+    grid_size = device.compute_with_storage_grid_size()
+    for core_range in spec.grid.ranges():
+        end = core_range.end
+        if end.x > grid_size.x - 1 or end.y > grid_size.y - 1:
+            raise ValueError(
+                f"tilize: {what} L1 shard grid ends at ({end.x},{end.y}) but the device "
+                f"compute grid is ({grid_size.x},{grid_size.y}) — that core does not exist"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -263,6 +295,10 @@ def tilize(
     out_memory_config = memory_config if memory_config is not None else input_tensor.memory_config()
     out_dtype = dtype if dtype is not None else input_tensor.dtype
 
+    device = input_tensor.device()
+    _check_l1_shard_grid(device, input_tensor.memory_config(), "input")
+    _check_l1_shard_grid(device, out_memory_config, "output")
+
     validate(
         input_tensor,
         out_memory_config,
@@ -271,7 +307,6 @@ def tilize(
         use_double_buffer=use_double_buffer,
     )
 
-    device = input_tensor.device()
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
         out_dtype,

@@ -50,6 +50,7 @@ is the untilize partner, the wrong direction, and would scatter tile bytes to st
 | `eval/golden_tests/tilize/test_golden.py` | **126 passed, 90 skipped (INVALID), 0 failed, 0 xfail/xpass** |
 | `eval/golden_tests/tilize/test_regression.py` | **9 / 9** |
 | `eval/golden_tests/tilize/test_golden_main_tests.py` (reference/grader) | **105 passed, 28 skipped, 0 failed** (2 collection ERRORs are internal to the golden file — `use_module_device` marker vs a `device_params` parametrize on `test_deepseek_v3_mla_tilize_trace_mode`) |
+| `eval/golden_tests/tilize/test_translated.py` | **275 passed, 1 failed** — the one failure requests a hardware-invalid config (see issue 6) |
 
 Measured accuracy is **bit-exact** wherever the format allows it, per the identity oracle:
 
@@ -197,6 +198,22 @@ follow-up (below).
    `TT_METAL_PROFILER_CPP_POST_PROCESS=1` are all set *before the device opens*; and a
    `ReadDeviceProfiler` after a *single* launch reliably returns an empty window, so the bench batches
    reads per round.
+6. **An out-of-range L1 shard grid wedged the command queue — now refused up front.**
+   `test_translated.py::test_tilize_width_sharded_dram_input_to_l1_sharded_output_49107` builds its
+   **L1** output `ShardSpec` from `device.dram_grid_size().x` (= 12 on WH B0) while the compute grid is
+   8×8, so it asks for an L1 shard on core (11,0), which does not exist. `allocate_tensor_on_device`
+   *accepts* it; the failure surfaced much later inside
+   `TensorAccessorArgs::get_compile_time_args()` as
+   `No core coordinate found at location: (8, 0, TENSIX, LOGICAL)` — thrown after the output buffer was
+   allocated and the program was partway built. That left the command queue corrupted (`TT_FATAL:
+   Unexpected values for event in completion queue` on the next `synchronize_device`) and then
+   **segfaulted pytest** while it formatted the traceback, aborting the whole file.
+   Added `_check_l1_shard_grid()`, which validates any L1 shard grid against
+   `compute_with_storage_grid_size()` **before** allocating anything. Effect: that cell now fails with
+   a clean `ValueError`, the device stays healthy, and the run continues — which took
+   `test_translated.py` from *aborted after 11 tests* to **275 passed / 1 failed**. The remaining
+   failure is a device-portability bug in the reference test itself (it reuses a DRAM-bank grid for an
+   L1 shard), not an op gap; it would pass on a box whose compute grid has ≥ 12 columns.
 
 ### Advisory deviations from `op_design.md`
 
