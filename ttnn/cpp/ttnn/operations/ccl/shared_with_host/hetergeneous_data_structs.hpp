@@ -190,8 +190,7 @@ inline size_t flattened_index (const ttnn::ccl::Shape4D<uint32_t>& shape, const 
 
         // Explicit narrowing casts: new_* are size_t here (unlike the uint32_t twin in
         // advance_worker_global_page below) but are page coords bounded by the uint32_t slice-shape
-        // dims, so they fit. Required for -Werror=narrowing under the strict Quasar kernel build,
-        // which is the first device-kernel TU to include this CCL header (via the quasar matmul reader).
+        // dims, so they fit. Required for -Werror=narrowing under stricter kernel build.
         curr_page_idx = flattened_index(
             tensor_shape,
             tensor_slice_shape + Shape4D<uint32_t>{

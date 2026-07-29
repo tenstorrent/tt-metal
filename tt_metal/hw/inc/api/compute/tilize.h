@@ -32,47 +32,7 @@
 #endif
 #endif
 
-#ifdef ARCH_QUASAR
-#include "api/debug/dprint.h"  // DEBUG (conv tilize-pack PACR0_TILE_INC localizer, remove after)
-#endif
-
 namespace ckernel {
-
-#ifdef ARCH_QUASAR
-// DEST tile capacity in the CURRENT sync/accum mode: full DEST holds DEST_REGISTER_FULL_SIZE/(NUM_FACES*
-// FACE_R_DIM) full tiles in fp16 (== DEST_NUM_TILES_FP16); half-sync holds half, and 32-bit dest (accum)
-// halves it again. Derived from ckernel_trisc_common.h constants (pulled in by the unpack/math/pack LLK
-// headers this file includes) rather than ckernel_defs.h's DEST_NUM_TILES_FP16, which the compute-API build
-// does not transitively include. Used by BOTH the UNPACK_TO_DEST batched tilize (compile-time column-chunk
-// width) and the default per-tile datacopy tilize (wide-row chunk size in tilize_block, to keep every DEST
-// section within one non-wrapping capacity — see tilize_block's Quasar branch).
-constexpr uint32_t qsr_tilize_dest_tile_cap() {
-    constexpr uint32_t full_tiles =
-        ckernel::trisc::DEST_REGISTER_FULL_SIZE / (ckernel::trisc::NUM_FACES * ckernel::trisc::FACE_R_DIM);
-    uint32_t cap = (DST_SYNC_MODE == DstSync::SyncFull) ? full_tiles : (full_tiles >> 1);
-    return DST_ACCUM_MODE ? (cap >> 1) : cap;
-}
-
-#ifdef QSR_TILIZE_UNPACK_TO_DEST
-// Batched unpack-to-dest tilize (tt-metal #49445): the LLK-intended tilize-to-DEST unpacks a whole tile-row
-// into DISTINCT DEST slots with ONE section_done per DEST section — unlike the single-tile UNP_DEST path,
-// which lands every tile in DEST slot 0 with a per-tile section_done and mis-orders the tilized data (PCC~0).
-// A conv tilize block is one 32-row tile-row of `block_width` column-tiles; when block_width exceeds the DEST
-// tile capacity the row is split into equal compile-time column chunks that each fit DEST.
-
-// Largest column-chunk width that (a) fits DEST and (b) divides block_width evenly, so every chunk reuses the
-// same compile-time MOP (no tail re-program). Degenerates to 1 (per-tile) only for block widths sharing no
-// divisor <= cap other than 1.
-constexpr uint32_t qsr_tilize_chunk_width(uint32_t block_width) {
-    uint32_t cap = qsr_tilize_dest_tile_cap();
-    uint32_t c = (block_width < cap) ? block_width : cap;
-    while (c > 1 && (block_width % c) != 0) {
-        --c;
-    }
-    return c;
-}
-#endif  // QSR_TILIZE_UNPACK_TO_DEST
-#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -87,7 +47,6 @@ constexpr uint32_t qsr_tilize_chunk_width(uint32_t block_width) {
  * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim_ct = 0>
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -105,39 +64,8 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // TODO(SK) #42757: Quasar unpack tilize could issue block_ct_dim tiles per MOP invocation, but scheduling
     // block_ct_dim against full_ct_dim would need a compute-API-level workaround since BH/WH operate
     // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
-#ifdef QSR_TILIZE_UNPACK_TO_DEST
-    // UnpackToDestEn bypass (tt-metal #49445): route the tilize unpacker into DEST (UNP_DEST) so the
-    // per-tile MATH A2D datacopy issues NO MOP (sync-only forwarder) — sidestepping the Quasar tilize
-    // datacopy DEST-section-release fault (ERROR_TRISC1 0x19). The math init is skipped for unpack_to_dest
-    // (llk_math_unary_datacopy_api.h:47). Enabled only for the conv Program-A tilize (factory-injected define).
-    if constexpr (block_ct_dim_ct > 0) {
-        // BATCHED path: program the block MOP with the compile-time column-chunk width (must match the chunk
-        // width the batched tilize_block below computes from the same block_ct_dim_ct). FULL_CT_DIM = the full
-        // source-row width in tiles (== block_ct_dim_ct).
-        constexpr uint32_t chunk = qsr_tilize_chunk_width(block_ct_dim_ct);
-        UNPACK((llk_unpack_tilize_block_to_dest_init<block_ct_dim_ct /*FULL_CT_DIM*/, chunk /*BLOCK_CT_DIM*/>(icb)));
-    } else {
-        // Fallback single-tile MOP (block_ct_dim_ct not threaded by the caller).
-        UNPACK((llk_unpack_tilize_init<true /*unpack_to_dest*/>(icb, block /*full_ct_dim*/)));
-    }
-    // Direct UNPACK<->PACK DEST double-buffer handshake (replaces the racy dvalid section scheme). UNPACK is the
-    // sole DEST producer (UNPACR_TILIZE, SET_DVALID=0), PACK the sole consumer (PACR). A single semaphore
-    // (UNPACK_MATH, reused purely as the unpack->pack token) with max=N (2 SyncHalf / 1 SyncFull) bounds the
-    // unpacker to <=1 DEST bank ahead of the packer; each thread flips its OWN DEST section base in lockstep (in
-    // tilize_block). Deterministic: the unpacker provably cannot lap the packer. MATH issues NO DEST ops on this
-    // path (no MOVA2D/datacopy MOP -> the FPU dest-dvalid ring is never advanced -> ERROR_TRISC1 0x19 cannot
-    // recur). The SEMINIT is done by UNPACK inside llk_unpack_tilize_dest_sync_init (the PRODUCER thread), NOT
-    // MATH: UNPACK's acquire (SEMWAIT STALL_ON_MAX) latches the sem max at issue, so the SEMINIT (max=N) must be
-    // ordered before it on the SAME thread — SEMINIT-on-MATH raced -> acquire latched the reset max=0 -> waited
-    // for val<0 -> first-section deadlock (dprint_tr10). PACK only reads the value (reset 0), so it needs no
-    // SEMINIT ordering. MATH is idle (no init call). The dvalid section scheme was insufficient: its masks came
-    // from the single-section reference test and the unpack side never flipped its DEST bank id -> desync/lap.
-    UNPACK((llk_unpack_tilize_dest_sync_init<DST_SYNC_MODE>()));
-    PACK((llk_pack_tilize_dest_sync_init<DST_SYNC_MODE>()));
-#else
     UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
-#endif
 #endif
 }
 
@@ -192,51 +120,6 @@ ALWI void tilizeA_B_reduce_init(
     PACK((llk_pack_dest_init()));
 #endif
 }
-
-// clang-format off
-/**
- * Re-initializes the fused tilize+reduce for a new input CB and/or a changed block size WITHOUT re-running the
- * one-time hw_configure that tilizeA_B_reduce_init performs. Call tilizeA_B_reduce_init once at kernel start,
- * then use this lighter variant to re-bind the unpack-tilize / math-reduce to a different input CB or a
- * changed `block` (tiles-to-reduce) mid-kernel -- e.g. per split-reader stream, or per channel-block when the
- * tile count changes. Re-running hw_configure every iteration corrupts unpacker state (UNPACKER fault), so
- * this issues only the per-use unpack/math inits (the pack side is re-init'd separately, e.g. via
- * pack_untilize_dest_init). These two llk inits are identical across WH/BH/Quasar, so no arch split is needed.
- *
- * | Param Type | Name             | Description                          | Type     | Valid Range | Required |
- * |------------|------------------|--------------------------------------|----------|-------------|----------|
- * | Template   | neginf_srcA      | NegInf source A flag                 | bool     | true/false  | False    |
- * | Template   | zero_srcA_reduce | Zero source A for reduce flag        | bool     | true/false  | False    |
- * | Function   | icb0             | Input circular buffer A identifier   | uint32_t | 0 to 31     | True     |
- * | Function   | icb1_scaler      | Input circular buffer for scaler     | uint32_t | 0 to 31     | True     |
- * | Function   | block            | Size of tile block to work on        | uint32_t | > 0         | True     |
- */
-// clang-format on
-template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
-ALWI void tilizeA_B_reduce_init_short(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb) {
-    // Identical to tilizeA_B_reduce_init but WITHOUT the three llk_*_hw_configure calls (unpack/math/pack),
-    // which are one-time hardware setup and corrupt engine state if re-run per iteration. The per-use inits
-    // below -- including the MATH pack-sync and the PACK init/dest-init -- must all be re-issued together so
-    // UNPACK, MATH and PACK stay coherent when `block` (tiles-to-reduce) or the input CB changes mid-kernel.
-    // On Quasar this matters especially because pack_untilize_dest_init only issues llk_pack_untilize_init and
-    // relies on llk_pack_init/llk_pack_dest_init here for the packer's dest-offset / MATH-PACK sync state.
-    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
-        icb0, icb1_scaler, block)));
-    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
-#ifndef ARCH_QUASAR
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
-#else
-    // [#48552] Quasar: match the LLK team's canonical tilizeA_B_reduce_init_short (UNPACK tilizeA_B + MATH
-    // reduce ONLY -- no MATH pack-sync / PACK init / PACK dest_init). Their minimal version passes
-    // test_max_pool2d_strided_reduce.py; the MATH<->PACK dest-sync we previously set up here is the prime
-    // suspect for the compute_pool_2d pool-reduce dest-sync DEADLOCK at the real stem size (112x112,
-    // test_stem_maxpool.py -k 112x112). If maxpool passes with this, flip _MAXPOOL_ON_DEVICE back to True.
-    // ocb is unused on Quasar now (kept for the WH/BH branch above).
-    (void)ocb;
-#endif
-}
 #endif  // (REDUCE_OP && REDUCE_DIM) || __DOXYGEN__
 
 #ifndef ARCH_QUASAR
@@ -288,76 +171,8 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
  * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
  */
 // clang-format on
-template <uint32_t block_ct_dim_ct = 0>
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
-    // [#48552] Removed the per-tilize-block TZBLK/TZCFG-IN/TZCFG-OUT DPRINT flood (200+ prints/core -> overflowed
-    // the DPRINT ring -> watcher error). Their job is done: tile geometry is correct (frdim=16 nf=4) and the
-    // tilize now completes all blocks; the 0x19 is in the matmul, not the tilize.
-#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
-    // UnpackToDestEn bypass (tt-metal #49445): the unpacker tilizes DIRECTLY into DEST (UNP_DEST), so the
-    // per-tile MATH A2D datacopy MOP (ERROR_TRISC1 0x19, Quasar DEST-section leak) is never issued. Sync is the
-    // UNPACK<->PACK DEST-dvalid section-done handshake, NOT the MATH semaphore; MATH is bypassed entirely.
-    if constexpr (block_ct_dim_ct > 0) {
-        // BATCHED unpack-to-dest (the LLK-intended tilize-to-DEST — see the reference in tt-llk
-        // tests/sources/quasar/unpack_tilize_quasar_test.cpp). One tilize block is a single 32-row tile-row of
-        // block_ct_dim_ct column-tiles; the batched MOP tilizes a run of column-tiles into DISTINCT DEST slots
-        // (advancing the L1 source by SRC_Z_STRIDE and DEST by one full tile per tile) with ONE section_done
-        // per DEST section — fixing the single-tile path's slot-0 overwrite + per-tile section_done that
-        // mis-ordered the tilized data (PCC~0). When the row is wider than DEST, split into equal compile-time
-        // column chunks that each fit DEST; each chunk fills DEST slots 0..chunk-1 then packs them out.
-        constexpr uint32_t chunk = qsr_tilize_chunk_width(block_ct_dim_ct);
-        constexpr uint32_t num_chunks = block_ct_dim_ct / chunk;  // exact by construction of chunk
-        static_assert(chunk * num_chunks == block_ct_dim_ct, "column chunks must tile the row exactly");
-        for (uint32_t c = 0; c < num_chunks; c++) {
-            // UNPACK: block until a DEST bank is free (<=1 bank ahead of PACK), tilize `chunk` column-tiles into
-            // slots 0..chunk-1 of that bank, then publish it to PACK and flip UNPACK to the other bank.
-            UNPACK((llk_unpack_tilize_dest_acquire()));
-            UNPACK((llk_unpack_tilize_block_to_dest(icb, input_tile_index, c * chunk, 0 /*dest slot*/)));
-            UNPACK((llk_unpack_tilize_dest_release<DST_SYNC_MODE, DST_ACCUM_MODE>()));
-            // PACK: wait for UNPACK's published bank, pack all `chunk` slots (dslot j -> out tile j, confirmed
-            // via dprint_utd2), then free the bank back to UNPACK and flip PACK to the other bank.
-            PACK((llk_pack_tilize_dest_wait()));
-            for (uint32_t j = 0; j < chunk; j++) {
-                PACK((llk_pack<true /*out_of_order*/>(j /*DEST slot*/, ocb, output_tile_index + c * chunk + j)));
-            }
-            PACK((llk_pack_tilize_dest_release<DST_SYNC_MODE, DST_ACCUM_MODE>()));
-            // MATH: intentionally absent — no DEST MOP is issued, so no MOVA2D and no 0x19.
-        }
-        return;
-    }
-    // Fallback single-tile UNP_DEST (block_ct_dim_ct not threaded by the caller): each tile -> DEST slot 0 with
-    // a per-tile section_done. Mis-orders wide blocks; kept only for API completeness. The conv
-    // (compute_kernel_lib::tilize) always threads block_ct_dim_ct, so the batched path above is what runs.
-    for (uint32_t t = 0; t < block; t++) {
-        UNPACK((llk_unpack_tilize_to_dest(icb, input_tile_index, t)));   // tile t -> DEST slot 0
-        UNPACK((llk_unpack_dest_dvalid_section_done<DST_SYNC_MODE>()));  // mark DEST section valid for PACK
-        PACK((llk_pack<true /*out_of_order*/>(
-            0 /*tile index*/, ocb, t + output_tile_index)));                         // PACR waits on DEST dvalid
-        PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));  // clear dvalid, free DEST bank
-    }
-    return;
-#endif
-
-#ifdef ARCH_QUASAR
-    // Quasar per-tile datacopy tilize (TT_METAL_QSR_TILIZE_UNPACK_TO_DEST OFF). SINGLE continuous loop over the
-    // full block — structurally identical to the WH/BH #else. The earlier chunking + per-chunk re-init has been
-    // REMOVED; it was the CAUSE of the C2048 ERROR_TRISC1 0x19, not the cure (LLK root-cause, cited below).
-    //
-    // The "DEST section wraps after `cap` tiles" premise was FALSE for the semaphore-sync scheme. SyncHalf DEST
-    // is a strict 2-bank ping-pong fully bounded by the MATH_PACK semaphore (seeded max=2 in
-    // _llk_math_pack_sync_init_): MATH's wait_for_dest_available stalls STALL_ON_MAX (llk_math_common.h:302-305),
-    // PACK's packer_wait_for_math_done stalls STALL_ON_ZERO (llk_pack_common.h:279-282), and
-    // _llk_math_dest_section_done_<SyncHalf> merely TOGGLES the section base between bank0/bank1
-    // (ckernel_trisc_common.h:301-306) — it never grows or wraps. So MATH is at most 2 tiles ahead of PACK for
-    // ANY block width, and a 64-tile row cannot overflow DEST (WH runs this exact loop over block=64 and passes).
-    //
-    // The removed per-chunk llk_math_pack_sync_init re-SEEDED a LIVE MATH_PACK semaphore mid-kernel with no
-    // MATH<->PACK barrier (llk_math_common.h:281-295) while PACK was still retiring the prior chunk's
-    // section-done SEMGET -> the STALL_ON_MAX invariant broke and the next MATH post drove the count past max=2
-    // -> over-max SEMPOST -> ERROR_TRISC1 0x19 at the first tile after the re-init (g=8). Removing it lets the
-    // ping-pong run seamlessly across the whole block. Uses the Quasar-flavored llk calls (bare datacopy /
-    // single-bool llk_pack) that already compiled and passed for the narrow (single-chunk) case.
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
@@ -365,30 +180,19 @@ ALWI void tilize_block(
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
-        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
-        PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
-        // Release dest. NO llk_math_set_dvalid: it belongs to the dest-dvalid scheme and is compile-blocked on
-        // the semaphore-sync path; the datacopy MOP + llk_math_dest_section_done handle FPU dvalid as WH does.
-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
-    }
-#else
-    UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
-
-    for (uint32_t t = 0; t < block; t++) {
-        // Acquire dst
-        MATH((llk_math_wait_for_dest_available()));
-        PACK((llk_packer_wait_for_math_done()));
-
+#ifndef ARCH_QUASAR
         // Datacopy
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
             0 /*dst index*/, icb)));
         PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
+#else
+        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
+        PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
+#endif
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
-#endif
 }
 
 // clang-format off
@@ -440,16 +244,6 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
 
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
-#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
-    // Clean the DEST dvalid ring + reset both banks to 0 for a FOLLOWING matmul in the same kernel. The semaphore
-    // tilize above orders UNPACK<->PACK via the UNPACK_MATH count but does NOT touch the HW dvalid bits, whereas
-    // the OLD dvalid section_done cleared them as a side effect — and the fused conv's matmul (utd1) relied on
-    // inheriting that clean dvalid ring. The fused kernel's llk_math_pack_sync_init/llk_pack_dest_init reset the
-    // semaphore + bank id but not the raw dvalid bits, so without this the matmul hangs at its first partials op
-    // (dprint_utd10/11). The SyncFull section_done variant issues CLEARDVALID for BOTH banks and resets SEC->0.
-    UNPACK((llk_unpack_dest_dvalid_section_done<DstSync::SyncFull>()));
-    PACK((llk_pack_dest_dvalid_section_done<DstSync::SyncFull, DST_ACCUM_MODE>()));
-#endif
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif

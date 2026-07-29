@@ -952,12 +952,6 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             program.impl().finalize_offsets(device);
         }
 
-        // [#48552 POC] Per-dispatch, free-on-completion physical tile-counter isolation (gated by
-        // TT_METAL_QSR_TC_ISOLATE; slow dispatch). Reassign packed_tile_counter to fresh FIFO-pooled counters
-        // NOW, so the ConfigureDeviceWithProgram re-serialize below writes the fresh assignment to L1. Under
-        // slow serial dispatch this also returns the prior dispatch's counters (that program has completed).
-        program.impl().qsr_rebase_dispatch_tile_counters();
-
         // First configure (allocate buffers + write configs/binaries), then write runtime args.
         // This allows us to allocate ephemeral scratchpad buffers, and pass their locations as implicit CRTAs.
         detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);

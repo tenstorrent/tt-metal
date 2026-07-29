@@ -297,12 +297,6 @@ public:
     // core require remapper being enabled
     void finalize_dataflow_buffer_configs();
 
-    // [#48552 POC] Per-dispatch, free-on-completion physical tile-counter isolation (slow dispatch; gated by
-    // TT_METAL_QSR_TC_ISOLATE). Rebase reassigns packed_tile_counter to fresh FIFO-pooled counters just before
-    // ConfigureDeviceWithProgram re-serializes them to L1; release returns them when the program completes.
-    void qsr_rebase_dispatch_tile_counters();
-    void qsr_release_dispatch_tile_counters();
-
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
     std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
