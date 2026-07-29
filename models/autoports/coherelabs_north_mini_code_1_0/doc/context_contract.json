@@ -16,12 +16,14 @@
   "page_size": 32,
   "cache_dtype": "bfloat16",
   "capability_reduction": null,
-  "completion_status": "complete",
-  "pending_gates": [],
+  "completion_status": "in-progress",
+  "pending_gates": [
+    "Fresh independent stage review after review-4 AutoFix closure"
+  ],
   "independent_stage_review": {
     "verdict": "pending-final-review",
     "required_work": [
-      "Run a fresh stage review against the review-3 closure."
+      "Run a fresh stage review against the review-4 AutoFix closure and isolated history."
     ]
   },
   "context_probe_evidence": {

@@ -277,7 +277,7 @@ three hard-check gaps have now been addressed with the evidence above. A fresh
 stage review is required before the stage can close. No push will be
 performed.
 
-Stage implementation/evidence checkpoint: `03b1b0078f1` (`Add optimized North
+Stage implementation/evidence checkpoint: `f77d4e00940` (`Add optimized North
 Mini decoder`).
 
 ## Second-review AutoFix closure
@@ -330,7 +330,7 @@ Primary closure artifacts are
 `artifacts/synthetic_bfp4_dense_expert_rejection.xml`, and
 `artifacts/dram_sharded_expert_candidate_full_lower_bound.xml`.
 
-Second-review repair/evidence checkpoint: `0085f30d237` (`Close North Mini
+Second-review repair/evidence checkpoint: `2a9f76b6e29` (`Close North Mini
 optimized decoder review gaps`).
 
 21. Ran the expanded final suite normally and under watcher after the two
@@ -440,11 +440,13 @@ candidate rejections, capacity evidence, and artifact paths are consolidated
 in `README.md`. The optimize checklist above is complete for this
 decoder-only, single-device scope.
 
-Optimization checkpoints before this closure:
+Rewritten, model-isolated optimization checkpoints:
 
-- `03b1b0078f1` — Add optimized North Mini decoder.
-- `0085f30d237` — Close North Mini optimized decoder review gaps.
-- `c7e024e8faa` — Log North Mini optimization checkpoint.
+- `f77d4e00940` — Add optimized North Mini decoder.
+- `2a9f76b6e29` — Close North Mini optimized decoder review gaps.
+- `c709816ba57` — Log North Mini optimization checkpoint.
+- `a9219e58d4e` — Optimize North Mini decoder active expert paths.
+- `a53eebe040d` — Close North Mini optimized decoder review 4.
 
 No commit was pushed.
 
@@ -496,6 +498,7 @@ required item and both secondary concerns:
     p300c devices with healthy heartbeats, zero GDDR errors, and no thermal
     trip.
 
-The stage history is isolated onto the functional checkpoint before the
-fresh final review; the resulting model-only SHAs are recorded below after
-that rewrite. No commit was pushed.
+The stage history is isolated directly onto functional checkpoint
+`78dbd88bec7`. `git diff --name-only 78dbd88bec7..a53eebe040d` contains only
+`models/autoports/coherelabs_north_mini_code_1_0/` paths. The rewritten
+model-only SHAs are listed above. No commit was pushed.
