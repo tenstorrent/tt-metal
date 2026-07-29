@@ -71,7 +71,7 @@ safe-outputs:
     labels: [automation]
     # Scope patches to source-like files only: a mistaken or manipulated agent response
     # cannot touch unrelated files outside Silencer's noise-fix scope.
-    allowed-files: ["*.cpp", "*.cc", "*.cxx", "*.h", "*.hpp", "*.py", "*.pyi", "*.cmake", "CMakeLists.txt"]
+    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
     max: 3
   push-to-pull-request-branch:
     target: "*"
