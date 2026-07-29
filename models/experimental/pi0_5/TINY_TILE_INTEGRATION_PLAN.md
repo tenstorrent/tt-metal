@@ -775,3 +775,68 @@ aggregates away).
 **Do not treat "fewer ops" or "less kernel time" as a proxy for this pipeline's wall-clock.** The one
 result that has held up across every experiment is the opposite direction: adding CORES to an op
 reliably hurts (kv_splits S=2/4/8, "64 cores beats 80", `_RESHARD_CORES=2` beats 4 and 8).
+
+---
+
+# The perf sheet: where the time actually goes, and what is left
+
+Built from the profiler's per-op columns (`DEVICE KERNEL DURATION`, `DEVICE FW DURATION`,
+`PER CORE MIN/MAX`, `CORE COUNT`), 31 block iterations, tile-16. Script: `scratchpad/perfsheet.py`.
+
+## e2e confirms the single-layer metric (so it was not lying after all)
+
+16-chip e2e @3 cams: `kv_splits=1` **26.70 ms**, `=2` 28.23, `=4` 27.31. Same shape and sign as the
+single-layer walltime, including the non-monotonicity (S=2 worse than S=4). So `kv_splits` is a genuine
+end-to-end loss and the negative result stands at the level that matters. The metric is trustworthy;
+what was wrong was my *model* of why it moved.
+
+## `DEVICE FW DURATION` is NOT usable as a per-op cost
+
+For the baseline it looks perfect -- per-iteration `fw` sums to 115.6 us against 116.5 us measured
+wall-clock -- which is why it is tempting. But it does not survive validation: between the S=1 and S=2
+runs, `MatmulDecode`'s `fw - kernel` fell 24.38 -> 4.11 us even though nothing about that op changed.
+`fw - kernel` is therefore mostly **stall time waiting on inputs** (kv_sdpa got faster, so the downstream
+matmul waited less), not fixed setup. Do not read it as overhead.
+
+## What IS solid: large, reproducible CORE IMBALANCE
+
+Per-core min/max is measured *within* one op invocation, so it is immune to the cross-run instability
+above -- and it reproduces to two decimals across three independent runs:
+
+| op | cores | kernel | slowest core | fastest core | idle | idle % |
+|---|---|---|---|---|---|---|
+| `GateUpMatmulDecode` | 70 | 12.03 | 11.95 | 3.36 | **8.58** | **72%** |
+| `MatmulDecode` (x3) | 70 | 8.24 | 8.13 | 4.99 | 3.14 | 39% |
+| `NlpCreateQkvHeadsRope` | 10 | 5.77 | 5.52 | 3.04 | 2.48 | 45% |
+| `LayerNorm` (x2) | 8 | 4.01 | 4.00 | 3.77 | 0.23 | 6% |
+| `KvSdpa` | 8 | 28.47 | 28.16 | 28.02 | 0.14 | 0% |
+
+**~21 us per iteration (18% of 116 us) is cores idling on their slowest peer.**
+
+Root cause is structural and the ratio confirms it: the **base cores** (`k_idx == 0`, `N_blocks` = 16 of
+70) run phase-2's K-reduction *and* the epilogue on top of their own phase-1 partial, while the other 54
+cores do phase 1 only. Base/non-base = 11.95/3.36 = **3.56x**. For `gate_up` the epilogue is ~80 tile-ops
+(4 K-slabs x 8 `Nc_tiles` x 2 weights, + gelu + GeGLU multiply) concentrated on 16 cores.
+
+Note this cannot be fixed by giving base cores a smaller K-slice: even at `Kc_base = 0` they would still
+owe the ~8.6 us epilogue while non-base cores finish in ~4.5 us. **The epilogue placement is the problem,
+not the K balance.**
+
+## Recommended next work, in order
+
+1. **Distribute the K-reduction + epilogue across the `K_blocks` cores of each N-slice.** Today the
+   reduce for output slice `n` happens entirely on base core `(k=0, n)`. Instead let each of the 4 cores
+   holding slice `n` reduce a quarter of that slice's `Nc_tiles` and write its piece into the base core's
+   output CB. Same core count, same total work, but the epilogue's critical path shrinks ~4x. Estimated
+   `gate_up` 12.03 -> ~5.5 us and each `MatmulDecode` 8.24 -> ~5.8 us, i.e. **~13 us/iteration (~12%)**.
+   This is the only large reproducible inefficiency left that does NOT require adding cores or ops --
+   the two things that have failed every time.
+2. **Rope imbalance (45% on 10 cores).** The `v` cores skip the rotation that the `q`/`k` cores perform,
+   so they finish early. Cheap to rebalance; worth ~2 us.
+3. **`kv_sdpa` remains the largest single kernel (28.5 us) and is perfectly balanced (0% skew).** Its
+   8-core cap is real but splitting it is closed (negative at single-layer AND e2e). Any further gain
+   has to come from the flash inner loop itself, not parallelization.
+
+**Validate every one of these at 16-chip e2e, not at single-layer only.** Kernel-time reductions have
+now twice failed to translate (kv_splits -27% kernel -> +5.7% e2e; the norm fusion removed 2 ops/iter ->
++5% wall). Treat a kernel-time win as a hypothesis until e2e agrees.
