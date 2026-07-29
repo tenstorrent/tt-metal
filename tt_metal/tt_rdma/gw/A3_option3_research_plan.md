@@ -5,6 +5,22 @@
 re-heads + egresses to the Blackhole with **zero Arm per-frame work and no doorbell/window toggle** — removing
 the config-serialization wall that caps the doorbell drain at ~40G, and giving the lowest-latency gateway.
 
+## ★ Execution-model correction (2026-07-29) — the doorbell/RPC path is NON-NATIVE
+Everything built so far (A1..A3.3b, the doorbell drain, the option-1 DPA-heap doorbell) drives the DPA via
+`flexio_process_call` (a host→DPA **RPC**) and then **busy-polls** — spinning on the SQ-CQ owner bit and on a
+software **doorbell**. That is NOT how the DPA is meant to run. The DPA is an **event-driven RTOS with
+hardware-triggered, run-to-completion threads**: a thread is meant to be woken by a **CQE hardware interrupt**,
+process, then re-arm/reschedule — full CPU/Arm bypass, minimal activation latency. Our software doorbell +
+`flexio_window` poll was a workaround for the device-split, and it is exactly what introduced the per-batch
+window↔outbox config toggle that serialized the threads (~40G wall). **Option 3 done natively removes the
+doorbell entirely: the RoCE RQ CQE IS the trigger (hardware-delivered) — no poll, no config toggle, no Arm per
+frame.** So option 3 is not just lower-latency; it is the *correct* DPA model, and it dissolves the serializer
+as a side effect. (What the scaffold DID get right: the memory model — gather from **DPA-heap / NIC-private
+DDR** scales to 134G, gather from host memory contends at ~42G, matching "DMA-gather into DPA caches backed by
+internal DDR". Keep the landing buffer in DPA-private DDR.) Not-yet-used DPA facilities to fold in: **async DMA
+engines** (host↔DPA movement, vs the contended host-MR gather) and **EU affinity** (`FLEXIO_AFFINITY_STRICT`,
+one armed handler per EU).
+
 ## Why this is the production / lowest-latency target
 - **Lowest latency:** the Arm leaves the per-frame path entirely. The DPA reacts to the RoCE completion itself
   — no Arm→doorbell→DPA hop, no `flexio_window` read.
@@ -62,8 +78,17 @@ the config-serialization wall that caps the doorbell drain at ~40G, and giving t
   DPA-RC-responder API. Enumerate G1 sub-paths concretely: which mlxconfig/eswitch change gives GID+DPA on one
   function, and its bench blast radius (OVS/SF). Reference: `/opt/mellanox/doca/samples/doca_dpa/`, doca-dpa
   skill, doca-rdma skill (connection methods), doca-verbs skill.
-- **P1 — DPA polls a LOCAL RC QP's CQ (1–2 d).** Loopback/local RC pair; the DPA polls the RQ CQ and observes
-  a WRITE_IMM recv completion. Isolates G2 from G1 (no external RoCE, no GID split yet).
+- **P1 (RE-CAST) — DPA event-handler HARDWARE-TRIGGERED on an RC RQ CQ (1–2 d).** NOT a busy-poll: create a
+  `flexio_event_handler`, attach the RC QP's RQ CQ to that handler's thread (`rqcq_attr.thread =
+  flexio_event_handler_get_thread(eh)`), so a WRITE_IMM recv CQE **hardware-triggers** the EU. The handler runs
+  the re-head to completion, then `flexio_dev_cq_arm(rq_cq)` + `flexio_dev_thread_reschedule()` and sleeps until
+  the next CQE. NO `flexio_process_call`, NO doorbell, NO window poll. **The stock packet_processor RX-reflect
+  path is exactly this template (`create_app_event_handler` + `flexio_event_handler_run` + the RQ-CQ-triggered
+  `flexio_pp_dev`/`process_packet`) — which the A1 blast BYPASSED by switching to the RPC. Go back to it and
+  swap the eth RQ for an RC RQ.** Loopback/local RC pair first (isolates G2 from G1: no external RoCE, no GID
+  split). Success = the DPA egresses a re-headed frame per RC WRITE_IMM with the EU sleeping between events
+  (verify via msg-stream/trace, not a spin), and N handlers on N EUs (`FLEXIO_AFFINITY_STRICT`) run truly
+  concurrently. This is the native DPA path; the doorbell scaffold is retired here.
 - **P2 — resolve the device-split G1 (2–4 d, THE gate).** Get a RoCE-GID RC QP whose RQ-CQ the DPA polls
   (co-locate via mlxconfig, or cross-fn). If neither works → option 3 infeasible → fall back to option 1.
 - **P3 — external RoCEv2 WRITE_IMM → DPA CQ (2–3 d).** Real external requester (manual QP exchange first),
@@ -89,7 +114,18 @@ Estimate ~1.5–3 wk, dominated by G1 (P2). HIGH risk concentrated in G1.
 - **Pair with B2 (MR federation)** for true per-destination RDMA semantics regardless of trigger.
 
 ## First concrete step
-P0 + P1 in parallel with an **option-1 prototype** (DPA-heap doorbell) as the hedge: P1 proves the DPA can drain
-an RC CQ at all (low risk, high info); option-1 banks a scaling win while P2 (the risky co-location) is assessed.
+**P1 (re-cast): the hardware-triggered event-handler on an RC RQ CQ** — go back to the stock packet_processor
+RX-handler template (which the A1 blast bypassed with the RPC) and swap the eth RQ for an RC RQ. This is the
+native DPA model and is the highest-info first move: it proves the CQE-triggered re-head works and retires the
+doorbell scaffold. Option-1 (DPA-heap doorbell) already banked the 134G scaling number and the memory-model
+finding (keep the landing in DPA-private DDR) — that stands, but it's a busy-poll scaffold, not the production
+form. P2 (the risky co-location for a GID+DPA function) is only needed if P1's RC-RQ-CQ can't be armed on the
+DPA without co-location — the same G1 gate.
+
+## Status of the scaffold vs the native path
+- **DONE (scaffold, RPC+busy-poll):** RoCE→DPA→BH byte-exact E2E; option-1 DPA-heap doorbell scales to 134G.
+  Proves the datapath, byte-exactness, and the memory model. NOT the native execution model.
+- **NEXT (native, event-driven):** P1 re-cast — CQE-hardware-triggered event handler, no doorbell, no poll,
+  no Arm per frame. This is the production / lowest-latency form.
 
 _Companion: [[tt-rdma-dpa-rehead-plan]] (chronological), `gw/A3_rehead_plan.md` (the doorbell path + E2E)._
