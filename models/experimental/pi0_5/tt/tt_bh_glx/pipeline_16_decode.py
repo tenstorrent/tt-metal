@@ -285,6 +285,25 @@ class Pi0_5GLX16DecodePipeline:
         if suffix_padded > action_horizon:
             expert_mask[:, prefix_padded + action_horizon : kv_total] = _MASK_VAL
             expert_mask[action_horizon:suffix_padded, :] = _MASK_VAL
+        # The tiny-tile denoise block passes attn_mask=None to kv_sdpa (the fused two-source path has
+        # no mask support), so ANY masking built here is silently discarded. Measured impact of losing
+        # just the phantom-suffix tail: 0.011% mean relative error (the phantom rows derive from the
+        # small adaRMS shift, so their K/V and hence their softmax contribution are tiny) -- see
+        # test_l1_single_layer_pcc_phantom_mask. That is acceptable.
+        # Masking REAL prefix columns is NOT: those K/V are full magnitude. That only arises when a
+        # caller supplies img_masks with an absent camera or a padded lang_masks, so fail loudly here
+        # rather than let it be dropped without a trace.
+        _dropped = expert_mask.clone()
+        if suffix_padded > action_horizon:  # the tolerated phantom-suffix tail
+            _dropped[:, prefix_padded + action_horizon : kv_total] = 0.0
+            _dropped[action_horizon:suffix_padded, :] = 0.0
+        if bool((_dropped != 0).any()):
+            raise NotImplementedError(
+                "pipeline_16_decode built an expert attention mask that blocks REAL prefix columns "
+                "(absent camera or padded language), but the tiny-tile denoise block drops the mask "
+                "entirely -- kv_sdpa's fused two-source path has no mask support. Restore a "
+                "valid-length/padded-column mask in kv_sdpa before using partial img_masks/lang_masks."
+            )
         expert_mask_4d = expert_mask.unsqueeze(0).unsqueeze(0)
 
         _rope_l1 = os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")

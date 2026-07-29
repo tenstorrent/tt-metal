@@ -373,6 +373,63 @@ def test_l1_single_layer_pcc(mesh_device):
 
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_l1_single_layer_pcc_phantom_mask(mesh_device):
+    """PCC against an oracle that MASKS the phantom suffix KV, as pipeline_16_decode intends.
+
+    The other PCC test builds an all-zero mask, so both the device and the oracle attend to the
+    phantom suffix columns identically and it cannot see a dropped mask. pipeline_16_decode actually
+    builds a NON-zero expert mask whenever suffix_padded > action_horizon (16 > 10), blocking the
+    phantom suffix KV columns and the phantom query rows -- and pre-merge honoured it, while the
+    tiny-tile block passes attn_mask=None. This test is the missing gate for that.
+
+    Note PCC is a weak detector here: it is scale-invariant and the output is dominated by the 1024
+    real prefix keys, so a large per-element error can still show a high PCC. The relative-error
+    figure printed below is the meaningful number.
+    """
+    config, ah, suffix_len, bw, ref_blocks, adarms_cond, hidden, prefix_kv, mask, _ = _setup(mesh_device)
+
+    # Production-style phantom mask (mirrors pipeline_16_decode._build_upstream_artifacts).
+    kv_total = _PREFIX_LEN + suffix_len
+    phantom = torch.zeros(1, 1, suffix_len, kv_total, dtype=torch.bfloat16)
+    if suffix_len > ah:
+        phantom[:, :, :, _PREFIX_LEN + ah : kv_total] = -1e4
+        phantom[:, :, ah:suffix_len, :] = -1e4
+
+    # oracle WITH the phantom mask vs oracle WITHOUT it -- isolates what dropping the mask costs,
+    # independent of any device numerics.
+    _, _, _, _, _, _, cos, sin = _build_inputs(config, suffix_len, ah)
+    h_with = _torch_oracle(ref_blocks, hidden, adarms_cond, prefix_kv, phantom, cos, sin, suffix_len)
+    h_without = _torch_oracle(ref_blocks, hidden, adarms_cond, prefix_kv, mask, cos, sin, suffix_len)
+    a, b = h_with[:, :ah, :].float(), h_without[:, :ah, :].float()
+    rel = ((b - a).abs() / a.abs().clamp(min=1e-9))
+    print(
+        f"\n[phantom-mask oracle] PCC(with,without)={_compute_pcc(a, b):.6f}  "
+        f"mean|rel err|={rel.mean().item() * 100:.3f}%  max={rel.max().item() * 100:.3f}%"
+    )
+
+    dev, fwd = _build_l1(
+        mesh_device, ref_blocks, config.expert_config, config, suffix_len, ah, adarms_cond, prefix_kv, mask
+    )
+    x = from_torch_pi05(hidden, dtype=ttnn.bfloat16, device=mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    dev.append(x)
+    try:
+        h_dev = ttnn.to_torch(fwd(x))[:, :ah, :].float()
+    finally:
+        for t in dev:
+            try:
+                ttnn.deallocate(t)
+            except Exception:
+                pass
+    rel_dev = ((h_dev - a).abs() / a.abs().clamp(min=1e-9))
+    pcc_dev = _compute_pcc(a, h_dev)
+    print(
+        f"[phantom-mask device] PCC(masked oracle, device)={pcc_dev:.6f}  "
+        f"mean|rel err|={rel_dev.mean().item() * 100:.3f}%  max={rel_dev.max().item() * 100:.3f}%"
+    )
+
+
+@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_walltime_l1_single_layer(mesh_device):
     """L1 decode_all traced-replay wall-clock only — runs at ANY tile height.
 
