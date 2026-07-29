@@ -133,9 +133,9 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
         compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float16_b>";
     }
     if (output.dtype() == DataType::BFLOAT16) {
-        compute_defines["ROUNDING_MODE"] = "1";
+        compute_defines["ROUND_NEAREST_EN"] = "true";
     } else {
-        compute_defines["ROUNDING_MODE"] = "0";
+        compute_defines["ROUND_NEAREST_EN"] = "false";
     }
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_kernel_path;

@@ -55,7 +55,8 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (ADD, SUB, MUL or DIV)
- * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV)
+ * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB)
+ * @tparam ROUND_NEAREST: when true, applies software RNE conversion for ADD/SUB (no-op if is_fp32_dest_acc_en)
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
@@ -106,9 +107,7 @@ inline void calculate_sfpu_binary(
             }
         }
 
-        if constexpr (
-            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
-            ROUND_NEAREST) {
+        if constexpr ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB) && !is_fp32_dest_acc_en && ROUND_NEAREST) {
             result = float32_to_bf16_rne(result);
         }
 
