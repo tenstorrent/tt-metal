@@ -1,933 +1,343 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Ask an LLM whether our model's output is a MEANINGFUL response -- instead of regex-extracting it.
+"""Ask Claude whether our model's output is a MEANINGFUL response -- instead of regex-extracting it.
 
-Every existing scorer in this directory decides "did the model answer?" with a pile of regexes, and
-that decision is measurably wrong in both directions:
+The regex extractors in this directory decide "did the model answer?" and get it wrong both ways:
+``boxed_choice`` stage 3 hands a letter to responses that never answered (19.5% of the TT side against
+the reference's 1.5% on 2026-07-28), and nothing regex-shaped sees language drift, noise bursts, or a
+block that stopped mid-thought -- those all produce text a regex is happy with.
 
-* ``boxed_choice`` stage 3 hands a letter to responses that never answered -- 19.5% of the TT side
-  against the reference's 1.5% on 2026-07-28 -- so the official number credits TT for prose that
-  merely happens to contain a parenthesised letter.
-* the mirror in ``live_score.py`` agreed with the real filter on only 54/61 non-empty responses.
-* nothing regex-shaped detects the failures we actually chase: language drift, unrevealed-canvas
-  noise bursts, a block that stopped mid-thought. Those all produce text a regex is happy with.
+So this sends the raw completion to Claude Opus 5 and gets back a structured verdict: is it coherent
+on-task text, which language, did it commit to an answer, which choice. **Meaningful is not correct**
+-- a well-argued wrong answer is meaningful, and the judge is told so.
 
-So this tool sends the raw completion to a judge model behind the Tenstorrent LiteLLM proxy and gets
-back a structured verdict: is it coherent on-task text, which language is it in, did it commit to a
-final answer, and which choice did it pick. **Meaningful is not the same as correct** -- a
-well-argued wrong answer is meaningful, and the judge is told so explicitly. That separation is the
-whole point: it splits "the model is reasoning badly" from "the model is emitting garbage", which is
-the distinction every DG regression so far has turned on.
-
-THE JUDGE NEVER SEES THE ANSWER KEY. It is asked which choice the response selected; correctness is
-computed locally by comparing that against the gold letter. Putting gold in the prompt would let the
-judge launder a non-answer into the right letter -- exactly the failure mode we are replacing.
+The judge never sees the answer key: it reports which choice the response selected, and correctness is
+computed locally against gold. Otherwise it could launder a non-answer into the right letter.
 
 Usage::
 
-    export API_KEY=...          # or LITELLM_API_KEY, or --api-key-file
-    llm_judge.py --list-models
+    export ANTHROPIC_API_KEY=...
+    pip install anthropic
 
-    # a finished lm_eval run (reads doc + resps + its own exact_match, so it can also report
-    # where the regex extractor and the judge disagree)
     llm_judge.py /home/zni/dg_runs/cot_rerun --out /tmp/verdicts.jsonl
-
-    # mid-run, before lm_eval has written any samples: reassemble from the server log
-    llm_judge.py /home/zni/dg_runs/flip_8192/both --from-server-log
-
-    # anything else: one response per line of jsonl, or a whole file as one response
-    llm_judge.py responses.jsonl
+    llm_judge.py responses.jsonl --votes 3
     cat one_response.txt | llm_judge.py -
 
-Costs money per call, so verdicts are cached on disk keyed by (model, prompt version, text): re-runs
-of the same run are free, and ``--votes N`` majority-votes N independent calls when a single
-judgement is not enough.
+Three Opus 5 properties shape the request: structured outputs constrain the reply to the verdict
+schema; thinking is on by default and ``max_tokens`` covers thinking plus text, so the budget is sized
+for both (``--effort low`` is the cost lever); and temperature does not exist -- Opus 5 rejects it --
+so ``--votes N`` gets its spread from ordinary sampling non-determinism, not a knob.
 
-CONCURRENCY. 198 questions one at a time is a coffee break spent almost entirely waiting on sockets,
-so the default is 32 calls in flight and the scheduled unit is a CALL, not an item -- ``--votes 5``
-fans out across votes as well as items, which a per-item pool cannot do. But ``--concurrency`` is a
-CEILING, not a promise: a fixed high concurrency against a shared proxy degenerates into a 429 storm,
-so a ``Limiter`` halves the in-flight budget once per congestion epoch (honouring ``Retry-After``),
-creeps it back one slot per 24 clean responses, and prints where it settled so the next run can start
-there. Verdicts are flushed to the cache as they land, so a killed run keeps every call it paid for.
-
-Measured on 60 calls of 0.25 s each against a stub proxy: 15.4 s serial, **0.7 s at 32 in flight when
-the proxy does not push back (22x)**, and 5.8 s when the stub rejects above 6 in flight -- in that
-last case the limiter converges on 6, which is the answer, rather than the 4 it undershot to before
-the epoch rule existed. So the high-concurrency default is free when the proxy is permissive and
-self-correcting when it is not.
+Concurrency is per ITEM (128 by default, and the httpx pool is sized to match, since httpx's own
+default of 100 would otherwise cap it silently). Votes within one item run in sequence, so the calls in
+flight top out at the item count -- irrelevant at 198 questions, worth knowing if you ever run
+``--votes 5`` over a handful of responses. Measured with a 0.25 s stub: 180 calls in 0.78 s against
+45 s serial.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import random
 import re
 import sys
-import threading
-import time
-import urllib.error
-import urllib.request
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-DEFAULT_BASE = os.environ.get("LITELLM_BASE_URL", "https://litellm-proxy--tenstorrent.workload.tenstorrent.com")
-DEFAULT_MODEL = os.environ.get("LITELLM_JUDGE_MODEL", "azure/gpt-4o")
-KEY_ENV = ("LITELLM_API_KEY", "TT_LITELLM_API_KEY", "API_KEY", "OPENAI_API_KEY")
+MODEL = os.environ.get("LLM_JUDGE_MODEL", "claude-opus-5")
+CONCURRENCY = int(os.environ.get("LLM_JUDGE_CONCURRENCY", "128"))
+MAX_TOKENS = 2048  # covers thinking + the verdict; thinking is on by default on Opus 5
+LETTERS = "ABCD"
+MODES = ("none", "empty", "repetition", "incoherent_noise", "wrong_language", "truncated_midthought", "off_task")
 
-# Bumped whenever the rubric changes: it is part of the cache key, so old verdicts do not survive a
-# prompt edit and silently mix two rubrics into one number.
-PROMPT_VERSION = "v1"
+SYSTEM = """You classify RAW language-model output. You are not answering the question.
 
-LETTERS = "ABCDEFGH"
+MEANINGFUL is not CORRECT. A response that argues carefully and reaches the wrong conclusion is
+meaningful. A response is NOT meaningful only when it is broken as text: empty, degenerate repetition,
+random-token noise, in a language the prompt did not ask for, cut off mid-thought before any
+conclusion, or off-task.
 
-# Judge calls are network-bound and each one parks a thread on a socket, so the useful concurrency is
-# set by what the proxy tolerates, not by core count -- 198 questions at 8 in flight is minutes of
-# mostly-idle waiting. 32 is the ceiling the limiter starts from and adapts DOWN from on 429/503, so
-# a default this high costs nothing when the proxy is stricter than that.
-DEFAULT_CONCURRENCY = int(os.environ.get("LITELLM_JUDGE_CONCURRENCY", "32"))
+Judge only what is present. Never infer an answer the response does not state: if it never commits to
+a choice, say so, even if one is clearly implied. A parenthesised letter somewhere in prose is NOT a
+selection."""
 
-FAILURE_MODES = (
-    "none",
-    "empty",
-    "repetition",
-    "incoherent_noise",
-    "wrong_language",
-    "truncated_midthought",
-    "off_task",
-    "refusal",
-)
-
-JUDGE_SYSTEM = """You are a strict evaluator of RAW language-model output during hardware bring-up.
-
-You are NOT answering the question. You are classifying the RESPONSE text you are given.
-
-Critical distinction: MEANINGFUL is not the same as CORRECT. A response that argues carefully and
-reaches the wrong conclusion is meaningful. A response is NOT meaningful only when it is broken as
-text: empty, degenerate repetition, random-token noise, in a language the prompt did not ask for,
-cut off mid-thought before any conclusion, off-task, or a refusal.
-
-Judge only what is present. Never infer an answer the response does not state: if it never commits
-to a choice, say so, even if one choice is clearly implied or the reasoning is heading there. A
-parenthesised letter appearing somewhere in prose is NOT a selection.
-
-Reply with a single JSON object, no prose and no code fence:
-{
-  "meaningful": bool,
-  "failure_mode": one of ["none","empty","repetition","incoherent_noise","wrong_language",
-                          "truncated_midthought","off_task","refusal"],
-  "language": ISO 639-1 code of the bulk of the response, e.g. "en", "zh", "ko", or "mixed",
-  "answered": bool,            // did it explicitly state a final answer?
-  "selected_letter": "A".."D" or null,   // only if choices were given AND it selected one
-  "selected_answer_text": string or null, // what it said the answer is, verbatim, <=120 chars
-  "reasoning_present": bool,   // is there substantive reasoning, not just an answer?
-  "notes": string              // <=200 chars, why. Name the evidence.
-}"""
+SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "meaningful": {"type": "boolean"},
+            "failure_mode": {"type": "string", "enum": list(MODES)},
+            "language": {"type": "string", "description": "ISO 639-1 code of the bulk of it, or 'mixed'"},
+            "answered": {"type": "boolean", "description": "did it explicitly state a final answer?"},
+            "selected_letter": {"type": ["string", "null"], "enum": [*LETTERS, None]},
+            "selected_answer_text": {"type": ["string", "null"], "description": "what it said the answer is"},
+            "notes": {"type": "string", "description": "one short sentence naming the evidence"},
+        },
+        "required": [
+            "meaningful",
+            "failure_mode",
+            "language",
+            "answered",
+            "selected_letter",
+            "selected_answer_text",
+            "notes",
+        ],
+        "additionalProperties": False,
+    },
+}
 
 
-# ---------------------------------------------------------------------------- transport
-
-
-def resolve_key(explicit: str | None, key_file: Path | None) -> str:
-    if explicit:
-        return explicit.strip()
-    if key_file:
-        return key_file.read_text().strip()
-    for name in KEY_ENV:
-        val = os.environ.get(name)
-        if val and val.strip():
-            return val.strip()
-    sys.exit(
-        "no API key. Set one of " + ", ".join(KEY_ENV) + ", or pass --api-key-file.\n"
-        "The proxy is the Tenstorrent LiteLLM gateway; the key is the same one the curl examples use."
-    )
-
-
-class Limiter:
-    """Adaptive in-flight gate in front of the proxy: additive increase, multiplicative decrease.
-
-    Raising --concurrency without this does not make a run faster, it makes it a 429 storm -- the
-    proxy rejects, every thread sleeps and retries, and wall clock ends up WORSE than a lower fixed
-    concurrency while the queue thrashes. So the limit is discovered instead of assumed: it starts at
-    --concurrency, halves on every 429/503 (honouring ``Retry-After`` when the proxy sends one), and
-    creeps back up one slot per ``PROBE_OK`` clean responses. The value it settles on is printed, so
-    the next run can start there.
-
-    The pool itself is sized at the CEILING, not the current limit -- shrinking a ThreadPoolExecutor
-    is not possible, so the gate has to be the thing that narrows, and idle threads park in
-    ``__enter__`` rather than hammering the proxy.
-    """
-
-    PROBE_OK = 24  # clean responses before trying one more slot
-    FLOOR = 2  # never throttle down to serial: one stuck call would stall everything
-    MIN_EPOCH = 0.5  # seconds one decrease covers; see `throttled`
-
-    def __init__(self, limit: int):
-        self.cv = threading.Condition()
-        self.ceiling = max(1, limit)
-        self.limit = max(1, limit)
-        self.inflight = 0
-        self.pause_until = 0.0
-        self.epoch_until = 0.0
-        self.throttles = 0
-        self.low_water = self.limit
-        self.ok_run = 0
-
-    def __enter__(self):
-        with self.cv:
-            while True:
-                now = time.monotonic()
-                if self.inflight < self.limit and now >= self.pause_until:
-                    self.inflight += 1
-                    return self
-                # A pause needs a bounded wait or nothing wakes the thread when it expires.
-                self.cv.wait(timeout=max(0.05, self.pause_until - now) if self.pause_until > now else None)
-
-    def __exit__(self, *_exc):
-        with self.cv:
-            self.inflight -= 1
-            self.cv.notify()
-        return False
-
-    def throttled(self, retry_after: float | None) -> None:
-        """Halve at most once per congestion EPOCH, not once per rejection.
-
-        Measured against a stub that 429s above 6 in flight: halving on every rejection drove a
-        ceiling of 32 down to 2 (past the 6 the proxy would have given) in 26 throttles, because the
-        ~26 calls already on the wire when the first decrease landed each halved it again. Absorbing
-        the rest of the burst into one epoch settles near the real limit instead of undershooting it.
-        """
-        with self.cv:
-            self.throttles += 1
-            now = time.monotonic()
-            pause = retry_after if retry_after else 1.0
-            if now >= self.epoch_until:
-                self.limit = max(self.FLOOR, self.limit // 2)
-                self.low_water = min(self.low_water, self.limit)
-                self.ok_run = 0
-                self.epoch_until = now + max(pause, self.MIN_EPOCH)
-            self.pause_until = max(self.pause_until, now + pause)
-
-    def ok(self) -> None:
-        with self.cv:
-            self.ok_run += 1
-            if self.ok_run >= self.PROBE_OK and self.limit < self.ceiling:
-                self.limit += 1
-                self.ok_run = 0
-                self.cv.notify()
-
-    def summary(self) -> str:
-        return (
-            f"{self.limit} in flight at the end (ceiling {self.ceiling}, low water {self.low_water}), "
-            f"{self.throttles} throttle(s)"
-        )
-
-
-class NullLimiter:
-    """For the single-shot paths (--list-models); no gate, no bookkeeping."""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc):
-        return False
-
-    def throttled(self, _retry_after) -> None:
-        pass
-
-    def ok(self) -> None:
-        pass
-
-
-def retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
-    """``Retry-After`` in seconds, when the proxy bothered to say. Guessing over it is strictly worse
-    than obeying it: guess low and the throttle repeats, guess high and the run idles."""
-    raw = (exc.headers or {}).get("Retry-After")
-    if not raw:
-        return None
-    try:
-        return max(0.0, min(120.0, float(str(raw).strip())))
-    except ValueError:
-        return None  # the HTTP-date form; not worth a parser, the backoff covers it
-
-
-def http_json(
-    url: str,
-    key: str,
-    payload: dict | None = None,
-    timeout: float = 180.0,
-    retries: int = 4,
-    limiter=None,
-):
-    """POST (or GET, when payload is None) JSON, retrying the failures that are worth retrying.
-
-    429 and 5xx are transient on a shared proxy; 4xx otherwise is a bad request and retrying it just
-    burns wall clock. The error body is surfaced -- LiteLLM puts the real reason (unknown model, key
-    out of budget) in there, and swallowing it turns a one-line fix into a debugging session.
-
-    The retry sleep is OUTSIDE the limiter's gate: holding an in-flight slot while sleeping would
-    make a throttled run look busy to the gate and starve the threads that could still make progress.
-    """
-    gate = limiter if limiter is not None else NullLimiter()
-    data = None if payload is None else json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
-    last, wait = "", 0.0
-    for attempt in range(retries + 1):
-        req = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
-        try:
-            with gate:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    body = resp.read()
-            gate.ok()
-            return json.loads(body.decode())
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")[:400]
-            last = f"HTTP {exc.code}: {detail}"
-            if exc.code in (408, 429) or exc.code >= 500:
-                after = retry_after_seconds(exc)
-                gate.throttled(after)
-                wait = after if after else min(30.0, 2.0**attempt) * (0.7 + 0.6 * random.random())
-            else:
-                raise RuntimeError(last) from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            last = f"{type(exc).__name__}: {exc}"
-            wait = min(30.0, 2.0**attempt) * (0.7 + 0.6 * random.random())
-        if attempt < retries:
-            time.sleep(wait)
-    raise RuntimeError(f"{url} failed after {retries + 1} attempts -- {last}")
-
-
-def list_models(base: str, key: str) -> int:
-    got = http_json(f"{base.rstrip('/')}/models", key)
-    ids = sorted(str(m.get("id")) for m in (got.get("data") or []) if m.get("id"))
-    print(f"{len(ids)} model(s) on {base}:")
-    for mid in ids:
-        print(f"  {mid}")
-    if DEFAULT_MODEL not in ids:
-        print(f"\n!! the default --model {DEFAULT_MODEL!r} is not in that list; pass --model explicitly")
-    return 0
-
-
-# ---------------------------------------------------------------------------- prompt
-
-
-def truncate(text: str, max_chars: int) -> str:
-    """Keep the head and the TAIL. The final answer lives at the end; a head-only cut loses it."""
-    if len(text) <= max_chars:
+def truncate(text: str, budget: int) -> str:
+    """Keep the head and the TAIL -- the final answer lives at the end, so a head-only cut loses it."""
+    if len(text) <= budget:
         return text
-    head = max_chars // 4
-    tail = max_chars - head
-    return f"{text[:head]}\n\n[... {len(text) - max_chars} chars elided ...]\n\n{text[-tail:]}"
+    head = budget // 4
+    return f"{text[:head]}\n[... {len(text) - budget} chars elided ...]\n{text[head - budget:]}"
 
 
-def build_user_prompt(item: dict, max_chars: int) -> str:
+def prompt_for(item: dict, budget: int) -> str:
     parts = []
     if item.get("question"):
-        parts.append("QUESTION the model was given:\n" + truncate(str(item["question"]), 4000))
-    choices = item.get("choices") or []
-    if choices:
+        parts.append("QUESTION:\n" + truncate(item["question"], 4000))
+    if item.get("choices"):
         parts.append(
-            "CHOICES (letters as the model saw them):\n"
-            + "\n".join(f"({LETTERS[i]}) {c}" for i, c in enumerate(choices) if i < len(LETTERS))
+            "CHOICES (as the model saw them):\n"
+            + "\n".join(f"({LETTERS[i]}) {c}" for i, c in enumerate(item["choices"]) if i < len(LETTERS))
         )
-    parts.append("RESPONSE to classify:\n<<<RESPONSE\n" + truncate(item.get("text") or "", max_chars) + "\nRESPONSE>>>")
-    if not choices:
-        parts.append('There were no multiple-choice options: leave "selected_letter" null.')
+    parts.append("RESPONSE to classify:\n<<<\n" + truncate(item.get("text") or "", budget) + "\n>>>")
     return "\n\n".join(parts)
 
 
-def parse_verdict(content: str) -> dict:
-    """Parse the judge's JSON, tolerating a code fence or a stray sentence around it."""
-    text = content.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", text).strip()
-    try:
-        got = json.loads(text)
-    except ValueError:
-        m = re.search(r"\{.*\}", text, re.S)
-        if not m:
-            raise ValueError(f"judge did not return JSON: {content[:200]!r}") from None
-        got = json.loads(m.group(0))
-    if not isinstance(got, dict):
-        raise ValueError(f"judge returned {type(got).__name__}, not an object")
-    mode = str(got.get("failure_mode") or "none")
-    # A null letter is the COMMON case -- "it never selected one" is the finding, not an error path --
-    # so this has to survive None without reaching `None in LETTERS`.
-    raw = got.get("selected_letter")
-    letter = str(raw).strip().upper().strip("()")[:1] if raw else ""
-    return {
-        "meaningful": bool(got.get("meaningful")),
-        "failure_mode": mode if mode in FAILURE_MODES else "other",
-        "language": (str(got.get("language") or "").strip().lower() or None),
-        "answered": bool(got.get("answered")),
-        # `letter and` is load-bearing: "" is a substring of every string, so an empty letter would
-        # otherwise pass the membership test and be reported as a selection.
-        "selected_letter": letter if letter and letter in LETTERS else None,
-        "selected_answer_text": (
-            str(got.get("selected_answer_text"))[:200] if got.get("selected_answer_text") else None
-        ),
-        "reasoning_present": bool(got.get("reasoning_present")),
-        "notes": str(got.get("notes") or "")[:300],
-    }
-
-
-def judge_call(item: dict, cfg: dict, vote: int, limiter=None) -> dict:
-    payload = {
-        "model": cfg["model"],
-        "messages": [
-            {"role": "system", "content": JUDGE_SYSTEM},
-            {"role": "user", "content": build_user_prompt(item, cfg["max_chars"])},
-        ],
-        # Deterministic for vote 0; later votes need spread or majority voting is theatre.
-        "temperature": 0.0 if vote == 0 else 0.7,
-        "max_tokens": 700,
-        "response_format": {"type": "json_object"},
-    }
-    got = http_json(
-        f"{cfg['base'].rstrip('/')}/chat/completions",
-        cfg["key"],
-        payload,
-        timeout=cfg["timeout"],
-        limiter=limiter,
+def judge_one(client, item: dict, cfg: dict) -> dict:
+    """One call. A refusal is HTTP 200 with stop_reason 'refusal', and with thinking on the verdict is
+    not content[0] -- so neither is assumed here."""
+    resp = client.beta.messages.create(
+        model=cfg["model"],
+        max_tokens=MAX_TOKENS,
+        system=SYSTEM,
+        messages=[{"role": "user", "content": prompt_for(item, cfg["max_chars"])}],
+        output_config={"effort": cfg["effort"], "format": SCHEMA},
+        # Safety classifiers can decline; "default" retries on another model inside the same call.
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
     )
-    choice = (got.get("choices") or [{}])[0]
-    content = (choice.get("message") or {}).get("content") or ""
-    verdict = parse_verdict(content)
-    usage = got.get("usage") or {}
-    verdict["_usage"] = {
-        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-        "completion_tokens": int(usage.get("completion_tokens") or 0),
-    }
-    return verdict
+    if resp.stop_reason == "refusal":
+        raise RuntimeError(f"judge declined ({getattr(getattr(resp, 'stop_details', None), 'category', None)})")
+    text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+    got = json.loads(text)
+    got["selected_letter"] = got.get("selected_letter") if got.get("selected_letter") in tuple(LETTERS) else None
+    return got
 
 
-# ---------------------------------------------------------------------------- cache
-
-
-class Cache:
-    """Disk cache of verdicts. Keyed on the response text, so it survives re-ordered inputs."""
-
-    def __init__(self, path: Path | None):
-        self.path = path
-        self.data = {}
-        self.hits = 0
-        self.writes = 0  # calls actually paid for this run, as opposed to replayed
-        self.lock = threading.Lock()
-        if path and path.exists():
-            try:
-                self.data = json.loads(path.read_text())
-            except ValueError:
-                self.data = {}  # a truncated cache is not worth a crash; rebuild it
-
-    @staticmethod
-    def key(item: dict, cfg: dict, vote: int) -> str:
-        blob = json.dumps(
-            [
-                cfg["model"],
-                PROMPT_VERSION,
-                cfg["max_chars"],
-                vote,
-                item.get("text") or "",
-                item.get("question") or "",
-                item.get("choices") or [],
-            ],
-            sort_keys=True,
-        )
-        return hashlib.sha256(blob.encode()).hexdigest()[:32]
-
-    def get(self, key: str):
-        with self.lock:  # --concurrency means these run from several threads
-            got = self.data.get(key)
-            if got is not None:
-                self.hits += 1
-            return got
-
-    def put(self, key: str, verdict: dict) -> None:
-        with self.lock:
-            self.data[key] = verdict
-            self.writes += 1
-
-    def flush(self) -> None:
-        """Atomic write. A high-concurrency run over 198 questions is minutes of paid calls; a
-        Ctrl-C during a plain ``write_text`` truncates the file and throws all of them away."""
-        if not self.path:
-            return
-        with self.lock:
-            blob = json.dumps(self.data)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(blob)
-        tmp.replace(self.path)
-
-
-# ---------------------------------------------------------------------------- inputs
-
-
-def _gold_letter(doc: dict) -> str | None:
-    letter = str(doc.get("answer", "")).strip().upper().strip("()")[:1]
-    return letter if letter in LETTERS else None
-
-
-def load_samples(target: Path, stage: str) -> tuple[str, list[dict]]:
-    """Items from an lm_eval samples_*.jsonl (or the newest under a run dir).
-
-    Carries the run's own ``exact_match`` so the report can show where the regex extractor and the
-    judge disagree -- which is the number that says whether the regexes were lying.
-    """
-    if target.is_dir():
-        cands = sorted(target.rglob(f"{stage}/**/samples_*.jsonl")) or sorted(target.rglob("samples_*.jsonl"))
-        if not cands:
-            sys.exit(f"no samples_*.jsonl under {target} (mid-run? try --from-server-log)")
-        path = cands[-1]
-    else:
-        path = target
-
-    items = []
-    for line in path.open(errors="replace"):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        # One record per filter, so every raw count is doubled. flexible-extract is the scored one.
-        if row.get("filter") not in (None, "flexible-extract"):
-            continue
-        doc = row.get("doc") or {}
-        items.append(
-            {
-                "id": doc.get("Record ID") or row.get("doc_id"),
-                "question": doc.get("Question") or doc.get("question"),
-                "choices": list(doc.get("choices") or []),
-                "gold_letter": _gold_letter(doc),
-                "gold_text": str(doc.get("Correct Answer", "")).strip() or None,
-                "text": (row.get("resps") or [[""]])[0][0],
-                "regex_correct": bool(row.get("exact_match")) if "exact_match" in row else None,
-            }
-        )
-    return str(path), items
-
-
-def load_server_log(run_dir: Path, checkpoint: str, stage_skip: bool = True) -> tuple[str, list[dict]]:
-    """Items reassembled from the server log's per-block token ids, for a run still in flight.
-
-    Reuses ``live_score.py`` rather than re-deriving the log format: the smoke-stage drop and the
-    block grouping are subtle enough that a second copy would drift out of agreement with the mid-run
-    scorer, and two disagreeing mid-run numbers is worse than one.
-    """
-    import importlib.util
-
-    src = Path(__file__).resolve().parent / "live_score.py"
-    spec = importlib.util.spec_from_file_location("dg_live_score", src)
-    live = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(live)
-
-    log = run_dir / "server.log"
-    if not log.exists():
-        cands = [d for d in run_dir.iterdir() if d.is_dir() and (d / "server.log").exists()] if run_dir.is_dir() else []
-        if not cands:
-            sys.exit(f"no server.log under {run_dir}")
-        run_dir = max(cands, key=lambda d: (d / "server.log").stat().st_mtime)
-        log = run_dir / "server.log"
-
-    requests, _trips = live.read_completions(log)
-    if stage_skip:
-        requests = requests[live.smoke_stage_requests(run_dir) :]
-    tok = live.load_tokenizer(checkpoint)
-    items = [
-        {
-            "id": f"req{i}",
-            "text": tok.decode(req["ids"], skip_special_tokens=True),
-            "guard_ended": bool(req.get("guard_ended")),
-            "blocks": req.get("blocks"),
+def judge_item(client, item: dict, cfg: dict) -> dict:
+    """An item's verdict: empty text is settled locally, otherwise N votes majority-voted."""
+    if not (item.get("text") or "").strip():
+        return {
+            "meaningful": False,
+            "failure_mode": "empty",
+            "language": None,
+            "answered": False,
+            "selected_letter": None,
+            "selected_answer_text": None,
+            "notes": "empty -- no call made",
         }
-        for i, req in enumerate(requests)
-    ]
-    return str(log), items
+    votes = []
+    for _ in range(cfg["votes"]):
+        try:
+            votes.append(judge_one(client, item, cfg))
+        except Exception as exc:  # noqa: BLE001 - one bad item must not lose the run
+            return {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    return majority(votes)
 
 
-def load_plain(target: Path) -> tuple[str, list[dict]]:
-    """jsonl with a text-ish field per line, or a whole file (or stdin) as one response."""
+def majority(votes: list[dict]) -> dict:
+    """Field-wise majority, plus whether the votes disagreed at all."""
+    out = dict(votes[0])
+    for field in ("meaningful", "answered"):
+        out[field] = sum(bool(v.get(field)) for v in votes) > len(votes) / 2
+    for field in ("failure_mode", "language", "selected_letter"):
+        out[field] = Counter(v.get(field) for v in votes).most_common(1)[0][0]
+    out["votes"] = len(votes)
+    out["split"] = len({(bool(v["meaningful"]), v["selected_letter"]) for v in votes}) > 1
+    return out
+
+
+def norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
+
+
+def judge_letter(verdict: dict, item: dict) -> str | None:
+    """The letter the response picked: the judge's letter, else its verbatim answer text matched back
+    against the choices. The text path is what makes this shuffle-independent.
+
+    A response the judge marked ``answered: false`` gets no letter even if it mentioned a choice --
+    crediting that is the same false credit as the regex extractor's stage 3, which is the whole
+    reason for this tool.
+    """
+    if verdict.get("answered") is False:
+        return None
+    if verdict.get("selected_letter"):
+        return verdict["selected_letter"]
+    said, choices = norm(verdict.get("selected_answer_text") or ""), item.get("choices") or []
+    if not said:
+        return None
+    hits = [i for i, c in enumerate(choices) if norm(c) and (norm(c) in said or said in norm(c))]
+    return LETTERS[hits[0]] if len(hits) == 1 and hits[0] < len(LETTERS) else None
+
+
+def load(target: Path, stage: str) -> tuple[str, list[dict]]:
+    """lm_eval samples (a file or the newest under a run dir), a jsonl of responses, or one text blob."""
+    if target.is_dir():
+        found = sorted(target.rglob(f"{stage}/**/samples_*.jsonl")) or sorted(target.rglob("samples_*.jsonl"))
+        if not found:
+            sys.exit(f"no samples_*.jsonl under {target}")
+        target = found[-1]
+
+    if str(target) != "-" and "samples_" in target.name:
+        items = []
+        for line in target.open(errors="replace"):
+            row = json.loads(line)
+            if row.get("filter") not in (None, "flexible-extract"):
+                continue  # one row per filter; flexible-extract is the scored one
+            doc = row.get("doc") or {}
+            gold = str(doc.get("answer", "")).strip().upper().strip("()")[:1]
+            items.append(
+                {
+                    "id": doc.get("Record ID") or row.get("doc_id"),
+                    "question": doc.get("Question"),
+                    "choices": list(doc.get("choices") or []),
+                    "gold_letter": gold if gold in LETTERS else None,
+                    "text": (row.get("resps") or [[""]])[0][0],
+                    "regex_correct": bool(row["exact_match"]) if "exact_match" in row else None,
+                }
+            )
+        return f"{target} ({len(items)} questions)", items
+
     raw = sys.stdin.read() if str(target) == "-" else target.read_text(errors="replace")
     lines = [ln for ln in raw.splitlines() if ln.strip()]
     if lines and all(ln.lstrip().startswith("{") for ln in lines):
         items = []
         for i, ln in enumerate(lines):
             row = json.loads(ln)
-            text = row.get("text") or row.get("response") or row.get("output") or row.get("completion")
-            if text is None and isinstance(row.get("resps"), list):
-                text = (row["resps"] or [[""]])[0][0]
-            items.append(
-                {
-                    "id": row.get("id", i),
-                    "question": row.get("question"),
-                    "choices": list(row.get("choices") or []),
-                    "gold_letter": row.get("gold_letter"),
-                    "gold_text": row.get("gold_text"),
-                    "text": text or "",
-                }
-            )
+            row.setdefault("id", i)
+            row["text"] = row.get("text") or row.get("response") or row.get("output") or ""
+            items.append(row)
         return f"{target} (jsonl, {len(items)} rows)", items
     return f"{target} (single response)", [{"id": 0, "text": raw}]
 
 
-# ---------------------------------------------------------------------------- grading
-
-
-def norm(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
-
-
-def derive_letter(verdict: dict, item: dict) -> str | None:
-    """The letter the response selected: the judge's letter, else its verbatim answer text matched
-    back against the choices. The text path is what makes this shuffle-independent -- and it is a
-    LOCAL match against choices the judge already saw, never against gold."""
-    if verdict.get("selected_letter"):
-        return verdict["selected_letter"]
-    said = verdict.get("selected_answer_text")
-    choices = item.get("choices") or []
-    if not said or not choices:
-        return None
-    said_n = norm(said)
-    if not said_n:
-        return None
-    hits = [i for i, c in enumerate(choices) if norm(c) and (norm(c) in said_n or said_n in norm(c))]
-    return LETTERS[hits[0]] if len(hits) == 1 and hits[0] < len(LETTERS) else None
-
-
-def majority(verdicts: list[dict]) -> dict:
-    """Field-wise majority over N votes, plus how split they were."""
-    out = dict(verdicts[0])
-    for field in ("meaningful", "answered", "reasoning_present"):
-        votes = [bool(v.get(field)) for v in verdicts]
-        out[field] = sum(votes) > len(votes) / 2
-    for field in ("failure_mode", "language", "selected_letter"):
-        counted = Counter(v.get(field) for v in verdicts)
-        out[field] = counted.most_common(1)[0][0]
-    out["_votes"] = len(verdicts)
-    out["_split"] = len({(bool(v.get("meaningful")), v.get("selected_letter")) for v in verdicts}) > 1
-    out["_usage"] = {
-        "prompt_tokens": sum(v.get("_usage", {}).get("prompt_tokens", 0) for v in verdicts),
-        "completion_tokens": sum(v.get("_usage", {}).get("completion_tokens", 0) for v in verdicts),
-    }
-    return out
-
-
-EMPTY_VERDICT = {
-    "meaningful": False,
-    "failure_mode": "empty",
-    "language": None,
-    "answered": False,
-    "selected_letter": None,
-    "selected_answer_text": None,
-    "reasoning_present": False,
-    "notes": "empty response -- classified locally, no API call",
-    "_usage": {"prompt_tokens": 0, "completion_tokens": 0},
-}
-
-
-def judge_one(item: dict, cfg: dict, cache: Cache, vote: int, limiter=None) -> dict:
-    """One CALL: the cache lookup plus, on a miss, one request. The unit the pool schedules."""
-    key = Cache.key(item, cfg, vote)
-    got = cache.get(key)
-    if got is not None:
-        return got
-    try:
-        got = judge_call(item, cfg, vote, limiter=limiter)
-    except Exception as exc:  # noqa: BLE001 - one bad call must not lose the whole run
-        return {"error": f"{type(exc).__name__}: {exc}"[:300]}
-    cache.put(key, got)
-    return got
-
-
-def judge_item(item: dict, cfg: dict, cache: Cache, limiter=None) -> dict:
-    """One item's final verdict, serially. Kept for callers that judge a single response; the batch
-    path is ``judge_all``, which parallelises across votes as well as items."""
-    if not (item.get("text") or "").strip():
-        return dict(EMPTY_VERDICT)
-    votes = [judge_one(item, cfg, cache, v, limiter) for v in range(cfg["votes"])]
-    return assemble(votes)
-
-
-def assemble(votes: list[dict]) -> dict:
-    """Collapse an item's votes into its verdict. An errored vote poisons the item rather than being
-    silently dropped: majority-voting over the survivors would quietly change the denominator."""
-    for vote in votes:
-        if vote.get("error"):
-            return {"error": vote["error"]}
-    return majority(votes) if len(votes) > 1 else votes[0]
-
-
-def judge_all(items: list[dict], cfg: dict, cache: Cache, limiter, progress=None) -> list[dict]:
-    """Judge every item, scheduling one task per CALL rather than per item.
-
-    Per-item tasks waste the pool whenever the work is not shaped like one call per item: with
-    ``--votes 5`` over 8 items, 8 tasks each doing 5 sequential calls runs 5x longer than 40
-    independent tasks at the same concurrency. Flattening to (item, vote) makes the pool saturate for
-    any mix, and it is also what lets the cache-hit tasks retire instantly instead of queueing behind
-    a live call.
-
-    Results are collected as they complete so the cache can be flushed incrementally -- a killed run
-    keeps every verdict it paid for.
-    """
-    tasks = [(i, v) for i, item in enumerate(items) if (item.get("text") or "").strip() for v in range(cfg["votes"])]
-    votes: dict[int, dict[int, dict]] = {i: {} for i in range(len(items))}
-    if not tasks:
-        return [dict(EMPTY_VERDICT) for _ in items]
-
-    flush_every = max(25, len(tasks) // 20)
-    with ThreadPoolExecutor(max_workers=cfg["concurrency"]) as pool:
-        futures = {pool.submit(judge_one, items[i], cfg, cache, v, limiter): (i, v) for i, v in tasks}
-        for done, future in enumerate(as_completed(futures), 1):
-            i, v = futures[future]
-            votes[i][v] = future.result()
-            if progress:
-                progress(done, len(tasks))
-            if done % flush_every == 0:
-                cache.flush()
-
-    out = []
-    for i, item in enumerate(items):
-        if not (item.get("text") or "").strip():
-            out.append(dict(EMPTY_VERDICT))
-        else:
-            out.append(assemble([votes[i][v] for v in sorted(votes[i])]))
-    return out
-
-
-def make_progress(total_items: int, quiet: bool):
-    """A progress line on stderr, so a high-concurrency run over 198 questions is not a silent wait.
-
-    stderr, not stdout: the report is what gets piped into a file or grepped, and progress noise in
-    there would corrupt it.
-    """
-    if quiet or total_items <= 1:
-        return None
-    state = {"last": 0.0}
-    tty = sys.stderr.isatty()
-
-    def progress(done: int, total: int) -> None:
-        now = time.monotonic()
-        if done < total and now - state["last"] < 2.0:
-            return
-        state["last"] = now
-        end = "\r" if tty and done < total else "\n"
-        print(f"  judged {done}/{total} call(s)...", end=end, file=sys.stderr, flush=True)
-
-    return progress
-
-
-# ---------------------------------------------------------------------------- report
-
-
-def report(
-    source: str,
-    items: list[dict],
-    verdicts: list[dict],
-    cfg: dict,
-    cache: Cache,
-    limiter=None,
-    elapsed: float | None = None,
-) -> tuple[str, float]:
-    n = len(items)
-    errors = [v for v in verdicts if v.get("error")]
+def report(source: str, items: list[dict], verdicts: list[dict], cfg: dict) -> None:
     ok = [(i, v) for i, v in zip(items, verdicts) if not v.get("error")]
-    modes = Counter(v["failure_mode"] for _i, v in ok)
-    langs = Counter(v.get("language") or "?" for _i, v in ok)
+    errors = [v for v in verdicts if v.get("error")]
+    n = len(ok)
+    pct = (lambda c: f"{100.0 * c / n:.1f}%") if n else (lambda c: "n/a")
+
+    print(f"source: {source}")
+    print(f"judge: {cfg['model']}  effort={cfg['effort']}  votes={cfg['votes']}")
+    print(f"items: {len(items)}   judged: {n}" + (f"   ERRORED: {len(errors)}" if errors else ""))
+    print()
     meaningful = sum(1 for _i, v in ok if v["meaningful"])
     answered = sum(1 for _i, v in ok if v["answered"])
-    split = sum(1 for _i, v in ok if v.get("_split"))
+    print(f"meaningful: {meaningful}/{n}  ({pct(meaningful)})   <- coherent on-task text, correct or not")
+    print(f"answered:   {answered}/{n}  ({pct(answered)})   <- explicitly stated a final answer")
+    split = sum(1 for _i, v in ok if v.get("split"))
+    if split:
+        print(f"  ({split} item(s) split across votes -- those are the majority, not unanimous)")
+    print()
+    print(
+        "failure modes: "
+        + (", ".join(f"{k}={v}" for k, v in Counter(v["failure_mode"] for _i, v in ok).most_common()) or "none")
+    )
+    print(
+        "languages:     "
+        + ", ".join(f"{k}={v}" for k, v in Counter(v.get("language") or "?" for _i, v in ok).most_common())
+    )
 
     graded = [(i, v) for i, v in ok if i.get("gold_letter")]
-    correct = sum(1 for i, v in graded if derive_letter(v, i) == i["gold_letter"])
-
-    # Where the regexes lied. Both directions matter: a false credit inflates the official score, a
-    # missed answer deflates it, and the two do not cancel.
-    comparable = [(i, v) for i, v in graded if i.get("regex_correct") is not None]
-    judge_correct = {id(i): derive_letter(v, i) == i["gold_letter"] for i, v in comparable}
-    regex_only = sum(1 for i, _v in comparable if i["regex_correct"] and not judge_correct[id(i)])
-    judge_only = sum(1 for i, _v in comparable if not i["regex_correct"] and judge_correct[id(i)])
-    laundered = sum(1 for i, v in comparable if i["regex_correct"] and not v["answered"])
-
-    prompt_tok = sum(v.get("_usage", {}).get("prompt_tokens", 0) for _i, v in ok)
-    comp_tok = sum(v.get("_usage", {}).get("completion_tokens", 0) for _i, v in ok)
-
-    pct = (lambda c: f"{100.0 * c / len(ok):.1f}%") if ok else (lambda c: "n/a")
-    L = [
-        f"source: {source}",
-        f"judge: {cfg['model']}  votes={cfg['votes']}  concurrency={cfg['concurrency']}  prompt={PROMPT_VERSION}",
-        f"items: {n}   judged: {len(ok)}" + (f"   ERRORED: {len(errors)}" if errors else ""),
-        "",
-        f"meaningful:  {meaningful}/{len(ok)}  ({pct(meaningful)})   <- coherent on-task text, correct or not",
-        f"answered:    {answered}/{len(ok)}  ({pct(answered)})   <- explicitly stated a final answer",
-    ]
-    if split:
-        L.append(f"  ({split} item(s) split across votes -- those verdicts are the majority, not unanimous)")
-    L.append("")
-    L.append("failure modes: " + (", ".join(f"{k}={v}" for k, v in modes.most_common()) or "none"))
-    L.append("languages:     " + ", ".join(f"{k}={v}" for k, v in langs.most_common()))
     if graded:
-        L.append("")
-        L.append(
-            f"correct (judge-selected letter vs gold): {correct}/{len(graded)}  "
-            f"= {100.0 * correct / len(graded):.1f}%"
+        correct = sum(1 for i, v in graded if judge_letter(v, i) == i["gold_letter"])
+        print(
+            f"\ncorrect: {correct}/{len(graded)} = {100.0 * correct / len(graded):.1f}%   "
+            "(gold was never shown to the judge)"
         )
-        L.append("  gold was NEVER shown to the judge; the letter is matched locally.")
-    if comparable:
-        L.append("")
-        L.append(f"vs lm_eval's regex extractor, on {len(comparable)} item(s) with both:")
-        L.append(f"  regex correct but judge says wrong/no-answer: {regex_only}")
-        L.append(f"  judge correct but regex missed it:            {judge_only}")
-        L.append(
-            f"  regex credited a response that never answered:  {laundered}"
-            "   <- the laundering this tool exists to find"
+    both = [(i, v) for i, v in graded if i.get("regex_correct") is not None]
+    if both:
+        laundered = sum(1 for i, v in both if i["regex_correct"] and not v["answered"])
+        disagree = sum(1 for i, v in both if i["regex_correct"] != (judge_letter(v, i) == i["gold_letter"]))
+        print(
+            f"vs the regex extractor on {len(both)} item(s): {disagree} disagreement(s); "
+            f"{laundered} response(s) it scored correct that never answered"
         )
     if errors:
-        L.append("")
-        L.append(f"!! {len(errors)} item(s) failed to judge; first: {errors[0]['error']}")
-        L.append("   They are excluded from every rate above, so the denominators are short.")
-    L.append("")
-    L.append(
-        f"calls: {cache.writes} made this run, {cache.hits} replayed from cache"
-        + (f" -> {cache.path}" if cache.path else "  (cache disabled)")
-    )
-    if elapsed:
-        rate_s = f"   ({cache.writes / elapsed:.1f} call/s)" if cache.writes else ""
-        L.append(f"wall clock: {elapsed:.1f}s{rate_s}")
-    if limiter is not None and getattr(limiter, "ceiling", None):
-        L.append(f"limiter: {limiter.summary()}")
-        if limiter.throttles:
-            L.append(
-                f"  the proxy pushed back; concurrency was adapted down to {limiter.low_water} at the "
-                f"worst point. Start the next run near there with --concurrency."
-            )
-    # Cached verdicts carry the usage of the call that produced them, so this is the cost of judging
-    # this input ONCE -- not what was spent this run. Said plainly rather than quietly conflated.
-    L.append(f"tokens across all verdicts (cached included): {prompt_tok} prompt + {comp_tok} completion")
-    return "\n".join(L), (meaningful / len(ok) if ok else 0.0)
-
-
-# ---------------------------------------------------------------------------- main
+        print(f"\n!! {len(errors)} item(s) failed; first: {errors[0]['error']}")
+        print("   Excluded from every rate above, so the denominators are short.")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument(
-        "target",
-        nargs="?",
-        type=Path,
-        help="a run dir, an lm_eval samples_*.jsonl, a jsonl of responses, a text file, or - for stdin",
-    )
-    ap.add_argument("--list-models", action="store_true", help="print the models the proxy exposes and exit")
-    ap.add_argument("--model", default=DEFAULT_MODEL, help=f"judge model (default {DEFAULT_MODEL})")
-    ap.add_argument("--base-url", default=DEFAULT_BASE)
-    ap.add_argument("--api-key", default=None, help="prefer the env vars: " + ", ".join(KEY_ENV))
-    ap.add_argument("--api-key-file", type=Path, default=None)
-    ap.add_argument(
-        "--from-server-log", action="store_true", help="reassemble completions from a live run's server.log"
-    )
-    ap.add_argument(
-        "--checkpoint", default="/home/zni/dg_models/diffusiongemma-26B-A4B-it", help="--from-server-log tokenizer"
-    )
-    ap.add_argument("--stage", default="full", help="which lm_eval stage's samples to read (full|smoke)")
-    ap.add_argument("--limit", type=int, default=None, help="judge only the first N items")
-    ap.add_argument("--votes", type=int, default=1, help="independent judge calls per item, majority-voted")
-    ap.add_argument(
-        "--concurrency",
-        type=int,
-        default=DEFAULT_CONCURRENCY,
-        help=f"in-flight judge calls (default {DEFAULT_CONCURRENCY}). This is a CEILING, not a "
-        "promise: the limiter halves it on every 429/503 and creeps back up, and the value it "
-        "settled on is printed at the end. One task per call, so --votes fans out too.",
-    )
-    ap.add_argument("--quiet", action="store_true", help="no progress line on stderr")
+    ap.add_argument("target", type=Path, help="a run dir, samples_*.jsonl, a jsonl of responses, or - for stdin")
+    ap.add_argument("--model", default=MODEL)
+    ap.add_argument("--effort", default="low", choices=("low", "medium", "high", "xhigh", "max"))
+    ap.add_argument("--votes", type=int, default=1, help="independent calls per item, majority-voted")
+    ap.add_argument("--concurrency", type=int, default=CONCURRENCY, help=f"calls in flight (default {CONCURRENCY})")
+    ap.add_argument("--stage", default="full", help="which lm_eval stage's samples to read")
+    ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--max-chars", type=int, default=24000, help="response truncation budget (head+TAIL kept)")
-    ap.add_argument("--timeout", type=float, default=180.0)
-    ap.add_argument("--cache", type=Path, default=Path(__file__).resolve().parent / ".llm_judge_cache.json")
-    ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--out", type=Path, default=None, help="write one verdict per line as jsonl")
-    ap.add_argument("--dry-run", action="store_true", help="print the first prompt and the item count, spend nothing")
-    ap.add_argument(
-        "--min-meaningful",
-        type=float,
-        default=None,
-        help="exit 1 if the meaningful rate is below this fraction (for gating a run)",
-    )
+    ap.add_argument("--dry-run", action="store_true", help="print the first prompt and exit, spending nothing")
     args = ap.parse_args()
 
-    if args.list_models:
-        return list_models(args.base_url, resolve_key(args.api_key, args.api_key_file))
-    if args.target is None:
-        ap.error("a target is required (or --list-models)")
-
-    if args.from_server_log:
-        source, items = load_server_log(args.target, args.checkpoint)
-    elif str(args.target) == "-" or (args.target.is_file() and "samples_" not in args.target.name):
-        source, items = load_plain(args.target)
-    else:
-        source, items = load_samples(args.target, args.stage)
-    if args.limit is not None:
+    source, items = load(args.target, args.stage)
+    if args.limit:
         items = items[: args.limit]
     if not items:
-        print(f"no items in {source}")
-        return 0
+        sys.exit(f"no items in {source}")
 
-    cfg = {
-        "model": args.model,
-        "base": args.base_url,
-        "key": "" if args.dry_run else resolve_key(args.api_key, args.api_key_file),
-        "votes": max(1, args.votes),
-        "max_chars": args.max_chars,
-        "timeout": args.timeout,
-        "concurrency": max(1, args.concurrency),
-    }
-    calls = sum(1 for i in items if (i.get("text") or "").strip()) * cfg["votes"]
-
+    cfg = {"model": args.model, "effort": args.effort, "votes": max(1, args.votes), "max_chars": args.max_chars}
     if args.dry_run:
-        print(
-            f"source: {source}\nitems: {len(items)}   calls that would be made: {calls}"
-            f"   at concurrency {cfg['concurrency']}"
-        )
-        print(f"\n--- system ---\n{JUDGE_SYSTEM}\n\n--- first user prompt ---")
-        print(build_user_prompt(items[0], args.max_chars))
+        print(f"{source}\ncalls: {sum(1 for i in items if (i.get('text') or '').strip()) * cfg['votes']}")
+        print(f"\n--- system ---\n{SYSTEM}\n\n--- first prompt ---\n{prompt_for(items[0], args.max_chars)}")
         return 0
 
-    cache = Cache(None if args.no_cache else args.cache)
-    # Never open more sockets than there is work for: a pool of 32 for 3 calls is 29 idle threads.
-    limiter = Limiter(min(cfg["concurrency"], max(1, calls)))
-    cfg["concurrency"] = limiter.ceiling
-    started = time.monotonic()
     try:
-        verdicts = judge_all(items, cfg, cache, limiter, make_progress(len(items), args.quiet))
-    finally:
-        # Keep whatever was paid for, including on Ctrl-C: judge_all flushes periodically, but the
-        # last partial window would otherwise be lost.
-        cache.flush()
-    elapsed = time.monotonic() - started
+        import anthropic
+        import httpx
+    except ImportError as exc:
+        sys.exit(f"needs the Anthropic SDK: pip install anthropic   ({exc})")
+
+    workers = max(1, min(args.concurrency, len(items) * cfg["votes"]))
+    # httpx defaults to max_connections=100, which would silently cap concurrency above that.
+    client = anthropic.Anthropic(
+        http_client=anthropic.DefaultHttpxClient(
+            limits=httpx.Limits(max_connections=workers + 8, max_keepalive_connections=workers + 8)
+        )
+    )
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        verdicts = list(pool.map(lambda it: judge_item(client, it, cfg), items))
 
     if args.out:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
         with args.out.open("w") as fh:
             for item, verdict in zip(items, verdicts):
-                row = {
-                    "id": item.get("id"),
-                    "gold_letter": item.get("gold_letter"),
-                    "judge_letter": None if verdict.get("error") else derive_letter(verdict, item),
-                    "regex_correct": item.get("regex_correct"),
-                    "chars": len(item.get("text") or ""),
-                    **{k: v for k, v in verdict.items() if not k.startswith("_")},
-                }
-                fh.write(json.dumps(row) + "\n")
+                fh.write(
+                    json.dumps(
+                        {
+                            "id": item.get("id"),
+                            "gold_letter": item.get("gold_letter"),
+                            "judge_letter": None if verdict.get("error") else judge_letter(verdict, item),
+                            "regex_correct": item.get("regex_correct"),
+                            **verdict,
+                        }
+                    )
+                    + "\n"
+                )
 
-    text, rate = report(source, items, verdicts, cfg, cache, limiter, elapsed)
-    print(text)
+    report(source, items, verdicts, cfg)
     if args.out:
-        print(f"per-item verdicts: {args.out}")
-    if args.min_meaningful is not None and rate < args.min_meaningful:
-        print(f"\nFAIL: meaningful rate {rate:.3f} < --min-meaningful {args.min_meaningful}")
-        return 1
+        print(f"\nper-item verdicts: {args.out}")
     return 0
 
 
