@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,11 +11,10 @@ Tests:
     sync: true
     fabric_setup:
       topology: Linear
-      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2]
+      num_links: all
 
     defaults:
       ftype: unicast
@@ -29,11 +28,10 @@ Tests:
     sync: true
     fabric_setup:
       topology: Mesh
-      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2]
+      num_links: all
 
     defaults:
       ftype: unicast
@@ -43,36 +41,36 @@ Tests:
     patterns:
       - type: neighbor_exchange
 
-  - name: "MeshUnicastAllToAll"
-    sync: true
+  - name: "FlowControlLinear"
+    enable_flow_control: true
     fabric_setup:
-      topology: Mesh
-      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+      topology: Linear
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-      size: [512, 1024, 2048, 4096]
-      num_packets: [50, 100]
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: all
+      size: [1024, 2048, 4096]
 
     defaults:
-      ftype: unicast
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
 
-  - name: "MeshUnicastRandomPairing"
+  - name: "FlowControlMesh"
+    enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     parametrization_params:
-      size: [1024, 2048]
-      num_packets: [100, 250]
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: all
+      size: [1024, 2048, 4096]
 
     defaults:
-      ftype: unicast
-      ntype: unicast_write
+      num_packets: 10000
 
     patterns:
-      - type: full_device_random_pairing
-        iterations: 3
+      - type: all_to_all
