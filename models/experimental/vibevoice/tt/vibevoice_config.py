@@ -5,8 +5,9 @@
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import List, Optional
+
+from models.experimental.vibevoice.common.safe_paths import safe_join
 
 
 @dataclass
@@ -74,8 +75,11 @@ class VibeVoiceModelConfig:
 
 
 def load_vibevoice_model_config(model_path: str) -> VibeVoiceModelConfig:
-    """Parse VibeVoice config.json into structured dataclasses."""
-    cfg_path = Path(model_path) / "config.json"
+    """Parse VibeVoice config.json into structured dataclasses.
+
+    ``model_path`` is operator-supplied (env var / CLI), so the join is pinned under it.
+    """
+    cfg_path = safe_join(model_path, "config.json")
     if not cfg_path.exists():
         # Return defaults for the 1.5B variant when no config.json is present
         return VibeVoiceModelConfig()
