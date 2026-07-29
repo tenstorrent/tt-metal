@@ -96,6 +96,8 @@ def test_dtype_coverage(device, dtype, torch_dtype, pcc, dim):
         ((2, 3, 4, 32, 32), -1),  # rank 5, negative last dim
         ((3, 32, 32), 0),  # rank 3
         ((32, 32), 0),  # rank 2
+        ((8,), 0),  # rank 1: exercises the unsqueeze -> recurse -> reshape special case
+        ((8,), -1),  # rank 1, negative dim (same as dim=0, only valid dim for rank 1)
     ],
 )
 def test_dim_and_rank(device, repeats, shape, dim):
