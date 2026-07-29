@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
     PROMPT_5K_PATH,
@@ -932,6 +933,17 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     "mesh_device, device_params, num_links, topology",
     [
         pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="mesh-2x4",
+        ),
+        pytest.param(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
@@ -951,6 +963,10 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 @pytest.mark.parametrize(
     "layer_type, layer_idx", [("dense", 0), ("moe", GLM51Config.NUM_DENSE_LAYERS)], ids=["dense", "moe"]
 )
+# GLM-5.2 KV dedup: exercises tp_shard_kv end-to-end through TtPrefillBlock -> ttMLA (norm/attn/FFN
+# stack, not just the isolated MLA-level tests in tests/sparse_mla/). Single-shot (is_chunked=False
+# default), the exact configuration test_sparse_tp_sharded_kv_matches_sp already proved correct.
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -964,6 +980,7 @@ def test_glm_prefill_block(
     seq_len,
     layer_type,
     layer_idx,
+    tp_shard_kv,
     model_path,
     weight_cache_path,
 ):
@@ -1049,6 +1066,7 @@ def test_glm_prefill_block(
         # single-block test: layer_num=1 so the sparse single-shot cache write (update_padded_kv_cache,
         # num_layers=layer_num) gets a valid count, not the None default.
         layer_num=1,
+        tp_shard_kv=tp_shard_kv,
     )
     kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BF16_RM,
@@ -1058,6 +1076,7 @@ def test_glm_prefill_block(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        tp_axis=tp_axis if tp_shard_kv else None,
     )
     # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
     # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
@@ -1076,6 +1095,7 @@ def test_glm_prefill_block(
         num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
+        tp_axis=tp_axis if tp_shard_kv else None,
     )
 
     # --- input (full, host) + sharded device copy ---

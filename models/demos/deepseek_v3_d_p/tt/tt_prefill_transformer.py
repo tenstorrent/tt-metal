@@ -138,6 +138,7 @@ class TtPrefillTransformer(LightweightModule):
         is_first_rank: bool = True,
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
+        tp_shard_kv: bool = False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -226,6 +227,7 @@ class TtPrefillTransformer(LightweightModule):
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 sparse_kv_cache_format=sparse_kv_cache_format,
+                tp_shard_kv=tp_shard_kv,
             )
             self.layers.append(layer)
 
