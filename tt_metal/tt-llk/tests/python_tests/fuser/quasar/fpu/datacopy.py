@@ -8,14 +8,15 @@ import torch
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fused_fpu import Fpu
-from fuser.fused_loop import FusedLoop, LoopTileByTile
+from fuser.fused_loop import FusedLoop, LoopBlockRow
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
 
 
 class DatacopyFpu(Fpu):
-    loop: FusedLoop = LoopTileByTile()
+    loop: FusedLoop = LoopBlockRow()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
@@ -67,7 +68,7 @@ class DatacopyFpu(Fpu):
         return (
             f"// Operation {stage}: Datacopy FPU\n"
             f"_llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {en_32bit_dest}>"
-            f"({num_rows_per_matrix}, 1);\n"
+            f"({num_rows_per_matrix}, {block.block_tiles_x});\n"
         )
 
     def calculate(

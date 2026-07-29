@@ -7,7 +7,7 @@ from typing import List, Tuple
 import torch
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopTileByTile
+from fuser.fused_loop import FusedLoop, LoopBlockRow
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
@@ -16,7 +16,8 @@ from helpers.llk_params import DestSync, EltwiseBinaryReuseDestType, Transpose
 
 
 class UnpackerA(Unpacker):
-    loop: FusedLoop = LoopTileByTile()
+    loop: FusedLoop = LoopBlockRow()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
@@ -88,7 +89,7 @@ class UnpackerA(Unpacker):
             code += f"_llk_sync_init_(semaphore::UNPACK_MATH, {num_sem}, 0);\n"
         code += (
             f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
-            f"({buf_desc_id}, {tensor_shape}, 1);\n"
+            f"({buf_desc_id}, {tensor_shape}, {block.block_tiles_x});\n"
         )
         return code
 
