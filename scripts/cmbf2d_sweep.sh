@@ -25,22 +25,25 @@ mkdir -p generated/cmbf2d
 
 run_point() {
     local tag="$1"
-    echo "=== [$(date +%H:%M:%S)] point ${tag}: tokens=${CMBF2D_NUM_TOKENS:-100} slots=${CMBF2D_NUM_SLOTS:-32} chunk=${CMBF2D_CHUNK_BYTES:-14336} stall=${CMBF2D_STALL:-0} variant=${CMBF2D_VARIANT:-0}"
+    echo "=== [$(date +%H:%M:%S)] point ${tag}: tokens=${CMBF2D_NUM_TOKENS:-100} slots=${CMBF2D_NUM_SLOTS:-32} chunk=${CMBF2D_CHUNK_BYTES:-14336} stall=${CMBF2D_STALL:-0} variant=${CMBF2D_VARIANT:-0} check=${CMBF2D_CHECK:-0}"
     CMBF2D_TAG="$tag" scripts/run_safe_pytest.sh "$TEST" -k "$FILTER" -s \
         >"generated/cmbf2d/run_${tag}.log" 2>&1
     local rc=$?
     local bw="generated/cmbf2d/bwinfo_${tag}.txt"
     if [[ -f "$bw" ]]; then
         # The file's own summary lines: end-to-end GB/s, push-rate sGB/s, and the stall shares.
-        local summary send shares nvalid
+        local summary send shares nvalid acc
         summary=$(grep "per-producer GB/s" "$bw")
         send=$(grep "per-producer sGB/s" "$bw")
         shares=$(grep "mean send-window shares" "$bw")
         nvalid=$(grep -c "^ *[0-9]" "$bw")
+        # Phase 4 accuracy verdict, when the point ran with CMBF2D_CHECK=1.
+        acc=$(grep "^# accuracy:" "$bw")
         {
             echo "${tag} rc=${rc} workers=${nvalid} ${summary#\# per-producer GB/s: }"
             echo "    send ${send#\# per-producer sGB/s: }"
             echo "    ${shares#\# mean send-window }"
+            [[ -n "$acc" ]] && echo "    ${acc#\# }"
         } | tee -a "$LOG"
     else
         echo "${tag} rc=${rc} NO REPORT (see generated/cmbf2d/run_${tag}.log)" | tee -a "$LOG"

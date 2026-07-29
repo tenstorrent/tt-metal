@@ -37,6 +37,9 @@ struct CombineFabric2dWorkerTelemetry {
     bool relocated = false;  // worker is not in its eth core's physical column
     uint32_t peer_mesh_id = 0;
     uint32_t peer_chip_id = 0;
+    // Mesh coordinate of the chip this worker's tokens land on (the far end of its cable). Empty only
+    // if that chip is somehow outside this mesh, which the op itself would already have rejected.
+    std::vector<uint32_t> peer_coord;
 
     // Payload, read out of L1. `valid` is false when the magic word is absent (kernel never ran, or
     // died before completing its record).
@@ -48,7 +51,17 @@ struct CombineFabric2dWorkerTelemetry {
     uint32_t write_up_to_final = 0;
     uint64_t t_first_send = 0;   // wall clock when the first token was handed to the fabric
     uint64_t t_last_send = 0;    // ... the last token
-    uint64_t t_last_credit = 0;  // ... when the credit for the last token came back
+    uint64_t t_last_credit = 0;  // ... when the credit for the last token came back. In the receiverless
+                                 // modes there are no app-level credits, so this is instead the moment
+                                 // the EDM drain proved every payload packet reached the far chip
+                                 // (Phase 4 Goal 1) — an upper bound where t_last_send is the lower one.
+
+    // Phase 4. `drain_packets` is how many header-only fillers the drain needed (edm_slots - 1, or 0 in
+    // the modes that have real end-to-end credits). The base pages say what this producer read and where
+    // it wrote, which is what lets a caller check content without re-deriving the cable mapping.
+    uint32_t drain_packets = 0;
+    uint32_t in_base_page = 0xFFFFFFFFu;  // 0xFFFFFFFF => this run had no precooked input
+    uint32_t out_base_page = 0;           // first page written in the PEER chip's output buffer
 
     // Stall attribution over the send window. The four cycle buckets are disjoint and together with the
     // loop's own overhead account for t_last_send - t_first_send, which is what makes them useful for
