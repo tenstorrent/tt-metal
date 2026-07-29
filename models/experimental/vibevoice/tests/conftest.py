@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Pytest configuration for VibeVoice-1.5B reference tests.
+Pytest configuration and shared fixtures for VibeVoice-1.5B tests.
 
-Prepends reference/ so the vendored reference model (`modular`, `processor`,
-`schedule`) imports resolve, and tt-metal root so `models.experimental.vibevoice`
-imports work when running from repo root.
+Prepends the tt-metal root so ``models.experimental.vibevoice`` imports resolve when
+pytest is invoked from outside the repo root.
 """
 
 import sys
@@ -14,14 +13,10 @@ from pathlib import Path
 
 import pytest
 
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-_TT_METAL_ROOT = _VIBEVOICE_ROOT.parent.parent.parent
+_TT_METAL_ROOT = Path(__file__).resolve().parents[4]
 
-for path in (_REFERENCE_DIR, _TT_METAL_ROOT):
-    path_str = str(path)
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
+if str(_TT_METAL_ROOT) not in sys.path:
+    sys.path.insert(0, str(_TT_METAL_ROOT))
 
 
 @pytest.fixture(scope="session", autouse=True)

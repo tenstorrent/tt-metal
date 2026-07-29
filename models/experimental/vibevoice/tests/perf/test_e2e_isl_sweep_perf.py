@@ -94,7 +94,7 @@ def _device_params() -> dict:
 
 
 def _build_full_processor_batch(model_path: str) -> tuple[object, dict, int]:
-    from processor.vibevoice_processor import VibeVoiceProcessor
+    from models.experimental.vibevoice.reference.processor.vibevoice_processor import VibeVoiceProcessor
 
     ensure_demo_resources()
     text_path = TEXT_EXAMPLES_DIR / f"{_DEMO_ID}.txt"

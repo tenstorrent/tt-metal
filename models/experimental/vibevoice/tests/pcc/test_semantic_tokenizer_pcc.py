@@ -7,9 +7,6 @@ Loads real semantic_tokenizer weights, runs reference PyTorch encoder
 and TT encoder on a fixed audio segment (24000 samples), asserts PCC >= 0.99.
 """
 
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
@@ -26,12 +23,6 @@ from models.experimental.vibevoice.tt.ttnn_semantic_tokenizer import (
     TTSemanticTokenizer,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import load_vibevoice_model_config
-
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 AUDIO_LEN = 24000  # 1 second at 24kHz
 
@@ -50,8 +41,10 @@ def sem_tok_state():
 
 def _reference_semantic_encode(hf_state: dict, audio: torch.Tensor, vv_config) -> torch.Tensor:
     """Run reference semantic tokenizer encode."""
-    from modular.configuration_vibevoice import VibeVoiceSemanticTokenizerConfig
-    from modular.modular_vibevoice_tokenizer import VibeVoiceSemanticTokenizerModel
+    from models.experimental.vibevoice.reference.modular.configuration_vibevoice import VibeVoiceSemanticTokenizerConfig
+    from models.experimental.vibevoice.reference.modular.modular_vibevoice_tokenizer import (
+        VibeVoiceSemanticTokenizerModel,
+    )
 
     cfg = vv_config.semantic_tokenizer
     tok_cfg = VibeVoiceSemanticTokenizerConfig(
@@ -75,6 +68,7 @@ def _reference_semantic_encode(hf_state: dict, audio: torch.Tensor, vv_config) -
     return out  # [1, vae_dim, T_enc]
 
 
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_semantic_tokenizer_pcc(mesh_device, vv_config, sem_tok_state):

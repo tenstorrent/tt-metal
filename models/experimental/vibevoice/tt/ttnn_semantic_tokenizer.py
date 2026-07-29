@@ -368,10 +368,10 @@ class TTConv1d:
                 x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             if cp > 0:
                 if self._cache is None:
-                    # Fixed, pre-allocated streaming cache: allocated once and updated
-                    # in place below, so its buffer address stays constant across calls.
-                    # Reassigning it to a fresh ttnn.slice each call (the old behaviour)
-                    # breaks ttnn trace capture/replay, which requires stable addresses.
+                    # Fixed, pre-allocated streaming cache: allocated once and updated in
+                    # place below, so its buffer address stays constant across calls.  It
+                    # must not be reassigned to a fresh ttnn.slice per call — ttnn trace
+                    # capture/replay requires stable buffer addresses.
                     self._cache = ttnn.zeros(
                         [B, 1, cp, self.in_ch],
                         dtype=self.compute_dtype,
@@ -407,11 +407,12 @@ class TTConv1d:
             input_width = T
             conv_padding = (0, 0, cp, extra_pad)
 
-        # VV_CONV_SINGLE_BLOCK=1: force the depthwise conv (groups>1) onto the single-height-block
-        # path (act_block_h >= full output height) — the ONE code path in compute_depthwise_conv1d.cpp
-        # that the ttnn rebuild left UNCHANGED (multi-block got a separate-scratch rework).  Reproduces
-        # the old-build depthwise numerics byte-for-byte iff the old build also ran these convs
-        # single-block (probing the long-form collapse; the conv is the only value-changing feedback op).
+        # VV_CONV_SINGLE_BLOCK=1 (default): force the depthwise conv (groups>1) onto the
+        # single-height-block path by setting act_block_h >= the full output height.  The
+        # multi-block path in compute_depthwise_conv1d.cpp uses a separate-scratch scheme whose
+        # numerics differ, and this conv is the only value-changing op in the streaming feedback
+        # loop, so a small delta here compounds over a long-form render.  Pinning the single-block
+        # path keeps the depthwise numerics stable.
         _conv_cfg = None
         if os.environ.get("VV_CONV_SINGLE_BLOCK", "1") == "1" and self.groups > 1 and use_cache:
             out_w = (T_padded - self.K) // self.stride + 1
@@ -625,7 +626,6 @@ class TTSemanticTokenizer:
         self._stages = [[TTBlock1DDevice(bw, device) for bw in stage_blocks] for stage_blocks in weights.stages]
 
         if weights.final_norm_w is not None:
-            C = weights.final_norm_w.shape[0]
             self._final_norm_w = _norm_w_tt(weights.final_norm_w, device)
         else:
             self._final_norm_w = None
