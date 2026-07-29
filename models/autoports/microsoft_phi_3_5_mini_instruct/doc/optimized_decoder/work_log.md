@@ -170,8 +170,7 @@ Post-advisor final-default validation:
 - [x] Real-weight BFP4/BFP8 crossed with LoFi/HiFi2 precision/fidelity sweep.
 - [x] Precision-locked 8/16/32-core and block-through-16 geometry sweep.
 - [x] Packed/split QKV and gate/up whole-layer A/B; measured winners selected.
-- [ ] Independent `$stage-review` clean pass and local final checkpoint commit
-  (first post-advisor review requested provenance/commit remediation).
+- [x] Independent `$stage-review` clean pass and local final checkpoint commit.
 
 ## Commits
 
@@ -181,5 +180,9 @@ Post-advisor final-default validation:
 - Post-advisor first review:
   `doc/optimized_decoder/stage_review_shard_advise_first.md`, verdict
   `more-work-needed` (provenance/commit remediation).
-- Final post-advisor checkpoint and clean rereview: pending below.
+- Post-advisor implementation/evidence checkpoint: `ed12648255e`
+- Final clean rereview:
+  `doc/optimized_decoder/stage_review_shard_advise.md`, verdict `clean-pass`.
+- Closing review/documentation checkpoint: the commit immediately following
+  `ed12648255e` on this branch.
 - Push: not performed
