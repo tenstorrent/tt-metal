@@ -789,11 +789,18 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                     # Compiling the missing shape here instead is NOT the fallback: it is the
                     # documented cause of a reproduced four-device AllBroadcast hang needing
                     # `tt-smi -r` (doc/optimize_perf/upfront_earlyhalt_gpqa_20260722.md -- warming
-                    # the 160-token prefill before capture was the controlled fix). Padding up to
-                    # the nearest warmed length is not free either while
-                    # DG_DENOISE_HIDE_PREFILL_PADS is default OFF, since the extra pad keys are
-                    # decision-changing. So the request ends, loudly, with the same stop-id block
-                    # the degeneracy guard's terminal path already uses.
+                    # the 160-token prefill before capture was the controlled fix). So the request
+                    # ends, loudly, with the same stop-id block the degeneracy guard's terminal path
+                    # already uses.
+                    #
+                    # WORTH REVISITING: the reason padding up to the nearest warmed length was not an
+                    # acceptable fallback was that the extra pad keys were decision-changing, and
+                    # DG_DENOISE_HIDE_PREFILL_PADS was default OFF. It is default ON since 2026-07-29,
+                    # so those keys are now masked out of the reveal -- which makes "pad up to the
+                    # nearest warmed shape" a candidate for replacing this rejection entirely. That
+                    # needs its own measurement (the mask hides the pads from the CANVAS; prefill still
+                    # writes their K/V, and the commit path is not the denoise path), so it is recorded
+                    # here rather than assumed.
                     logger.error(
                         f"[DiffusionGemma vLLM] REJECTING request on row {row}: aligned prefill "
                         f"length {cache_len} was not warmed before trace capture "

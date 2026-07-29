@@ -53,35 +53,70 @@ halt from **72% to 99%** and per-block latency to **0.652x (~1.53x faster)**. Se
 maskless path. Evidence: `doc/decision_fidelity/device_gumbel_restored.md` sections 10, 17 and 19,
 with the gate scripts under `doc/decision_fidelity/gate/`.
 
-`DG_DENOISE_HIDE_PREFILL_PADS` is **default ON since 2026-07-28**. Prefill right-pads the prompt to a
+`DG_DENOISE_HIDE_PREFILL_PADS` is **default ON since 2026-07-29** (flipped on 07-28, reverted the same day on a measurement that turned out to be void, re-decided on 07-29 against the A100 reference -- see below). Prefill right-pads the prompt to a
 tile multiple and writes K/V for the pad tokens while the reveal predicate uses the padded length, so
 the canvas attends up to 31 garbage keys immediately before itself, destroying the thinking-template
 prefix at canvas positions 0-4 -- the entire accept budget block 0 bootstraps from.
 
-Three independent measurements, all on device:
+### Why it is ON: the A100 reference as an absolute yardstick (2026-07-29)
 
-* **7 of 7** block-0 collapses fixed (`doc/decision_fidelity/device_gumbel_restored.md` section 18),
-  and injecting the same padding geometry into the HF reference reproduces the failure there (q096
-  hits the 48-step cap; hiding the pads restores baseline).
-* **Language drift**, the shipped vLLM server replaying the GPQA prompts that actually drifted in the
-  198-question run, one knob, 512-token budget: **6 of 6 reproduced drifts repaired, 0 regressions**
-  across 5 clean controls, and the **3 empty replies also fixed** (the think channel now closes, so
-  `--reasoning-parser diffusion_gemma` returns text instead of nothing). Drift among non-empty
-  replies 6/11 = 55% -> 1/14 = 7%, and that remaining one (`doc_id 58`) is degenerate in BOTH arms --
-  a collapsed tail whose garbage merely changes language -- so it is pre-existing, not caused here.
-* On 16 trivial-English probes: **2/16 -> 0/16**, matching the A100 CUDA reference's 0/16, at no
-  latency cost (24.6 s vs 24.5 s per request).
+The same 11 prompts -- the ones that drifted on TT, plus clean controls -- at the same 5632-token
+budget on **both** platforms, so neither platform nor generation budget is confounded:
 
-The same A/B exonerates the sampler: `DG_VLLM_GUMBEL_MODE=host` (IID) drifts on exactly the same
-prompts as `device` (2/16, repaired 0) while costing 1.40x per request, so do NOT revert that default
-for language reasons. That measurement is why the `host` mode was DELETED outright on 2026-07-28;
-`device` is now the only Gumbel mode. Cost of the pad fix on GPQA prompts is +12% mean latency
-(39.3 -> 44.1 s), because more replies now finish their think channel instead of being truncated
-mid-thought.
+| | drift | guard kills | empty | mean chars |
+|---|---|---|---|---|
+| A100 reference | **0/11** | -- | 0 | 11069 |
+| TT, pads attended | **5/9 non-empty** | 3 | 2 | 2507 |
+| TT, pads hidden | **0/11** | **0** | **0** | **8514** |
 
-Set `DG_DENOISE_HIDE_PREFILL_PADS=0` for the old maskless behaviour. **Still owed:** a full 198-question
-GPQA run at the reference budget to confirm the 38/198 non-English rate drops and the score holds, and
-the clean-question mechanism arm (`gate/padfix_regression_arm.sh`, 3 of 30 pairs done). **Landmine:**
+Every drifted prompt repaired, both empty replies recovered, the guard stops firing, four clean
+controls untouched. `doc 8` is the clearest case: 0.41 CJK across 2181 chars with 43 Latin words
+becomes clean English, 12902 chars, 1746 words.
+
+The **length** recovery is what shows causation rather than coincidence: mean 2507 -> 8514 chars, i.e.
+24% -> 77% of the reference. Language and length recover together, because the mechanism is one thing:
+the pads poison block 0's accept budget, the reply ends early, and with too little English context the
+language follows block 0. The A100 does not pad at all, which is why it never drifts.
+
+Accuracy on those 11 (lm_eval flexible-extract). **n=11, so one question is 9 pp** -- this shows no
+regression, it does not show superiority:
+
+| arm | accuracy | stated |
+|---|---|---|
+| TT + pads hidden | 8/11 = 72.7% | 10/11 |
+| A100 @5632 | 7/11 = 63.6% | 7/11 |
+| TT, pads attended | 5/11 = 45.5% | 8/11 |
+| reference rep2 @126976 | 8/11 = 72.7% | -- |
+
+Per question the fix is one-directional: three go wrong -> right (two were the empty replies, one is a
+question the A100 also gets wrong) and **none** go right -> wrong.
+
+Denoise steps stay healthy: mean 18.3, median 16, 1% of blocks reach the 48-step cap, in line with
+`cot_rerun`'s 20.0 mean over 2119 blocks. Pads-attended showed a *lower* 15.4 mean, which was not a
+good sign -- it converged fast because it converged to a short, poisoned block.
+
+Also on device, from before: hiding the pads fixed **7 of 7** block-0 collapses
+(`doc/decision_fidelity/device_gumbel_restored.md` section 18), and injecting the same padding
+geometry into the HF reference reproduces the failure there.
+
+### Why the 2026-07-28 revert was wrong
+
+That revert read "repairs 3, breaks 28" off a paired 44-prompt comparison. It is **void**: both arms
+ran on the token-gather denoise MoE, which cannot converge at all -- entropy plateaus at ~0.46 against
+the 0.005 halt threshold, so the early halt never fires and every block commits an unsettled canvas --
+and the two arms were not even matched on that path. It was deleted in `7417bd7d69d`, so the 07-29
+measurement above is the first time this flag has been judged on a baseline that converges. Any
+absolute degeneracy or drift rate recorded between 2026-07-28 ~21:25 and the concat default flip is
+void for the same reason.
+
+**Still owed:** the gate `plan.md` specifies for this flag is the full 198-question GPQA score against
+the 70.71% / 70.20% reference bar. Drift and degeneracy are settled; the score has only been checked on
+an 11-prompt subset that was *selected for drift*, so its absolute value says nothing about the bar.
+Also unfinished: the clean-question mechanism arm (`gate/padfix_regression_arm.sh`, 3 of 30 pairs).
+
+Set `DG_DENOISE_HIDE_PREFILL_PADS=0` for the old maskless behaviour.
+
+**Landmine:**
 combining this with a bounded sliding span (`DG_DENOISE_SLIDING_SPAN=1`, default off) raises
 `NotImplementedError` -- the bounded read is built for (span, lo), so pad slots need mapping into that
 window first.
