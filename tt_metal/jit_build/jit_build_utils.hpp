@@ -89,6 +89,25 @@ std::vector<std::uint8_t> read_file_bytes(const std::string& path);
 std::vector<tt::jit_build::GeneratedFile> read_directory_files(
     const std::string& dir, std::span<const std::string> extensions = {});
 
+// Harvest profiler zone-source locations from a preprocessed (.ii) translation unit and append them
+// to the profiler's zone-source-location log.
+//
+// The device profiler stores only a 16-bit hash per zone; the host rebuilds the
+// hash -> (zone_name, file, line) table by grepping the compiler's `#pragma message(...,KERNEL_PROFILER)`
+// notes out of *.o.log (see JitBuildState::extract_zone_src_locations). A kernel compiled on the JIT
+// server leaves no local *.o.log, so its zones -- including the `*-KERNEL` markers that
+// "DEVICE KERNEL DURATION [ns]" is derived from -- would be missing entirely. The shipped .ii keeps the
+// `_Pragma(message(...))` as a literal directive, so recover them from there instead.
+//
+// Best-effort: profiler bookkeeping must never block a kernel compile. Safe to call repeatedly -- the
+// host dedupes by zone string.
+void harvest_zone_src_locations_from_ii(const std::vector<std::uint8_t>& ii_content);
+
+// Harvest zone-source locations from every *.ii directly inside |out_dir| (non-recursive), for the
+// case where the objects were compiled elsewhere and only the .ii + ELF are on disk locally.
+// No-op when |out_dir| holds no .ii. Best-effort.
+void harvest_zone_src_locations_from_dir(const std::string& out_dir);
+
 // An RAII wrapper that generates a temporary filename and renames the file on destruction.
 // This is to allow multiple processes to write to the same target file without clobbering each other.
 class FileRenamer {
