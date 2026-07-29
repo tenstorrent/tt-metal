@@ -199,5 +199,6 @@ and profiler artifacts. The stage-owned local commit SHA is recorded below;
 no push was performed.
 
 Stage implementation commit:
-`52479ea865ee9cebb8618ab17866fe3599e5c3dc`. This SHA is recorded by the
-following documentation-only checkpoint.
+`52479ea865e42d51f24bd227669e3d570c572e0e`.
+Documentation checkpoint:
+`00b4142a0fb112915169c8fa2cdc756070c77e10`.
