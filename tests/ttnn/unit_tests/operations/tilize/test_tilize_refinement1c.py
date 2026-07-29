@@ -158,8 +158,13 @@ def test_c7_gate_pinned_to_its_sweep():
     "shape,want_b13,want_c7",
     [
         (C7_REGIME, 0, 1),  # 64 B, 1 block/core -> C7 only (B13 does not pay on top)
-        (B13_ONLY_MULTIBLOCK, 1, 0),  # 64 B, 4 blocks/core -> C7 off
-        (B13_ONLY_128B, 1, 0),  # 128 B -> C7 off
+        # 64 B, 4 blocks/core: was B13's cell until Refinement 2 measured lever B8
+        # (trid double-issue) at 0.782 there vs B13's 0.925 on the same bench row
+        # (`x_tall_narrow_4blk_no_levers` 14 319 -> `x_tall_narrow_4blk_b8_forced`
+        # 11 197 vs `x_tall_narrow_4blk_b13_only` 13 220). B8 needs >= 2 blocks and
+        # supersedes B13 wherever it fires, so BOTH R1c levers are off here now.
+        (B13_ONLY_MULTIBLOCK, 0, 0),
+        (B13_ONLY_128B, 1, 0),  # 128 B, 1 block/core -> C7 off, B8 needs 2 blocks
         (NO_LEVERS_256B, 0, 0),  # 256 B -> both off
         (NO_LEVERS_512B, 0, 0),  # 512 B -> both off
     ],
@@ -290,12 +295,17 @@ def test_bit_exact_with_l1_interleaved_input(device):
     """L1-interleaved: 64 banks, so the stateful path self-disables in-kernel.
 
     The helper's `period * 2 <= num_rows` guard is a *runtime* fallback to the
-    plain per-row loop — the plan still offers B13 (the read is 64 B), so this is
+    plain per-row loop — the plan still offers B13 (the read is 128 B), so this is
     the test that the in-kernel guard produces correct data rather than a
-    bank-major walk over a bank period it cannot amortize.
+    bank-major walk over a bank period it cannot amortize. Single-block shape so
+    Refinement 2's B8 does not take the cell (see the note in
+    `test_stateful_read_offered_to_every_interleaved_generic_plan`).
     """
-    plan = _plan(device, B13_ONLY_MULTIBLOCK, memory_config=ttnn.L1_MEMORY_CONFIG)
+    plan = _plan(device, B13_ONLY_128B, memory_config=ttnn.L1_MEMORY_CONFIG)
     assert plan["stateful_read"] == 1
+    _roundtrip_exact(device, B13_ONLY_128B, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # ...and the 64 B / 4-block shape, which now runs B8's prefetch instead, must
+    # also be bit-exact on an L1-interleaved source.
     _roundtrip_exact(device, B13_ONLY_MULTIBLOCK, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
@@ -371,12 +381,16 @@ def test_stateful_read_offered_to_every_interleaved_generic_plan(device):
 
     kernel-side by `if constexpr (DSpec::is_interleaved)`. Assert that split of
     responsibility — the host does not try to second-guess the accessor: a DRAM
-    and an L1 interleaved input with the same read size both get the flag. Uses a
-    multi-block shape so the mutual-exclusion clause (C7 wins at 1 block/core)
-    does not mask the result.
+    and an L1 interleaved input with the same read size both get the flag.
+
+    Shape choice: 128 B with ONE block per core is the cell where B13 is the only
+    lever left standing — C7 needs <= 64 B and Refinement 2's B8 needs >= 2 blocks,
+    so neither can mask the result. (This used to use the 64 B / 4-block shape,
+    which B8 now wins; see `test_plan_lever_selection_per_read_size`.)
     """
     for mem in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG):
-        plan = _plan(device, B13_ONLY_MULTIBLOCK, memory_config=mem)
+        plan = _plan(device, B13_ONLY_128B, memory_config=mem)
+        assert plan["blocks_per_core"] == 1, "the shape must stay single-block or B8 supersedes B13"
         assert plan["split_read"] == 0
         assert plan["stateful_read"] == 1
         assert plan["chunk_row_bytes"] <= STATEFUL_READ_MAX_ROW_BYTES

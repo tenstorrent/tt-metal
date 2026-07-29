@@ -96,7 +96,8 @@ void kernel_main() {
     constexpr uint32_t sem_reserve_id = get_compile_time_arg_val(9);
     constexpr uint32_t sem_done_id = get_compile_time_arg_val(10);
     constexpr uint32_t prefetch_blocks = get_compile_time_arg_val(11);  // lever B8
-    constexpr uint32_t vc_spread = get_compile_time_arg_val(12);        // lever B10
+    constexpr uint32_t vc_spread = get_compile_time_arg_val(12);        // lever B10 (bitmask)
+    constexpr bool read_vc_spread = (vc_spread & 1u) != 0;              // bit 0 == spread the reads
     constexpr uint32_t cb_depth = get_compile_time_arg_val(13);
     constexpr uint32_t trid_a = get_compile_time_arg_val(14);
     constexpr uint32_t trid_b = get_compile_time_arg_val(15);
@@ -127,7 +128,7 @@ void kernel_main() {
         // --- lever B10: retarget this core's reads onto its own static VC ------
         // NOC_CTRL is sticky and `noc_async_read` never rewrites it in dedicated
         // mode, so one armed set_state moves every read below onto `read_vc`.
-        if constexpr (vc_spread) {
+        if constexpr (read_vc_spread) {
             const uint32_t read_vc = get_arg_val<uint32_t>(5);
             noc_async_read_one_packet_set_state<true>(accessor.get_noc_addr(start_row), chunk_row_bytes, read_vc);
         }
@@ -188,7 +189,7 @@ void kernel_main() {
             // NOC_PACKET_TAG is sticky across kernel launches -- hand the cmd buf
             // back with the firmware's default tag.
             noc_async_read_set_trid(0);
-            if constexpr (vc_spread) {
+            if constexpr (read_vc_spread) {
                 noc_async_read_one_packet_set_state<true>(
                     accessor.get_noc_addr(start_row), chunk_row_bytes, default_read_vc);
             }
@@ -266,7 +267,7 @@ void kernel_main() {
             }
         }
 
-        if constexpr (vc_spread) {
+        if constexpr (read_vc_spread) {
             // Restore the firmware default before exiting -- NOC_CTRL survives the
             // kernel launch and the next program on this core will not re-set it.
             noc_async_read_one_packet_set_state<true>(

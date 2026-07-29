@@ -222,11 +222,21 @@ def test_gated_default_keeps_depth2_past_four_block_boundaries(device):
 
 
 def test_gated_default_keeps_depth2_when_latency_bound(device):
-    """Single-core with blocks to pipeline: depth-2 (measured +32 %)."""
+    """Single-core with blocks to pipeline: the C16 gate must NOT pick depth-1.
+
+    Refinement 2 note: on this exact regime lever B8 (trid double-issue) also fires
+    and takes the shipped depth to 3, because its prefetch needs a third window
+    (`x_single_core_b8_off` 30 267 ns vs `c_single_core` 27 304 ns). The property
+    this test guards is the C16 one — depth-1 here costs +32 %
+    (`x_single_core_depth1` 40 013 ns) — so it asserts the *gate's* answer is 2 and
+    the shipped depth is at least that, rather than pinning the literal 2 and
+    breaking whenever a deeper-window lever lands on the same cell.
+    """
     gated = _plan(device, (1, 1, 512, 512), use_multicore=False)
     assert gated["ncores"] == 1
     assert gated["blocks_per_core"] >= MIN_BLOCKS_FOR_DEPTH2
-    assert gated["depth"] == 2, "the latency-bound single-core regime must keep depth-2"
+    assert depth2_pays(gated["ncores"], gated["blocks_per_core"]), "C16 must still want depth-2 here"
+    assert gated["depth"] >= 2, "the latency-bound single-core regime must never fall back to depth-1"
 
 
 def test_gated_default_picks_depth1_for_one_block_per_core(device):

@@ -245,6 +245,10 @@ L1_CB_BUDGET_PREFETCH_BYTES = 196608
 # (NOC_UNICAST_WRITE_VC, dataflow_api_common.h:62).
 NUM_UNICAST_VCS = 4
 DEFAULT_UNICAST_VC = 1
+# `vc_spread` bitmask -- the two halves are programmed by different mechanisms and
+# measured separately (see the Mode-C ledger).
+VC_SPREAD_READ = 1
+VC_SPREAD_WRITE = 2
 
 
 def _lever_flags():
@@ -294,56 +298,110 @@ def split_read_pays(depth: int, blocks_per_core: int, chunk_row_bytes: int) -> b
     )
 
 
-# --- Refinement 2 payoff gates (measured; see the changelog's Mode-C ledger) ---
+# --- Refinement 2 payoff gates -- all three MEASURED -------------------------
 #
-# B8 pays where the per-block read drain is NOT already hidden behind another
-# core's traffic, i.e. below the DRAM bandwidth-saturation knee. The NPE
-# counterfactual on the read group says the same thing before any device run:
-#   1024 B x 32 reads, 1 core   (ONE_FROM_ALL): 32/barrier 1 537.7 ns  ->
-#                                               64/barrier 1 323.5 ns/block  (0.861)
-#   1024 B x 32 reads, 64 cores (ALL_FROM_ALL): 32/barrier 28 448 ns   ->
-#                                               64/barrier 28 548 ns/block   (1.004)
-# i.e. deepening the outstanding-read window buys 14 % of the read leg when the
-# core owns the DRAM endpoints and exactly nothing when 64 cores are already
-# queued on them. Device numbers that set the constant are in the changelog.
-TRID_PREFETCH_MAX_CORES = 16
+# B8 pays exactly while the plan is **below DRAM bandwidth saturation**, i.e. while
+# the binding resource is this core's own read issue/drain rather than the DRAM
+# aggregate. That single mechanism explains both clauses, and each clause has its
+# own device sweep (7 rounds x 10 launches, in-run A/B pairs, CV <= 1.1 %).
+#
+# Clause 1 -- CORE COUNT, at a fixed 1024 B read (`[1,1,4096,512]`, chunk 16, the
+# `core_cap` hook forcing the count so only `ncores` moves):
+#
+#   cores | blk | no lever ns |    B8 ns | B8/none | achieved GB/s (no lever)
+#   ------|-----|-------------|----------|---------|-------------------------
+#       1 | 128 |     218 729 |  190 276 | **0.870** |  38.4
+#       2 |  64 |     112 613 |   98 426 | **0.874** |  74.5
+#       4 |  32 |      60 983 |   52 957 | **0.868** | 137.6
+#       8 |  16 |      45 350 |   45 411 |   1.001 | 185.0   <- DRAM saturates here
+#      16 |   8 |      45 037 |   43 577 |   0.968 | 186.3
+#      32 |   4 |      45 119 |   43 878 |   0.972 | 185.9
+#      64 |   2 |      44 110 |   43 942 |   0.996 | 190.2
+#
+# 1-4 cores is a flat, reproducible -13 %; from 8 cores the wall-clock stops moving
+# with the core count at all (~45 us / ~186 GB/s), which is the saturation the
+# mechanism predicts. The residual -3 % at 16/32 cores is NOT monotone with the
+# +0.1 % at 8 and -0.4 % at 64, so it is scatter, not an effect: excluded.
+#
+# Clause 2 -- READ SIZE, at a fixed 64 cores x 2 blocks/core (`[1,1,4096,W]`,
+# W = 64/128/256/512 giving chunk 2/4/8/16, i.e. 128/256/512/1024 B reads):
+#
+#   read B | no lever ns |   B8 ns | B8/none | achieved GB/s
+#   -------|-------------|---------|---------|--------------
+#     64 B |      14 319 |  11 197 | **0.782** |  73.2   (4 blk/core row)
+#    128 B |       9 594 |   7 883 | **0.822** | 109.3
+#    256 B |      13 573 |  13 624 |   1.004 | 154.5
+#    512 B |      23 375 |  22 700 |   0.971 | 179.4
+#   1024 B |      44 110 |  43 942 |   0.996 | 190.2
+#
+# Same story from the other side: at <= 128 B even the full grid is
+# transaction-rate bound (73-109 GB/s, far under the ~190 GB/s achievable copy), so
+# the per-block drain is still on the critical path. From 256 B up it is not.
+# At 64 B / 4 blocks B8 also BEATS B13 (0.782 vs 0.925 on the same row), which is
+# why the two are mutually exclusive with B8 winning whenever it fires.
+TRID_PREFETCH_MAX_CORES = 4
+TRID_PREFETCH_MAX_ROW_BYTES = 128
 TRID_PREFETCH_MIN_BLOCKS = 2
-# B10 / A3 thresholds -- set from the device sweep (see the changelog ledger).
-VC_SPREAD_MIN_CORES = 65  # > any current grid => OFF (measured no payoff)
+#
+# B10 (per-reader/per-writer static unicast VC) is a **measured regression on every
+# regime with meaningful traffic**, and the two halves are separable:
+#
+#   regime                | reads only | writes only |  both
+#   ----------------------|------------|-------------|--------
+#   b_wide_short (64c)    | 1.084      | **1.779**   | 1.947
+#   a_square     (64c)    | 1.085      | **1.957**   |   --
+#   d_tall_narrow(64c,1blk)|    --     |     --      | 1.001
+#   c_single_core(1c)     |     --     |     --      | 1.011
+#
+# So the write half nearly doubles the runtime and the read half costs ~8.5 %.
+# Mechanism: the firmware picks ONE static VC for a reason -- VC 1 for unicast
+# (dataflow_api_common.h:62) -- and rotating requests over VCs 0/2/3 splits the
+# per-VC buffering at the DRAM NIU instead of pooling it, so each core's stream
+# gets a fraction of the queue depth it had. On one core (nothing to de-serialize)
+# it is exactly inert, which is the B0 control this verdict needs. The gate is
+# therefore identity-false; the lever and its bench rows stay so the verdict is
+# re-measurable rather than a changelog claim.
+VC_SPREAD_MIN_CORES = 65  # > any current grid => OFF (measured regression)
+#
+# A3 (bank-adjacent work->core order) is **measured neutral**: b_wide_short 1.016,
+# a_square 1.005, d_tall_narrow 1.000 -- at or inside the noise floor, never a win.
+# The structural reason is prior to the measurement: a tilize block needs 32
+# CONSECUTIVE source pages and interleaved round-robin puts page p in bank
+# p % NUM_DRAM_BANKS, so EVERY core necessarily touches all 12 banks. There is no
+# core<->bank affinity for a placement to exploit, so the only thing the
+# permutation can move is average hop count on a grid that is already full.
 BANK_PLACEMENT_MIN_CORES = 65  # > any current grid => OFF (measured no payoff)
 
 
-def trid_prefetch_pays(ncores: int, blocks_per_core: int, prefetch_cb_bytes: int) -> bool:
+def trid_prefetch_pays(ncores: int, blocks_per_core: int, chunk_row_bytes: int, prefetch_cb_bytes: int) -> bool:
     """B8 gate: is a third CB window + two transaction ids worth 1.5x the CB L1?
 
-    Three clauses:
+    Four clauses (the sweeps behind clauses 2 and 3 are tabulated above):
 
     1. ``blocks_per_core >= TRID_PREFETCH_MIN_BLOCKS`` is **structural**, not a
        payoff question: with one chunk-block per core there is no next block whose
        reads could stay in flight across the barrier.
-    2. ``ncores < TRID_PREFETCH_MAX_CORES`` — measured. Above the DRAM
-       bandwidth-saturation knee the per-block drain is already overlapped by the
-       other cores' outstanding requests, so the deeper window buys nothing and
-       only costs L1.
-    3. the depth-3 footprint must fit ``L1_CB_BUDGET_PREFETCH_BYTES`` at the
+    2. ``ncores <= TRID_PREFETCH_MAX_CORES`` — measured. Below DRAM saturation the
+       core's own read drain is the bound and removing it is worth ~13 %.
+    3. ``chunk_row_bytes <= TRID_PREFETCH_MAX_ROW_BYTES`` — measured. The other way
+       to be under saturation: at <= 128 B the op is transaction-rate bound even on
+       the full grid, and the drain is worth 18-22 %.
+    4. the depth-3 footprint must fit ``L1_CB_BUDGET_PREFETCH_BYTES`` at the
        **unchanged** ``chunk_wt`` — a lever is not allowed to move the transaction
        shape behind the caller's back (Refinement 1's chunk-pin rule).
     """
-    return (
-        blocks_per_core >= TRID_PREFETCH_MIN_BLOCKS
-        and ncores < TRID_PREFETCH_MAX_CORES
-        and prefetch_cb_bytes <= L1_CB_BUDGET_PREFETCH_BYTES
-    )
+    if blocks_per_core < TRID_PREFETCH_MIN_BLOCKS:
+        return False
+    if prefetch_cb_bytes > L1_CB_BUDGET_PREFETCH_BYTES:
+        return False
+    return ncores <= TRID_PREFETCH_MAX_CORES or chunk_row_bytes <= TRID_PREFETCH_MAX_ROW_BYTES
 
 
 def vc_spread_pays(ncores: int) -> bool:
     """B10 gate: does spreading readers/writers over the 4 unicast VCs pay?
 
-    One measured clause on the core count — VC diversity can only break a
-    first-come-first-serve queue that several cores actually share. Measured no
-    payoff at every core count this op reaches (see the changelog ledger), so the
-    constant is above any current grid and this is identity-false; the lever code
-    and its counterfactual bench rows are kept so the verdict is re-measurable.
+    No — measured a regression at every core count with real traffic (the table
+    above ``VC_SPREAD_MIN_CORES``), so this is identity-false on any current grid.
     """
     return ncores >= VC_SPREAD_MIN_CORES
 
@@ -351,11 +409,9 @@ def vc_spread_pays(ncores: int) -> bool:
 def bank_placement_pays(ncores: int) -> bool:
     """A3 gate: does bank-adjacent work->core assignment pay?
 
-    Structurally weak for this op and measured neutral (see the changelog ledger):
-    a tilize block needs 32 CONSECUTIVE source pages, and interleaved round-robin
-    puts consecutive pages on consecutive banks, so every core necessarily touches
-    all ``NUM_DRAM_BANKS`` banks — there is no core<->bank affinity for a placement
-    to exploit. Kept as a re-measurable lever rather than deleted.
+    No — measured neutral-to-slightly-negative, and structurally there is no
+    affinity to exploit (see the note above ``BANK_PLACEMENT_MIN_CORES``), so this
+    is identity-false on any current grid.
     """
     return ncores >= BANK_PLACEMENT_MIN_CORES
 
@@ -831,9 +887,19 @@ def _plan_generic(
     )
     prefetch_blocks = (
         2
-        if (prefetch_ok and (b8 == 2 or (b8 == 1 and trid_prefetch_pays(ncores, blocks_per_core, prefetch_cb_bytes))))
+        if (
+            prefetch_ok
+            and (
+                b8 == 2 or (b8 == 1 and trid_prefetch_pays(ncores, blocks_per_core, chunk_row_bytes, prefetch_cb_bytes))
+            )
+        )
         else 1
     )
+    if prefetch_blocks == 1 and b8 == 3 and prefetch_ok:
+        # Isolation row for the Mode-C ledger: B8 bundles TWO changes (a third CB
+        # window and the trid pipeline). `TILIZE_LEVER_B8=3` gives the extra window
+        # WITHOUT the trid pipeline, so the ledger can attribute the delta.
+        depth = PREFETCH_DEPTH
     if prefetch_blocks == 2:
         # B8 owns the read command programming for the whole block sequence, so it
         # is mutually exclusive with B13's bank-major arming (measured -- see the
@@ -847,17 +913,31 @@ def _plan_generic(
         )
 
     # --- lever B10: per-reader / per-writer static unicast VC -----------------
+    # `vc_spread` is a BITMASK -- bit 0 = spread the reads, bit 1 = spread the
+    # writes. Read and write live on different NoCs (B9) and are programmed by
+    # completely different mechanisms (sticky NOC_CTRL vs per-call), so the ledger
+    # needs to attribute the delta to one half or the other rather than to "B10".
+    # Force values: 2 = both, 3 = reads only, 4 = writes only.
     b10 = levers["b10"]
-    vc_spread = int(b10 == 2 or (b10 == 1 and vc_spread_pays(ncores)))
+    if b10 == 2:
+        vc_spread = VC_SPREAD_READ | VC_SPREAD_WRITE
+    elif b10 == 3:
+        vc_spread = VC_SPREAD_READ
+    elif b10 == 4:
+        vc_spread = VC_SPREAD_WRITE
+    elif b10 == 1 and vc_spread_pays(ncores):
+        vc_spread = VC_SPREAD_READ | VC_SPREAD_WRITE
+    else:
+        vc_spread = 0
     # Rotate over the 4 unicast VCs by work-unit index. Reads and writes are on
     # different NoCs (B9), so they get independent rotations; offsetting the write
     # rotation by half the VC count keeps a core's read and write VCs different.
-    if vc_spread:
-        read_vcs = [i % NUM_UNICAST_VCS for i in range(len(work))]
-        write_vcs = [(i + NUM_UNICAST_VCS // 2) % NUM_UNICAST_VCS for i in range(len(work))]
-    else:
-        read_vcs = None
-        write_vcs = None
+    read_vcs = [i % NUM_UNICAST_VCS for i in range(len(work))] if vc_spread & VC_SPREAD_READ else None
+    write_vcs = (
+        [(i + NUM_UNICAST_VCS // 2) % NUM_UNICAST_VCS for i in range(len(work))]
+        if vc_spread & VC_SPREAD_WRITE
+        else None
+    )
 
     plan.update(
         {

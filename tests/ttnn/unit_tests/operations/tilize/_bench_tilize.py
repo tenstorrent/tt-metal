@@ -48,6 +48,7 @@ from ttnn.operations.tilize import tilize
 from ttnn.operations.tilize import tilize_program_descriptor as tpd
 from ttnn.operations.tilize.tilize_program_descriptor import (
     L1_CB_BUDGET_BYTES,
+    L1_CB_BUDGET_PREFETCH_BYTES,
     a0_active_cores,
     build_plan,
 )
@@ -165,13 +166,13 @@ REGIMES = {
     # that is what makes the gate itself re-measurable instead of a claim.
     #
     # 64 B reads, 1 block/core: both levers pay (this is the target regime).
-    "x_tall_narrow_no_levers": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
+    "x_tall_narrow_no_levers": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0, b8=0)),
     "x_tall_narrow_b13_only": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=1, c7=0)),
     "x_tall_narrow_c7_only": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=1)),
     # 64 B reads, 4 blocks/core: B13 still pays, C7 turns over (it spends the
     # read/write overlap across the block boundary). Default here is B13 only.
     "n_tall_narrow_4blk": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16),
-    "x_tall_narrow_4blk_no_levers": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0)),
+    "x_tall_narrow_4blk_no_levers": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0, b8=0)),
     "x_tall_narrow_4blk_c7_forced": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=2)),
     # Read-size sweep at a fixed 64 cores x 1 block/core (nt_h == 1, Wt = 128/256
     # makes the planner pick chunk_wt 2/4 => 128 B / 256 B reads). 128 B is the
@@ -201,6 +202,91 @@ REGIMES = {
         out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
         levers=dict(b13=0, c7=2),
     ),
+    # --- Refinement 2: per-lever counterfactuals for B8 (trid double-issue),
+    # B10 (per-core static unicast VC) and A3 (bank-adjacent work->core order).
+    # `levers=dict(b8=N)`: 0 = off, 1 = gated, 2 = FORCE past the payoff gate,
+    # 3 = the extra CB window WITHOUT the trid pipeline (isolation row, so the
+    # ledger can separate "deeper CB" from "reads in flight across the barrier").
+    #
+    # B8's own regime is low-core-count + multi-block. c_single_core (1 core,
+    # 16 blk) and x_wide_short_1core (1 core, 32 blk) are where the gate turns it
+    # ON, so those two need the 3-way (off / window-only / full) comparison.
+    "x_single_core_b8_off": dict(shape=(1, 1, 512, 512), dtype=ttnn.bfloat16, multicore=False, levers=dict(b8=0)),
+    "x_single_core_b8_window_only": dict(
+        shape=(1, 1, 512, 512), dtype=ttnn.bfloat16, multicore=False, levers=dict(b8=3)
+    ),
+    "x_wide_short_1core_b8_off": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, multicore=False, levers=dict(b8=0)),
+    "x_wide_short_1core_b8_window_only": dict(
+        shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, multicore=False, levers=dict(b8=3)
+    ),
+    # ... and forcing it past the gate on the full grid is the counterfactual for
+    # the gate's core-count clause (a_square 4 blk/core, n_tall_narrow_4blk 4 blk).
+    "x_square_b8_forced": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(b8=2)),
+    # B8 read-transaction-size sweep at a FIXED 64 cores x 2 blocks/core (nt_h = 128
+    # with Wt = 2/4/8/16 makes the planner pick chunk 2/4/8/16 => 128/256/512/1024 B
+    # reads while `n_chunks` stays 1). This is what sets the gate's size clause: the
+    # first sweep found B8 worth -19 % at 64 B and inert at 1024 B on the same core
+    # count, so the threshold is a read SIZE, not only a core count.
+    # The gated DEFAULT on the 128 B / 2-blk regime -- the shipped number future
+    # phases must not regress (the `p_*` row below is its counterfactual).
+    "m_2blk_128B": dict(shape=(1, 1, 4096, 64), dtype=ttnn.bfloat16),
+    "p_2blk_128B": dict(shape=(1, 1, 4096, 64), dtype=ttnn.bfloat16, levers=dict(b8=0, b13=0)),
+    "x_2blk_128B_b8": dict(shape=(1, 1, 4096, 64), dtype=ttnn.bfloat16, levers=dict(b8=2, b13=0)),
+    "p_2blk_256B": dict(shape=(1, 1, 4096, 128), dtype=ttnn.bfloat16, levers=dict(b8=0, b13=0)),
+    "x_2blk_256B_b8": dict(shape=(1, 1, 4096, 128), dtype=ttnn.bfloat16, levers=dict(b8=2, b13=0)),
+    "p_2blk_512B": dict(shape=(1, 1, 4096, 256), dtype=ttnn.bfloat16, levers=dict(b8=0, b13=0)),
+    "x_2blk_512B_b8": dict(shape=(1, 1, 4096, 256), dtype=ttnn.bfloat16, levers=dict(b8=2, b13=0)),
+    "p_2blk_1024B": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, levers=dict(b8=0, b13=0)),
+    "x_2blk_1024B_b8": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, levers=dict(b8=2, b13=0)),
+    # 64 B x 4 blocks at 64 cores -- the row where the first sweep found B8 beats
+    # even B13 (which the planner ships there today).
+    "x_tall_narrow_4blk_b13_only": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b8=0, b13=1)),
+    # B8 CORE-COUNT sweep at a fixed 1024 B read (the size where B8 is inert on the
+    # full grid but pays 10-12 % on ONE core). `core_cap` forces the count through
+    # the planner's sweep hook, so chunk stays 16 and only `ncores` moves. This is
+    # what sets the gate's core clause instead of borrowing BANDWIDTH_KNEE_CORES.
+    "p_1024B_1c": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=1, levers=dict(b8=0)),
+    "x_1024B_1c_b8": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=1, levers=dict(b8=2)),
+    "p_1024B_2c": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=2, levers=dict(b8=0)),
+    "x_1024B_2c_b8": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=2, levers=dict(b8=2)),
+    "p_1024B_4c": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=4, levers=dict(b8=0)),
+    "x_1024B_4c_b8": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=4, levers=dict(b8=2)),
+    "p_1024B_8c": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=8, levers=dict(b8=0)),
+    "x_1024B_8c_b8": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=8, levers=dict(b8=2)),
+    "p_1024B_16c": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=16, levers=dict(b8=0)),
+    "x_1024B_16c_b8": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=16, levers=dict(b8=2)),
+    "p_1024B_32c": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=32, levers=dict(b8=0)),
+    "x_1024B_32c_b8": dict(shape=(1, 1, 4096, 512), dtype=ttnn.bfloat16, core_cap=32, levers=dict(b8=2)),
+    "x_tall_narrow_4blk_b8_forced": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b8=2, b13=0)),
+    "x_fp32_b8_forced": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.float32, levers=dict(b8=2)),
+    # B10: VC diversity can only break a queue that several cores share, so the
+    # interesting regimes are the full-grid ones. c_single_core is the B0 control
+    # (one core cannot contend with itself).
+    "x_wide_short_b10_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b10=2)),
+    # ... and the two halves separately (b10=3 reads only, b10=4 writes only): the
+    # read VC is a sticky NOC_CTRL program and the write VC is a per-call field, so
+    # a single "B10" number cannot say which mechanism moved the clock.
+    "x_wide_short_b10_read_only": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b10=3)),
+    "x_wide_short_b10_write_only": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b10=4)),
+    "x_square_b10_read_only": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(b10=3)),
+    "x_square_b10_write_only": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(b10=4)),
+    "x_square_b10_forced": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(b10=2)),
+    "x_tall_narrow_b10_forced": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b10=2)),
+    "x_single_core_b10_forced": dict(shape=(1, 1, 512, 512), dtype=ttnn.bfloat16, multicore=False, levers=dict(b10=2)),
+    "x_g_to_sharded_b10_forced": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(b10=2),
+    ),
+    # A3: host-only work->core permutation. Same regimes as B10 (it is the other
+    # congestion lever), plus the wide-short one it was proposed for.
+    "x_wide_short_a3_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(a3=2)),
+    "x_square_a3_forced": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, levers=dict(a3=2)),
+    "x_tall_narrow_a3_forced": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(a3=2)),
+    # B10 + A3 together: both attack route congestion, so the bundle is the row
+    # that answers "did we only fail to see it because each alone is too small?"
+    "x_wide_short_b10_a3_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b10=2, a3=2)),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
@@ -344,17 +430,28 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
     )
 
     if plan["path"] != "alias":
-        assert plan["cb_bytes_per_core"] <= L1_CB_BUDGET_BYTES, (
+        # Lever B8 (Refinement 2) buys a THIRD CB window, so its budget is the
+        # prefetch one. Either way the footprint is a constant in W, which is the
+        # property `PROPERTIES["bounded_cb"]` claims.
+        budget = L1_CB_BUDGET_PREFETCH_BYTES if plan["depth"] > 2 else L1_CB_BUDGET_BYTES
+        assert plan["cb_bytes_per_core"] <= budget, (
             f"CB budget violation on {name}: {plan['cb_bytes_per_core']} B/core "
-            f"> {L1_CB_BUDGET_BYTES} B (chunk_wt={plan['chunk_wt']}, depth={plan['depth']})"
+            f"> {budget} B (chunk_wt={plan['chunk_wt']}, depth={plan['depth']})"
         )
-        if spec.get("double_buffer") is None:
+        if spec.get("double_buffer") is None and plan["depth"] <= 2:
             want = 2 if tpd.depth2_pays(plan["ncores"], plan["blocks_per_core"]) else 1
             assert plan["depth"] == want, (
                 f"C16 gate violation on {name}: depth={plan['depth']} but the gate "
                 f"wants {want} (ncores={plan['ncores']}, "
                 f"blocks_per_core={plan['blocks_per_core']})"
             )
+        if plan["prefetch_blocks"] == 2:
+            assert (
+                plan["depth"] == tpd.PREFETCH_DEPTH
+            ), f"B8 depth violation on {name}: prefetch is on but depth={plan['depth']}"
+            assert (
+                plan["blocks_per_core"] >= tpd.TRID_PREFETCH_MIN_BLOCKS
+            ), f"B8 structural violation on {name}: only {plan['blocks_per_core']} block(s)/core"
 
 
 def test_bench_tilize(device):
@@ -373,8 +470,8 @@ def test_bench_tilize(device):
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
         levers = spec.get("levers") or {}
-        os.environ["TILIZE_LEVER_B13"] = str(levers.get("b13", 1))
-        os.environ["TILIZE_LEVER_C7"] = str(levers.get("c7", 1))
+        for key in ("b13", "c7", "b8", "b10", "a3"):
+            os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, 1))
         tt_input, out_cfg = _build(device, spec)
         plan = _plan_for(device, tt_input, spec, out_cfg)
         _assert_structural_gates(name, spec, plan, grid_cores)
@@ -408,6 +505,9 @@ def test_bench_tilize(device):
                     blocks=plan["blocks_per_core"],
                     b13=plan["stateful_read"],
                     c7=plan["split_read"],
+                    b8=plan["prefetch_blocks"],
+                    b10=plan["vc_spread"],
+                    a3=plan["bank_placement"],
                     cb_bytes=plan["cb_bytes_per_core"],
                     ns=ns,
                     cv=(std / ns * 100.0) if ns else 0.0,
@@ -417,8 +517,8 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
-        os.environ["TILIZE_LEVER_B13"] = "1"
-        os.environ["TILIZE_LEVER_C7"] = "1"
+        for key in ("B13", "C7", "B8", "B10", "A3"):
+            os.environ[f"TILIZE_LEVER_{key}"] = "1"
         tpd.CORE_CAP_OVERRIDE = None
 
     arch = os.environ.get("ARCH_NAME", "unknown")
@@ -430,14 +530,16 @@ def test_bench_tilize(device):
         f"A0_KNEE_CORES={tpd.A0_KNEE_CORES}); sharded -> shard's own cores",
         f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
         f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
-        f"    {'regime':<24} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
-        f"{'blk':>4} {'B13':>4} {'C7':>3} {'cbB/core':>9} {'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
+        f"    {'regime':<34} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
+        f"{'blk':>4} {'B13':>4} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'cbB/core':>9} "
+        f"{'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
         gbps = (r["traffic"] / r["ns"]) if (r["traffic"] and r["ns"]) else 0.0
         lines.append(
-            f"    {r['regime']:<24} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
+            f"    {r['regime']:<34} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
             f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['c7']:>3} "
+            f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} "
             f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )
     print("\n".join(lines))

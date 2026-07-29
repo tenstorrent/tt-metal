@@ -61,7 +61,8 @@ void kernel_main() {
     constexpr uint32_t stateful_read = get_compile_time_arg_val(8);  // lever B13
     constexpr uint32_t sem_reserve_id = get_compile_time_arg_val(9);
     constexpr uint32_t sem_done_id = get_compile_time_arg_val(10);
-    constexpr uint32_t vc_spread = get_compile_time_arg_val(11);  // lever B10
+    constexpr uint32_t vc_spread = get_compile_time_arg_val(11);  // lever B10 (bitmask)
+    constexpr bool write_vc_spread = (vc_spread & 2u) != 0;       // bit 1 == spread the writes
     constexpr auto dst_args = TensorAccessorArgs<12>();
     // Declared unconditionally (never inside `if constexpr`) so the CT arg offsets
     // are the same in both configurations; only used when split_read.
@@ -86,7 +87,10 @@ void kernel_main() {
         // no sticky-register dance and no restore: ncrisc_noc_fast_write writes
         // NOC_CTRL (and therefore NOC_CMD_STATIC_VC) on EVERY call, so the vc
         // argument of noc_async_write is live in DM_DEDICATED_NOC.
-        const uint32_t write_vc = vc_spread ? get_arg_val<uint32_t>(6) : NOC_UNICAST_WRITE_VC;
+        // Only read when the lever is on: passing a *runtime* vc unconditionally
+        // stops the compiler folding NOC_CMD_STATIC_VC(vc) into the constant
+        // NOC_CTRL word, i.e. it would make the lever cost something even when off.
+        [[maybe_unused]] const uint32_t write_vc = write_vc_spread ? get_arg_val<uint32_t>(6) : NOC_UNICAST_WRITE_VC;
 
         for (uint32_t c = 0; c < chunk_count; ++c) {
             const uint32_t col0 = (chunk_start + c) * chunk_wt;
@@ -126,8 +130,10 @@ void kernel_main() {
                     if constexpr (skip_dm) {
                         volatile uint32_t sink = static_cast<uint32_t>(noc_addr);
                         (void)sink;
-                    } else {
+                    } else if constexpr (write_vc_spread) {
                         noc_async_write(l1_addr, noc_addr, tile_bytes, noc_index, write_vc);
+                    } else {
+                        noc_async_write(l1_addr, noc_addr, tile_bytes);
                     }
                     l1_addr += tile_bytes;
                 }
