@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Vendored from the VibeVoice reference implementation:
+# https://github.com/microsoft/VibeVoice
+
 # copied from https://github.com/vibevoice-community/VibeVoice/blob/main/vibevoice/modular/modeling_vibevoice.py
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
