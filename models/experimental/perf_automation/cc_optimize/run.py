@@ -2722,6 +2722,41 @@ def _decide_parallelism_route(
         print(f"  [optimize/cc] parallelism route decision skipped ({exc})")
 
 
+def _env_params(var: str) -> int:
+    """Param count from an env override, accepting a bare count or a "3B"/"800M" shorthand."""
+    raw = (os.environ.get(var) or "").strip()
+    if not raw:
+        return 0
+    m = re.fullmatch(r"([0-9]*\.?[0-9]+)\s*([BbMm])?", raw)
+    if not m:
+        return 0
+    scale = {"b": 1e9, "m": 1e6}.get((m.group(2) or "").lower(), 1.0)
+    return int(float(m.group(1)) * scale)
+
+
+def _params_from_model_id(model_id: str) -> tuple[int, int]:
+    """(total_params, active_params) as published by the model NAME, or (0, 0).
+
+    Model ids carry the size the card advertises: "Llama-3.1-8B" -> 8B total; a MoE id carries the
+    ACTIVE count after an A, "NVIDIA-Nemotron-3-Nano-30B-A3B" -> 30B total / 3B active. That naming is
+    the number a team quotes when saying what a model's ceiling should be, so it is the right fallback
+    when the checkpoint headers cannot be read.
+    """
+    s = str(model_id or "")
+    active = 0
+    m_act = re.search(r"[-_]A([0-9]*\.?[0-9]+)\s*([BbMm])", s)
+    if m_act:
+        active = int(float(m_act.group(1)) * (1e9 if m_act.group(2).lower() == "b" else 1e6))
+    total = 0
+    # Last size-looking token wins ("Llama-3.2-11B-Vision" -> 11B); the A-suffix match is skipped so a
+    # MoE id never reports its ACTIVE count as the total.
+    for m in re.finditer(r"(?<![A-Za-z0-9.])([0-9]*\.?[0-9]+)\s*([BbMm])(?![A-Za-z0-9])", s):
+        if m_act and m.start() == m_act.start() + 1:
+            continue
+        total = int(float(m.group(1)) * (1e9 if m.group(2).lower() == "b" else 1e6))
+    return total, active
+
+
 def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     """The weight-bytes-per-token facts the DECODE roofline needs, or None when they cannot be known.
 
@@ -2748,9 +2783,8 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     if not cfg:
         return None
     experts = cfg.get("num_local_experts") or cfg.get("num_experts") or cfg.get("n_routed_experts")
-    if experts:
-        return None
     src = "checkpoint bytes + HF config"
+    analytic_params = 0
     # ANALYTIC FIRST: every tensor's shape and dtype from the safetensors header, with the on-device
     # widths applied per name pattern. The checkpoint's FILE SIZE counts the stored dtype -- 15.0 GB of
     # bf16 for Llama-3.1-8B, where the device streams 6.09 GB as bfp4/bfp8 -- so it understates the
@@ -2774,6 +2808,10 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
                     _an["tensors"],
                     _unit,
                 )
+            # EXACT param count, free: the header walk already sums numel. This is the params-based
+            # ceiling's input, and it does not depend on the width the device serves.
+            if _an.get("params"):
+                analytic_params = int(_an["params"])
     except Exception:  # noqa: BLE001
         pass
     override = (os.environ.get("TT_PERF_WEIGHT_BYTES") or "").strip()
@@ -2795,6 +2833,23 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
         "dominant_dtype": str(cfg.get("torch_dtype") or "bfloat16"),
         "source": src,
     }
+    # PARAMS drive the ceiling (xB -> xGB). Exact count from the headers when readable, else the count
+    # the model NAME publishes; for MoE the A-suffix ("30B-A3B") is the ACTIVE count, which is the read
+    # set a routed token streams.
+    name_total, name_active = _params_from_model_id(mid or "")
+    total_params = analytic_params or name_total
+    if total_params:
+        facts["total_params"] = int(total_params)
+    if experts:
+        facts["is_moe"] = True
+        active = _env_params("TT_PERF_ACTIVE_PARAMS") or name_active
+        if active:
+            facts["active_params"] = int(active)
+        else:
+            # No active count = no honest MoE ceiling. Total params would overstate the read set by
+            # experts/top_k, making the ceiling far too low and every run read ABOVE_BAND. Returning
+            # None keeps the ms-floor fallback: weaker, but not wrong.
+            return None
     try:
         from agent import model_bytes as _mb2
 

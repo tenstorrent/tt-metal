@@ -527,8 +527,19 @@ def _roofline_lines(
                 active_bytes = int(round(float(_mb) * 1e6))
                 _pk = float((throughput or {}).get("peak_bw_gbps") or 0.0) * 1e9
                 if _pk > 0:
-                    theo = _pk / (active_bytes / max(1, int(throughput.get("tp_degree") or 1)))
-                    band = [0.60 * theo, 0.80 * theo]
+                    # perf_target OWNS this arithmetic. This used to be its own `_pk / bytes` with a
+                    # hardcoded (0.60, 0.80) band, which kept the pre-sustained-fraction physics after
+                    # the ceiling moved: an anchored run printed 84.0 while the stop gate reading the
+                    # same snapshot judged against 51.2.
+                    from agent.perf_target import rate_and_band as _rab
+
+                    theo, _b = _rab(
+                        active_bytes,
+                        _pk,
+                        frac=float((throughput or {}).get("bw_fraction") or 0.0) or 1.0,
+                        tp_degree=int(throughput.get("tp_degree") or 1),
+                    )
+                    band = [_b[0], _b[1]]
         except Exception:  # noqa: BLE001
             pass
         tp = max(1, int(throughput.get("tp_degree") or 1))
@@ -575,9 +586,18 @@ def _roofline_lines(
         _depth = str((throughput or {}).get("perf_layers") or "").strip()
         _partial = _depth and _depth.lower() not in ("all", "0", "none")
         _tag = "   [%s-layer window, NOT the full model]" % _depth if _partial else ""
-        out.append(f"  theoretical ceiling : {theo:.1f} {_u}{_tag}")
+        # The ceiling is SUSTAINED, not spec: peak x 0.80 dense / x 0.50 MoE, over the bytes one unit
+        # streams. BOTH labels are derived from the numbers -- a hardcoded "(60-80%)" next to a band
+        # computed from other fractions tells the reader the wrong physics.
+        _frac = float((throughput or {}).get("bw_fraction") or 0.0)
+        _peak_gbps = float((throughput or {}).get("peak_bw_gbps") or 0.0)
+        # BOTH parts must be known to name the spec figure. A snapshot missing peak_bw_gbps would
+        # otherwise render "(80% of 0 GB/s)", which reads as a measurement rather than a missing field.
+        _pk = f" ({_frac * 100:.0f}% of {_peak_gbps:.0f} GB/s)" if (0.0 < _frac < 1.0 and _peak_gbps > 0) else ""
+        out.append(f"  ceiling (sustained) : {theo:.1f} {_u}{_pk}{_tag}")
         if band[0] is not None:
-            out.append(f"  achievable (60-80%) : {band[0]:.1f} - {band[1]:.1f} {_u}")
+            _lo_pct = (100.0 * band[0] / theo) if theo else 0.0
+            out.append(f"  in band (>={_lo_pct:.0f}% of it): {band[0]:.1f} - {band[1]:.1f} {_u}")
         out.append(
             f"  measured            : {measured:.1f} {_u}   (1000 / {fm:.2f} ms){_tag}"
             if measured

@@ -252,6 +252,10 @@ def weight_bytes(
     dflt = device_width(default_device_dtype)
 
     total, skipped, count = 0.0, 0.0, 0
+    # Params on the SAME read set as `total` (lookup-only tensors excluded when unit=token). The
+    # params-based ceiling needs this, and unlike bytes a param count does not depend on the width
+    # the device serves -- so it costs no per-model investigation.
+    params = 0
     by_pattern: dict = {}
     for f in files:
         try:
@@ -278,6 +282,7 @@ def weight_bytes(
                 skipped += b
                 continue
             total += b
+            params += n
             e = by_pattern.setdefault(key, {"bytes": 0.0, "tensors": 0})
             e["bytes"] += b
             e["tensors"] += 1
@@ -285,6 +290,7 @@ def weight_bytes(
         return {}
     return {
         "bytes": int(round(total)),
+        "params": int(params),
         "tensors": count,
         "skipped_lookup_bytes": int(round(skipped)),
         "by_pattern": by_pattern,

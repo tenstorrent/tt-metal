@@ -3360,6 +3360,10 @@ def _persist_throughput(rep: dict) -> None:
             "active_bytes": target.active_bytes,
             "peak_bw_gbps": float((_ENV or {}).get("dram_bw_gbps", 0.0)),
             "tp_degree": target.tp_degree,
+            # The sustained fraction folded into theoretical_rate, so the report can label the ceiling
+            # achievable-not-spec and 512 GB/s stays recoverable from it.
+            "bw_fraction": getattr(target, "bw_fraction", 1.0),
+            "bytes_source": getattr(target, "bytes_source", ""),
             # THE UNIT MUST TRAVEL WITH THE CEILING. Without this key the report's
             # `throughput.get("unit") or "token"` fell back to token for EVERY model, so a diffusion
             # model printed its steps/s ceiling labelled "tok/s/u" and the byte anchor was looked up

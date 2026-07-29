@@ -33,6 +33,30 @@ _DEFAULT_BYTES_PER_ELEM = 2.0
 _BAND_LO_FRAC = 0.60
 _BAND_HI_FRAC = 0.80
 
+# ---------------------------------------------------------------------------
+# THE CEILING IS PARAMS-BASED AND SUSTAINED (team decision, 2026-07-29).
+#
+#   dense: (peak_BW * 0.80) / params_GB          8B on a 512 GB/s part -> (512*0.8)/8 = 51.2 tok/s/u
+#   MoE:   (peak_BW * 0.50) / active_params_GB   3B active -> (512*0.5)/3 = 85.3 tok/s/u
+#
+# 1 B params -> 1 GB streamed. Deliberately an approximation: the exact on-device byte count (6.095 GB
+# for Llama-3.1-8B served as bf4/bf8) is more accurate, but establishing it costs a per-model
+# investigation of what width each tensor group is actually served at. A param count is
+# dtype-independent, so it needs no such work, and xB -> xGB lands close enough to steer optimization.
+#
+# The DRAM efficiency the part sustains (~80% of spec on dense streams; ~50% on MoE, whose per-token
+# expert reads are scattered) is folded INTO the ceiling, so theoretical_rate is ACHIEVABLE rather than
+# spec. MoE cards publish the active-parameter count ("30B-A3B" -> 3B active), which is this input.
+_BYTES_PER_PARAM = 1.0
+_DENSE_BW_FRACTION = 0.80
+_MOE_BW_FRACTION = 0.50
+# Band lo as a fraction of the ACHIEVABLE ceiling. 0.75 is chosen so the DENSE stop threshold lands
+# exactly where it did before the efficiency factor moved inside the ceiling:
+# 0.60 * peak == 0.75 * (0.80 * peak). Keeping 0.60 here instead would move the "done" line from
+# 38.4 to 30.7 tok/s/u for an 8B model -- i.e. the run would stop optimizing sooner as a pure
+# side effect of restating the same physics.
+_ACHIEVABLE_BAND_LO_FRAC = 0.75
+
 
 _UNKNOWN_DTYPES: set = set()
 _SPELLING_ALIASES = {
@@ -131,6 +155,12 @@ class PerfTarget:
     # measurement it is handed counts the SAME unit -- a per-step ceiling scored against a per-token
     # reading is not a comparison, and nothing downstream could previously tell.
     unit: str = "token"
+    # Fraction of peak DRAM BW folded into theoretical_rate (0.80 dense / 0.50 MoE). Carried so a
+    # report can state the ceiling is SUSTAINED rather than spec, and so the spec number stays
+    # recoverable (theoretical_rate / bw_fraction) instead of being lost inside one multiplication.
+    bw_fraction: float = 1.0
+    # How the divisor was obtained: the params rule, or the exact per-tensor bytes it falls back to.
+    bytes_source: str = ""
 
 
 def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0) -> int:
@@ -170,6 +200,54 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0)
     return int(round(wb + kv))
 
 
+def ceiling_params(model_facts: dict) -> int:
+    """Params streamed per unit of work: ACTIVE params for MoE, total params for dense.
+
+    A routed token reads the shared trunk plus only the experts it selects, so `active_params` is the
+    read set -- taken directly (what a model card publishes) or derived from
+    shared_params + top_k * per_expert_params when that split is known. 0 when unknown.
+    """
+    mf = model_facts or {}
+    if mf.get("is_moe"):
+        active = _scalar(mf.get("active_params", 0), 0)
+        if active > 0:
+            return int(active)
+        shared = _scalar(mf.get("shared_params", 0), 0)
+        per_expert = _scalar(mf.get("per_expert_params", 0), 0)
+        top_k = _scalar(mf.get("top_k", 0), 0)
+        if shared > 0 and per_expert > 0 and top_k > 0:
+            return int(shared + top_k * per_expert)
+        return 0
+    return int(_scalar(mf.get("total_params", 0), 0))
+
+
+def simple_active_bytes(model_facts: dict) -> int:
+    """Bytes streamed per unit of work under the xB -> xGB rule. 0 when the param count is unknown."""
+    return int(round(ceiling_params(model_facts) * _BYTES_PER_PARAM))
+
+
+def bw_fraction(model_facts: dict) -> float:
+    """Fraction of peak DRAM bandwidth this model's read pattern actually sustains."""
+    return _MOE_BW_FRACTION if (model_facts or {}).get("is_moe") else _DENSE_BW_FRACTION
+
+
+def rate_and_band(
+    bytes_per_unit: float, peak_bw_bytes_s: float, *, frac: float = _DENSE_BW_FRACTION, tp_degree: int = 1
+):
+    """(ceiling, (band_lo, band_hi)) from an ALREADY-KNOWN byte count.
+
+    The one place the ceiling arithmetic lives. Exists because a second caller (the report renderer,
+    recomputing from the ledger's byte anchor) had its own copy: `peak / bytes` with a hardcoded
+    (0.60, 0.80) band. That copy silently kept the pre-sustained-fraction physics, so an anchored run
+    printed a 84.0 ceiling while the stop gate it shares was judging against 51.2 -- the report and the
+    gate disagreeing about the same run. Callers pass bytes; nobody else multiplies.
+    """
+    tp = max(1, int(tp_degree or 1))
+    per_dev = (float(bytes_per_unit) / tp) if bytes_per_unit else 0.0
+    theo = ((float(peak_bw_bytes_s) * float(frac)) / per_dev) if per_dev > 0 else 0.0
+    return theo, (_ACHIEVABLE_BAND_LO_FRAC * theo, theo)
+
+
 def _shared_bytes(mf: dict, dt) -> float:
     """Always-on MoE bytes: attention + router + shared experts + resident embeddings."""
     if mf.get("shared_tensors"):
@@ -180,14 +258,29 @@ def _shared_bytes(mf: dict, dt) -> float:
 
 
 def compute_target(model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, seq_len: int = 0) -> PerfTarget:
-    """MODEL-LEVEL decode ceiling. Per-device convention: per-device bytes vs single-chip BW
-    (never per-device bytes against mesh-aggregate BW — that is the 4-8x error)."""
-    ab = active_bytes(model_facts, seq_len=seq_len)
+    """MODEL-LEVEL decode ceiling, SUSTAINED (not spec peak).
+
+        ceiling = (peak_BW * bw_fraction) / bytes_per_unit
+
+    with bytes from the param count under the xB -> xGB rule and bw_fraction 0.80 dense / 0.50 MoE
+    (see the block comment at the top of this module). Llama-3.1-8B on a 512 GB/s part:
+    (512*0.8)/8 = 51.2 tok/s/u.
+
+    Falls back to the exact per-tensor byte count ONLY when no param count is available, so facts
+    written before this change still yield a ceiling instead of dropping to the weaker ms floor.
+    Per-device convention: per-device bytes vs single-chip BW (never per-device bytes against
+    mesh-aggregate BW — that is the 4-8x error).
+    """
+    mf = model_facts or {}
+    ab = simple_active_bytes(mf)
+    src = "params rule: %.3gB x %.2f B/param" % (ceiling_params(mf) / 1e9, _BYTES_PER_PARAM)
+    if ab <= 0:
+        ab = active_bytes(mf, seq_len=seq_len)
+        src = "per-tensor exact bytes (no param count available)"
+    frac = bw_fraction(mf)
     peak_bw = float((hw_facts or {}).get("dram_bw_gbps", 0.0)) * 1e9
     tp = max(1, int(tp_degree or 1))
-    ab_per_device = ab / tp
-    theo = (peak_bw / ab_per_device) if ab_per_device > 0 else 0.0
-    band = (_BAND_LO_FRAC * theo, _BAND_HI_FRAC * theo)
+    theo, band = rate_and_band(ab, peak_bw, frac=frac, tp_degree=tp)
     return PerfTarget(
         active_bytes=ab,
         peak_bw_bytes_s=peak_bw,
@@ -195,7 +288,9 @@ def compute_target(model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, seq
         band=band,
         tp_degree=tp,
         seq_len=seq_len,
-        unit=str((model_facts or {}).get("unit") or "token").strip().lower(),
+        unit=str(mf.get("unit") or "token").strip().lower(),
+        bw_fraction=frac,
+        bytes_source=src,
     )
 
 
@@ -220,7 +315,9 @@ def target_from_floor_ms(modeled_floor_ms: float) -> PerfTarget:
 def score(target: PerfTarget, forward_ms: float) -> dict:
     """Compare a measured decode-step / invocation time against the target.
 
-    bw_util = measured / theoretical = effective_BW / peak_BW (identical), i.e. the fraction of
+    bw_util = measured / theoretical_rate, the fraction of the SUSTAINED ceiling reached (the
+    efficiency factor lives inside theoretical_rate now, so this is no longer a fraction of spec
+    peak -- `bw_util_of_peak` is, and the two differ by exactly target.bw_fraction). Formerly: the fraction of
     the achievable ceiling reached. status: BELOW_BAND (keep optimizing) | IN_BAND (>= 60% of
     ceiling, done) | ABOVE_BAND (beat the ceiling -> active_bytes/floor suspect, assert never win)
     | UNKNOWN (no valid target or measurement)."""
@@ -255,6 +352,11 @@ def score(target: PerfTarget, forward_ms: float) -> dict:
         "measured_tok_s": round(measured, 3),
         "theoretical_rate": round(theo, 3),
         "bw_util": round(bw_util, 4),
+        # bw_util is now the fraction of the SUSTAINED ceiling reached; this is the fraction of SPEC
+        # peak, which is what a bandwidth number in a report should be comparable to.
+        "bw_util_of_peak": round(bw_util * target.bw_fraction, 4) if target.bw_fraction else None,
+        "bw_fraction": target.bw_fraction,
+        "bytes_source": target.bytes_source or None,
         "band": (round(target.band[0], 3), round(target.band[1], 3)),
         "effective_bw_bytes_s": eff_bw,
     }
