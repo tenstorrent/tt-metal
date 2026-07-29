@@ -43,16 +43,25 @@ skus:
       - pipeline-functional
       - topology-6u
       # TEST-ONLY (SYS-4772) -- DO NOT MERGE.
+      #
+      # Restored after b30f5be3 removed it. This label is load-bearing for something
+      # non-obvious: models-smoke-tests-impl.yaml chooses the job container with
+      #   contains(join(runs_on, ','), 'dedicated-merge-gate')
+      #     && inputs.docker-image                                  # raw GHCR
+      #     || format('{0}{1}', harbor-prefix, inputs.docker-image) # harbor-prefixed
+      # so with no 'dedicated-merge-gate' string anywhere in runs_on the job asks for
+      # harbor.ci.tenstorrent.net/... and dies in "Initialize containers" with
+      #   dial tcp: lookup harbor.ci.tenstorrent.net ... no such host
+      # because the galaxy lab has no DNS for harbor (see the comment in merge-gate.yaml).
+      # That is what failed all 5 attempts of run 30395043332 -- before the test ever ran.
+      - in-service-dedicated-merge-gate
+      #
       # Pin this SKU to the single faulty board OM1-01A04-STGWH01 instead of letting the
       # pool pick between STGWH01 and its healthy twin STGWH02. runs_on is the only routing
       # mechanism GitHub Actions offers (there is no way to select a self-hosted runner by
       # name), so this requires a label that ONLY STGWH01 carries.
-      #
-      # NOTE: this label is unverified -- the runners API needs org admin, so the set of
-      # labels each board advertises cannot be read from outside. Until infra confirms it,
-      # the galaxy job will sit QUEUED rather than run, which is the intended behaviour here
-      # (better a queued job than a run on the healthy board). If the real label differs,
-      # change the line below to whatever infra reports.
+      # VERIFIED 2026-07-28: this label is real -- run 30395043332 was picked up by
+      # OM1-01A04-STGWH01 within 3 seconds, twice.
       - OM1-01A04-STGWH01
 
   wh_galaxy_perf:
