@@ -311,13 +311,11 @@ def generate_ttml(
 
         if is_dp:
             input_tensor = create_input_tensor_dp(padded.numpy(), device)
-            input_ids_np = padded.numpy()
         else:
             input_tensor = create_input_tensor_from_torch(padded, device)
-            input_ids_np = padded.numpy()
 
         # --- forward ---
-        logits = model(input_tensor, attn_mask, past_key_values=past_kv, input_ids_np=input_ids_np)
+        logits = model(input_tensor, attn_mask, past_key_values=past_kv)
 
         if track_memory and step == 0:
             MemoryUsageTracker.snapshot("GENERATION_STEP_0")

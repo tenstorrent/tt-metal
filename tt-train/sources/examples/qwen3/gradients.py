@@ -362,13 +362,13 @@ def run_backward_comparison(
         for d in range(dp_size):
             padded_np[d, 0, 0, : seq_lens[d]] = np.array(sequences[d], dtype=np.int32)
         input_tensor = create_input_tensor_dp(padded_np, device)
-        logits = ttml_model(input_tensor, causal_mask, input_ids_np=padded_np)
+        logits = ttml_model(input_tensor, causal_mask)
     else:
         padded_input = torch.zeros(effective_batch, 1, 1, max_seq_len, dtype=torch.int32)
         for b in range(effective_batch):
             padded_input[b, 0, 0, : seq_lens[b]] = torch.tensor(sequences[b], dtype=torch.int32)
         input_tensor = create_input_tensor(padded_input, device)
-        logits = ttml_model(input_tensor, causal_mask, input_ids_np=padded_input.numpy())
+        logits = ttml_model(input_tensor, causal_mask)
     if track_memory:
         MemoryUsageTracker.snapshot("FORWARD_PASS")
     print("  Forward pass complete.")

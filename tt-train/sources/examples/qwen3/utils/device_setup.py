@@ -34,12 +34,21 @@ def setup_device(dp_size: int, tp_size: int, seed: int = 42):
     """Open a Tenstorrent device (single or mesh) and return ``(ctx, device)``.
 
     Handles:
-      - Fabric enablement via ``ttml.core.distributed.enable_fabric``
+      - Fabric enablement and MGD validation via ``ttml.open_device_mesh``
+      - Registration of the named ``("dp", "tp")`` mesh
       - Parallelism-context initialisation
+
+    The distributed path goes through ``ttml.open_device_mesh`` rather than
+    ``enable_fabric`` + ``AutoContext.open_device`` so that ``ttml.mesh()`` is
+    populated: the ``ttml.modules`` parallel layers (``VocabParallelEmbedding``,
+    ``FeatureParallelEmbedding``, ...) resolve their cluster axis by *name*, and
+    raise if no mesh has been registered. It performs the same fabric
+    enablement, and additionally validates the mesh shape against the MGD file.
     """
     distributed = dp_size > 1 or tp_size > 1
     total_devices = dp_size * tp_size
 
+    ctx = ttml.autograd.AutoContext.get_instance()
     if distributed:
         if "TT_MESH_GRAPH_DESC_PATH" not in os.environ:
             print(_MGD_WARNING, file=sys.stderr)
@@ -48,11 +57,7 @@ def setup_device(dp_size: int, tp_size: int, seed: int = 42):
             f"\nEnabling distributed mode: DP={dp_size}, TP={tp_size} "
             f"({total_devices} devices, mesh [{dp_size}, {tp_size}])"
         )
-        ttml.core.distributed.enable_fabric(total_devices)
-
-    ctx = ttml.autograd.AutoContext.get_instance()
-    if distributed:
-        ctx.open_device([dp_size, tp_size])
+        ttml.open_device_mesh(ttml.Mesh((dp_size, tp_size), ("dp", "tp")))
         ctx.initialize_parallelism_context(
             ttml.autograd.DistributedConfig(enable_ddp=dp_size > 1, enable_tp=tp_size > 1)
         )

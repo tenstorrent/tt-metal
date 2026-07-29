@@ -151,7 +151,7 @@ def evaluate(
 
             input_tensor = create_input_tensor(x_np, dp_mapper)
 
-            logits = model(input_tensor, causal_mask, input_ids_np=x_np)
+            logits = model(input_tensor, causal_mask)
             target_tensor = create_target_tensor(y_np, dp_mapper)
             if use_tp:
                 loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
@@ -190,7 +190,7 @@ def generate_text(model, config, tokenizer, prompt, max_tokens, max_seq_len, dev
             padded[0, 0, 0, : len(tokens_window)] = np.array(tokens_window, dtype=np.uint32)
 
             input_tensor = create_input_tensor(padded)
-            logits = model(input_tensor, causal_mask, input_ids_np=padded)
+            logits = model(input_tensor, causal_mask)
             logits_np = extract_logits(logits, distributed)
 
             pred_pos = len(tokens_window) - 1
@@ -806,7 +806,7 @@ def main():
             t0 = _tlog(step, "create_input", t0)
 
             # Forward pass
-            logits = ttml_model(input_tensor, causal_mask, input_ids_np=x_np)
+            logits = ttml_model(input_tensor, causal_mask)
             t0 = _tlog(step, "forward", t0)
 
             # Memory snapshot after forward pass (only during first iteration)
