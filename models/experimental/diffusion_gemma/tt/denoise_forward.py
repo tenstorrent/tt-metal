@@ -207,8 +207,10 @@ def hide_prefill_pads_enabled() -> bool:
     pads restores 20/12/11, i.e. baseline. See ``doc/decision_fidelity/device_gumbel_restored.md``
     section 16.
 
-    Default **OFF**. It was flipped ON on 2026-07-28 and REVERTED the same day: it repairs the
-    catastrophic block-0 collapses but breaks far more healthy requests than it fixes.
+    Default **ON** since 2026-07-29. Attending the pad keys is what makes TT answer English prompts
+    in Chinese, and it does so by cutting generation short: the pads destroy the thinking-template
+    prefix at canvas positions 0-4, block 0 bootstraps from a poisoned accept budget, the reply ends
+    early, and with too little English context the language choice goes with block 0.
 
     WHAT IT REPAIRS, measured:
 
@@ -220,38 +222,42 @@ def hide_prefill_pads_enabled() -> bool:
       That A/B also ruled the SAMPLER out: DG_VLLM_GUMBEL_MODE=host (IID) drifted on the same two
       prompts as device, repairing 0, at 1.40x the cost -- which is why the host mode was deleted.
 
-    WHAT REVERTED IT -- a paired full-workload comparison, 2026-07-28. Same 44 GPQA prompts in the
-    same lm_eval order, same max_model_len 8192 / max_gen_toks 5632, only this flag moved:
+    WHAT DECIDED IT -- the A100 reference as an absolute yardstick, 2026-07-29. The same 11 prompts
+    (the ones that drifted on TT, plus clean controls) at the same 5632-token budget on both
+    platforms, so neither platform nor generation budget is confounded:
 
-        cot_rerun (pads OFF)   guard kills  5/44 = 11%   9.0 blocks/req   1.3% per-block degeneracy
-        pads ON                guard kills 30/44 = 68%   3.2 blocks/req  21.1% per-block degeneracy
+                        drift      guard kills   empty   mean chars
+        A100 reference   0/11           --          0       11069
+        TT, pads attend  5/9 non-empty   3          2        2507
+        TT, pads hidden  0/11            0          0        8514
 
-    Per request: killed in both 2, killed only with pads OFF 3, killed only with pads ON 28. It
-    repairs 3 and breaks 28, and requests die at ~3 committed blocks instead of ~9.
+    Every drifted prompt is repaired, both empty replies come back, the guard stops firing, and the
+    four clean controls are untouched -- matching the reference's 0/11. doc 8 is the clearest case:
+    0.41 CJK in 2181 chars with 43 Latin words becomes clean English in 12902 chars with 1746.
 
-    The arms that argued FOR the flip were run on a prompt set deliberately ENRICHED with known
-    failures, where the flag does help (5/6 -> 3/6 kills, 27% -> 14% per-block degeneracy, drift
-    3/5 -> 1/6, doc 12 going 612 chars + drift -> 4033 chars of clean English). That does not
-    generalise. Comparing an enriched subset against a population average is the error to avoid here,
-    and so is validating degeneracy at max_tokens=512, which caps generation at 2 canvases and cannot
-    see this failure mode at all.
+    The length recovery is what shows this is the cause rather than a coincidence: 2507 -> 8514 mean
+    chars, i.e. 24% -> 77% of the reference. Language and length recover together, which is why the
+    two symptoms always appeared together.
 
-    The mechanism is not in doubt; the blast radius is the problem. It perturbs every prompt whose
-    length is not a 32-multiple, and most of those were converging fine. A shippable version has to be
-    narrower -- applied only where block 0 actually collapses -- or must stop disturbing prompts that
-    are already converging.
+    An earlier revert on 2026-07-28 read "repairs 3, breaks 28" from a paired 44-prompt comparison.
+    That comparison is void -- both arms ran on the token-gather denoise MoE, which cannot converge at
+    all (entropy plateaus at ~0.46 against the 0.005 halt threshold, every block commits an unsettled
+    canvas), and the arms were not matched on it either. That path was deleted in 7417bd7d69d.
+
+    Still true and worth remembering: this is decision-changing for every prompt whose length is not a
+    32-multiple, so it must be re-gated on the full 198-question GPQA score, not only on drift.
 
     Decision-changing for every prompt whose length is not a 32-multiple; prompts that ARE aligned
     have no pad slots, so the mask is unchanged there (verified: doc 47 is byte-identical across both
-    arms). Set DG_DENOISE_HIDE_PREFILL_PADS=1 to opt in.
+    arms). Set DG_DENOISE_HIDE_PREFILL_PADS=0 for the old maskless behaviour.
 
-    NOTE if you opt in: combining this with a BOUNDED sliding span
+    NOTE now that it is on by default: combining this with a BOUNDED sliding span
     (DG_DENOISE_SLIDING_SPAN=1, still default off) raises NotImplementedError in
     _build_reveal_mask_device -- the bounded read is built for (span, lo), so pad slots would have
     to be mapped into that window rather than hidden by absolute position. Enabling the span needs
     that mask first.
     """
-    return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "0").lower() in ("1", "true", "yes", "on")
+    return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "1").lower() in ("1", "true", "yes", "on")
 
 
 def prefill_pad_span(true_prompt_len: int | None, padded_prompt_len: int | None):
