@@ -1,0 +1,25 @@
+Command:
+python models/autoports/coherelabs_north_mini_code_1_0/tests/fused_decoder_perf.py --implementation fused --mode prefill --layer 0 --batch 1 --sequence 65 --warmups 0 --iterations 1 --dense-gate-up-variant packed_all
+
+Exit status: 1
+
+Salient exact compiler output:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp:60:25: error: 'single_tile_size_bytes' was not declared in this scope
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp:55:25: error: 'single_tile_size_bytes' was not declared in this scope
+   55 |                         single_tile_size_bytes,
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp:77:25: error: 'single_tile_size_bytes' was not declared in this scope
+   77 |                         single_tile_size_bytes,
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+
+Python call site:
+  File "models/autoports/coherelabs_north_mini_code_1_0/tt/fused_decoder.py", line 106, in _dense_mlp
+    gate, up = ttnn.split(packed, self.intermediate_size, dim=-1)
+
+RuntimeError:
+Failed to generate binaries for writer_tm_tile_layout_split_two_chunks
+
+Adaptation:
+The delivered packed_slice variant replaces this prefill split with two
+on-device slices. It passes logical lengths 33 and 65 and is faster than the
+separate-linears control. Decode retains the valid faster split specialization.

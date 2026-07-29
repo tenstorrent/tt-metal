@@ -1,0 +1,13 @@
+kind,phase,batch,functional_mean_ms,fused_mean_ms,improvement_percent,functional_min_ms,fused_min_ms,iterations
+dense_full_rope,prefill,1,0.633436,0.598181,5.566,0.620503,0.585917,50
+dense_full_rope,prefill,32,13.749497,12.582875,8.485,13.634552,12.520174,50
+dense_full_rope,traced_decode,1,0.360533,0.334443,7.236,0.358995,0.331833,50
+dense_full_rope,traced_decode,32,6.750626,6.038892,10.543,6.741943,6.024973,50
+sliding_rope_moe,prefill,1,14.838008,10.132311,31.714,14.647175,10.050222,50
+sliding_rope_moe,prefill,32,145.995851,122.053586,16.399,145.747977,121.757640,50
+sliding_rope_moe,traced_decode,1,9.531956,6.703870,29.670,9.514522,6.689782,50
+sliding_rope_moe,traced_decode,32,11.239430,8.410543,25.169,11.232210,8.400096,50
+full_no_rope_moe,prefill,1,14.757502,10.150406,31.219,14.635602,10.014263,50
+full_no_rope_moe,prefill,32,145.564803,121.494340,16.536,145.258256,121.054859,50
+full_no_rope_moe,traced_decode,1,9.537583,6.698897,29.763,9.532327,6.685384,50
+full_no_rope_moe,traced_decode,32,11.233974,8.416626,25.079,11.225413,8.400745,50

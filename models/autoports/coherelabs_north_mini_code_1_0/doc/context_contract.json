@@ -15,10 +15,21 @@
   "serving_decode_batch": 32,
   "page_size": 32,
   "cache_dtype": "bfloat16",
-  "capability_reduction": null,
-  "completion_status": "complete",
+  "capability_reduction": {
+    "scope": "fused sparse layers at serving decode batch 32 only",
+    "advertised_context": 500000,
+    "largest_feasible_context": 496928,
+    "reason": "hard per-bank DRAM limit after reserving K/V first and directly loading only packed gate/up weights",
+    "unaffected": "batch-1 all layer kinds and batch-32 dense layers retain 500000"
+  },
+  "completion_status": "functional_decoder_and_fused_decoder_complete",
   "pending_gates": [],
   "independent_stage_review": {
+    "stage": "functional_decoder",
+    "verdict": "clean-pass",
+    "required_work": []
+  },
+  "fused_decoder_stage_review": {
     "verdict": "clean-pass",
     "required_work": []
   },
@@ -90,6 +101,19 @@
     "kv_bytes_formula": "batch * context * 2 caches * 4 kv heads * 128 head dim * 2 BF16 bytes",
     "batch_1_context_500000_kv_bytes": 1024000000,
     "batch_32_context_500000_kv_bytes": 32768000000,
-    "note": "All three layer kinds passed near-limit nonaligned prefill and batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced dense decode passed; no capability reduction is applied."
+    "note": "All three layer kinds passed near-limit nonaligned prefill and batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced dense decode passed. Stage-02 fused sparse layers have a separately measured hard DRAM limit recorded below."
+  },
+  "fused_decoder_capacity_evidence": {
+    "duplicate_weight_fix": "fused loader directly uploads only the selected packed gate/up family; separate gate/up tensors are never allocated",
+    "allocation_order": "reserve both K/V caches first, then allocate expert weights largest-first",
+    "sparse_batch_32_largest_feasible_context": 496928,
+    "sparse_batch_32_largest_feasible_result": "traced finite decode passed for both layer 1 sliding/RoPE/MoE and layer 4 full/no-RoPE/MoE",
+    "sparse_batch_32_first_failing_page_aligned_context": 496960,
+    "failure": "hard DRAM limit: packed expert gate/up needs 100663296 bytes per bank but total free and largest free block are both 100581760 bytes",
+    "passing_artifacts": [
+      "fused_decoder/decode_layer1_context496928_batch32.json",
+      "fused_decoder/decode_layer4_context496928_batch32.json"
+    ],
+    "failure_artifact": "fused_decoder/sparse_batch32_context496960_oom.txt"
   }
 }
