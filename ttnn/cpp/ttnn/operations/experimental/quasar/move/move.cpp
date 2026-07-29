@@ -33,7 +33,9 @@ Tensor create_ghost_tensor(const Tensor& input_tensor) {
 
 inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
-    const auto& input_mem_config = input_tensor.memory_config();
+    // Hold the memory config by value, not by reference: input_tensor is deallocated below, which
+    // destroys the TensorSpec (and the MemoryConfig inside it) that memory_config() refers into.
+    const auto input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
     tt::tt_metal::TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
