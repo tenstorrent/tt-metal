@@ -350,6 +350,53 @@ def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     assert_quality(padded_torch_tensor, padded_torch_output_tensor)
 
 
+def _make_interior_core_block_shard_memory_config(shape):
+    """2×2 block shards (64×64 elements = 2×2 tiles) over a 128×128-padded tensor.
+
+    Exercises interior-core skip (rp=0, bp=0 → no kernels placed) and all four
+    (has_right_pad, has_bottom_pad) writer KernelSpec combos. Requires shape whose
+    padded extent is 128×128 (e.g. (97, 97)) so the 2×2 grid of 2×2-tile shards
+    covers the full 4×4 tile tensor with one pure-interior core at (0, 0).
+    """
+    padded_shape = list(shape)
+    padded_shape[-2] = (padded_shape[-2] + 31) // 32 * 32
+    padded_shape[-1] = (padded_shape[-1] + 31) // 32 * 32
+    assert (
+        padded_shape[-2] == 128 and padded_shape[-1] == 128
+    ), f"interior-core block shard fixture expects 128×128 padded tensor, got {padded_shape[-2]}×{padded_shape[-1]}"
+
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+    shard_spec = ttnn.ShardSpec(shard_grid, (64, 64), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+@pytest.mark.parametrize("fill_value", [1])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+def test_fill_pad_sharded_interior_block_core(device, fill_value, dtype):
+    """Cover interior-core skip and all four sharded writer (rp, bp) KernelSpec combos.
+
+    (97, 97) pads to 128×128 (4×4 tiles). 2×2 block shards of 64×64 elements (2×2 tiles)
+    give one interior core (0, 0) with rp=0, bp=0 and edge cores for (0,1), (1,0), (1,1).
+    """
+    shape = (97, 97)
+    torch.manual_seed(1234)
+    torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
+        shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
+    )
+    input_mem_config = _make_interior_core_block_shard_memory_config(shape)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+
+    output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
+
+    assert_quality(padded_torch_tensor, padded_torch_output_tensor)
+
+
 def _make_l1_sharded_memory_config(shape, shard_scheme):
     """Build an L1-sharded memory config for fill_pad cache-hit tests."""
     padded_shape = list(shape)
@@ -398,18 +445,21 @@ def test_fill_pad_program_cache_addr_change(device, factory_case):
     Guards Metal 2.0 TensorBinding CRTA re-resolution for both factories:
     FillPadProgramFactory (DRAM interleaved) and FillPadL1ShardedProgramFactory (L1 sharded).
     """
-    shape = (17, 17)  # exercises both right and bottom implicit tile padding
     fill_value = 1.5
     dtype = ttnn.bfloat16
     torch_dtype = ttnn_dtype_to_torch_dtype[dtype]
     output_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     if factory_case == "dram_interleaved":
+        shape = (17, 17)  # single tile with both right and bottom implicit padding
         input_mem_config = ttnn.DRAM_MEMORY_CONFIG
     elif factory_case == "l1_height_sharded":
+        shape = (17, 17)
         input_mem_config = _make_l1_sharded_memory_config(shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
     else:
-        input_mem_config = _make_l1_sharded_memory_config(shape, ttnn.TensorMemoryLayout.BLOCK_SHARDED)
+        # Reuse interior-block fixture: all four writer specs + interior-core skip
+        shape = (97, 97)
+        input_mem_config = _make_interior_core_block_shard_memory_config(shape)
 
     device.enable_program_cache()
     device.clear_program_cache()

@@ -582,8 +582,10 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
     }
 
     // ---- Writer KernelSpecs (one per (rp_idx, has_bottom_pad_core)). Split by has_bottom_pad_core
-    // so the conditional BOT_MASK producer binding is per-node consistent with the compute consumer
-    // (see METAL2_PORT_PLAN.md — sharded writer split). has_right_pad / has_bottom_pad become #defines.
+    // so the BOT_MASK producer binding is per-node consistent with its compute consumer (compute keys
+    // has_bottom_pad at compile time). With derived placement, an unsplit writer would bind a
+    // producer-only bot-mask DFB on non-bottom nodes and fail the per-node producer/consumer census.
+    // has_right_pad / has_bottom_pad become #defines.
     std::array<std::array<int, 2>, 2> writer_idx{{{-1, -1}, {-1, -1}}};
     for (uint32_t rp = 0; rp <= 1; ++rp) {
         for (uint32_t hbp = 0; hbp <= 1; ++hbp) {
