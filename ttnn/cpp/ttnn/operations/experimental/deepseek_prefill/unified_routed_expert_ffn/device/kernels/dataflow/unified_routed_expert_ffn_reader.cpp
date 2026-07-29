@@ -141,6 +141,13 @@ void kernel_main() {
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
+    // CB block sizes are the compile-time MAX and never vary with the runtime
+    // per_core_M. Only the DRAM reads and the multicast payload below shrink to
+    // the live rows (#50885); the CB pointers always advance by a full max block.
+    // A block size that changed between experts would overshoot fifo_limit, which
+    // only wraps on exact equality — see the note in adaptive_chunk.hpp.
+    constexpr uint32_t g_in0_block_tiles_max = per_core_M_max * in0_block_w_gu;
+    constexpr uint32_t act_tiles_max = per_core_M_max * in0_block_w_d;
     // cb_in0_down_full stays sized to the compile-time MAX per-core M: the down
     // matmul keeps a full ring and MAC-skips rows >= the runtime per_core_M, so
     // the reader pushes the full block (filling only per_core_M runtime rows via
@@ -414,7 +421,6 @@ void kernel_main() {
         // for the tail. Chunk starts are UNIFORM at chunk*chunk_M_max (full chunks
         // are max_chunk; the tail is last, so its start is num_full*max_chunk too).
         const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
-        const uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
         const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
 
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
@@ -431,7 +437,7 @@ void kernel_main() {
         //   per-K-block elapsed time at small per_core_M where mcast/handshake
         //   overhead dominates compute.
         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
-            x_stage_obj.reserve_back(g_in0_block_num_tiles);
+            x_stage_obj.reserve_back(g_in0_block_tiles_max);
             cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
             if constexpr (reader_mcasts_up) {
                 cb_in1_up_obj.reserve_back(g_in1_block_num_tiles);
@@ -591,7 +597,7 @@ void kernel_main() {
                          .addr = block_start},
                         /*linked=*/true);
                 }
-                x_stage_obj.push_back(g_in0_block_num_tiles);
+                x_stage_obj.push_back(g_in0_block_tiles_max);
 
                 noc.async_writes_flushed();
                 in0_valid_sem.set(IN0_VALID);
@@ -740,7 +746,7 @@ void kernel_main() {
             // Step 3: receivers wait for both valid semaphores and push.
             if (!is_in0_sender) {
                 in0_valid_sem.wait(IN0_VALID);
-                x_stage_obj.push_back(g_in0_block_num_tiles);
+                x_stage_obj.push_back(g_in0_block_tiles_max);
             }
             if (!is_in1_sender) {
                 in1_valid_sem.wait(IN1_VALID);
@@ -875,14 +881,14 @@ void kernel_main() {
             // after the in1_down mcast; starts as soon as compute pushes
             // cb_activated AND the ready acks are in (already done in step 1).
             if (is_act_sender) {
-                // cb_activated holds this core's per_core_M (runtime) x in0_block_w_d
-                // activated tiles; read/mcast/pop exactly that many. cb_in0_down_full
-                // is pushed FULL (compile-time max) below so the down matmul's ring
-                // stays aligned — the rows past per_core_M are MAC-skipped there.
+                // cb_activated carries a FULL max block (constant CB block size —
+                // see adaptive_chunk.hpp), of which only the first per_core_M
+                // (runtime) x in0_block_w_d tiles hold this chunk's real rows. Drain
+                // the whole block but MCAST only the real tiles (#50885). Likewise
+                // cb_in0_down_full is pushed FULL below, and the down matmul
+                // MAC-skips the rows past per_core_M.
                 const uint32_t re_act_tiles = per_core_M * in0_block_w_d;
-                if (re_act_tiles > 0) {
-                    cb_activated_obj.wait_front(re_act_tiles);
-                }
+                cb_activated_obj.wait_front(act_tiles_max);
                 act_ready_sem.wait(GRID_X_NOC - 1);
                 act_ready_sem.set(0);
 
@@ -921,9 +927,7 @@ void kernel_main() {
                 act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                     noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
 
-                if (re_act_tiles > 0) {
-                    cb_activated_obj.pop_front(re_act_tiles);
-                }
+                cb_activated_obj.pop_front(act_tiles_max);
             }
 
             // Step 5: receivers wait for both valid sems and push.

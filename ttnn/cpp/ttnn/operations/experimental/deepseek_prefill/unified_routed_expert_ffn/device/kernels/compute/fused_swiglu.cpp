@@ -331,16 +331,21 @@ FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t gate_intermed_cb_id,
     uint32_t up_intermed_cb_id,
     uint32_t m_subblocks) {
-    // Adaptive per_core_M: this core's gate/up work is bounded by the runtime
-    // per_core_M (m_subblocks tile-rows). The x block this core consumes and the
-    // partials/intermed single-block CBs shrink with it; the gate/up WEIGHT
-    // blocks stay full-width (M-independent). The CBs were SIZED on the host to
-    // the compile-time MAX per_core_M, so a smaller runtime count just uses fewer
-    // of the reserved tiles. m_subblocks==0 (this core owns no row this chunk)
-    // reserves/pushes nothing.
+    // Adaptive per_core_M: this core's gate/up WORK is bounded by the runtime
+    // per_core_M (m_subblocks tile-rows) — MACs, tilize strips, copies and packs
+    // all scale with it. The gate/up WEIGHT blocks stay full-width (M-independent).
+    //
+    // The CB BLOCK SIZE, however, is the compile-time MAX and never varies: every
+    // reserve/push/wait/pop below moves a full max block, and the runtime remainder
+    // is padded with O(1) pointer-only bumps. See the ring-alignment note in
+    // adaptive_chunk.hpp — a block size that changes between experts overshoots
+    // fifo_limit, which never wraps, and the CB pointer runs away into L1.
     const uint32_t EFF_M = m_subblocks;
-    const uint32_t x_block_tiles = m_subblocks * in0_block_w;  // runtime x block (per_core_M rows)
+    const uint32_t x_block_tiles = m_subblocks * in0_block_w;  // runtime x work (per_core_M rows)
     const uint32_t EFF_OUT = m_subblocks * in1_num_subblocks * out_subblock_num_tiles;
+    // Constant CB block sizes (per_core_M_max-derived, from the host CB sizing).
+    constexpr uint32_t X_BLOCK_TILES_MAX = in0_block_num_tiles;
+    constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
     pack_reconfig_data_format(partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -353,16 +358,15 @@ FORCE_INLINE void matmul_phase_fused_gu(
     CircularBuffer partials_up_cb(partials_up_cb_id);
     CircularBuffer gate_intermed_cb(gate_intermed_cb_id);
 
-    // Reserve both partials CBs once for the (effective) per-core block. pack_tile
-    // with output_tile_index writes to absolute slots; WrPtr doesn't advance
-    // until cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land
-    // back in the SAME L1 slots — accumulating physically — which is what
-    // we want. No per-K-block pop+repush needed. Guarded by EFF_M>0 so an
-    // empty row (m_subblocks==0) never issues a 0-count reserve/push.
-    if (EFF_M > 0) {
-        partials_gu_cb.reserve_back(EFF_OUT);
-        partials_up_cb.reserve_back(EFF_OUT);
-    }
+    // Reserve both partials CBs once for the FULL max block. pack_tile with
+    // output_tile_index writes to absolute slots; WrPtr doesn't advance until
+    // cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land back in the
+    // SAME L1 slots — accumulating physically — which is what we want. No
+    // per-K-block pop+repush needed. Only slots [0, EFF_OUT) are ever written;
+    // the rest of the block is stale and is dropped downstream (the down matmul
+    // MAC-skips rows >= per_core_M and the writer never emits them).
+    partials_gu_cb.reserve_back(EFF_OUT_MAX);
+    partials_up_cb.reserve_back(EFF_OUT_MAX);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if constexpr (tilize_x) {
@@ -388,6 +392,20 @@ FORCE_INLINE void matmul_phase_fused_gu(
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(n_strips);
+            // The helper consumed/produced only the runtime rows, but the reader
+            // pushed a full max cb_x_rm block and the matmul below pops a full max
+            // cb_in0_x block. Settle both with pointer-only bumps (no tilize work
+            // on the stale rows) so every CB moves a constant-size block.
+            {
+                const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
+                if (x_pad > 0) {
+                    CircularBuffer x_rm_cb(x_rm_cb_id);
+                    x_rm_cb.wait_front(x_pad);
+                    x_rm_cb.pop_front(x_pad);
+                    x_cb.reserve_back(x_pad);
+                    x_cb.push_back(x_pad);
+                }
+            }
             reconfig_data_format_srca(gate_cb_id);
             matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
             pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
@@ -395,7 +413,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
 #endif
         }
-        x_cb.wait_front(x_block_tiles);
+        x_cb.wait_front(X_BLOCK_TILES_MAX);
         gate_cb.wait_front(in1_block_num_tiles);
         up_cb.wait_front(in1_block_num_tiles);
 
@@ -470,15 +488,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
         }
 #endif
 
-        x_cb.pop_front(x_block_tiles);
+        x_cb.pop_front(X_BLOCK_TILES_MAX);
         gate_cb.pop_front(in1_block_num_tiles);
         up_cb.pop_front(in1_block_num_tiles);
     }
     // Make the accumulated partials visible to the second-pass copy loops.
-    if (EFF_M > 0) {
-        partials_gu_cb.push_back(EFF_OUT);
-        partials_up_cb.push_back(EFF_OUT);
-    }
+    partials_gu_cb.push_back(EFF_OUT_MAX);
+    partials_up_cb.push_back(EFF_OUT_MAX);
 
     // After K-loop: partials_gu holds gate-matmul accumulator,
     // partials_up holds up-matmul accumulator. Copy each to its intermed
@@ -528,6 +544,18 @@ FORCE_INLINE void matmul_phase_fused_gu(
         gate_intermed_cb.push_back(out_subblock_num_tiles);
         tile_regs_release();
     }
+    // The copy loop above did real work only for the runtime rows. Settle the rest
+    // of the constant-size block with pointer-only bumps: drop the stale tail of
+    // partials_gu and pad gate_intermed so multiply_phase sees a full max block.
+    {
+        const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+        if (pad > 0) {
+            partials_gu_cb.wait_front(pad);
+            partials_gu_cb.pop_front(pad);
+            gate_intermed_cb.reserve_back(pad);
+            gate_intermed_cb.push_back(pad);
+        }
+    }
 
     // Up partials are NOT copied to a separate cb_up_intermed: the multiply
     // phase reads cb_partials_up directly (bf16) and pairs each tile with
@@ -571,9 +599,9 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     // Adaptive per_core_M: this core produces eff_out_tiles = per_core_M * pcN
     // activated tiles this chunk (0 if it owns no row -> nothing to do).
     const uint32_t EFF_OUT = eff_out_tiles;
-    if (EFF_OUT == 0) {
-        return;
-    }
+    // CB blocks are the constant compile-time max (see matmul_phase_fused_gu);
+    // only the activation work below is bounded by the runtime EFF_OUT.
+    constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
     // Dst budget derived from the host ComputeConfig (via -DFP32_DEST_ACC_EN) so
     // it and the SFPU op's fp32-dest template below stay in sync with the
     // program factory's DST_CAPACITY / fp32_dest_acc_en (no silent drift). The
@@ -587,8 +615,8 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     CircularBuffer up_partials_cb(up_partials_cb_id);
     CircularBuffer activated_cb(activated_cb_id);
 
-    gate_partials_cb.wait_front(EFF_OUT);
-    up_partials_cb.wait_front(EFF_OUT);
+    gate_partials_cb.wait_front(EFF_OUT_MAX);
+    up_partials_cb.wait_front(EFF_OUT_MAX);
 
     pack_reconfig_data_format(activated_cb_id);
     // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
@@ -646,8 +674,17 @@ FORCE_INLINE void swiglu_oai_activation_phase(
         activated_cb.push_back(c);
         tile_regs_release();
     }
-    gate_partials_cb.pop_front(EFF_OUT);
-    up_partials_cb.pop_front(EFF_OUT);
+    // Pad cb_activated up to the constant block (pointer-only); the reader drains
+    // the full max block and mcasts only the runtime rows.
+    {
+        const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+        if (pad > 0) {
+            activated_cb.reserve_back(pad);
+            activated_cb.push_back(pad);
+        }
+    }
+    gate_partials_cb.pop_front(EFF_OUT_MAX);
+    up_partials_cb.pop_front(EFF_OUT_MAX);
 }
 #endif
 
@@ -662,14 +699,12 @@ FORCE_INLINE void multiply_phase(
     CircularBuffer activated_cb(activated_cb_id);
 
     const uint32_t EFF_OUT = eff_out_tiles;
-    // Empty row (no valid tiles): gate_intermed / partials_up were not pushed, so
-    // there is nothing to wait on or drain.
-    if (EFF_OUT == 0) {
-        return;
-    }
+    // CB blocks are the constant compile-time max (see matmul_phase_fused_gu);
+    // only the multiply work below is bounded by the runtime EFF_OUT.
+    constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
 
-    gate_cb.wait_front(EFF_OUT);
-    up_cb.wait_front(EFF_OUT);
+    gate_cb.wait_front(EFF_OUT_MAX);
+    up_cb.wait_front(EFF_OUT_MAX);
 
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
@@ -699,8 +734,17 @@ FORCE_INLINE void multiply_phase(
         tile_regs_release();
         base += out_subblock_num_tiles;
     }
-    gate_cb.pop_front(EFF_OUT);
-    up_cb.pop_front(EFF_OUT);
+    // Pad cb_activated up to the constant block (pointer-only); the reader drains
+    // the full max block and mcasts only the runtime rows.
+    {
+        const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+        if (pad > 0) {
+            activated_cb.reserve_back(pad);
+            activated_cb.push_back(pad);
+        }
+    }
+    gate_cb.pop_front(EFF_OUT_MAX);
+    up_cb.pop_front(EFF_OUT_MAX);
 }
 
 }  // namespace
