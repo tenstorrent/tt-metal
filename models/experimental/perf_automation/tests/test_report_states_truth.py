@@ -267,8 +267,12 @@ def test_the_block_level_table_declares_its_vintage(tmp_path, monkeypatch):
 
 
 def test_utilisation_names_the_ceiling_it_is_measured_against(tmp_path, monkeypatch):
-    """70% of a BASELINE ceiling is progress-against-target, not headroom: the same run was at 49% of
-    the bound its own build had reached. Unlabelled, the figure gets quoted as the second one."""
+    """The utilization line must NAME its denominator. It said "BASELINE ceiling" when the divisor was
+    the streamed BYTES, which optimization shrinks (bf8_b -> bf4_b), so the build's own bound moved
+    during a run -- 84.0 at the baseline vs 121.3 once every weight group reached bf4 -- and the reader
+    had to be told which one the percentage was against. The divisor is now the PARAM count, which no
+    lever changes, so both ceilings are the same number and the qualifier described a distinction that
+    no longer exists."""
     sm, _ = _sm_and_led()
     monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
     snap = {
@@ -283,4 +287,5 @@ def test_utilisation_names_the_ceiling_it_is_measured_against(tmp_path, monkeypa
     }
     out = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 16.99}, "m", "main"))
     line = next(l for l in out.splitlines() if l.startswith("  utilization"))
-    assert "BASELINE ceiling" in line, line
+    assert "(measured / ceiling)" in line, line
+    assert "70%" in line, line

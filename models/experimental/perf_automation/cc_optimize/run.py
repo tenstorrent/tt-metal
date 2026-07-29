@@ -2796,14 +2796,24 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
             cfg.get("pipeline_tag") or (manifest.get("model_meta") or {}).get("pipeline_tag") or ""
         )
         _snap = _hf_snapshots(mid)[0] if mid and _hf_snapshots(mid) else None
-        if _snap and _unit:
+        # THE PARAM COUNT DOES NOT DEPEND ON THE UNIT -- only the lookup-only exclusion does -- so the
+        # header walk runs whenever a snapshot is readable. Gating it on `_unit` too meant a model whose
+        # unit could not be determined (bge-large-en-v1.5) silently fell back to the checkpoint's FILE
+        # SIZE as the divisor: 1.34 GB of float32 instead of its param count, i.e. ~4 B/param, so the
+        # xB -> xGB rule was bypassed for exactly the models least able to report the error themselves.
+        if _snap:
             _an = _mb.weight_bytes(
                 _snap,
-                unit=_unit,
+                # Unknown unit -> count as "token", which EXCLUDES lookup-only tensors. One row of an
+                # embedding table crosses the bus per token, never the whole matrix, and that is true of
+                # an encoder pass too -- so excluding it is right for any unit, and erring toward a
+                # smaller divisor errs toward a HIGHER ceiling, which merely fails to bind rather than
+                # stopping a run early.
+                unit=_unit or "token",
                 overrides=_mb.overrides_from_env(),
                 default_device_dtype=os.environ.get("TT_PERF_DEFAULT_WEIGHT_DTYPE", ""),
             )
-            if _an.get("bytes"):
+            if _an.get("bytes") and _unit:
                 wb, src = _an["bytes"], "analytic: %d tensors from safetensors headers, unit=%s" % (
                     _an["tensors"],
                     _unit,
@@ -2858,11 +2868,17 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
             facts["unit"] = _u
     except Exception:  # noqa: BLE001
         pass
-    layers = cfg.get("num_hidden_layers") or cfg.get("n_layer") or cfg.get("num_layers")
-    kv_heads = cfg.get("num_key_value_heads") or cfg.get("num_attention_heads") or cfg.get("num_heads")
-    hidden = cfg.get("hidden_size") or cfg.get("d_model")
-    heads = cfg.get("num_attention_heads") or cfg.get("num_heads")
-    head_dim = cfg.get("head_dim") or ((int(hidden) // int(heads)) if (hidden and heads) else None)
+    # A CONFIG VALUE MAY BE A LIST. Per-layer configs carry lists where a scalar is expected, and raw
+    # int() on one raises TypeError -- which the caller swallows, so the model lost its ENTIRE ceiling
+    # over a KV-cache field the ceiling does not even need without a seq_len. perf_target._scalar
+    # already coerces exactly this (per-layer top_k), so reuse it instead of a second rule here.
+    from agent.perf_target import _scalar as _sc
+
+    layers = _sc(cfg.get("num_hidden_layers") or cfg.get("n_layer") or cfg.get("num_layers"), 0)
+    kv_heads = _sc(cfg.get("num_key_value_heads") or cfg.get("num_attention_heads") or cfg.get("num_heads"), 0)
+    hidden = _sc(cfg.get("hidden_size") or cfg.get("d_model"), 0)
+    heads = _sc(cfg.get("num_attention_heads") or cfg.get("num_heads"), 0)
+    head_dim = _sc(cfg.get("head_dim"), 0) or ((hidden // heads) if (hidden and heads) else 0)
     for key, val in (("layers", layers), ("kv_heads", kv_heads), ("head_dim", head_dim)):
         if val:
             facts[key] = int(val)

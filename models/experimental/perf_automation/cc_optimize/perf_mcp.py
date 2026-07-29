@@ -3264,7 +3264,26 @@ def _reliable_forward_unit() -> str:
 
 
 def _load_perf_target_inputs() -> dict | None:
+    """The bandwidth facts, REBUILT if the file is gone.
+
+    perf_target_inputs.json is untracked and lives in the model directory the optimize loop reverts
+    between attempts, and the producer runs once at setup and never overwrites -- so once a revert
+    deleted it, nothing rebuilt it and every later report fell to the band-less ms floor for the rest
+    of the run. That is why a RUN_REPORT could show "modeled floor / NO_BAND / no weight-bytes input"
+    for a model whose facts had existed minutes earlier. Rebuilding here costs one safetensors header
+    read and makes the ceiling survive the revert instead of depending on it.
+    """
     try:
+        return json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import importlib.util as _ilu
+
+        _spec = _ilu.spec_from_file_location("cc_run_ptin", str(Path(__file__).parent / "run.py"))
+        _run = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_run)
+        _run._emit_perf_target_inputs(_MODEL_ROOT, _MODEL_ROOT, None, _MANIFEST)
         return json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
     except Exception:  # noqa: BLE001
         return None

@@ -112,7 +112,7 @@ def test_a_bandwidth_ceiling_does_publish_the_band(tmp_path):
     llm = {
         "scope": "model",
         "has_unit_ceiling": True,
-        "theoretical_rate": 51.2,  # (512 * 0.80) / 8 GB
+        "theoretical_rate": 64.0,  # 512 / 8 GB
         "band": [38.4, 51.2],
         "active_bytes": int(8e9),
         "peak_bw_gbps": 512.0,
@@ -121,8 +121,8 @@ def test_a_bandwidth_ceiling_does_publish_the_band(tmp_path):
         "perf_layers": "all",
     }
     text = _render(sm, tmp_path, baseline_profile={"per_token_ms": 19.4}, throughput=llm, final_ms=19.4)
-    assert "38.4 - 51.2 tok/s/u" in text, text
-    assert "ceiling (sustained) : 51.2 tok/s/u (80% of 512 GB/s)" in text, text
+    assert "achievable (60-80%) : 38.4 - 51.2 tok/s/u" in text, text
+    assert "theoretical ceiling : 64.0 tok/s/u" in text, text
 
 
 def test_status_has_no_band_verdict_for_a_floor_target(tmp_path):

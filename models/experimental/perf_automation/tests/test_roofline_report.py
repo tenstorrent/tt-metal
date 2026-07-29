@@ -15,7 +15,7 @@ _SPEC.loader.exec_module(S)
 
 _LLM = {
     "has_unit_ceiling": True,
-    "theoretical_rate": 51.2,  # (512 * 0.80) / 8 GB -- sustained, not spec
+    "theoretical_rate": 64.0,  # 512 / 8 GB
     "band": [38.4, 51.2],
     "active_bytes": 8_000_000_000,
     "peak_bw_gbps": 512.0,
@@ -27,7 +27,7 @@ _LLM = {
 
 def test_llm_decode_form_matches_bandwidth_math():
     out = "\n".join(S._roofline_lines(_LLM, 19.4))
-    assert "ceiling (sustained) : 51.2 tok/s/u" in out
+    assert "theoretical ceiling : 64.0 tok/s/u" in out
     assert "38.4 - 51.2 tok/s/u" in out
     assert "measured            : 51.5 tok/s/u" in out  # 1000 / 19.4
     assert "412 GB/s" in out  # 8 GB / 19.4 ms

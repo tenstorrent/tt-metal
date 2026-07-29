@@ -37,6 +37,8 @@ unreportable the moment you restart.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import math
@@ -283,6 +285,35 @@ def anchor_value(kind: str, *, depth: str = "", model: str = "", task: str = "")
     return None
 
 
+@contextlib.contextmanager
+def _anchor_lock(model: str = "", task: str = ""):
+    """Serialise the anchor's check-then-write across PROCESSES.
+
+    `anchor` reads "is anything pinned?" and then appends -- two writers can both see nothing and both
+    append, after which which value is pinned depends on which append landed first. Stress-testing 64
+    concurrent writers pinned 1000.0 on one run and 1001.0 on the next, i.e. a NON-DETERMINISTIC
+    baseline, which is the one thing an anchor exists to prevent. Two writers is a real configuration:
+    the producer anchors at setup and the MCP server anchors when it rebuilds facts a revert deleted.
+
+    Best-effort: an unavailable lock yields anyway rather than blocking a measurement.
+    """
+    f = None
+    try:
+        f = open(str(ledger_path(model, task)) + ".lock", "a+")
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        yield
+    finally:
+        if f is not None:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except Exception:  # noqa: BLE001
+                pass
+            f.close()
+
+
 def anchor(
     kind: str,
     value_ms,
@@ -301,11 +332,12 @@ def anchor(
     """
     if not is_identified(model, task):
         return None
-    held = anchor_value(kind, depth=depth, model=model, task=task)
-    if held is not None:
-        return held
-    if record(kind, PHASE_BEFORE, value_ms, depth=depth, mode=mode, source=source, model=model, task=task):
-        return float(value_ms)
+    with _anchor_lock(model, task):
+        held = anchor_value(kind, depth=depth, model=model, task=task)
+        if held is not None:
+            return held
+        if record(kind, PHASE_BEFORE, value_ms, depth=depth, mode=mode, source=source, model=model, task=task):
+            return float(value_ms)
     return None
 
 

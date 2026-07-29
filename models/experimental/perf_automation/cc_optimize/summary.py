@@ -586,18 +586,14 @@ def _roofline_lines(
         _depth = str((throughput or {}).get("perf_layers") or "").strip()
         _partial = _depth and _depth.lower() not in ("all", "0", "none")
         _tag = "   [%s-layer window, NOT the full model]" % _depth if _partial else ""
-        # The ceiling is SUSTAINED, not spec: peak x 0.80 dense / x 0.50 MoE, over the bytes one unit
-        # streams. BOTH labels are derived from the numbers -- a hardcoded "(60-80%)" next to a band
-        # computed from other fractions tells the reader the wrong physics.
-        _frac = float((throughput or {}).get("bw_fraction") or 0.0)
-        _peak_gbps = float((throughput or {}).get("peak_bw_gbps") or 0.0)
-        # BOTH parts must be known to name the spec figure. A snapshot missing peak_bw_gbps would
-        # otherwise render "(80% of 0 GB/s)", which reads as a measurement rather than a missing field.
-        _pk = f" ({_frac * 100:.0f}% of {_peak_gbps:.0f} GB/s)" if (0.0 < _frac < 1.0 and _peak_gbps > 0) else ""
-        out.append(f"  ceiling (sustained) : {theo:.1f} {_u}{_pk}{_tag}")
+        out.append(f"  theoretical ceiling : {theo:.1f} {_u}{_tag}")
         if band[0] is not None:
+            # The percentages are DERIVED from the band, not hardcoded: dense sustains 60-80% of peak
+            # and MoE 37.5-50%, so a fixed "(60-80%)" string would describe the wrong physics for an
+            # MoE while printing its correct numbers.
             _lo_pct = (100.0 * band[0] / theo) if theo else 0.0
-            out.append(f"  in band (>={_lo_pct:.0f}% of it): {band[0]:.1f} - {band[1]:.1f} {_u}")
+            _hi_pct = (100.0 * band[1] / theo) if theo else 0.0
+            out.append(f"  achievable ({_lo_pct:.0f}-{_hi_pct:.0f}%) : {band[0]:.1f} - {band[1]:.1f} {_u}")
         out.append(
             f"  measured            : {measured:.1f} {_u}   (1000 / {fm:.2f} ms){_tag}"
             if measured
@@ -617,12 +613,13 @@ def _roofline_lines(
             # (the target and the measured ms are from different states); do NOT print a >100% util.
             out.append(f"  utilization         : measured EXCEEDS ceiling — target stale/suspect (re-profile)")
         else:
-            # NAME THE DENOMINATOR. The ceiling is pinned at the BASELINE, so this is
-            # progress-against-target, not headroom-remaining: on llama3_1_8b_p150 it read 70% of the
-            # 84.0 baseline ceiling while the build's own bound had moved to 121.3 (every weight group
-            # reached bf4), i.e. 49% of what the hardware now allows. Both are true; unlabelled, the
-            # figure gets quoted as the second one.
-            out.append(f"  utilization         : {util * 100:.0f}%   (measured / BASELINE ceiling)")
+            # "BASELINE ceiling" was needed when the divisor was the streamed BYTES: optimization
+            # shrinks bytes (bf8_b -> bf4_b), so the build's own bound moved during the run -- 84.0 at
+            # the baseline vs 121.3 once every weight group reached bf4 -- and the figure had to say
+            # which one it was against. The divisor is now the PARAM count, which no lever changes, so
+            # the baseline ceiling and the current ceiling are the same number and the qualifier only
+            # added noise.
+            out.append(f"  utilization         : {util * 100:.0f}%   (measured / ceiling)")
     else:
         _current = throughput.get("modeled_floor_ms")
         floor = _floor_anchor(_current, throughput.get("perf_layers"), model, task) or _current

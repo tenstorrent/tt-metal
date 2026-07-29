@@ -4,9 +4,11 @@
 
 The standard bound for LLM decode is:
 
-    ceiling    = (peak_BW * sustained) / params_GB   (512 * 0.80) / 8 GB = 51.2 tok/s/u   [dense]
-                                                     (512 * 0.50) / 3 GB = 85.3 tok/s/u   [MoE, active]
-    in band    = >= 75% of that ceiling              38.4 - 51.2 tok/s/u
+    ceiling    = (peak_BW_per_chip * fraction * TP) / params_GB
+                 dense (512*0.8)/8 = 51.2 tok/s/u ;  MoE (512*0.5)/3 = 85.3 tok/s/u
+    achievable = 60-80% OF THAT CEILING            51.2 -> 30.7 - 41.0 tok/s/u
+    compute    = (peak_FLOPs * 0.8 * TP) / (2 * params * tokens_per_unit) -- binds prefill, not decode
+    TP scales the ceiling; DP and PP scale only aggregate_rate
     measured   = bytes / forward_time                8 GB / 19.4 ms = 412 GB/s -> 51.5 tok/s/u
 
 The divisor is the PARAM count under xB -> xGB, not the exact streamed bytes: the exact figure
@@ -45,18 +47,21 @@ def _pt():
 
 
 def test_the_ceiling_is_sustained_bandwidth_over_params_gb():
-    """8B params on a 512 GB/s part -> (512*0.8)/8 = 51.2 tok/s/u."""
+    """8B params on a 512 GB/s part -> (512*0.8)/8 = 51.2 tok/s/u. The sustained fraction is INSIDE the
+    ceiling: 512 GB/s is a spec figure no workload attains, and a target nobody can reach is not one."""
     pt = _pt()
     tgt = pt.compute_target({"total_params": int(8e9)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
     assert tgt.active_bytes == int(8 * _GB)  # xB -> xGB
     assert tgt.bw_fraction == 0.80
     assert round(tgt.theoretical_rate, 1) == 51.2
+    assert [round(b, 1) for b in tgt.band] == [30.7, 41.0]  # 60-80% OF the ceiling
+    assert tgt.bound_by == "memory"
     assert "params rule" in tgt.bytes_source
 
 
 def test_a_moe_ceiling_uses_active_params_and_half_of_peak():
-    """A 30B-A3B MoE streams only its active params, at a lower sustained fraction:
-    (512*0.5)/3 = 85.3 tok/s/u -- NOT 512/30, which would bound nothing it can reach."""
+    """A 30B-A3B MoE streams only its ACTIVE params, and its scattered expert reads sustain ~50% of
+    peak: (512*0.5)/3 = 85.3 tok/s/u -- not 512/30, which would bound nothing it can reach."""
     pt = _pt()
     tgt = pt.compute_target(
         {"is_moe": True, "active_params": int(3e9), "total_params": int(30e9)},
@@ -64,7 +69,8 @@ def test_a_moe_ceiling_uses_active_params_and_half_of_peak():
     )
     assert tgt.active_bytes == int(3 * _GB)
     assert tgt.bw_fraction == 0.50
-    assert round(tgt.theoretical_rate, 1) == 85.3
+    assert round(tgt.theoretical_rate, 1) == 85.3  # (512*0.5)/3
+    assert [round(b, 1) for b in tgt.band] == [51.2, 68.3]
 
 
 def test_the_exact_byte_count_is_the_fallback_when_no_param_count_exists():
@@ -77,13 +83,11 @@ def test_the_exact_byte_count_is_the_fallback_when_no_param_count_exists():
 
 
 def test_the_achievable_band_is_60_to_80_percent_of_peak():
-    """38.4-51.2 tok/s/u. The stop threshold is DELIBERATELY unmoved by folding the efficiency factor
-    into the ceiling: 0.60 * peak == 0.75 * (0.80 * peak), so a run's definition of "done" is the same
-    absolute rate as before. Keeping 0.60-of-ceiling instead would have dropped it to 30.7."""
+    """30.7-41.0 tok/s/u -- 60-80% of the 51.2 ceiling, which is the label the report prints."""
     pt = _pt()
     tgt = pt.compute_target({"weight_bytes": int(8 * _GB)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
     lo, hi = tgt.band
-    assert round(lo, 1) == 38.4 and round(hi, 1) == 51.2, (lo, hi)
+    assert round(lo, 1) == 30.7 and round(hi, 1) == 41.0, (lo, hi)
 
 
 def test_a_measured_forward_pass_scores_as_published():
@@ -95,11 +99,11 @@ def test_a_measured_forward_pass_scores_as_published():
     assert round(s["effective_bw_bytes_s"] / 1e9) == 412
     # 8 GB / 19.4 ms = 412.4 GB/s, and 412.4/512 = 80.5%. The published "80%" rounds 412 first;
     # both agree to the nearest point, so pin the band rather than a single rounding convention.
-    # bw_util is now the fraction of the SUSTAINED ceiling; the fraction of SPEC peak is the 80.5%
-    # this used to report, preserved as bw_util_of_peak.
+    # 8 GB / 19.4 ms = 412 GB/s of the 512 spec peak = 80.5%, reported as bw_util_of_peak now that
+    # the 0.80 lives inside the ceiling.
     assert 80.0 <= s["bw_util_of_peak"] * 100 <= 80.6
-    # 51.5 measured against a 51.2 sustained ceiling: the params rule says 8 GB where the device
-    # streams 6.095, so a well-optimized bf4/bf8 build legitimately reads just past the ceiling.
+    # 51.5 measured against a 51.2 ceiling: the params rule assumes 8 GB where the device streams
+    # 6.095, so a well-optimized bf4/bf8 build legitimately reads just past it.
     assert s["status"] == "ABOVE_BAND"
 
 
@@ -234,11 +238,13 @@ def test_emit_never_raises_on_a_broken_model_root(tmp_path, monkeypatch):
 
 
 def test_end_to_end_the_produced_facts_give_the_published_ceiling(tmp_path, monkeypatch):
-    """Producer -> perf_target: the file this writes must yield 51.2 tok/s/u and the 38.4-51.2 band."""
+    """Producer -> perf_target: the file this writes must yield the 51.2 ceiling and 30.7-41.0 band."""
     run = _run_mod()
     monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
     monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
+    # No snapshot: this pins the CONFIG-and-name path, so the real HF cache must not leak in.
+    monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
     run._emit_perf_target_inputs(tmp_path, tmp_path, None, {})
     facts = json.loads((tmp_path / "perf_target_inputs.json").read_text())
 
@@ -246,7 +252,7 @@ def test_end_to_end_the_produced_facts_give_the_published_ceiling(tmp_path, monk
     tgt = pt.compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
     assert facts["total_params"] == int(8e9)  # from the model id "Llama-3.1-8B"
     assert round(tgt.theoretical_rate, 1) == 51.2
-    assert [round(b, 1) for b in tgt.band] == [38.4, 51.2]
+    assert [round(b, 1) for b in tgt.band] == [30.7, 41.0]
     assert round(pt.score(tgt, 19.4)["measured_tok_s"], 1) == 51.5
 
 
@@ -262,6 +268,8 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
     monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 16_060_556_376)
     monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
+    # No snapshot: this pins the CONFIG-and-name path, so the real HF cache must not leak in.
+    monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
 
     monkeypatch.delenv("TT_PERF_WEIGHT_BYTES", raising=False)
     from_disk = run._perf_target_inputs(tmp_path, None, {})
@@ -276,7 +284,7 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
     assert "on-device" in on_device["source"]
     tgt = pt.compute_target(on_device, {"dram_bw_gbps": _BH_DRAM_GBPS})
     assert round(tgt.theoretical_rate, 1) == 51.2  # identical either way now
-    assert [round(b, 1) for b in tgt.band] == [38.4, 51.2]
+    assert [round(b, 1) for b in tgt.band] == [30.7, 41.0]
 
 
 def test_a_junk_override_is_ignored_rather_than_trusted(tmp_path, monkeypatch):
@@ -345,10 +353,8 @@ def test_published_figures_render_exactly(tmp_path, monkeypatch):
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), 534.44, {"per_token_ms": 19.4}, "m", "main"))
     # Labels say SUSTAINED, and both are derived from the numbers rather than hardcoded strings.
-    assert "ceiling (sustained) : 51.2 tok/s/u" in out, out
-    assert "(80% of 512 GB/s)" in out, out
-    assert "38.4 - 51.2 tok/s/u" in out, out
-    assert "60-80%" not in out, out
+    assert "theoretical ceiling : 51.2 tok/s/u" in out, out
+    assert "achievable (60-80%) : 30.7 - 41.0 tok/s/u" in out, out
     assert "51.5 tok/s/u" in out and "412 GB/s" in out
 
 
@@ -485,12 +491,10 @@ def test_the_anchored_ceiling_uses_the_sustained_fraction_not_a_second_copy_of_t
     snap["bw_fraction"] = 0.80
     txt = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 17.0}, "m", "main"))
 
-    # (512 * 0.80) / 6.0947 GB = 67.2 tok/s/u, from the ANCHOR, at the SUSTAINED fraction.
+    # (512*0.8) / 6.0947 GB = 67.2 tok/s/u from the ANCHOR.
     assert "67.2 tok/s/u" in txt, txt
-    assert "84.0" not in txt, txt  # the spec-peak number the old copy produced
     assert "153.8" not in txt, txt  # the stale snapshot value
-    # Band is 75%-of-ceiling, one owner (perf_target), never a local 0.60/0.80 pair.
-    assert "50.4 - 67.2 tok/s/u" in txt, txt
+    assert "40.3 - 53.8 tok/s/u" in txt, txt
 
 
 def test_an_anchored_snapshot_without_the_fraction_keeps_its_old_reading(tmp_path, monkeypatch):
@@ -520,6 +524,8 @@ def test_the_anchored_divisor_is_the_one_the_ceiling_divides_by(tmp_path, monkey
     monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 16_060_556_376)
     monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
+    # No snapshot: this pins the CONFIG-and-name path, so the real HF cache must not leak in.
+    monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
 
     root = tmp_path / "m"
     root.mkdir()
@@ -534,3 +540,116 @@ def test_the_anchored_divisor_is_the_one_the_ceiling_divides_by(tmp_path, monkey
     gate = pt.compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
     assert pinned_bytes == gate.active_bytes, (pinned_bytes, gate.active_bytes)
     assert pinned_bytes != 16_060_556_376, "anchored the checkpoint bytes, not the ceiling's divisor"
+
+
+def test_a_list_valued_config_field_does_not_cost_the_whole_ceiling(tmp_path, monkeypatch):
+    """A per-layer config carries a LIST where a scalar is expected. Raw int() on one raises TypeError,
+    the caller swallows it, and the model lost its ENTIRE ceiling over a KV field the ceiling does not
+    even use without a seq_len. Two cached checkpoints hit this in a stress run."""
+    run = _run_mod()
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
+    monkeypatch.setattr(
+        run,
+        "_hf_cache_dims",
+        lambda mid: _cfg(num_key_value_heads=[8] * 32, num_hidden_layers=[32], head_dim=[128, 128]),
+    )
+    monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
+    facts = run._perf_target_inputs(tmp_path, None, {})
+    assert facts, "a list-valued field must not withhold the whole ceiling"
+    assert facts["kv_heads"] == 8 and facts["layers"] == 32 and facts["head_dim"] == 128
+    assert round(_pt().compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS}).theoretical_rate, 1) == 51.2
+
+
+def test_params_are_read_even_when_the_unit_cannot_be_determined(tmp_path, monkeypatch):
+    """THE DEFECT: the header walk was gated on a known unit, so a model whose unit could not be
+    determined fell back to the checkpoint's FILE SIZE as the divisor -- bge-large-en-v1.5 read 1.34 GB
+    of float32 (~4 B/param) and scored 305.5, bypassing xB -> xGB entirely. The param count does not
+    depend on the unit; only the lookup-only exclusion does."""
+    run = _run_mod()
+    shard = tmp_path / "snap"
+    shard.mkdir()
+    # 1M params stored as float32 (4 MB on disk) -- params rule must give 1 MB, not 4 MB
+    import struct
+
+    hdr = json.dumps({"w": {"dtype": "F32", "shape": [1000, 1000], "data_offsets": [0, 4_000_000]}}).encode()
+    (shard / "model.safetensors").write_bytes(struct.pack("<Q", len(hdr)) + hdr)
+
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 4_000_000)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "org/no-size-in-name")
+    monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: {"hidden_size": 1000})  # no tag, no architectures
+    monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [shard])
+
+    facts = run._perf_target_inputs(tmp_path, None, {})
+    assert facts and facts.get("total_params") == 1_000_000, facts
+    tgt = _pt().compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
+    assert tgt.active_bytes == 1_000_000, "divisor came from the file size, not the params"
+    assert "params rule" in tgt.bytes_source
+
+
+# --- the COMPUTE term, and TP/DP -- model-agnostic, no architecture formulas --------------------------
+
+_BH_HW = {
+    "dram_bw_gbps": 512.0,
+    "dram_bw_per_chip_gbps": 512.0,
+    "peak_tflops_per_core": {"lofi": 5.4, "hifi2": 2.7, "hifi3": 1.8, "hifi4": 1.35},
+    "grid_x": 13,
+    "grid_y": 10,
+    "mesh_chips": 1,
+    "worker_cores": 130,
+}
+
+
+def test_decode_is_memory_bound_and_prefill_is_compute_bound():
+    """The binding constraint decides, and which one binds follows from the unit: a decode step reads
+    every weight to make ONE token (~2 FLOP/byte, far under what the part wants, so bandwidth binds),
+    while a prefill does the same reads for S tokens -- bytes flat, FLOPs linear in S. prefill_ceiling
+    used to raise NotImplementedError, so those runs got a bandwidth bound they could never hit."""
+    pt = _pt()
+    dec = pt.compute_target({"total_params": int(8e9), "unit": "token"}, _BH_HW, tokens_per_unit=1)
+    assert dec.bound_by == "memory"
+    assert round(dec.theoretical_rate, 1) == 51.2  # unchanged by adding the compute term
+
+    pre = pt.compute_target({"total_params": int(8e9), "unit": "token"}, _BH_HW, tokens_per_unit=2048)
+    assert pre.bound_by == "compute"
+    assert pre.theoretical_rate < dec.theoretical_rate, "prefill cannot be faster than decode per unit"
+    # (176 TFLOP/s * 0.8) / (2 * 8e9 * 2048)
+    assert abs(pre.theoretical_rate - (pt.chip_peak_flops(_BH_HW) * 0.8) / (2 * 8e9 * 2048)) < 1e-6
+
+
+def test_the_compute_ceiling_is_per_chip_not_mesh_aggregate():
+    """worker_cores in the env is already multiplied by mesh_chips, so a per-unit FLOP ceiling built
+    from it would apply the chip count twice -- the same defect the bandwidth term had."""
+    pt = _pt()
+    one = dict(_BH_HW)
+    eight = {**_BH_HW, "mesh_chips": 8, "worker_cores": 130 * 8, "dram_bw_gbps": 512.0 * 8}
+    assert abs(pt.chip_peak_flops(one) - pt.chip_peak_flops(eight)) < 1e-3
+
+
+def test_tp_scales_the_ceiling_and_dp_only_scales_aggregate():
+    """Model-agnostic mesh rule: TP shards the weights AND the work, so it raises the per-unit ceiling.
+    DP replicates, so it cannot make one unit faster -- it multiplies how many run at once. Eight chips
+    of bandwidth is eight chips of bandwidth however it is split, so aggregate is constant."""
+    pt = _pt()
+    mf = {"total_params": int(8e9), "unit": "token"}
+    seen_aggregate = set()
+    for tp, dp, want_per_user in ((8, 1, 409.6), (4, 2, 204.8), (2, 4, 102.4), (1, 8, 51.2)):
+        t = pt.compute_target(mf, _BH_HW, tp_degree=tp, dp_degree=dp)
+        assert round(t.theoretical_rate, 1) == want_per_user, (tp, dp, t.theoretical_rate)
+        assert t.dp_degree == dp and t.tp_degree == tp
+        seen_aggregate.add(round(t.aggregate_rate, 1))
+        # the BAND scores the per-unit rate, never the aggregate
+        assert t.band[1] <= t.theoretical_rate + 1e-9
+    assert seen_aggregate == {409.6}, seen_aggregate
+
+
+def test_dp_never_leaks_into_the_scored_rate():
+    """A DP-inflated target would let a slow per-token run read IN_BAND because other replicas exist."""
+    pt = _pt()
+    mf = {"total_params": int(8e9), "unit": "token"}
+    solo = pt.compute_target(mf, _BH_HW, tp_degree=1, dp_degree=1)
+    replicated = pt.compute_target(mf, _BH_HW, tp_degree=1, dp_degree=32)
+    assert solo.theoretical_rate == replicated.theoretical_rate
+    assert solo.band == replicated.band
+    ms = 1000.0 / 35.0  # 35 tok/s: in band for the real ceiling
+    assert pt.score(solo, ms)["status"] == pt.score(replicated, ms)["status"] == "IN_BAND"

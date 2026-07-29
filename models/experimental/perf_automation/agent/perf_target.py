@@ -35,10 +35,14 @@ _BAND_LO_FRAC = 0.60
 _BAND_HI_FRAC = 0.80
 
 # ---------------------------------------------------------------------------
-# THE CEILING IS PARAMS-BASED AND SUSTAINED (team decision, 2026-07-29).
+# THE CEILING IS PARAMS-BASED (team decision, 2026-07-29).
 #
-#   dense: (peak_BW * 0.80) / params_GB          8B on a 512 GB/s part -> (512*0.8)/8 = 51.2 tok/s/u
-#   MoE:   (peak_BW * 0.50) / active_params_GB   3B active -> (512*0.5)/3 = 85.3 tok/s/u
+#   theoretical ceiling = (peak_BW * sustained_fraction * TP) / params_GB
+#       dense: (512 * 0.80) / 8 GB = 51.2 tok/s/u     sustained fraction 0.80
+#       MoE:   (512 * 0.50) / 3 GB = 85.3 tok/s/u     0.50, over ACTIVE params
+#
+# The fraction is INSIDE the ceiling: the reported number is the one a run can actually reach, because
+# 512 GB/s is a spec figure no workload attains and a target nobody can hit is not a target.
 #
 # 1 B params -> 1 GB streamed. Deliberately an approximation: the exact on-device byte count (6.095 GB
 # for Llama-3.1-8B served as bf4/bf8) is more accurate, but establishing it costs a per-model
@@ -49,14 +53,30 @@ _BAND_HI_FRAC = 0.80
 # expert reads are scattered) is folded INTO the ceiling, so theoretical_rate is ACHIEVABLE rather than
 # spec. MoE cards publish the active-parameter count ("30B-A3B" -> 3B active), which is this input.
 _BYTES_PER_PARAM = 1.0
+# The fraction of spec DRAM bandwidth each read pattern sustains, folded INTO the ceiling.
 _DENSE_BW_FRACTION = 0.80
 _MOE_BW_FRACTION = 0.50
-# Band lo as a fraction of the ACHIEVABLE ceiling. 0.75 is chosen so the DENSE stop threshold lands
-# exactly where it did before the efficiency factor moved inside the ceiling:
-# 0.60 * peak == 0.75 * (0.80 * peak). Keeping 0.60 here instead would move the "done" line from
-# 38.4 to 30.7 tok/s/u for an 8B model -- i.e. the run would stop optimizing sooner as a pure
-# side effect of restating the same physics.
-_ACHIEVABLE_BAND_LO_FRAC = 0.75
+# The achievable band, as a fraction of the ceiling: the report reads "achievable (60-80%)" and these
+# are the numbers behind that label. NOTE the stop threshold this implies -- IN_BAND fires at
+# 0.60 * ceiling, i.e. 30.7 tok/s/u for an 8B model, rather than the 38.4 it was when the 0.80 sat in
+# the band instead of the ceiling.
+_BAND_LO_FRAC_OF_CEILING = 0.60
+_BAND_HI_FRAC_OF_CEILING = 0.80
+
+# --- COMPUTE term -----------------------------------------------------------------------------------
+# A weight is used in one multiply-accumulate per token, and a MAC is 2 FLOPs, so the work ONE unit of
+# work costs is 2 x (params it reads) x (tokens in that unit). Model-agnostic: it needs the same param
+# count the bandwidth term already has, and no architecture formulas.
+#
+# tokens_per_unit is 1 for a decode step and the sequence length for a prefill -- which is exactly why
+# prefill is compute-bound and decode is not: the bytes stay put while the FLOPs scale with the
+# sequence. At batch 1 decode the arithmetic intensity is ~2 FLOP/byte against a part that wants ~100,
+# so the bandwidth term dominates by a wide margin and this one never binds. It exists so that prefill,
+# diffusion at resolution and batched encoders are bounded by the constraint that actually binds THEM.
+_FLOPS_PER_PARAM_PER_TOKEN = 2.0
+# Fraction of matrix-engine peak a real kernel sustains. Deliberately generous (the compute term is a
+# ceiling, not a prediction) and separate from the DRAM fraction, which describes a different unit.
+_COMPUTE_PEAK_FRACTION = 0.80
 
 
 _UNKNOWN_DTYPES: set = set()
@@ -167,6 +187,17 @@ class PerfTarget:
     bw_fraction: float = 1.0
     # How the divisor was obtained: the params rule, or the exact per-tensor bytes it falls back to.
     bytes_source: str = ""
+    # DATA parallelism. Never in theoretical_rate -- replicas do not make one unit of work faster.
+    # Kept so a report can state system throughput (aggregate_rate) beside the per-unit ceiling.
+    dp_degree: int = 1
+    # Which constraint set the ceiling: "memory" (bytes / BW) or "compute" (FLOPs / peak). The standard
+    # roofline takes the lower rate; naming the winner is what routes the lever class.
+    bound_by: str = "memory"
+    # Tokens inside one unit of work: 1 for a decode step, the sequence length for a prefill. The bytes
+    # are flat in this, the FLOPs are linear -- which is the whole reason prefill is compute-bound.
+    tokens_per_unit: int = 1
+    # theoretical_rate * dp: total units/s the mesh can retire. NOT the number the band scores.
+    aggregate_rate: float = 0.0
 
 
 def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0) -> int:
@@ -262,8 +293,50 @@ def rate_and_band(
     pk, fr = max(0.0, float(peak_bw_bytes_s or 0.0)), max(0.0, float(frac or 0.0))
     if per_dev <= 0:
         return 0.0, (0.0, 0.0)
+    # THE FRACTION IS IN THE CEILING: (peak * 0.80) / params_GB for dense, (peak * 0.50) / active_GB
+    # for MoE -- 51.2 tok/s/u for an 8B model on a 512 GB/s part, which is the figure the team quotes.
     theo = (pk * fr) / per_dev
-    return theo, (_ACHIEVABLE_BAND_LO_FRAC * theo, theo)
+    return theo, (_BAND_LO_FRAC_OF_CEILING * theo, _BAND_HI_FRAC_OF_CEILING * theo)
+
+
+def chip_peak_flops(hw_facts: dict, fidelity: str = "") -> float:
+    """Per-CHIP matrix-engine peak FLOP/s, or 0.0 when the arch facts carry no peak table.
+
+    Per-chip for the same reason the bandwidth term is per-chip: the bytes and the FLOPs of one unit of
+    work are both per-device, so pairing either with a mesh-aggregate figure applies the chip count
+    twice. `worker_cores` in the env is already multiplied by mesh_chips, so it is divided back out.
+    """
+    hw = hw_facts or {}
+    peaks = hw.get("peak_tflops_per_core") or {}
+    if not peaks:
+        return 0.0
+    per_core = peaks.get(str(fidelity or "").strip().lower()) or peaks.get("hifi4")
+    if not per_core:
+        return 0.0
+    cores = _scalar(hw.get("worker_cores", 0), 0)
+    chips = max(1, _scalar(hw.get("mesh_chips", 1), 1))
+    if cores <= 0:
+        gx, gy = _scalar(hw.get("grid_x", 0), 0), _scalar(hw.get("grid_y", 0), 0)
+        cores = gx * gy * chips
+    per_chip_cores = max(1.0, float(cores) / float(chips))
+    return float(per_core) * 1e12 * per_chip_cores
+
+
+def compute_ceiling(model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, tokens_per_unit: int = 1) -> float:
+    """Per-unit rate ceiling from COMPUTE: peak_FLOPs / FLOPs_per_unit. 0.0 when unknown.
+
+    FLOPs_per_unit = 2 * params_read * tokens_per_unit, sharded across TP the same way the bytes are.
+    """
+    params = ceiling_params(model_facts)
+    toks = max(1, _scalar(tokens_per_unit, 1))
+    tp = max(1, int(tp_degree or 1))
+    if params <= 0:
+        return 0.0
+    flops_per_unit = _FLOPS_PER_PARAM_PER_TOKEN * float(params) * float(toks) / tp
+    peak = chip_peak_flops(hw_facts, str((model_facts or {}).get("fidelity") or ""))
+    if peak <= 0 or flops_per_unit <= 0:
+        return 0.0
+    return (peak * _COMPUTE_PEAK_FRACTION) / flops_per_unit
 
 
 def _shared_bytes(mf: dict, dt) -> float:
@@ -276,11 +349,24 @@ def _shared_bytes(mf: dict, dt) -> float:
 
 
 def compute_target(
-    model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, seq_len: int = 0, bytes_per_unit: float = 0.0
+    model_facts: dict,
+    hw_facts: dict,
+    *,
+    tp_degree: int = 1,
+    dp_degree: int = 1,
+    seq_len: int = 0,
+    bytes_per_unit: float = 0.0,
+    tokens_per_unit: int = 1,
 ) -> PerfTarget:
-    """MODEL-LEVEL decode ceiling, SUSTAINED (not spec peak).
+    """MODEL-LEVEL per-unit ceiling: the LOWER of the bandwidth and compute bounds.
 
-        ceiling = (peak_BW * bw_fraction) / bytes_per_unit
+        memory  : (peak_BW_per_chip * bw_fraction * TP) / bytes_per_unit
+        compute : (peak_FLOPs_per_chip * 0.80 * TP) / (2 * params * tokens_per_unit)
+        ceiling : min(the two)          -- the binding constraint, `bound_by` names it
+
+    TP scales both (weights and work shard together). DP and PP scale NEITHER -- they multiply how many
+    units run at once, not how fast one is, so they appear only in `aggregate_rate`. Model-agnostic: no
+    architecture formulas, only a param count, a unit, and the mesh split.
 
     with bytes from the param count under the xB -> xGB rule and bw_fraction 0.80 dense / 0.50 MoE
     (see the block comment at the top of this module). Llama-3.1-8B on a 512 GB/s part:
@@ -309,9 +395,36 @@ def compute_target(
         ab = active_bytes(mf, seq_len=seq_len)
         src = "per-tensor exact bytes (no param count available)"
     frac = bw_fraction(mf)
-    peak_bw = float((hw_facts or {}).get("dram_bw_gbps", 0.0)) * 1e9
+    # PER-CHIP BANDWIDTH, NOT MESH-AGGREGATE. The bytes are already per-device (ab / tp), so pairing
+    # them with mesh-aggregate bandwidth applies the chip count TWICE:
+    #     today     (per_chip * chips) / (B / TP) = per_chip * chips * TP / B
+    #     physics    per_chip * TP / B            -- each of TP chips streams B/TP at per_chip
+    # The ratio is `chips`, so EVERY mesh run was inflated by its chip count -- 4x for a TP=4 model on
+    # 4 chips, 8x for a replicated model on 8 (decide_parallelism's single-chip route returns
+    # tp=1, dp=total_chips, which is exactly the case environment.py flags its aggregate as invalid
+    # for). Only a 1-chip run was correct, which is why nothing caught it.
+    #
+    # DP and PP are deliberately absent: replicas and pipeline stages do not reduce the bytes ONE unit
+    # of work streams, so they raise aggregate throughput, never the per-unit ceiling this scores.
+    hw = hw_facts or {}
+    peak_bw = float(hw.get("dram_bw_per_chip_gbps") or hw.get("dram_bw_gbps", 0.0)) * 1e9
     tp = max(1, int(tp_degree or 1))
     theo, band = rate_and_band(ab, peak_bw, frac=frac, tp_degree=tp)
+    bound = "memory"
+    # THE BINDING CONSTRAINT WINS. Bandwidth and compute are both ceilings, so the real one is the
+    # LOWER rate -- the standard roofline. Decode at batch 1 is memory-bound by a wide margin, so this
+    # changes nothing there; it is what bounds prefill, diffusion at resolution and batched encoders,
+    # which were previously handed a bandwidth number they could never be limited by.
+    _toks = max(1, _scalar(tokens_per_unit, 1))
+    theo_c = compute_ceiling(mf, hw, tp_degree=tp, tokens_per_unit=_toks)
+    if theo_c > 0 and (theo <= 0 or theo_c < theo):
+        theo, bound = theo_c, "compute"
+        band = (_BAND_LO_FRAC_OF_CEILING * theo, _BAND_HI_FRAC_OF_CEILING * theo)
+    # DP AND PP ARE NOT IN THE CEILING. Replicas and pipeline stages do not reduce what ONE unit of work
+    # reads or computes, so they cannot make one token faster -- they multiply how many run at once.
+    # Folding them in is what inflated every mesh run by its chip count. Carried separately so a report
+    # can state total system throughput without ever contaminating the per-unit target the gate scores.
+    dp = max(1, _scalar(dp_degree, 1))
     return PerfTarget(
         active_bytes=ab,
         peak_bw_bytes_s=peak_bw,
@@ -322,6 +435,10 @@ def compute_target(
         unit=str(mf.get("unit") or "token").strip().lower(),
         bw_fraction=frac,
         bytes_source=src,
+        dp_degree=dp,
+        bound_by=bound,
+        tokens_per_unit=_toks,
+        aggregate_rate=theo * dp,
     )
 
 

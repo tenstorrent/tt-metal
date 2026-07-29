@@ -76,20 +76,20 @@ def test_tp_divides_per_device_bytes():
 
 def test_compute_target_ceiling_and_band():
     # 1B params -> 1 GB under xB -> xGB (NOT 2 GB from params x bf16: the stored dtype is not the
-    # divisor any more), and the ceiling is sustained: (512 * 0.80) / 1 = 409.6 tok/s.
+    # divisor any more), and the 0.80 sustained fraction is inside the ceiling: (512*0.8)/1 = 409.6.
     mf = {"total_params": 1_000_000_000, "dominant_dtype": "bfloat16"}
     t = pt.compute_target(mf, _BH)
     assert t.active_bytes == 1_000_000_000
     assert abs(t.theoretical_rate - 409.6) < 1e-3
-    assert abs(t.band[0] - 0.75 * 409.6) < 1e-3 and abs(t.band[1] - 409.6) < 1e-3
+    assert abs(t.band[0] - 0.60 * 409.6) < 1e-3 and abs(t.band[1] - 0.80 * 409.6) < 1e-3
 
 
 def test_status_below_in_above():
     mf = {"total_params": 1_000_000_000, "dominant_dtype": "bfloat16"}
-    t = pt.compute_target(mf, _BH)  # theo 409.6 tok/s ; band 307.2 - 409.6
-    below = pt.score(t, forward_ms=1000.0 / 100.0)  # 100 tok/s < 307.2
-    inb = pt.score(t, forward_ms=1000.0 / 350.0)  # 350 tok/s, >=307.2, <=409.6
-    above = pt.score(t, forward_ms=1000.0 / 500.0)  # 500 tok/s > 409.6 ceiling
+    t = pt.compute_target(mf, _BH)  # theo 409.6 tok/s ; band 245.8 - 327.7
+    below = pt.score(t, forward_ms=1000.0 / 100.0)  # 100 tok/s < 245.8
+    inb = pt.score(t, forward_ms=1000.0 / 300.0)  # 300 tok/s, >=245.8, <=409.6
+    above = pt.score(t, forward_ms=1000.0 / 600.0)  # 600 tok/s > 409.6 ceiling
     assert below["status"] == "BELOW_BAND"
     assert inb["status"] == "IN_BAND"
     assert above["status"] == "ABOVE_BAND"
@@ -120,13 +120,13 @@ def test_a_floor_target_carries_no_band():
 
 
 def test_only_a_bandwidth_ceiling_produces_a_band():
-    """The band must come from bandwidth-over-bytes, never from the ms floor. 8 GB on 512 GB/s at the
-    0.80 sustained fraction -> a 51.2 ceiling and the 38.4-51.2 band."""
+    """The band must come from bandwidth-over-bytes, never from the ms floor: 8 GB on 512 GB/s -> a
+    (512*0.8)/8 = 51.2 ceiling with the 30.7-41.0 achievable band."""
     t = pt.compute_target({"weight_bytes": int(8e9)}, {"dram_bw_gbps": 512.0})
-    assert [round(b, 1) for b in t.band] == [38.4, 51.2]
-    assert pt.score(t, 25.0)["status"] == "IN_BAND"  # 40 tok/s, inside 38.4-51.2
-    assert pt.score(t, 40.0)["status"] == "BELOW_BAND"  # 25 tok/s
-    assert pt.score(t, 19.4)["status"] == "ABOVE_BAND"  # 51.5 tok/s, just past the ceiling
+    assert [round(b, 1) for b in t.band] == [30.7, 41.0]
+    assert pt.score(t, 30.0)["status"] == "IN_BAND"  # 33.3 tok/s, inside 30.7-41.0
+    assert pt.score(t, 50.0)["status"] == "BELOW_BAND"  # 20 tok/s
+    assert pt.score(t, 10.0)["status"] == "ABOVE_BAND"  # 100 tok/s, past the 51.2 ceiling
 
 
 def test_list_topk_degrades_not_crashes():
@@ -159,7 +159,7 @@ def test_prefill_stub_raises():
 def test_a_negative_bandwidth_is_unknown_not_a_negative_ceiling():
     """A junk dram_bw_gbps divided straight through to a NEGATIVE ceiling, which set a negative band
     and scored BELOW_BAND -- a verdict against a target that cannot exist. Unknown, not fast."""
-    t = pt.compute_target({"total_params": int(8e9)}, {"dram_bw_gbps": -1})
+    t = pt.compute_target({"total_params": int(8e9)}, {"dram_bw_gbps": -1, "dram_bw_per_chip_gbps": -1})
     assert t.theoretical_rate == 0.0
     assert t.band == (0.0, 0.0)
     assert pt.score(t, 19.4)["status"] == "UNKNOWN"
