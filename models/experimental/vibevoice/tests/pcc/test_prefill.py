@@ -269,7 +269,10 @@ def _tt_prefill_inputs_embeds(generator, inputs: dict):
     speech_masks = inputs["speech_masks"]
     speech_input_mask = inputs["speech_input_mask"]
 
-    speech_embeds = generator._process_speech_prefill(speech_tensors, speech_masks)
+    # _process_speech_prefill keeps the connector output on device ([1, 1, N_slots, hidden] fp32);
+    # bring it back to the [N_slots, hidden] host form this PCC check compares against.
+    speech_embeds = ttnn.to_torch(generator._process_speech_prefill(speech_tensors, speech_masks))
+    speech_embeds = speech_embeds.to(torch.float32).squeeze(0).squeeze(0)
     inputs_embeds = generator._build_prefill_embeds(
         inputs["input_ids"],
         speech_tensors,
