@@ -13,8 +13,8 @@ namespace ttnn::experimental::prim {
 struct RotaryEmbeddingLlamaMultiCorePrefillSharded {
     // Metal 2.0 factory (MetalV2FactoryConcept) for prefill with sharded cos/sin/trans_mat.
     // Globally-allocated (L1-resident) cos/sin/trans_mat bind through borrowed-memory DataflowBuffers
-    // (DataflowBufferSpec::borrowed_from) in the fast path and via TensorAccessor otherwise; the work
-    // unit is placed on the active cores only (a subset of the shard grid in the borrowed configs).
+    // (DataflowBufferSpec::borrowed_from) only when the shard grid covers all work-unit cores; otherwise
+    // they are read via TensorAccessor. The work unit is placed on all device cores.
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,
