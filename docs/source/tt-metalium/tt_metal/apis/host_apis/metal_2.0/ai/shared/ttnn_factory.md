@@ -14,7 +14,7 @@
 
 ## The Metal 2.0 factory concept
 
-A Metal 2.0 op factory satisfies **`MetalV2FactoryConcept`**: it implements a single method, `create_program_artifacts`, that returns a `ProgramArtifacts` (a `ProgramSpec`, its `ProgramRunArgs`, and any op-owned tensors the factory allocates). The framework adapter stamps a `Program` from the spec onto each mesh coordinate range on cache miss, and refreshes tensor bindings on cache hit.
+A Metal 2.0 op factory satisfies **`ProgramSpecFactoryConcept`**: it implements a single method, `create_program_artifacts`, that returns a `ProgramArtifacts` (a `ProgramSpec`, its `ProgramRunArgs`, and any op-owned tensors the factory allocates). The framework adapter stamps a `Program` from the spec onto each mesh coordinate range on cache miss, and refreshes tensor bindings on cache hit.
 
 This is the Metal 2.0 factory concept ops port to today. It supports:
 
@@ -72,7 +72,7 @@ Declare each `TensorParameter` from the tensor's `tensor_spec()`, and reference 
 
 The audit's job here is one question: **does the op fit the single concept above?**
 
-- **Single-program** (the common case — op-owned tensors are fine) → `MetalV2FactoryConcept`. Proceed.
+- **Single-program** (the common case — op-owned tensors are fine) → `ProgramSpecFactoryConcept`. Proceed.
 - **Anything else** → the port is **blocked on framework work**, not porter-resolvable. Record RED and stop.
 
 The "anything else" cases — and the reason they're blocked:
@@ -124,7 +124,7 @@ The auditor adds the following to `METAL2_PREPORT_AUDIT.md`. The decision is rec
 ## TTNN ProgramFactory
 
 ### Concept
-MetalV2FactoryConcept — or — BLOCKED (op-owned GlobalSemaphores / genuine multi-program; see below)
+ProgramSpecFactoryConcept — or — BLOCKED (op-owned GlobalSemaphores / genuine multi-program; see below)
 
 ### Fit
 - Single vs multi-program: [single — one ProgramSpec stamped across the mesh / multi — BLOCKED]
@@ -145,7 +145,7 @@ The porter inherits the audit's decision; the port plan's TTNN section is a brie
 
 ```markdown
 ## TTNN ProgramFactory
-- Concept (inherited from audit): MetalV2FactoryConcept
+- Concept (inherited from audit): ProgramSpecFactoryConcept
 - Custom compute_program_hash: [delete (was at file:line) / none]
 - Implementation notes: [optional — anything specific about how this op realizes the concept; most ports won't need this]
 ```
@@ -160,7 +160,7 @@ The porter adds the following to `METAL2_PORT_REPORT.md` at the end of the port.
 ## TTNN ProgramFactory
 
 ### Concept realized
-[Confirm MetalV2FactoryConcept, or — if something changed — explain why and confirm it was surfaced with the invoker before re-deciding.]
+[Confirm ProgramSpecFactoryConcept, or — if something changed — explain why and confirm it was surfaced with the invoker before re-deciding.]
 
 ### Device-op-class edits
 - Custom compute_program_hash deleted: [file:line, or "none"]
@@ -182,5 +182,5 @@ If the port stayed on the default concept with no device-op edits, these section
 - [Audit doc](../audit/metal2_audit.md) — the feasibility audit that invokes this document as its final step.
 - [Port recipe](../port/metal2_port.md) — builds the `ProgramSpec` + `ProgramRunArgs` this document's factory entry point returns.
 - [Migration guide — Design Principles](migration_guide.md#design-principles) — the named-binding model the spec is built on.
-- [`ttnn/api/ttnn/operation_concepts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/operation_concepts.hpp) — `MetalV2FactoryConcept` definition in code.
+- [`ttnn/api/ttnn/operation_concepts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/operation_concepts.hpp) — `ProgramSpecFactoryConcept` definition in code.
 - [`ttnn/api/ttnn/metal_v2_artifacts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/metal_v2_artifacts.hpp) — `ProgramArtifacts` field layout.
