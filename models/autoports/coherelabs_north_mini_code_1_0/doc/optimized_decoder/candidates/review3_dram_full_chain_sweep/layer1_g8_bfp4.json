@@ -1,0 +1,111 @@
+{
+  "activation_dtype": "bfloat16",
+  "baseline": {
+    "latency_ms": 2.07274,
+    "path": "OptimizedDecoder._dense_expert_moe_chunk",
+    "timing": "warmed_eager_full_chain",
+    "weight_dtype": "bfp4"
+  },
+  "candidates": [
+    {
+      "down_in0_block_w": 1,
+      "gate_up_in0_block_w": 1,
+      "latency_ms": 4.148065,
+      "pcc_threshold": 0.995,
+      "pcc_vs_dense_bfp4": 0.9999974370002747,
+      "speedup_vs_dense_bfp4": 0.4996884089328398,
+      "status": "correct",
+      "timing": "warmed_eager_full_chain"
+    },
+    {
+      "down_in0_block_w": 2,
+      "gate_up_in0_block_w": 2,
+      "latency_ms": 3.6675705,
+      "pcc_threshold": 0.995,
+      "pcc_vs_dense_bfp4": 0.9998778700828552,
+      "speedup_vs_dense_bfp4": 0.5651534169554477,
+      "status": "correct",
+      "timing": "warmed_eager_full_chain"
+    },
+    {
+      "down_in0_block_w": 3,
+      "gate_up_in0_block_w": 4,
+      "latency_ms": 3.705483,
+      "pcc_threshold": 0.995,
+      "pcc_vs_dense_bfp4": 0.9998705983161926,
+      "speedup_vs_dense_bfp4": 0.5593710725430396,
+      "status": "correct",
+      "timing": "warmed_eager_full_chain"
+    },
+    {
+      "down_in0_block_w": 4,
+      "gate_up_in0_block_w": 8,
+      "latency_ms": 3.611789,
+      "pcc_threshold": 0.995,
+      "pcc_vs_dense_bfp4": 0.9998494386672974,
+      "speedup_vs_dense_bfp4": 0.5738818076028251,
+      "status": "correct",
+      "timing": "warmed_eager_full_chain"
+    },
+    {
+      "down_in0_block_w": 6,
+      "gate_up_in0_block_w": 16,
+      "latency_ms": 3.7699405,
+      "pcc_threshold": 0.995,
+      "pcc_vs_dense_bfp4": 0.999824047088623,
+      "speedup_vs_dense_bfp4": 0.5498070858147496,
+      "status": "correct",
+      "timing": "warmed_eager_full_chain"
+    },
+    {
+      "capacity_failure": true,
+      "down_in0_block_w": 8,
+      "error": "DRAM expert full-chain failure at group_0_gate: RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 5-9] grow to 1618688 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x7e6233a4e4ca]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7e6233bf823e]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1806fd8) [0x7e6233c06fd8]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7e6233bf79e6]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7e6233bf647e]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7e6233bf537a]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7e6233b8a65a]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7e6233b89a43]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e433f) [0x7e62346e433f]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3a6b) [0x7e62346e3a6b]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7e6234515575]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x6582) [0x18194c2]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x6582) [0x18194c2]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x1897ea0]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18ac109]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f8c5]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2f686]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2f40a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f390]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f29d]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae2ca3]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c198]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198bfac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7e627a77f1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7e627a77f28b]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a9269]\n",
+      "error_type": "RuntimeError",
+      "gate_up_in0_block_w": 32,
+      "status": "runtime_rejected"
+    },
+    {
+      "capacity_failure": true,
+      "down_in0_block_w": 12,
+      "error": "DRAM expert full-chain failure at group_0_gate: RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 5-9] grow to 3076864 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x7e6233a4e4ca]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7e6233bf823e]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1806fd8) [0x7e6233c06fd8]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7e6233bf79e6]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7e6233bf647e]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7e6233bf537a]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7e6233b8a65a]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7e6233b89a43]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e433f) [0x7e62346e433f]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3a6b) [0x7e62346e3a6b]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7e6234515575]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x6582) [0x18194c2]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x6582) [0x18194c2]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x1897ea0]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18ac109]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f8c5]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2f686]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2f40a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f390]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f29d]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae2ca3]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c198]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198bfac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7e627a77f1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7e627a77f28b]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a9269]\n",
+      "error_type": "RuntimeError",
+      "gate_up_in0_block_w": 64,
+      "status": "runtime_rejected"
+    },
+    {
+      "capacity_failure": true,
+      "down_in0_block_w": 24,
+      "error": "DRAM expert full-chain failure at group_0_gate: RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 5-9] grow to 3076864 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x7e6233a4e4ca]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7e6233bf823e]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xa6) [0x7e6233bf78a6]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x153) [0x7e6233bf6463]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7e6233bf537a]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7e6233b8a65a]\n --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7e6233b89a43]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e433f) [0x7e62346e433f]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3a6b) [0x7e62346e3a6b]\n --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7e6234515575]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x6582) [0x18194c2]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x6582) [0x18194c2]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1abbf62]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1891e9a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815ee8]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x1897ea0]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18ac109]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f8c5]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2f686]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2f40a]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f390]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2f29d]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae2ca3]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c198]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198bfac]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7e627a77f1ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7e627a77f28b]\n --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a9269]\n",
+      "error_type": "RuntimeError",
+      "gate_up_in0_block_w": 64,
+      "status": "runtime_rejected"
+    }
+  ],
+  "down_weight_shape": [
+    1,
+    8,
+    768,
+    2048
+  ],
+  "experts_executed": 128,
+  "gate_up_weight_shape": [
+    1,
+    8,
+    2048,
+    768
+  ],
+  "group_count": 8,
+  "groups_executed": 16,
+  "input_shape": [
+    1,
+    8,
+    32,
+    2048
+  ],
+  "layer_idx": 1,
+  "math_fidelity": "LoFi",
+  "num_dram_banks": 8,
+  "weight_dtype": "bfp4",
+  "workload": "real_weight_b32_dense_expert_full_chain"
+}

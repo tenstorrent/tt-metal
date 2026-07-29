@@ -1,0 +1,12 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL'.
+Using operations until 'PERF_PREFILL_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/review3_selected/layer0_prefill_b1/filtered.csv
+Overall DRAM roofline (modeled ops): 18.9% (97 GB/s)
+Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/review3_selected/layer0_prefill_b1/summary.csv
+Plotting PNG stacked report to models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/review3_selected/layer0_prefill_b1/summary.png

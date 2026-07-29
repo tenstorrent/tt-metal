@@ -246,8 +246,9 @@ device-resident path remains selected at b32; b1 remains truly sparse.
   matmul-CCL items are not applicable.
 - [x] Final defaults reproduce the best correct dense candidate at both
   batches.
-- [x] Runtime rows verify BFP8 attention, BFP4 dense MLP, BFP8 experts, LoFi
-  compute, DRAM-sharded weights, and batch-specific programs.
+- [x] Runtime rows verify BFP8 attention, BFP4 dense MLP, BFP8 sparse experts,
+  BFP4 dense experts, LoFi compute, DRAM-sharded weights, and batch-specific
+  programs.
 - [x] Paged SDPA and cache TTNN composites are retained and swept.
 - [x] QKV is packed; dense gate/up packed versus separate was measured and
   separate selected.
@@ -257,7 +258,8 @@ device-resident path remains selected at b32; b1 remains truly sparse.
 - [x] Attention BFP4/LoFi and dense/expert BFP4/LoFi trials have real-weight
   correctness evidence.
 - [x] DRAM-sharded decode matmuls are used at b1 and b32.
-- [x] MoE active-expert execution is branch-proven at b1 decode/prefill.
+- [x] MoE active-expert execution is selected and branch-proven at b1
+  decode/prefill.
   Batch 32 uses the fastest correct device-resident dense-expert path only
   after AutoDebug/AutoFix exhausted three single-device active-output
   formulations; the limitation and performance comparison are evidenced in
@@ -342,3 +344,105 @@ optimized decoder review gaps`).
     evidence is in `artifacts/final_after_review2_full.xml` and
     `artifacts/final_after_review2_watcher.xml`; the device log is
     `watcher/final_after_review2/generated/watcher/watcher.log`.
+
+## Third-review AutoDebug/AutoFix closure
+
+The third independent review is preserved in `STAGE_REVIEW_3.md`. Its five
+findings were diagnosed in `AUTODEBUG_REVIEW3.md` and repaired under the
+AutoFix isolation loop:
+
+22. Split sparse and dense expert precision policy. Sparse active experts
+    retain BFP8/LoFi. Dense experts now select BFP4/LoFi because all eight
+    authentic real-weight/propagated-activation rows pass: layer-1
+    prefill/decode PCC 0.999428/0.997995 at b1 and b32; layer-4
+    prefill/decode PCC 0.999990–0.999941/0.997234. Matched b32 decode improves
+    from about 3.39 ms with BFP8 to about 2.22 ms with BFP4. Synthetic random
+    failures are retained as diagnostics but no longer veto equivalent
+    authentic evidence.
+23. Replaced the selected batch-1 prefill dense-all-expert path with grouped
+    active-expert execution. Tile groups of 24 keep gate/up, activation, and
+    down intermediates in L1 and perform routing/reduction on device. The
+    selected aligned sequence-128 means are 14.191 ms at layer 1 and
+    14.264 ms at layer 4, versus functional 14.908/14.655 ms. Non-aligned
+    sequence 33 and 128 tests monkeypatch the dense and legacy branches to
+    fail if entered and pass sampled full-output PCC 0.99867/0.99871.
+24. Replaced the disconnected DRAM-sharded projection proxy with an opt-in
+    real full-chain harness: propagated layer-1/layer-4 activations, all 128
+    checkpoint experts, router, gate/up, SiLU/multiply, down, routing,
+    reduction, residual, trace, BFP4/BFP8, groups 8/16/32/64, and all legal
+    block pairs. G8 BFP4 is correct (PCC 0.99981–0.99985) but slower:
+    2.818 ms traced versus 1.883 ms for the selected dense expert chain. G16
+    executes but is numerically invalid at PCC 0.675–0.687. G32 fails exact
+    CB/L1 capacity; G64 requires 393,216 bytes per bank with only 288,000
+    available. The family is rejected on compatible full-chain evidence.
+25. Added final optimized capacity evidence. Layer 0 completes logical
+    context 500,000 in 159,869.562 ms; layers 1 and 4 complete non-aligned
+    context 499,999 in 193,125.821 and 347,770.355 ms with finite output.
+    Explicit large-M programs were not rejected on their first error: the
+    77-MB-per-core CB request was adapted to automatic programming, then
+    width-sharded weight incompatibility was adapted with batch-1
+    interleaved QKV/O copies. The context contract remains 500,000.
+    A final contract audit extended those copies to every batch so large
+    multi-user prefill cannot select a missing weight family. With that final
+    resident set, batch-32 context-500,000 cache allocation and traced decode
+    pass with finite output in 131.105 ms
+    (`context500000_decode_b32_review3.json`).
+    A separate watcher-enabled repeat is also finite and its 3,248-line log
+    has no fatal, invalid-NoC, CB-bounds, overflow, sanitizer, timeout, hang,
+    tripped, or kernel-error signature
+    (`context500000_decode_b32_review3_watcher.json`,
+    `watcher/review3_capacity_final/`).
+26. Re-ran the final correctness suite: `30 passed, 16 skipped in 308.39s`.
+    The 16 skips are opt-in DRAM candidate cases. The authentic mixed-policy
+    matrix is 8/8 passing.
+27. Re-ran the same suite under `TT_METAL_WATCHER=10`: `30 passed, 16 skipped
+    in 347.109s`. The 2,170-line log is clean for fatal, invalid-NoC,
+    CB-bounds, overflow, sanitizer, timeout, hang, tripped, and kernel-error
+    signatures. Post-run tt-smi 6.0.0 reports four healthy p300c devices,
+    healthy DRAM, zero GDDR errors, and zero thermal trips.
+28. Collected a fresh 12-row Tracy matrix from the final source and analyzed
+    every raw ops CSV with advice-enabled `tt-perf-report`. Batch-1 active
+    sparse matmuls consume 85% of MoE prefill device time and 57–58% of MoE
+    decode. Batch-32 dense expert matmuls remain dominant. No measured window
+    contains Torch, `from_torch`, `to_torch`, or a host fallback. Raw and
+    analyzed evidence is in `tracy/review3_selected/`.
+29. Re-ran all 12 warmed wall rows with three warmups and 20 samples. Final
+    means are: layer 0 b1 prefill/decode 0.516/0.187 ms and b32
+    4.708/0.252 ms; layer 1 b1 14.191/0.792 ms and b32
+    139.959/2.220 ms; layer 4 b1 14.264/0.795 ms and b32
+    139.855/2.215 ms. Primary batch-1 decode beats the best correct baseline
+    and no batch-32 row regresses. Samples and cumulative policies are in
+    `candidates/review3_final_runtime/`.
+
+Commands for the final gates:
+
+```text
+pytest -q -s --timeout=900 --junitxml=.../artifacts/review3_full.xml \
+  models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py
+
+TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=.../watcher/review3_final \
+pytest -q -s --timeout=900 --junitxml=.../artifacts/review3_watcher.xml \
+  models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py
+
+python -m tracy -p -r --check-exit-code -o <profile-dir> \
+  models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py \
+  --mode <prefill|decode> --batch <1|32> --layer <0|1|4> \
+  --sequence 128 --warmups 1 --iterations 1
+
+tt-perf-report <ops_perf_results.csv> --start-signpost <phase> \
+  --end-signpost <phase-end> --no-color --no-host-ops \
+  [--active-experts 8] --csv filtered.csv --summary-file summary
+```
+
+The final 20-sample table, profiler/device accounting, topology decisions,
+candidate rejections, capacity evidence, and artifact paths are consolidated
+in `README.md`. The optimize checklist above is complete for this
+decoder-only, single-device scope.
+
+Optimization checkpoints before this closure:
+
+- `03b1b0078f1` — Add optimized North Mini decoder.
+- `0085f30d237` — Close North Mini optimized decoder review gaps.
+- `c7e024e8faa` — Log North Mini optimization checkpoint.
+
+No commit was pushed.

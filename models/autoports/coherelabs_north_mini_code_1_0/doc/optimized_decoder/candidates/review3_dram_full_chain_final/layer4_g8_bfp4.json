@@ -1,0 +1,47 @@
+{
+  "activation_dtype": "bfloat16",
+  "baseline": {
+    "latency_ms": 1.8825296000000002,
+    "path": "OptimizedDecoder._dense_expert_moe_chunk",
+    "timing": "warmed_trace_replay_full_chain",
+    "weight_dtype": "bfp4"
+  },
+  "candidates": [
+    {
+      "down_in0_block_w": 4,
+      "gate_up_in0_block_w": 8,
+      "latency_ms": 2.81759205,
+      "pcc_threshold": 0.995,
+      "pcc_vs_dense_bfp4": 0.9998064041137695,
+      "speedup_vs_dense_bfp4": 0.6681341963610382,
+      "status": "correct",
+      "timing": "warmed_trace_replay_full_chain"
+    }
+  ],
+  "down_weight_shape": [
+    1,
+    8,
+    768,
+    2048
+  ],
+  "experts_executed": 128,
+  "gate_up_weight_shape": [
+    1,
+    8,
+    2048,
+    768
+  ],
+  "group_count": 8,
+  "groups_executed": 16,
+  "input_shape": [
+    1,
+    8,
+    32,
+    2048
+  ],
+  "layer_idx": 4,
+  "math_fidelity": "LoFi",
+  "num_dram_banks": 8,
+  "weight_dtype": "bfp4",
+  "workload": "real_weight_b32_dense_expert_full_chain"
+}

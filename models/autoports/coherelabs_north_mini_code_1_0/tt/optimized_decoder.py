@@ -37,8 +37,8 @@ class OptimizationConfig:
     prefill_dense_down_dtype: object = ttnn.bfloat8_b
     expert_gate_up_dtype: object = ttnn.bfloat8_b
     expert_down_dtype: object = ttnn.bfloat8_b
-    dense_expert_gate_up_dtype: object = ttnn.bfloat8_b
-    dense_expert_down_dtype: object = ttnn.bfloat8_b
+    dense_expert_gate_up_dtype: object = ttnn.bfloat4_b
+    dense_expert_down_dtype: object = ttnn.bfloat4_b
     expert_activation_dtype: object = ttnn.bfloat16
     router_dtype: object = ttnn.bfloat16
     router_fidelity: object = ttnn.MathFidelity.HiFi2
@@ -76,6 +76,10 @@ class OptimizationConfig:
     sparse_down_in0_block_w: int = 12
     moe_chunk_size: int = 4
     sparse_intermediate_dram: bool = False
+    batch1_prefill_active_experts: bool = True
+    prefill_grouped_sparse: bool = True
+    prefill_moe_chunk_size: int = 24
+    prefill_sparse_intermediate_dram: bool = False
     dense_expert_batch_threshold: int = 32
     dense_expert_chunk_size: int = 1024
     dense_expert_cores: int = 100
@@ -146,6 +150,12 @@ def _decode_dram_program(m: int, n: int, cores: int, in0_block_w: int, fused_act
 
 
 def _prefill_program(m: int, k: int, n: int, fused_activation=None):
+    # Explicit multicast configs keep their output tiles resident per core;
+    # scaling per_core_M across the full advertised context would require
+    # tens of MiB of circular buffers per worker.  TTNN's auto-selected
+    # large-M factory streams those rows and is the capacity-safe choice.
+    if m > 8192:
+        return None
     grid_x, grid_y = (10, 10) if m >= 1024 else (8, 8)
     k_tiles = math.ceil(k / ttnn.TILE_SIZE)
     in0_block_w = max(divisor for divisor in range(1, k_tiles // grid_y + 1) if k_tiles % divisor == 0)
@@ -383,6 +393,21 @@ class OptimizedDecoder(FunctionalDecoder):
                 dtype=ttnn.bfloat16,
             ),
         }
+        if max_cache_len > 8192:
+            # Auto-selected streaming large-M matmuls require interleaved B.
+            # Keep dedicated prefill copies instead of reshaping weights in
+            # the measured path.  They are materialized for every batch so
+            # large multi-user prefill cannot select a missing weight family.
+            weights["large_prefill_qkv"] = _to_device(
+                qkv,
+                mesh_device,
+                dtype=cfg.attention_weight_dtype,
+            )
+            weights["large_prefill_o"] = _to_device(
+                o.transpose(-2, -1),
+                mesh_device,
+                dtype=cfg.attention_weight_dtype,
+            )
 
         mlp_type = hf_config.mlp_layer_types[layer_idx]
         if mlp_type == "dense":
@@ -509,16 +534,17 @@ class OptimizedDecoder(FunctionalDecoder):
         apply_rope=True,
     ):
         batch = batch_size or self.batch
+        program = _prefill_program(
+            _prefill_physical_m(batch, seq_len),
+            self.hidden_size,
+            self.num_heads * self.head_dim + 2 * self.num_kv_heads * self.head_dim,
+        )
         fused = ttnn.linear(
             normalized,
-            self.weights["qkv"],
+            self.weights["large_prefill_qkv"] if program is None else self.weights["qkv"],
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=_prefill_program(
-                _prefill_physical_m(batch, seq_len),
-                self.hidden_size,
-                self.num_heads * self.head_dim + 2 * self.num_kv_heads * self.head_dim,
-            ),
+            program_config=program,
             compute_kernel_config=self.attention_compute,
         )
         fused = ttnn.reshape(fused, (batch, seq_len, -1))
@@ -580,16 +606,17 @@ class OptimizedDecoder(FunctionalDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         attended = ttnn.transformer.concatenate_heads(attended, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        program = _prefill_program(
+            _prefill_physical_m(self.batch, seq_len),
+            self.num_heads * self.head_dim,
+            self.hidden_size,
+        )
         projected = ttnn.linear(
             attended,
-            self.weights["o"],
+            self.weights["large_prefill_o"] if program is None else self.weights["o"],
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=_prefill_program(
-                _prefill_physical_m(self.batch, seq_len),
-                self.num_heads * self.head_dim,
-                self.hidden_size,
-            ),
+            program_config=program,
             compute_kernel_config=self.attention_compute,
         )
         if self.batch > 1:
@@ -1012,6 +1039,122 @@ class OptimizedDecoder(FunctionalDecoder):
         reduced = ttnn.slice(reduced, (0, 0, 0, 0), (token_count, 1, 1, self.hidden_size))
         return ttnn.reshape(reduced, (1, 1, token_count, self.hidden_size))
 
+    def _sparse_moe_prefill_chunk(self, normalized, token_count):
+        """Run active experts with one token tile per sparse-matmul batch."""
+        cfg = self.optimization_config
+        projection_memory = ttnn.DRAM_MEMORY_CONFIG if cfg.prefill_sparse_intermediate_dram else ttnn.L1_MEMORY_CONFIG
+        padded_tokens = math.ceil(token_count / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        if padded_tokens != token_count:
+            normalized = ttnn.pad(
+                normalized,
+                padding=((0, 0), (0, 0), (0, padded_tokens - token_count), (0, 0)),
+                value=0.0,
+            )
+        groups = padded_tokens // ttnn.TILE_SIZE
+        flat = ttnn.reshape(normalized, (1, 1, padded_tokens, self.hidden_size))
+        grouped = ttnn.reshape(flat, (1, groups, ttnn.TILE_SIZE, self.hidden_size))
+        logits = ttnn.linear(
+            flat,
+            self.weights["router"],
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=_rect_grid(4),
+            compute_kernel_config=self.router_compute,
+        )
+        top_values, top_indices = ttnn.topk(logits, k=self.top_k, dim=-1, sorted=True)
+        top_values = ttnn.sigmoid(top_values)
+        routing = ttnn.scatter(ttnn.zeros_like(logits), dim=-1, index=top_indices, src=top_values)
+        routing_grouped = ttnn.reshape(routing, (1, groups, ttnn.TILE_SIZE, self.num_experts))
+        sparsity = ttnn.sum(routing_grouped, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        sparsity = ttnn.to_layout(sparsity, ttnn.ROW_MAJOR_LAYOUT)
+
+        expert_gate = ttnn.reshape(
+            self.weights["expert_gate"],
+            (1, self.num_experts, self.hidden_size, self.intermediate_size),
+        )
+        expert_up = ttnn.reshape(
+            self.weights["expert_up"],
+            (1, self.num_experts, self.hidden_size, self.intermediate_size),
+        )
+        expert_down = ttnn.reshape(
+            self.weights["expert_down"],
+            (1, self.num_experts, self.intermediate_size, self.hidden_size),
+        )
+        gate = ttnn.sparse_matmul(
+            grouped,
+            expert_gate,
+            sparsity=sparsity,
+            nnz=None,
+            memory_config=projection_memory,
+            program_config=_sparse_program(
+                cfg.sparse_gate_up_grid,
+                self.intermediate_size,
+                cfg.sparse_gate_up_in0_block_w,
+            ),
+            compute_kernel_config=self.expert_gate_up_compute,
+            dtype=cfg.expert_activation_dtype,
+        )
+        up = ttnn.sparse_matmul(
+            grouped,
+            expert_up,
+            sparsity=sparsity,
+            nnz=None,
+            memory_config=projection_memory,
+            program_config=_sparse_program(
+                cfg.sparse_gate_up_grid,
+                self.intermediate_size,
+                cfg.sparse_gate_up_in0_block_w,
+            ),
+            compute_kernel_config=self.expert_gate_up_compute,
+            dtype=cfg.expert_activation_dtype,
+        )
+        gate = ttnn.reshape(
+            gate,
+            (groups, self.num_experts, ttnn.TILE_SIZE, self.intermediate_size),
+        )
+        up = ttnn.reshape(
+            up,
+            (groups, self.num_experts, ttnn.TILE_SIZE, self.intermediate_size),
+        )
+        gate = ttnn.silu(gate, output_tensor=gate)
+        activated = ttnn.multiply(
+            gate,
+            up,
+            dtype=cfg.expert_activation_dtype,
+            output_tensor=up,
+        )
+        gate.deallocate(True)
+        down_sparsity = ttnn.reshape(sparsity, (1, 1, groups, self.num_experts))
+        down = ttnn.sparse_matmul(
+            activated,
+            expert_down,
+            sparsity=down_sparsity,
+            nnz=None,
+            is_input_a_sparse=True,
+            is_input_b_sparse=False,
+            memory_config=projection_memory,
+            program_config=_sparse_program(
+                cfg.sparse_down_grid,
+                self.hidden_size,
+                cfg.sparse_down_in0_block_w,
+            ),
+            compute_kernel_config=self.expert_down_compute,
+            dtype=cfg.expert_activation_dtype,
+        )
+        routing = ttnn.permute(routing_grouped, (0, 1, 3, 2))
+        routing = ttnn.reshape(routing, (groups, self.num_experts, ttnn.TILE_SIZE, 1))
+        down = ttnn.multiply(
+            down,
+            routing,
+            dtype=cfg.expert_activation_dtype,
+            output_tensor=down,
+        )
+        reduced = ttnn.experimental.fast_reduce_nc(down, dims=[1], memory_config=projection_memory)
+        reduced = ttnn.reshape(reduced, (1, 1, padded_tokens, self.hidden_size))
+        if padded_tokens != token_count:
+            reduced = ttnn.slice(reduced, (0, 0, 0, 0), (1, 1, token_count, self.hidden_size))
+        return reduced
+
     def _dense_expert_moe_chunk(self, normalized, token_count):
         """Batched expert path used where sparse output padding is counterproductive."""
         cfg = self.optimization_config
@@ -1113,7 +1256,7 @@ class OptimizedDecoder(FunctionalDecoder):
             compute_kernel_config=self.expert_down_compute,
         )
 
-    def _sparse_moe(self, normalized, seq_len):
+    def _sparse_moe(self, normalized, seq_len, *, phase):
         total_tokens = self.batch * seq_len
         cfg = self.optimization_config
         pack_multi_user = self.batch > 1 and seq_len % ttnn.TILE_SIZE
@@ -1125,6 +1268,31 @@ class OptimizedDecoder(FunctionalDecoder):
                 return ttnn.to_layout(result, ttnn.TILE_LAYOUT)
             return ttnn.reshape(result, (1, self.batch, seq_len, self.hidden_size))
 
+        levels = []
+
+        def push_output(output):
+            output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+            level = 0
+            while True:
+                if level == len(levels):
+                    levels.append([])
+                levels[level].append(output)
+                if len(levels[level]) < 32:
+                    return
+                output = ttnn.concat(
+                    levels[level],
+                    dim=2,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                levels[level] = []
+                level += 1
+
+        def finish_outputs():
+            outputs = [output for level in reversed(levels) for output in level]
+            return (
+                outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            )
+
         if pack_multi_user:
             # A view cannot discard each batch row's physical sequence pad.
             # Pack logical tokens on-device before flattening non-aligned
@@ -1134,16 +1302,24 @@ class OptimizedDecoder(FunctionalDecoder):
             flat = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
         else:
             flat = ttnn.reshape(normalized, (1, 1, total_tokens, self.hidden_size))
-        if total_tokens >= cfg.dense_expert_batch_threshold:
+        active_prefill = phase == "prefill" and self.batch == 1 and cfg.batch1_prefill_active_experts
+        if not active_prefill and total_tokens >= cfg.dense_expert_batch_threshold:
             chunks = ttnn.split(flat, cfg.dense_expert_chunk_size, dim=2)
             outputs = [self._dense_expert_moe_chunk(chunk, chunk.shape[2]) for chunk in chunks]
             result = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=0)
+            return restore_batch_shape(result)
+        if active_prefill and cfg.prefill_grouped_sparse:
+            chunk_size = cfg.prefill_moe_chunk_size
+            for start in range(0, total_tokens, chunk_size):
+                end = min(start + chunk_size, total_tokens)
+                chunk = ttnn.slice(flat, (0, 0, start, 0), (1, 1, end, self.hidden_size))
+                push_output(self._sparse_moe_prefill_chunk(chunk, end - start))
+            result = finish_outputs()
             return restore_batch_shape(result)
         chunk_size = cfg.moe_chunk_size
         if total_tokens <= chunk_size:
             result = self._sparse_moe_chunk(flat, total_tokens)
         else:
-            outputs = []
             for start in range(0, total_tokens, chunk_size):
                 end = min(start + chunk_size, total_tokens)
                 logical_chunk = end - start
@@ -1157,8 +1333,8 @@ class OptimizedDecoder(FunctionalDecoder):
                 output = self._sparse_moe_chunk(chunk, chunk_size)
                 if logical_chunk < chunk_size:
                     output = ttnn.slice(output, (0, 0, 0, 0), (1, 1, logical_chunk, self.hidden_size))
-                outputs.append(output)
-            result = ttnn.concat(outputs, dim=2)
+                push_output(output)
+            result = finish_outputs()
         return restore_batch_shape(result)
 
     def prefill_forward(
@@ -1192,7 +1368,7 @@ class OptimizedDecoder(FunctionalDecoder):
         mlp = (
             self._dense_mlp_prefill(normalized, seq_len)
             if self.mlp_type == "dense"
-            else self._sparse_moe(normalized, seq_len)
+            else self._sparse_moe(normalized, seq_len, phase="prefill")
         )
         return ttnn.add(ttnn.add(hidden_states, attention), mlp)
 
@@ -1227,7 +1403,7 @@ class OptimizedDecoder(FunctionalDecoder):
         else:
             normalized_interleaved = ttnn.sharded_to_interleaved(normalized, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
             normalized_public = ttnn.reshape(normalized_interleaved, (1, self.batch, 1, self.hidden_size))
-            mlp = self._sparse_moe(normalized_public, 1)
+            mlp = self._sparse_moe(normalized_public, 1, phase="decode")
             mlp = ttnn.reshape(mlp, (1, 1, self.batch, self.hidden_size))
             mlp = ttnn.to_memory_config(mlp, self.residual_memory_config)
         output = ttnn.add(ttnn.add(residual, attention), mlp, memory_config=self.residual_memory_config)

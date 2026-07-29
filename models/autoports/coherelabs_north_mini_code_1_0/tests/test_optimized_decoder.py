@@ -230,6 +230,10 @@ def _real_hidden_at_layer(layer_idx, config, *, sequence=1, token_id=123):
 
 def test_optimized_path_audit():
     assert issubclass(OptimizedDecoder, FunctionalDecoder)
+    policy = OptimizationConfig()
+    assert policy.expert_gate_up_dtype == policy.expert_down_dtype == ttnn.bfloat8_b
+    assert policy.dense_expert_gate_up_dtype == policy.dense_expert_down_dtype == ttnn.bfloat4_b
+    assert policy.expert_gate_up_fidelity == policy.expert_down_fidelity == ttnn.MathFidelity.LoFi
     for method_name in (
         "from_state_dict",
         "prefill_forward",
@@ -239,6 +243,7 @@ def test_optimized_path_audit():
         "_dense_mlp_decode",
         "_dense_mlp_prefill",
         "_sparse_moe_chunk",
+        "_sparse_moe_prefill_chunk",
         "_dense_expert_moe_chunk",
     ):
         assert method_name in OptimizedDecoder.__dict__, f"{method_name} would fall back to functional code"
@@ -252,6 +257,7 @@ def test_optimized_path_audit():
             "_dense_mlp_decode",
             "_dense_mlp_prefill",
             "_sparse_moe_chunk",
+            "_sparse_moe_prefill_chunk",
             "_dense_expert_moe_chunk",
         )
     )
@@ -417,28 +423,35 @@ def test_optimized_real_weight_moe_decode(mesh_device, layer_idx):
     [(layer, batch, mode) for layer in (1, 4) for batch in (1, 32) for mode in ("prefill", "decode")],
 )
 def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batch, mode):
-    """Exercise selected BFP8 or explicitly requested BFP4 experts on authentic activations."""
+    """Exercise selected mixed or explicitly requested dense-expert precision on authentic activations."""
     config = _config()
     sequence = 33 if mode == "prefill" else 34
     hidden = _real_hidden_at_layer(layer_idx, config, sequence=sequence, token_id=321)
     state = _real_layer_state(layer_idx)
-    expert_dtype_name = os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_DTYPE", "bfp8")
-    expert_dtype = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[expert_dtype_name]
+    expert_dtype_name = os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_DTYPE", "selected")
+    expert_dtype = {
+        "bf16": ttnn.bfloat16,
+        "bfp8": ttnn.bfloat8_b,
+        "bfp4": ttnn.bfloat4_b,
+    }.get(expert_dtype_name)
     expert_fidelity_name = os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_FIDELITY", "lofi")
     expert_fidelity = {
         "lofi": ttnn.MathFidelity.LoFi,
         "hifi2": ttnn.MathFidelity.HiFi2,
     }[expert_fidelity_name]
-    policy = replace(
-        OptimizationConfig(),
-        dense_expert_gate_up_dtype=expert_dtype,
-        dense_expert_down_dtype=expert_dtype,
+    policy_overrides = dict(
         expert_gate_up_fidelity=expert_fidelity,
         expert_down_fidelity=expert_fidelity,
         dense_expert_batch_threshold=1,
         dense_expert_chunk_size=int(os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_CHUNK", "1024")),
         serving_fused_kv_update=os.environ.get("NORTH_MINI_AUTHENTIC_FUSED_KV", "0") == "1",
     )
+    if expert_dtype is not None:
+        policy_overrides.update(
+            dense_expert_gate_up_dtype=expert_dtype,
+            dense_expert_down_dtype=expert_dtype,
+        )
+    policy = replace(OptimizationConfig(), **policy_overrides)
     decoder = OptimizedDecoder.from_state_dict(
         state,
         hf_config=config,
@@ -448,6 +461,11 @@ def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batc
         max_cache_len=64,
         optimization_config=policy,
     )
+    if expert_dtype_name == "selected":
+        assert decoder.weights["expert_gate"].dtype == ttnn.bfloat8_b
+        assert decoder.weights["expert_down"].dtype == ttnn.bfloat8_b
+        assert decoder.weights["dense_expert_gate"].dtype == ttnn.bfloat4_b
+        assert decoder.weights["dense_expert_down"].dtype == ttnn.bfloat4_b
     key_cache, value_cache = decoder.create_paged_kv_cache()
     page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -526,148 +544,384 @@ def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batc
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
-def test_dram_sharded_expert_projection_candidate(mesh_device, weight_dtype):
-    """Adapt the batched DRAM-sharded kernel to one hardware-bank expert group."""
+_DRAM_EXPERT_BLOCK_PAIRS = (
+    (1, 1),
+    (2, 2),
+    (4, 3),
+    (8, 4),
+    (16, 6),
+    (32, 8),
+    (64, 12),
+    (64, 24),
+)
+_DRAM_EXPERT_PCC_THRESHOLD = 0.995
+
+
+def _dram_expert_block_pairs():
+    value = os.environ.get("NORTH_MINI_DRAM_EXPERT_BLOCK_PAIRS")
+    if value is None:
+        return _DRAM_EXPERT_BLOCK_PAIRS
+    pairs = []
+    for item in value.split(","):
+        gate_up, down = (int(field) for field in item.split(":", maxsplit=1))
+        if 64 % gate_up or 24 % down:
+            raise ValueError(
+                "NORTH_MINI_DRAM_EXPERT_BLOCK_PAIRS entries must be gate_up:down pairs "
+                "where gate_up divides 64 and down divides 24"
+            )
+        pairs.append((gate_up, down))
+    if not pairs:
+        raise ValueError("NORTH_MINI_DRAM_EXPERT_BLOCK_PAIRS cannot be empty")
+    return tuple(dict.fromkeys(pairs))
+
+
+def _dram_expert_selected(value, variable):
+    selected = os.environ.get(variable)
+    if selected is None:
+        return True
+    return str(value) in {item.strip() for item in selected.split(",")}
+
+
+def _dram_expert_pcc(reference, actual):
+    reference = reference.float().reshape(-1)
+    actual = actual.float().reshape(-1)
+    reference = reference - reference.mean()
+    actual = actual - actual.mean()
+    denominator = torch.linalg.vector_norm(reference) * torch.linalg.vector_norm(actual)
+    if denominator == 0:
+        return float(torch.equal(reference, actual))
+    return float(torch.dot(reference, actual) / denominator)
+
+
+def _dram_expert_is_capacity_failure(message):
+    message = message.lower()
+    return any(
+        token in message
+        for token in (
+            "l1",
+            "circular buffer",
+            "cb allocation",
+            "out of memory",
+            "insufficient memory",
+            "not enough space",
+            "cannot allocate",
+            "allocator",
+        )
+    )
+
+
+def _dram_expert_memory_configs(mesh_device, group_count, k, n):
     workers = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     num_banks = len(workers)
+    if group_count % num_banks:
+        raise ValueError(f"group_count={group_count} must be divisible by num_dram_banks={num_banks}")
     worker_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(core.x, core.y), ttnn.CoreCoord(core.x, core.y)) for core in workers]
     )
     dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+    groups_per_bank = group_count // num_banks
+    input_memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            worker_grid,
+            [groups_per_bank * ttnn.TILE_SIZE, k],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    weight_memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_grid,
+            [groups_per_bank * k, n],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    output_memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            worker_grid,
+            [groups_per_bank * ttnn.TILE_SIZE, n],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    return input_memory, weight_memory, output_memory, num_banks
+
+
+def _real_expert_group(state, layer_idx, projection, start, end):
+    prefix = f"model.layers.{layer_idx}.mlp.experts."
+    return (
+        torch.stack([state[f"{prefix}{expert}.{projection}_proj.weight"] for expert in range(start, end)])
+        .transpose(-2, -1)
+        .contiguous()
+    )
+
+
+def _materialize_dram_expert_groups(mesh_device, state, layer_idx, group_count, dtype):
     mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    compute = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
+    _, gate_weight_memory, _gate_output_memory, num_banks = _dram_expert_memory_configs(
+        mesh_device, group_count, 2048, 768
     )
-    generator = torch.Generator().manual_seed(29000)
+    _, down_weight_memory, _down_output_memory, _ = _dram_expert_memory_configs(mesh_device, group_count, 768, 2048)
+    groups = []
+    for start in range(0, 128, group_count):
+        materialized = {}
+        for projection in ("gate", "up", "down"):
+            host = _real_expert_group(state, layer_idx, projection, start, start + group_count)
+            materialized[projection] = ttnn.from_torch(
+                host.unsqueeze(0),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=gate_weight_memory if projection != "down" else down_weight_memory,
+                mesh_mapper=mapper,
+            )
+            del host
+        groups.append(materialized)
+    return groups, num_banks
 
-    def run_projection(k, n, in0_block_w):
-        activation = _randn(generator, 1, num_banks, 32, k, scale=0.02)
-        weight = _randn(generator, 1, num_banks, k, n, scale=0.02)
-        in0_memory = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(worker_grid, [32, k], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        weight_memory = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(dram_grid, [k, n], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        output_memory = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(worker_grid, [32, n], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        activation_interleaved = ttnn.from_torch(
-            activation,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-        activation_tt = ttnn.to_memory_config(activation_interleaved, in0_memory)
-        weight_tt = ttnn.from_torch(
-            weight,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=weight_memory,
-            mesh_mapper=mapper,
-        )
-        program = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
-            in0_block_w=in0_block_w,
-            per_core_M=1,
-            per_core_N=n // ttnn.TILE_SIZE,
-            fused_activation=None,
-        )
-        kwargs = dict(
-            program_config=program,
-            memory_config=output_memory,
-            compute_kernel_config=compute,
-            dtype=ttnn.bfloat16,
-        )
-        output = ttnn.matmul(activation_tt, weight_tt, **kwargs)
+
+def _measure_warmed_expert_chain(mesh_device, operation, output_shape):
+    warmups = int(os.environ.get("NORTH_MINI_DRAM_EXPERT_WARMUPS", "3"))
+    iterations = int(os.environ.get("NORTH_MINI_DRAM_EXPERT_ITERATIONS", "20"))
+    traced = os.environ.get("NORTH_MINI_DRAM_EXPERT_TRACE", "1") == "1"
+    if warmups < 1 or iterations < 1:
+        raise ValueError("NORTH_MINI_DRAM_EXPERT_WARMUPS and ITERATIONS must be positive")
+
+    for _ in range(warmups):
+        output = operation()
         ttnn.synchronize_device(mesh_device)
-        start = time.perf_counter()
-        for _ in range(10):
-            output = ttnn.matmul(activation_tt, weight_tt, **kwargs)
+        output.deallocate(True)
+        output = None
+
+    if not traced:
+        start = time.perf_counter_ns()
+        for _ in range(iterations):
+            output = operation()
         ttnn.synchronize_device(mesh_device)
-        latency_ms = (time.perf_counter() - start) * 100
-        actual = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        reference = torch.matmul(activation.float(), weight.float())
-        _assert_pcc(f"dram-expert-{weight_dtype}-{k}x{n}", reference, actual.float(), threshold=0.99)
-        return latency_ms, output
+        latency_ms = (time.perf_counter_ns() - start) / 1_000_000 / iterations
+        host = ttnn.to_torch(output).reshape(output_shape).float()
+        output.deallocate(True)
+        return latency_ms, host, "warmed_eager_full_chain"
 
-    gate_ms, gate_output = run_projection(2048, 768, 4)
-    down_ms, down_output = run_projection(768, 2048, 2)
-
-    def measure(operation):
-        result = operation()
+    trace_id = None
+    capture_ended = False
+    try:
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        output = operation()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        capture_ended = True
+        for _ in range(warmups):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
-        start = time.perf_counter()
-        for _ in range(10):
-            result = operation()
+        start = time.perf_counter_ns()
+        for _ in range(iterations):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
-        return (time.perf_counter() - start) * 100, result
-
-    silu_ms, activated_gate = measure(lambda: ttnn.silu(gate_output, memory_config=gate_output.memory_config()))
-    multiply_ms, _ = measure(
-        lambda: ttnn.multiply(
-            activated_gate,
-            gate_output,
-            dtype=ttnn.bfloat16,
-            memory_config=gate_output.memory_config(),
-        )
-    )
-    interleave_ms, down_interleaved = measure(
-        lambda: ttnn.sharded_to_interleaved(down_output, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16)
-    )
-    reduce_ms, reduced = measure(lambda: ttnn.sum(down_interleaved, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-    add_ms, _ = measure(lambda: ttnn.add(reduced, reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-    groups = math.ceil(128 / num_banks)
-    lower_bound_ms = groups * (2 * gate_ms + down_ms + silu_ms + multiply_ms + interleave_ms + reduce_ms + add_ms)
-    print(
-        f"dram-expert-{weight_dtype}: banks={num_banks}, gate_ms={gate_ms:.6f}, "
-        f"down_ms={down_ms:.6f}, silu_ms={silu_ms:.6f}, multiply_ms={multiply_ms:.6f}, "
-        f"interleave_ms={interleave_ms:.6f}, reduce_ms={reduce_ms:.6f}, add_ms={add_ms:.6f}, "
-        f"unrouted_lower_bound_ms={lower_bound_ms:.6f}"
-    )
+        latency_ms = (time.perf_counter_ns() - start) / 1_000_000 / iterations
+        host = ttnn.to_torch(output).reshape(output_shape).float()
+        return latency_ms, host, "warmed_trace_replay_full_chain"
+    finally:
+        if trace_id is not None and not capture_ended:
+            try:
+                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            except Exception:
+                pass
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
+        if output is not None:
+            output.deallocate(True)
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("layer_idx,batch,sequence", [(1, 1, 33), (4, 1, 33)])
-def test_optimized_non_aligned_sparse_prefill_exercises_active_experts(
-    mesh_device, monkeypatch, layer_idx, batch, sequence
+def _dram_expert_candidate_operation(
+    decoder,
+    normalized,
+    grouped_weights,
+    group_count,
+    gate_up_block_w,
+    down_block_w,
 ):
-    config = _config()
-    total_tokens = batch * sequence
-    selected_tokens = [0, total_tokens // 2, total_tokens - 1]
-    state = _synthetic_state(config, layer_idx, sparse_weights=True)
-    prefix = f"model.layers.{layer_idx}."
-    for projection in ("q_proj", "k_proj", "v_proj", "o_proj"):
-        state[prefix + f"self_attn.{projection}.weight"].zero_()
-    generator = torch.Generator().manual_seed(26000 + layer_idx)
-    hidden = _randn(generator, batch, sequence, config.hidden_size, scale=0.02)
-    normalized = _normalized(hidden, state, config, layer_idx)
-    reference_moe, experts = _sparse_moe_reference(
-        normalized,
-        state,
-        config,
-        layer_idx,
-        flat_indices=selected_tokens,
+    mesh_device = decoder.mesh_device
+    input_memory, _gate_weight_memory, gate_output_memory, _ = _dram_expert_memory_configs(
+        mesh_device, group_count, decoder.hidden_size, decoder.intermediate_size
     )
-    assert torch.unique(experts).numel() > config.num_experts_per_tok
-    reference = hidden.reshape(-1, config.hidden_size)[selected_tokens] + reference_moe
+    down_input_memory, _down_weight_memory, down_output_memory, _ = _dram_expert_memory_configs(
+        mesh_device, group_count, decoder.intermediate_size, decoder.hidden_size
+    )
+    if down_input_memory != gate_output_memory:
+        raise AssertionError("batched DRAM-sharded gate/up and down shard contracts do not compose")
+    gate_program = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+        in0_block_w=gate_up_block_w,
+        per_core_M=1,
+        per_core_N=decoder.intermediate_size // ttnn.TILE_SIZE,
+        fused_activation=None,
+    )
+    down_program = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+        in0_block_w=down_block_w,
+        per_core_M=1,
+        per_core_N=decoder.hidden_size // ttnn.TILE_SIZE,
+        fused_activation=None,
+    )
+
+    def run():
+        stage = "router"
+        try:
+            flat = ttnn.reshape(normalized, (decoder.batch, decoder.hidden_size))
+            logits = ttnn.linear(
+                flat,
+                decoder.weights["router"],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                core_grid=ttnn.CoreGrid(x=1, y=8),
+                compute_kernel_config=decoder.router_compute,
+            )
+            top_values, top_indices = ttnn.topk(logits, k=decoder.top_k, dim=-1, sorted=True)
+            top_values = ttnn.sigmoid(top_values)
+            routing = ttnn.scatter(ttnn.zeros_like(logits), dim=-1, index=top_indices, src=top_values)
+            logits.deallocate(True)
+            top_values.deallocate(True)
+            top_indices.deallocate(True)
+            routing = ttnn.permute(routing, (1, 0))
+            routing = ttnn.reshape(routing, (1, decoder.num_experts, decoder.batch, 1))
+
+            stage = "repeat_and_height_reshard"
+            expert_input = ttnn.reshape(flat, (1, 1, decoder.batch, decoder.hidden_size))
+            expert_input = ttnn.repeat(expert_input, ttnn.Shape((1, group_count, 1, 1)))
+            expert_input = ttnn.to_memory_config(expert_input, input_memory)
+
+            accumulator = None
+            for group_index, weights in enumerate(grouped_weights):
+                start = group_index * group_count
+                stage = f"group_{group_index}_gate"
+                gate = ttnn.matmul(
+                    expert_input,
+                    weights["gate"],
+                    dtype=ttnn.bfloat16,
+                    memory_config=gate_output_memory,
+                    program_config=gate_program,
+                    compute_kernel_config=decoder.expert_gate_up_compute,
+                )
+                stage = f"group_{group_index}_up"
+                up = ttnn.matmul(
+                    expert_input,
+                    weights["up"],
+                    dtype=ttnn.bfloat16,
+                    memory_config=gate_output_memory,
+                    program_config=gate_program,
+                    compute_kernel_config=decoder.expert_gate_up_compute,
+                )
+                stage = f"group_{group_index}_silu_multiply"
+                activated = ttnn.multiply(
+                    gate,
+                    up,
+                    input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                    dtype=ttnn.bfloat16,
+                    memory_config=gate_output_memory,
+                )
+                gate.deallocate(True)
+                up.deallocate(True)
+
+                stage = f"group_{group_index}_down"
+                down = ttnn.matmul(
+                    activated,
+                    weights["down"],
+                    dtype=ttnn.bfloat16,
+                    memory_config=down_output_memory,
+                    program_config=down_program,
+                    compute_kernel_config=decoder.expert_down_compute,
+                )
+                activated.deallocate(True)
+
+                stage = f"group_{group_index}_routing"
+                routing_group = ttnn.slice(
+                    routing,
+                    (0, start, 0, 0),
+                    (1, start + group_count, decoder.batch, 1),
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                routed = ttnn.multiply(
+                    down,
+                    routing_group,
+                    dtype=ttnn.bfloat16,
+                    memory_config=down_output_memory,
+                )
+                down.deallocate(True)
+                routing_group.deallocate(True)
+
+                stage = f"group_{group_index}_reduce"
+                reduced = ttnn.experimental.fast_reduce_nc(
+                    routed,
+                    dims=[1],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                routed.deallocate(True)
+                if accumulator is None:
+                    accumulator = reduced
+                else:
+                    stage = f"group_{group_index}_accumulate"
+                    previous = accumulator
+                    accumulator = ttnn.add(previous, reduced, memory_config=ttnn.L1_MEMORY_CONFIG)
+                    previous.deallocate(True)
+                    reduced.deallocate(True)
+
+            expert_input.deallocate(True)
+            routing.deallocate(True)
+            stage = "residual_boundary_reshard"
+            accumulator = ttnn.to_memory_config(accumulator, decoder.residual_memory_config)
+            return ttnn.reshape(accumulator, (1, 1, decoder.batch, decoder.hidden_size))
+        except Exception as error:
+            raise RuntimeError(f"DRAM expert full-chain failure at {stage}: {type(error).__name__}: {error}") from error
+
+    return run
+
+
+def _write_dram_expert_sweep_record(record):
+    print("NORTH_MINI_DRAM_EXPERT_SWEEP_RESULT=" + json.dumps(record, sort_keys=True))
+    output_dir = os.environ.get("NORTH_MINI_DRAM_EXPERT_SWEEP_OUTPUT_DIR")
+    if output_dir is None:
+        return
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    name = f"layer{record['layer_idx']}_g{record['group_count']}_{record['weight_dtype']}.json"
+    (output_path / name).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+
+
+@pytest.mark.skipif(
+    os.environ.get("NORTH_MINI_DRAM_EXPERT_SWEEP", "0") != "1",
+    reason="set NORTH_MINI_DRAM_EXPERT_SWEEP=1 for the real-weight all-expert DRAM-sharded sweep",
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("layer_idx", [1, 4], ids=["layer1", "layer4"])
+@pytest.mark.parametrize("group_count", [8, 16, 32, 64], ids=lambda value: f"g{value}")
+@pytest.mark.parametrize("weight_dtype_name", ["bfp4", "bfp8"])
+def test_dram_sharded_expert_full_chain_candidate(
+    mesh_device,
+    layer_idx,
+    group_count,
+    weight_dtype_name,
+):
+    """Execute every real expert through the compatible batched DRAM-sharded chain."""
+    if not _dram_expert_selected(layer_idx, "NORTH_MINI_DRAM_EXPERT_LAYERS"):
+        pytest.skip("layer filtered by NORTH_MINI_DRAM_EXPERT_LAYERS")
+    if not _dram_expert_selected(group_count, "NORTH_MINI_DRAM_EXPERT_GROUPS"):
+        pytest.skip("group filtered by NORTH_MINI_DRAM_EXPERT_GROUPS")
+    if not _dram_expert_selected(weight_dtype_name, "NORTH_MINI_DRAM_EXPERT_DTYPES"):
+        pytest.skip("dtype filtered by NORTH_MINI_DRAM_EXPERT_DTYPES")
+
+    config = _config()
+    batch = 32
+    state = _real_layer_state(layer_idx)
+    hidden = _real_hidden_at_layer(layer_idx, config, sequence=34, token_id=321)
+    normalized = _normalized(hidden[:, -1:], state, config, layer_idx).repeat(batch, 1, 1)
     policy = replace(
-        _expert_sweep_policy(),
-        dense_expert_batch_threshold=1 << 30,
-        sparse_intermediate_dram=True,
+        OptimizationConfig(),
+        dense_expert_batch_threshold=1,
+        dense_expert_gate_up_dtype=ttnn.bfloat4_b,
+        dense_expert_down_dtype=ttnn.bfloat4_b,
+        expert_gate_up_fidelity=ttnn.MathFidelity.LoFi,
+        expert_down_fidelity=ttnn.MathFidelity.LoFi,
     )
     decoder = OptimizedDecoder.from_state_dict(
         state,
@@ -678,20 +932,201 @@ def test_optimized_non_aligned_sparse_prefill_exercises_active_experts(
         max_cache_len=64,
         optimization_config=policy,
     )
+    assert decoder.weights["dense_expert_gate"].dtype == ttnn.bfloat4_b
+    assert decoder.weights["dense_expert_up"].dtype == ttnn.bfloat4_b
+    assert decoder.weights["dense_expert_down"].dtype == ttnn.bfloat4_b
+    normalized_tt = ttnn.from_torch(
+        normalized.unsqueeze(0),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    def baseline_operation():
+        output = decoder._dense_expert_moe_chunk(normalized_tt, batch)
+        output = ttnn.reshape(output, (1, 1, batch, config.hidden_size))
+        return ttnn.to_memory_config(output, decoder.residual_memory_config)
+
+    baseline_ms, baseline, timing_kind = _measure_warmed_expert_chain(
+        mesh_device,
+        baseline_operation,
+        (batch, config.hidden_size),
+    )
+    weight_dtype = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b}[weight_dtype_name]
+    grouped_weights, num_banks = _materialize_dram_expert_groups(
+        mesh_device,
+        state,
+        layer_idx,
+        group_count,
+        weight_dtype,
+    )
+    assert len(grouped_weights) * group_count == config.num_experts
+    record = {
+        "workload": "real_weight_b32_dense_expert_full_chain",
+        "layer_idx": layer_idx,
+        "group_count": group_count,
+        "groups_executed": 128 // group_count,
+        "experts_executed": 128,
+        "num_dram_banks": num_banks,
+        "weight_dtype": weight_dtype_name,
+        "activation_dtype": "bfloat16",
+        "math_fidelity": "LoFi",
+        "input_shape": [1, group_count, 32, 2048],
+        "gate_up_weight_shape": [1, group_count, 2048, 768],
+        "down_weight_shape": [1, group_count, 768, 2048],
+        "baseline": {
+            "path": "OptimizedDecoder._dense_expert_moe_chunk",
+            "weight_dtype": "bfp4",
+            "latency_ms": baseline_ms,
+            "timing": timing_kind,
+        },
+        "candidates": [],
+    }
+
+    for gate_up_block_w, down_block_w in _dram_expert_block_pairs():
+        row = {
+            "gate_up_in0_block_w": gate_up_block_w,
+            "down_in0_block_w": down_block_w,
+        }
+        operation = _dram_expert_candidate_operation(
+            decoder,
+            normalized_tt,
+            grouped_weights,
+            group_count,
+            gate_up_block_w,
+            down_block_w,
+        )
+        try:
+            latency_ms, actual, candidate_timing_kind = _measure_warmed_expert_chain(
+                mesh_device,
+                operation,
+                (batch, config.hidden_size),
+            )
+            pcc = _dram_expert_pcc(baseline, actual)
+            row.update(
+                {
+                    "status": "correct" if pcc >= _DRAM_EXPERT_PCC_THRESHOLD else "pcc_rejected",
+                    "pcc_vs_dense_bfp4": pcc,
+                    "pcc_threshold": _DRAM_EXPERT_PCC_THRESHOLD,
+                    "latency_ms": latency_ms,
+                    "speedup_vs_dense_bfp4": baseline_ms / latency_ms,
+                    "timing": candidate_timing_kind,
+                }
+            )
+        except Exception as error:
+            message = str(error)
+            row.update(
+                {
+                    "status": "runtime_rejected",
+                    "error_type": type(error).__name__,
+                    "error": message,
+                    "capacity_failure": _dram_expert_is_capacity_failure(message),
+                }
+            )
+            gc.collect()
+        record["candidates"].append(row)
+
+    _write_dram_expert_sweep_record(record)
+    normalized_tt.deallocate(True)
+    for weights in grouped_weights:
+        for weight in weights.values():
+            weight.deallocate(True)
+    correct = [row for row in record["candidates"] if row["status"] == "correct"]
+    runtime_failures = [row for row in record["candidates"] if row["status"] == "runtime_rejected"]
+    if group_count == 8 and weight_dtype_name == "bfp4":
+        assert correct, (
+            f"no correct real-weight full-chain candidate survived for layer={layer_idx}, "
+            f"group_count={group_count}, dtype={weight_dtype_name}: {record['candidates']}"
+        )
+    else:
+        assert correct or any(
+            row["status"] in {"pcc_rejected", "runtime_rejected"} for row in record["candidates"]
+        ), f"group_count={group_count} produced neither a survivor nor rejection evidence"
+        if group_count >= 32 and not correct:
+            non_capacity = [row for row in runtime_failures if not row["capacity_failure"]]
+            assert not non_capacity, (
+                f"G{group_count} may only be rejected by exact L1/circular-buffer capacity evidence; "
+                f"non-capacity failures: {non_capacity}"
+            )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "layer_idx,batch,sequence",
+    [(layer_idx, 1, sequence) for layer_idx in (1, 4) for sequence in (33, 128)],
+)
+def test_optimized_non_aligned_sparse_prefill_exercises_active_experts(
+    mesh_device, monkeypatch, layer_idx, batch, sequence
+):
+    config = _config()
+    total_tokens = batch * sequence
+    state = _synthetic_state(config, layer_idx, sparse_weights=True)
+    prefix = f"model.layers.{layer_idx}."
+    for projection in ("q_proj", "k_proj", "v_proj", "o_proj"):
+        state[prefix + f"self_attn.{projection}.weight"].zero_()
+    generator = torch.Generator().manual_seed(26000 + layer_idx)
+    hidden = _randn(generator, batch, sequence, config.hidden_size, scale=0.02)
+    normalized = _normalized(hidden, state, config, layer_idx)
+    router_logits = F.linear(normalized.reshape(-1, config.hidden_size), state[prefix + "mlp.gate.weight"])
+    router_top = torch.topk(router_logits, config.num_experts_per_tok + 1, dim=-1).values
+    route_margin = router_top[:, -2] - router_top[:, -1]
+    selected_tokens = []
+    for anchor in (0, total_tokens // 2, total_tokens - 1):
+        start, end = max(0, anchor - 8), min(total_tokens, anchor + 9)
+        selected_tokens.append(start + int(route_margin[start:end].argmax()))
+    selected_tokens = sorted(set(selected_tokens))
+    reference_moe, experts = _sparse_moe_reference(
+        normalized,
+        state,
+        config,
+        layer_idx,
+        flat_indices=selected_tokens,
+    )
+    assert torch.unique(experts).numel() > config.num_experts_per_tok
+    reference = hidden.reshape(-1, config.hidden_size)[selected_tokens] + reference_moe
+    policy = _expert_sweep_policy()
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=layer_idx,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=max(64, sequence),
+        optimization_config=policy,
+    )
     sparse_chunks = []
-    original_sparse = decoder._sparse_moe_chunk
+    original_sparse = decoder._sparse_moe_prefill_chunk
 
     def counted_sparse(value, token_count):
         sparse_chunks.append(token_count)
         return original_sparse(value, token_count)
 
+    def forbidden_decode_sparse(*_args, **_kwargs):
+        pytest.fail("selected prefill entered token-as-batch decode sparse execution")
+
     def forbidden_dense(*_args, **_kwargs):
         pytest.fail("active-expert test entered dense all-expert execution")
 
-    monkeypatch.setattr(decoder, "_sparse_moe_chunk", counted_sparse)
+    monkeypatch.setattr(decoder, "_sparse_moe_prefill_chunk", counted_sparse)
+    monkeypatch.setattr(decoder, "_sparse_moe_chunk", forbidden_decode_sparse)
     monkeypatch.setattr(decoder, "_dense_expert_moe_chunk", forbidden_dense)
+    actual_moe = decoder._sparse_moe(
+        _to_tt(normalized.unsqueeze(0), mesh_device),
+        sequence,
+        phase="prefill",
+    )
+    actual_moe = ttnn.to_torch(actual_moe).squeeze(0).reshape(-1, config.hidden_size)[selected_tokens]
+    _assert_pcc(f"optimized-active-experts-moe-layer-{layer_idx}", reference_moe, actual_moe)
+    sparse_chunks.clear()
     key_cache, value_cache = decoder.create_paged_kv_cache()
-    page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    page_table = _to_tt(
+        _page_table(batch, math.ceil(sequence / decoder.page_size)),
+        mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
     cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
     actual = decoder.prefill_forward(
         _to_tt(hidden.unsqueeze(0), mesh_device),
@@ -701,7 +1136,10 @@ def test_optimized_non_aligned_sparse_prefill_exercises_active_experts(
         position_cos=_to_tt(cos, mesh_device) if decoder.use_rope else None,
         position_sin=_to_tt(sin, mesh_device) if decoder.use_rope else None,
     )
-    expected_chunks = [policy.moe_chunk_size] * math.ceil(total_tokens / policy.moe_chunk_size)
+    expected_chunks = [
+        min(policy.prefill_moe_chunk_size, total_tokens - start)
+        for start in range(0, total_tokens, policy.prefill_moe_chunk_size)
+    ]
     assert sparse_chunks == expected_chunks
     actual = ttnn.to_torch(actual).squeeze(0).reshape(-1, config.hidden_size)[selected_tokens]
     for token, (reference_row, actual_row) in enumerate(zip(reference, actual)):
@@ -765,10 +1203,13 @@ def test_optimized_serving_prefill_exercises_selected_dense_experts(mesh_device,
         position_sin=_to_tt(sin, mesh_device),
     )
     assert dense_calls == [batch * sequence]
+    actual_host = ttnn.to_torch(actual).squeeze(0)
+    assert torch.isfinite(actual_host.float()).all()
     _assert_pcc(
-        f"optimized-serving-prefill-dense-experts-b{batch}-s{sequence}",
+        f"optimized-serving-prefill-dense-experts-synthetic-diagnostic-b{batch}-s{sequence}",
         reference,
-        ttnn.to_torch(actual).squeeze(0),
+        actual_host,
+        threshold=-1.0,
     )
 
 
