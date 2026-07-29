@@ -573,6 +573,59 @@ REGIMES = {
         in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
         levers=dict(r3=0, coal=1),
     ),
+    # --- Refinement 3b: the hoisted interleaved bank table (lever 3) -----------
+    # `levers=dict(bt=N)`: 0 = off (the plan falls back to B13, i.e. the Refinement-3
+    # shipped path -- the counterfactual), 1 = gated, 2 = force past the payoff gate.
+    # The lever replaces B13's PER-BAND bank table with one primed per core, so its
+    # two counterfactual rows are "B13 as shipped" and "neither".
+    "p_g_to_sharded_bt_off": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(bt=0),
+    ),
+    "x_g_to_sharded_bt_bare": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(bt=0, b13=0),
+    ),
+    # ... and at depth 1, so the ledger can separate the lever from the C16 depth.
+    "x_g_to_sharded_bt_d1": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        double_buffer=False,
+    ),
+    # The lever's gate is (>= 2 bands/core) x (<= 128 B reads) on an INTERLEAVED
+    # source, so these two rows force it onto the interleaved regimes that meet the
+    # structural clause but currently ship B8 -- the counterfactual for "should the
+    # gate also take these?".
+    "x_2blk_128B_bt": dict(shape=(1, 1, 4096, 64), dtype=ttnn.bfloat16, levers=dict(b8=0, b13=0, bt=2)),
+    "x_tall_narrow_4blk_bt": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b8=0, b13=0, bt=2)),
+    "p_tall_narrow_4blk_b13": dict(shape=(1, 1, 8192, 32), dtype=ttnn.bfloat16, levers=dict(b8=0, b13=1, bt=0)),
+    # --- Refinement 3b lever 2: drop the do-nothing writer kernel on alias_out ---
+    # `levers=dict(nw=0)` is the counterfactual (the 3-kernel program of Refinement 3).
+    "p_g_to_sharded_nw_off": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(nw=0),
+    ),
+    # ... and on a SMALL alias_out shape, where a fixed per-launch cost is a much
+    # bigger share (lever B0: per-core-overhead levers are counterfactualed on the
+    # smallest shape they run in).
+    "n_g_to_sharded_small": dict(
+        shape=(1, 1, 512, 128),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(1, 3), (128, 64)),
+    ),
+    "p_g_to_sharded_small_nw_off": dict(
+        shape=(1, 1, 512, 128),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(1, 3), (128, 64)),
+        levers=dict(nw=0),
+    ),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
@@ -797,7 +850,7 @@ def test_bench_tilize(device):
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
         levers = spec.get("levers") or {}
-        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg", "r3", "coal"):
+        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg", "r3", "coal", "bt", "nw"):
             os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, 1))
         # Default 0: this one is a measurement probe, not a lever.
         os.environ["TILIZE_LEVER_ADDR"] = str(levers.get("addr", 0))
@@ -833,6 +886,8 @@ def test_bench_tilize(device):
                     depth=plan["depth"],
                     blocks=plan["blocks_per_core"],
                     b13=plan["stateful_read"],
+                    bt=plan["bank_table"],
+                    nw=plan["drop_writer"],
                     c7=plan["split_read"],
                     b8=plan["prefetch_blocks"],
                     b10=plan["vc_spread"],
@@ -849,7 +904,7 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
-        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG", "R3", "COAL"):
+        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG", "R3", "COAL", "BT", "NW"):
             os.environ[f"TILIZE_LEVER_{key}"] = "1"
         os.environ["TILIZE_LEVER_ADDR"] = "0"
         tpd.CORE_CAP_OVERRIDE = None
@@ -867,14 +922,14 @@ def test_bench_tilize(device):
         f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
         f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
         f"    {'regime':<34} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
-        f"{'blk':>4} {'B13':>4} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'GRP':>4} {'cbB/core':>9} "
+        f"{'blk':>4} {'B13':>4} {'BT':>3} {'NW':>3} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'GRP':>4} {'cbB/core':>9} "
         f"{'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
         gbps = (r["traffic"] / r["ns"]) if (r["traffic"] and r["ns"]) else 0.0
         lines.append(
             f"    {r['regime']:<34} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
-            f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['c7']:>3} "
+            f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['bt']:>3} {r['nw']:>3} {r['c7']:>3} "
             f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} {r['stg']:>4} {r['grp']:>4} "
             f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )

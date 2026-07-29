@@ -552,8 +552,100 @@ def _lever_flags():
         stg=int(os.environ.get("TILIZE_LEVER_STG", "1")),
         r3=int(os.environ.get("TILIZE_LEVER_R3", "1")),
         coal=int(os.environ.get("TILIZE_LEVER_COAL", "1")),
+        bt=int(os.environ.get("TILIZE_LEVER_BT", "1")),
+        nw=int(os.environ.get("TILIZE_LEVER_NW", "1")),
         addr=int(os.environ.get("TILIZE_LEVER_ADDR", "0")),
     )
+
+
+# --- Refinement 3b, lever 3: the hoisted interleaved bank table -----------------
+#
+# B13 (`StickReadMode::Stateful`) already reads bank-major with an armed command
+# buffer, but it rebuilds its bank addresses on EVERY band: `num_banks`
+# `accessor.get_noc_addr` calls per chunk-block. Refinement 3b's per-RISC Tracy
+# timeline is what makes that worth attacking — on `g_dram_to_sharded`'s aliased
+# plan it prices address generation at **4 857 of 17 017 NCRISC cycles** while the
+# unpack TRISC sits in `cb_wait_front` for 90 % of the kernel and BRISC for 99 %,
+# i.e. NCRISC is the critical path and every cycle it spends is the op's.
+# (Refinement 3 estimated the ceiling here at ~400 ns from B13's delta; the
+# timeline overturns that.)
+#
+# `dataflow_kernel_lib::InterleavedStickBands` primes the table ONCE per core (per
+# chunk) and every band reuses it, because the interleaved map is affine in the
+# page index. Everything else is identical to B13: same 32 transactions, same
+# bank-major order, one arm per bank group, one barrier per block.
+#
+# Two clauses, both structural-with-a-payoff-reading:
+#   * >= 2 bands per core -- with one band the hoist replaces `num_banks` calls
+#     with `num_banks` calls and only adds a table.
+#   * the same read-SIZE clause B13 carries. Above it the per-read command
+#     programming is a small share of the transaction, so neither the arming nor
+#     the address generation is worth the bank-major issue order.
+BANK_TABLE_MIN_BLOCKS = 2
+
+
+def bank_table_pays(blocks_per_core: int, chunk_row_bytes: int) -> bool:
+    """Lever-3 gate: hoist B13's bank table out of the block loop?
+
+    **MEASURED: NO — always False.** Three in-run A/B pairs, 7 rounds x 10
+    launches, CV <= 1.4 %, each against the plan that regime ships today:
+
+      regime                         hoisted | B13     | neither
+      -------------------------------|---------|--------|---------
+      `g_dram_to_sharded` (8 blk)    | 16 062  | 15 916 | 16 827
+      `[1,1,4096,64]`     (2 blk)    |  9 528  |  9 417 | --
+      `[1,1,8192,32]`     (4 blk)    | 13 264  | 13 208 | --
+
+    The hoist removes **84 of 96** `accessor.get_noc_addr` calls on the first row
+    and is **0.9 % SLOWER**; B13, which removes 160 of 256, is 5.4 % faster than
+    bare. Two facts follow, and together they close the address-generation
+    question this refinement opened:
+
+      1. `InterleavedAddrGen::get_noc_addr` is already about as cheap as the cached
+         table lookup + `bank_page * aligned_page` multiply that replaces it, so
+         the hoist trades one arithmetic sequence for another.
+      2. What B13 actually buys is not the arithmetic — it is the ARMED command
+         buffer (`noc_async_read_with_state` writes 2 registers where
+         `noc_async_read` writes 4-5), which the hoist already inherits.
+
+    And the deeper reading, which the per-RISC timeline (lever 1) supplies: the
+    read loop is DRAM-SERVICE bound, and `noc_async_read` spins in
+    `noc_cmd_buf_ready`, so the address arithmetic of row r+1 overlaps the service
+    of row r. Removing it just makes NCRISC spin longer. That is the same
+    "~70 % of the address-gen prize is hidden" that Refinements 1c and 3 inferred
+    from B13's delta — now measured directly by removing 87 % of the calls and
+    getting nothing.
+
+    Kept identity-false (with the `TILIZE_LEVER_BT=2` force flag and the
+    `x_*_bt*` bench rows) so the verdict stays re-measurable rather than a
+    changelog claim.
+    """
+    return False
+
+
+# --- Refinement 3b, lever 2: drop the writer kernel on `alias_out` --------------
+#
+# With the output CB aliased onto the shard the writer has NO NoC traffic: its
+# whole body is one `cb_wait_front(shard_tiles)` / `cb_pop_front(shard_tiles)`.
+# The per-RISC timeline prices that at **17 372 of 17 522 BRISC cycles blocked in
+# the wait (99 %)** — the kernel exists only to close the CB loop.
+#
+# It does not even need to close it. The aliased output CB has exactly
+# `shard_tiles` pages and compute pushes exactly `shard_tiles`, so after k pushes
+# the free space is `shard_tiles - k*chunk_wt >= chunk_wt` for every k < num_blocks:
+# `cb_reserve_back` never blocks and the CB never needs recycling. Across launches
+# the firmware re-runs `setup_local_cb_read_write_interfaces`, which sets
+# `tiles_acked_received_init = 0` (`circular_buffer_init.h`), so the un-popped
+# pages of the previous launch cannot leak into the next one.
+#
+# The program therefore ships TWO kernels instead of three. The one thing that has
+# to move with it is the output base-address runtime arg — with the CB aliased
+# there is no `Buffer*` arg forcing a re-patch, and `test_alias_program_cache_
+# rebinding` is the probe that catches it — so it is emitted on the compute kernel
+# instead (read by nobody; its job is to exist).
+def drop_writer_pays() -> bool:
+    """Lever-2 gate: is removing the do-nothing writer kernel worth it?"""
+    return True
 
 
 def stateful_read_pays(chunk_row_bytes: int) -> bool:
@@ -1171,6 +1263,8 @@ def _plan_alias(plan, geo):
             # Path B has no NoC traffic at all, so no transaction-shaping lever
             # applies (B13 / C7 / B8 / B10 / A3 all move NoC commands around).
             "stateful_read": 0,
+            "bank_table": 0,
+            "drop_writer": 0,
             "split_read": 0,
             "prefetch_blocks": 1,
             "vc_spread": 0,
@@ -1645,6 +1739,40 @@ def _plan_generic(
     if chunk_wt == 1:
         stagger &= ~STAGGER_WRITE
 
+    # --- Refinement 3b, lever 3: hoisted interleaved bank table ------------------
+    # B13's address generation, hoisted out of the block loop (see `bank_table_pays`
+    # and `InterleavedStickBands`). Decided LAST among the read-path levers because
+    # it is exclusive with every one of them -- it owns the whole 32-read row loop --
+    # and it SUPERSEDES B13, whose per-band table it replaces.
+    bt = levers["bt"]
+    bank_table_ok = (
+        row_page_stride == 1
+        # The affine page->bank map only exists on an INTERLEAVED source.
+        and in_geo is None
+        and not alias_in
+        and not coalesce_rows
+        and not blocks_row_major
+        and not split_read
+        and prefetch_blocks == 1
+        and read_group == 1
+        and not addr_probe
+        and not fanin_mode
+        and not stagger
+    )
+    bank_table = int(bank_table_ok and (bt == 2 or (bt == 1 and bank_table_pays(blocks_per_core, chunk_row_bytes))))
+    if bank_table:
+        # One or the other, never both: the hoisted table IS the bank-major arming.
+        stateful_read = 0
+
+    # --- Refinement 3b, lever 2: drop the do-nothing writer kernel ---------------
+    # Only on `alias_out`, where the writer has no NoC traffic at all, and only
+    # when nothing else needs it: lever C7 uses the writer as the SECOND read
+    # issuer, and the zone variant instruments its wait/pop.
+    nw = levers["nw"]
+    drop_writer = int(
+        alias_out and not split_read and (nw == 2 or (nw == 1 and drop_writer_pays())) and _zone_flag() == 0
+    )
+
     # --- lever B10: per-reader / per-writer static unicast VC -----------------
     # `vc_spread` is a BITMASK -- bit 0 = spread the reads, bit 1 = spread the
     # writes. Read and write live on different NoCs (B9) and are programmed by
@@ -1692,6 +1820,8 @@ def _plan_generic(
             "source_page_bytes": in_page_bytes,
             "shard_tiles": shard_tiles,
             "stateful_read": stateful_read,
+            "bank_table": bank_table,  # Refinement 3b lever 3
+            "drop_writer": drop_writer,  # Refinement 3b lever 2
             "split_read": split_read,
             "prefetch_blocks": prefetch_blocks,
             "vc_spread": vc_spread,
@@ -1901,6 +2031,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["read_group"],  # lever B7': blocks per read barrier
         plan["addr_probe"],  # measurement probe (bench only, garbage output)
         zones,  # Refinement 3b lever 1: per-RISC Tracy timeline (bench only)
+        plan["bank_table"],  # Refinement 3b lever 3: hoisted interleaved bank table
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1941,11 +2072,18 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     src_addr = input_tensor.buffer_address()
     dst_addr = output_tensor.buffer_address()
 
+    # Refinement 3b lever 2. With the writer gone the output base address has no
+    # other carrier, and the aliased CB is not a `Buffer*` runtime arg that would
+    # force a re-patch -- so it rides on the compute kernel. Nothing reads it; its
+    # job is to exist (`test_alias_program_cache_rebinding` is the probe).
+    drop_writer = bool(plan["drop_writer"])
+    compute_tail = [dst_addr] if drop_writer else []
+
     if alias:
         for core in plan["cores"]:
             reader_rt[core.x][core.y] = [src_addr]
             writer_rt[core.x][core.y] = [dst_addr]
-            compute_rt[core.x][core.y] = [plan["num_blocks"]]
+            compute_rt[core.x][core.y] = [plan["num_blocks"]] + compute_tail
     else:
         read_vcs = plan["read_vcs"]
         write_vcs = plan["write_vcs"]
@@ -2001,7 +2139,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 # Refinement 2b (arg 7): rotation of this core's chunk_wt tile writes.
                 index % chunk_wt,
             ]
-            compute_rt[core.x][core.y] = [row_count * chunk_count]
+            compute_rt[core.x][core.y] = [row_count * chunk_count] + compute_tail
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
@@ -2045,8 +2183,13 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     if cb_stage is not None:
         cbs.append(cb_stage)
 
+    # Refinement 3b lever 2: the do-nothing writer is not launched at all on
+    # `alias_out` (see `drop_writer_pays`). The aliased output CB has exactly as
+    # many pages as compute pushes, so nothing ever has to recycle it.
+    kernels = [reader_kernel, compute_kernel] if drop_writer else [reader_kernel, writer_kernel, compute_kernel]
+
     return ttnn.ProgramDescriptor(
-        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        kernels=kernels,
         semaphores=semaphores,
         cbs=cbs,
     )

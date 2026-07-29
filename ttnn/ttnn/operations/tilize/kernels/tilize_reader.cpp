@@ -216,7 +216,9 @@ void kernel_main() {
     constexpr uint32_t addr_probe = get_compile_time_arg_val(27);
     // Refinement 3b lever 1: per-RISC Tracy timeline (bench only, see the header).
     constexpr uint32_t zones = get_compile_time_arg_val(28);
-    constexpr auto src_args = TensorAccessorArgs<29>();
+    // Refinement 3b lever 3: hoisted interleaved bank table (see the header).
+    constexpr uint32_t bank_table = get_compile_time_arg_val(29);
+    constexpr auto src_args = TensorAccessorArgs<30>();
 
     using dataflow_kernel_lib::StickReadMode;
     constexpr StickReadMode read_mode = stateful_read ? StickReadMode::Stateful : StickReadMode::Generic;
@@ -276,6 +278,15 @@ void kernel_main() {
         !zones || (!alias_mode && !fanin_mode && !coalesce_rows && !split_read && prefetch_blocks == 1 && !stagger &&
                    !addr_probe && read_group == 1 && row_page_stride == 1 && vc_spread == 0),
         "the per-RISC timeline instruments the plain per-block read loop only");
+    // Lever 3 is the HOISTED form of B13: it owns the whole 32-read row loop and
+    // the bank arming, so every other lever that reshapes that loop is exclusive
+    // with it -- including B13 itself, whose per-band table it replaces. It also
+    // needs the generic chunk-outer block order (its table is primed per chunk).
+    static_assert(
+        !bank_table ||
+            (!alias_mode && !stateful_read && !coalesce_rows && !split_read && prefetch_blocks == 1 && !stagger &&
+             !fanin_mode && !addr_probe && !blocks_row_major && read_group == 1 && !zones && row_page_stride == 1),
+        "the hoisted bank table owns the read loop; B13/C7/B8/fan-in/rotation/coalesce cannot also own it");
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -297,6 +308,52 @@ void kernel_main() {
         if constexpr (read_vc_spread) {
             const uint32_t read_vc = get_arg_val<uint32_t>(5);
             noc_async_read_one_packet_set_state<true>(accessor.get_noc_addr(start_row), chunk_row_bytes, read_vc);
+        }
+
+        if constexpr (bank_table) {
+            // --- Refinement 3b lever 3: hoisted interleaved bank table -----------
+            // B13 (StickReadMode::Stateful) already reads bank-major with an armed
+            // command buffer, but it rebuilds its bank addresses PER BLOCK: 12
+            // `accessor.get_noc_addr` calls per band, 96 per core on the 8-band
+            // `alias_out` crossover. The per-RISC timeline (lever 1) prices address
+            // generation at 4 857 of 17 017 NCRISC cycles with the unpack TRISC
+            // blocked in `cb_wait_front` 90 % of the time -- i.e. NCRISC is the
+            // critical path, so that term is NOT hidden and is worth removing.
+            //
+            // The table is band-INDEPENDENT (see InterleavedStickBands), so one
+            // priming pass per chunk serves every band: 12 accessor calls per core
+            // instead of 12 per block. Everything else about the read is unchanged --
+            // same 32 transactions per block, same bank-major order, same one arm
+            // per bank group, same one barrier per block.
+            constexpr uint32_t bank_period =
+                decltype(TensorAccessor(src_args, src_addr))::DSpec::is_dram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
+            dataflow_kernel_lib::InterleavedStickBands<bank_period> bands;
+            const uint32_t blocks = num_rows / tile_height;
+            for (uint32_t c = 0; c < chunk_count; ++c) {
+                const uint32_t byte_offset = (chunk_start + c) * chunk_row_bytes;
+                bands.prime(accessor, start_row, byte_offset);
+                for (uint32_t block = 0; block < blocks; ++block) {
+                    const uint32_t page_offset = block * tile_height;
+                    cb_reserve_back(cb_rm_input, chunk_wt);
+                    const uint32_t l1_addr = get_write_ptr(cb_rm_input);
+                    // Checked, not assumed (watcher builds): the affine identity the
+                    // whole table rests on, re-derived through the accessor.
+                    ASSERT(bands.addr_of(page_offset) == accessor.get_noc_addr(start_row + page_offset, byte_offset));
+                    ASSERT(
+                        bands.addr_of(page_offset + tile_height - 1) ==
+                        accessor.get_noc_addr(start_row + page_offset + tile_height - 1, byte_offset));
+                    if constexpr (!skip_dm) {
+                        bands.read_band(page_offset, chunk_row_bytes, l1_addr, chunk_row_bytes, tile_height);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_rm_input, chunk_wt);
+                }
+            }
+            if constexpr (read_vc_spread) {  // NOC_CTRL is sticky across launches
+                noc_async_read_one_packet_set_state<true>(
+                    accessor.get_noc_addr(start_row), chunk_row_bytes, default_read_vc);
+            }
+            return;
         }
 
         if constexpr (zones) {

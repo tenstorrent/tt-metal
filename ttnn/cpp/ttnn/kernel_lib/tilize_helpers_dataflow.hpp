@@ -210,6 +210,88 @@ FORCE_INLINE void write_sticks_after_untilize(
     uint32_t start_page = 0,
     uint32_t byte_offset_within_page = 0);
 
+/**
+ * @brief Bank-address table for a run of tilize read bands, built ONCE per core
+ *
+ * `read_stick_rows_for_tilize<StickReadMode::Stateful>` already reads bank-major
+ * with an armed command buffer, but it rebuilds its bank addresses on every call:
+ * one `accessor.get_noc_addr` per bank group per BAND. On a plan with several
+ * bands (tile-row blocks) per core that address generation is the residual — it
+ * is pure NCRISC work, and on a read-bound plan every NCRISC cycle is on the
+ * critical path. A per-RISC Tracy timeline of tilize's `alias_out` crossover
+ * (`[1,1,2048,512]` -> BLOCK-sharded, 64 cores, 8 bands/core) attributes
+ * **4 857 of 17 017 NCRISC cycles to address generation alone**, with the unpack
+ * TRISC blocked in `cb_wait_front` for 90 % of the kernel.
+ *
+ * This class removes all but `num_banks` of those calls. It rests on the
+ * interleaved page mapping being an affine function of the page index: page `p`
+ * lives in bank `p % num_banks` at bank-page `p / num_banks`
+ * (`dataflow_api_addrgen.h` InterleavedAddrGen), so for a fixed byte offset
+ *
+ *     addr(first_page + m) = table[m % num_banks]
+ *                          + (m / num_banks) * aligned_page_size
+ *
+ * for EVERY m >= 0 — the table primed at `first_page` therefore serves every band
+ * at `first_page + k * stride`, for any k and any stride. `read_band()` walks the
+ * bands the same bank-major way the Stateful mode does (one arm per bank group,
+ * then a running `+= aligned_page` inside the group), so it keeps that mode's
+ * per-read cost and only drops the address generation.
+ *
+ * Applicable only to an INTERLEAVED accessor (a sharded one has no such affine
+ * map) and only worth priming when there is more than one band per core and at
+ * least two rows per bank group — otherwise the priming pass costs more than the
+ * calls it replaces. Both are compile-time checkable by the caller; `prime()`
+ * asserts the accessor part.
+ *
+ * @tparam num_banks Bank period — `NUM_DRAM_BANKS` or `NUM_L1_BANKS`.
+ *
+ * @code
+ *   dataflow_kernel_lib::InterleavedStickBands<NUM_DRAM_BANKS> bands;
+ *   bands.prime(accessor, start_row, byte_offset);           // num_banks accessor calls, once
+ *   for (uint32_t b = 0; b < num_blocks; ++b) {
+ *       cb_reserve_back(cb_in, chunk_wt);
+ *       bands.read_band(b * 32, row_bytes, get_write_ptr(cb_in), row_bytes, 32);
+ *       noc_async_read_barrier();
+ *       cb_push_back(cb_in, chunk_wt);
+ *   }
+ * @endcode
+ */
+template <uint32_t num_banks>
+class InterleavedStickBands {
+public:
+    /**
+     * @brief Build the bank table. Costs `num_banks` accessor calls, once per core.
+     * @param accessor Interleaved TensorAccessor for the source tensor
+     * @param first_page Page index the table is anchored at (band offsets are relative to it)
+     * @param byte_offset_within_page Byte offset inside each source page (folded into the table)
+     */
+    template <typename Accessor>
+    FORCE_INLINE void prime(const Accessor& accessor, uint32_t first_page, uint32_t byte_offset_within_page);
+
+    /**
+     * @brief Read one band of `num_rows` sticks, bank-major, with no accessor call
+     * @param page_offset Band start, RELATIVE to the `first_page` given to prime()
+     * @param row_bytes Bytes to read per row
+     * @param l1_addr Destination L1 address of row 0 of the band
+     * @param l1_row_stride Bytes between consecutive rows in L1
+     * @param num_rows Rows in this band
+     */
+    FORCE_INLINE void read_band(
+        uint32_t page_offset, uint32_t row_bytes, uint32_t l1_addr, uint32_t l1_row_stride, uint32_t num_rows) const;
+
+    /**
+     * @brief The address `read_band` would use for row `page_offset` of the run
+     *
+     * Exposed so a caller can re-derive it through the accessor under `ASSERT`
+     * and check the affine identity on device instead of assuming it.
+     */
+    FORCE_INLINE uint64_t addr_of(uint32_t page_offset) const;
+
+private:
+    uint64_t noc_addr_[num_banks];
+    uint32_t aligned_page_ = 0;
+};
+
 }  // namespace dataflow_kernel_lib
 
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.inl"

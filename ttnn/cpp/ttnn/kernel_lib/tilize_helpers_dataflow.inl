@@ -330,4 +330,65 @@ FORCE_INLINE void write_sticks_after_untilize(
     }
 }
 
+// ─── InterleavedStickBands ──────────────────────────────────────────────────
+//
+// The hoisted form of read_stick_rows_for_tilize<Stateful>'s address generation:
+// the bank table is primed once and every band reuses it (see the class doc for
+// the affine identity it rests on).
+
+template <uint32_t num_banks>
+template <typename Accessor>
+FORCE_INLINE void InterleavedStickBands<num_banks>::prime(
+    const Accessor& accessor, uint32_t first_page, uint32_t byte_offset_within_page) {
+    static_assert(
+        Accessor::DSpec::is_interleaved,
+        "InterleavedStickBands relies on the interleaved page->bank map; a sharded accessor has none");
+    aligned_page_ = accessor.get_aligned_page_size();
+    for (uint32_t bank = 0; bank < num_banks; ++bank) {
+        noc_addr_[bank] = accessor.get_noc_addr(first_page + bank, byte_offset_within_page);
+    }
+}
+
+template <uint32_t num_banks>
+FORCE_INLINE uint64_t InterleavedStickBands<num_banks>::addr_of(uint32_t page_offset) const {
+    const uint64_t entry = noc_addr_[page_offset % num_banks];
+    const uint64_t coord = entry & ~static_cast<uint64_t>(0xFFFFFFFFu);
+    const uint32_t local = static_cast<uint32_t>(entry) + (page_offset / num_banks) * aligned_page_;
+    return coord | static_cast<uint64_t>(local);
+}
+
+template <uint32_t num_banks>
+FORCE_INLINE void InterleavedStickBands<num_banks>::read_band(
+    uint32_t page_offset, uint32_t row_bytes, uint32_t l1_addr, uint32_t l1_row_stride, uint32_t num_rows) const {
+    // Bank group `g` of this band holds rows g, g+num_banks, g+2*num_banks, ...
+    // -- all in table entry (page_offset + g) % num_banks, at bank page
+    // (page_offset + g) / num_banks. Both are carried incrementally, so the loop
+    // contains no divide and no accessor call.
+    uint32_t bank = page_offset % num_banks;
+    uint32_t bank_page = page_offset / num_banks;
+    const uint32_t l1_group_stride = num_banks * l1_row_stride;
+
+    for (uint32_t group = 0; group < num_banks && group < num_rows; ++group) {
+        const uint64_t entry = noc_addr_[bank];
+        const uint64_t coord = entry & ~static_cast<uint64_t>(0xFFFFFFFFu);
+        uint32_t src_local_addr = static_cast<uint32_t>(entry) + bank_page * aligned_page_;
+        // One arm per bank group: with_state re-supplies the local address on every
+        // read, so the coordinate is all this pins.
+        noc_async_read_set_state(coord | static_cast<uint64_t>(src_local_addr));
+
+        uint32_t dst = l1_addr + group * l1_row_stride;
+        for (uint32_t row = group; row < num_rows; row += num_banks) {
+            noc_async_read_with_state(src_local_addr, dst, row_bytes);
+            // Row + num_banks is the SAME bank one aligned page further in.
+            src_local_addr += aligned_page_;
+            dst += l1_group_stride;
+        }
+
+        if (++bank == num_banks) {
+            bank = 0;
+            ++bank_page;
+        }
+    }
+}
+
 }  // namespace dataflow_kernel_lib
