@@ -235,25 +235,6 @@ def _stage_table_lines(stages: list) -> list:
     return out
 
 
-def _achievable_band_ms(floor_ms: float):
-    """The 60-80%-of-ceiling band expressed in ms, or None.
-
-    Derived from the SAME definition the LLM-decode branch uses: perf_target.target_from_floor_ms
-    turns a floor into a rate ceiling and a (lo, hi) rate band, so a slower ms is a LOWER rate --
-    the ms band is therefore [floor/hi_frac, floor/lo_frac]. Sourced from perf_target rather than
-    re-deriving 0.6/0.8 here, so one module owns what "achievable" means.
-    """
-    try:
-        from agent.perf_target import target_from_floor_ms
-    except Exception:  # noqa: BLE001
-        return None
-    tgt = target_from_floor_ms(floor_ms)
-    lo_rate, hi_rate = tgt.band
-    if not (lo_rate and hi_rate):
-        return None
-    return (1000.0 / hi_rate, 1000.0 / lo_rate)
-
-
 def _floor_status(floor_ms: float, measured_ms: float) -> str:
     """BELOW_BAND | IN_BAND | ABOVE_BAND for a floor-derived (non-decode) target.
 
@@ -629,14 +610,12 @@ def _roofline_lines(
             if have_floor
             else "  modeled floor       : n/a"
         )
-        # The floor is NOT a goal: its compute term assumes the FULL grid even for an op that ran on
-        # a few cores, and L1/sharded ops fall back to DRAM bandwidth for want of a calibrated L1
-        # peak. No real kernel reaches it, so a bare "% of floor" invites chasing an unreachable
-        # number. Show the same 60-80% ACHIEVABLE band the LLM branch shows -- derived from THIS
-        # floor via perf_target -- so both branches share one definition of "done".
-        _band = _achievable_band_ms(floor) if have_floor else None
-        if _band:
-            out.append(f"  achievable (60-80%) : {_band[0]:.2f} - {_band[1]:.2f} ms")
+        # NO ACHIEVABLE BAND IN THE FLOOR FORM, and no line pretending otherwise. This printed a
+        # hardcoded "achievable (60-80%) : … ms" from _achievable_band_ms(floor) -- which asks
+        # target_from_floor_ms for a band and is answered (0.0, 0.0) on purpose, because 60-80% of
+        # 1000/floor is not a bandwidth statement and has no hardware peak behind it. So the line could
+        # never render, and it survived only as a stale label describing physics the tool rejected. The
+        # rate ceiling is where a band belongs, and every model reaches that form now.
         out.append(
             f"  measured            : {fm:.2f} ms" if fm else "  measured            : n/a (no valid forward ms)"
         )
