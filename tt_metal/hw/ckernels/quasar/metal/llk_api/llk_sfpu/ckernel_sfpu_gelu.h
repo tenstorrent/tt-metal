@@ -133,7 +133,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         // Round H to the nearest multiple of 2⁻²⁵: adding 0.375 = (2²³+2²²)·2⁻²⁵ shifts H's
         // 2⁻²⁵ place to the FP32 round-to-nearest-even boundary (safe since H ∈ [3e-8, 9e-4] ≪ 0.25),
         // so (H + 0.375) - 0.375 == round(H / 2⁻²⁵) · 2⁻²⁵. In the deep tail (-5.5426, -4.828]
-        // this reproduces torch's exact float32 ercc staircase (0 BF16 ULP); above -4.828 the
+        // this reproduces torch's exact float32 erfc staircase (0 BF16 ULP); above -4.828 the
         // 2⁻²⁵ grid is far finer than BF16 so rounding is lossless. One constant serves the
         // whole exp region — no separate branch or multiply.
         constexpr float ROUND_TO_GRID = 0.375f;
