@@ -15,11 +15,12 @@ localizes to the FFN kernel.
 The ROW_MAJOR x layout (``x_rm``) is measured — the Blackhole fused-tilize
 production fast path (x tilized + bf8-packed inside the op, fresh output).
 
-Baselines in ``_EXPECTED_NS`` were MEASURED LOCALLY on a BH board on 2026-07-27
+Baselines in ``_EXPECTED_NS`` were MEASURED LOCALLY on a BH board on 2026-07-29
 and must be RECALIBRATED on the perf CI runner: device times are DDR-speed
 dependent, so the canonical baselines have to come from the CI runner the check
 actually runs on (mirrors the dated recalibration comments in the sibling
-``test_moe_perf`` / ``test_dispatch_combine_perf``).
+``test_moe_perf`` / ``test_dispatch_combine_perf``). Each value is the midpoint of
+a 3-sample min/max on one board; see ``_MARGIN`` for the observed spread.
 """
 
 import pytest
@@ -46,25 +47,32 @@ _LAYOUT_ID = "x_rm"  # Blackhole fused-tilize production fast path (ROW_MAJOR bf
 # Per-(model, active) UnifiedRoutedExpertFfnDeviceOperation device time in ns, measured
 # on a Blackhole P150 (2026-07-27). Recalibrate on the perf CI runner (device times are HW-dependent).
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k26", 0): 3_962,
-    ("kimi_k26", 128): 209_611,
-    ("kimi_k26", 256): 221_190,
-    ("kimi_k26", 512): 280_076,
-    ("kimi_k26", 1024): 402_655,
-    ("kimi_k26", 2048): 659_392,
-    ("kimi_k26", 4096): 1_294_679,
-    ("kimi_k26", 5120): 1_681_466,
-    ("glm_51", 0): 3_941,
-    ("glm_51", 128): 186_853,
-    ("glm_51", 256): 194_073,
-    ("glm_51", 512): 244_886,
-    ("glm_51", 1024): 351_959,
-    ("glm_51", 2048): 576_561,
-    ("glm_51", 4096): 1_141_564,
-    ("glm_51", 5120): 1_459_484,
+    ("kimi_k26", 0): 3_907,
+    ("kimi_k26", 128): 179_491,
+    ("kimi_k26", 256): 194_029,
+    ("kimi_k26", 512): 254_381,
+    ("kimi_k26", 1024): 328_781,
+    ("kimi_k26", 2048): 591_428,
+    ("kimi_k26", 4096): 1_173_901,
+    ("kimi_k26", 5120): 1_493_475,
+    ("glm_51", 0): 3_923,
+    ("glm_51", 128): 154_624,
+    ("glm_51", 256): 171_652,
+    ("glm_51", 512): 226_592,
+    ("glm_51", 1024): 287_046,
+    ("glm_51", 2048): 517_995,
+    ("glm_51", 4096): 1_025_398,
+    ("glm_51", 5120): 1_305_806,
 }
 
-_MARGIN = 0.03
+# 5% rather than 3%: re-measuring every case three times on a P150 showed most are
+# stable to <1%, but the short-ISL cases are not — kimi isl-256 spans 7.5%
+# (186.8/188.2/201.3 us) and glm isl-512 3.6%. Those runs are dominated by fixed
+# per-K-block sync latency rather than by streaming work, so they pick up
+# run-to-run jitter. Each baseline is the midpoint of its 3-sample min/max, and
+# +-5% covers the observed spread; tightening this needs multi-iteration averaging
+# in the harness, not a narrower band.
+_MARGIN = 0.05
 
 
 def _k_filter(model: str, active: int) -> str:
