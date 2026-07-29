@@ -114,9 +114,17 @@ BH lands it exactly-once, drop=0 (dst=02:00:00:00:00:02, the real BH RXQ2 MAC). 
 `flexio_process_call`, NOT an event handler (which only fires on an RX CQE). (2) the TX→vport steering matches
 on **dst MAC** — Phase C (done) points both TX rules at the BH dst MAC (`TT_BH_DMAC 0x020000000002`) so frames
 keep the real dst=BH (A1 had spoofed dst=SMAC to satisfy the stock rule). (3) DPA runs on the PF (mlx5_0),
-not the SF. **Next (DPA):** A2 (per-frame read landed payload) → A3 (trigger
-off the RoCE RQ completion; SF-RoCE vs PF-DPA cross-device) → A4 full re-head → A5 perf.
-**Next (egress overall):** B2 (MR federation via RISC1 doorbell 3.1e).
+not the SF.
+
+**A2/A4 per-frame re-head — dpa_ttblast.patch modes (env):** `TTDPA_ZC=1` = **A4 zero-copy gather** (write
+only the 46B header/frame; HW gathers the payload from a source mkey via the send WQE's 2nd data seg — needed
+the ctrl `ds` patched 3→4). `TTDPA_SRC=1` = A2 per-frame CPU copy; `TTDPA_HDRONLY=1` = header-only floor.
+**Findings (single DPA thread, jumbo):** copy 0.13 Mpps (~4G), gather+DPA-table-CRC 0.60 (~20G),
+gather+**CRC skipped/HW-offloaded** ~1.73 (~57G). The BH pool does NOT check header CRC → CRC can be skipped
+on the pool path (DPA table-CRC is slow — global in device memory; use HW ROCE_ICRC for a real endpoint).
+Gather lands byte-exact, exactly-once, drop=0. **Line-rate DPA re-head = gather + skip/HW-CRC + ~4 DPA
+threads (multi-thread fan-out).** **Next (DPA):** multi-thread (~4×) → A3 trigger (RoCE-RQ→DPA, hybrid
+doorbell) → A5 perf. **Next (egress overall):** B2 (MR federation via RISC1 doorbell 3.1e).
 
 ## 4. Regression / perf gates (run every phase change)
 ```
