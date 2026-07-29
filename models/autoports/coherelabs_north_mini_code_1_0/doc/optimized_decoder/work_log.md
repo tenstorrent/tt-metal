@@ -772,3 +772,11 @@ runtime-policy regression. Machine-readable distributions are in
 Commit ledger:
 
 - `327a8ffac63` — Complete North Mini sparse decoder sweep.
+- `8ce223940de` — Resolve North Mini prefill timing variance.
+
+The focused independent rereview in `STAGE_REVIEW_FINAL_REREVIEW.md` closes
+the prefill-variance finding: its recomputed paired confidence intervals
+include zero and its exact-field audit confirms the two interleaved labels
+execute the same prefill policy. The verdict remains `more-work-needed`
+solely for the batch-32 routed-output dependency. The reviewer found no
+further required model-local remediation.

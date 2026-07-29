@@ -313,4 +313,11 @@ the batch-32 routed-output capability documented in
 `ROUTED_MOE_HYPOTHESIS.md`: its required shared-TTNN local combine is outside
 the explicitly model-local write scope.
 
-Stage-owned remediation commit: `327a8ffac63` (local only, never pushed).
+`STAGE_REVIEW_FINAL_REREVIEW.md` independently closes the prefill-variance
+finding after recomputing the interleaved distributions and checking the
+phase-specific fields. Its verdict remains `more-work-needed` solely because
+the batch-32 routed-output capability requires a shared-TTNN change outside
+this stage's authorized files; it identifies no further model-local fix.
+
+Stage-owned commits: `327a8ffac63` and `8ce223940de` (local only, never
+pushed).
