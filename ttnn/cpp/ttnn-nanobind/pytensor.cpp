@@ -225,9 +225,23 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 
         // Previous impl only copied if data needed transformation. Instead *always* copy
         // because the HostBuffer will be returned directly to the other python frameworks
-        // wrapped in an ndarray
+        // wrapped in an ndarray.
 
-        auto logical_data = tt::tt_metal::tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
+        // BFP paths stage unpacked float into host_buffer while tensor_spec remains BFP; rebuild
+        // a matching FLOAT32 spec so HostTensor::to_vector does not re-unpack.
+        TensorSpec decode_spec = tensor_spec;
+        if (tensor_spec.data_type() != convert_to_data_type<T>()) {
+            decode_spec = TensorSpec(
+                tensor_spec.logical_shape(),
+                TensorLayout::fromPaddedShape(
+                    convert_to_data_type<T>(),
+                    tensor_spec.page_config(),
+                    MemoryConfig{},
+                    tensor_spec.logical_shape(),
+                    tensor_spec.padded_shape()));
+        }
+        auto logical_data =
+            HostTensor::from_buffer(std::move(host_buffer), decode_spec).to_vector<T>();
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 

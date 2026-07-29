@@ -26,6 +26,12 @@ namespace tt::tt_metal::tensor_impl {
 template <typename T>
 std::vector<T> encode_tensor_data(ttsl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value = 0);
 
+// Converts physical data into logical data based on tensor spec
+// - Physical data: Flat container of physical data corresponding to tensor spec
+// - Logical data: Flat container of row major data corresponding to ND logical shape
+template <typename T>
+std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const TensorSpec& tensor_spec);
+
 template <typename T>
 std::vector<T> to_tile_major_layout(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert);
 

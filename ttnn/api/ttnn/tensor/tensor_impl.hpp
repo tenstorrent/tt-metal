@@ -10,7 +10,6 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"

@@ -317,13 +317,12 @@ nb::object make_numpy_tensor(
 
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
         const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
-        const auto cpu_tensor_strides = cpu_tensor.strides();
 
         if (tt::tt_metal::logical_matches_physical(cpu_tensor_spec)) {
             return make_numpy_tensor_from_data.template operator()<NumpyType>(cpu_tensor_data, cpu_tensor_spec);
         }
 
-        const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(cpu_tensor_data, cpu_tensor_spec);
+        const auto decoded_data = cpu_tensor.host_tensor().to_vector<MetalType>();
         return make_numpy_tensor_from_data.template operator()<NumpyType>(decoded_data, cpu_tensor_spec);
     };
 
