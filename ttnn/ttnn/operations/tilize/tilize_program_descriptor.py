@@ -554,6 +554,25 @@ def _lever_flags():
         coal=int(os.environ.get("TILIZE_LEVER_COAL", "1")),
         bt=int(os.environ.get("TILIZE_LEVER_BT", "1")),
         nw=int(os.environ.get("TILIZE_LEVER_NW", "1")),
+        # Refinement 4, lever 1: the compute-only program on Path B.
+        #   0 = off (the Phase-0 three-kernel program == the counterfactual)
+        #   1 = gated (see `drop_dataflow_pays`)
+        #   2 = forced past the payoff gate
+        #   3 = compute-only but with the arm/drain FOLDED onto TRISC — i.e. the
+        #       `examples/zero_copy_fold` variant, kept as a bench row because it
+        #       is the arm that isolates *which half* of "fewer kernels" pays.
+        nd=int(os.environ.get("TILIZE_LEVER_ND", "1")),
+        # Refinement 4, lever 3: Fp32Mode::Fast on an fp32 input whose OUTPUT is
+        # narrower than fp32. 0 = off (always Lossless, the Phase-0 behaviour),
+        # 1 = gated, 2 = forced past the payoff gate.
+        f32=int(os.environ.get("TILIZE_LEVER_F32", "1")),
+        # Refinement 4, lever 2 (measurement, not a lever): issue ONE tilize call
+        # per chunk-block, each with its own InitAndUninit pair, instead of one
+        # call around the whole block loop. Prices the config-burst pair by
+        # subtraction — the ceiling of ANY init/uninit amortisation scheme. Output
+        # stays bit-exact (every call is fully inited), so unlike the ablations it
+        # measures the real kernel.
+        iu=int(os.environ.get("TILIZE_LEVER_IU", "0")),
         addr=int(os.environ.get("TILIZE_LEVER_ADDR", "0")),
     )
 
@@ -672,6 +691,104 @@ def drop_writer_pays() -> bool:
     on Path B, where the reader must also go.
     """
     return True
+
+
+# --- Refinement 4, lever 1: the compute-only program on Path B (B0) -------------
+#
+# Path B (same-spec L1-sharded I/O) aliases BOTH CBs onto the resident shards, so
+# the reader's whole body is `cb_reserve_back(shard_tiles); cb_push_back(shard_tiles)`
+# and the writer's is `cb_wait_front(shard_tiles); cb_pop_front(shard_tiles)`. Two
+# kernel launches whose only job is to publish pages that are ALREADY at the CB
+# address. Refinement 3b removed the writer on the one-sided `alias_out` alias for a
+# measured ~45 ns/launch; this is the same move with the reader going too.
+#
+# THE ARM/DRAIN IS NOT MOVED — IT IS DELETED. That distinction is the whole lever,
+# and `ttnn/ttnn/operations/examples/zero_copy_fold` is why it has to be made
+# explicitly: that example measures a compute-only program that FOLDS the arm/drain
+# onto TRISC and finds it 0.74x-0.95x, i.e. SLOWER, because the arm/drain used to
+# overlap the tilize on NCRISC/BRISC and now serializes onto the compute thread.
+# Deleting it instead is only sound because of the exact-page argument
+# (Refinement 3b, `drop_writer_pays`), which Path B satisfies on BOTH sides:
+#
+#   * INPUT: the aliased input CB has exactly `shard_tiles` pages and the bytes are
+#     already there, so nothing has to be published -- `WaitMode::NoWait` drops the
+#     per-block `cb_wait_front` and the helper's `cb_pop_front` still walks
+#     `fifo_rd_ptr` across the shard exactly as before (it is the read pointer, not
+#     the credit, that selects block k's rows). Total pops == `shard_tiles` == the
+#     CB size, so `llk_pop_tiles`' fifo-limit LLK_ASSERTs hold with equality.
+#   * OUTPUT: the aliased output CB has exactly `shard_tiles` pages and compute
+#     pushes exactly `shard_tiles`, so after k pushes the free space is
+#     `shard_tiles - k*chunk_wt >= chunk_wt` for every k < num_blocks:
+#     `cb_reserve_back` never blocks and the CB never needs recycling.
+#
+# Across launches the firmware re-runs `setup_local_cb_read_write_interfaces`, which
+# sets `tiles_acked_received_init = 0` (`circular_buffer_init.h`), so neither the
+# un-popped output pages nor the un-pushed input credits can leak into the next
+# launch of a cached program.
+#
+# Both base-address runtime args move onto the compute kernel (read by nobody; their
+# job is to exist), because with both CBs aliased there is no `Buffer*` runtime arg
+# forcing a re-patch -- `test_tilize_refinement4.py::test_path_b_program_cache_rebinding`
+# is the probe.
+DROP_DATAFLOW_MAX_BLOCKS_PER_CORE = 1 << 30  # no structural cap; see the gate
+
+
+def drop_dataflow_pays(blocks_per_core: int) -> bool:
+    """Lever-1 gate: run Path B as a compute-only program?
+
+    **MEASURED: YES, unconditionally on this path.** In-run A/B against the
+    three-kernel program (`TILIZE_LEVER_ND=0`), 15 rounds x 10 launches:
+
+      regime                  | 1 kernel |  3 kernels | ratio
+      ------------------------|----------|------------|-------
+      f_sharded_small  4 blk  |  see changelog.md, Refinement 4, Perf gate
+      f_sharded_large  8 blk  |  "
+      x_sharded_tiny   1 blk  |  "
+
+    The saving is two kernels' entry/exit plus the two CB handshakes they close,
+    and it is a FIXED per-launch term, so it is largest where the work per core is
+    smallest -- which is exactly the regime this refinement targets
+    (`f_sharded_small` is 50 % dispatch/CB-sync, 50 % tilize LLK, 0 % DM).
+
+    Not to be confused with FOLDING the arm/drain into compute, which
+    `examples/zero_copy_fold` measures at 0.74x-0.95x (slower). See the block
+    comment above: this deletes the arm/drain, it does not move it. The folded
+    variant is retained as the `TILIZE_LEVER_ND=3` bench arm so the two are
+    distinguishable by measurement rather than by argument.
+    """
+    return blocks_per_core <= DROP_DATAFLOW_MAX_BLOCKS_PER_CORE
+
+
+# --- Refinement 4, lever 3: Fp32Mode::Fast on a narrowing fp32 cast -------------
+#
+# The compute kernel used to pick `Fp32Mode::Lossless` from the INPUT CB format
+# alone, so `fp32 -> bf16` / `fp32 -> bf8b` took the slow (non-fast_tilize) LLK path
+# to preserve a precision the narrower output cannot hold. `Lossless` is only
+# *required* when the tiled output must be bit-identical to the fp32 input, i.e.
+# when the output is itself fp32.
+#
+# The switch is a HOST+KERNEL pair, not a kernel-only flag: `can_use_fast_tilize`
+# carries `static_assert(!has_unpack_to_dest_fp32<input_dfb>())` -- fast tilize
+# reads DEST at bf16 stride, so an UnpackToDestFp32 input CB would have the
+# unpacker write 32-bit payloads into slots the pack stage reads as tf32 and
+# silently corrupt the output. So `_compute_config` must also drop
+# `unpack_to_dest_mode[CB_RM_INPUT]` back to `Default` on exactly the cells this
+# gate turns on.
+def fp32_fast_pays(in_dtype, out_dtype) -> bool:
+    """Lever-3 gate: may an fp32 input take the fast tilize path?
+
+    Structural clause (not a payoff question): the output must NOT be fp32.
+    `fp32 -> fp32` is a bit-exactness contract (`test_tilize_precision_baseline`
+    asserts `exact_frac == 1.0`) and `can_use_fast_tilize` refuses an fp32 output
+    anyway, so Lossless + UnpackToDestFp32 is the only correct configuration there.
+
+    Payoff clause: see `changelog.md` Refinement 4 -- measured on the compute-bound
+    sharded regime the refinement targets AND on the DM-bound interleaved one, and
+    gated to where it was measured to pay.
+    """
+    if in_dtype != ttnn.float32:
+        return False  # not an fp32 input -> `Lossless` was never selected
+    return out_dtype != ttnn.float32
 
 
 def stateful_read_pays(chunk_row_bytes: int) -> bool:
@@ -1181,6 +1298,11 @@ def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_d
         "tile_out": tile_out,
         "tile_row_bytes": tile_row_bytes,
         "needs_cast": int(output_tensor.dtype != input_tensor.dtype),
+        # Refinement 4 lever 3 needs the dtypes themselves (not just `needs_cast`)
+        # in both planners, and `_compute_config` has to agree with the kernel's
+        # Fp32Mode on the same cell, so the decision lives in the plan.
+        "in_dtype": input_tensor.dtype,
+        "out_dtype": output_tensor.dtype,
     }
 
     # Path B is inherently multi-core (one shard per core), so an explicit
@@ -1252,6 +1374,21 @@ def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_d
     )
 
 
+def _fp32_lossless(plan) -> int:
+    """Refinement 4 lever 3: 1 == Fp32Mode::Lossless (slow, bit-exact fp32 path).
+
+    Only ever 0 for an fp32 input whose output is narrower than fp32 — every other
+    dtype either never selected Lossless (the kernel's own
+    `is_fp32_input_format` guard) or needs it for bit-exactness.
+    """
+    f32 = _lever_flags()["f32"]
+    if f32 == 0:
+        return 1  # counterfactual: the Phase-0 behaviour
+    if f32 == 2 or fp32_fast_pays(plan["in_dtype"], plan["out_dtype"]):
+        return 0
+    return 1
+
+
 def _plan_alias(plan, geo):
     """Path B: one resident shard per core, no NoC traffic on either side."""
     shard_h, shard_w = geo["h"], geo["w"]
@@ -1263,6 +1400,20 @@ def _plan_alias(plan, geo):
     cores = []
     for core_range in grid.ranges():
         cores.extend(ttnn.grid_to_cores(core_range.start, core_range.end, True))
+
+    # --- Refinement 4, lever 1: the compute-only program (see `drop_dataflow_pays`)
+    # The zone variant instruments the reader's and writer's OWN stages, so it needs
+    # both kernels to exist. The DM/compute ablations do not: `TILIZE_SKIP_DM` is a
+    # no-op on Path B (there is no NoC traffic to drop, which is the whole point) and
+    # `TILIZE_SKIP_COMPUTE` keeps the compute kernel's CB dance, which the
+    # compute-only program reproduces under `no_wait`. Keeping the lever ON under
+    # ablation is what makes `no_dm == full` a statement about the SHIPPED program;
+    # the three-kernel arm (`TILIZE_LEVER_ND=0`) carries the original witness.
+    nd = _lever_flags()["nd"]
+    drop_dataflow = int((nd == 2 or nd == 3 or (nd == 1 and drop_dataflow_pays(num_blocks))) and _zone_flag() == 0)
+    # nd == 3 is the `examples/zero_copy_fold` arm: still one kernel, but the
+    # arm/drain is FOLDED onto TRISC instead of deleted.
+    self_arm = int(drop_dataflow and nd == 3)
 
     plan.update(
         {
@@ -1290,7 +1441,11 @@ def _plan_alias(plan, geo):
             # applies (B13 / C7 / B8 / B10 / A3 all move NoC commands around).
             "stateful_read": 0,
             "bank_table": 0,
-            "drop_writer": 0,
+            # Refinement 4 lever 1: both dataflow kernels go, or neither.
+            "drop_writer": drop_dataflow,
+            "drop_reader": drop_dataflow,
+            "self_arm": self_arm,
+            "fp32_lossless": _fp32_lossless(plan),
             "split_read": 0,
             "prefetch_blocks": 1,
             "vc_spread": 0,
@@ -1848,6 +2003,11 @@ def _plan_generic(
             "stateful_read": stateful_read,
             "bank_table": bank_table,  # Refinement 3b lever 3
             "drop_writer": drop_writer,  # Refinement 3b lever 2
+            # Refinement 4 lever 1 is Path-B only: on the generic and one-sided-alias
+            # paths the reader is the op's whole data movement.
+            "drop_reader": 0,
+            "self_arm": 0,
+            "fp32_lossless": _fp32_lossless(plan),  # Refinement 4 lever 3
             "split_read": split_read,
             "prefetch_blocks": prefetch_blocks,
             "vc_spread": vc_spread,
@@ -1895,7 +2055,23 @@ _FP32_DEST_IN = (ttnn.float32, ttnn.uint32, ttnn.int32)
 _FP32_DEST_OUT = (ttnn.float32, ttnn.bfloat8_b, ttnn.uint32, ttnn.int32)
 
 
-def _compute_config(in_dtype, out_dtype):
+def _compute_config(in_dtype, out_dtype, fp32_lossless=1):
+    """ComputeConfig for the tilize kernel.
+
+    ``fp32_lossless`` (Refinement 4 lever 3) MUST agree with the compute kernel's
+    ``Fp32Mode`` on the same cell — the two are one decision split across the host
+    and the kernel, and the helper enforces the pairing with a ``static_assert`` in
+    both directions:
+
+    * ``Fp32Mode::Lossless`` requires ``unpack_to_dest_mode[CB_RM_INPUT] =
+      UnpackToDestFp32`` (otherwise the slow path still truncates fp32 to tf32 on
+      its way into DEST and the "lossless" promise is silently broken); and
+    * ``Fp32Mode::Fast`` on an fp32 input requires ``Default`` (fast tilize's pack
+      stage steps DEST at bf16 stride, so a 32-bit unpack payload would be read as
+      tf32 and the output would be silently corrupt).
+
+    Both are compile-time, so a mismatch fails the JIT build rather than the test.
+    """
     fp32_dest_acc_en = in_dtype in _FP32_DEST_IN or out_dtype in _FP32_DEST_OUT
 
     config = ttnn.ComputeConfigDescriptor()
@@ -1906,7 +2082,12 @@ def _compute_config(in_dtype, out_dtype):
         # Must be assigned wholesale: nanobind's bound vector copies on
         # __getitem__, so in-place element assignment is silently dropped.
         modes = [ttnn.UnpackToDestMode.Default] * 32
-        modes[CB_RM_INPUT] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        # An fp32 input on the FAST path must stay Default; every other input format
+        # either needs the fp32 unpack (Lossless) or ignores it (uint32/int32/bf16,
+        # where `is_fp32_input_format` is false so the kernel never asks for
+        # Lossless and `has_supported_fast_tilize_format` never selects fast).
+        if fp32_lossless or in_dtype != ttnn.float32:
+            modes[CB_RM_INPUT] = ttnn.UnpackToDestMode.UnpackToDestFp32
         config.unpack_to_dest_mode = modes
     return config
 
@@ -2089,7 +2270,24 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     # ---------------- compute ----------------
-    compute_ct_args = [chunk_wt, plan["needs_cast"], skip_compute, zones]
+    # Refinement 4 lever 1. `no_wait` == nobody publishes the input CB (the bytes are
+    # already at its address), so the helper's per-block `cb_wait_front` must go;
+    # `self_arm` == the `zero_copy_fold` counterfactual, where the arm/drain is folded
+    # onto TRISC instead of deleted (so the wait stays and is satisfied by the kernel's
+    # own push).
+    drop_reader = bool(plan["drop_reader"])
+    self_arm = bool(plan["self_arm"])
+    compute_ct_args = [
+        chunk_wt,
+        plan["needs_cast"],
+        skip_compute,
+        zones,
+        int(drop_reader and not self_arm),  # no_wait
+        int(self_arm),
+        plan["shard_tiles"],
+        plan["fp32_lossless"],  # Refinement 4 lever 3
+        _lever_flags()["iu"],  # Refinement 4 lever 2 (measurement)
+    ]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
@@ -2098,12 +2296,13 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     src_addr = input_tensor.buffer_address()
     dst_addr = output_tensor.buffer_address()
 
-    # Refinement 3b lever 2. With the writer gone the output base address has no
-    # other carrier, and the aliased CB is not a `Buffer*` runtime arg that would
-    # force a re-patch -- so it rides on the compute kernel. Nothing reads it; its
-    # job is to exist (`test_alias_program_cache_rebinding` is the probe).
+    # Refinement 3b lever 2 / Refinement 4 lever 1. With a dataflow kernel gone the
+    # base address it carried has no other carrier, and an aliased CB is not a
+    # `Buffer*` runtime arg that would force a re-patch -- so it rides on the compute
+    # kernel. Nothing reads them; their job is to exist
+    # (`test_alias_program_cache_rebinding` / `test_path_b_program_cache_rebinding`).
     drop_writer = bool(plan["drop_writer"])
-    compute_tail = [dst_addr] if drop_writer else []
+    compute_tail = ([src_addr] if drop_reader else []) + ([dst_addr] if drop_writer else [])
 
     if alias:
         for core in plan["cores"]:
@@ -2186,7 +2385,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         core_ranges=core_ranges,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
-        config=_compute_config(input_tensor.dtype, output_tensor.dtype),
+        config=_compute_config(input_tensor.dtype, output_tensor.dtype, plan["fp32_lossless"]),
     )
 
     # Lever C7's NCRISC <-> BRISC handshake. Two monotonic per-launch counters in
@@ -2212,7 +2411,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # Refinement 3b lever 2: the do-nothing writer is not launched at all on
     # `alias_out` (see `drop_writer_pays`). The aliased output CB has exactly as
     # many pages as compute pushes, so nothing ever has to recycle it.
-    kernels = [reader_kernel, compute_kernel] if drop_writer else [reader_kernel, writer_kernel, compute_kernel]
+    # Refinement 4 lever 1: on Path B the reader goes too, leaving a COMPUTE-ONLY
+    # program (see `drop_dataflow_pays`).
+    kernels = []
+    if not drop_reader:
+        kernels.append(reader_kernel)
+    if not drop_writer:
+        kernels.append(writer_kernel)
+    kernels.append(compute_kernel)
 
     return ttnn.ProgramDescriptor(
         kernels=kernels,
