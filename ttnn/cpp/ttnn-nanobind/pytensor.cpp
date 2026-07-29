@@ -1545,7 +1545,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "to_list",
             [](Tensor& self) -> nb::object {
-                using namespace tt::tt_metal::tensor_impl;
+                using namespace ttnn::tensor_impl;
                 return dispatch(self.dtype(), [&]<typename T>() -> nb::object {
                     const auto& logical_shape = self.logical_shape();
                     auto shape_vec = CMAKE_UNIQUE_NAMESPACE::ttnn_shape_to_ndarray(logical_shape);
