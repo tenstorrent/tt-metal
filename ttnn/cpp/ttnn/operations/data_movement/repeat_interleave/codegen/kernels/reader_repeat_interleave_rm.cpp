@@ -25,6 +25,8 @@
 //          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH
 // RT args: src_addr, num_out_pages, out_start_page
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -43,6 +45,9 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, input_page_size);
 
+    Noc noc;
+    CircularBuffer cb_in(cb_id);
+
     constexpr uint32_t SRC_LOWER = REP_DIM_PAGES * LOWER_PAGES;
     constexpr uint32_t DST_LOWER = NUM_REPEATS * SRC_LOWER;
 
@@ -51,8 +56,8 @@ void kernel_main() {
 
     while (pages_left > 0) {
         uint32_t batch = (pages_left < BATCH) ? pages_left : BATCH;
-        cb_reserve_back(cb_id, batch);
-        uint32_t l1_addr = get_write_ptr(cb_id);
+        cb_in.reserve_back(batch);
+        uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
             uint32_t block = out_page / DST_LOWER;
@@ -62,13 +67,12 @@ void kernel_main() {
             uint32_t in_rep = out_rep / NUM_REPEATS;
             uint32_t src_page = block * SRC_LOWER + in_rep * LOWER_PAGES + lo;
 
-            uint64_t noc_addr = s.get_noc_addr(src_page);
-            noc_async_read(noc_addr, l1_addr, stick_size);
-            l1_addr += l1_slot_stride;
+            noc.async_read(s, cb_in, stick_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
+            l1_offset += l1_slot_stride;
             out_page++;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id, batch);
+        noc.async_read_barrier();
+        cb_in.push_back(batch);
         pages_left -= batch;
     }
 }

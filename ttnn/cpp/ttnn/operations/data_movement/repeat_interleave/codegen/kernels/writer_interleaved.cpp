@@ -7,6 +7,9 @@
 // When BATCH > 1: pipelined — overlaps NOC DMA of batch N with compute
 // delivering batch N+1. Requires cb_out depth >= 2 * BATCH.
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -41,6 +44,9 @@ void kernel_main() {
         REQUESTED_WRITE_SIZE < destination_page_size ? REQUESTED_WRITE_SIZE : destination_page_size;
     const uint32_t write_size = write_size_dst < l1_page_stride ? write_size_dst : l1_page_stride;
 
+    Noc noc;
+    CircularBuffer cb(cb_out);
+
     uint32_t tile_id = start_id;
 
     if constexpr (BATCH > 1) {
@@ -52,11 +58,12 @@ void kernel_main() {
 
         // Prime the pipeline: issue first batch without prior flush
         uint32_t batch = (tiles_left < BATCH) ? tiles_left : BATCH;
-        cb_wait_front(cb_out, batch);
-        uint32_t l1_addr = get_read_ptr(cb_out);
+        cb.wait_front(batch);
+        uint32_t l1_read_offset = 0;
         for (uint32_t t = 0; t < batch; t++) {
-            noc_async_write_page(tile_id++, d, l1_addr, write_size);
-            l1_addr += l1_page_stride;
+            noc.async_write(
+                cb, d, write_size, {.offset_bytes = l1_read_offset}, {.page_id = tile_id++, .offset_bytes = 0});
+            l1_read_offset += l1_page_stride;
         }
         tiles_left -= batch;
         uint32_t prev_batch = batch;
@@ -66,29 +73,30 @@ void kernel_main() {
         // been popped yet and are still counted as "available" by cb_wait_front.
         while (tiles_left > 0) {
             batch = (tiles_left < BATCH) ? tiles_left : BATCH;
-            cb_wait_front(cb_out, prev_batch + batch);  // wait for NEW batch to arrive
-            noc_async_writes_flushed();                 // flush prev (NOC drained during wait)
-            cb_pop_front(cb_out, prev_batch);           // reclaim prev batch space
+            cb.wait_front(prev_batch + batch);  // wait for NEW batch to arrive
+            noc.async_writes_flushed();         // flush prev (NOC drained during wait)
+            cb.pop_front(prev_batch);           // reclaim prev batch space
 
-            l1_addr = get_read_ptr(cb_out);
+            l1_read_offset = 0;
             for (uint32_t t = 0; t < batch; t++) {
-                noc_async_write_page(tile_id++, d, l1_addr, write_size);
-                l1_addr += l1_page_stride;
+                noc.async_write(
+                    cb, d, write_size, {.offset_bytes = l1_read_offset}, {.page_id = tile_id++, .offset_bytes = 0});
+                l1_read_offset += l1_page_stride;
             }
             tiles_left -= batch;
             prev_batch = batch;
         }
 
         // Drain final batch
-        noc_async_writes_flushed();
-        cb_pop_front(cb_out, prev_batch);
+        noc.async_writes_flushed();
+        cb.pop_front(prev_batch);
     } else {
         for (uint32_t i = 0; i < num_tiles; i++) {
-            cb_wait_front(cb_out, 1);
-            noc_async_write_page(tile_id++, d, get_read_ptr(cb_out), write_size);
-            noc_async_writes_flushed();
-            cb_pop_front(cb_out, 1);
+            cb.wait_front(1);
+            noc.async_write(cb, d, write_size, {.offset_bytes = 0}, {.page_id = tile_id++, .offset_bytes = 0});
+            noc.async_writes_flushed();
+            cb.pop_front(1);
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

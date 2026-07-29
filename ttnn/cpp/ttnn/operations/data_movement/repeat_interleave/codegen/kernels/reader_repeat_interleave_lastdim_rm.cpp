@@ -25,6 +25,9 @@
 //     TensorAccessorArgs(in_t), cb_id, BATCH
 // RT: src_addr, num_out_pages, out_start_page   (src_page == out_page)
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -47,30 +50,37 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, input_page_size);
 
+    Noc noc;
+    CircularBuffer cb_in(cb_id);
+
     uint32_t page = out_start_page;
     uint32_t pages_left = num_out_pages;
 
     while (pages_left > 0) {
         uint32_t batch = (pages_left < BATCH) ? pages_left : BATCH;
-        cb_reserve_back(cb_id, batch);
-        uint32_t l1 = get_write_ptr(cb_id);
+        cb_in.reserve_back(batch);
+        // Absolute L1 base is still needed: the staging address is alignment-
+        // rounded off the slot address, and the in-place expansion below walks
+        // raw L1. CB-relative NoC offsets are derived as (stage - l1).
+        uint32_t l1 = cb_in.get_write_ptr();
 
         // Read all sticks in the batch into the tail of their slots first.
         uint32_t rd = l1;
         for (uint32_t t = 0; t < batch; t++) {
             uint32_t stage = (rd + src_min_off + input_alignment - 1) & ~(input_alignment - 1);
-            noc_async_read(s.get_noc_addr(page + t), stage, in_read_size);
+            noc.async_read(
+                s, cb_in, in_read_size, {.page_id = page + t, .offset_bytes = 0}, {.offset_bytes = stage - l1});
             rd += l1_slot_stride;
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // Expand each stick front-to-back, in place.
         uint32_t slot = l1;
         for (uint32_t t = 0; t < batch; t++) {
             if constexpr (ELEM_SIZE == 2) {
-                volatile tt_l1_ptr uint16_t* b = (volatile tt_l1_ptr uint16_t*)slot;
+                CoreLocalMem<volatile uint16_t> b(slot);
                 uint32_t stage = (slot + src_min_off + input_alignment - 1) & ~(input_alignment - 1);
-                volatile tt_l1_ptr uint16_t* src = (volatile tt_l1_ptr uint16_t*)stage;
+                CoreLocalMem<volatile uint16_t> src(stage);
                 uint32_t o = 0;
                 for (uint32_t i = 0; i < W_in; i++) {
                     uint16_t v = src[i];
@@ -79,9 +89,9 @@ void kernel_main() {
                     }
                 }
             } else {  // ELEM_SIZE == 4
-                volatile tt_l1_ptr uint32_t* b = (volatile tt_l1_ptr uint32_t*)slot;
+                CoreLocalMem<volatile uint32_t> b(slot);
                 uint32_t stage = (slot + src_min_off + input_alignment - 1) & ~(input_alignment - 1);
-                volatile tt_l1_ptr uint32_t* src = (volatile tt_l1_ptr uint32_t*)stage;
+                CoreLocalMem<volatile uint32_t> src(stage);
                 uint32_t o = 0;
                 for (uint32_t i = 0; i < W_in; i++) {
                     uint32_t v = src[i];
@@ -93,7 +103,7 @@ void kernel_main() {
             slot += l1_slot_stride;
         }
 
-        cb_push_back(cb_id, batch);
+        cb_in.push_back(batch);
         page += batch;
         pages_left -= batch;
     }
