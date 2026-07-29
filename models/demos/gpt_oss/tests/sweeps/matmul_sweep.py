@@ -526,13 +526,13 @@ def main():
             json.dump(snap, f, indent=2)
         os.replace(tmp, progress_path)
 
+    n_ok = n_skip = n_fatal = 0
     write_progress(0, "(starting)")
     print(f"# progress file: {progress_path}", flush=True)
 
     dev = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     rows = []
     best = {}
-    n_ok = n_skip = n_fatal = 0
     bar = tqdm(total=total, unit="cfg", dynamic_ncols=True) if tqdm is not None else None
     try:
         for i, t in enumerate(trials):
