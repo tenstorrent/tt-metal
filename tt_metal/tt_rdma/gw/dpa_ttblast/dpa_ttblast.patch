@@ -11,7 +11,7 @@
  
  /* Structure for transfer CQ data */
  struct app_transfer_cq {
-@@ -83,6 +83,24 @@
+@@ -83,6 +83,31 @@
  	struct app_transfer_cq sq_cq_transf;
  	/* SQ transfer information. */
  	struct app_transfer_wq sq_transf;
@@ -33,12 +33,19 @@
 +	/* Skip the header CRC (write 0). A4 found the DPA-side CRC caps a thread at ~20G (table) vs ~57G without;
 +	 * the BH drainer pool does NOT check header CRC, so this is safe on the pool path and needed for line rate. */
 +	uint8_t tt_no_crc;
++	/* ---- A3.2 hybrid doorbell: DPA reads a HOST-memory doorbell via a flexio_window ---- */
++	uint32_t tt_win_id;              /* flexio_window id (host flexio_window_get_id) -> DPA window_config */
++	uint32_t tt_db_mkey;             /* ibv_mr lkey over the host doorbell region (window access key) */
++	flexio_uintptr_t tt_db_haddr;    /* HOST virtual address of the doorbell region */
++	uint32_t tt_outbox_id;           /* explicit outbox id (over process UAR): the DPA must RESTORE this after
++	                                  * each window access, or the shared thread-config slot leaves the SQ
++	                                  * doorbell pointing at the window and sends silently fail to egress. */
  	uint8_t not_first_run;
  } __attribute__((__packed__, aligned(8)));
  
 --- a/packet_processor/dev/flexio_packet_processor_dev.c
 +++ b/packet_processor/dev/flexio_packet_processor_dev.c
-@@ -178,6 +178,168 @@
+@@ -178,6 +178,287 @@
  	flexio_dev_dbr_rq_inc_pi(app_ctx.rq_ctx.rq_dbr);
  }
  
@@ -204,10 +211,129 @@
 +	return d->tt_count;
 +}
 +
++/* ---- A3.2 arrival-driven re-head: drain a HOST doorbell, gather-egress each newly-"landed" frame ----
++ * The doorbell is a single uint64 `produced` in host memory (the RoCE responder bumps it per WRITE_IMM). The
++ * DPA polls it via window entity 0 and egresses frames [0..produced), each a gather send from the host landing
++ * buffer (tt_src_daddr/tt_src_mkey, A3.1), until it has egressed tt_count total. Runs in ONE RPC with a bounded
++ * spin (SPIN_MAX) so a stalled producer can't hang the DPA forever. Returns frames egressed. */
++uint64_t tt_drain_rpc(uint64_t arg);
++__dpa_rpc__ uint64_t tt_drain_rpc(uint64_t arg)
++{
++	struct host2dev_packet_processor_data *d = (void *)arg;
++	struct tt_blast_ctx c;
++	struct flexio_dev_thread_ctx *dtctx;
++	flexio_uintptr_t db_local = 0;
++	const uint32_t plen = d->tt_plen;
++	const uint32_t flen = 14u + 32u + plen;
++	const uint32_t hdr_len = 14u + 32u;
++	const uint32_t BATCH = 16u;
++	const int gather = (d->tt_src_mkey != 0);
++	const uint8_t *src = (const uint8_t *)d->tt_src_daddr;
++	const uint64_t SPIN_MAX = 4000000000ull; /* ~watchdog backstop if the producer stalls */
++	volatile uint64_t *produced;
++	uint64_t consumed = 0, spin = 0;
++
++	tt_ctx_init(&c, d);
++	if (!d->tt_no_crc)
++		tt_crc_init();
++	flexio_dev_get_thread_ctx(&dtctx);
++	/* Resolve the host doorbell address once (window entity 0). NOTE: window config and the SQ's outbox share
++	 * the thread's config slot -> after ANY window access the outbox MUST be restored or SQ doorbells go to
++	 * the window and sends silently fail to egress. So we toggle: window to read `produced`, outbox to send. */
++	flexio_dev_window_config(FLEXIO_DEV_WINDOW_ENTITY_0, (uint16_t)d->tt_win_id, d->tt_db_mkey);
++	if (flexio_dev_window_ptr_acquire(FLEXIO_DEV_WINDOW_ENTITY_0, d->tt_db_haddr, &db_local) !=
++	    FLEXIO_DEV_STATUS_SUCCESS)
++		return 0;
++	produced = (volatile uint64_t *)db_local;
++	flexio_dev_outbox_config(NULL, (uint16_t)d->tt_outbox_id); /* back to send mode */
++
++	while (consumed < d->tt_count) {
++		uint64_t p;
++
++		/* peek the host doorbell (switch to window, read, switch back to outbox for the sends) */
++		flexio_dev_window_config(FLEXIO_DEV_WINDOW_ENTITY_0, (uint16_t)d->tt_win_id, d->tt_db_mkey);
++		__dpa_thread_fence(__DPA_MEMORY, __DPA_R, __DPA_R);
++		p = *produced; /* live host doorbell read via the window */
++		flexio_dev_outbox_config(NULL, (uint16_t)d->tt_outbox_id);
++		if (p > d->tt_count)
++			p = d->tt_count;
++		if (consumed >= p) { /* caught up -> wait for more arrivals (bounded) */
++			if (++spin > SPIN_MAX)
++				break;
++			continue;
++		}
++		spin = 0;
++		/* drain [consumed, p) in SQ-CQ-paced batches */
++		while (consumed < p) {
++			uint64_t end = consumed + BATCH;
++			uint32_t j, b;
++
++			if (end > p)
++				end = p;
++			b = (uint32_t)(end - consumed);
++			for (j = 0; j < b; j++) {
++				uint8_t *f = (uint8_t *)get_next_dte(&c.dt_ctx, DATA_IDX_MASK, LOG_WQD_CHUNK_BSIZE);
++				union flexio_dev_sqe_seg *cseg, *swqe;
++
++				tt_build_frame(f, d, plen, (uint32_t)(consumed + 1), src, gather);
++				cseg = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++				flexio_dev_swqe_seg_ctrl_set(cseg, c.sq_ctx.sq_pi, c.sq_ctx.sq_number,
++							     (j == b - 1) ? FLEXIO_CTRL_SEG_CE_CQE_ALWAYS
++									  : FLEXIO_CTRL_SEG_CE_CQE_ON_CQE_ERROR,
++							     FLEXIO_CTRL_SEG_TYPE_SEND_EN);
++				if (gather)
++					((uint8_t *)&cseg->ctrl.qpn_ds)[3] = 4u;
++				swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++				flexio_dev_swqe_seg_eth_set(swqe, 0, 0, 0, NULL);
++				swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++				flexio_dev_swqe_seg_mem_ptr_data_set(swqe, gather ? hdr_len : flen, c.lkey, (uint64_t)f);
++				swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++				if (gather)
++					flexio_dev_swqe_seg_mem_ptr_data_set(swqe, plen, d->tt_src_mkey, d->tt_src_daddr);
++				c.sq_ctx.sq_pi++;
++				consumed++;
++			}
++			__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
++			flexio_dev_qp_sq_ring_db(c.sq_ctx.sq_pi, c.sq_ctx.sq_number);
++			__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
++			while (flexio_dev_cqe_get_owner(c.sq_cq_ctx.cqe) != c.sq_cq_ctx.cq_hw_owner_bit)
++				;
++			com_step_cq(&c.sq_cq_ctx);
++		}
++	}
++	flexio_dev_print("TT-RDMA drain done: %u frames egressed (doorbell peek %u)\n", (uint32_t)consumed,
++			 (uint32_t)*produced);
++	return consumed;
++}
++
++/* ---- A3.2 doorbell seam test: read one uint64 from HOST memory via a flexio_window ----
++ * Proves the DPA can read a host-memory doorbell (the RoCE responder will bump it per WRITE_IMM). `arg` is the
++ * DPA-heap host2dev struct; tt_win_id/tt_db_mkey/tt_db_haddr describe the host doorbell. Returns the value
++ * read (so the host can verify it sees live host writes across successive calls). */
++uint64_t tt_winread_rpc(uint64_t arg);
++__dpa_rpc__ uint64_t tt_winread_rpc(uint64_t arg)
++{
++	struct host2dev_packet_processor_data *d = (void *)arg;
++	struct flexio_dev_thread_ctx *dtctx;
++	flexio_uintptr_t local = 0;
++	uint64_t v = 0;
++
++	flexio_dev_get_thread_ctx(&dtctx);
++	/* Point window entity 0 at the host doorbell region (window id + its access mkey). */
++	flexio_dev_window_config(FLEXIO_DEV_WINDOW_ENTITY_0, (uint16_t)d->tt_win_id, d->tt_db_mkey);
++	/* Translate the host VA into a DPA-local pointer, then read it. */
++	if (flexio_dev_window_ptr_acquire(FLEXIO_DEV_WINDOW_ENTITY_0, d->tt_db_haddr, &local) ==
++	    FLEXIO_DEV_STATUS_SUCCESS) {
++		__dpa_thread_fence(__DPA_MEMORY, __DPA_R, __DPA_R);
++		v = *(volatile uint64_t *)local;
++	}
++	return v;
++}
++
  /* Entry point function that host side call for the execute.
   *  thread_arg - pointer to the host2dev_packet_processor_data structure
   *     to transfer data from the host side.
-@@ -194,6 +356,15 @@
+@@ -194,6 +475,15 @@
  		data_from_host->not_first_run = 1;
  	}
  
@@ -238,16 +364,20 @@
  /* Used for host (x86/DPU) memory allocations. */
  #include <malloc.h>
  
-@@ -59,6 +65,8 @@
+@@ -59,6 +65,12 @@
  
  /* Flex IO packet processor device (DPA) side function stub. */
  extern flexio_func_t flexio_pp_dev;
 +/* TT-RDMA A1: DPA-side RPC blast entry, invoked synchronously via flexio_process_call. */
 +extern flexio_func_t tt_blast_rpc;
++/* A3.2: DPA-side RPC that reads one uint64 from host memory via a flexio_window (doorbell seam test). */
++extern flexio_func_t tt_winread_rpc;
++/* A3.2: DPA-side RPC that drains a host doorbell + gather-egresses each newly-landed frame (arrival-driven). */
++extern flexio_func_t tt_drain_rpc;
  
  /* Application context struct holding necessary host side variables. */
  struct app_context {
-@@ -122,6 +130,31 @@
+@@ -122,6 +134,31 @@
  	 * information struct.
  	 */
  	flexio_uintptr_t app_data_daddr;
@@ -279,7 +409,7 @@
  };
  
  /* Open ibv device
-@@ -178,8 +211,8 @@
+@@ -178,8 +215,8 @@
  /* Number of entries in each RQ/SQ/CQ is 2^LOG_Q_DEPTH. */
  #define LOG_Q_DEPTH 7
  #define Q_DEPTH L2V(LOG_Q_DEPTH)
@@ -290,7 +420,7 @@
  /* SQ/RQ data entry byte size log to value. */
  #define Q_DATA_ENTRY_BSIZE L2V(LOG_Q_DATA_ENTRY_BSIZE)
  /* SQ/RQ DATA byte size is queue depth times entry byte size. */
-@@ -217,6 +250,9 @@
+@@ -217,6 +254,9 @@
  
  /* Source MAC address to match for incoming packets. */
  #define SMAC 0x02427e7feb02
@@ -300,7 +430,7 @@
  /* Creates steering rules for application.
   * Returns 0 on success and -1 if the allocation was failed.
   * app_ctx - pointer to app_context structure.
-@@ -255,15 +291,17 @@
+@@ -255,15 +295,17 @@
  			return -1;
  		}
  
@@ -321,7 +451,7 @@
  		if (!app_ctx->tx_rule_vport) {
  			fprintf(stderr, "Failed to create TX vport steering rule\n");
  			return -1;
-@@ -686,6 +724,165 @@
+@@ -686,6 +728,165 @@
  	return 0;
  }
  
@@ -487,7 +617,7 @@
  /* Copy application information to DPA.
   * DPA side needs queue information in order to process the packets.
   * The DPA heap memory address will be passed as the event handler argument.
-@@ -716,6 +913,18 @@
+@@ -716,6 +917,18 @@
  	h2d_data->rq_cq_transf = app_ctx->rq_cq_transf;
  	/* Set RQ's information. */
  	h2d_data->rq_transf = app_ctx->rq_transf;
@@ -506,7 +636,7 @@
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -887,6 +1096,219 @@
+@@ -887,6 +1100,442 @@
  /* dev msg stream buffer built from chunks of 2^FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE each */
  #define MSG_HOST_BUFF_BSIZE (512 * L2V(FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE))
  
@@ -606,6 +736,229 @@
 +	 * question this whole path answers: do N such calls run in parallel on N DPA EUs, or serialize? */
 +	a->status = flexio_process_call(a->process, &tt_blast_rpc, &a->ret, a->app_data_daddr);
 +	return NULL;
++}
++
++/* A3.2 arrival simulator: bump the host `produced` doorbell from 0 to target in chunks (models a RoCE
++ * responder posting WRITE_IMM completions), so the DPA drain is genuinely doorbell-paced. */
++struct db_bump {
++	volatile uint64_t *db;
++	uint64_t target;
++	uint64_t chunk;
++	unsigned us;
++};
++
++static void *db_bump_fn(void *v)
++{
++	struct db_bump *a = v;
++	uint64_t p = 0;
++
++	while (p < a->target) {
++		p += a->chunk;
++		if (p > a->target)
++			p = a->target;
++		*a->db = p;
++		__sync_synchronize();
++		if (a->us)
++			usleep(a->us);
++	}
++	return NULL;
++}
++
++/* A3.2 full doorbell datapath: the DPA drains a host `produced` doorbell (read via a flexio_window) and
++ * gather-egresses each newly-"landed" frame from the host landing buffer (A3.1), until `total` frames. Either
++ * PRESET (produced=total up front) or ARRIVAL-DRIVEN (a bump thread grows produced over time). This is the
++ * hybrid-doorbell re-head with a SIMULATED producer; A3.3 swaps the bump thread for the real RoCE responder. */
++static int tt_run_doorbell(struct app_context *app_ctx)
++{
++	struct host2dev_packet_processor_data h = {0};
++	struct flexio_window *win = NULL;
++	struct flexio_outbox *outbox = NULL;
++	struct flexio_outbox_attr obattr = {0};
++	struct ibv_mr *dbmr = NULL;
++	flexio_uintptr_t app_data = 0;
++	void *dbpage = NULL;
++	volatile uint64_t *db;
++	struct db_bump ba;
++	pthread_t bt;
++	struct timespec t0, t1;
++	uint64_t ret = 0;
++	uint32_t total, plen;
++	int preset, have_thread = 0, rc = 0;
++
++	total = tt_fill_hdr_params(&h);
++	if (!total)
++		return -1;
++	plen = h.tt_plen;
++	if (tt_create_src(app_ctx, plen))
++		fprintf(stderr, "doorbell: source setup failed\n");
++	h.tt_src_daddr = app_ctx->tt_src_daddr;
++	h.tt_src_mkey = app_ctx->tt_src_mkey;
++	h.sq_cq_transf = app_ctx->sq_cq_transf; /* reuse the single SQ created in main */
++	h.sq_transf = app_ctx->sq_transf;
++	h.rq_cq_transf = app_ctx->rq_cq_transf;
++	h.rq_transf = app_ctx->rq_transf;
++
++	if (posix_memalign(&dbpage, 4096, 4096))
++		return -1;
++	memset(dbpage, 0, 4096);
++	db = (volatile uint64_t *)dbpage;
++	dbmr = ibv_reg_mr(app_ctx->process_pd, dbpage, 4096, IBV_ACCESS_LOCAL_WRITE);
++	if (!dbmr) {
++		fprintf(stderr, "doorbell: ibv_reg_mr failed\n");
++		free(dbpage);
++		return -1;
++	}
++	if (flexio_window_create(app_ctx->flexio_process, app_ctx->process_pd, &win)) {
++		fprintf(stderr, "doorbell: flexio_window_create failed\n");
++		rc = -1;
++		goto out;
++	}
++	h.tt_win_id = flexio_window_get_id(win);
++	h.tt_db_mkey = dbmr->lkey;
++	h.tt_db_haddr = (flexio_uintptr_t)(uintptr_t)dbpage;
++
++	/* Explicit outbox over the process UAR: the DPA restores this after each window access so SQ doorbells
++	 * still reach the (process-UAR) SQ. Without it, window access leaves the doorbell pointing at the window. */
++	if (flexio_outbox_create(app_ctx->flexio_process, &obattr, &outbox)) {
++		fprintf(stderr, "doorbell: flexio_outbox_create failed\n");
++		rc = -1;
++		goto out;
++	}
++	h.tt_outbox_id = flexio_outbox_get_id(outbox);
++
++	if (flexio_copy_from_host(app_ctx->flexio_process, &h, sizeof(h), &app_data)) {
++		fprintf(stderr, "doorbell: copy app_data failed\n");
++		rc = -1;
++		goto out;
++	}
++
++	preset = getenv("TTDPA_DB_PRESET") && strtoul(getenv("TTDPA_DB_PRESET"), NULL, 0) > 0;
++	printf("A3.2 DOORBELL: total=%u plen=%u %s src=%s\n", total, plen,
++	       preset ? "PRESET(produced=total)" : "ARRIVAL-DRIVEN(bump thread)",
++	       app_ctx->tt_src_ibv_mr ? "HOST-MEM" : (app_ctx->tt_src_mkey ? "DPA-heap-gather" : "none"));
++
++	if (preset) {
++		*db = total;
++		__sync_synchronize();
++	} else {
++		ba.db = db;
++		ba.target = total;
++		ba.chunk = getenv("TTDPA_DB_CHUNK") ? strtoul(getenv("TTDPA_DB_CHUNK"), NULL, 0) : 4096;
++		ba.us = getenv("TTDPA_DB_US") ? (unsigned)strtoul(getenv("TTDPA_DB_US"), NULL, 0) : 200;
++		if (pthread_create(&bt, NULL, db_bump_fn, &ba)) {
++			fprintf(stderr, "doorbell: bump thread failed\n");
++			rc = -1;
++			goto out;
++		}
++		have_thread = 1;
++	}
++
++	clock_gettime(CLOCK_MONOTONIC, &t0);
++	if (flexio_process_call(app_ctx->flexio_process, &tt_drain_rpc, &ret, app_data)) {
++		fprintf(stderr, "doorbell: drain RPC failed\n");
++		rc = -1;
++	}
++	clock_gettime(CLOCK_MONOTONIC, &t1);
++	if (have_thread)
++		pthread_join(bt, NULL);
++	{
++		double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
++		double fl = 14.0 + 32.0 + (double)plen;
++
++		printf("A3.2 DOORBELL done: %lu frames egressed (doorbell=%lu) in %.4fs = %.2f Mpps = %.2f Gbps%s\n",
++		       (unsigned long)ret, (unsigned long)*db, dt, dt > 0 ? ret / dt / 1e6 : 0.0,
++		       dt > 0 ? (ret * fl * 8.0) / dt / 1e9 : 0.0,
++		       ret == total ? " [exact]" : " [SHORT]");
++	}
++
++out:
++	if (app_data)
++		flexio_buf_dev_free(app_ctx->flexio_process, app_data);
++	if (outbox)
++		flexio_outbox_destroy(outbox);
++	if (win)
++		flexio_window_destroy(win);
++	if (dbmr)
++		ibv_dereg_mr(dbmr);
++	free(dbpage);
++	return rc;
++}
++
++/* A3.2 doorbell seam test: prove the DPA can read a live HOST-memory doorbell via a flexio_window. Allocates a
++ * host page, registers it (ibv_mr on the process PD) as the window's access key, creates the window, then calls
++ * the DPA winread RPC twice with two different host values -> confirms the DPA reads the CURRENT host value
++ * each time (a stale/mismatch would fail). This is the host->DPA signalling half of the hybrid doorbell. */
++static int tt_run_wintest(struct app_context *app_ctx)
++{
++	struct host2dev_packet_processor_data h = {0};
++	struct flexio_window *win = NULL;
++	struct ibv_mr *mr = NULL;
++	flexio_uintptr_t app_data = 0;
++	volatile uint64_t *db;
++	uint64_t ret = 0;
++	void *hb = NULL;
++	int rc = 0, pass = 0;
++
++	if (posix_memalign(&hb, 4096, 4096))
++		return -1;
++	memset(hb, 0, 4096);
++	db = (volatile uint64_t *)hb;
++
++	mr = ibv_reg_mr(app_ctx->process_pd, hb, 4096, IBV_ACCESS_LOCAL_WRITE);
++	if (!mr) {
++		fprintf(stderr, "WINTEST: ibv_reg_mr failed\n");
++		free(hb);
++		return -1;
++	}
++	if (flexio_window_create(app_ctx->flexio_process, app_ctx->process_pd, &win)) {
++		fprintf(stderr, "WINTEST: flexio_window_create failed\n");
++		rc = -1;
++		goto out;
++	}
++	h.tt_win_id = flexio_window_get_id(win);
++	h.tt_db_mkey = mr->lkey;
++	h.tt_db_haddr = (flexio_uintptr_t)(uintptr_t)hb;
++	printf("WINTEST: win_id=%u db_mkey=0x%x db_haddr=%p\n", h.tt_win_id, h.tt_db_mkey, hb);
++
++	if (flexio_copy_from_host(app_ctx->flexio_process, &h, sizeof(h), &app_data)) {
++		fprintf(stderr, "WINTEST: copy app_data failed\n");
++		rc = -1;
++		goto out;
++	}
++
++	*db = 0xDEADBEEFULL;
++	__sync_synchronize();
++	if (flexio_process_call(app_ctx->flexio_process, &tt_winread_rpc, &ret, app_data)) {
++		fprintf(stderr, "WINTEST: process_call 1 failed\n");
++		rc = -1;
++		goto out;
++	}
++	printf("WINTEST 1: host wrote 0x%lx, DPA read 0x%lx -> %s\n", (unsigned long)*db,
++	       (unsigned long)ret, ret == 0xDEADBEEFULL ? "OK" : "MISMATCH");
++	pass += (ret == 0xDEADBEEFULL);
++
++	*db = 0x12345678ULL;
++	__sync_synchronize();
++	if (flexio_process_call(app_ctx->flexio_process, &tt_winread_rpc, &ret, app_data)) {
++		fprintf(stderr, "WINTEST: process_call 2 failed\n");
++		rc = -1;
++		goto out;
++	}
++	printf("WINTEST 2: host wrote 0x%lx, DPA read 0x%lx -> %s\n", (unsigned long)*db,
++	       (unsigned long)ret, ret == 0x12345678ULL ? "OK (live read)" : "STALE/MISMATCH");
++	pass += (ret == 0x12345678ULL);
++
++	printf("WINTEST RESULT: %s (%d/2)\n", pass == 2 ? "PASS -- DPA reads live host doorbell" : "FAIL", pass);
++
++out:
++	if (app_data)
++		flexio_buf_dev_free(app_ctx->flexio_process, app_data);
++	if (win)
++		flexio_window_destroy(win);
++	if (mr)
++		ibv_dereg_mr(mr);
++	free(hb);
++	return rc;
 +}
 +
 +/* TT-RDMA multi-thread fan-out. Creates `nthreads` SQs, builds one per-thread host2dev struct each (disjoint
@@ -726,7 +1079,7 @@
  /* Application name in string format for Flex IO app get. */
  #define DEV_APP_NAME_STR(_app_name) #_app_name
  #define DEV_APP_NAME_XSTR(_app_name) DEV_APP_NAME_STR(_app_name)
-@@ -1068,20 +1490,49 @@
+@@ -1068,20 +1717,63 @@
  
  	printf("Ready to receive messages\n");
  
@@ -738,9 +1091,20 @@
 -	if (flexio_event_handler_run(app_ctx.pp_eh, app_ctx.app_data_daddr)) {
 -		fprintf(stderr, "Failed to run event handler.\n");
 -		err = -1;
--		goto cleanup;
--	}
--
++	/* A3.2 doorbell seam test: DPA reads a live host-memory doorbell via a flexio_window, then exit. */
++	if (getenv("TTDPA_WINTEST") && strtoul(getenv("TTDPA_WINTEST"), NULL, 0) > 0) {
++		if (tt_run_wintest(&app_ctx))
++			err = -1;
++		goto cleanup;
++	}
++
++	/* A3.2 full doorbell datapath: DPA drains a host doorbell + gather-egresses each landed frame, then exit. */
++	if (getenv("TTDPA_DOORBELL") && strtoul(getenv("TTDPA_DOORBELL"), NULL, 0) > 0) {
++		if (tt_run_doorbell(&app_ctx))
++			err = -1;
+ 		goto cleanup;
+ 	}
+ 
 -	/* Wait for Enter - the DPA sample is running in the meanwhile */
 -	if (!fread(buf, 1, 1, stdin)) {
 -		fprintf(stderr, "Failed in fread\n");
@@ -790,7 +1154,7 @@
  	}
  
  cleanup:
-@@ -1096,6 +1547,20 @@
+@@ -1096,6 +1788,20 @@
  		err = -1;
  	}
  

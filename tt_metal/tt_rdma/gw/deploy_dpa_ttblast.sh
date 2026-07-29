@@ -29,6 +29,13 @@
 #   TTDPA_PERSRC=1 per-thread source buffer+mkey (diagnostic; no measurable gain)
 #   TTDPA_HOSTSRC=1 A3.1: gather the payload from HOST memory (ibv_mr on the process PD) instead of DPA heap
 #                  -- proves the PF DPA can egress the RoCE-landed buffer (the A3 re-head memory seam)
+#   TTDPA_WINTEST=1 A3.2: DPA reads a live host doorbell via a flexio_window (host->DPA signalling seam)
+#   TTDPA_DOORBELL=1 A3.2: full hybrid-doorbell re-head -- DPA drains a host `produced` doorbell (window read)
+#                  and gather-egresses each newly-landed frame. TTDPA_DB_PRESET=1 sets produced=total up front;
+#                  else a bump thread (TTDPA_DB_CHUNK / TTDPA_DB_US) simulates arrivals. Combine with
+#                  TTDPA_HOSTSRC=1 for the realistic host landing buffer. (A3.3 swaps the bump for real RoCE.)
+#                  Gotcha baked in: the DPA restores an explicit outbox after each window access, else the SQ
+#                  doorbell follows the window config and sends silently fail to egress.
 #   TTDPA_DMAC/TTDPA_RKEY tune the frame dst/rkey (see the patch).
 #
 # NOTE (steering): the TX->wire rule matches on dst MAC. Phase C points it at the BH dst MAC (TT_BH_DMAC
