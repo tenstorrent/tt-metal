@@ -83,6 +83,7 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t G = get_compile_time_arg_val(2);
+    constexpr bool compose_only = get_compile_time_arg_val(3) == 1;
     constexpr uint32_t kk = Kt * Kt;
     constexpr uint32_t kv = Kt * Vt;
     const uint32_t group = get_arg_val<uint32_t>(0);
@@ -120,6 +121,10 @@ void kernel_main() {
         pop(cb_remote_b, kv);
         pop(cb_scratch, kv);
         ping = !ping;
+    }
+
+    if constexpr (compose_only) {
+        return;
     }
 
     wait(cb_stage_token, 1);

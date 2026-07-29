@@ -229,4 +229,40 @@ output projection/reduce-scatter (4.055 vs 2.532 ms) and local affine
 composition (1.175 vs 0.508 ms). These are the next two targets, ranked by
 measured opportunity.
 
+## 2026-07-29: fuse local affine composition
+
+Verdict: keep. The existing `KdaAffinePrefixOperation` already performs an
+arbitrary-group Hillis--Steele scan on device. Add a compose-only mode that
+returns the final inclusive `(A, B)` transform for each head and skips
+initial-state application. The distributed path now calls that mode directly
+instead of launching slices, matmuls, adds, concats, and final slices. The
+implementation is parameterized by `groups_per_head`, `key_dim`, and
+`val_dim`; it contains no SP/TP participant-count branches.
+
+Validation:
+
+- `./build_metal.sh`: PASS.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_distributed_affine_prefix.py -q -s`:
+  2 passed, `SAFE_PYTEST_RESULT: PASS`; both mesh-axis placements, repeat, and
+  trace replay pass with unchanged accuracy.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_sp_layer.py -q -s`:
+  6 passed, `SAFE_PYTEST_RESULT: PASS`. This exercises `G=4,5,8,10` across
+  both mesh-axis placements. Worst printed output PCC is 0.999969 against the
+  serial reference and 0.999974 for chunked versus one-shot; worst recurrent
+  PCC is 0.999917 and 0.999985 respectively.
+- Real Kimi-K3 layer, real weights, `T=5120`, ten trace replays:
+  SP2xTP4 passes at 12.332 ms/replay
+  (`generated/profiler/reports/2026_07_29_06_32_52`), down from 13.472 ms
+  after the generalized relay (8.5%) and 14.605 ms baseline (15.6%).
+  SP4xTP2 passes at 12.012 ms/replay
+  (`generated/profiler/reports/2026_07_29_06_34_38`), down from its matched
+  12.462 ms control (3.6%).
+
+The trace verifies the intended mechanism. SP2xTP4 local composition falls
+from 24 operations and 1.175 ms to one `KdaAffinePrefixOperation` at
+45.303 us (25.9x). SP4xTP2 falls from 12 operations and 0.508 ms to one
+operation at 54.197 us (9.4x). The remaining SP2/SP4 wall gap is 0.320 ms,
+with TP4 output projection/reduce-scatter still the largest adverse stage:
+3.950 ms versus 2.434 ms.
+
 ## Backlog

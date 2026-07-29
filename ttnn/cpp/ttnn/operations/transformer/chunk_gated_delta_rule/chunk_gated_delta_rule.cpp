@@ -737,16 +737,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
                                         : (std::getenv("QWEN_KDA_PREFIX_DRAM") == nullptr ? ttnn::L1_MEMORY_CONFIG
                                                                                           : ttnn::DRAM_MEMORY_CONFIG);
             if (distributed_prefix) {
-                auto summary_a_grouped = ttnn::reshape(summary_a, ttnn::Shape({BH, groups_per_head, K, K}));
-                auto summary_b_grouped = ttnn::reshape(summary_b, ttnn::Shape({BH, groups_per_head, K, V}));
-                auto [local_prefix_a, local_prefix_b] = inclusive_affine_prefix(
-                    summary_a_grouped, summary_b_grouped, groups_per_head, prefix_mem, kernel_cfg);
-                auto partition_a = ttnn::reshape(
-                    slice_group_axis(local_prefix_a, groups_per_head - 1, groups_per_head, prefix_mem),
-                    ttnn::Shape({BH, K, K}));
-                auto partition_b = ttnn::reshape(
-                    slice_group_axis(local_prefix_b, groups_per_head - 1, groups_per_head, prefix_mem),
-                    ttnn::Shape({BH, K, V}));
+                auto [partition_a, partition_b] =
+                    ttnn::prim::kda_affine_compose(summary_a, summary_b, groups_per_head, prefix_mem, kernel_cfg);
                 auto identity = ttnn::reshape(*affine_identity, ttnn::Shape({BH, K, K}));
                 auto zero = ttnn::reshape(*affine_zero, ttnn::Shape({BH, K, V}));
                 auto [partition_entry_state, final_state] = kda_distributed_affine_prefix(

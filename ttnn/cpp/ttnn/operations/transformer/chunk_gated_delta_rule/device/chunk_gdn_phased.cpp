@@ -331,33 +331,70 @@ void KdaAffinePrefixOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     check(in.transform_a, "transform_a", DataType::FLOAT32);
     check(in.transform_b, "transform_b", DataType::FLOAT32);
-    check(in.initial_state, "initial_state", DataType::FLOAT32);
     const auto& as = in.transform_a.logical_shape();
     const auto& bs = in.transform_b.logical_shape();
-    const auto& ss = in.initial_state.logical_shape();
-    TT_FATAL(as.rank() == 3 && bs.rank() == 3 && ss.rank() == 3, "KDA affine prefix expects rank-3 tensors");
+    TT_FATAL(as.rank() == 3 && bs.rank() == 3, "KDA affine prefix expects rank-3 transforms");
     TT_FATAL(attrs.groups_per_head > 0, "groups_per_head must be positive");
     TT_FATAL(as[0] == attrs.BH * attrs.groups_per_head, "transform_a leading dimension mismatch");
     TT_FATAL(bs[0] == as[0], "transform_a/transform_b leading dimensions must match");
     TT_FATAL(as[1] == attrs.key_dim && as[2] == attrs.key_dim, "transform_a must be [BH*G,K,K]");
     TT_FATAL(bs[1] == attrs.key_dim && bs[2] == attrs.val_dim, "transform_b must be [BH*G,K,V]");
-    TT_FATAL(ss[0] == attrs.BH && ss[1] == attrs.key_dim && ss[2] == attrs.val_dim, "initial_state shape mismatch");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be tile aligned");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be tile aligned");
+    if (attrs.compose_only) {
+        TT_FATAL(!in.initial_state.has_value(), "compose-only affine prefix does not take an initial state");
+    } else {
+        TT_FATAL(in.initial_state.has_value(), "affine prefix requires an initial state");
+        check(*in.initial_state, "initial_state", DataType::FLOAT32);
+        const auto& ss = in.initial_state->logical_shape();
+        TT_FATAL(ss.rank() == 3, "KDA affine prefix expects a rank-3 initial state");
+        TT_FATAL(ss[0] == attrs.BH && ss[1] == attrs.key_dim && ss[2] == attrs.val_dim, "initial_state shape mismatch");
+    }
 }
 
 KdaAffinePrefixOperation::spec_return_value_t KdaAffinePrefixOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t&) {
-    return {TensorSpec(
-        Shape({attrs.BH * attrs.groups_per_head, attrs.key_dim, attrs.val_dim}),
-        TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config))};
+    const auto layout = [&](const Shape& shape) {
+        return TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
+    };
+    if (attrs.compose_only) {
+        return {
+            layout(Shape({attrs.BH, attrs.key_dim, attrs.key_dim})),
+            layout(Shape({attrs.BH, attrs.key_dim, attrs.val_dim}))};
+    }
+    return {layout(Shape({attrs.BH * attrs.groups_per_head, attrs.key_dim, attrs.val_dim}))};
 }
 
 KdaAffinePrefixOperation::tensor_return_value_t KdaAffinePrefixOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    auto specs = compute_output_specs(attrs, in);
-    return {create_device_tensor(specs[0], in.transform_a.device())};
+    tensor_return_value_t outputs;
+    for (const auto& spec : compute_output_specs(attrs, in)) {
+        outputs.push_back(create_device_tensor(spec, in.transform_a.device()));
+    }
+    return outputs;
 }
+
+namespace {
+KdaAffinePrefixParams affine_prefix_params(
+    const Tensor& transform_a,
+    const Tensor& transform_b,
+    uint32_t groups_per_head,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool compose_only) {
+    const auto& as = transform_a.logical_shape();
+    const auto& bs = transform_b.logical_shape();
+    TT_FATAL(groups_per_head > 0 && as[0] % groups_per_head == 0, "invalid affine group count");
+    return {
+        .BH = static_cast<uint32_t>(as[0]) / groups_per_head,
+        .groups_per_head = groups_per_head,
+        .key_dim = static_cast<uint32_t>(as[1]),
+        .val_dim = static_cast<uint32_t>(bs[2]),
+        .output_mem_config = output_mem_config,
+        .compute_kernel_config = compute_kernel_config,
+        .compose_only = compose_only};
+}
+}  // namespace
 
 Tensor kda_affine_prefix(
     const Tensor& transform_a,
@@ -366,19 +403,34 @@ Tensor kda_affine_prefix(
     uint32_t groups_per_head,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
-    const auto& as = transform_a.logical_shape();
-    const auto& bs = transform_b.logical_shape();
-    TT_FATAL(groups_per_head > 0 && as[0] % groups_per_head == 0, "invalid affine group count");
     auto results = ttnn::device_operation::launch<KdaAffinePrefixOperation>(
-        KdaAffinePrefixParams{
-            .BH = static_cast<uint32_t>(as[0]) / groups_per_head,
-            .groups_per_head = groups_per_head,
-            .key_dim = static_cast<uint32_t>(as[1]),
-            .val_dim = static_cast<uint32_t>(bs[2]),
-            .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config},
+        affine_prefix_params(
+            transform_a,
+            transform_b,
+            groups_per_head,
+            output_mem_config,
+            compute_kernel_config,
+            /*compose_only=*/false),
         KdaAffinePrefixInputs{.transform_a = transform_a, .transform_b = transform_b, .initial_state = initial_state});
     return results[0];
+}
+
+std::pair<Tensor, Tensor> kda_affine_compose(
+    const Tensor& transform_a,
+    const Tensor& transform_b,
+    uint32_t groups_per_head,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
+    auto results = ttnn::device_operation::launch<KdaAffinePrefixOperation>(
+        affine_prefix_params(
+            transform_a,
+            transform_b,
+            groups_per_head,
+            output_mem_config,
+            compute_kernel_config,
+            /*compose_only=*/true),
+        KdaAffinePrefixInputs{.transform_a = transform_a, .transform_b = transform_b, .initial_state = std::nullopt});
+    return {results[0], results[1]};
 }
 
 KdaGatedRmsOperation::program_factory_t KdaGatedRmsOperation::select_program_factory(
