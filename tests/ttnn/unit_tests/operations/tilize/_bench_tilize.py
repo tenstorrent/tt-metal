@@ -849,6 +849,28 @@ REGIMES = {
         same_cfg=True,
         double_buffer=False,
     ),
+    # --- Refinement 5 (Mode-D audit): the INDIVISIBLE-HEIGHT regime -------------
+    # A0 is graded per regime, and the completeness audit found a regime that no
+    # prior phase benched: the tile-row split is `_split_contiguous(nt_h, n_h)`, so
+    # when `nt_h % n_h != 0` the first `nt_h % n_h` cores get one EXTRA tile-row --
+    # and because a core's work is `row_count * chunk_count`, one extra row multiplies
+    # that core's block count by `(base+1)/base`. At `nt_h = 64k+1` that is 2x on the
+    # busiest core while the mean moves 1.6 %, i.e. a ~1.97x work imbalance.
+    # Every other bench shape in this file divides evenly, so the whole cumulative set
+    # measures `imbalance == 1.000`. These rows measure what it actually costs; the
+    # `a_square` / `d_tall_narrow` rows above are their even references.
+    # (65 rows: max 8 blk vs mean 4.06. 66 rows: max 8 vs 4.12. 96: max 8 vs 6.00.)
+    "n_imbal_square_65row": dict(shape=(1, 1, 2080, 2048), dtype=ttnn.bfloat16),
+    "n_imbal_square_96row": dict(shape=(1, 1, 3072, 2048), dtype=ttnn.bfloat16),
+    "n_imbal_tall_narrow_65": dict(shape=(1, 1, 2080, 32), dtype=ttnn.bfloat16),
+    # The smallest shape that can carry a RECOVERABLE imbalance at all: the ratio
+    # needs `n_w == 1` (so a whole row of `chunk_count` blocks is the assignment unit)
+    # AND `chunk_count > 1`, which together force `nt_h >= ncores` and `Wt > chunk_wt`.
+    # 4.26 MB, rec 1.33 -- small enough that if the imbalance were exposed anywhere it
+    # would be here, and it is the row that decides whether the 65row/96row result is
+    # "no cost" or just "hidden by a huge shape".
+    "n_imbal_mid_65row": dict(shape=(1, 1, 2080, 1024), dtype=ttnn.bfloat16),
+    "p_imbal_mid_even": dict(shape=(1, 1, 2048, 1024), dtype=ttnn.bfloat16),
 }
 
 _SELECTED = os.environ.get("TILIZE_BENCH_REGIMES", "")
@@ -943,6 +965,41 @@ elif SPLIT_DM:
     _VARIANTS = [("full", "0", "0"), ("no_read", "2", "0"), ("no_write", "3", "0"), ("no_dm", "1", "0")]
 else:
     _VARIANTS = [("full", "0", "0")]
+
+
+def work_imbalance(plan):
+    """The A0 *balance* term: ``(raw, recoverable)`` block-count ratios.
+
+    Refinement 5's Mode-D audit grades A0 per regime, and A0 has two halves: the
+    active-core *count* (asserted below) and how evenly the work lands on those
+    cores. The second half was never measured before this pass, because every other
+    bench shape in this file divides evenly. It does not, in general: the tile-row
+    split is ``_split_contiguous(nt_h, n_h)``, so at ``nt_h = 64k+1`` one core gets
+    ``base+1`` rows while the rest get ``base``; since a core's work is
+    ``row_count * chunk_count``, at ``base == 1`` that doubles the critical core's
+    blocks for 1.6 % more bytes.
+
+    Two ratios, because only one of them is headroom:
+
+    * ``raw`` = ``max / mean``. What the split costs against a *fractional* ideal.
+      **Not** achievable when the total work is barely above the core count — 65
+      indivisible blocks on 64 cores forces some core to take 2 however they are
+      assigned.
+    * ``recoverable`` = ``max / ceil(total / ncores)``. The ratio against the best
+      any assignment of whole blocks could do. This is the actionable number: 1.0
+      means the split is already optimal *given the work unit*, and the only lever
+      left is a smaller work unit.
+
+    Path B / the one-sided aliases are one shard per core: balanced by construction.
+    """
+    work = plan.get("work") or []
+    if not work:
+        return 1.0, 1.0
+    blocks = [u["row_count"] * u["chunk_count"] for u in work]
+    total, n, mx = sum(blocks), len(blocks), max(blocks)
+    mean = total / n
+    best = -(-total // n)  # ceil
+    return (mx / mean if mean else 1.0), (mx / best if best else 1.0)
 
 
 def _assert_structural_gates(name, spec, plan, grid_cores):
@@ -1178,6 +1235,15 @@ def test_bench_tilize(device):
                     stg=plan["stagger"],
                     grp=plan["read_group"],
                     cb_bytes=plan["cb_bytes_per_core"],
+                    # Refinement 5 (Mode-D audit): the busiest core's work divided by
+                    # the mean. 1.000 means the split is perfectly balanced; > 1 means
+                    # the duration is set by a core doing more than its share, which is
+                    # headroom no per-transaction lever can reach. Reported on EVERY row
+                    # so a future distribution change that introduces imbalance on a
+                    # shape that used to divide evenly is visible in the same table as
+                    # the ns it costs.
+                    imb=work_imbalance(plan)[0],
+                    rec=work_imbalance(plan)[1],
                     ns=ns,
                     cv=(std / ns * 100.0) if ns else 0.0,
                     traffic=traffic,
@@ -1207,7 +1273,7 @@ def test_bench_tilize(device):
         f"    {'regime':<34} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
         f"{'blk':>4} {'B13':>4} {'BT':>3} {'NW':>3} {'ND':>3} {'SA':>3} {'RCB':>4} {'F32':>4} {'IU':>3} "
         f"{'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'GRP':>4} {'cbB/core':>9} "
-        f"{'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
+        f"{'imb':>5} {'rec':>5} {'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
         gbps = (r["traffic"] / r["ns"]) if (r["traffic"] and r["ns"]) else 0.0
@@ -1216,7 +1282,8 @@ def test_bench_tilize(device):
             f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['bt']:>3} {r['nw']:>3} "
             f"{r['nd']:>3} {r['sa']:>3} {r['rcb']:>4} {r['f32']:>4} {r['iu']:>3} {r['c7']:>3} "
             f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} {r['stg']:>4} {r['grp']:>4} "
-            f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
+            f"{r['cb_bytes']:>9} {r['imb']:>5.2f} {r['rec']:>5.2f} {r['ns']:>10.1f} {r['cv']:>5.1f} "
+            f"{r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )
     print("\n".join(lines))
 
