@@ -31,7 +31,14 @@ shared dashboard tree `/proj_sw/user_dev/llk_code_gen` **if that path exists**
 `*_issue_solver` / `issue_solver` suffixes above are always appended, so the
 dashboard folder shape is preserved in every case.
 
-`SIM_PORT` is only populated for Quasar (the lone sim carve-out). Blackhole and Wormhole run on the locally-attached card — no simulator, no `--run-simulator`. Hosts without a matching BH/WH card finalize the run as `failed` with `ENV_ERROR`. Quasar has no silicon, so it always runs on `emu-quasar-1x3` with port 5556. On every arch, `.claude/scripts/run_test.sh` serialises the consumer step internally via the single global lock `/tmp/tt-llk-test.lock` — agents never flock manually.
+`SIM_PORT` is only populated for Quasar (the lone Aether carve-out).
+Blackhole and Wormhole use their silicon queue when the dashboard supplies
+`HW_TEST_DISPATCH_CMD`; without it they require a locally attached card.
+Quasar has no silicon and executes on the compute runner through
+`run_test.sh`, using `QSR_SIM_BACKEND=emu|vcs` and the corresponding configured
+UMD path. Port 5556 is node-local. Quasar consumer execution across compute
+hosts is serialized by `QSR_AETHER_LOCK` on the shared filesystem; other local
+device runs retain `/tmp/tt-llk-test.lock`.
 
 
 ## How the orchestrators consume this

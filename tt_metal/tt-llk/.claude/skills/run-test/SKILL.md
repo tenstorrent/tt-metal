@@ -6,7 +6,13 @@ user_invocable: true
 
 # /run-test — Run LLK Tests
 
-Wraps `.claude/scripts/run_test.sh`, which serialises every invocation on one global lock (flock), fetches SFPI when missing, sets `TT_UMD_SIMULATOR_PATH`, watches the run and kills a hang gracefully, reaps stale emulator jobs, and exposes `count` / `compile` / `simulate` / `run` subcommands. It is a single blocking call — invoke it like pytest and wait for the verdict. Agents and Claude must never call `pytest` directly.
+Wraps `.claude/scripts/run_test.sh`, which serialises execution with `flock`,
+fetches SFPI when missing, selects Quasar Aether emulation or VCS through
+`QSR_SIM_BACKEND`, sets `TT_UMD_SIMULATOR_PATH`, watches the run and kills a
+hang gracefully, reaps stale Aether jobs, and exposes `count` / `compile` /
+`simulate` / `run` subcommands. It is a single blocking call — invoke it like
+pytest and wait for the verdict. Agents and Claude must never call `pytest`
+directly.
 
 ## Usage
 
@@ -40,7 +46,14 @@ Examples:
 
 ## Blocking call, hang-bounded
 
-`run_test.sh` is a single synchronous call — invoke it and wait for the verdict; there is no resume loop and no timeout to tune. The only wait is on the global lock (first-come, first-served, unbounded). Once a run starts a watcher bounds it: a post-ready log stall (emulator) or `TENSIX TIMED OUT` (silicon) is detected, killed gracefully so tt-exalens releases the remote emulator, and reported as HANG (exit 5). The `llk-test-runner` agent passes the Bash-tool maximum `timeout: 600000` as a backstop only.
+`run_test.sh` is a single synchronous call — invoke it and wait for the
+verdict; there is no resume loop and no timeout to tune. The only wait is on
+the execution lock (first-come, first-served, unbounded). Quasar uses
+`QSR_AETHER_LOCK` when configured so separate compute hosts share one lock.
+Once a run starts a watcher bounds it: a post-ready log stall (Aether) or
+`TENSIX TIMED OUT` (silicon) is detected, killed gracefully, and reported as
+HANG (exit 5). The `llk-test-runner` agent passes the Bash-tool maximum
+`timeout: 600000` as a backstop only.
 
 ## Sandbox
 

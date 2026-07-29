@@ -1,5 +1,5 @@
 #!/bin/bash
-# Reap orphaned remote Zebu emulator jobs on the emu host.
+# Reap orphaned remote Aether VCS/Zebu jobs on the simulation host.
 #
 # A run's emu job is cleanly released by the graceful tt-exalens `exit` a
 # finishing pytest sends. A run whose local peer dies non-gracefully (hard kill,
@@ -13,28 +13,31 @@
 # reap regardless — e.g. from a batch trap after its child runs are killed.
 #
 # Usage:
-#   reap_stale_emu.sh [--arch quasar] [--emu-host soc-l-12] [--force]
+#   reap_stale_emu.sh [--arch quasar] [--emu-host soc-l-04]
+#                     [--lock /shared/quasar-aether.lock] [--force]
 set -u
 
 ARCH="quasar"
-EMU_HOST="${EMU_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}"
+EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-04}}}"
+LOCKFILE="${QSR_AETHER_LOCK:-/tmp/tt-llk-test.lock}"
 FORCE="false"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch)     ARCH="$2";     shift 2 ;;
     --emu-host) EMU_HOST="$2"; shift 2 ;;
+    --lock)     LOCKFILE="$2"; shift 2 ;;
     --force)    FORCE="true";  shift   ;;
     -h|--help)  grep '^#' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
-# Single global lock shared by every run_test.sh invocation on the host (all arches).
-LOCKFILE="/tmp/tt-llk-test.lock"
-
-# Unless forced, only reap when no local sim holds the emulator lock — a live run
-# owns the emulator and its own teardown releases it.
+# Unless forced, only reap when no sim holds the configured Aether lock — a live
+# run owns the resource and its own teardown releases it. In production this is
+# a shared-filesystem lock, so the check covers every compute runner.
 if [[ "$FORCE" != "true" ]]; then
+  mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null ||
+    { echo "[reap] cannot create lock directory for $LOCKFILE" >&2; exit 1; }
   exec 9>>"$LOCKFILE" 2>/dev/null || { echo "[reap] cannot open $LOCKFILE" >&2; exit 1; }
   if ! flock -n 9; then
     echo "[reap] a local sim holds $LOCKFILE — skipping (its own teardown will release the emulator)"
@@ -47,19 +50,19 @@ fi
 # straggler zrun/vovsh. A detached VOV farm job that survives still falls back to
 # EMULATOR_TIMEOUT. $USER/$found/$p/$g are evaluated on the remote (single-quoted).
 remote_cmd='
-found=$(pgrep -u "$USER" -f "make -C verification/emu test" 2>/dev/null)
+found=$(pgrep -u "$USER" -f "make -C verification(/emu)? (sim-test|test)" 2>/dev/null)
 for p in $found; do
   g=$(ps -o pgid= -p "$p" 2>/dev/null | tr -d " ")
   [ -n "$g" ] && kill -TERM -"$g" 2>/dev/null
 done
 sleep 2
 # Broad catch: the sh-recipe/zrun/vovsh/tee children detach (setsid to the VOV
-# farm) and escape the make process group, so match the shared "test_umd_remote"
-# marker in their cmdlines to reap the whole tree.
-pkill -9 -u "$USER" -f "test_umd_remote" 2>/dev/null
-pkill -9 -u "$USER" -f "make -C verification/emu test" 2>/dev/null
+# farm) and escape the make process group. Emulator uses test_umd_remote while
+# VCS uses umd_remote_test, so cover both backends.
+pkill -9 -u "$USER" -f "test_umd_remote|umd_remote_test" 2>/dev/null
+pkill -9 -u "$USER" -f "make -C verification(/emu)? (sim-test|test)" 2>/dev/null
 n=$(printf "%s\n" "$found" | grep -c . 2>/dev/null); n=${n:-0}
-echo "[reap] $(hostname): killed $n emu make job(s)"
+echo "[reap] $(hostname): killed $n Aether make job(s)"
 true'
 
 # Feed over stdin to bash -s: the ssh command-argument form is re-parsed by the
