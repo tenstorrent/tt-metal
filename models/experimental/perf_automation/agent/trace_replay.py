@@ -131,6 +131,36 @@ def measure_adapter(adapter, device) -> float:
         print("TRACE_REPLAY_SKIPPED=%r" % (exc,), flush=True)
         raise
 
+    # Report the topology the trace ACTUALLY ran on (from the mesh device the perf test opened), so the
+    # full-pipeline scorecard reflects the REAL mesh (DP x TP) instead of falling back to its default.
+    # A >1-chip mesh means the pipeline ran tensor-parallel (sharded). Emitted here, in the tool, so it
+    # is correct for EVERY generated perf test without relying on the test to print it.
+    def _mesh_dims(dev):
+        s = getattr(dev, "shape", None)
+        if s is not None:
+            try:
+                d = [int(x) for x in tuple(s)]
+                if len(d) >= 2:
+                    return d[0], d[1]
+                if len(d) == 1:
+                    return 1, d[0]
+            except Exception:  # noqa: BLE001
+                pass
+            if hasattr(s, "num_rows") and hasattr(s, "num_cols"):
+                return int(s.num_rows), int(s.num_cols)
+        return None
+
+    _dims = _mesh_dims(device)
+    if _dims is None:
+        try:
+            from .perf_adapter import resolve_mesh_shape
+
+            _dims = tuple(int(x) for x in resolve_mesh_shape(1, 1))
+        except Exception:  # noqa: BLE001
+            _dims = (1, 1)
+    _dp, _tp = int(_dims[0]), int(_dims[1])
+    print("DP=%d TP=%d shard_active=%s" % (_dp, _tp, bool(_dp * _tp > 1)), flush=True)
+
     stages = list(getattr(adapter, "stages", None) or [])
     if not stages:
         # Legacy PipelineDecodeAdapter (exposes .step(), no .stages): one decode stage.

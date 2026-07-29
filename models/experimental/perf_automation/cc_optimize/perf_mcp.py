@@ -1911,8 +1911,12 @@ def _run_full_pipeline_ms():
     headline_units = []
     walls = []
     prefills = []
-    tp = dp = 1
-    shard = False
+    # Topology comes ONLY from the run's own DP=/TP=/shard_active marker (parsed below), which
+    # trace_replay.measure_adapter emits from the mesh the pipeline ACTUALLY opened. No default and no
+    # guess: if the run reports no topology the scorecard prints 'unknown' rather than fabricating a mesh
+    # (the old hardcoded 1x1 silently mislabelled a genuine multi-chip trace as single-chip).
+    dp = tp = None
+    shard = None
     batch = 1
     decode_path = prefill_path = "n/a"
     last_err = None
@@ -1988,6 +1992,8 @@ def _run_full_pipeline_ms():
                 dp, tp = int(m.group(1)), int(m.group(2))
             if "shard_active=True" in line:
                 shard = True
+            elif "shard_active=False" in line:
+                shard = False
             if "TRACE_REPLAY_PATH=" in line:
                 mb = _re.search(r"batch=(\d+)", line)
                 if mb:
@@ -2007,15 +2013,20 @@ def _run_full_pipeline_ms():
         isl = env.get("TT_PERF_SEQ_LEN", os.environ.get("TT_PERF_SEQ_LEN", "128"))
         osl = env.get("TT_PERF_MAX_NEW_TOKENS", "1")
         tsu = (1000.0 / dec) if dec else 0.0
+        # mesh/TP/DP/shard come solely from the run's marker; when it is absent they stay None and we
+        # print 'unknown' rather than a fabricated topology.
+        _mesh_s = ("%dx%d" % (dp, tp)) if (dp is not None and tp is not None) else "unknown"
+        _tp_s = ("%d" % tp) if tp is not None else "unknown"
+        _dp_s = ("%d" % dp) if dp is not None else "unknown"
+        _shard_s = "unknown" if shard is None else str(shard)
         sys.stderr.write(
-            "[full-pipeline-gate] PERF_SCORECARD mesh=%dx%d TP=%d DP=%d shard=%s on_device=%s "
+            "[full-pipeline-gate] PERF_SCORECARD mesh=%s TP=%s DP=%s shard=%s on_device=%s "
             "ISL=%s OSL=%s batch=%d TTFT_ms=%s prefill_path=%s decode_ms=%s decode_path=%s TSU=%.2f TS=%.2f\n"
             % (
-                dp,
-                tp,
-                tp,
-                dp,
-                shard,
+                _mesh_s,
+                _tp_s,
+                _dp_s,
+                _shard_s,
                 (dec is not None or pf is not None),
                 isl,
                 osl,
