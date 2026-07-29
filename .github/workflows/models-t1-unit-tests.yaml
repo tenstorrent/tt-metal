@@ -17,6 +17,7 @@ on:
           - qwen3-32b-galaxy
           - qwen3.6-27b
           - gpt-oss-120b
+          - minimax-m3
           - whisper
           - gemma-4-12b
           - gemma-4-26b-a4b

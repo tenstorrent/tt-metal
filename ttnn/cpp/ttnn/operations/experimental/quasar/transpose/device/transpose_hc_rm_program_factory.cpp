@@ -91,12 +91,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
     TensorParameter input_param{
         .unique_id = INPUT_TENSOR,
         .spec = input_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     };
     TensorParameter output_param{
         .unique_id = OUTPUT_TENSOR,
         .spec = output_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     };
 
     // ------------------------------------------------------------------------
