@@ -348,7 +348,11 @@ geometry search.
 - [x] advice-enabled `tt-perf-report` reviewed and actionable rows attacked
 - [x] theoretical/device/end-to-end accounting reconciled
 - [x] independent stage review returned clean-pass
-- [ ] local scoped commit and SHA record
+- [x] local scoped commit and SHA record
+
+## Local commit
+
+- Stage implementation and evidence: `5aecb6cb0a8`
 
 ## Stage review
 
