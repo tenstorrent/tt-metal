@@ -40,12 +40,25 @@ full prerequisites.
 
 **A.2 Verify activation works** (also the per-shell step, B.0):
 ```
+export TTMLIR_ADVISOR_HOME=/path/to/tt-mlir     # MUST be exported BEFORE sourcing; bootstrap.sh
+                                                # checks it first and exits 1 if unset
 cd "$TTMLIR_ADVISOR_HOME"
-source .agents/skills/shard-advise/scripts/bootstrap.sh >/dev/null 2>&1   # redirect, never | tail
-python -c "import ttnn; print(ttnn.__file__)"    # must resolve, not error
+source tools/ttnn-jit/integrations/agentic-research/shard-advise/scripts/bootstrap.sh \
+  >/dev/null 2>&1                               # redirect, never | tail
+python3 -c "import ttnn; print(ttnn.__file__)"  # must resolve, not error
 ```
 `bootstrap.sh` activates the env, sets `SYSTEM_DESC_PATH`, and runs `ttrt query --save-artifacts`
 once to make the system descriptor. If it reports `ttnn-advise` missing, A.1 wasn't done.
+
+> **The path above is the tt-mlir one, and it matters.** Inside a **tt-metal** checkout this skill
+> lives at `.agents/skills/shard-advise/scripts/bootstrap.sh`, and earlier revisions of this file gave
+> that path here — but `$TTMLIR_ADVISOR_HOME` is a **tt-mlir** checkout, where the script ships under
+> `tools/ttnn-jit/integrations/agentic-research/`. Sourcing the tt-metal path from tt-mlir gives
+> `No such file or directory`, and the follow-up import then gives
+> `ModuleNotFoundError: No module named 'ttnn'`. Together those look exactly like a broken or missing
+> advisor install; they are not. This cost one operator a wrong "the advisor is unusable" conclusion
+> and a day of the advise arms being held for no reason. If you see that pair, check this path and
+> `TTMLIR_ADVISOR_HOME` before concluding anything about the build.
 
 **A.3 Tracer handlers (know this exists).** The advisor builds TTIR by monkeypatching ttnn ops
 in `tools/ttnn-jit/_src/interception_tracer.py`. A model may use an op it doesn't model yet →
