@@ -226,6 +226,17 @@ void kernel_main() {
     const uint32_t near_y = get_arg_val<uint32_t>(DIAG_ARG_BASE + 1);
 #endif
 
+    // ---- RING REDUCE-SCATTER args (index 17+; unfused/single-chunk/no-diag, so index 17 is free). ----
+#if defined(RSCATTER)
+    const uint32_t rs_next_x = get_arg_val<uint32_t>(17);  // next core in the Pk cycle (I send to it)
+    const uint32_t rs_next_y = get_arg_val<uint32_t>(18);
+    const uint32_t rs_prev_x = get_arg_val<uint32_t>(19);  // prev core (it sends to me)
+    const uint32_t rs_prev_y = get_arg_val<uint32_t>(20);
+    const uint32_t rs_owned_chunk = get_arg_val<uint32_t>(21);  // tile-chunk this core owns + writes to DRAM
+    const uint32_t rs_P = get_arg_val<uint32_t>(22);            // cycle size = Pk
+    const uint32_t rs_chunk_tiles = get_arg_val<uint32_t>(23);  // tiles per chunk = M_block*N_block / Pk
+#endif
+
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
     cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
     const uint32_t base0 = get_write_ptr(in0_cb);
@@ -316,6 +327,65 @@ void kernel_main() {
         return;
     }
 
+#if defined(RSCATTER)
+    // ---- Pk > 1: RING REDUCE-SCATTER (one independent reduce-scatter per output SUB-block). ----
+    // P = Pk cores in the factory's optimized cyclic order. Each of the N_bpc output sub-blocks (M_block x
+    // N_block tiles) is tile-partitioned into P chunks of chunk_tiles contiguous tiles (row-major; chunk c =
+    // tiles [c*chunk_tiles, (c+1)*chunk_tiles)). Every round each core sends one chunk to `next` and receives
+    // one from `prev` into cb_recv; compute adds its own resident partial tiles and forwards the running sum,
+    // so after P-1 rounds each core holds ONE fully-reduced chunk (rs_owned_chunk) and writes its tiles.
+    // Semaphore EPOCHS increase monotonically across (nb, round): global g = nb*(P-1)+t, so a wait targets g+1
+    // and can never alias across sub-blocks. Reuses the in0-ring payload->credit protocol (red_sem/redfree_sem);
+    // cb_send/cb_recv are EXACTLY 2 chunk-slots so the FIFO period matches g%2.
+    const uint32_t P = rs_P;
+    constexpr uint32_t cb_send = 4;
+    constexpr uint32_t cb_recv = 5;
+    const uint32_t chunk_tiles = rs_chunk_tiles;
+    const uint32_t chunk_bytes = chunk_tiles * tile_bytes;
+    const uint32_t recv_base = get_write_ptr(cb_recv);  // my cb_recv L1 base (identical offset on every core)
+    const uint32_t rs_recv_addr = get_semaphore(red_sem_id);
+    volatile tt_l1_ptr uint32_t* rs_recv_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_recv_addr);
+    const uint32_t rs_free_addr = get_semaphore(redfree_sem_id);
+    volatile tt_l1_ptr uint32_t* rs_free_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_free_addr);
+    const uint64_t prev_rs_free = get_noc_addr(rs_prev_x, rs_prev_y, rs_free_addr);  // I credit prev
+    const uint64_t next_rs_recv = get_noc_addr(rs_next_x, rs_next_y, rs_recv_addr);  // I signal next
+
+    uint32_t g = 0;  // monotonically increasing (nb, round) epoch, shared by rs_recv and rs_free
+    for (uint32_t nb = 0; nb < N_bpc; ++nb) {
+        const uint32_t n_base = nb * N_block;  // this sub-block's N-column base within the core's ownership
+        for (uint32_t t = 0; t + 1u < P; ++t, ++g) {
+            // Post my recv-slot credit to prev FIRST (every core credits before any core blocks on its own send
+            // credit -> no cyclic deadlock). cb_reserve_back waits until compute consumed my previous chunk.
+            cb_reserve_back(cb_recv, chunk_tiles);
+            noc_semaphore_inc(prev_rs_free, 1);          // tell prev: my cb_recv slot is free for epoch g
+            cb_wait_front(cb_send, chunk_tiles);         // compute staged this epoch's send chunk
+            noc_semaphore_wait_min(rs_free_ptr, g + 1);  // next freed its slot for epoch g
+            const uint32_t slot = g & 1u;                // double-buffered (2 slots), period matches the global epoch
+            uint64_t dst = get_noc_addr(rs_next_x, rs_next_y, recv_base + slot * chunk_bytes);
+            noc_async_write(get_read_ptr(cb_send), dst, chunk_bytes);
+            noc_semaphore_inc(next_rs_recv, 1);  // ordered after the payload (same peer + NoC, like the in0 ring)
+            noc_async_writes_flushed();          // payload departed L1 -> cb_send slot reusable
+            cb_pop_front(cb_send, chunk_tiles);
+            noc_semaphore_wait_min(rs_recv_ptr, g + 1);  // prev delivered epoch g into my cb_recv slot g%2
+            cb_push_back(cb_recv, chunk_tiles);          // compute adds its own tiles + (forwards | finishes owned)
+        }
+        // The last round produced my fully-reduced OWNED chunk into out_cb -> write its tiles to DRAM.
+        // Chunk c owns sub-block tiles [c*chunk_tiles ..); tile i -> (m = i/N_block, n = i%N_block) at global
+        // (m_start+m, n_start + n_base + n); valid iff m < valid_m and (n_base+n) < valid_n.
+        cb_wait_front(out_cb, chunk_tiles);
+        const uint32_t rr = get_read_ptr(out_cb);
+        for (uint32_t j = 0; j < chunk_tiles; ++j) {
+            const uint32_t idx = rs_owned_chunk * chunk_tiles + j;
+            const uint32_t m = idx / N_block;
+            const uint32_t n = idx - m * N_block;
+            if (m < valid_m && (n_base + n) < valid_n) {
+                noc_async_write_page((m_start + m) * Nt + (n_start + n_base + n), out, rr + j * tile_bytes);
+            }
+        }
+        noc_async_writes_flushed();  // output pages departed L1 -> out_cb slot safe to reuse
+        cb_pop_front(out_cb, chunk_tiles);
+    }
+#else
     // Pk > 1: linear reduction chain. `use_reduce` carries the cb_reduce DEPTH (>=2); guard the modulus so the
     // Pk==1 compile (use_reduce == 0) does not instantiate a division by zero in this unreachable branch.
     constexpr uint32_t red_depth = use_reduce ? use_reduce : 1u;
@@ -396,6 +466,7 @@ void kernel_main() {
         cb_pop_front(out_cb, out_blk);
 #endif  // SKIP_REDUCTION
     }
+#endif  // RSCATTER vs chain
     // Pipelined: single deferred completion before return — drain this core's forwarded partial-sums / DRAM
     // output writes AND the non-posted reduction-readiness semaphore atomics (noc_semaphore_inc), so no
     // in-flight NoC transaction outlives the program (writes_flushed above only guarantees source-L1 reuse).

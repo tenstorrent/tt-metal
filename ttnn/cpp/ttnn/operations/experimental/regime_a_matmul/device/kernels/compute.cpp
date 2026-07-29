@@ -14,20 +14,6 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 
-// Test-only causal timing zones (compile-gated; mask 0 => no-op => byte-identical). See DIAG_ZONES.
-// SumN{1,2} accumulate a repeated region's total time across the k-loop into one zone (2 accumulator slots).
-// The compute/TRISC kernel does NOT auto-inject the profiler header (dataflow kernels do), so include it.
-#ifdef DIAG_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
-// Regular start/end zones (SumN accumulators do not flush to the CSV for the compute kernel). K_num_blocks
-// is small so per-k-block markers are cheap; the analysis SUMS the per-instance durations to get total wait.
-#define RA_ZONE_SUM1(n) DeviceZoneScopedN(n)
-#define RA_ZONE_SUM2(n) DeviceZoneScopedN(n)
-#else
-#define RA_ZONE_SUM1(n)
-#define RA_ZONE_SUM2(n)
-#endif
-
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
@@ -111,6 +97,36 @@ void reduce_add_block(uint32_t a_cb, uint32_t b_cb, uint32_t out_cb, uint32_t M_
         cb_push_back(out_cb, N_block_tiles);
     }
 }
+
+#ifdef RSCATTER
+// Ring reduce-scatter helpers. rs_copy_chunk: copy n_tiles from in_cb starting at tile in_tile_off -> out_cb,
+// used to SEED the ring with this core's own chunk. No cb push/pop (the caller manages both CBs).
+void rs_copy_chunk(uint32_t in_cb, uint32_t in_tile_off, uint32_t out_cb, uint32_t n_tiles) {
+    copy_tile_to_dst_init_short(in_cb);
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t i = 0; i < n_tiles; ++i) {
+        acquire_dst();
+        copy_tile(in_cb, in_tile_off + i, 0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+}
+// out_cb[0..n) = acc_cb[acc_tile_off ..) + add_cb[0..n). acc_cb is this core's resident FP32 matmul partial
+// (read at a chunk offset); add_cb is the received running sum. This adds MY contribution for the chunk that is
+// currently travelling round the ring. Every add is FP32 in DST, exactly as in the chain's reduce_add_block.
+void rs_add_chunk(uint32_t acc_cb, uint32_t acc_tile_off, uint32_t add_cb, uint32_t out_cb, uint32_t n_tiles) {
+    add_tiles_init(acc_cb, add_cb);
+    reconfig_data_format(acc_cb, add_cb);
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t i = 0; i < n_tiles; ++i) {
+        acquire_dst();
+        add_tiles(acc_cb, add_cb, acc_tile_off + i, i, 0 /*dst*/);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+}
+#endif
 
 // For caller: if FUSE_TERNARY defined then out_cb == in_cb
 /**
@@ -335,35 +351,6 @@ void add_bias_and_addcmul_block(
     cb_pop_front(intermediate_cb, out_block_num_tiles);
 }
 
-#ifdef RSCATTER
-// Ring reduce-scatter helpers (test-only). Copy n_tiles from in_cb starting at tile in_tile_off -> out_cb
-// (used to seed the ring with this core's own row-chunk). No cb push/pop (caller manages).
-void rs_copy_chunk(uint32_t in_cb, uint32_t in_tile_off, uint32_t out_cb, uint32_t n_tiles) {
-    copy_tile_to_dst_init_short(in_cb);
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(out_cb);
-    for (uint32_t i = 0; i < n_tiles; ++i) {
-        acquire_dst();
-        copy_tile(in_cb, in_tile_off + i, 0);
-        pack_tile(0, out_cb);
-        release_dst();
-    }
-}
-// out_cb[0..n] = acc_cb[acc_tile_off..] + add_cb[0..n]. acc_cb is the resident fp32 matmul partial (read at a
-// row offset); add_cb is the received bf16 chunk. Adds this core's own row into the running ring sum.
-void rs_add_chunk(uint32_t acc_cb, uint32_t acc_tile_off, uint32_t add_cb, uint32_t out_cb, uint32_t n_tiles) {
-    add_tiles_init(acc_cb, add_cb);
-    reconfig_data_format(acc_cb, add_cb);
-    pack_reconfig_data_format(out_cb);
-    for (uint32_t i = 0; i < n_tiles; ++i) {
-        acquire_dst();
-        add_tiles(acc_cb, add_cb, acc_tile_off + i, i, 0);
-        pack_tile(0, out_cb);
-        release_dst();
-    }
-}
-#endif
-
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t in0_cb,
@@ -441,15 +428,14 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     // split-K plan B: 1 if this is the bottom K-band (no incoming running sum), else 0. Always present.
     [[maybe_unused]] const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
-#ifdef REDTREE
-    // Fan-in-2 reduction tree (test-only): number of incoming partials to sum before this core's block is
-    // final (0 = leaf/copy, 1 = one add, 2 = root two adds). Follows is_reduce_bottom; never combined with
-    // fusion, so it cannot collide with the fused is_reduce_top read below.
-    const uint32_t tree_num_recv = get_arg_val<uint32_t>(argidx++);
+#if defined(REDUCE_MEET)
+    // Number of incoming partials for this core: 0 at a chain end, 1 normally, 2 at the meet root. The root
+    // adds them one at a time in channel order, which matches the order the writer pushes them.
+    const uint32_t red_nrecv = get_arg_val<uint32_t>(argidx++);
 #endif
 #ifdef RSCATTER
-    // Ring reduce-scatter (test-only): this core's ring position, the ring size P=Pk, and chunk_tiles (tiles
-    // per chunk = M_block*N_block / Pk). Follow is_reduce_bottom; unfused only (no collision with is_reduce_top).
+    // Ring reduce-scatter: this core's cycle position, the cycle size P=Pk, and chunk_tiles (tiles per chunk =
+    // M_block*N_block / Pk). Follow is_reduce_bottom; unfused only, so they cannot collide with is_reduce_top.
     const uint32_t rs_ring_pos = get_arg_val<uint32_t>(argidx++);
     const uint32_t rs_P = get_arg_val<uint32_t>(argidx++);
     const uint32_t rs_chunk_tiles = get_arg_val<uint32_t>(argidx++);
@@ -496,28 +482,19 @@ void kernel_main() {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
-    bool reuse_in0_block = false;
-
     uint32_t current_M_block_tiles = M_block_tiles;
     uint32_t current_N_block_tiles = N_block_tiles;
     uint32_t current_subblock_h = subblock_h;
     uint32_t current_subblock_w = subblock_w;
 
-#ifdef IN0_KSLICE_RESIDENT
-    // Large-Mt ring: cb0 holds the full k-slice (all K_num_blocks in0 blocks, block-major). It is filled
-    // ONCE (the writer pushes it incrementally, W compute blocks per ring step) and kept resident so it can
-    // be reused across the N_blocks_per_core N-sub-blocks; the k-loop addresses block k_block via the in0_base
+    // Large-Mt ring: cb0 holds the full k-slice (all K_num_blocks in0 blocks, block-major). It is filled ONCE
+    // (the writer pushes it incrementally, W compute blocks per ring step) and kept resident so it can be
+    // reused across the N_blocks_per_core N-sub-blocks; the k-loop addresses block k_block via the in0_base
     // tile offset instead of popping. Popped once at the end.
     //
-    // DEFAULT (progressive): NO startup barrier. The first N-sub-block's k-loop instead waits cumulatively
-    // per K block (below), so the first matmul begins as soon as the first ring shard arrives while ring
-    // forwarding + in1 reading continue concurrently. Later N-sub-blocks reuse the now-complete resident slice.
-#ifdef DIAG_FULL_IN0_WAIT
-    // A/B baseline (test-only): the OLD single full-slice startup barrier before any matmul. Exactly the
-    // previous production behavior; the per-K cumulative waits below are compiled out.
-    cb_wait_front(in0_cb, K_num_blocks * in0_block_num_tiles);
-#endif
-#endif
+    // Progressive startup: NO startup barrier. The first N-sub-block's k-loop instead waits cumulatively per K
+    // block (below), so the first matmul begins as soon as the first ring shard arrives while ring forwarding
+    // + in1 reading continue concurrently. Later N-sub-blocks reuse the now-complete resident slice.
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
@@ -543,29 +520,20 @@ void kernel_main() {
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-#ifndef IN0_KSLICE_RESIDENT
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-#else
-#ifndef DIAG_FULL_IN0_WAIT
-                // Progressive cumulative wait (default resident path): begin matmul k_block as soon as the
-                // writer's incremental per-step ring pushes make CUMULATIVE (k_block+1) in0 blocks available.
-                // Only the FIRST resident traversal waits (M_blocks_per_core==1, first N-sub-block); once the
-                // slice is complete it stays resident and later N-sub-blocks reuse it with no further waits.
-                // Repeated cb_wait_front WITHOUT an intervening pop requires cumulative counts (CB API
-                // contract) — satisfied since (k_block+1)*in0_block_num_tiles is strictly increasing and CB0
-                // is popped only once, after all reuse (below). The writer pushes W blocks at a time, so a
-                // wait for a mid-batch boundary is simply satisfied when that W-batch lands.
+                // Progressive cumulative wait: begin matmul k_block as soon as the writer's incremental per-step
+                // ring pushes make CUMULATIVE (k_block+1) in0 blocks available. Only the FIRST resident traversal
+                // waits (M_blocks_per_core==1, first N-sub-block); once the slice is complete it stays resident
+                // and later N-sub-blocks reuse it with no further waits. Repeated cb_wait_front WITHOUT an
+                // intervening pop requires cumulative counts (CB API contract) — satisfied since
+                // (k_block+1)*in0_block_num_tiles is strictly increasing and CB0 is popped only once, after all
+                // reuse (below). The writer pushes W blocks at a time, so a wait for a mid-batch boundary is
+                // simply satisfied when that W-batch lands.
                 if (m_block_iter == 0 && n_block_iter == 0) {
-                    RA_ZONE_SUM1("Z_C_IN0WAIT");  // compute stalled on progressive in0 (ring exposure to compute)
                     cb_wait_front(in0_cb, (k_block + 1) * in0_block_num_tiles);
                 }
-#endif
-#endif
-                {
-                    RA_ZONE_SUM2("Z_C_IN1WAIT");  // compute stalled on in1 delivery (read exposure to compute)
-                    cb_wait_front(in1_cb, in1_block_num_tiles);
-                }
+                cb_wait_front(in1_cb, in1_block_num_tiles);
 
+#if !defined(SKIP_COMPUTE)
                 matmul_blocks(
                     in0_cb,
                     in1_cb,
@@ -575,30 +543,16 @@ void kernel_main() {
                     N_block_tiles,
                     K_block_tiles,
                     current_subblock_h,
-                    current_subblock_w
-#ifdef IN0_KSLICE_RESIDENT
-                    ,
-                    k_block * in0_block_num_tiles  // block-major offset into the resident k-slice
+                    current_subblock_w,
+                    k_block * in0_block_num_tiles);  // block-major offset into the resident k-slice
+#else
+                // Diagnostic: skip the matmul MATH. in0/in1 CBs are still waited + popped (below) so the
+                // dataflow protocol is unchanged; the accumulation buffer keeps its stale/uninitialised
+                // contents and the minimal output pack (copy_block below) still produces the out_cb shape.
+                (void)k_block;
 #endif
-                );
 
-                if (k_block == K_num_blocks - 1) {
-                    /**
-                     * On next iteration we might get reuse on in0
-                     *
-                     */
-                    if (n_block_iter < N_blocks_per_core - 1) {
-                        // going to stride on N, so reuse in0
-                        reuse_in0_block = true;
-                    }
-                }
-#ifndef IN0_KSLICE_RESIDENT
-                if (!reuse_in0_block) {
-                    cb_pop_front(in0_cb, in0_block_num_tiles);
-                }
-#endif
                 cb_pop_front(in1_cb, in1_block_num_tiles);
-                reuse_in0_block = false;
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
@@ -607,33 +561,30 @@ void kernel_main() {
             cb_push_back(intermediate_cb, out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-#ifndef RSCATTER
-            cb_reserve_back(out_cb, out_block_num_tiles);
-#endif
-#ifdef REDUCE_K
 #ifdef RSCATTER
-            // Ring reduce-scatter (test-only, no-fusion). intermediate_cb (fp32, resident) = my matmul partial,
-            // row-major. Partitioned into P=Pk contiguous tile-chunks of ct = out_block_num_tiles/Pk tiles
-            // (chunk c = tiles [c*ct, (c+1)*ct)). Seed cb_send with my own chunk `rs_ring_pos`; over P-1 rounds
-            // receive chunk d=(rs_ring_pos-t-1)%P, add my resident chunk d, and forward the running sum (rounds
-            // < P-2) or write my fully-reduced OWNED chunk (last round) -> out_cb.
+            // ---- Ring REDUCE-SCATTER. intermediate_cb (FP32, resident) is my matmul partial for the whole
+            // sub-block, row-major, partitioned into P=Pk contiguous chunks of ct tiles (chunk c = tiles
+            // [c*ct, (c+1)*ct)). Seed cb_send with MY OWN chunk `rs_ring_pos`; then over P-1 rounds receive the
+            // running sum for chunk d = (rs_ring_pos - t - 1) mod P, add my resident chunk d, and either forward
+            // it (earlier rounds) or keep it (last round) - at which point it is fully reduced and is exactly
+            // the chunk this core owns, so it goes to out_cb for the writer to send to DRAM. ----
             {
-                const uint32_t P = rs_P;                              // Pk
-                const uint32_t ct = rs_chunk_tiles;                   // tiles per chunk = out_block_num_tiles / Pk
-                constexpr uint32_t cb_send_cb = tt::CBIndex::c_4;     // compute -> writer send-chunk CB (bf16)
-                constexpr uint32_t cb_recv_cb = tt::CBIndex::c_5;     // incoming-chunk CB (bf16), 2 slots
+                const uint32_t P = rs_P;
+                const uint32_t ct = rs_chunk_tiles;
+                constexpr uint32_t cb_send_cb = tt::CBIndex::c_4;     // compute -> writer send chunk (bf16)
+                constexpr uint32_t cb_recv_cb = tt::CBIndex::c_5;     // incoming chunk (bf16), 2 slots
                 cb_wait_front(intermediate_cb, out_block_num_tiles);  // resident; popped after the ring
-                cb_reserve_back(cb_send_cb, ct);                      // seed: my own chunk `rs_ring_pos`
+                cb_reserve_back(cb_send_cb, ct);
                 rs_copy_chunk(intermediate_cb, rs_ring_pos * ct, cb_send_cb, ct);
                 cb_push_back(cb_send_cb, ct);
                 for (uint32_t t = 0; t + 1u < P; ++t) {
-                    const uint32_t d = (rs_ring_pos + P - t - 1u) % P;  // chunk received + reduced this round
+                    const uint32_t d = (rs_ring_pos + P - t - 1u) % P;  // chunk reduced this round
                     cb_wait_front(cb_recv_cb, ct);
-                    if (t + 1u < P - 1u) {  // forward the running sum to next round's send
+                    if (t + 1u < P - 1u) {  // forward the running sum into the next round's send slot
                         cb_reserve_back(cb_send_cb, ct);
                         rs_add_chunk(intermediate_cb, d * ct, cb_recv_cb, cb_send_cb, ct);
                         cb_push_back(cb_send_cb, ct);
-                    } else {  // last round: this is my fully-reduced OWNED chunk -> writer writes it to DRAM
+                    } else {  // last round: fully reduced AND owned by this core -> writer writes it to DRAM
                         cb_reserve_back(out_cb, ct);
                         rs_add_chunk(intermediate_cb, d * ct, cb_recv_cb, out_cb, ct);
                         cb_push_back(out_cb, ct);
@@ -642,37 +593,35 @@ void kernel_main() {
                 }
                 cb_pop_front(intermediate_cb, out_block_num_tiles);
             }
-#else  // non-RSCATTER REDUCE_K branches (chain / NO_REDUCE / REDTREE / fused) share the intermediate wait
-       // Split-K plan B column reduction: bottom band emits its own matmul partial; every other band
-       // adds the running sum forwarded up from the band below. The DM then either forwards out_cb up
-       // (non-top bands) or writes it to DRAM (top band).
+#else
+            cb_reserve_back(out_cb, out_block_num_tiles);
+            // Split-K plan B column reduction: bottom band emits its own matmul partial; every other band
+            // adds the running sum forwarded up from the band below. The DM then either forwards out_cb up
+            // (non-top bands) or writes it to DRAM (top band).
             cb_wait_front(intermediate_cb, out_block_num_tiles);
-#ifdef DIAG_NO_REDUCE
-            // NO_REDUCE ablation: force the bottom-band copy path on EVERY core so it never waits for or adds
-            // cb_reduce. The writer bypasses the matching reduction traffic; only the top band writes.
+#ifndef REGIME_A_FUSED
+            // NO-FUSION path (byte-identical to the historical Regime-A output stage): top and non-top reduce
+            // bands are identical; the writer decides forward-up vs DRAM-write.
+#if defined(SKIP_REDUCTION)
+            // Diagnostic: no cross-band accumulation. Every band packs its LOCAL partial to out_cb (no
+            // cb_reduce wait/pop); the writer (also SKIP_REDUCTION) writes each local partial directly.
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
-            cb_pop_front(intermediate_cb, out_block_num_tiles);
-#elif defined(REDTREE)
-            // Fan-in-2 reduction tree (test-only, no-fusion). num_recv rounds of reduce-add. Leaf (num_recv==0)
-            // forwards its own partial (copy_block); each round r<num_recv-1 accumulates in place; the final
-            // round writes intermediate + cb_reduce -> out_cb. num_recv==1 matches the chain non-bottom path;
-            // num_recv==0 the chain bottom path. (Tree reassociates the sum -> PCC-preserving, not bit-exact.)
-            if (tree_num_recv == 0u) {
+#elif defined(REDUCE_MEET)
+            if (red_nrecv == 0u) {
                 copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             } else {
-                for (uint32_t r = 0; r + 1u < tree_num_recv; ++r) {
-                    cb_wait_front(cb_reduce, out_block_num_tiles);
+                // Fold all but the last incoming partial into the accumulator in place, then fold the last one
+                // straight into out_cb. Same total arithmetic as the linear chain, just a different order, so
+                // the result is PCC-equal but not bit-identical (float addition is not associative).
+                cb_wait_front(cb_reduce, red_nrecv * out_block_num_tiles);
+                for (uint32_t c = 0; c + 1u < red_nrecv; ++c) {
                     reduce_add_in_place(intermediate_cb, cb_reduce, M_block_tiles, N_block_tiles);
                     cb_pop_front(cb_reduce, out_block_num_tiles);
                 }
-                cb_wait_front(cb_reduce, out_block_num_tiles);
                 reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
                 cb_pop_front(cb_reduce, out_block_num_tiles);
             }
-            cb_pop_front(intermediate_cb, out_block_num_tiles);
-#elif !defined(REGIME_A_FUSED)
-            // NO-FUSION path (byte-identical to the historical Regime-A output stage): top and non-top reduce
-            // bands are identical; the writer decides forward-up vs DRAM-write.
+#else
             if (is_reduce_bottom) {
                 copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             } else {
@@ -680,6 +629,7 @@ void kernel_main() {
                 reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
                 cb_pop_front(cb_reduce, out_block_num_tiles);
             }
+#endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
 #else
             // FUSION-AWARE split-K: bias/activation/addcmul are applied EXACTLY ONCE at the reduction ROOT
@@ -724,34 +674,9 @@ void kernel_main() {
                 cb_pop_front(intermediate_cb, out_block_num_tiles);
 #endif  // fusion kind
             }
-#endif  // DIAG_NO_REDUCE / REDTREE / no-fusion chain / fused
-#endif  // RSCATTER vs non-RSCATTER
-#elif !defined(FUSE_TERNARY)
-            cb_wait_front(intermediate_cb, out_block_num_tiles);
-#ifndef FUSE_BIAS
-            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
-#else
-            cb_wait_front(in2_cb, N_block_tiles);
-            add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
-            cb_pop_front(in2_cb, N_block_tiles);
-#endif  // FUSE_BIAS
-            cb_pop_front(intermediate_cb, out_block_num_tiles);
-
-#else   // FUSE_TERNARY is set
-            add_bias_and_addcmul_block(
-                intermediate_cb,
-                in2_cb,
-                ternary_a_cb,
-                ternary_b_cb,
-                fused_ternary_scalar_uint,
-                out_cb,
-                M_block_tiles,
-                N_block_tiles,
-                broadcast_ternary_b);
-#endif  // FUSE_TERNARY
+#endif  // no-fusion chain vs fused
+#endif  // RSCATTER vs chain
         }
     }
-#ifdef IN0_KSLICE_RESIDENT
     cb_pop_front(in0_cb, K_num_blocks * in0_block_num_tiles);
-#endif
 }
