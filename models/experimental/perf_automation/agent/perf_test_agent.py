@@ -30,9 +30,9 @@ def _component_run_timeout() -> int:
         return adaptive_op_timeout("build", env_key="PERF_MCP_COMPONENT_RUN_TIMEOUT_S")
     except Exception:  # noqa: BLE001
         # 240 s was the defect: llama's real perf-test build takes ~872 s.
-        from .sdk_retry import _operator_ceiling_s
+        from .device_budget import operator_ceiling_s
 
-        return int(os.environ.get("PERF_MCP_COMPONENT_RUN_TIMEOUT_S", "") or _operator_ceiling_s())
+        return int(os.environ.get("PERF_MCP_COMPONENT_RUN_TIMEOUT_S", "") or operator_ceiling_s())
 
 
 _TIMEOUT_CODES = {124, 137, 143, -9, -15}

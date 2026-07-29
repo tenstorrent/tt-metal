@@ -247,66 +247,6 @@ def _usage_summary(result_msg) -> dict:
     }
 
 
-def sdk_model_files_runner(
-    env_agent_path: str | os.PathLike[str] = Path(__file__).parent.parent / ".env.agent",
-    max_turns: int = 24,
-) -> Callable[[str], str]:
-    """Build the production runner for read_model_files (PLAN section 7.3).
-
-    Native Anthropic auth: ANTHROPIC_API_KEY if exported, else `claude` login. No creds file
-    required, so .env.agent is optional (it only supplies model/effort overrides when present).
-    """
-    from .config import apply_agent_env, get_model
-
-    resolved = apply_agent_env(env_agent_path)
-    model = get_model("sub", resolved)
-
-    def runner(prompt: str) -> str:
-        pass
-
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ClaudeAgentOptions,
-            ResultMessage,
-            TextBlock,
-            query,
-        )
-
-        options = ClaudeAgentOptions(
-            model=model,
-            system_prompt=(
-                "You map model source trees for performance tooling. Use ONLY the "
-                "read-only tools provided (Read, Glob, Grep). Your FINAL message "
-                "must be exactly one JSON object — no prose, no code fences."
-            ),
-            allowed_tools=["Read", "Glob", "Grep"],
-            permission_mode="bypassPermissions",
-            setting_sources=[],
-            max_turns=max_turns,
-            max_buffer_size=50 * 1024 * 1024,
-        )
-        chunks: list[str] = []
-
-        async def _go() -> None:
-            async for msg in query(prompt=prompt, options=options):
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            chunks.append(block.text)
-                elif isinstance(msg, ResultMessage):
-                    runner.last_usage = _usage_summary(msg)
-
-        from .sdk_retry import run_with_retry
-
-        run_with_retry(_go, lambda: chunks.clear())
-        return _extract_json_object("\n".join(chunks))
-
-    runner.last_usage = None
-    runner.model = model
-
-    return runner
-
-
 def cli_model_files_runner(max_turns: int = 24) -> Callable[[str], str]:
     """CC-native discovery runner: drives the `claude` CLI (login auth, no SDK, no model tier) to map
     the model tree and return the pathmap JSON. The cc engine uses this so its discovery is claude-code
@@ -1127,72 +1067,6 @@ REVIEW_PROMPT = (
     '"reasoning": <2-3 sentences>}}. Stop only for genuine soundness blockers — '
     "warnings with a sensible fallback are acceptable."
 )
-
-
-def lead_review_gate(
-    pathmap: dict[str, Any],
-    env_agent_path: str | os.PathLike[str] = Path(__file__).parent.parent / ".env.agent",
-    max_turns: int = 4,
-) -> dict[str, Any]:
-    """One lead-model call: read the evidence notes, decide continue/stop.
-
-    Returns {"decision", "reasoning", "model"}; raises DiscoveryRejected on stop.
-    No tools — pure judgment over the structured findings."""
-
-    from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
-
-    from .config import apply_agent_env, get_model
-
-    resolved = apply_agent_env(env_agent_path)
-    model = get_model("lead", resolved)
-    findings = json.dumps({k: pathmap[k] for k in ("perf_test", "pcc", "components", "summary", "warnings")}, indent=1)
-    prompt = REVIEW_PROMPT.format(findings=findings)
-    if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
-        prompt += (
-            "\n\nMODULE-LEVEL RUN (--module-level): this is a SINGLE-COMPONENT optimization. The perf test "
-            "times ONE module in isolation and the correctness gate is DELIBERATELY that module's OWN "
-            "per-component PCC test (a unit-level PCC >= its target), NOT a full-model end-to-end check. A "
-            "whole-pipeline / end-to-end gate is NOT expected or required here — the per-component PCC test "
-            "IS the correct and sufficient correctness signal for the single module being optimized. Do NOT "
-            "stop for 'the gate is only a per-component/unit test' or 'no correctness signal for the other "
-            "stages'; judge ONLY whether the per-component perf test and its per-component PCC gate are sound "
-            "for that one module."
-        )
-    options = ClaudeAgentOptions(
-        model=model,
-        system_prompt="You make go/no-go calls for an automated perf-optimization harness.",
-        allowed_tools=[],
-        permission_mode="bypassPermissions",
-        setting_sources=[],
-        max_turns=max_turns,
-        max_buffer_size=50 * 1024 * 1024,
-    )
-    chunks: list[str] = []
-    usage: dict[str, Any] = {}
-
-    async def _go() -> None:
-        async for msg in query(prompt=prompt, options=options):
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock):
-                        chunks.append(block.text)
-            elif isinstance(msg, ResultMessage):
-                usage["summary"] = _usage_summary(msg)
-
-    from .sdk_retry import run_with_retry
-
-    run_with_retry(_go, lambda: (chunks.clear(), usage.clear()))
-    try:
-        verdict = json.loads(_extract_json_object("\n".join(chunks)))
-    except json.JSONDecodeError as exc:
-        raise DiscoveryRejected(f"lead review returned unparseable verdict: {exc}") from exc
-    decision = verdict.get("decision")
-    reasoning = str(verdict.get("reasoning", ""))
-    if decision not in ("continue", "stop"):
-        raise DiscoveryRejected(f"lead review returned invalid decision: {decision!r}")
-    if decision == "stop":
-        raise DiscoveryRejected(f"lead agent stopped the run: {reasoning}")
-    return {"decision": decision, "reasoning": reasoning, "model": model, "usage": usage.get("summary")}
 
 
 def cli_lead_review_gate(

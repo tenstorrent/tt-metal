@@ -29,7 +29,6 @@ from .events import write_event
 from .environment import environment_check
 from .model_files import read_model_files
 from .opclass import STRUCTURAL_OP_CLASSES
-from .pkgtools import installer_hint
 from .router import build_index, cache_playbook
 from .probes import PerfRunFailed
 from .run import Run
@@ -109,7 +108,6 @@ def check_dependencies() -> list[str]:
     tt-perf-report is needed by every profile (stage-2 REFINE runs it even in
     mock-tracy mode); claude-agent-sdk is needed by the discovery sub-agent and
     the lead review gate. Returns actionable messages for anything missing."""
-    import importlib.util
     import shutil as _shutil
 
     from .pkgtools import installer_hint
@@ -118,8 +116,6 @@ def check_dependencies() -> list[str]:
     missing: list[str] = []
     if _shutil.which("tt-perf-report") is None:
         missing.append(f"tt-perf-report not on PATH — install the agent deps into your tt-metal venv: {hint}")
-    if importlib.util.find_spec("claude_agent_sdk") is None:
-        missing.append(f"claude-agent-sdk not importable — install the agent deps into your tt-metal venv: {hint}")
     return missing
 
 
@@ -344,28 +340,6 @@ def before_loop(
     # Agent-SDK health: the claude CLI auto-updates and can drift out of sync with the pinned
     # python claude-agent-sdk, after which EVERY agent call fails ("error result: success").
     # Detect that here (a trivial call in a clean subprocess) and, by default, auto-upgrade +
-    # re-test BEFORE the first in-process SDK import (discover), so the run picks up the fix.
-    stages.start("agent_sdk_health", "Checking the agent toolchain")
-    if config.get("cc_discovery"):
-        stages.done("cc discovery: claude CLI (SDK health check skipped)")
-    else:
-        from .sdk_health import ensure_compatible
-
-        sdk_status = ensure_compatible()
-        if sdk_status.get("ok"):
-            stages.done(
-                f"healthy (claude-agent-sdk {sdk_status.get('version')}"
-                + (f", auto-synced from {sdk_status['version_before']}" if sdk_status.get("healed") else "")
-                + ")"
-            )
-        else:
-            raise SystemExit(
-                "BEFORE-LOOP FAILED: agent SDK unhealthy "
-                f"(claude-agent-sdk {sdk_status.get('version')}): {sdk_status.get('reason')}\n"
-                f"  detail: {sdk_status.get('detail', '')}\n"
-                f"  fix: {installer_hint()} -U claude-agent-sdk  (or set AGENT_SDK_AUTOSYNC=1 to auto-fix)"
-            )
-
     stages.start("ensure_tt_lang", "Verifying the kernel toolchain (tt-lang)")
     try:
         from .ttlang import ensure_ttl
@@ -873,25 +847,19 @@ def main(argv: list[str] | None = None) -> int:
 
         model_runner = make_mock_model_runner(args.model_root) if args.mock_model_files else None
         if model_runner is None:
-            if getattr(args, "cc_discovery", False):
-                from .probes import cli_model_files_runner
+            # ONE runner now. The `else:` branch here called probes.sdk_model_files_runner, the
+            # Claude-Agent-SDK twin of this CLI runner, and only the retired FSM engine ever took it
+            # -- cc always passes --cc-discovery. Both are gone with the SDK.
+            from .probes import cli_model_files_runner
 
-                model_runner = cli_model_files_runner()
-            else:
-                from .probes import sdk_model_files_runner
-
-                model_runner = sdk_model_files_runner()  # section 3.1 fail-fast
+            model_runner = cli_model_files_runner()
 
         if args.mock_model_files:
             review = mock_review  # gatherer mocked -> nothing real to review
-        elif getattr(args, "cc_discovery", False):
+        else:
             from .probes import cli_lead_review_gate
 
             review = cli_lead_review_gate
-        else:
-            from .probes import lead_review_gate
-
-            review = lead_review_gate
 
         if args.mock_tracy:
             factory = lambda perf, case: mock_run_profiled

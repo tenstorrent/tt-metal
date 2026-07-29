@@ -98,7 +98,9 @@ def test_before_loop_all_mocks_produces_manifest_and_baseline(tmp_path, model_ro
         "environment_check",
         "startup_reset",
         "cache_playbook",
-        "agent_sdk_health",
+        # "agent_sdk_health" was here: a subprocess probe that pre-empted a broken in-process
+        # claude_agent_sdk import before discovery touched it. There is no in-process SDK any more --
+        # every model call is a `claude` CLI subprocess -- so the stage went with it.
         "ensure_tt_lang",
         "discover",
         "lead_review",

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Callable
 
 AXIS_TO_METRIC = {"device": "device_ms", "host": "wall_ms"}
@@ -57,51 +56,6 @@ def choose_axis(profile: dict, runner: Callable[[str], object]) -> str:
         return AXIS_TO_METRIC.get((obj or {}).get("axis"), "device_ms")
     except Exception:
         return "device_ms"
-
-
-def make_axis_runner(
-    env_agent_path: str | Path = Path(__file__).parent.parent / ".env.agent",
-    max_turns: int = 4,
-) -> Callable[[str], str]:
-    """Live strategist runner: runner(prompt) -> JSON text. Lead model, no tools (pure judgment)."""
-    from .config import apply_agent_env, get_model
-
-    resolved = apply_agent_env(env_agent_path)
-    model = get_model("lead", resolved)
-
-    def runner(prompt: str) -> str:
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ClaudeAgentOptions,
-            ResultMessage,  # noqa: F401
-            TextBlock,
-            query,
-        )
-
-        options = ClaudeAgentOptions(
-            model=model,
-            system_prompt="You pick the optimization axis. Final message is one JSON object, no prose.",
-            allowed_tools=[],
-            permission_mode="bypassPermissions",
-            setting_sources=[],
-            max_turns=max_turns,
-            max_buffer_size=50 * 1024 * 1024,
-        )
-        chunks: list[str] = []
-
-        async def _go() -> None:
-            async for msg in query(prompt=prompt, options=options):
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            chunks.append(block.text)
-
-        from .sdk_retry import run_with_retry
-
-        run_with_retry(_go, lambda: chunks.clear())
-        return "\n".join(chunks)
-
-    return runner
 
 
 def make_cli_axis_runner() -> Callable[[str], str]:
