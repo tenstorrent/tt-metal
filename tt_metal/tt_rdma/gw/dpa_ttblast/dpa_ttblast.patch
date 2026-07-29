@@ -11,7 +11,7 @@
  
  /* Structure for transfer CQ data */
  struct app_transfer_cq {
-@@ -83,6 +83,18 @@
+@@ -83,6 +83,24 @@
  	struct app_transfer_cq sq_cq_transf;
  	/* SQ transfer information. */
  	struct app_transfer_wq sq_transf;
@@ -27,12 +27,18 @@
 +	/* A4: mkey over the source payload buffer. If nonzero, the DPA does ZERO-COPY GATHER (send WQE 2nd data
 +	 * seg = payload read by HW from tt_src_daddr via this mkey; only the 46B header is written per frame). */
 +	uint32_t tt_src_mkey;
++	/* Multi-thread fan-out: this thread's frame seq numbers start at tt_seq_base+1, so N concurrent threads
++	 * (each its own SQ + this struct) emit DISJOINT seq ranges and the BH pool stays exactly-once. */
++	uint32_t tt_seq_base;
++	/* Skip the header CRC (write 0). A4 found the DPA-side CRC caps a thread at ~20G (table) vs ~57G without;
++	 * the BH drainer pool does NOT check header CRC, so this is safe on the pool path and needed for line rate. */
++	uint8_t tt_no_crc;
  	uint8_t not_first_run;
  } __attribute__((__packed__, aligned(8)));
  
 --- a/packet_processor/dev/flexio_packet_processor_dev.c
 +++ b/packet_processor/dev/flexio_packet_processor_dev.c
-@@ -178,6 +178,140 @@
+@@ -178,6 +178,168 @@
  	flexio_dev_dbr_rq_inc_pi(app_ctx.rq_ctx.rq_dbr);
  }
  
@@ -95,7 +101,9 @@
 +	tt_put32(h + 16, 0);          /* remote_offset lo */
 +	tt_put32(h + 20, 0);          /* remote_offset hi */
 +	tt_put32(h + 24, 0);          /* imm */
-+	tt_put32(h + 28, tt_crc32(h, 28));
++	/* CRC over the 28B header. Skippable (write 0): the BH drainer pool validates rkey/op/roff/len only, not
++	 * the header CRC, and the DPA-side CRC is the per-thread throughput wall (A4) -> skip it for line rate. */
++	tt_put32(h + 28, d->tt_no_crc ? 0u : tt_crc32(h, 28));
 +	if (hdr_only)
 +		return; /* A4 gather: the payload is read by HW via the SQ 2nd data segment (no CPU copy) */
 +	if (src)
@@ -105,11 +113,32 @@
 +			h[32 + i] = (uint8_t)i;
 +}
 +
-+/* Post `tt_count` TT-RDMA WRITE frames on the SQ, SQ-CQ paced (batch of 16, last send signaled, wait). A4:
-+ * if d->tt_src_mkey != 0 => ZERO-COPY GATHER: write only the 46B header per frame; the send WQE's 2nd data
-+ * segment (the otherwise-pad 4th WQE slot) reads the payload directly from d->tt_src_daddr via tt_src_mkey,
-+ * so the HW gathers [header]+[payload] with no per-frame CPU payload copy. Else COPY mode (whole frame). */
-+static void tt_blast(struct host2dev_packet_processor_data *d)
++/* Per-invocation blast context: exactly the queue state one DPA thread needs to drive its OWN SQ. Multi-thread
++ * (N concurrent flexio_process_call RPCs) requires each thread to own its SQ/SQ-CQ/data-ring, so the blast
++ * MUST NOT touch the shared global app_ctx -- it builds this on its stack from its own host2dev arg. */
++struct tt_blast_ctx {
++	sq_ctx_t sq_ctx;    /* this thread's SQ */
++	cq_ctx_t sq_cq_ctx; /* this thread's SQ CQ */
++	dt_ctx_t dt_ctx;    /* this thread's SQ data ring */
++	uint32_t lkey;      /* this thread's SQ-data mkey */
++};
++
++static void tt_ctx_init(struct tt_blast_ctx *c, struct host2dev_packet_processor_data *d)
++{
++	c->lkey = d->sq_transf.wqd_mkey_id;
++	com_sq_ctx_init(&c->sq_ctx, d->sq_transf.wq_num, d->sq_transf.wq_ring_daddr);
++	com_cq_ctx_init(&c->sq_cq_ctx, d->sq_cq_transf.cq_num, d->sq_cq_transf.log_cq_depth,
++			d->sq_cq_transf.cq_ring_daddr, d->sq_cq_transf.cq_dbr_daddr);
++	com_dt_ctx_init(&c->dt_ctx, d->sq_transf.wqd_daddr);
++}
++
++/* Post `tt_count` TT-RDMA WRITE frames on THIS thread's SQ `c`, SQ-CQ paced (batch of 16, last send signaled,
++ * wait). Frame seq numbers start at d->tt_seq_base+1 so N concurrent threads emit DISJOINT seq ranges (the BH
++ * pool stays exactly-once). A4: if d->tt_src_mkey != 0 => ZERO-COPY GATHER: write only the 46B header per
++ * frame; the send WQE's 2nd data segment (the otherwise-pad 4th WQE slot) reads the payload directly from
++ * d->tt_src_daddr via tt_src_mkey, so the HW gathers [header]+[payload] with no per-frame CPU payload copy.
++ * Else COPY mode (whole frame). */
++static void tt_blast(struct tt_blast_ctx *c, struct host2dev_packet_processor_data *d)
 +{
 +	const uint32_t plen = d->tt_plen;
 +	const uint32_t flen = 14u + 32u + plen;
@@ -118,18 +147,19 @@
 +	const int gather = (d->tt_src_mkey != 0);
 +	const uint8_t *src = (const uint8_t *)d->tt_src_daddr;
 +
-+	tt_crc_init();
++	if (!d->tt_no_crc)
++		tt_crc_init();
 +	uint32_t sent = 0;
 +	while (sent < d->tt_count) {
 +		uint32_t b = d->tt_count - sent;
 +		if (b > BATCH)
 +			b = BATCH;
 +		for (uint32_t j = 0; j < b; j++) {
-+			uint8_t *f = (uint8_t *)get_next_dte(&app_ctx.dt_ctx, DATA_IDX_MASK, LOG_WQD_CHUNK_BSIZE);
-+			tt_build_frame(f, d, plen, sent + j + 1, src, gather);
++			uint8_t *f = (uint8_t *)get_next_dte(&c->dt_ctx, DATA_IDX_MASK, LOG_WQD_CHUNK_BSIZE);
++			tt_build_frame(f, d, plen, d->tt_seq_base + sent + j + 1, src, gather);
 +
-+			union flexio_dev_sqe_seg *cseg = get_next_sqe(&app_ctx.sq_ctx, SQ_IDX_MASK);
-+			flexio_dev_swqe_seg_ctrl_set(cseg, app_ctx.sq_ctx.sq_pi, app_ctx.sq_ctx.sq_number,
++			union flexio_dev_sqe_seg *cseg = get_next_sqe(&c->sq_ctx, SQ_IDX_MASK);
++			flexio_dev_swqe_seg_ctrl_set(cseg, c->sq_ctx.sq_pi, c->sq_ctx.sq_number,
 +						     (j == b - 1) ? FLEXIO_CTRL_SEG_CE_CQE_ALWAYS
 +								  : FLEXIO_CTRL_SEG_CE_CQE_ON_CQE_ERROR,
 +						     FLEXIO_CTRL_SEG_TYPE_SEND_EN);
@@ -137,49 +167,56 @@
 +			 * ds is the low byte of the big-endian qpn_ds field -> patch it to 4. */
 +			if (gather)
 +				((uint8_t *)&cseg->ctrl.qpn_ds)[3] = 4u;
-+			union flexio_dev_sqe_seg *swqe = get_next_sqe(&app_ctx.sq_ctx, SQ_IDX_MASK);
++			union flexio_dev_sqe_seg *swqe = get_next_sqe(&c->sq_ctx, SQ_IDX_MASK);
 +			flexio_dev_swqe_seg_eth_set(swqe, 0, 0, 0, NULL);
-+			swqe = get_next_sqe(&app_ctx.sq_ctx, SQ_IDX_MASK);
++			swqe = get_next_sqe(&c->sq_ctx, SQ_IDX_MASK);
 +			/* data seg 1: the 46B header (gather) or the whole frame (copy) */
-+			flexio_dev_swqe_seg_mem_ptr_data_set(swqe, gather ? hdr_len : flen, app_ctx.lkey, (uint64_t)f);
-+			swqe = get_next_sqe(&app_ctx.sq_ctx, SQ_IDX_MASK);
++			flexio_dev_swqe_seg_mem_ptr_data_set(swqe, gather ? hdr_len : flen, c->lkey, (uint64_t)f);
++			swqe = get_next_sqe(&c->sq_ctx, SQ_IDX_MASK);
 +			if (gather) /* data seg 2 (4th WQE slot): HW reads the payload from the source via its mkey */
 +				flexio_dev_swqe_seg_mem_ptr_data_set(swqe, plen, d->tt_src_mkey, d->tt_src_daddr);
-+			app_ctx.sq_ctx.sq_pi++;
++			c->sq_ctx.sq_pi++;
 +		}
 +		__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
-+		flexio_dev_qp_sq_ring_db(app_ctx.sq_ctx.sq_pi, app_ctx.sq_ctx.sq_number);
++		flexio_dev_qp_sq_ring_db(c->sq_ctx.sq_pi, c->sq_ctx.sq_number);
 +		__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
-+		while (flexio_dev_cqe_get_owner(app_ctx.sq_cq_ctx.cqe) != app_ctx.sq_cq_ctx.cq_hw_owner_bit)
++		while (flexio_dev_cqe_get_owner(c->sq_cq_ctx.cqe) != c->sq_cq_ctx.cq_hw_owner_bit)
 +			;
-+		com_step_cq(&app_ctx.sq_cq_ctx);
++		com_step_cq(&c->sq_cq_ctx);
 +		sent += b;
 +	}
-+	flexio_dev_print("TT-RDMA blast done: %u frames x %uB (%s)\n", sent, flen, gather ? "gather" : "copy");
++	flexio_dev_print("TT-RDMA blast done: %u frames x %uB seqbase=%u (%s)\n", sent, flen, d->tt_seq_base,
++			 gather ? "gather" : "copy");
 +}
 +
-+/* Host-invokable RPC entry (flexio_process_call): runs the blast synchronously. `arg` is the DPA-heap address
-+ * of the host2dev_packet_processor_data struct (== app_data_daddr on the host). */
++/* Host-invokable RPC entry (flexio_process_call): runs the blast synchronously on a per-call ctx. `arg` is the
++ * DPA-heap address of this thread's host2dev_packet_processor_data struct (== app_data_daddr[i] on the host).
++ * N host pthreads call this concurrently, each with its own arg -> each drives its own SQ on its own EU, with
++ * NO shared mutable state (thread-safe). */
 +uint64_t tt_blast_rpc(uint64_t arg);
 +__dpa_rpc__ uint64_t tt_blast_rpc(uint64_t arg)
 +{
 +	struct host2dev_packet_processor_data *d = (void *)arg;
++	struct tt_blast_ctx c;
 +
-+	app_ctx_init(d);
-+	tt_blast(d);
++	tt_ctx_init(&c, d);
++	tt_blast(&c, d);
 +	return d->tt_count;
 +}
 +
  /* Entry point function that host side call for the execute.
   *  thread_arg - pointer to the host2dev_packet_processor_data structure
   *     to transfer data from the host side.
-@@ -194,6 +328,12 @@
+@@ -194,6 +356,15 @@
  		data_from_host->not_first_run = 1;
  	}
  
-+	/* TT-RDMA A1: if a blast count was requested, originate TT-RDMA WRITE frames and finish (no RX). */
++	/* TT-RDMA A1: if a blast count was requested, originate TT-RDMA WRITE frames and finish (no RX). Build a
++	 * per-call ctx from the arg (same path as the RPC) so this stays thread-safe if run as an event handler. */
 +	if (data_from_host->tt_count) {
-+		tt_blast(data_from_host);
++		struct tt_blast_ctx c;
++		tt_ctx_init(&c, data_from_host);
++		tt_blast(&c, data_from_host);
 +		return;
 +	}
 +
@@ -188,17 +225,20 @@
  	while (flexio_dev_cqe_get_owner(app_ctx.rq_cq_ctx.cqe) !=
 --- a/packet_processor/host/flexio_packet_processor_host.c
 +++ b/packet_processor/host/flexio_packet_processor_host.c
-@@ -36,6 +36,9 @@
+@@ -36,6 +36,12 @@
  /* Used for geteuid function. */
  #include <unistd.h>
  
 +/* TT-RDMA A1: blast timing. */
 +#include <time.h>
 +
++/* TT-RDMA multi-thread fan-out: N host pthreads, each a blocking flexio_process_call driving its own SQ. */
++#include <pthread.h>
++
  /* Used for host (x86/DPU) memory allocations. */
  #include <malloc.h>
  
-@@ -59,6 +62,8 @@
+@@ -59,6 +65,8 @@
  
  /* Flex IO packet processor device (DPA) side function stub. */
  extern flexio_func_t flexio_pp_dev;
@@ -207,7 +247,34 @@
  
  /* Application context struct holding necessary host side variables. */
  struct app_context {
-@@ -178,8 +183,8 @@
+@@ -122,6 +130,26 @@
+ 	 * information struct.
+ 	 */
+ 	flexio_uintptr_t app_data_daddr;
++
++	/* ---- TT-RDMA shared payload source (A2/A4), created once and shared by all blast threads ---- */
++	flexio_uintptr_t tt_src_daddr;      /* DPA-heap source buffer (simulated RoCE-landed payload) */
++	uint32_t tt_src_mkey;               /* mkey over the source (A4 zero-copy gather); 0 => copy/none */
++	struct flexio_mkey *tt_src_mkey_ptr; /* keep for cleanup */
++};
++
++/* ---- TT-RDMA multi-thread fan-out: per-thread SQ + its own DPA-side app_data ---- */
++struct tt_sq {
++	struct flexio_cq *flexio_sq_cq_ptr; /* this thread's SQ CQ */
++	struct flexio_sq *flexio_sq_ptr;    /* this thread's SQ */
++	struct flexio_mkey *sqd_mkey;       /* this thread's SQ-data mkey */
++	struct app_transfer_cq sq_cq_transf;
++	struct app_transfer_wq sq_transf;
++	flexio_uintptr_t app_data_daddr;    /* this thread's host2dev struct on the DPA heap */
++	/* Optional per-thread payload source (TTDPA_PERSRC=1): give each thread its own source buffer + mkey so
++	 * the HW gather reads don't all serialize through one shared mkey's MTT. */
++	flexio_uintptr_t src_daddr;
++	struct flexio_mkey *src_mkey_ptr;
++	uint32_t src_mkey;
+ };
+ 
+ /* Open ibv device
+@@ -178,8 +206,8 @@
  /* Number of entries in each RQ/SQ/CQ is 2^LOG_Q_DEPTH. */
  #define LOG_Q_DEPTH 7
  #define Q_DEPTH L2V(LOG_Q_DEPTH)
@@ -218,7 +285,7 @@
  /* SQ/RQ data entry byte size log to value. */
  #define Q_DATA_ENTRY_BSIZE L2V(LOG_Q_DATA_ENTRY_BSIZE)
  /* SQ/RQ DATA byte size is queue depth times entry byte size. */
-@@ -217,6 +222,9 @@
+@@ -217,6 +245,9 @@
  
  /* Source MAC address to match for incoming packets. */
  #define SMAC 0x02427e7feb02
@@ -228,7 +295,7 @@
  /* Creates steering rules for application.
   * Returns 0 on success and -1 if the allocation was failed.
   * app_ctx - pointer to app_context structure.
-@@ -255,15 +263,17 @@
+@@ -255,15 +286,17 @@
  			return -1;
  		}
  
@@ -249,83 +316,384 @@
  		if (!app_ctx->tx_rule_vport) {
  			fprintf(stderr, "Failed to create TX vport steering rule\n");
  			return -1;
-@@ -716,6 +726,75 @@
+@@ -686,6 +719,137 @@
+ 	return 0;
+ }
+ 
++/* ---- TT-RDMA blast param + source helpers (shared by the single- and multi-thread paths) ---- */
++
++/* Fill the TT-RDMA header params (dmac/smac/count/plen/rkey) into `h` from the environment. Prints the params
++ * line when a blast was requested. Returns the blast count (0 => not a blast run). */
++static uint32_t tt_fill_hdr_params(struct host2dev_packet_processor_data *h)
++{
++	const char *c = getenv("TTDPA_COUNT");
++	const char *p = getenv("TTDPA_PLEN");
++	const char *r = getenv("TTDPA_RKEY");
++	const char *dm = getenv("TTDPA_DMAC");
++	unsigned m[6] = {0x02, 0, 0, 0, 0, 0x02};
++	uint64_t smac = SMAC; /* src MAC must match the TX steering rule (create_rule_tx_fwd_to_vport) */
++	int i;
++
++	if (dm)
++		sscanf(dm, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]);
++	for (i = 0; i < 6; i++) {
++		h->tt_dmac[i] = (uint8_t)m[i];
++		h->tt_smac[i] = (uint8_t)(smac >> (8 * (5 - i))); /* SMAC is big-endian 48-bit */
++	}
++	h->tt_count = c ? (uint32_t)strtoul(c, NULL, 0) : 0;
++	h->tt_plen = p ? (uint32_t)strtoul(p, NULL, 0) : 256;
++	h->tt_rkey = r ? (uint32_t)strtoul(r, NULL, 0) : 0x00CAFE42u;
++	h->tt_no_crc = (getenv("TTDPA_NOCRC") && strtoul(getenv("TTDPA_NOCRC"), NULL, 0) > 0) ? 1 : 0;
++	if (h->tt_count)
++		printf("TT-RDMA blast: count=%u plen=%u rkey=0x%08x dmac=%02x:%02x:%02x:%02x:%02x:%02x crc=%s\n",
++		       h->tt_count, h->tt_plen, h->tt_rkey, m[0], m[1], m[2], m[3], m[4], m[5],
++		       h->tt_no_crc ? "OFF" : "on");
++	return h->tt_count;
++}
++
++/* Create ONE payload source buffer of `sp` bytes on the DPA heap, filled with the tag pattern (simulated
++ * RoCE-landed payload), and (if want_mkey) an mkey over it for the HW gather. Sets *daddr / *mkey_ptr /
++ * *mkey_id. Returns 0 / -1. */
++static int tt_alloc_src_buf(struct app_context *app_ctx, uint32_t sp, int want_mkey, const char *tag,
++			    flexio_uintptr_t *daddr, struct flexio_mkey **mkey_ptr, uint32_t *mkey_id)
++{
++	char *pat = calloc(1, sp);
++	size_t tl, i;
++	int rc = 0;
++
++	if (!pat)
++		return -1;
++	tl = strlen(tag);
++	for (i = 0; i < sp; i++)
++		pat[i] = (i < tl) ? tag[i] : (char)i;
++	if (flexio_copy_from_host(app_ctx->flexio_process, pat, sp, daddr)) {
++		fprintf(stderr, "src: failed to alloc DPA source buffer\n");
++		free(pat);
++		return -1;
++	}
++	if (want_mkey) {
++		struct flexio_mkey_attr ma = {0};
++		struct flexio_mkey *mk = NULL;
++
++		ma.pd = app_ctx->process_pd;
++		ma.daddr = *daddr;
++		ma.len = sp;
++		ma.access = IBV_ACCESS_LOCAL_WRITE;
++		if (flexio_device_mkey_create(app_ctx->flexio_process, &ma, &mk)) {
++			fprintf(stderr, "src: failed to create source mkey\n");
++			rc = -1;
++		} else {
++			*mkey_ptr = mk;
++			*mkey_id = flexio_mkey_get_id(mk);
++		}
++	}
++	free(pat);
++	return rc;
++}
++
++/* Create the shared TT-RDMA payload source buffer (+ mkey for A4 zero-copy gather) ONCE on the DPA heap, and
++ * cache it in app_ctx (tt_src_daddr / tt_src_mkey). Honors TTDPA_HDRONLY / TTDPA_SRC / TTDPA_ZC. Idempotent:
++ * a second call is a no-op, so all fan-out threads share one read-only source. Returns 0 / -1. */
++static int tt_create_src(struct app_context *app_ctx, uint32_t plen)
++{
++	int want_src, want_zc, rc = 0;
++	uint32_t sp;
++	char *pat;
++	const char *tag;
++	size_t tl, i;
++
++	if (app_ctx->tt_src_daddr) /* already created (or HDRONLY sentinel) */
++		return 0;
++	/* A4 floor: header-only per frame (no payload write). Sentinel daddr=1, no real buffer/mkey. */
++	if (getenv("TTDPA_HDRONLY") && strtoul(getenv("TTDPA_HDRONLY"), NULL, 0) > 0) {
++		app_ctx->tt_src_daddr = 1;
++		printf("A4 floor: HEADER-ONLY per-frame (no payload write)\n");
++		return 0;
++	}
++	want_src = getenv("TTDPA_SRC") && strtoul(getenv("TTDPA_SRC"), NULL, 0) > 0;
++	want_zc = getenv("TTDPA_ZC") && strtoul(getenv("TTDPA_ZC"), NULL, 0) > 0;
++	if (!want_src && !want_zc)
++		return 0;
++
++	sp = plen ? plen : 256;
++	pat = calloc(1, sp);
++	if (!pat)
++		return -1;
++	tag = want_zc ? "A4-DPA-ZEROCOPY-GATHER-" : "A2-DPA-PER-FRAME-READ-";
++	tl = strlen(tag);
++	for (i = 0; i < sp; i++)
++		pat[i] = (i < tl) ? tag[i] : (char)i;
++	if (flexio_copy_from_host(app_ctx->flexio_process, pat, sp, &app_ctx->tt_src_daddr)) {
++		fprintf(stderr, "src: failed to alloc DPA source buffer\n");
++		rc = -1;
++	} else if (want_zc) {
++		/* mkey over the source so the HW TX can gather-read the payload (A4). */
++		struct flexio_mkey_attr ma = {0};
++		struct flexio_mkey *mk = NULL;
++		ma.pd = app_ctx->process_pd;
++		ma.daddr = app_ctx->tt_src_daddr;
++		ma.len = sp;
++		ma.access = IBV_ACCESS_LOCAL_WRITE;
++		if (flexio_device_mkey_create(app_ctx->flexio_process, &ma, &mk)) {
++			fprintf(stderr, "A4: failed to create source mkey\n");
++			rc = -1;
++		} else {
++			app_ctx->tt_src_mkey_ptr = mk;
++			app_ctx->tt_src_mkey = flexio_mkey_get_id(mk);
++			printf("A4 ZERO-COPY GATHER: src @0x%lx (%u B) mkey=0x%x\n",
++			       (unsigned long)app_ctx->tt_src_daddr, sp, app_ctx->tt_src_mkey);
++		}
++	} else {
++		printf("A2: DPA payload source @0x%lx (%u B) = per-frame copy\n",
++		       (unsigned long)app_ctx->tt_src_daddr, sp);
++	}
++	free(pat);
++	return rc;
++}
++
+ /* Copy application information to DPA.
+  * DPA side needs queue information in order to process the packets.
+  * The DPA heap memory address will be passed as the event handler argument.
+@@ -716,6 +880,18 @@
  	h2d_data->rq_cq_transf = app_ctx->rq_cq_transf;
  	/* Set RQ's information. */
  	h2d_data->rq_transf = app_ctx->rq_transf;
 +
-+	/* ---- TT-RDMA A1 blast params (env-driven; TTDPA_COUNT>0 turns the DPA into a TT-RDMA blaster) ---- */
-+	{
-+		const char *c = getenv("TTDPA_COUNT");
-+		const char *p = getenv("TTDPA_PLEN");
-+		const char *r = getenv("TTDPA_RKEY");
-+		const char *dm = getenv("TTDPA_DMAC");
-+		unsigned m[6] = {0x02, 0, 0, 0, 0, 0x02};
-+		uint64_t smac = SMAC; /* src MAC must match the TX steering rule (create_rule_tx_fwd_to_vport(SMAC)) */
-+		int i;
-+		if (dm)
-+			sscanf(dm, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]);
-+		for (i = 0; i < 6; i++) {
-+			h2d_data->tt_dmac[i] = (uint8_t)m[i];
-+			h2d_data->tt_smac[i] = (uint8_t)(smac >> (8 * (5 - i))); /* SMAC is big-endian 48-bit */
-+		}
-+		h2d_data->tt_count = c ? (uint32_t)strtoul(c, NULL, 0) : 0;
-+		h2d_data->tt_plen = p ? (uint32_t)strtoul(p, NULL, 0) : 256;
-+		h2d_data->tt_rkey = r ? (uint32_t)strtoul(r, NULL, 0) : 0x00CAFE42u;
-+		if (h2d_data->tt_count)
-+			printf("TT-RDMA blast: count=%u plen=%u rkey=0x%08x dmac=%02x:%02x:%02x:%02x:%02x:%02x\n",
-+			       h2d_data->tt_count, h2d_data->tt_plen, h2d_data->tt_rkey, m[0], m[1], m[2], m[3], m[4],
-+			       m[5]);
-+
-+		/* A4 floor experiment: TTDPA_HDRONLY=1 => DPA writes only the 46B header per frame (no payload
-+		 * write), to isolate the best-case per-frame cost. Sentinel tt_src_daddr=1. */
-+		if (h2d_data->tt_count && getenv("TTDPA_HDRONLY") && strtoul(getenv("TTDPA_HDRONLY"), NULL, 0) > 0) {
-+			h2d_data->tt_src_daddr = 1;
-+			printf("A4 floor: HEADER-ONLY per-frame (no payload write)\n");
-+		}
-+		/* A2/A4: TTDPA_SRC=1 (per-frame CPU copy) or TTDPA_ZC=1 (A4 zero-copy gather) => allocate a payload
-+		 * SOURCE buffer on the DPA heap, fill it with a known pattern (simulates the RoCE-landed payload).
-+		 * For ZC also create an mkey over it so the HW TX can gather the payload directly. */
-+		int want_src = getenv("TTDPA_SRC") && strtoul(getenv("TTDPA_SRC"), NULL, 0) > 0;
-+		int want_zc = getenv("TTDPA_ZC") && strtoul(getenv("TTDPA_ZC"), NULL, 0) > 0;
-+		if (h2d_data->tt_count && (want_src || want_zc)) {
-+			uint32_t sp = h2d_data->tt_plen ? h2d_data->tt_plen : 256;
-+			char *pat = calloc(1, sp);
-+			if (pat) {
-+				const char *tag = want_zc ? "A4-DPA-ZEROCOPY-GATHER-" : "A2-DPA-PER-FRAME-READ-";
-+				size_t tl = strlen(tag), i;
-+				for (i = 0; i < sp; i++)
-+					pat[i] = (i < tl) ? tag[i] : (char)i;
-+				if (flexio_copy_from_host(app_ctx->flexio_process, pat, sp, &h2d_data->tt_src_daddr)) {
-+					fprintf(stderr, "src: failed to alloc DPA source buffer\n");
-+				} else if (want_zc) {
-+					/* mkey over the source so the HW TX can gather-read the payload (A4). */
-+					struct flexio_mkey_attr ma = {0};
-+					struct flexio_mkey *mk = NULL;
-+					ma.pd = app_ctx->process_pd;
-+					ma.daddr = h2d_data->tt_src_daddr;
-+					ma.len = sp;
-+					ma.access = IBV_ACCESS_LOCAL_WRITE;
-+					if (flexio_device_mkey_create(app_ctx->flexio_process, &ma, &mk))
-+						fprintf(stderr, "A4: failed to create source mkey\n");
-+					else {
-+						h2d_data->tt_src_mkey = flexio_mkey_get_id(mk);
-+						printf("A4 ZERO-COPY GATHER: src @0x%lx (%u B) mkey=0x%x\n",
-+						       (unsigned long)h2d_data->tt_src_daddr, sp, h2d_data->tt_src_mkey);
-+					}
-+				} else {
-+					printf("A2: DPA payload source @0x%lx (%u B) = per-frame copy\n",
-+					       (unsigned long)h2d_data->tt_src_daddr, sp);
-+				}
-+				free(pat);
-+			}
-+		}
++	/* ---- TT-RDMA A1 blast params (env-driven; TTDPA_COUNT>0 turns the DPA into a TT-RDMA blaster). This is
++	 * the SINGLE-THREAD path (one SQ, whole count, seq base 0). The multi-thread fan-out (TTDPA_THREADS>1) is
++	 * driven separately in main() via tt_run_multithread() and does not use this app_data. ---- */
++	if (tt_fill_hdr_params(h2d_data)) {
++		if (tt_create_src(app_ctx, h2d_data->tt_plen))
++			fprintf(stderr, "TT-RDMA: source buffer setup failed\n");
++		h2d_data->tt_src_daddr = app_ctx->tt_src_daddr;
++		h2d_data->tt_src_mkey = app_ctx->tt_src_mkey;
++		h2d_data->tt_seq_base = 0;
 +	}
 +
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -1068,20 +1147,37 @@
+@@ -887,6 +1063,219 @@
+ /* dev msg stream buffer built from chunks of 2^FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE each */
+ #define MSG_HOST_BUFF_BSIZE (512 * L2V(FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE))
+ 
++/* ---- TT-RDMA multi-thread fan-out (create N SQs, spawn N host pthreads each blocking on one RPC) ---- */
++
++/* Create one SQ (+ its CQ + data mkey) for a fan-out blast thread, into `s`. Mirrors create_app_sq() but
++ * writes into a per-thread struct rather than the shared app_ctx, so N of these are fully independent. */
++static int create_tt_sq(struct app_context *app_ctx, struct tt_sq *s)
++{
++	struct flexio_process *app_fp = app_ctx->flexio_process;
++	struct flexio_cq_attr sqcq_attr = {0};
++	struct flexio_wq_attr sq_attr = {0};
++	uint32_t uar_id = flexio_uar_get_id(app_ctx->process_uar);
++	uint32_t cq_num;
++
++	if (cq_mem_alloc(app_fp, &s->sq_cq_transf)) {
++		fprintf(stderr, "tt_sq: failed to alloc SQ CQ memory\n");
++		return -1;
++	}
++	sqcq_attr.log_cq_depth = LOG_Q_DEPTH;
++	sqcq_attr.element_type = FLEXIO_CQ_ELEMENT_TYPE_NON_DPA_CQ;
++	sqcq_attr.uar_id = uar_id;
++	sqcq_attr.cq_dbr_daddr = s->sq_cq_transf.cq_dbr_daddr;
++	sqcq_attr.cq_ring_qmem.daddr = s->sq_cq_transf.cq_ring_daddr;
++	if (flexio_cq_create(app_fp, NULL, &sqcq_attr, &s->flexio_sq_cq_ptr)) {
++		fprintf(stderr, "tt_sq: failed to create SQ CQ\n");
++		return -1;
++	}
++	cq_num = flexio_cq_get_cq_num(s->flexio_sq_cq_ptr);
++	s->sq_cq_transf.cq_num = cq_num;
++	s->sq_cq_transf.log_cq_depth = LOG_Q_DEPTH;
++	if (sq_mem_alloc(app_fp, &s->sq_transf)) {
++		fprintf(stderr, "tt_sq: failed to alloc SQ memory\n");
++		return -1;
++	}
++	sq_attr.log_wq_depth = LOG_Q_DEPTH;
++	sq_attr.uar_id = uar_id;
++	sq_attr.wq_ring_qmem.daddr = s->sq_transf.wq_ring_daddr;
++	sq_attr.pd = app_ctx->process_pd;
++	if (flexio_sq_create(app_fp, NULL, cq_num, &sq_attr, &s->flexio_sq_ptr)) {
++		fprintf(stderr, "tt_sq: failed to create SQ\n");
++		return -1;
++	}
++	s->sq_transf.wq_num = flexio_sq_get_wq_num(s->flexio_sq_ptr);
++	s->sqd_mkey = create_dpa_mkey(app_ctx, s->sq_transf.wqd_daddr);
++	if (!s->sqd_mkey) {
++		fprintf(stderr, "tt_sq: failed to create SQ data mkey\n");
++		return -1;
++	}
++	s->sq_transf.wqd_mkey_id = flexio_mkey_get_id(s->sqd_mkey);
++	return 0;
++}
++
++/* Tear down a tt_sq (reverse order of creation). Safe on a partially-created struct (NULL/0 fields skipped). */
++static int destroy_tt_sq(struct app_context *app_ctx, struct tt_sq *s)
++{
++	struct flexio_process *fp = app_ctx->flexio_process;
++	int err = 0;
++
++	if (s->app_data_daddr && flexio_buf_dev_free(fp, s->app_data_daddr))
++		err = -1;
++	if (s->src_mkey_ptr && flexio_device_mkey_destroy(s->src_mkey_ptr))
++		err = -1;
++	if (s->src_daddr && flexio_buf_dev_free(fp, s->src_daddr))
++		err = -1;
++	if (s->flexio_sq_ptr && flexio_sq_destroy(s->flexio_sq_ptr))
++		err = -1;
++	if (s->sqd_mkey && flexio_device_mkey_destroy(s->sqd_mkey))
++		err = -1;
++	if (s->sq_transf.wq_ring_daddr && flexio_buf_dev_free(fp, s->sq_transf.wq_ring_daddr))
++		err = -1;
++	if (s->sq_transf.wqd_daddr && flexio_buf_dev_free(fp, s->sq_transf.wqd_daddr))
++		err = -1;
++	if (s->flexio_sq_cq_ptr && flexio_cq_destroy(s->flexio_sq_cq_ptr))
++		err = -1;
++	if (s->sq_cq_transf.cq_ring_daddr && flexio_buf_dev_free(fp, s->sq_cq_transf.cq_ring_daddr))
++		err = -1;
++	if (s->sq_cq_transf.cq_dbr_daddr && flexio_buf_dev_free(fp, s->sq_cq_transf.cq_dbr_daddr))
++		err = -1;
++	return err;
++}
++
++/* Per-pthread argument: one blocking flexio_process_call(tt_blast_rpc) on this thread's app_data. */
++struct tt_worker_arg {
++	struct flexio_process *process;
++	flexio_uintptr_t app_data_daddr;
++	uint64_t ret;
++	int status;
++	int idx;
++};
++
++static void *tt_worker(void *v)
++{
++	struct tt_worker_arg *a = v;
++
++	/* Blocking synchronous RPC: runs tt_blast_rpc on the DPA, returns the frame count. The concurrency
++	 * question this whole path answers: do N such calls run in parallel on N DPA EUs, or serialize? */
++	a->status = flexio_process_call(a->process, &tt_blast_rpc, &a->ret, a->app_data_daddr);
++	return NULL;
++}
++
++/* TT-RDMA multi-thread fan-out. Creates `nthreads` SQs, builds one per-thread host2dev struct each (disjoint
++ * seq range so the BH pool stays exactly-once), then spawns `nthreads` host pthreads that each block in one
++ * flexio_process_call. pthread_join gives clean completion + per-thread frame count + wall-clock. 0 / -1. */
++static int tt_run_multithread(struct app_context *app_ctx, int nthreads)
++{
++	struct host2dev_packet_processor_data tmpl = {0};
++	struct tt_worker_arg *args = NULL;
++	pthread_t *tids = NULL;
++	struct tt_sq *sqs = NULL;
++	uint32_t total, per, plen;
++	struct timespec t0, t1;
++	uint64_t done = 0;
++	int i, created = 0, launched = 0, err = 0;
++	int persrc = getenv("TTDPA_PERSRC") && strtoul(getenv("TTDPA_PERSRC"), NULL, 0) > 0;
++
++	total = tt_fill_hdr_params(&tmpl);
++	if (!total)
++		return -1;
++	plen = tmpl.tt_plen;
++	if (tt_create_src(app_ctx, plen))
++		fprintf(stderr, "TT-RDMA: source buffer setup failed\n");
++	tmpl.tt_src_daddr = app_ctx->tt_src_daddr;
++	tmpl.tt_src_mkey = app_ctx->tt_src_mkey;
++	/* Per-thread source only makes sense in zero-copy gather mode (a real source mkey exists). */
++	if (persrc && !app_ctx->tt_src_mkey)
++		persrc = 0;
++
++	sqs = calloc(nthreads, sizeof(*sqs));
++	args = calloc(nthreads, sizeof(*args));
++	tids = calloc(nthreads, sizeof(*tids));
++	if (!sqs || !args || !tids) {
++		free(sqs);
++		free(args);
++		free(tids);
++		return -1;
++	}
++
++	per = total / (uint32_t)nthreads;
++	printf("TT-RDMA MULTI-THREAD: %d threads x %u frames (%u total, %u dropped as remainder) plen=%u %s%s\n",
++	       nthreads, per, per * (uint32_t)nthreads, total - per * (uint32_t)nthreads, plen,
++	       app_ctx->tt_src_mkey ? "ZERO-COPY-GATHER" : (app_ctx->tt_src_daddr == 1 ? "HDR-ONLY" : "COPY/FIXED"),
++	       persrc ? " PER-THREAD-SRC" : "");
++
++	for (i = 0; i < nthreads; i++) {
++		struct host2dev_packet_processor_data h = tmpl;
++
++		if (create_tt_sq(app_ctx, &sqs[i])) {
++			err = -1;
++			goto cleanup;
++		}
++		created++;
++		/* Optional: give this thread its own source buffer + mkey (parallelize the gather read DMA). */
++		if (persrc) {
++			if (tt_alloc_src_buf(app_ctx, plen ? plen : 256, 1, "A4-DPA-ZEROCOPY-GATHER-",
++					     &sqs[i].src_daddr, &sqs[i].src_mkey_ptr, &sqs[i].src_mkey)) {
++				err = -1;
++				goto cleanup;
++			}
++			h.tt_src_daddr = sqs[i].src_daddr;
++			h.tt_src_mkey = sqs[i].src_mkey;
++		}
++		h.sq_cq_transf = sqs[i].sq_cq_transf;
++		h.sq_transf = sqs[i].sq_transf;
++		h.rq_cq_transf = app_ctx->rq_cq_transf; /* shared RQ info (unused by the blast, kept for ctx init) */
++		h.rq_transf = app_ctx->rq_transf;
++		h.tt_count = per;
++		h.tt_seq_base = (uint32_t)i * per;
++		h.not_first_run = 0;
++		if (flexio_copy_from_host(app_ctx->flexio_process, &h, sizeof(h), &sqs[i].app_data_daddr)) {
++			fprintf(stderr, "tt_sq[%d]: failed to copy app_data to DPA\n", i);
++			err = -1;
++			goto cleanup;
++		}
++		args[i].process = app_ctx->flexio_process;
++		args[i].app_data_daddr = sqs[i].app_data_daddr;
++		args[i].idx = i;
++	}
++
++	clock_gettime(CLOCK_MONOTONIC, &t0);
++	for (i = 0; i < nthreads; i++) {
++		if (pthread_create(&tids[i], NULL, tt_worker, &args[i])) {
++			fprintf(stderr, "pthread_create[%d] failed\n", i);
++			err = -1;
++			break;
++		}
++		launched++;
++	}
++	for (i = 0; i < launched; i++) {
++		pthread_join(tids[i], NULL);
++		if (args[i].status) {
++			fprintf(stderr, "thread %d flexio_process_call failed (status %d)\n", i, args[i].status);
++			err = -1;
++		}
++		done += args[i].ret;
++	}
++	clock_gettime(CLOCK_MONOTONIC, &t1);
++	{
++		double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
++		double flen = 14.0 + 32.0 + (double)plen;
++
++		printf("TT-RDMA MULTI-THREAD done: %lu frames in %.4fs = %.2f Mpps = %.2f Gbps (aggregate, %d threads)\n",
++		       (unsigned long)done, dt, dt > 0 ? done / dt / 1e6 : 0.0,
++		       dt > 0 ? (done * flen * 8.0) / dt / 1e9 : 0.0, launched);
++	}
++
++cleanup:
++	for (i = 0; i < created; i++)
++		if (destroy_tt_sq(app_ctx, &sqs[i]))
++			err = -1;
++	free(sqs);
++	free(args);
++	free(tids);
++	return err;
++}
++
+ /* Application name in string format for Flex IO app get. */
+ #define DEV_APP_NAME_STR(_app_name) #_app_name
+ #define DEV_APP_NAME_XSTR(_app_name) DEV_APP_NAME_STR(_app_name)
+@@ -1068,20 +1457,49 @@
  
  	printf("Ready to receive messages\n");
  
@@ -347,21 +715,33 @@
 +	 * (an event handler only fires on an RX CQE, which a pure TX blast never gets). Otherwise fall back to the
 +	 * original event-handler RX-reflect demo. */
 +	if (getenv("TTDPA_COUNT") && strtoul(getenv("TTDPA_COUNT"), NULL, 0) > 0) {
-+		uint64_t func_ret = 0;
-+		struct timespec t0, t1;
++		int nthreads = getenv("TTDPA_THREADS") ? atoi(getenv("TTDPA_THREADS")) : 1;
 +
-+		printf("TT-RDMA DPA blast: invoking flexio_process_call...\n");
-+		clock_gettime(CLOCK_MONOTONIC, &t0);
-+		if (flexio_process_call(app_fp, &tt_blast_rpc, &func_ret, app_ctx.app_data_daddr)) {
-+			fprintf(stderr, "flexio_process_call(tt_blast_rpc) failed.\n");
-+			err = -1;
-+			goto cleanup;
-+		}
-+		clock_gettime(CLOCK_MONOTONIC, &t1);
-+		{
-+			double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
-+			printf("TT-RDMA DPA blast returned: %lu frames in %.4fs = %.2f Mpps\n", func_ret, dt,
-+			       dt > 0 ? func_ret / dt / 1e6 : 0.0);
++		if (nthreads < 1)
++			nthreads = 1;
++		if (nthreads > 1) {
++			/* Multi-thread fan-out: N SQs + N host pthreads, each a blocking flexio_process_call. */
++			if (tt_run_multithread(&app_ctx, nthreads)) {
++				err = -1;
++				goto cleanup;
++			}
++		} else {
++			uint64_t func_ret = 0;
++			struct timespec t0, t1;
++
++			printf("TT-RDMA DPA blast: invoking flexio_process_call...\n");
++			clock_gettime(CLOCK_MONOTONIC, &t0);
++			if (flexio_process_call(app_fp, &tt_blast_rpc, &func_ret, app_ctx.app_data_daddr)) {
++				fprintf(stderr, "flexio_process_call(tt_blast_rpc) failed.\n");
++				err = -1;
++				goto cleanup;
++			}
++			clock_gettime(CLOCK_MONOTONIC, &t1);
++			{
++				double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
++				printf("TT-RDMA DPA blast returned: %lu frames in %.4fs = %.2f Mpps\n", func_ret, dt,
++				       dt > 0 ? func_ret / dt / 1e6 : 0.0);
++			}
 +		}
 +	} else {
 +		/* Start event handler - invoked by an incoming CQE. */
@@ -377,3 +757,38 @@
  	}
  
  cleanup:
+@@ -1096,6 +1514,16 @@
+ 		err = -1;
+ 	}
+ 
++	/* Clean up shared TT-RDMA source buffer + mkey (A2/A4) if created (daddr==1 is the HDRONLY sentinel). */
++	if (app_ctx.tt_src_mkey_ptr && flexio_device_mkey_destroy(app_ctx.tt_src_mkey_ptr)) {
++		fprintf(stderr, "Failed to destroy TT source mkey\n");
++		err = -1;
++	}
++	if (app_ctx.tt_src_daddr > 1 && flexio_buf_dev_free(app_fp, app_ctx.tt_src_daddr)) {
++		fprintf(stderr, "Failed to free TT source buffer\n");
++		err = -1;
++	}
++
+ 	/* Clean up previously created rules */
+ 	if (clean_up_rules(&app_ctx)) {
+ 		err = -1;
+--- a/packet_processor/host/meson.build
++++ b/packet_processor/host/meson.build
+@@ -30,11 +30,14 @@
+ 
+ # The meson file for build packet processor host side sample
+ 
++# TT-RDMA multi-thread fan-out needs pthreads (N host threads each blocking in flexio_process_call).
++threads_dep = dependency('threads')
++
+ # Build sample as executable application
+ executable('flexio_packet_processor',
+ 	['flexio_packet_processor_host.c'],
+ 	c_args: '-DDEV_APP_NAME='+dev_app_name,
+ 	native: true,
+-	dependencies: [ibverbs_dep, mlx5_dep, flexio_dep, common_host_dep, sample_device_dep],
++	dependencies: [ibverbs_dep, mlx5_dep, flexio_dep, common_host_dep, sample_device_dep, threads_dep],
+ 	link_depends: sample_dev_target
+ )
