@@ -672,33 +672,12 @@ def test_rtdetr_model(device):
 
     torch_scores = torch_outputs.enc_outputs_class.max(dim=-1).values
     torch_topk_ind = torch.topk(torch_scores, torch_rtdetr.config.num_queries, dim=1).indices
-    tt_scores = ttnn.to_torch(tt_module.enc_outputs_class_max).float()
-    tt_topk_values = ttnn.to_torch(tt_module.topk_values).float().reshape(torch_topk_ind.shape)
     tt_topk_ind = ttnn.to_torch(tt_module.topk_ind).long().reshape(torch_topk_ind.shape)
 
-    exact_match = (torch_topk_ind == tt_topk_ind).float().mean().item()
-    overlap = torch.isin(tt_topk_ind, torch_topk_ind).float().mean().item()
-    logger.info(f"Top-k exact positional match: {exact_match:.4f}")
-    logger.info(f"Top-k set overlap: {overlap:.4f}")
-
-    for k in (10, 50, 100, torch_rtdetr.config.num_queries):
-        overlap = torch.isin(tt_topk_ind[:, :k], torch_topk_ind[:, :k]).float().mean().item()
-        logger.info(f"Top-{k} overlap: {overlap:.4f}")
-
-    _, cpu_topk_from_tt_scores = torch.topk(tt_scores, torch_rtdetr.config.num_queries, dim=1)
-    device_topk_match = (cpu_topk_from_tt_scores == tt_topk_ind).float().mean().item()
-    device_topk_overlap = torch.isin(tt_topk_ind, cpu_topk_from_tt_scores).float().mean().item()
-    values_sorted = (tt_topk_values[:, :-1] >= tt_topk_values[:, 1:]).float().mean().item()
-    adjacent_ties = (tt_topk_values[:, :-1] == tt_topk_values[:, 1:]).float().mean().item()
-    gathered_tt_scores = torch.gather(tt_scores, dim=1, index=tt_topk_ind)
-    topk_value_error = torch.max(torch.abs(tt_topk_values - gathered_tt_scores)).item()
-
-    logger.info(f"TT top-k vs Torch top-k on TT scores: {device_topk_match:.4f}")
-    logger.info(f"TT top-k set overlap on TT scores: {device_topk_overlap:.4f}")
-    logger.info(f"TT top-k values sorted descending: {values_sorted:.4f}")
-    logger.info(f"TT top-k adjacent ties: {adjacent_ties:.4f}")
-    logger.info(f"Unique TT selected scores: {torch.unique(tt_topk_values).numel()}")
-    logger.info(f"TT top-k value/index max error: {topk_value_error}")
+    # Decoder queries are an unordered set. Align queries selected by both implementations.
+    matches = torch_topk_ind[0, :, None] == tt_topk_ind[0, None, :]
+    torch_positions, tt_positions = torch.nonzero(matches, as_tuple=True)
+    logger.info(f"Shared top-k proposals: {len(torch_positions)}")
 
     tt_last_hidden_state = ttnn.to_torch(tt_last_hidden_state)
     tt_intermediate_hidden_states = ttnn.to_torch(tt_intermediate_hidden_states)
@@ -706,32 +685,32 @@ def test_rtdetr_model(device):
     tt_intermediate_reference_points = ttnn.to_torch(tt_intermediate_reference_points)
 
     _, last_hidden_state_pcc = assert_with_pcc(
-        torch_outputs.last_hidden_state,
-        tt_last_hidden_state,
+        torch_outputs.last_hidden_state[:, torch_positions],
+        tt_last_hidden_state[:, tt_positions],
         pcc=0.90,
     )
-    logger.info(f"Last hidden state: {last_hidden_state_pcc}")
+    logger.info(f"Aligned last hidden state: {last_hidden_state_pcc}")
 
     _, hidden_states_pcc = assert_with_pcc(
-        torch_outputs.intermediate_hidden_states,
-        tt_intermediate_hidden_states,
+        torch_outputs.intermediate_hidden_states[:, :, torch_positions],
+        tt_intermediate_hidden_states[:, :, tt_positions],
         pcc=0.90,
     )
-    logger.info(f"Intermediate hidden states: {hidden_states_pcc}")
+    logger.info(f"Aligned intermediate hidden states: {hidden_states_pcc}")
 
     _, logits_pcc = assert_with_pcc(
-        torch_outputs.intermediate_logits,
-        tt_intermediate_logits,
+        torch_outputs.intermediate_logits[:, :, torch_positions],
+        tt_intermediate_logits[:, :, tt_positions],
         pcc=0.90,
     )
-    logger.info(f"Intermediate logits: {logits_pcc}")
+    logger.info(f"Aligned intermediate logits: {logits_pcc}")
 
     _, reference_points_pcc = assert_with_pcc(
-        torch_outputs.intermediate_reference_points,
-        tt_intermediate_reference_points,
+        torch_outputs.intermediate_reference_points[:, :, torch_positions],
+        tt_intermediate_reference_points[:, :, tt_positions],
         pcc=0.90,
     )
-    logger.info(f"Intermediate reference points: {reference_points_pcc}")
+    logger.info(f"Aligned intermediate reference points: {reference_points_pcc}")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

@@ -294,12 +294,11 @@ class TtRTDetrModel:
         enc_outputs_coord_logits = ttnn.add(enc_outputs_coord_logits, self.anchors)
 
         enc_outputs_class_max = ttnn.max(enc_outputs_class, dim=-1, keepdim=False)
-        self.enc_outputs_class_max = enc_outputs_class_max
 
-        topk_values, topk_ind = ttnn.topk(enc_outputs_class_max, self.num_queries, dim=1)
-        self.topk_values = topk_values
+        _, topk_ind = ttnn.topk(enc_outputs_class_max, self.num_queries, dim=1)
         topk_ind = ttnn.typecast(topk_ind, ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        self.topk_ind = topk_ind
+
+        self.topk_ind = topk_ind  # TODO: remove after debugging
 
         reference_points_unact = ttnn.gather(
             enc_outputs_coord_logits,
