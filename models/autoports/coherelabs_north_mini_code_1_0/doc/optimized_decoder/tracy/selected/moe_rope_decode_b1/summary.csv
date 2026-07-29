@@ -1,0 +1,27 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+57.28,SparseMatmulDeviceOperation (in0:l1_interleaved),438.92,3,Compute,1.41,4.38,3.39,1.71,3.28
+10.71,UnaryDeviceOperation (in0:l1_interleaved),82.08,6,Compute,,,,,
+8.85,BinaryNgDeviceOperation (in0:l1_interleaved),67.82,2,Compute,,,,,
+6.41,MatmulDeviceOperation (in0:width_sharded),49.12,2,Compute,37.00,37.12,37.06,0.08,37.06
+3.15,TopKDeviceOperation (in0:l1_interleaved),24.14,1,Other,,,,,
+2.53,FastReduceNCDeviceOperation (in0:l1_interleaved),19.38,1,Compute,,,,,
+1.85,NLPCreateQKVHeadsDecodeDeviceOperation (in0:l1_interleaved),14.17,1,Other,,,,,
+1.20,SdpaDecodeDeviceOperation (in0:height_sharded),9.21,1,Compute,,,,,
+0.91,MatmulDeviceOperation (in0:l1_interleaved),6.98,1,Compute,21.74,21.74,21.74,,21.74
+0.74,TilizeWithValPaddingDeviceOperation (in0:l1_interleaved),5.69,1,TM,,,,,
+0.74,PagedFusedUpdateCacheDeviceOperation (in0:dram_interleaved),5.67,1,Other,,,,,
+0.72,UntilizeWithUnpaddingDeviceOperation (in0:l1_interleaved),5.51,4,TM,,,,,
+0.63,LayerNormDeviceOperation (in0:width_sharded),4.80,1,Compute,,,,,
+0.56,FillPadDeviceOperation (in0:l1_interleaved),4.26,1,TM,,,,,
+0.48,RotaryEmbeddingHfDeviceOperation (in0:height_sharded),3.68,2,Other,,,,,
+0.45,ReshapeViewDeviceOperation (in0:l1_interleaved),3.47,1,TM,,,,,
+0.43,ReshardDeviceOperation (in0:width_sharded),3.27,2,DM,,,,,
+0.38,InterleavedToShardedDeviceOperation (in0:dram_interleaved),2.92,4,DM,,,,,
+0.38,BinaryNgDeviceOperation (in0:width_sharded),2.89,2,Compute,,,,,
+0.35,ShardedToInterleavedDeviceOperation (in0:width_sharded),2.68,2,DM,,,,,
+0.32,SliceDeviceOperation (in0:l1_interleaved),2.49,3,TM,,,,,
+0.30,ScatterDeviceOperation (in0:l1_interleaved),2.32,1,Other,,,,,
+0.23,SliceDeviceOperation (in0:width_sharded),1.77,1,TM,,,,,
+0.19,InterleavedToShardedDeviceOperation (in0:l1_interleaved),1.45,1,DM,,,,,
+0.17,NLPConcatHeadsDecodeDeviceOperation (in0:height_sharded),1.32,1,TM,,,,,
+0.04,ReshardDeviceOperation (in0:height_sharded),0.28,1,DM,,,,,
