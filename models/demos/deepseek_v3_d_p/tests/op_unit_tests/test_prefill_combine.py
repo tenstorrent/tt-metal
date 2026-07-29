@@ -11,6 +11,7 @@ Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
 from dataclasses import dataclass
+import itertools
 import os
 
 import pytest
@@ -614,7 +615,18 @@ def test_externally_owned_cases(
 
 # ---------------------------------------------------------------------------
 # CombineFabric2D — isolated fabric-transfer experiment (see cmb-f2d plan).
-# Not a PCC test: it runs the new op and we inspect Tracy zones from the run.
+#
+# The test states what it wants moved as a list of explicit movement descriptors — (src, in_base_token,
+# dst, out_base_token) — hands them to the op along with an input region and a zeroed output region, and
+# afterwards walks the same list to check every movement landed. Nothing about HOW the op moves the data
+# appears here: no producer identity, no core count, no placement, no telemetry. The coupling that used
+# to be implicit (an assumed mapping from a neighbour's input region to this chip's output region) is now
+# exactly the descriptor list, written by the test and read by the op.
+#
+# The one hardware assumption is that each device has two distinct neighbours along CMBF2D_AXIS, which is
+# how production boards are wired; cables per neighbour comes from the mesh config's num_links. On
+# differently wired hardware the op rejects the descriptor list rather than silently doing something else.
+#
 # Select the config with: -k 'fabric2d-torus-xy-8x4-2link'
 # ---------------------------------------------------------------------------
 CMBF2D_BWINFO_PATH = "generated/cmbf2d/bwinfo.txt"
@@ -622,166 +634,127 @@ CMBF2D_BWINFO_PATH = "generated/cmbf2d/bwinfo.txt"
 # Sweep knobs. The op's own defaults live in C++; these let a sweep driver vary one axis per pytest
 # invocation (one device open per point) without touching the test body. CMBF2D_TAG, when set, moves
 # the report to bwinfo_<tag>.txt so a sweep's points don't overwrite each other.
-CMBF2D_NUM_TOKENS = int(os.environ.get("CMBF2D_NUM_TOKENS", "100"))
-CMBF2D_NUM_SLOTS = int(os.environ.get("CMBF2D_NUM_SLOTS", "32"))
-CMBF2D_CHUNK_BYTES = int(os.environ.get("CMBF2D_CHUNK_BYTES", "14336"))
+#
+# in_tokens   tokens one movement reads (and the depth of the L1 source ring the op will use for it)
+# out_tokens  tokens one movement writes — the knob that sets the total traffic
+CMBF2D_IN_TOKENS = int(os.environ.get("CMBF2D_IN_TOKENS", "32"))
+CMBF2D_OUT_TOKENS = int(os.environ.get("CMBF2D_OUT_TOKENS", "100"))
+CMBF2D_TOKEN_BYTES = int(os.environ.get("CMBF2D_TOKEN_BYTES", "14336"))
 CMBF2D_TAG = os.environ.get("CMBF2D_TAG", "")
 # 1 => producer records the fine-grained stall buckets (costs a few percent of the bandwidth
 # it is measuring). Off for headline numbers, on to explain them.
 CMBF2D_STALL = int(os.environ.get("CMBF2D_STALL", "0"))
-# Diagnostic overrides for the producer loop; see CombineFabric2dParams::variant.
-CMBF2D_VARIANT = int(os.environ.get("CMBF2D_VARIANT", "0"))
-# 1 => Phase 4 Goal 2: feed the producers precooked tokens from DRAM and check the destination DRAM
-# against them afterwards. Only meaningful in a DRAM mode (variant bit5 or bit6); the op rejects it
-# otherwise, because the L1-only baseline drops the payload.
-CMBF2D_CHECK = int(os.environ.get("CMBF2D_CHECK", "0"))
-
-# Identity stamp in word 0 of every precooked page, so a mismatch can say WHICH page it found rather
-# than just "bytes differ". Words 1..3 carry (device linear id, page index, producer index).
-CMBF2D_PAGE_MAGIC = 0x2D1F2D1
+# Mesh axis whose neighbours the op talks to. Matches the op's `axis` argument.
+CMBF2D_AXIS = 0
 
 
 def _cmbf2d_bwinfo_path():
     return f"generated/cmbf2d/bwinfo_{CMBF2D_TAG}.txt" if CMBF2D_TAG else CMBF2D_BWINFO_PATH
 
 
-def _cmbf2d_make_precooked_input(mesh_device, num_links, num_slots, chunk_size_bytes):
-    """Build the precooked source tokens (Goal 2) and return (device_tensor, host_torch_view).
+def _cmbf2d_plan_movements(mesh_device, axis, num_links, in_tokens, out_tokens):
+    """Every data movement in the run: one per cable per device, `num_links` to each axis-neighbour.
 
-    Layout: every device gets `2 * num_links * num_slots` pages of `chunk_size_bytes`, one page per
-    (producer, slot); producer i owns pages [i * num_slots, (i+1) * num_slots) — the same split the
-    program factory hands the kernels. Sharding is the explicit 2D form (tensor dim0 -> mesh axis 0,
-    dim1 -> mesh axis 1) so "which device holds which block" needs no ordering convention: device
-    (r, c) holds rows [r*pages, (r+1)*pages) and columns [c*elems, (c+1)*elems).
+    Input regions are keyed by the movement's index on its own device. Output regions are keyed by the
+    slot the DESTINATION sees, which is what keeps them collision-free: a device's arrivals are the
+    `num_links` from its backward neighbour (which sent forward) and the `num_links` from its forward one,
+    so keying on (direction, link) gives each its own range. The op rejects the list if that is wrong.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    assert mesh_shape[axis] >= 3, f"axis {axis} extent {mesh_shape[axis]}: need 3+ for two distinct neighbours"
 
-    Content is random (so a torn packet cannot pass by luck) with the first four words of every page
-    overwritten by an identity stamp, which is what makes a failure diagnosable.
+    def _neighbour(coord, delta):
+        nbr = list(coord)
+        nbr[axis] = (nbr[axis] + delta) % mesh_shape[axis]
+        return nbr
+
+    movements = []
+    for coord in itertools.product(*(range(n) for n in mesh_shape)):
+        for direction, delta in enumerate((1, -1)):
+            for link in range(num_links):
+                idx = direction * num_links + link
+                movements.append(
+                    ttnn._ttnn.operations.experimental.CombineFabric2dMovement(
+                        src=list(coord),
+                        in_base_token=idx * in_tokens,
+                        dst=_neighbour(coord, delta),
+                        out_base_token=idx * out_tokens,
+                    )
+                )
+    return movements
+
+
+def _cmbf2d_make_regions(mesh_device, in_tokens, out_tokens, token_size_bytes, num_links):
+    """The op's two DRAM regions, sized for `2 * num_links` movements per device: random input, zeroed
+    output (so an unwritten token fails the check instead of passing on leftover garbage).
+
+    Sharded with the explicit 2D form (tensor dim0 -> mesh axis 0, dim1 -> mesh axis 1) so "which device
+    holds which block" needs no ordering convention.
     """
     rows, cols = tuple(mesh_device.shape)
-    pages = 2 * num_links * num_slots
-    elems = chunk_size_bytes // 4
-    gen = torch.Generator().manual_seed(0xF2D4)
-    host = torch.randint(1, 2**31 - 1, (rows * pages, cols * elems), dtype=torch.int32, generator=gen)
-    page_idx = torch.arange(pages, dtype=torch.int32)
-    for r in range(rows):
-        for c in range(cols):
-            blk = host[r * pages : (r + 1) * pages, c * elems : (c + 1) * elems]
-            blk[:, 0] = CMBF2D_PAGE_MAGIC
-            blk[:, 1] = r * cols + c  # device, as a linear id over the mesh coordinate (r, c)
-            blk[:, 2] = page_idx  # page within this device's input region
-            blk[:, 3] = page_idx // num_slots  # which of the device's producers owns it
-    dev_tensor = ttnn.from_torch(
-        host,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (rows, cols), dims=(0, 1)),
-    )
-    return dev_tensor, host
+    elems = token_size_bytes // 4
+    gen = torch.Generator().manual_seed(0xF2D5)
 
-
-def _cmbf2d_check_accuracy(
-    mesh_device, output, host_input, workers, num_tokens, num_slots, num_links, chunk_size_bytes
-):
-    """Compare every producer's destination DRAM pages against the tokens it was fed (Goal 2).
-
-    Producer P on chip S read pages [in_base, in_base + num_slots) of S's input region and sent
-    `num_tokens` tokens round-robin over them, landing on pages [out_base, out_base + num_tokens) of
-    its peer chip D's output buffer. Both base pages and D's coordinate come from P's own telemetry
-    record, so this check never re-derives the placement or the cable map.
-
-    Returns (list of per-worker result dicts, summary string).
-    """
-    rows, cols = tuple(mesh_device.shape)
-    elems = chunk_size_bytes // 4
-    in_pages = 2 * num_links * num_slots
-    out_pages = 2 * num_links * num_tokens
-    out_host = ttnn.to_torch(
-        output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, (rows, cols), dims=(0, 1))
-    ).to(torch.int32)
-    assert tuple(out_host.shape) == (
-        rows * out_pages,
-        cols * elems,
-    ), f"unexpected composed output shape {tuple(out_host.shape)}"
-
-    # Token t of a producer is slot (t % num_slots) of its input region.
-    slot_of_token = torch.arange(num_tokens, dtype=torch.long) % num_slots
-    # Negative control: the same comparison against the expectation rotated by one slot. A byte-exact
-    # pass means nothing if the pages were degenerate (all zeros, or all producers fed the same data) —
-    # in that case the rotated comparison would pass too. It must fail, on every token, for the real
-    # pass above to carry information.
-    control_slot_of_token = (slot_of_token + 1) % num_slots
-    results = []
-    for w in workers:
-        if not w["valid"] or w["in_base_page"] == 0xFFFFFFFF or len(w["peer_coord"]) != 2:
-            continue
-        sr, sc = int(w["mesh_coord"][0]), int(w["mesh_coord"][1])
-        dr, dc = int(w["peer_coord"][0]), int(w["peer_coord"][1])
-        in_base, out_base = int(w["in_base_page"]), int(w["out_base_page"])
-        src = host_input[sr * in_pages : (sr + 1) * in_pages, sc * elems : (sc + 1) * elems]
-        dst = out_host[dr * out_pages : (dr + 1) * out_pages, dc * elems : (dc + 1) * elems]
-        expected = src[in_base + slot_of_token]
-        got = dst[out_base : out_base + num_tokens]
-        bad = (expected != got).any(dim=1)
-        n_bad = int(bad.sum())
-        control_bad = int((src[in_base + control_slot_of_token] != got).any(dim=1).sum())
-        detail = ""
-        if n_bad:
-            # First offending token, described by the identity stamp that actually landed there. A wrong
-            # (dev, page) means a routing/page-mapping error; a right stamp with wrong body means tearing.
-            i = int(bad.nonzero()[0])
-            g, e = got[i], expected[i]
-            detail = (
-                f"token {i}: expected stamp (magic {int(e[0]):#x} dev {int(e[1])} page {int(e[2])} "
-                f"prod {int(e[3])}), got (magic {int(g[0]):#x} dev {int(g[1])} page {int(g[2])} "
-                f"prod {int(g[3])}), {int((g != e).sum())}/{elems} words differ"
-            )
-        results.append(
-            {
-                "src": (sr, sc),
-                "dst": (dr, dc),
-                "worker": tuple(w["worker_logical"]),
-                "eth": tuple(w["eth_logical"]),
-                "in_base": in_base,
-                "out_base": out_base,
-                "bad_tokens": n_bad,
-                "control_bad_tokens": control_bad,
-                "detail": detail,
-            }
+    def _to_device(host):
+        return ttnn.from_torch(
+            host,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (rows, cols), dims=(0, 1)),
         )
-    n_bad_workers = sum(1 for r in results if r["bad_tokens"])
-    total_bad = sum(r["bad_tokens"] for r in results)
-    total = len(results) * num_tokens
-    control_total = sum(r["control_bad_tokens"] for r in results)
-    summary = (
-        f"{len(results)} producer(s) checked, {n_bad_workers} with mismatches, "
-        f"{total_bad}/{total} token pages wrong "
-        f"(negative control: {control_total}/{total} differ under a one-slot rotation, want all)"
+
+    in_shape = (rows * 2 * num_links * in_tokens, cols * elems)
+    out_shape = (rows * 2 * num_links * out_tokens, cols * elems)
+    return (
+        _to_device(torch.randint(1, 2**31 - 1, in_shape, dtype=torch.int32, generator=gen)),
+        _to_device(torch.zeros(out_shape, dtype=torch.int32)),
     )
-    return results, summary
 
 
-def _dump_combine_fabric2d_bwinfo(
-    mesh_device, num_links, axis, num_tokens, path=CMBF2D_BWINFO_PATH, extra_notes=(), telem=None
-):
-    """Read each worker's L1 telemetry record and write a bandwidth report.
+def _cmbf2d_check_accuracy(mesh_device, dev_input, dev_output, movements, in_tokens, out_tokens):
+    """True if every movement landed: output token out_base + t equals input token in_base + t % in_tokens.
 
-    Two windows are always reported, and in every mode they bracket the true transfer time:
-      * GB/s  over first-send -> end-of-transfer proof. The proof is the credit for the last token in
-        the modes that have app-level credits, and the EDM drain (Phase 4 Goal 1) in the receiverless
-        ones. Either way it is an UPPER bound on the transfer, so GB/s is a lower bound on bandwidth.
+    Reads both regions back off the device, so the only thing compared is DRAM against DRAM.
+    """
+    rows, cols = tuple(mesh_device.shape)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, (rows, cols), dims=(0, 1))
+    host_in = ttnn.to_torch(dev_input, mesh_composer=composer).to(torch.int32)
+    host_out = ttnn.to_torch(dev_output, mesh_composer=composer).to(torch.int32)
+    # A sharded mesh tensor's shape is its per-device shard, i.e. one device's region.
+    in_rows, elems = tuple(dev_input.shape)
+    out_rows = dev_output.shape[0]
+    src_of_token = torch.arange(out_tokens, dtype=torch.long) % in_tokens
+
+    for m in movements:
+        sr, sc = m.src
+        dr, dc = m.dst
+        src = host_in[sr * in_rows + m.in_base_token :][:in_tokens, sc * elems : (sc + 1) * elems]
+        got = host_out[dr * out_rows + m.out_base_token :][:out_tokens, dc * elems : (dc + 1) * elems]
+        if not torch.equal(src[src_of_token], got):
+            return False
+    return True
+
+
+def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, path=CMBF2D_BWINFO_PATH):
+    """Read each producer's L1 telemetry record and write a bandwidth report.
+
+    Purely diagnostic — the accuracy check above does not use any of this, and the caller can skip it
+    entirely. This is also the ONE place in the test that knows the op runs producer kernels at all.
+    Two windows are reported, and they bracket the true transfer time:
+      * GB/s  over first-send -> EDM drain complete. The drain forces every payload credit back from the
+        far chip, so this is an UPPER bound on the transfer and hence a LOWER bound on bandwidth.
       * sGB/s over first-send -> last-send, the push rate: a LOWER bound on the transfer time, so an
-        upper bound on bandwidth.
+        UPPER bound on bandwidth.
     Nothing here needs to know where the worker cores are — the binding recomputes placement from
-    (num_links, axis). `extra_notes` are appended as trailing comment lines (accuracy results).
+    (num_links, axis).
     """
     # Plain diagnostic function rather than a registered ttnn operation, so it lives on the raw
     # nanobind module instead of under ttnn.experimental.deepseek_prefill.* like the op itself.
-    if telem is None:
-        telem = ttnn._ttnn.operations.experimental.combine_fabric2d_read_telemetry(
-            mesh_device, num_links=num_links, axis=axis
-        )
+    telem = ttnn._ttnn.operations.experimental.combine_fabric2d_read_telemetry(
+        mesh_device, num_links=num_links, axis=axis
+    )
     clock_mhz = telem["clock_mhz"]
     workers = telem["workers"]
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -791,23 +764,19 @@ def _dump_combine_fabric2d_bwinfo(
         if not w["valid"]:
             bad.append(w)
             continue
-        # End-to-end window closes when the credit for the last token returns. Approach #1 (DRAM_DIRECT)
-        # has no credits at all, so t_last_credit is 0; there is no end-to-end signal, and the send
-        # window IS the measured (DRAM-bounded) rate, so fall back to t_last_send for that mode.
-        end_ts = w["t_last_credit"] if w["t_last_credit"] else w["t_last_send"]
-        cycles = end_ts - w["t_first_send"]
+        cycles = w["t_drained"] - w["t_first_send"]
         us = cycles / clock_mhz if clock_mhz else 0.0
-        payload = w["tokens_sent"] * w["chunk_size_bytes"]
+        payload = w["tokens_sent"] * w["token_size_bytes"]
         gbps = (payload / (us * 1e-6)) / 1e9 if us > 0 else 0.0
-        # Send window: first send -> last send. Excludes the tail credit round-trip, so it is the
-        # "how fast can this producer push" number; the credit-window one above is the end-to-end.
+        # Send window: first send -> last send. Excludes the drain tail, so it is the "how fast can this
+        # producer push" number; the drain-window one above is the end-to-end.
         send_cycles = w["t_last_send"] - w["t_first_send"]
         send_us = send_cycles / clock_mhz if clock_mhz else 0.0
         send_gbps = (payload / (send_us * 1e-6)) / 1e9 if send_us > 0 else 0.0
-        # Stall shares of the send window: wait_slot = eth side cannot drain us, starve = credit
-        # round-trip, issue = our own packet issue, credit = the extra credit packets we forward.
+        # Stall shares of the send window: wait_slot = eth side cannot drain us, issue = our own
+        # packet issue cost.
         denom = send_cycles if send_cycles > 0 else 1
-        shares = {k: 100.0 * w[f"{k}_cycles"] / denom for k in ("wait_slot", "issue", "starve", "credit")}
+        shares = {k: 100.0 * w[f"{k}_cycles"] / denom for k in ("wait_slot", "issue")}
         rows.append((w, cycles, us, payload, gbps, send_us, send_gbps, shares))
 
     def _stats(vals):
@@ -819,23 +788,20 @@ def _dump_combine_fabric2d_bwinfo(
         f.write(
             f"# CombineFabric2D bandwidth telemetry\n"
             f"# mesh={tuple(mesh_device.shape)} num_links={num_links} axis={axis} "
-            f"num_tokens={num_tokens} num_slots={CMBF2D_NUM_SLOTS} chunk={CMBF2D_CHUNK_BYTES}B "
-            f"clock={clock_mhz}MHz edm_sender_slots={edm_slots} stall_telemetry={CMBF2D_STALL} "
-            f"variant={CMBF2D_VARIANT} check={CMBF2D_CHECK}\n"
+            f"in_tokens={CMBF2D_IN_TOKENS} out_tokens={CMBF2D_OUT_TOKENS} (per movement) "
+            f"token={CMBF2D_TOKEN_BYTES}B clock={clock_mhz}MHz edm_sender_slots={edm_slots} "
+            f"stall_telemetry={CMBF2D_STALL}\n"
             f"# GB/s   = payload / (first send -> transfer provably complete)   [end to end, LOWER bound\n"
-            f"#          on bandwidth]. The proof is the credit for the last token where the mode has\n"
-            f"#          app-level credits, and the EDM sender-channel drain (dpk header-only fillers,\n"
-            f"#          which force every payload credit back from the far chip) where it does not.\n"
+            f"#          on bandwidth]. The proof is the EDM sender-channel drain: dpk header-only\n"
+            f"#          fillers plus one more free slot force every payload credit back from the far chip.\n"
             f"# sGB/s  = payload / (first send -> last send)                    [push rate, UPPER bound]\n"
-            f"# wait%/iss%/strv%/crd% = share of the send window spent waiting for an EDM slot (eth\n"
-            f"#   side is the limiter) / issuing payload packets / credit-starved (round-trip is the\n"
-            f"#   limiter) / forwarding credit packets. Remainder is loop overhead + polling.\n"
+            f"# wait%/iss% = share of the send window spent waiting for an EDM slot (eth side is the\n"
+            f"#   limiter) / issuing payload packets. Remainder is loop overhead.\n"
             f"# workers: {len(rows)} valid, {len(bad)} missing/invalid records\n"
             f"#\n"
             f"{'dev':>4} {'coord':>8} {'worker_l':>9} {'worker_p':>9} {'eth':>7} {'ex':>3} {'lnk':>4}"
-            f" {'reloc':>6} {'peer':>5} {'tok':>6} {'cred':>6} {'cpkt':>5} {'dpk':>4} {'wut':>6}"
-            f" {'us':>9} {'GB/s':>7} {'sus':>9} {'sGB/s':>7}"
-            f" {'wait%':>6} {'iss%':>6} {'strv%':>6} {'crd%':>6}\n"
+            f" {'reloc':>6} {'peer':>5} {'tok':>6} {'obase':>6} {'dpk':>4}"
+            f" {'us':>9} {'GB/s':>7} {'sus':>9} {'sGB/s':>7} {'wait%':>6} {'iss%':>6}\n"
         )
         for w, _cycles, us, _payload, gbps, send_us, send_gbps, sh in sorted(
             rows, key=lambda r: (r[0]["device_id"], r[0]["eth_phys_x"])
@@ -845,10 +811,9 @@ def _dump_combine_fabric2d_bwinfo(
                 f" {str(tuple(w['worker_logical'])):>9} {str(tuple(w['worker_physical'])):>9}"
                 f" {str(tuple(w['eth_logical'])):>7} {w['eth_phys_x']:>3} {w['link_idx']:>4}"
                 f" {'Y' if w['relocated'] else '':>6} {w['peer_chip_id']:>5}"
-                f" {w['tokens_sent']:>6} {w['credits_forwarded']:>6} {w['credit_packets']:>5}"
-                f" {w['drain_packets']:>4} {w['write_up_to_final']:>6}"
+                f" {w['tokens_sent']:>6} {w['out_base_page']:>6} {w['drain_packets']:>4}"
                 f" {us:>9.2f} {gbps:>7.2f} {send_us:>9.2f} {send_gbps:>7.2f}"
-                f" {sh['wait_slot']:>6.1f} {sh['issue']:>6.1f} {sh['starve']:>6.1f} {sh['credit']:>6.1f}\n"
+                f" {sh['wait_slot']:>6.1f} {sh['issue']:>6.1f}\n"
             )
         for w in bad:
             f.write(
@@ -859,19 +824,16 @@ def _dump_combine_fabric2d_bwinfo(
             g_min, g_p50, g_max, g_mean = _stats([r[4] for r in rows])
             s_min, s_p50, s_max, s_mean = _stats([r[6] for r in rows])
             total = sum(r[3] for r in rows)
-            mean_sh = {k: sum(r[7][k] for r in rows) / len(rows) for k in ("wait_slot", "issue", "starve", "credit")}
+            mean_sh = {k: sum(r[7][k] for r in rows) / len(rows) for k in ("wait_slot", "issue")}
             f.write(
                 f"#\n# per-producer GB/s: min {g_min:.2f} p50 {g_p50:.2f} max {g_max:.2f} mean {g_mean:.2f}\n"
                 f"# per-producer sGB/s: min {s_min:.2f} p50 {s_p50:.2f} max {s_max:.2f} mean {s_mean:.2f}\n"
-                f"# mean send-window shares: wait_slot {mean_sh['wait_slot']:.1f}% issue {mean_sh['issue']:.1f}% "
-                f"starve {mean_sh['starve']:.1f}% credit {mean_sh['credit']:.1f}%\n"
+                f"# mean send-window shares: wait_slot {mean_sh['wait_slot']:.1f}% issue {mean_sh['issue']:.1f}%\n"
                 f"# aggregate payload across the mesh: {total / 1e6:.1f} MB over {len(rows)} producers\n"
             )
             # The two windows bracket the transfer, so their ratio says how much of the reported time is
-            # tail (drain / credit return) rather than payload push.
+            # drain tail rather than payload push.
             f.write(f"# end-to-end vs push-rate spread: mean {g_mean:.2f} vs {s_mean:.2f} GB/s\n")
-        for note in extra_notes:
-            f.write(f"# {note}\n")
     return rows, bad, clock_mhz
 
 
@@ -888,55 +850,35 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
     )
     ttnn.visualize_mesh_device(mesh_device)
 
-    num_tokens = CMBF2D_NUM_TOKENS
-    num_slots = CMBF2D_NUM_SLOTS
-    chunk_size_bytes = CMBF2D_CHUNK_BYTES
+    in_tokens = CMBF2D_IN_TOKENS
+    out_tokens = CMBF2D_OUT_TOKENS
+    token_size_bytes = CMBF2D_TOKEN_BYTES
 
-    # Goal 2: precooked source tokens, so the run can be checked for content and not just arrival.
-    dev_input, host_input = (None, None)
-    if CMBF2D_CHECK:
-        dev_input, host_input = _cmbf2d_make_precooked_input(mesh_device, num_links, num_slots, chunk_size_bytes)
-        logger.info(
-            f"combine_fabric2d: precooked input {tuple(dev_input.shape)} "
-            f"({2 * num_links} producers x {num_slots} slots per device)"
-        )
+    # What we want moved, stated up front and independently of how the op will do it.
+    movements = _cmbf2d_plan_movements(mesh_device, CMBF2D_AXIS, num_links, in_tokens, out_tokens)
+    dev_input, dev_output = _cmbf2d_make_regions(mesh_device, in_tokens, out_tokens, token_size_bytes, num_links)
 
-    signpost(f"combine_fabric2d start num_links={num_links} num_tokens={num_tokens}")
+    signpost(f"combine_fabric2d start num_links={num_links} out_tokens={out_tokens}")
     output = ttnn.experimental.deepseek_prefill.combine_fabric2d(
         mesh_device,
+        dev_input,
+        dev_output,
+        movements,
         num_links=num_links,
-        num_tokens=num_tokens,
-        num_slots=num_slots,
-        chunk_size_bytes=chunk_size_bytes,
+        input_tokens_per_movement=in_tokens,
+        output_tokens_per_movement=out_tokens,
+        token_size_bytes=token_size_bytes,
+        axis=CMBF2D_AXIS,
         stall_telemetry=CMBF2D_STALL,
-        variant=CMBF2D_VARIANT,
-        input=dev_input,
     )
     ttnn.synchronize_device(mesh_device)
     signpost("combine_fabric2d end")
 
-    logger.debug(f"✅ combine_fabric2d ran, output shape={tuple(output.shape)}")
+    assert _cmbf2d_check_accuracy(mesh_device, dev_input, output, movements, in_tokens, out_tokens)
 
-    telem = ttnn._ttnn.operations.experimental.combine_fabric2d_read_telemetry(mesh_device, num_links=num_links, axis=0)
-
-    notes = []
-    acc_results, acc_summary = ([], "")
-    if CMBF2D_CHECK:
-        acc_results, acc_summary = _cmbf2d_check_accuracy(
-            mesh_device, output, host_input, telem["workers"], num_tokens, num_slots, num_links, chunk_size_bytes
-        )
-        notes.append(f"accuracy: {acc_summary}")
-        for r in acc_results:
-            if r["bad_tokens"]:
-                notes.append(
-                    f"  MISMATCH src {r['src']} worker {r['worker']} eth {r['eth']} -> dst {r['dst']} "
-                    f"pages [{r['out_base']}, {r['out_base'] + num_tokens}): {r['bad_tokens']} bad; {r['detail']}"
-                )
-
+    # ---- Bandwidth telemetry dump. OPTIONAL: diagnostics only, safe to comment out.
     bwinfo_path = _cmbf2d_bwinfo_path()
-    rows, bad, clock_mhz = _dump_combine_fabric2d_bwinfo(
-        mesh_device, num_links, axis=0, num_tokens=num_tokens, path=bwinfo_path, extra_notes=notes, telem=telem
-    )
+    rows, bad, clock_mhz = _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis=CMBF2D_AXIS, path=bwinfo_path)
     gbps = sorted(r[4] for r in rows)
     sgbps = sorted(r[6] for r in rows)
     logger.info(
@@ -945,25 +887,6 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
         f"p50 {gbps[len(gbps) // 2]:.2f} max {gbps[-1]:.2f} | push-rate sGB/s p50 "
         f"{sgbps[len(sgbps) // 2]:.2f}"
     )
-    if CMBF2D_CHECK:
-        logger.info(f"combine_fabric2d accuracy: {acc_summary}")
-        for r in acc_results:
-            if r["bad_tokens"]:
-                logger.error(
-                    f"combine_fabric2d MISMATCH src {r['src']} worker {r['worker']} -> dst {r['dst']} "
-                    f"out pages [{r['out_base']}, {r['out_base'] + num_tokens}): "
-                    f"{r['bad_tokens']} bad token(s); {r['detail']}"
-                )
-
-    assert not bad, f"{len(bad)} worker(s) produced no telemetry record"
-    assert all(r[0]["tokens_sent"] == num_tokens for r in rows), "a producer did not send every token"
-    if CMBF2D_CHECK:
-        assert acc_results, "accuracy check requested but no producer reported a precooked input base page"
-        bad_workers = [r for r in acc_results if r["bad_tokens"]]
-        assert not bad_workers, f"accuracy check failed: {acc_summary} (details in {bwinfo_path})"
-        # The control must fail everywhere, or the pass above was vacuous (degenerate page content).
-        weak = [r for r in acc_results if r["control_bad_tokens"] != num_tokens]
-        assert not weak, (
-            f"accuracy check is not discriminating: {len(weak)} producer(s) also matched a one-slot "
-            f"rotated expectation. {acc_summary}"
-        )
+    assert not bad, f"{len(bad)} producer(s) produced no telemetry record"
+    assert len(rows) == len(movements), f"{len(movements)} movements but {len(rows)} producer record(s)"
+    assert all(r[0]["tokens_sent"] == out_tokens for r in rows), f"a producer did not send its {out_tokens} tokens"

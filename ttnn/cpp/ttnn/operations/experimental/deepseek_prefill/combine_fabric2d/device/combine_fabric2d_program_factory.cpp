@@ -32,60 +32,51 @@ namespace {
 // ---------------------------------------------------------------------------------------------
 // L1 layout — identical on every tensix core of every device in the mesh.
 //
-// Uniformity is load-bearing: a producer on chip A addresses slot k of the receiver ring on chip B by
-// computing recv_buf + k * chunk, with no knowledge of B's harvesting or eth positions. All offsets
-// are relative to the L1 unreserved base (uniform for a given arch/config).
+// Uniformity is load-bearing: a producer on chip A addresses the drain sink of the peer worker on chip B
+// without knowing anything about B's harvesting or eth positions. All offsets are relative to the L1
+// unreserved base (uniform for a given arch/config).
 // ---------------------------------------------------------------------------------------------
-constexpr uint32_t PKT_HDR_PAYLOAD_OFF = 0x0000;  // packet header for the payload sends
-constexpr uint32_t PKT_HDR_CREDIT_OFF = 0x0400;   // separate header for credit-return sends
-// 1 kB of per-worker telemetry, in the gap the two packet headers leave before the buffers, so it
-// costs the payload rings nothing. Sized for expansion; the current record is 12 words.
+constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;  // scratch header for the drain's filler packets
+// Target of the drain's value-0 atomic increments. A remote atomic inc needs a real L1 address on the
+// far chip; nothing ever reads this word, which is exactly the point.
+constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
+// 1 kB of per-worker telemetry, in the gap before the source ring, so it costs the payload nothing.
+// Sized for expansion; the current record is 17 words.
 constexpr uint32_t TELEMETRY_OFF = 0x0800;
 constexpr uint32_t TELEMETRY_SIZE = 0x0400;
-constexpr uint32_t PROD_BUF_OFF = 0x1000;  // producer's rotating source data
-constexpr uint32_t L1_SLACK = 0x1000;      // keep clear of the global-semaphore region at the L1 top
-static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the producer buffer");
-static_assert(PKT_HDR_CREDIT_OFF <= TELEMETRY_OFF, "telemetry region overlaps the credit packet header");
+constexpr uint32_t PROD_BUF_OFF = 0x1000;  // the producer's L1 source ring
+constexpr uint32_t L1_SLACK = 0x1000;      // keep clear of whatever sits at the very top of L1
+static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
+static_assert(DRAIN_SINK_OFF < TELEMETRY_OFF, "telemetry region overlaps the drain sink");
+static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the source ring");
 
 // Telemetry record word layout, shared with the producer kernel. Kept explicit (rather than a struct)
 // because the kernel writes it by index and the host reads it by index.
 enum TelemetryWord : uint32_t {
     TELEM_MAGIC = 0,  // written LAST by the kernel; zeroed at kernel entry
     TELEM_TOKENS_SENT = 1,
-    TELEM_CREDITS_FORWARDED = 2,
-    TELEM_CHUNK_SIZE = 3,
-    TELEM_NUM_SLOTS = 4,
-    TELEM_T_FIRST_SEND_LO = 5,
-    TELEM_T_FIRST_SEND_HI = 6,
-    TELEM_T_LAST_SEND_LO = 7,
-    TELEM_T_LAST_SEND_HI = 8,
-    TELEM_T_LAST_CREDIT_LO = 9,
-    TELEM_T_LAST_CREDIT_HI = 10,
-    TELEM_WRITE_UP_TO_FINAL = 11,
-    // Stall attribution: where the producer's cycles actually go. Four disjoint buckets measured with
-    // the same wall clock as the timestamps above, so they are directly comparable to the send window.
-    TELEM_EDM_SLOTS = 12,        // EDM sender-channel buffer slots (the send pipeline's depth)
-    TELEM_CREDIT_PACKETS = 13,   // credit PACKETS sent (<= credits forwarded, they batch)
-    TELEM_WAIT_SLOT_CY_LO = 14,  // blocked in wait_for_empty_write_slot before a payload => the eth
-    TELEM_WAIT_SLOT_CY_HI = 15,  //   side (eRISC/link) is the bottleneck
-    TELEM_ISSUE_CY_LO = 16,      // issuing the payload: header build + 2 NoC writes + flush
-    TELEM_ISSUE_CY_HI = 17,
-    TELEM_STARVE_CY_LO = 18,  // credit-starved: sent == write_up_to with tokens left to send
-    TELEM_STARVE_CY_HI = 19,  //   => the credit round-trip is the bottleneck
-    TELEM_CREDIT_CY_LO = 20,  // forwarding the receiver's credits (a whole extra packet)
-    TELEM_CREDIT_CY_HI = 21,
-    TELEM_LOOP_ITERS = 22,  // producer loop trips, for a per-iteration cost estimate
-    // Phase 4. The drain packets are the D-1 header-only fillers the receiverless modes push to force
-    // every payload credit back (Goal 1); the base pages are what this producer read and wrote, so the
-    // host can check content without re-deriving the cable mapping (Goal 2).
-    TELEM_DRAIN_PACKETS = 23,
-    TELEM_IN_BASE_PAGE = 24,   // 0xFFFFFFFF => no precooked input
-    TELEM_OUT_BASE_PAGE = 25,  // first DRAM page written on the PEER chip
-    TELEM_NUM_WORDS = 26,
+    TELEM_TOKEN_SIZE = 2,
+    TELEM_NUM_IN_TOKENS = 3,
+    TELEM_T_FIRST_SEND_LO = 4,
+    TELEM_T_FIRST_SEND_HI = 5,
+    TELEM_T_LAST_SEND_LO = 6,
+    TELEM_T_LAST_SEND_HI = 7,
+    TELEM_T_DRAINED_LO = 8,  // when the EDM drain proved every packet reached the far chip
+    TELEM_T_DRAINED_HI = 9,
+    TELEM_EDM_SLOTS = 10,      // EDM sender-channel buffer slots (the send pipeline's depth)
+    TELEM_DRAIN_PACKETS = 11,  // header-only fillers the drain pushed (= edm_slots - 1)
+    TELEM_OUT_BASE_PAGE = 12,  // first page written in the PEER chip's output region
+    // Stall attribution: where the producer's cycles actually go. Two disjoint buckets measured with the
+    // same wall clock as the timestamps above, so they are directly comparable to the send window.
+    TELEM_WAIT_SLOT_CY_LO = 13,  // blocked in wait_for_empty_write_slot => the eth side is the limiter
+    TELEM_WAIT_SLOT_CY_HI = 14,
+    TELEM_ISSUE_CY_LO = 15,  // issuing the payload: header stamp + 2 NoC writes
+    TELEM_ISSUE_CY_HI = 16,
+    TELEM_NUM_WORDS = 17,
 };
 // Bumped whenever the record layout changes, so a stale record from an older kernel reads as invalid
 // instead of being misparsed.
-constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0003u;
+constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0004u;
 
 // ---------------------------------------------------------------------------------------------
 // Physical-column geometry
@@ -131,7 +122,7 @@ struct WorkerPlacement {
     uint32_t eth_phys_x = 0;  // its physical column
     uint32_t link_idx = 0;    // link index (routing plane) to open the connection on
     tt::tt_fabric::FabricNodeId peer_node{tt::tt_fabric::MeshId{0}, 0};  // chip across the cable
-    CoreCoord worker_logical;                                            // where both kernels go
+    CoreCoord worker_logical;                                            // where the producer goes
     CoreCoord worker_physical;  // noc0 coords; x == eth_phys_x unless relocated
     CoreCoord worker_virtual;   // what a remote producer must address
     bool in_eth_column = true;  // false => relocated, no longer adjacent to its router
@@ -160,7 +151,7 @@ DevicePlacement decide_placement(
     const auto mesh_shape = mesh->shape();
 
     // This device's fabric eth cores: num_links toward the forward axis neighbor and num_links toward
-    // the backward one. Every one is full duplex, so every one gets a worker.
+    // the backward one. Every one is full duplex, so every one gets a producer.
     struct EthEntry {
         CoreCoord eth_logical;
         uint32_t eth_phys_x;
@@ -304,83 +295,113 @@ private:
 };
 
 struct L1Layout {
-    uint32_t pkt_hdr_payload;
-    uint32_t pkt_hdr_credit;
+    uint32_t pkt_hdr_drain;
+    uint32_t drain_sink;
     uint32_t telemetry;
     uint32_t prod_buf;
-    uint32_t recv_buf;
-    uint32_t pkt_hdr_ring;  // num_slots prebuilt payload headers (SLOT_HEADERS variant)
+    uint32_t pkt_hdr_ring;  // num_in_tokens prebuilt payload headers
 };
 
-// The telemetry address depends only on the L1 base, so the readback path can resolve it without any
-// of the run's semaphores or sizing.
+// The telemetry address depends only on the L1 base, so the readback path can resolve it without any of
+// the run's sizing.
 uint32_t telemetry_addr(ttnn::MeshDevice* mesh) {
     return static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1)) +
            TELEMETRY_OFF;
 }
 
-L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t num_slots, uint32_t chunk_size_bytes, uint32_t sem_floor) {
+L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t num_in_tokens, uint32_t token_size_bytes) {
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
-    l.pkt_hdr_payload = base + PKT_HDR_PAYLOAD_OFF;
-    l.pkt_hdr_credit = base + PKT_HDR_CREDIT_OFF;
+    l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
+    l.drain_sink = base + DRAIN_SINK_OFF;
     l.telemetry = base + TELEMETRY_OFF;
     l.prod_buf = base + PROD_BUF_OFF;
-    l.recv_buf = l.prod_buf + num_slots * chunk_size_bytes;
-    // One prebuilt header per ring slot, past the rings.
-    l.pkt_hdr_ring = l.recv_buf + num_slots * chunk_size_bytes;
+    // One prebuilt header per ring slot, past the ring itself.
+    l.pkt_hdr_ring = l.prod_buf + num_in_tokens * token_size_bytes;
     const uint32_t hdr_ring_bytes =
-        num_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+        num_in_tokens * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     const uint32_t end = l.pkt_hdr_ring + hdr_ring_bytes;
+    const uint32_t l1_size = static_cast<uint32_t>(mesh->get_devices().front()->l1_size_per_core());
     TT_FATAL(
-        end + L1_SLACK <= sem_floor,
-        "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at 0x{:x}. "
-        "Reduce num_slots ({}) or chunk_size_bytes ({}).",
+        end + L1_SLACK <= l1_size,
+        "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the core has only {} B of L1. "
+        "Reduce num_in_tokens ({}) or token_size_bytes ({}).",
         end - base,
         end,
-        sem_floor,
-        num_slots,
-        chunk_size_bytes);
+        l1_size,
+        num_in_tokens,
+        token_size_bytes);
     return l;
 }
 
-// Per-coordinate program: for each of this device's fabric eth cores, ONE worker core running a
-// producer (writer RISC — owns that eth channel's single fabric connection) and a receiver (reader
-// RISC — no connection, since being a fabric destination requires none).
-// Index of a placement's worker within its device, i.e. the position of `eth_logical` in the
-// device's sorted by_eth_logical map. Used to give each worker its own page range in the DRAM output
-// buffer: worker i owns pages [i * num_tokens, (i+1) * num_tokens).
-uint32_t worker_index_of(const DevicePlacement& placement, const CoreCoord& eth_logical) {
-    return static_cast<uint32_t>(
-        std::distance(placement.by_eth_logical.begin(), placement.by_eth_logical.find(eth_logical)));
+bool same_coord(const std::vector<uint32_t>& a, const ttnn::MeshCoordinate& b) {
+    const auto bc = b.coords();
+    return a.size() == bc.size() && std::equal(a.begin(), a.end(), bc.begin());
 }
 
+// Per-coordinate program: one producer kernel per fabric eth core of this device, on a worker core in
+// that eth core's physical column, each owning that eth channel's single fabric connection and executing
+// exactly one of the caller's movement descriptors.
+//
+// This is where the ONLY coupling between the caller's movement list and the op's internals lives: a
+// movement whose `dst` is chip D must go to a producer whose cable reaches D. With num_links cables per
+// neighbour there are num_links equally valid producers for each such movement, and which one gets which
+// is arbitrary — we take them in the deterministic order both maps iterate in. Nothing outside this
+// function depends on that choice.
 tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const CombineFabric2dParams& args,
     const ttnn::MeshCoordinate& coord,
     PlacementCache& placements,
     const std::map<uint32_t, ttnn::MeshCoordinate>& chip_to_coord,
     const L1Layout& l1,
-    uint32_t write_up_to_addr,
-    uint32_t data_ready_addr,
-    uint32_t credits_addr,
-    tt::tt_metal::Buffer* dram_buf,
-    uint32_t dram_addr,
-    tt::tt_metal::Buffer* dram_in_buf,
-    uint32_t dram_in_addr) {
+    tt::tt_metal::Buffer* dram_out_buf,
+    tt::tt_metal::Buffer* dram_in_buf) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* mesh = args.device;
     auto* dev = mesh->get_device(coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
-
-    // Phase 3 mode select (variant bits, see CombineFabric2dParams::variant). Only DRAM_DIRECT changes
-    // host wiring here (it drops the receiver kernel); DRAM_DRAIN is read kernel-side from `variant`.
-    const bool dram_direct = (args.variant & 32u) != 0;  // Approach #1: producer writes DRAM, no receiver
+    const uint32_t dram_out_addr = static_cast<uint32_t>(dram_out_buf->address());
+    const uint32_t dram_in_addr = static_cast<uint32_t>(dram_in_buf->address());
 
     const auto& self_placement = placements.get(coord);
-    std::string summary;
 
+    // This device's movements, bucketed by destination coordinate. Each bucket is consumed in order as
+    // the matching producers are walked below.
+    std::map<ttnn::MeshCoordinate, std::vector<const CombineFabric2dMovement*>> pending_by_dst;
+    uint32_t mine = 0;
+    for (const auto& m : args.movements) {
+        if (!same_coord(m.src, coord)) {
+            continue;
+        }
+        mine++;
+        bool placed = false;
+        for (const auto& c : ttnn::MeshCoordinateRange(mesh->shape())) {
+            if (same_coord(m.dst, c)) {
+                pending_by_dst[c].push_back(&m);
+                placed = true;
+                break;
+            }
+        }
+        TT_FATAL(
+            placed,
+            "combine_fabric2d {}: movement src {} names destination {}, which is not a coordinate of this {} mesh",
+            self_node,
+            coord,
+            movement_coord_str(m.dst),
+            mesh->shape());
+    }
+    TT_FATAL(
+        mine == self_placement.by_eth_logical.size(),
+        "combine_fabric2d {} {}: got {} movement(s) for this device but it has {} fabric cable(s). Every cable "
+        "needs exactly one movement (2 directions x num_links {}).",
+        coord,
+        self_node,
+        mine,
+        self_placement.by_eth_logical.size(),
+        args.num_links);
+
+    std::string summary;
     for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
         // Peer = the worker serving the eth core at the far end of THIS eth core's cable. Cable truth,
         // not plane-index arithmetic: our producer writes into this eth core's EDM, so for a
@@ -412,19 +433,24 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             mesh->get_fabric_node_id(cit->second));
         const CoreCoord peer_virtual = pit->second.worker_virtual;
 
-        // DRAM page ranges (Phase 3). Approach #1's producer writes to the peer chip's buffer, into the
-        // page range owned by the peer worker it feeds. Approach #2's receiver drains into THIS chip's
-        // buffer, into its own worker's page range. Both are one page per token.
-        const uint32_t self_worker_idx = worker_index_of(self_placement, eth_logical);
-        const uint32_t peer_worker_idx = worker_index_of(peer_placement, far_eth_logical);
-        const uint32_t producer_dram_base_page = peer_worker_idx * args.num_tokens;  // page on the PEER chip
-        const uint32_t receiver_dram_base_page = self_worker_idx * args.num_tokens;  // page on THIS chip
-        // Phase 4 Goal 2: each producer owns its own num_slots-page region of THIS chip's input buffer,
-        // so the four producers of a chip send four distinguishable sets of tokens.
-        const uint32_t producer_input_base_page = self_worker_idx * args.num_slots;
+        // Claim a movement bound for the chip this cable actually reaches. Cable truth again: the packets
+        // this producer sends can only emerge at the far end of its own cable, so a movement is only
+        // assignable here if its `dst` is that far chip.
+        const ttnn::MeshCoordinate& far_coord = cit->second;
+        auto bucket = pending_by_dst.find(far_coord);
+        TT_FATAL(
+            bucket != pending_by_dst.end() && !bucket->second.empty(),
+            "combine_fabric2d {} {}: eth core ({},{}) cables to {}, but no (remaining) movement asks to send there. "
+            "Movements must name a destination for every cable, {} per neighbour.",
+            coord,
+            self_node,
+            eth_logical.x,
+            eth_logical.y,
+            far_coord,
+            args.num_links);
+        const CombineFabric2dMovement& mv = *bucket->second.back();
+        bucket->second.pop_back();
 
-        // ---- Producer (writer RISC). Owns the eth channel's single fabric connection: sends payload
-        // ---- tokens AND forwards the co-located receiver's credit returns.
         tt::tt_metal::KernelDescriptor prod;
         prod.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
@@ -432,33 +458,27 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         prod.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         prod.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
         prod.compile_time_args = {
-            args.num_tokens,
-            args.num_slots,
-            args.chunk_size_bytes,
+            args.output_tokens_per_movement,
+            args.input_tokens_per_movement,
+            args.token_size_bytes,
             static_cast<uint32_t>(wp.peer_node.chip_id),
             *wp.peer_node.mesh_id,
             static_cast<uint32_t>(peer_virtual.x),
             static_cast<uint32_t>(peer_virtual.y),
             l1.prod_buf,
-            l1.recv_buf,
-            l1.pkt_hdr_payload,
-            l1.pkt_hdr_credit,
-            write_up_to_addr,
-            data_ready_addr,
-            credits_addr,
+            l1.pkt_hdr_ring,
+            l1.pkt_hdr_drain,
+            l1.drain_sink,
             l1.telemetry,
             args.stall_telemetry,
-            args.variant,
-            l1.pkt_hdr_ring,
-            producer_dram_base_page,   // 18: first DRAM page this producer writes (Approach #1)
-            dram_addr,                 // 19: DRAM output buffer base address (uniform across the mesh)
-            producer_input_base_page,  // 20: first DRAM page this producer reads (precooked tokens)
-            dram_in_addr,              // 21: DRAM input buffer base address, 0 => no precooked input
+            mv.in_base_token,
+            mv.out_base_token,
+            dram_out_addr,
+            dram_in_addr,
         };
-        // 22+: TensorAccessorArgs for the interleaved DRAM output buffer, then the input buffer (both
-        // compile-time config). A null input buffer emits a two-zero (page_size 0) config, which the
-        // kernel never instantiates because dram_in_addr == 0 turns the prefill off.
-        tt::tt_metal::TensorAccessorArgs(dram_buf).append_to(prod.compile_time_args);
+        // 17+: TensorAccessorArgs for the interleaved output buffer, then the input buffer (both
+        // compile-time config).
+        tt::tt_metal::TensorAccessorArgs(dram_out_buf).append_to(prod.compile_time_args);
         tt::tt_metal::TensorAccessorArgs(dram_in_buf).append_to(prod.compile_time_args);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -479,42 +499,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             desc.kernels[prod_id].emplace_runtime_args(wp.worker_logical, rt);
         }
 
-        // ---- Receiver (reader RISC). No fabric connection: it polls its own L1 and hands credits to
-        // ---- the producer sharing its core. Approach #1 (dram_direct) has no receiver role at all —
-        // ---- the producer writes straight to the peer's DRAM, nothing consumes an L1 ring — so we
-        // ---- skip it entirely (a receiver would spin forever waiting on a data_ready that never comes).
-        if (!dram_direct) {
-            tt::tt_metal::KernelDescriptor recv;
-            recv.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
-                "receiver_combine_fabric2d.cpp";
-            recv.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-            recv.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
-            recv.compile_time_args = {
-                args.num_tokens,
-                args.num_slots,
-                args.chunk_size_bytes,
-                l1.recv_buf,
-                data_ready_addr,
-                credits_addr,
-                static_cast<uint32_t>(wp.worker_virtual.x),
-                static_cast<uint32_t>(wp.worker_virtual.y),
-                args.variant,             // 8: mode select (DRAM_DRAIN bit)
-                receiver_dram_base_page,  // 9: first DRAM page this receiver drains to (Approach #2)
-                dram_addr,                // 10: DRAM output buffer base address
-            };
-            // 11+: TensorAccessorArgs for the interleaved DRAM output buffer (compile-time config).
-            tt::tt_metal::TensorAccessorArgs(dram_buf).append_to(recv.compile_time_args);
-            recv.config = tt::tt_metal::DataMovementConfigDescriptor{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                // Approach #2 uses NOC_0 for the L1->DRAM drain; baseline only self-atomics on it.
-                .noc = tt::tt_metal::NOC::NOC_0,
-            };
-            desc.kernels.push_back(std::move(recv));  // no fabric connection => no rt args
-        }
-
         summary += fmt::format(
-            "{}[eth({},{}) phys_x {} link {} -> worker logical ({},{}) phys ({},{}){} peer {} virt ({},{})]",
+            "{}[eth({},{}) phys_x {} link {} -> worker logical ({},{}) phys ({},{}){} peer {} virt ({},{}) "
+            "in[{},{}) -> {} out[{},{})]",
             summary.empty() ? "" : " ",
             eth_logical.x,
             eth_logical.y,
@@ -527,12 +514,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             wp.in_eth_column ? "" : " RELOCATED",
             wp.peer_node,
             peer_virtual.x,
-            peer_virtual.y);
+            peer_virtual.y,
+            mv.in_base_token,
+            mv.in_base_token + args.input_tokens_per_movement,
+            far_coord,
+            mv.out_base_token,
+            mv.out_base_token + args.output_tokens_per_movement);
     }
 
     log_info(
         tt::LogOp,
-        "combine_fabric2d {} {}: {} worker core(s), each producer+receiver: {}",
+        "combine_fabric2d {} {}: {} producer(s): {}",
         coord,
         self_node,
         self_placement.by_eth_logical.size(),
@@ -553,8 +545,8 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
     CombineFabric2dTelemetry out;
     out.clock_mhz = static_cast<uint32_t>(mesh_device->get_devices().front()->get_clock_rate_mhz());
 
-    // Physical chip id -> mesh coordinate, so a worker's record can name its peer in the same
-    // coordinate space the caller uses to index per-device tensor shards (Goal 2's content check).
+    // Physical chip id -> mesh coordinate, so a worker's record can name the chip its tokens landed on in
+    // the same coordinate space the caller uses to index per-device tensor shards.
     std::map<uint32_t, ttnn::MeshCoordinate> chip_to_coord;
     for (const auto& c : ttnn::MeshCoordinateRange(mesh_shape)) {
         chip_to_coord.emplace(static_cast<uint32_t>(mesh_device->get_device(c)->id()), c);
@@ -578,8 +570,7 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
             w.peer_mesh_id = *wp.peer_node.mesh_id;
             w.peer_chip_id = static_cast<uint32_t>(wp.peer_node.chip_id);
             // The chip this worker's tokens actually land on is the far end of ITS cable — the same
-            // resolution the program factory used to pick the destination page range. Reported in mesh
-            // coordinates because that is how the caller indexes per-device tensor shards.
+            // resolution the program factory used to pick the destination page range.
             const auto far = dev->get_connected_ethernet_core(eth_logical);
             const auto fit = chip_to_coord.find(static_cast<uint32_t>(std::get<0>(far)));
             if (fit != chip_to_coord.end()) {
@@ -592,30 +583,21 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
             if (ok && words.size() >= TELEM_NUM_WORDS && words[TELEM_MAGIC] == TELEMETRY_MAGIC) {
                 w.valid = true;
                 w.tokens_sent = words[TELEM_TOKENS_SENT];
-                w.credits_forwarded = words[TELEM_CREDITS_FORWARDED];
-                w.chunk_size_bytes = words[TELEM_CHUNK_SIZE];
-                w.num_slots = words[TELEM_NUM_SLOTS];
-                w.write_up_to_final = words[TELEM_WRITE_UP_TO_FINAL];
+                w.token_size_bytes = words[TELEM_TOKEN_SIZE];
+                w.num_in_tokens = words[TELEM_NUM_IN_TOKENS];
                 w.t_first_send = static_cast<uint64_t>(words[TELEM_T_FIRST_SEND_LO]) |
                                  (static_cast<uint64_t>(words[TELEM_T_FIRST_SEND_HI]) << 32);
                 w.t_last_send = static_cast<uint64_t>(words[TELEM_T_LAST_SEND_LO]) |
                                 (static_cast<uint64_t>(words[TELEM_T_LAST_SEND_HI]) << 32);
-                w.t_last_credit = static_cast<uint64_t>(words[TELEM_T_LAST_CREDIT_LO]) |
-                                  (static_cast<uint64_t>(words[TELEM_T_LAST_CREDIT_HI]) << 32);
+                w.t_drained = static_cast<uint64_t>(words[TELEM_T_DRAINED_LO]) |
+                              (static_cast<uint64_t>(words[TELEM_T_DRAINED_HI]) << 32);
                 w.edm_slots = words[TELEM_EDM_SLOTS];
-                w.credit_packets = words[TELEM_CREDIT_PACKETS];
-                w.loop_iters = words[TELEM_LOOP_ITERS];
                 w.drain_packets = words[TELEM_DRAIN_PACKETS];
-                w.in_base_page = words[TELEM_IN_BASE_PAGE];
                 w.out_base_page = words[TELEM_OUT_BASE_PAGE];
                 w.wait_slot_cycles = static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_LO]) |
                                      (static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_HI]) << 32);
                 w.issue_cycles = static_cast<uint64_t>(words[TELEM_ISSUE_CY_LO]) |
                                  (static_cast<uint64_t>(words[TELEM_ISSUE_CY_HI]) << 32);
-                w.starve_cycles = static_cast<uint64_t>(words[TELEM_STARVE_CY_LO]) |
-                                  (static_cast<uint64_t>(words[TELEM_STARVE_CY_HI]) << 32);
-                w.credit_cycles = static_cast<uint64_t>(words[TELEM_CREDIT_CY_LO]) |
-                                  (static_cast<uint64_t>(words[TELEM_CREDIT_CY_HI]) << 32);
             }
             out.workers.push_back(std::move(w));
         }
@@ -640,107 +622,74 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
 
     const uint32_t fabric_max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     TT_FATAL(
-        operation_attributes.chunk_size_bytes <= fabric_max_payload,
-        "combine_fabric2d: chunk_size_bytes {} exceeds the fabric max payload {} (one packet per token)",
-        operation_attributes.chunk_size_bytes,
+        operation_attributes.token_size_bytes <= fabric_max_payload,
+        "combine_fabric2d: token_size_bytes {} exceeds the fabric max payload {} (one packet per token)",
+        operation_attributes.token_size_bytes,
         fabric_max_payload);
 
-    // Three single-writer monotonic counters (see the plan): each has exactly one writer, so there is
-    // no cross-RISC read-modify-write to race and no negative NoC atomic. Readers keep their own local
-    // consumed count and work on the difference. `write_up_to` starts at num_slots so a producer can
-    // fill the ring once before any credit returns. All live on the full worker grid so their L1
-    // addresses are uniform across the mesh (worker cores are eth-derived and differ per device).
     const auto grid = mesh_device->compute_with_storage_grid_size();
-    const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
-    auto write_up_to_sem = ttnn::global_semaphore::create_global_semaphore(
-        mesh_device, all_workers, operation_attributes.num_slots, tt::tt_metal::BufferType::L1);
-    auto data_ready_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
-    auto credits_to_return_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
-
-    const uint32_t write_up_to_addr = static_cast<uint32_t>(write_up_to_sem.address());
-    const uint32_t data_ready_addr = static_cast<uint32_t>(data_ready_sem.address());
-    const uint32_t credits_addr = static_cast<uint32_t>(credits_to_return_sem.address());
-    const uint32_t sem_floor = std::min({write_up_to_addr, data_ready_addr, credits_addr});
     const auto l1 = compute_l1_layout(
-        mesh_device, operation_attributes.num_slots, operation_attributes.chunk_size_bytes, sem_floor);
+        mesh_device, operation_attributes.input_tokens_per_movement, operation_attributes.token_size_bytes);
     log_info(
         tt::LogOp,
-        "combine_fabric2d L1: prod_buf 0x{:x} recv_buf 0x{:x} hdr_ring 0x{:x} ({} slots x {} B), variant {}, sems "
-        "write_up_to 0x{:x} (init {}) data_ready 0x{:x} credits_to_return 0x{:x}",
+        "combine_fabric2d L1: prod_buf 0x{:x} hdr_ring 0x{:x} ({} input tokens x {} B), drain_sink 0x{:x}",
         l1.prod_buf,
-        l1.recv_buf,
         l1.pkt_hdr_ring,
-        operation_attributes.num_slots,
-        operation_attributes.chunk_size_bytes,
-        operation_attributes.variant,
-        write_up_to_addr,
-        operation_attributes.num_slots,
-        data_ready_addr,
-        credits_addr);
+        operation_attributes.input_tokens_per_movement,
+        operation_attributes.token_size_bytes,
+        l1.drain_sink);
 
     // Physical chip id -> mesh coordinate, to turn a cable's far chip into a placement lookup.
     std::map<uint32_t, ttnn::MeshCoordinate> chip_to_coord;
-    for (const auto& c : ttnn::MeshCoordinateRange(mesh_device->shape())) {
+    for (const auto& c : ttnn::MeshCoordinateRange(mesh_shape)) {
         chip_to_coord.emplace(static_cast<uint32_t>(mesh_device->get_device(c)->id()), c);
     }
 
     PlacementCache placements(mesh_device, axis, operation_attributes.num_links, grid);
 
-    // Phase 3 DRAM output buffer. In the L1-only baseline this is the dummy {1,1} tensor (unused by the
-    // kernels); in DRAM modes it is the real interleaved landing buffer, whose base address is uniform
-    // across the mesh so a producer can address the same buffer on any chip by page.
-    auto* dram_buf = tensor_return_value.buffer();
-    TT_FATAL(dram_buf != nullptr, "combine_fabric2d: output tensor has no device buffer");
-    const uint32_t dram_addr = static_cast<uint32_t>(dram_buf->address());
-
-    // Phase 4 Goal 2 input buffer (optional). Same interleaved page layout as the output, so the
-    // producers can prefill their L1 source slots from it with an ordinary local DRAM read. Its address
-    // is uniform across the mesh (one MeshBuffer), but each producer only ever reads its OWN chip's
-    // copy, so uniformity is a convenience here rather than a requirement.
-    tt::tt_metal::Buffer* dram_in_buf = nullptr;
-    uint32_t dram_in_addr = 0;
-    if (tensor_args.input.has_value()) {
-        dram_in_buf = tensor_args.input->buffer();
-        TT_FATAL(dram_in_buf != nullptr, "combine_fabric2d: input tensor has no device buffer");
+    // Both regions are caller-owned interleaved DRAM buffers whose base address is uniform across the
+    // mesh, so a producer can address the same buffer on any chip by page index.
+    auto* dram_in_buf = tensor_args.input.buffer();
+    auto* dram_out_buf = tensor_return_value.buffer();
+    TT_FATAL(dram_in_buf != nullptr, "combine_fabric2d: input tensor has no device buffer");
+    TT_FATAL(dram_out_buf != nullptr, "combine_fabric2d: output tensor has no device buffer");
+    TT_FATAL(
+        dram_in_buf->aligned_page_size() == operation_attributes.token_size_bytes,
+        "combine_fabric2d: input page size {} must equal token_size_bytes {} (one page = one token)",
+        dram_in_buf->aligned_page_size(),
+        operation_attributes.token_size_bytes);
+    TT_FATAL(
+        dram_out_buf->aligned_page_size() == operation_attributes.token_size_bytes,
+        "combine_fabric2d: output page size {} must equal token_size_bytes {} (one page = one token)",
+        dram_out_buf->aligned_page_size(),
+        operation_attributes.token_size_bytes);
+    // Every movement's region must fit in the buffer it indexes. Checked here rather than in validate()
+    // because only the buffers know the real per-device page count.
+    const uint32_t in_pages = static_cast<uint32_t>(dram_in_buf->num_pages());
+    const uint32_t out_pages = static_cast<uint32_t>(dram_out_buf->num_pages());
+    for (const auto& m : operation_attributes.movements) {
         TT_FATAL(
-            dram_in_buf->aligned_page_size() == dram_buf->aligned_page_size(),
-            "combine_fabric2d: input page size {} must equal the output page size {} (one page = one token)",
-            dram_in_buf->aligned_page_size(),
-            dram_buf->aligned_page_size());
-        const uint32_t needed_pages = 2u * operation_attributes.num_links * operation_attributes.num_slots;
+            m.in_base_token + operation_attributes.input_tokens_per_movement <= in_pages,
+            "combine_fabric2d: movement src {} reads input tokens [{}, {}) but the input buffer holds {} per device",
+            movement_coord_str(m.src),
+            m.in_base_token,
+            m.in_base_token + operation_attributes.input_tokens_per_movement,
+            in_pages);
         TT_FATAL(
-            dram_in_buf->num_pages() >= needed_pages,
-            "combine_fabric2d: input buffer has {} pages but {} producers x num_slots {} need {}",
-            dram_in_buf->num_pages(),
-            2u * operation_attributes.num_links,
-            operation_attributes.num_slots,
-            needed_pages);
-        dram_in_addr = static_cast<uint32_t>(dram_in_buf->address());
-        TT_FATAL(
-            dram_in_addr != 0, "combine_fabric2d: input buffer address is 0, which the kernel reads as 'no input'");
+            m.out_base_token + operation_attributes.output_tokens_per_movement <= out_pages,
+            "combine_fabric2d: movement src {} -> dst {} writes output tokens [{}, {}) but the output buffer holds "
+            "{} per device",
+            movement_coord_str(m.src),
+            movement_coord_str(m.dst),
+            m.out_base_token,
+            m.out_base_token + operation_attributes.output_tokens_per_movement,
+            out_pages);
     }
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    workload_descriptor.semaphores.push_back(write_up_to_sem);
-    workload_descriptor.semaphores.push_back(data_ready_sem);
-    workload_descriptor.semaphores.push_back(credits_to_return_sem);
     for (const auto& coord : tensor_coords.coords()) {
         auto desc = build_program_for_coord(
-            operation_attributes,
-            coord,
-            placements,
-            chip_to_coord,
-            l1,
-            write_up_to_addr,
-            data_ready_addr,
-            credits_addr,
-            dram_buf,
-            dram_addr,
-            dram_in_buf,
-            dram_in_addr);
+            operation_attributes, coord, placements, chip_to_coord, l1, dram_out_buf, dram_in_buf);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;

@@ -14,33 +14,78 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::detail {
 void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
+    // One requested data movement. Bound as a named type rather than a bare tuple because it IS the op's
+    // contract: the caller states what moves where, and everything about how the op achieves it (core
+    // count, cable choice, which producer serves which movement) stays on the op's side of this line.
+    nb::class_<CombineFabric2dMovement>(mod, "CombineFabric2dMovement")
+        .def(
+            "__init__",
+            [](CombineFabric2dMovement* self,
+               const std::vector<uint32_t>& src,
+               uint32_t in_base_token,
+               const std::vector<uint32_t>& dst,
+               uint32_t out_base_token) {
+                new (self) CombineFabric2dMovement{src, in_base_token, dst, out_base_token};
+            },
+            nb::arg("src"),
+            nb::arg("in_base_token"),
+            nb::arg("dst"),
+            nb::arg("out_base_token"),
+            R"doc(
+            Move `input_tokens_per_movement` tokens starting at `in_base_token` of device `src`'s input
+            region into `output_tokens_per_movement` tokens starting at `out_base_token` of device
+            `dst`'s output region, cycling the inputs (output token t carries input token
+            t mod input_tokens_per_movement). `src` and `dst` are mesh coordinates; the bases are in
+            TOKENS (= pages), not bytes. `dst` must be a chip `src` has a fabric cable to.
+            )doc")
+        .def_rw("src", &CombineFabric2dMovement::src)
+        .def_rw("in_base_token", &CombineFabric2dMovement::in_base_token)
+        .def_rw("dst", &CombineFabric2dMovement::dst)
+        .def_rw("out_base_token", &CombineFabric2dMovement::out_base_token)
+        .def("__repr__", [](const CombineFabric2dMovement& m) {
+            std::string s = "CombineFabric2dMovement(src=(";
+            for (size_t i = 0; i < m.src.size(); i++) {
+                s += (i ? "," : "") + std::to_string(m.src[i]);
+            }
+            s += "), in_base_token=" + std::to_string(m.in_base_token) + ", dst=(";
+            for (size_t i = 0; i < m.dst.size(); i++) {
+                s += (i ? "," : "") + std::to_string(m.dst[i]);
+            }
+            return s + "), out_base_token=" + std::to_string(m.out_base_token) + ")";
+        });
+
     ttnn::bind_function<"combine_fabric2d", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        Isolated FABRIC_2D transfer experiment op. For each fabric eth core (`num_links` toward
-        each neighbor along mesh `axis`), one worker core in that eth core's physical column runs a
-        producer on the writer RISC and a receiver on the reader RISC. Every link is full duplex:
-        the producer sends `num_tokens` chunks of `chunk_size_bytes` to the peer worker across the
-        cable while the receiver consumes the peer's chunks into a `num_slots`-deep L1 ring, credited
-        back through the producer's connection. Used to profile the fabric leg in isolation.
+        Isolated FABRIC_2D transfer experiment op: chip-local DRAM -> eth -> neighbour chip's DRAM.
 
-        In the DRAM modes (`variant` bit5 DRAM_DIRECT / bit6 DRAM_DRAIN) the returned tensor is the
-        real interleaved DRAM landing buffer, one page per token per worker. Passing `input` — an
-        interleaved uint32 ROW_MAJOR DRAM tensor with `num_slots` pages per producer — makes each
-        producer prefill its L1 source slots from its own region of that buffer and send exactly those
-        tokens round-robin, so the landing buffer can be checked for content.
+        The caller supplies two region tensors and a list of `CombineFabric2dMovement` descriptors
+        saying what moves where. The op places one producer kernel per fabric eth core (`num_links`
+        toward each neighbour along mesh `axis`, both directions, so 2 * num_links per device), gives
+        each producer one of that device's movements whose `dst` its cable reaches, and each producer
+        then prefills its L1 source ring from its own input region and writes its output region
+        straight to the peer chip's DRAM, one fabric packet per token. There is no receiver kernel and
+        no application-level credit loop; the EDM sender-slot backpressure is the only throttle, so the
+        send window is the link-bounded rate.
+
+        `input` and `output` are caller-owned interleaved uint32 ROW_MAJOR DRAM mesh tensors with one
+        row per token. Every device needs exactly one movement per fabric cable it has; the op rejects
+        a list that does not cover them, that names an unreachable `dst`, or whose output ranges
+        overlap on a destination. Which of the equally-valid producers serves a given movement is an
+        internal detail and deliberately unspecified. Returns `output`.
         )doc",
         &combine_fabric2d,
         nb::arg("device"),
+        nb::arg("input"),
+        nb::arg("output"),
+        nb::arg("movements"),
         nb::arg("num_links") = 2,
-        nb::arg("num_tokens") = 100,
-        nb::arg("chunk_size_bytes") = 14336,
-        nb::arg("num_slots") = 32,
+        nb::arg("input_tokens_per_movement") = 32,
+        nb::arg("output_tokens_per_movement") = 100,
+        nb::arg("token_size_bytes") = 14336,
         nb::arg("axis") = 0,
         nb::arg("stall_telemetry") = 0,
-        nb::arg("variant") = 0,
-        nb::arg("topology") = nb::none(),
-        nb::arg("input") = nb::none());
+        nb::arg("topology") = nb::none());
 
     // Telemetry readback. Returns {"clock_mhz": int, "workers": [ {...}, ... ]} — plain Python data so
     // callers can format it however they like. The caller does NOT need to know where the worker cores
@@ -65,23 +110,16 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
                 d["peer_coord"] = w.peer_coord;
                 d["valid"] = w.valid;
                 d["tokens_sent"] = w.tokens_sent;
-                d["credits_forwarded"] = w.credits_forwarded;
-                d["chunk_size_bytes"] = w.chunk_size_bytes;
-                d["num_slots"] = w.num_slots;
-                d["write_up_to_final"] = w.write_up_to_final;
+                d["token_size_bytes"] = w.token_size_bytes;
+                d["num_in_tokens"] = w.num_in_tokens;
                 d["t_first_send"] = w.t_first_send;
                 d["t_last_send"] = w.t_last_send;
-                d["t_last_credit"] = w.t_last_credit;
+                d["t_drained"] = w.t_drained;
                 d["edm_slots"] = w.edm_slots;
-                d["credit_packets"] = w.credit_packets;
-                d["loop_iters"] = w.loop_iters;
                 d["drain_packets"] = w.drain_packets;
-                d["in_base_page"] = w.in_base_page;
                 d["out_base_page"] = w.out_base_page;
                 d["wait_slot_cycles"] = w.wait_slot_cycles;
                 d["issue_cycles"] = w.issue_cycles;
-                d["starve_cycles"] = w.starve_cycles;
-                d["credit_cycles"] = w.credit_cycles;
                 workers.append(d);
             }
             nb::dict out;

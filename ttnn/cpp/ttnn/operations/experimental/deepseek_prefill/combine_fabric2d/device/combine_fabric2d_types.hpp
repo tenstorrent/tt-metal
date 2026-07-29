@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <optional>
+#include <string>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -14,69 +15,107 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// Isolated fabric-transfer experiment op. No input tensors — the op reserves its own L1 scratch.
+// One data movement the caller is asking for: take `input_tokens_per_movement` tokens starting at
+// `in_base_token` of `src`'s input region, and fill `output_tokens_per_movement` tokens starting at
+// `out_base_token` of `dst`'s output region with them, cycling the inputs (output token t carries input
+// token t mod input_tokens_per_movement).
 //
-// Every fabric eth core of every device (num_links toward each axis neighbor) gets ONE worker core in
-// its physical column, running a producer (writer RISC) and a receiver (reader RISC). Each link is
-// full duplex for payload: the producer sends `num_tokens` chunks of `chunk_size_bytes` to the peer
-// worker across the cable, while the receiver consumes the peer's chunks. The producer owns the eth
-// channel's single fabric connection and also forwards the receiver's credit returns.
+// This is the op's contract, and it is deliberately the WHOLE contract: the caller says what moves
+// where, and nothing about how. How many cores run it, which eth core each one owns, which producer
+// serves which movement — all of that is the op's business, invisible here. `dst` must be a chip this
+// device has a cable to, which the op checks against cable truth rather than mesh arithmetic.
+//
+// Bases are in TOKENS (= pages), not bytes. A byte offset would be meaningless: these are interleaved
+// DRAM buffers, so consecutive pages are round-robined across banks and page k is not at base + k*size.
+struct CombineFabric2dMovement {
+    std::vector<uint32_t> src;    // mesh coordinate of the source device
+    uint32_t in_base_token = 0;   // first token of this movement's region in src's input buffer
+    std::vector<uint32_t> dst;    // mesh coordinate of the destination device
+    uint32_t out_base_token = 0;  // first token of this movement's region in dst's output buffer
+
+    // Constructors are declared (rather than relying on aggregate init) deliberately: a struct that is
+    // BOTH an aggregate and carries attribute_names matches two of ttsl::reflection's partial
+    // specializations at once, which is an ambiguity error. Declaring a constructor makes it non-aggregate
+    // so only the attribute_names path applies.
+    CombineFabric2dMovement() = default;
+    CombineFabric2dMovement(
+        std::vector<uint32_t> src_, uint32_t in_base_token_, std::vector<uint32_t> dst_, uint32_t out_base_token_) :
+        src(std::move(src_)), in_base_token(in_base_token_), dst(std::move(dst_)), out_base_token(out_base_token_) {}
+
+    static constexpr auto attribute_names = std::forward_as_tuple("src", "in_base_token", "dst", "out_base_token");
+    auto attribute_values() const { return std::forward_as_tuple(src, in_base_token, dst, out_base_token); }
+};
+
+// Mesh coordinate as text, for error messages on both the validation and the program-factory side.
+inline std::string movement_coord_str(const std::vector<uint32_t>& c) {
+    std::string s = "(";
+    for (size_t i = 0; i < c.size(); i++) {
+        s += (i ? "," : "") + std::to_string(c[i]);
+    }
+    return s + ")";
+}
+
+// Isolated fabric-transfer experiment op: chip-local DRAM -> eth -> neighbour chip's DRAM.
+//
+// The caller supplies an input region, an output region, and a list of movements between them. The op
+// places one producer kernel per fabric eth core (num_links toward each `axis` neighbour, both
+// directions, so 2 * num_links per device), assigns each of that device's movements to a producer whose
+// cable reaches the movement's `dst`, and each producer then prefills its L1 source ring from its own
+// input region and writes its output region straight to the peer chip's DRAM, one fabric packet per
+// token.
+//
+// There is no receiver kernel and no application-level credit loop: the eth channel's own sender-slot
+// backpressure is the only throttle, which is what lets this op sit at ~100% of the fabric's
+// per-direction bandwidth.
 //
 // `device` is FIRST so the framework's get_first_object_of_type<MeshDevice*>() over
 // attribute_values() (tuple element 0) finds the mesh.
 struct CombineFabric2dParams {
     ttnn::MeshDevice* device = nullptr;
     uint32_t num_links = 2;
-    uint32_t num_tokens = 100;
-    uint32_t chunk_size_bytes = 14336;  // 7168 bf16 elements = one token
-    uint32_t num_slots = 32;            // ring depth; also the producer's initial write_up_to credit
-    uint32_t axis = 0;                  // mesh axis along which the neighbors are chosen
-    // Fine-grained stall attribution in the producer (wait-for-slot / issue / credit-starved / credit
-    // buckets). Off by default: it costs ~3 wall-clock register reads per token, which is a few percent
-    // of the very number being measured. Turn it on to explain a result, off to quote one.
+    uint32_t input_tokens_per_movement = 32;    // also the depth of a producer's L1 source ring
+    uint32_t output_tokens_per_movement = 100;  // packets one movement sends; sets the traffic
+    uint32_t token_size_bytes = 14336;          // 7168 bf16 elements = one token = one fabric packet
+    uint32_t axis = 0;                          // mesh axis along which the neighbours are chosen
+    // Fine-grained stall attribution in the producer (wait-for-slot / issue buckets). Off by default:
+    // it costs ~2 wall-clock register reads per token, which is a few percent of the very number being
+    // measured. Turn it on to explain a result, off to quote one.
     uint32_t stall_telemetry = 0;
-    // Diagnostic overrides for the producer loop. Both deliberately break a guarantee, to price it;
-    // neither belongs in a real run.
-    //   bit2 (4) RELAXED_READY    data-ready atomic-inc without the flush ordering, so the receiver may
-    //                             observe the flag before the payload has landed (worth ~1%)
-    //   bit3 (8) NO_FLOW_CONTROL  ignore the credit gate and send no credit packets at all, which
-    //                             overwrites the receiver ring in flight but measures the payload-only
-    //                             ceiling of the link (23.8 GB/s per direction on 8x4 BH)
-    // Phase 3 receiver-path modes (mutually exclusive; pick at most one). Both make the op land tokens
-    // in a real interleaved DRAM output buffer instead of NOP-acking them in L1.
-    //   bit5 (32) DRAM_DIRECT  Approach #1: producer writes each token straight to the peer chip's DRAM
-    //                          (page base + token), no credits/semaphores, no receiver kernel. Plain
-    //                          unicast write, not the fused write+atomic-inc (that hangs BH on DRAM).
-    //   bit6 (64) DRAM_DRAIN   Approach #2: unchanged fabric path into the L1 ring; the receiver then
-    //                          writes each consumed slot to DRAM over NOC_0 and waits for it to land
-    //                          before returning that slot's credit.
-    uint32_t variant = 0;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
+    // Every movement across the whole mesh, in any order. The op picks out the ones whose `src` is the
+    // device it is currently building for.
+    std::vector<CombineFabric2dMovement> movements;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "device",
         "num_links",
-        "num_tokens",
-        "chunk_size_bytes",
-        "num_slots",
+        "input_tokens_per_movement",
+        "output_tokens_per_movement",
+        "token_size_bytes",
         "axis",
         "stall_telemetry",
-        "variant",
-        "topology");
+        "topology",
+        "movements");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            device, num_links, num_tokens, chunk_size_bytes, num_slots, axis, stall_telemetry, variant, topology);
+            device,
+            num_links,
+            input_tokens_per_movement,
+            output_tokens_per_movement,
+            token_size_bytes,
+            axis,
+            stall_telemetry,
+            topology,
+            movements);
     }
 };
 
-// Phase 4 Goal 2. Optional precooked source tokens: an interleaved DRAM buffer with the same page size
-// as the output (one page = one token), holding num_slots pages for each of this chip's producers
-// (producer i owns pages [i * num_slots, (i+1) * num_slots)). When given, each producer prefills its L1
-// source slots from its own region and then sends exactly those tokens round-robin, which is what makes
-// the destination DRAM checkable for content. When absent the op behaves exactly as in phase 3: the
-// payload is uninitialised L1 and only arrival is verifiable.
+// Both regions are caller-owned, so a test can lay down known content and zero the destination before
+// the run and then read the destination back afterwards. Interleaved uint32 ROW_MAJOR DRAM, one row =
+// one page = one token, and the same page size on both.
 struct CombineFabric2dInputs {
-    std::optional<ttnn::Tensor> input;
+    ttnn::Tensor input;
+    ttnn::Tensor output;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
