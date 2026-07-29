@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 #include <stdint.h>
@@ -15,8 +15,8 @@
 void kernel_main() {
     // Compile time args
     // -----------------
-    constexpr uint32_t src_cb_idx = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
+    constexpr uint32_t src_dfb_idx = get_compile_time_arg_val(0);
+    constexpr uint32_t dst_dfb_idx = get_compile_time_arg_val(1);
 
     constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
 
@@ -55,15 +55,15 @@ void kernel_main() {
     using dst_accessor_type = decltype(s_dst);
 
     Noc noc;
-    CircularBuffer src_cb(src_cb_idx);
-    CircularBuffer dst_cb(dst_cb_idx);
+    DataflowBuffer src_dfb(src_dfb_idx);
+    DataflowBuffer dst_dfb(dst_dfb_idx);
 
     // CB for input data.
-    const uint32_t src_cb_addr = src_cb.get_write_ptr();
-    constexpr DataFormat src_data_format = get_dataformat(src_cb_idx);
+    const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
+    constexpr DataFormat src_data_format = get_dataformat(src_dfb_idx);
 
     // CB for output data.
-    const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
+    const uint32_t dst_dfb_addr = dst_dfb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();
     // C++ type representation of the src/dst data formats
@@ -106,9 +106,9 @@ void kernel_main() {
         face_height_rem,
         face_width_rem,
         src_data_format,
-        src_cb_addr);
+        src_dfb_addr);
 
-    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements);
+    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_dfb_addr, output_page_elements);
 
     // Iterate over the initial dimensions combined together
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {
@@ -133,7 +133,7 @@ void kernel_main() {
                 const uint32_t src_tile_id = outer_index * inner_size + i * input_width + j;
 
                 // Fetch the next tile
-                noc.async_read(s_src, src_cb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+                noc.async_read(s_src, src_dfb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
 
                 uint32_t tile_rows_processed = 0;

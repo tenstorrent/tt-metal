@@ -108,11 +108,14 @@ std::array<uint32_t, N> from_id(int32_t id, const std::array<uint32_t, N>& dims)
     return coord;
 }
 
+// Reads N shape extents starting at vararg index C. The per-dimension shape blocks have no
+// stable per-element names (their count varies with tensor rank across instantiations), so they
+// are delivered as runtime varargs and read positionally.
 template <uint32_t N>
 std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
     std::array<uint32_t, N> ret{};
     for (uint32_t i = C; i < C + N; ++i) {
-        ret[i - C] = get_arg_val<uint32_t>(i);
+        ret[i - C] = get_vararg(i);
     }
 
     return ret;

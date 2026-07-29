@@ -1379,18 +1379,23 @@ class ttMLA:
 
         # sparse_sdpa requires per-chip heads H % 32 == 0 and H >= 32. When the TP head shard is too
         # thin (e.g. GLM's 64 heads at tp=4 → 16), transpose the TP sharding axis from heads to sequence
-        # for the duration of the attention: all-gather q's heads over TP (each chip regains all H heads),
-        # then re-shard the sequence over TP so every chip attends a DISTINCT seq slice in parallel at full
-        # H. After the op we invert it (gather seq, re-shard heads) to restore the head-sharded layout the
-        # wkv_b2 / o_proj epilogue expects. No padded/wasted heads; tp=1 and already-fat shards are untouched.
+        # with one 2D-fabric all-to-all. Each chip sends only its destination sequence quarter and receives
+        # all head quarters for that sequence quarter. We invert the redistribution after sparse_sdpa to
+        # restore the head-sharded layout expected by the epilogue. No replicated intermediate or wasted
+        # network traffic; tp=1 and already-fat shards are untouched.
         # The SP indexer emits S/sp indices; we split them over TP below to match the resharded q rows.
         transpose_head_to_seq = self._needs_head_to_seq_reshard
 
         q_seq_sharded = q
         if transpose_head_to_seq:
-            q_all_heads = self._all_gather(q, dim=1, cluster_axis=self.tp_axis)  # [1, H, S/sp, 576] repl on TP
-            q_seq_sharded = ttnn.mesh_partition(q_all_heads, dim=2, cluster_axis=self.tp_axis)  # [1,H,S/(sp·tp),576]
-            ttnn.deallocate(q_all_heads)
+            q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
+                q,
+                in_dim=1,
+                out_dim=2,
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=self.tp_axis,
+            )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
         q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
         if q_seq_sharded is not q:
@@ -1430,12 +1435,18 @@ class ttMLA:
         ttnn.deallocate(out)
 
         if transpose_head_to_seq:
-            # Invert the transpose: gather the per-TP seq slices back to S/sp, then re-shard heads onto TP
-            # so the result matches the head-sharded [1, H/tp, S/sp, v_dim] the epilogue consumes.
-            out_all_heads = self._all_gather(ret, dim=2, cluster_axis=self.tp_axis)  # [1, H, S/sp, v_dim] repl on TP
+            # Invert the redistribution so the result matches the head-sharded
+            # [1, H/tp, S/sp, v_dim] consumed by the epilogue.
+            head_sharded = ttnn.experimental.all_to_all_async_generic(
+                ret,
+                in_dim=2,
+                out_dim=1,
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=self.tp_axis,
+            )
             ttnn.deallocate(ret)
-            ret = ttnn.mesh_partition(out_all_heads, dim=1, cluster_axis=self.tp_axis)  # [1, H/tp, S/sp, v_dim]
-            ttnn.deallocate(out_all_heads)
+            ret = head_sharded
         return ret
 
     def _gather_kvpe_prefix(
