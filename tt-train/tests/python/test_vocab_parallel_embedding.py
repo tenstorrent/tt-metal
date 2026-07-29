@@ -208,6 +208,29 @@ class TestVocabParallelEmbedding:
         with expect_error(ValueError, "must be divisible by the tensor-parallel"):
             VocabParallelEmbedding(self.tp * 32 + 1, self.DIM, axis_name="tp")
 
+    def test_rejects_weight_init_that_tile_pads_the_shard(self, expect_error):
+        """A per-device ``weight_init`` may round the shard up to a tile boundary.
+
+        ``num_embeddings`` divisible by ``tp_size`` is not enough — the shard itself
+        has to be a multiple of 32, or the allocated rows outnumber the rows the
+        ownership offsets assume and every rank after the first reads shifted rows.
+        Constructing must fail rather than silently mis-index.
+        """
+        # vocab % 32 == 0 and vocab % tp == 0, but (vocab / tp) % 32 != 0.
+        # 32 * (tp + 1) gives this for every tp that divides 32: tp + 1 is never a
+        # multiple of tp, so vocab / tp = 32 * (tp + 1) / tp is not a multiple of 32.
+        vocab = 32 * (self.tp + 1)
+        if vocab % self.tp or (vocab // self.tp) % 32 == 0:
+            pytest.skip(f"no misaligned vocab constructed for tp={self.tp}")
+
+        def per_device_tile_padded_init(shape, mapper=None):
+            rows = shape[2] // self.tp
+            padded = (1, 1, ((rows + 31) // 32) * 32, shape[3])
+            return ttml.autograd.create_tensor(ttnn.empty(list(padded), ttnn.bfloat16, ttnn.TILE_LAYOUT, _device()))
+
+        with expect_error(ValueError, "rows per device but ownership offsets assume"):
+            VocabParallelEmbedding(vocab, self.DIM, weight_init=per_device_tile_padded_init, axis_name="tp")
+
     def test_forward_rejects_tp_sharded_ids(self, expect_error):
         vpe = VocabParallelEmbedding(128, self.DIM, axis_name="tp")
         # ids split along seq_len across the tp axis => not replicated on tp.

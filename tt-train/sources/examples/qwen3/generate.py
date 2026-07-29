@@ -286,14 +286,11 @@ def generate_ttml(
     per_device_batch = batch_size // dp_size if is_dp else batch_size
 
     orig_vocab = config.vocab_size
-    padded_vocab = ((orig_vocab + 31) // 32) * 32
 
     past_kv = KVCache(config.num_hidden_layers, max_seq_len) if kv_cache else None
     causal_mask = None if kv_cache else _causal_mask(max_seq_len, device)
 
     logits_mask = None
-    if not collect_logits:
-        logits_mask = _sample_logits_mask(orig_vocab, padded_vocab, device)
 
     current_tokens = [list(pt) for pt in all_prompt_tokens]
     generated = [[] for _ in range(batch_size)]
@@ -340,6 +337,9 @@ def generate_ttml(
                 logits_lists,
             )
         else:
+            if step == 0:
+                # logits is post-all_gather here, so dim 3 is the full padded vocab.
+                logits_mask = _sample_logits_mask(orig_vocab, int(logits.shape()[3]), device)
             tokens = _sample_on_device(
                 logits,
                 pred_positions,

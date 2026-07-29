@@ -53,7 +53,6 @@ does this) so the ``"tp"`` axis is registered by name — the ``ttml.modules``
 parallel embeddings look their cluster axis up by name, not by index.
 """
 
-from math import lcm
 from typing import Optional
 import torch
 from tqdm.auto import tqdm
@@ -94,14 +93,15 @@ def tp_padded_vocab_size(vocab_size):
     """Pad the vocab so each TP shard is whole *and* tile-aligned.
 
     ColumnParallelLinear and VocabParallelEmbedding both shard dim 2 across the
-    TP axis, so the padded size has to be divisible by ``tp_size``; the shards
-    then also have to be multiples of 32 for the tile layout. ``lcm(32,
-    tp_size)`` satisfies both (same formula as ttml.models.llama). The trailing
-    padded rows stay on device and are absorbed by
+    TP axis, so the padded size has to be divisible by ``tp_size`` *and* every
+    resulting shard has to be a multiple of 32 for the tile layout — that is,
+    the padded size must be a multiple of ``32 * tp_size``.
+
+    The trailing padded rows stay on device and are absorbed by
     ``vocab_parallel_cross_entropy_loss``, so ``config.vocab_size`` itself is
     free to be arbitrary.
     """
-    align = lcm(32, ttml.mesh().axis_size("tp"))
+    align = 32 * ttml.mesh().axis_size("tp")
     return ((vocab_size + align - 1) // align) * align
 
 
