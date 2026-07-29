@@ -15,10 +15,9 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// One data movement the caller is asking for: take `input_tokens_per_movement` tokens starting at
-// `in_base_token` of `src`'s input region, and fill `output_tokens_per_movement` tokens starting at
-// `out_base_token` of `dst`'s output region with them, cycling the inputs (output token t carries input
-// token t mod input_tokens_per_movement).
+// One data movement the caller is asking for: copy `tokens_per_movement` tokens starting at
+// `in_base_token` of `src`'s input region to `tokens_per_movement` tokens starting at `out_base_token` of
+// `dst`'s output region, 1:1 and in order.
 //
 // This is the op's contract, and it is deliberately the WHOLE contract: the caller says what moves
 // where, and nothing about how. How many cores run it, which eth core each one owns, which producer
@@ -59,10 +58,11 @@ inline std::string movement_coord_str(const std::vector<uint32_t>& c) {
 //
 // The caller supplies an input region, an output region, and a list of movements between them. The op
 // places one producer kernel per fabric eth core (num_links toward each `axis` neighbour, both
-// directions, so 2 * num_links per device), assigns each of that device's movements to a producer whose
-// cable reaches the movement's `dst`, and each producer then prefills its L1 source ring from its own
-// input region and writes its output region straight to the peer chip's DRAM, one fabric packet per
-// token.
+// directions, so 2 * num_links per device) plus a reader kernel beside it on the same core, and assigns
+// each of that device's movements to a producer whose cable reaches the movement's `dst`. The reader
+// streams the movement's tokens out of DRAM into a `num_l1_slots`-deep L1 ring over NOC_0 while the
+// producer drains that ring to the peer chip's DRAM over NOC_1, one fabric packet per token. The token
+// count is the caller's and is NOT bounded by L1.
 //
 // There is no receiver kernel and no application-level credit loop: the eth channel's own sender-slot
 // backpressure is the only throttle, which is what lets this op sit at ~100% of the fabric's
@@ -73,13 +73,17 @@ inline std::string movement_coord_str(const std::vector<uint32_t>& c) {
 struct CombineFabric2dParams {
     ttnn::MeshDevice* device = nullptr;
     uint32_t num_links = 2;
-    uint32_t input_tokens_per_movement = 32;    // also the depth of a producer's L1 source ring
-    uint32_t output_tokens_per_movement = 100;  // packets one movement sends; sets the traffic
-    uint32_t token_size_bytes = 14336;          // 7168 bf16 elements = one token = one fabric packet
-    uint32_t axis = 0;                          // mesh axis along which the neighbours are chosen
-    // Fine-grained stall attribution in the producer (wait-for-slot / issue buckets). Off by default:
-    // it costs ~2 wall-clock register reads per token, which is a few percent of the very number being
-    // measured. Turn it on to explain a result, off to quote one.
+    uint32_t tokens_per_movement = 100;  // tokens one movement copies; sets the traffic
+    uint32_t token_size_bytes = 14336;   // 7168 bf16 elements = one token = one fabric packet
+    uint32_t axis = 0;                   // mesh axis along which the neighbours are chosen
+    // Depth of the L1 ring between the reader and the producer, in tokens. Purely an implementation
+    // tuning knob — it bounds nothing the caller can observe, and accuracy holds for any value >= 2.
+    // Slots are claimed and released in batches of num_l1_slots / 2, so this also sets how much of the
+    // per-batch bookkeeping is amortised away.
+    uint32_t num_l1_slots = 8;
+    // Fine-grained stall attribution in the producer (eth-slot / issue / ring-wait buckets). Off by
+    // default: it costs a few wall-clock register reads per token, which is a few percent of the very
+    // number being measured. Turn it on to explain a result, off to quote one.
     uint32_t stall_telemetry = 0;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     // Every movement across the whole mesh, in any order. The op picks out the ones whose `src` is the
@@ -89,10 +93,10 @@ struct CombineFabric2dParams {
     static constexpr auto attribute_names = std::forward_as_tuple(
         "device",
         "num_links",
-        "input_tokens_per_movement",
-        "output_tokens_per_movement",
+        "tokens_per_movement",
         "token_size_bytes",
         "axis",
+        "num_l1_slots",
         "stall_telemetry",
         "topology",
         "movements");
@@ -100,10 +104,10 @@ struct CombineFabric2dParams {
         return std::forward_as_tuple(
             device,
             num_links,
-            input_tokens_per_movement,
-            output_tokens_per_movement,
+            tokens_per_movement,
             token_size_bytes,
             axis,
+            num_l1_slots,
             stall_telemetry,
             topology,
             movements);

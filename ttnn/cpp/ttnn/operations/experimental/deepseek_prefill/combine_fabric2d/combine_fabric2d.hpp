@@ -25,10 +25,10 @@ ttnn::Tensor combine_fabric2d(
     const ttnn::Tensor& output,
     const std::vector<CombineFabric2dMovement>& movements,
     uint32_t num_links = 2,
-    uint32_t input_tokens_per_movement = 32,
-    uint32_t output_tokens_per_movement = 100,
+    uint32_t tokens_per_movement = 100,
     uint32_t token_size_bytes = 14336,
     uint32_t axis = 0,
+    uint32_t num_l1_slots = 8,
     uint32_t stall_telemetry = 0,
     std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
 

@@ -7,6 +7,8 @@
 #include "combine_fabric2d_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include <ttnn/global_semaphore.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
@@ -44,8 +46,10 @@ struct CombineFabric2dWorkerTelemetry {
     bool valid = false;
     uint32_t tokens_sent = 0;
     uint32_t token_size_bytes = 0;
-    uint32_t num_in_tokens = 0;
-    uint64_t t_first_send = 0;  // wall clock when the first token was handed to the fabric
+    uint32_t num_l1_slots = 0;
+    uint32_t batch = 0;
+    uint64_t t_start = 0;       // wall clock at the reader's FIRST DRAM read: the effective-BW window opens
+    uint64_t t_first_send = 0;  // ... when the first token was handed to the fabric
     uint64_t t_last_send = 0;   // ... the last token
     uint64_t t_drained = 0;     // ... when the EDM drain proved every payload packet reached the far chip.
                                 // An upper bound on the transfer where t_last_send is the lower one.
@@ -60,6 +64,7 @@ struct CombineFabric2dWorkerTelemetry {
     uint32_t edm_slots = 0;         // EDM sender-channel depth (packets in flight it can absorb)
     uint64_t wait_slot_cycles = 0;  // waiting for an EDM slot => eth/eRISC-limited
     uint64_t issue_cycles = 0;      // building + issuing a payload packet
+    uint64_t ring_wait_cycles = 0;  // waiting for the reader to fill the ring => DRAM-read-limited
 };
 
 struct CombineFabric2dTelemetry {
@@ -74,8 +79,8 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
 struct CombineFabric2dProgramFactory {
     // Contract-2 declarative WorkloadDescriptor entry point. Builds one ProgramDescriptor per mesh
     // coordinate: each chip sends to its own neighbor, so the compile-time args are coord-dependent and
-    // cannot be replicated. No workload-scope semaphores are needed — the op has no application-level
-    // credit loop, only the EDM's own sender-slot backpressure.
+    // cannot be replicated. Allocates two workload-scope GlobalSemaphores for the reader/producer ring
+    // handshake, which need to be zero at launch.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const CombineFabric2dParams& operation_attributes,
         const CombineFabric2dInputs& tensor_args,
