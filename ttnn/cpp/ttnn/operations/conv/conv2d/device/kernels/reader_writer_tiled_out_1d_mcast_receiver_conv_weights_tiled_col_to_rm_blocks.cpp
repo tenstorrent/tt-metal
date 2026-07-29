@@ -74,7 +74,6 @@ void kernel_main() {
     // mcast args
     const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
-    i += 2;  // Runtime semaphore ids remain for argument-layout compatibility.
     DataflowBuffer dfb_weight_obj(cb_id_weight);
     DataflowBuffer dfb_bias_obj(bias_cb_id);
     DataflowBuffer dfb_act_second_obj(cb_id_act_second_reader);
@@ -207,6 +206,4 @@ void kernel_main() {
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
         }
     }  // out_num_blocks_h
-
-    noc.async_write_barrier();
 }

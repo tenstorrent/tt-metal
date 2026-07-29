@@ -78,7 +78,6 @@ void kernel_main() {
     constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
     constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(mcast_sem_args_base);
     constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(mcast_sem_args_base + 1);
-    constexpr uint32_t weights_mcast_num_dests_ct = get_compile_time_arg_val(mcast_sem_args_base + 2);
 
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
@@ -90,11 +89,9 @@ void kernel_main() {
     // mcast args
     const McastRect mcast_rect = {
         get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++)};
-    i += 2;  // Runtime destination counts remain for argument-layout compatibility.
 
     // Experimental API objects
     Noc noc;
-    i += 2;  // Runtime semaphore ids remain for argument-layout compatibility.
     DataflowBuffer dfb_weight_obj(cb_id_weight);
     DataflowBuffer dfb_bias_obj(bias_cb_id);
     DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
@@ -144,8 +141,7 @@ void kernel_main() {
         weights_pipe(
             noc,
             dataflow_kernel_lib::McastRect<>{
-                mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end},
-            weights_mcast_num_dests_ct);
+                mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end});
 #endif
 
     // read in bias if enabled (done only once for all batches)
@@ -301,6 +297,4 @@ void kernel_main() {
         // Increment weight start tile id for next block in width dim
         weight_start_tile_id += weight_next_block_stride_w;
     }  // out_num_blocks_w
-
-    noc.async_write_barrier();
 }

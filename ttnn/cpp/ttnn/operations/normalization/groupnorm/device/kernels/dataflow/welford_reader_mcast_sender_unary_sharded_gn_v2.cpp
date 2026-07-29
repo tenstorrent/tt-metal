@@ -11,6 +11,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
@@ -105,9 +106,12 @@ void kernel_main() {
     }
 
     Noc noc;
+
+    const dataflow_kernel_lib::McastRect<> mid_rect{
+        mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y};
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
-    reduce_sender_sem.set(VALID);
+    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_semaphore_id, /*PRE_HANDSHAKE=*/false> mid_pipe(
+        noc, mid_rect);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
@@ -183,10 +187,12 @@ void kernel_main() {
             p_global_vars[0] = local_result.variance;
 
             if constexpr (num_mcast_cores > 1) {
-                // wait for all other cores data ready
+                // Receiver acknowledgements publish their global mean/variance slots. Consume
+                // the gate before reading those remote source cells.
+                // The acknowledgement counter protects the following remote source-L1 reads.
+                // The multicast helper is intentionally no-handshake for this phase.
                 reduce_receiver_sem.wait(num_mcast_cores - 1);
                 reduce_receiver_sem.set(0);
-
                 UnicastEndpoint remote_ep;
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {
                     noc.async_read<NocOptions::DEFAULT, NOC_L1_READ_ALIGNMENT_BYTES>(
@@ -219,74 +225,31 @@ void kernel_main() {
 
             // mcast to other cores
             if constexpr (num_mcast_cores > 1) {
-                MulticastEndpoint mcast_dst;
-                noc.async_write_multicast(
-                    CoreLocalMem<uint32_t>(global_means_ptr),
-                    mcast_dst,
-                    2 * single_tile_size_bytes,
-                    num_mcast_cores_mid_group,
-                    {},
-                    {.noc_x_start = mcast_dest_noc_start_x,
-                     .noc_y_start = mcast_dest_noc_start_y,
-                     .noc_x_end = mcast_dest_noc_end_x,
-                     .noc_y_end = mcast_dest_noc_end_y,
-                     .addr = global_means_ptr},
-                    true);
-                reduce_sender_sem.set_multicast(
-                    noc,
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y,
-                    num_mcast_cores_mid_group,
-                    false);
+                mid_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
 
                 if (has_mcast_first_group) {
-                    noc.async_write_multicast(
-                        CoreLocalMem<uint32_t>(global_means_ptr),
-                        mcast_dst,
-                        2 * single_tile_size_bytes,
-                        num_mcast_cores_first_group,
-                        {},
-                        {.noc_x_start = mcast_first_group_dest_noc_start_x,
-                         .noc_y_start = mcast_first_group_dest_noc_start_y,
-                         .noc_x_end = mcast_first_group_dest_noc_end_x,
-                         .noc_y_end = mcast_first_group_dest_noc_end_y,
-                         .addr = global_means_ptr},
-                        true);
-                    reduce_sender_sem.set_multicast(
-                        noc,
-                        mcast_first_group_dest_noc_start_x,
-                        mcast_first_group_dest_noc_start_y,
-                        mcast_first_group_dest_noc_end_x,
-                        mcast_first_group_dest_noc_end_y,
-                        num_mcast_cores_first_group,
-                        false);
+                    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_semaphore_id, /*PRE_HANDSHAKE=*/false>
+                        first_pipe(
+                            noc,
+                            dataflow_kernel_lib::McastRect<>{
+                                mcast_first_group_dest_noc_start_x,
+                                mcast_first_group_dest_noc_start_y,
+                                mcast_first_group_dest_noc_end_x,
+                                mcast_first_group_dest_noc_end_y});
+                    first_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
                 }
 
                 if (has_mcast_last_group) {
-                    noc.async_write_multicast(
-                        CoreLocalMem<uint32_t>(global_means_ptr),
-                        mcast_dst,
-                        2 * single_tile_size_bytes,
-                        num_mcast_cores_last_group,
-                        {},
-                        {.noc_x_start = mcast_last_group_dest_noc_start_x,
-                         .noc_y_start = mcast_last_group_dest_noc_start_y,
-                         .noc_x_end = mcast_last_group_dest_noc_end_x,
-                         .noc_y_end = mcast_last_group_dest_noc_end_y,
-                         .addr = global_means_ptr},
-                        true);
-                    reduce_sender_sem.set_multicast(
-                        noc,
-                        mcast_last_group_dest_noc_start_x,
-                        mcast_last_group_dest_noc_start_y,
-                        mcast_last_group_dest_noc_end_x,
-                        mcast_last_group_dest_noc_end_y,
-                        num_mcast_cores_last_group,
-                        false);
+                    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_semaphore_id, /*PRE_HANDSHAKE=*/false>
+                        last_pipe(
+                            noc,
+                            dataflow_kernel_lib::McastRect<>{
+                                mcast_last_group_dest_noc_start_x,
+                                mcast_last_group_dest_noc_start_y,
+                                mcast_last_group_dest_noc_end_x,
+                                mcast_last_group_dest_noc_end_y});
+                    last_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
                 }
-                noc.async_write_barrier();
             }
 
             local_means_ptr += local_stride_per_group;
