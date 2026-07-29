@@ -21,23 +21,18 @@ import ttnn
 from conftest import requires_hybrid_allocator
 
 
-def _width_sharded_config(grid_start, grid_end, shard_shape, per_core):
-    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*grid_start), ttnn.CoreCoord(*grid_end))])
-    mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(crs, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    if per_core:
-        mem_config.experimental_set_per_core_allocation(True)
-    return mem_config
+# One row of cores, width-sharded. Spelled once so the grid, the shard width and the tensor
+# width cannot drift apart: tensor width must be shard_width * NUM_CORES for the shard to tile.
+NUM_CORES = 8
+SHARD_HEIGHT, SHARD_WIDTH = 512, 32
+GRID_START, GRID_END = (0, 0), (NUM_CORES - 1, 0)
 
 
 @requires_hybrid_allocator
-def test_op_rejects_per_core_input(per_core_mesh_device, expect_error):
+def test_op_rejects_per_core_input(per_core_mesh_device, per_core_width_sharded_config, expect_error):
     """Handing a per-core tensor to an op that has not opted in must fail loudly."""
-    mem_config = _width_sharded_config((0, 0), (7, 0), (512, 32), per_core=True)
-    torch_input = torch.randn(512, 32 * 8, dtype=torch.bfloat16)
+    mem_config = per_core_width_sharded_config(GRID_START, GRID_END, (SHARD_HEIGHT, SHARD_WIDTH))
+    torch_input = torch.randn(SHARD_HEIGHT, SHARD_WIDTH * NUM_CORES, dtype=torch.bfloat16)
 
     row_major = ttnn.from_torch(
         torch_input,
@@ -54,10 +49,10 @@ def test_op_rejects_per_core_input(per_core_mesh_device, expect_error):
 
 
 @requires_hybrid_allocator
-def test_lockstep_input_unaffected(per_core_mesh_device):
+def test_lockstep_input_unaffected(per_core_mesh_device, lockstep_width_sharded_config):
     """The check must be inert for ordinary lockstep tensors."""
-    lockstep_config = _width_sharded_config((0, 0), (7, 0), (512, 32), per_core=False)
-    torch_input = torch.randn(512, 32 * 8, dtype=torch.bfloat16)
+    lockstep_config = lockstep_width_sharded_config(GRID_START, GRID_END, (SHARD_HEIGHT, SHARD_WIDTH))
+    torch_input = torch.randn(SHARD_HEIGHT, SHARD_WIDTH * NUM_CORES, dtype=torch.bfloat16)
 
     row_major = ttnn.from_torch(
         torch_input,
