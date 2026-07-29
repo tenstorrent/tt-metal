@@ -26,7 +26,7 @@ from models.tt_dit.utils.ltx import (
     print_ltx_timing_table,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params, ring_params, ring_params_8k
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
@@ -34,7 +34,11 @@ from models.tt_dit.utils.vbench import assert_vbench_quality
 # l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
 # whose sharding/config tensors allocate from the dedicated L1_SMALL pool; it defaults to 0, which
 # OOMs the vocoder. 32 KB matches the audio component tests.
-ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+# NOTE: base the traced ring config on ring_params_8k (8192-byte fabric payload) rather than the
+# default payload: the strided AGMM registry + IN0_SUB_CHUNKS=2 banded path are tuned for 8k
+# (num_tiles_to_write_per_packet=4), which is where the fast block times were measured. Using the
+# default payload leaves the strided ops running a smaller packet and gives a worse e2e time.
+ring_trace_params = {**ring_params_8k, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 

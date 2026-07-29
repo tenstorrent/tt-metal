@@ -178,6 +178,28 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="xlarge_9472_3456_5120_y7_cwimb1_rs3_fullgrid",
         ),
+        # LTX video FFN ff2 (RowParallel reduce-scatter): per-device [4864,4096]@[4096,4096]
+        # (K = ffn_dim/TP = 16384/4 = 4096, N = dim = 4096), HiFi2 (impl default).
+        # LTX has no fused_mmrs_configs entry for this shape (falls to the (8,7) default), which is a
+        # too-small grid. Start from the Wan-style (12,8)=96-core MM grid with a plain 8/8/8 blocking
+        # (subblock 2x2), leaving rows 8-9 for the RS workers; tune from here.
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=4864,
+                K=4096,
+                N=4096,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=2,
+                subblock_w=2,
+                num_workers_per_link=3,
+            ),
+            id="ltx_ff2_4864_4096_4096_x12_y8_b888",
+        ),
     ],
 )
 @pytest.mark.parametrize(

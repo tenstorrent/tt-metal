@@ -52,7 +52,7 @@ from ...layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ...parallel.manager import CCLManager
 from ...utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ...utils.tensor import bf16_tensor, float32_tensor, from_torch
-from ...utils.test import line_params, ring_params
+from ...utils.test import line_params, ring_params, ring_params_4k, ring_params_8k
 
 WAN = "wan"
 LTX = "ltx"
@@ -147,8 +147,10 @@ def _ltx_rows(kind: str, tp: int, stage: int = 0) -> int:
         return {(1, 1): 2432, (1, 2): 9696, (2, 1): 2432, (2, 2): 9696, (4, 1): 1216, (4, 2): 4864}[(tp, stage)]
     if kind == "audio":  # audio N_local (stage-independent)
         return 64 if tp == 2 else 32
-    if kind == "text":  # Gemma prompt length L, replicated across SP
-        return 1024
+    if kind == "text":  # text-cross K/V: prompt length L, replicated across SP (kv_replicated=True),
+        # so it's L rows/device (NOT SP-divided). Matches the LTX transformer test's PROMPT_LEN=32
+        # -> 1 tile -> 2 cores in-model (was 1024, which ran at 34 cores and did not match the model).
+        return 32
     if kind == "audio_full":  # A->V K: audio ctx SP-gathered to full
         return 256
     raise ValueError(kind)
@@ -511,6 +513,12 @@ def _trace_and_time(submesh, run_ops, *, num_iters: int) -> float:
 # a 1x8 LINE submesh).
 _DP_GAL = {**line_params, "trace_region_size": 131072}
 _DP_GAL_RING = {**ring_params, "trace_region_size": 131072}
+# Ring device_params with an enlarged fabric-router payload (8192-B = 64 128-B sticks/packet,
+# 4096-B = 32 sticks/packet), matching ring_bh_4x8sp1tp0_8k / _4k in the LTX transformer test
+# (models/tt_dit/tests/models/ltx/test_transformer_ltx.py). Used to profile the fused distributed
+# RMSNorm AG path in isolation at the LTX stage_2 payloads.
+_DP_GAL_RING_8K = {**ring_params_8k, "trace_region_size": 131072}
+_DP_GAL_RING_4K = {**ring_params_4k, "trace_region_size": 131072}
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +543,13 @@ _CORR_PARAMS = [
     # FLUX: TP=4 ring (4-axis) and TP=8 ring (full-mesh 8-axis); each runs PHN False+True.
     ((4, 8), _DP_GAL_RING, FLUX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
     ((4, 8), _DP_GAL_RING, FLUX, 8, ttnn.Topology.Ring, GALAXY_LINKS, 1, True),
+    # LTX TP=4 ring on the 4-axis at the production BH 4x8 fabric payloads (8192-B / 4096-B router
+    # config; see ring_bh_4x8sp1tp0_8k / _4k in test_transformer_ltx.py). Same shape set as
+    # ltx_tp4_ring, but exercises the stage_2 AG-path norms at the 8k/4k payload under profile:
+    # video block/self-attn (dim=4096, N=4864/device) and the a2v videoQ norm (audio dim=2048,
+    # N=4864/device). Filter with CORR_ONLY=tp4_v_block_s2,tp4_a2v_videoQ_s2 to isolate them.
+    ((4, 8), _DP_GAL_RING_8K, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
+    ((4, 8), _DP_GAL_RING_4K, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
 ]
 _CORR_IDS = [
     "wan_tp4",
@@ -549,6 +564,8 @@ _CORR_IDS = [
     "ltx_tp4_ring",
     "flux_tp4_ring",
     "flux_tp8_ring",
+    "ltx_tp4_ring_8k",
+    "ltx_tp4_ring_4k",
 ]
 
 
@@ -602,14 +619,34 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
 
             ndiff, maxdelta, worst_oi = 0, 0.0, None
             _det_reps = int(_os.getenv("CORR_DET_REPEATS", "9"))  # extra fused runs after out0
-            for _j in range(_det_reps):  # same input -> must be bit-exact
-                oi = _fused(_j + 1)
-                d = (oi - out0).abs().max().item()
-                if d > 0.0:
-                    ndiff += 1
-                    if d > maxdelta:
-                        maxdelta, worst_oi = d, oi.clone()
-                del oi
+            if _os.getenv("CORR_WARM_EAGER") == "1":
+                # Warm-eager timing: fire the reps back-to-back ON-DEVICE (no per-rep _gather/
+                # to_torch readback) so the fabric stays hot across launches (mirrors trace replay /
+                # in-model), THEN a single sync and gather afterward for the determinism diff.
+                # Without this the per-rep readback idles the fabric ~90ms -> every rep is fabric-cold.
+                def _fused_dev(k, _inp=inp, _sems=sems, _pobs=pobs, _cfg=cfg):
+                    s = _sems[k % _PINGPONG]
+                    p = _make_pob(_inp, submesh, _cfg, links, tp_axis) if fresh_pob else _pobs[k % _PINGPONG]
+                    return _run_fused(_inp, submesh, s, _cfg, topology, tp_axis, p, op_override)
+
+                devs = [_fused_dev(_j + 1) for _j in range(_det_reps)]
+                ttnn.synchronize_device(submesh)
+                for dv in devs:
+                    oi = _gather(dv, tp_axis)
+                    d = (oi - out0).abs().max().item()
+                    if d > 0.0:
+                        ndiff += 1
+                        if d > maxdelta:
+                            maxdelta, worst_oi = d, oi.clone()
+            else:
+                for _j in range(_det_reps):  # same input -> must be bit-exact
+                    oi = _fused(_j + 1)
+                    d = (oi - out0).abs().max().item()
+                    if d > 0.0:
+                        ndiff += 1
+                        if d > maxdelta:
+                            maxdelta, worst_oi = d, oi.clone()
+                    del oi
             det = ndiff == 0
 
             if ndiff and _os.getenv("CORR_LOCALIZE") == "1":
