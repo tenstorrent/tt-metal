@@ -1029,6 +1029,7 @@ class TTVibeVoiceLM:
         start_pos: int = 0,
         kv_cache: Optional[KVCache] = None,
         return_last_hidden: bool = False,
+        compute_logits: bool = True,
     ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
         """Run transformer forward pass.
 
@@ -1042,6 +1043,7 @@ class TTVibeVoiceLM:
             (logits [B, 1, S, vocab], last_hidden or None)
         """
         S = inputs_embeds.shape[2]
+        B = inputs_embeds.shape[0]
         cfg = self.cfg
 
         # Hoist RoPE cos/sin slice once per forward (same window for all 28 layers).
@@ -1072,9 +1074,24 @@ class TTVibeVoiceLM:
 
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
 
+        # Non-final prefill chunks: their logits are discarded by the sampler, so skip the
+        # vocab-151936 matmul entirely (~1.7 ms per intermediate chunk).
+        if not compute_logits:
+            return None, last_hidden
+
+        # Only the LAST position's logits are consumed (greedy argmax of the next token),
+        # so for prefill (S>1) run lm_head on just the last row — bit-exact, and cuts the
+        # S×1536×151936 matmul's M from S to 1 (1752→1215 µs; the 467 MB weight read is the
+        # remaining floor).  last_hidden stays full-S.
+        x_head = (
+            x
+            if S == 1
+            else ttnn.slice(x, [0, 0, S - 1, 0], [B, 1, S, x.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+
         # LM head projection → logits
         logits = ttnn.linear(
-            x,
+            x_head,
             self.w.lm_head_w,
             compute_kernel_config=_HIFI4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1503,6 +1520,7 @@ class TTVibeVoiceLM:
                 start_pos=start,
                 kv_cache=kv_cache,
                 return_last_hidden=return_last_hidden,
+                compute_logits=(end >= S),  # only the final chunk's logits are consumed
             )
         return logits, last_hidden
 
