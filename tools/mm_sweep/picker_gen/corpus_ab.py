@@ -18,6 +18,7 @@ ROOT = os.environ.get("TT_METAL_HOME", os.path.abspath(f"{HERE}/../.."))
 WORKER = f"{HERE}/corpus_ab_worker.py"
 CORPUS = f"{HERE}/../regime_a_current_perf.json"
 OUT = f"{HERE}/results_v2/corpus_ab.jsonl"
+OUTOVR = None
 MASKS = "0,1024"
 RELAUNCHES = 2
 FILTER = None
@@ -31,8 +32,12 @@ while args:
         FILTER = args.pop(0)
     elif a == "--masks":
         MASKS = args.pop(0)
+    elif a == "--out":
+        OUTOVR = args.pop(0)
 
 MASK_LIST = [int(x) for x in MASKS.split(",")]
+if OUTOVR:
+    OUT = f"{HERE}/results_v2/{OUTOVR}"
 
 
 def done_keys():
@@ -144,7 +149,7 @@ def summarize():
         ds, bs, vs = [], [], []
         for r in rs:
             b = r["modes"].get("0", {}).get("median_us")
-            v = r["modes"].get("1024", {}).get("median_us")
+            v = r["modes"].get(str(MASK_LIST[1]), {}).get("median_us")
             if b and v:
                 ds.append(100 * (b - v) / b)
                 bs.append(b)
@@ -154,7 +159,7 @@ def summarize():
         d = statistics.median(ds)
         ad = any(r.get("balance", {}).get("adopt") for r in rs)
         adopted += 1 if ad else 0
-        pc = min((r.get("rel_pcc", {}).get("1024", 1.0) for r in rs if "rel_pcc" in r), default=None)
+        pc = min((r.get("rel_pcc", {}).get(str(MASK_LIST[1]), 1.0) for r in rs if "rel_pcc" in r), default=None)
         deltas.append(d)
         (wins if d >= 2 else regs if d <= -2 else []).append((key, d))
         print(

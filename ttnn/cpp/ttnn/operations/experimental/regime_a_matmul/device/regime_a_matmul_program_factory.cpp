@@ -1215,9 +1215,20 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
 
     // ---- M-split worker PLACEMENT (Sm>1): IN1_NEAR. Overrides only P.cores[i].coord; MUST run BEFORE the ring
     // reorder so the ring order recomputes on the placed coords. No-op at Sm==1. ----
-    const bool diag_place_in1 = (diag_mask & 0x1000u) != 0u;  // bit12: in1-read-optimal placement
-    const bool diag_place_mesh = (diag_mask & 0x2000u) != 0u;  // bit13: 2D bank x slice mesh (in0-ring-optimal)
-    if (diag_place_mesh) {
+    const bool diag_place_in1 = (diag_mask & 0x1000u) != 0u;   // bit12: in1-read-optimal placement (diag)
+    const bool diag_place_mesh = (diag_mask & 0x2000u) != 0u;  // bit13: force the mesh on
+    const bool diag_mesh_off = (diag_mask & 0x4000u) != 0u;    // bit14: force the mesh off (A/B the default)
+    // PRODUCTION GATE for the 2D mesh placement. Adopt only when the mesh FILLS the grid: preaders >= 10
+    // puts at least one slice in every grid row, so cores spread over the whole 11x10 array. Below that the
+    // mesh packs all 8*preaders cores into rows 0..preaders-1 and concentrates every DRAM path into a corner -
+    // measured -48% to -89% at preaders<=5 and -6% to -23% at preaders 6..7. Sm>1 is excluded because M-split
+    // slaves then lose the IN1_NEAR pass and the measured results are mixed (+8.7% to -22.2%), and Pk>=4 is
+    // required for the Ns>1 case (Pk=3/Ns=4 measured neutral-to-negative).
+    // Fitted on the 63-shape corpus at deployed configs: adopts 24/63 shapes, mean +5.06%, best +14.98%,
+    // worst -1.27%; every declined shape stays byte-identical to the previous production placement.
+    const uint32_t Ns_gate = cfg.n_slices ? cfg.n_slices : 1u;
+    const bool mesh_gate = (Pk * Ns_gate >= 10u) && (Sm == 1u) && (Ns_gate == 1u || Pk >= 4u);
+    if ((diag_place_mesh || mesh_gate) && !diag_mesh_off) {
         place_mesh(P, geo, device->compute_with_storage_grid_size());
     } else if (diag_place_in1) {
         place_in1_optimal(P, device, geo, device->compute_with_storage_grid_size());

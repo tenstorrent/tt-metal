@@ -56,8 +56,11 @@ struct RegimeAMatmulParams {
     //   bit11 (2048) SKIP_IN1_READ         - drop the in1 DRAM read payload; keep CB reserve/push, rotated
     //                                       shard order, barriers, M-split forwarding, semaphores, compute
     // And one more HOST-ONLY, correctness-preserving bit (valid output, allowed on every path):
-    //   bit13 (8192) PLACE_MESH            - 2D (bank x slice) mesh: banks along x, slices along y, so a ring
-    //                                       step and a reduction step are each ONE hop in different dims
+    //   bit13 (8192) PLACE_MESH            - force the 2D (bank x slice) mesh placement ON. It is PRODUCTION
+    //                                       DEFAULT when Pk>=10 && Ns==1 && Sm==1 (see the gate in the
+    //                                       factory); this bit forces it for shapes outside the gate.
+    //   bit14 (16384) MESH_OFF             - force the mesh OFF, i.e. restore the pre-mesh placement, so the
+    //                                       shipped default can be A/B'd
     //   bit12 (4096) PLACE_IN1_OPT         - CROSS placement: put each (bank, noc) reader group in the region
     //                                       downstream of THAT endpoint on THAT NoC instead of one spiral
     //                                       around the NOC_0-optimal core (also supersedes IN1_NEAR pass 1)
