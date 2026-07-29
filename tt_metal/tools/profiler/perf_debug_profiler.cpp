@@ -461,10 +461,18 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
     pz::ProfzoneDecodeState& st = *ctx.decode[sock_idx];
     const uint32_t page_words = kPageSize / sizeof(uint32_t);
-    const uint32_t fifo_pages = sock->get_fifo_curr_size() / sock->get_page_size();
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
 
-    uint32_t np = sock->pages_available();
+    // Both of these touch the device/FIFO state and run on EVERY pass for EVERY socket, so they set the
+    // writer's loop period. They were previously outside any zone, which is how a run could show 79 ms of
+    // writer zones inside a 5,433 ms span with the time unattributable.
+    uint32_t fifo_pages;
+    uint32_t np;
+    {
+        ZoneScopedNC("sock-poll", 0x16A085);  // teal: "is there anything to read?" -- pure overhead when empty
+        fifo_pages = sock->get_fifo_curr_size() / sock->get_page_size();
+        np = sock->pages_available();
+    }
     if (np == 0) {
         return false;
     }
@@ -480,7 +488,10 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     }
     ss.iters++;
     ss.pages += np;
-    ss.buf.resize(static_cast<size_t>(np) * page_words);
+    {
+        ZoneScopedNC("buf-resize", 0xD35400);  // dark orange: with the page cap removed this can be MBs per read
+        ss.buf.resize(static_cast<size_t>(np) * page_words);
+    }
     {
         ZoneScopedNC("sock-read", 0x27AE60);  // green: pulling pages off the D2H socket (also acks the sender)
         sock->read(ss.buf.data(), np);
@@ -581,6 +592,11 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
 // data-driven batch, then wake readers once per sweep. Idle sweeps back off. Mirrors test_x280_realprof.
 void PerfDebugProfiler::writer_thread() {
     tracy::SetThreadName("x280-writer");
+    // Startup accounting: the gap between this thread entering and its FIRST successful drain is the window
+    // in which the D2H FIFO can fill unserviced -- which back-pressures relay -> reader -> worker rings and
+    // stalls every producing RISC once. Reported so it is a number rather than an inference.
+    const auto t_writer_entry = std::chrono::steady_clock::now();
+    bool first_data_seen = false;
     auto watchdog = std::chrono::steady_clock::now();
     auto backoff = std::chrono::microseconds(50);
     // Drain-to-empty on stop: stop() sets P_STOP first, so the X280 stops producing; keep reading until every
@@ -612,6 +628,16 @@ void PerfDebugProfiler::writer_thread() {
                 }
             }
         }
+        if (any && !first_data_seen) {
+            first_data_seen = true;
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_writer_entry).count();
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] writer: first data {:.2f} ms after thread start [large => the FIFO sat "
+                "unserviced and producers will have stalled once]",
+                ms);
+        }
         if (any && ring_) {
             ring_->ring.writer().wake_readers();
         }
@@ -627,8 +653,15 @@ void PerfDebugProfiler::writer_thread() {
             }
             // Every socket came back empty: the writer is STARVED waiting on the device. If this dominates
             // while the device shows no stalls, the host is comfortably ahead -- the healthy state.
-            ZoneScopedNC("sock-idle", 0x7D6608);  // dark yellow
-            std::this_thread::sleep_for(backoff);
+            if (first_data_seen) {
+                ZoneScopedNC("sock-idle", 0x7D6608);  // dark yellow: steady-state starvation (healthy)
+                std::this_thread::sleep_for(backoff);
+            } else {
+                // Distinct name: idling BEFORE any data has arrived is the startup window, not steady-state
+                // starvation, and only this one can leave the FIFO unserviced while producers fill rings.
+                ZoneScopedNC("writer-startup-idle", 0xC0392B);  // red
+                std::this_thread::sleep_for(backoff);
+            }
         }
     }
     for (auto& ctx : devices_) {
