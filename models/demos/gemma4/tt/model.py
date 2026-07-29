@@ -972,7 +972,6 @@ class Gemma4Model:
                 rope_mats=layer_rope,
                 position_idx=position_idx,
                 page_table=layer_page_table,
-                page_table=layer_page_table,
                 kv_cache=kv_cache,
                 is_decode=is_decode,
                 token_index=token_index,
@@ -1650,7 +1649,7 @@ class Gemma4Model:
             tt_embeds = ttnn.reshape(tt_embeds, (1, 1, per_user_seq_len, self.hidden_size))
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
-        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table
+        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
@@ -2014,7 +2013,6 @@ class Gemma4Model:
             token_index=token_index,
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
-            page_tables_per_layer=page_tables_per_layer,
             page_tables_per_layer=page_tables_per_layer,
         )
 

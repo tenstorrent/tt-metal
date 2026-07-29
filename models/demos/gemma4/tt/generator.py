@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 from pathlib import Path
 
 import torch
@@ -33,6 +34,73 @@ from models.tt_transformers.tt.generator import (
     _pad_or_create_page_table,
 )
 from models.tt_transformers.tt.model_config import determine_device_name
+
+# ── Vision tower weight conversion (HF -> Meta, per-block RoPE) ─────────────
+# Replicated from models/demos/gemma4/tests/unit/test_vision_attention.py so
+# the runtime does not import from tests/. Gemma-4 vision uses 2D (per-block)
+# RoPE, so q/k weights and q/k norms are interleaved per RoPE block, not across
+# the full head_dim.
+_VISION_BLOCK_PROJ_RENAMES = [
+    (".q_proj.", ".wq."),
+    (".k_proj.", ".wk."),
+    (".v_proj.", ".wv."),
+    (".o_proj.", ".wo."),
+    (".gate_proj.", ".w1."),
+    (".up_proj.", ".w3."),
+    (".down_proj.", ".w2."),
+]
+
+
+def _meta_permute_qk_weight(weight, n_heads, head_dim, ndim=2):
+    blk = head_dim // ndim
+    in_dim = weight.shape[-1]
+    weight = weight.view(n_heads, ndim, 2, blk // 2, in_dim)
+    weight = weight.transpose(2, 3)
+    return weight.reshape(n_heads * head_dim, in_dim)
+
+
+def _meta_permute_norm_weight(weight, head_dim, ndim=2):
+    blk = head_dim // ndim
+    weight = weight.view(ndim, 2, blk // 2)
+    weight = weight.transpose(1, 2)
+    return weight.reshape(head_dim)
+
+
+def _convert_vision_block_hf_to_meta(state_dict, n_heads, n_kv_heads, head_dim, ndim=2):
+    converted = {}
+    for key, tensor in state_dict.items():
+        if "q_proj.linear.weight" in key:
+            tensor = _meta_permute_qk_weight(tensor, n_heads, head_dim, ndim)
+        elif "k_proj.linear.weight" in key:
+            tensor = _meta_permute_qk_weight(tensor, n_kv_heads, head_dim, ndim)
+        elif "q_norm.weight" in key or "k_norm.weight" in key:
+            tensor = _meta_permute_norm_weight(tensor, head_dim, ndim)
+        new_key = key
+        for old, new in _VISION_BLOCK_PROJ_RENAMES:
+            new_key = new_key.replace(old, new)
+        converted[new_key] = tensor
+    # NOTE: deliberately NOT calling map_hf_to_meta_keys here — it would rename
+    # self_attn->attention and the layernorms, which the Gemma-4 vision modules
+    # do NOT expect (they keep self_attn / input_layernorm / post_*_layernorm).
+    return converted
+
+
+def _build_vision_state_dict(full_state_dict, vision_args):
+    """Extract ``model.vision_tower.*`` from the full checkpoint and convert to
+    the ``visual.*`` Meta-format keys ``VisionTower`` expects."""
+    prefix = "model.vision_tower."
+    vision_sd = {k[len(prefix) :]: v for k, v in full_state_dict.items() if k.startswith(prefix)}
+    vision_sd = standardize_hf_keys_multimodal(vision_sd)
+    vision_sd = _convert_vision_block_hf_to_meta(
+        vision_sd, vision_args.n_heads, vision_args.n_kv_heads, vision_args.head_dim
+    )
+    return {f"visual.{k}": v for k, v in vision_sd.items()}
+
+
+def _vision_encoder_seq_len(num_patches: int, max_qkv_mm_seq_len: int = 2048) -> int:
+    """Padded encoder seq length (multiple of max_qkv_mm_seq_len) >= num_patches."""
+    return ((num_patches // max_qkv_mm_seq_len) + 1) * max_qkv_mm_seq_len
+
 
 # Same 128k batched-prefill token ceiling as the shared Generator
 # (padded_batch × padded_prefill_seq_len).
@@ -1014,7 +1082,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         "supports_async_decode": False,
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, vision_tower=None, embed_vision=None, image_token_id=None, pad_token_id=None, **kwargs):
         super().__init__(*args, **kwargs)
         # Gemma4 decode already returns sampled tokens when on-device sampling is enabled.
         self.enable_split_sampling = False
@@ -1232,12 +1300,14 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         num_layers=None,
         paged_attention_config=None,
         bounded_sliding_kv_cache=False,
+        multimodal: bool = True,
+        vision_dtype=ttnn.bfloat8_b,
     ):
         tokenizer = _load_text_tokenizer(model_path)
         if not hasattr(tokenizer, "stop_tokens"):
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
 
-        model_args, model, tt_kv_cache, _ = create_tt_model(
+        model_args, model, tt_kv_cache, state_dict = create_tt_model(
             mesh_device=mesh_device,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
@@ -1257,5 +1327,334 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             has_per_layer_inputs=bool(getattr(model, "hidden_size_per_layer_input", 0)),
             bounded_sliding=bounded_sliding_kv_cache,
         )
-        generator = cls([model], [model_args], mesh_device, processor=None, tokenizer=tokenizer)
+
+        vision_tower = None
+        embed_vision = None
+        image_token_id = None
+        pad_token_id = None
+        if multimodal:
+            hf_config = Gemma4ModelArgs.load_hf_config(model_path)
+            image_token_id = getattr(hf_config, "image_token_id", None)
+            if image_token_id is None:
+                raise ValueError("HF config has no image_token_id — not a multimodal Gemma-4 checkpoint?")
+            pad_token_id = getattr(getattr(hf_config, "text_config", hf_config), "pad_token_id", tokenizer.pad_token_id)
+
+            # VisionModelArgs reads HF_MODEL env for the checkpoint path (like ModelArgs).
+            os.environ.setdefault("HF_MODEL", model_path)
+            vision_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=1, max_seq_len=8192)
+            vision_state_dict = _build_vision_state_dict(state_dict, vision_args)
+            vision_tower = VisionTower(
+                args=vision_args,
+                dtype=vision_dtype,
+                state_dict=vision_state_dict,
+                tt_ccl=TT_CCL(mesh_device),
+                weight_cache_path=vision_args.weight_cache_path(vision_dtype),
+            )
+            embed_vision = Gemma4MultimodalEmbedder.from_state_dict(
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                vision_args=vision_args,
+                text_hidden_size=model.hidden_size,
+                dtype=ttnn.bfloat16,
+                weight_cache_path=vision_args.weight_cache_path(ttnn.bfloat16),
+            )
+
+        generator = cls(
+            [model],
+            [model_args],
+            mesh_device,
+            processor=None,
+            tokenizer=tokenizer,
+            vision_tower=vision_tower,
+            embed_vision=embed_vision,
+            image_token_id=image_token_id,
+            pad_token_id=pad_token_id,
+        )
         return generator, [tt_kv_cache], tokenizer
+
+    # ── Multimodal (vision) path ───────────────────────────────────────────
+    # These are only used when the generator was built with ``multimodal=True``.
+    # The text-only path (prefill_forward_text / decode_forward) is unchanged.
+
+    def encode_vision(self, pixel_values: torch.Tensor, image_position_ids: torch.Tensor):
+        """Run the on-device vision tower + on-device projector and return the VALID
+        projected soft tokens on device.
+
+        The vision tower returns a *padded* ``[1, batch, output_length, vision_hidden]``
+        pooled tensor plus a boolean ``[batch, output_length]`` mask (True = valid soft
+        token). The projector (RMSNorm + Linear, ttnn) lifts it to text-embedding space,
+        then a ttnn ``gather`` strips the padded slots so the returned tensor is the
+        compact ``[num_valid, text_hidden]`` set of soft tokens, in order, ready to
+        scatter into the ``image_token_id`` slots of the text stream.
+
+        Args:
+            pixel_values: ``[1, num_patches, in_dim]`` torch (from Gemma4Processor).
+            image_position_ids: ``[1, num_patches, 2]`` torch.
+
+        Returns:
+            ttnn.Tensor ``[num_valid, text_hidden]`` bfloat16 on device.
+        """
+        if not self.is_multimodal:
+            raise RuntimeError("encode_vision requires from_pretrained(..., multimodal=True).")
+        num_patches = image_position_ids.shape[1]
+        seq_len = _vision_encoder_seq_len(num_patches)
+        start_time = time.time()
+        pooled_tt, mask = self.vision_tower(pixel_values, image_position_ids, seq_len)
+        # On-device projection (scale-free RMSNorm + Linear) -> text embedding space.
+        projected_tt = self.embed_vision(pooled_tt)  # [1, batch, output_length, text_hidden]
+        model_time = time.time() - start_time
+        logger.info(f"vision_model time {model_time}")
+        if hasattr(pooled_tt, "deallocate"):
+            pooled_tt.deallocate(True)
+
+        # Strip padded soft tokens with an on-device gather. ``mask`` is host metadata
+        # (small bool tensor); only the integer valid indices touch the host. The 4D
+        # dim=2 gather with a uint16 TILE index is the tested ttnn.gather configuration.
+        valid_indices = torch.where(mask[0])[0].to(torch.uint16)  # [num_valid]
+        num_valid = int(valid_indices.numel())
+        text_hidden = projected_tt.shape[-1]
+        gather_index = valid_indices.view(1, 1, num_valid, 1).expand(1, 1, num_valid, text_hidden).contiguous()
+        gather_index_tt = ttnn.from_torch(
+            gather_index,
+            device=self.mesh_device,
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._replicate_mapper(),
+        )
+        image_embeds_tt = ttnn.gather(projected_tt, 2, index=gather_index_tt)  # [1,1,num_valid,text_hidden]
+        if hasattr(projected_tt, "deallocate"):
+            projected_tt.deallocate(True)
+        return ttnn.reshape(image_embeds_tt, (num_valid, text_hidden))
+
+    def encode_vision_batch(self, pixel_values_batch: torch.Tensor, image_position_ids_batch: torch.Tensor):
+        """Run the vision tower + embedder for a batch of images, ``num_devices`` at a
+        time (data-parallel: 1 image/device), and return the per-user valid projected
+        soft tokens as a list of HOST tensors.
+
+        The vision model is replicated across devices, so DP = sharding the batch dim of
+        the activations (``data_parallel=True`` on ``VisionTower.forward``). Each DP chunk
+        of ``num_devices`` images is processed concurrently; the sharded projected output
+        is gathered to host and the valid (non-padded) soft tokens are extracted per user
+        with a host-side gather (the small integer valid indices touch the host, matching
+        the single-user ``encode_vision``).
+
+        Args:
+            pixel_values_batch: ``[B, num_patches, in_dim]`` torch.
+            image_position_ids_batch: ``[B, num_patches, 2]`` torch.
+
+        Returns:
+            list of ``B`` host tensors, each ``[num_valid_u, text_hidden]`` (bf16), in user
+            order. ``num_valid_u`` is identical across users when every image has the same
+            patch layout (the batched-demo case).
+        """
+        if not self.is_multimodal:
+            raise RuntimeError("encode_vision_batch requires from_pretrained(..., multimodal=True).")
+        is_mesh = hasattr(self.mesh_device, "shape")
+        num_devices = self.mesh_device.get_num_devices() if is_mesh else 1
+        batch_size = int(pixel_values_batch.shape[0])
+        dp = num_devices > 1 and batch_size >= num_devices and batch_size % num_devices == 0
+        chunk_size = num_devices if dp else batch_size
+        num_chunks = batch_size // chunk_size
+        num_patches = image_position_ids_batch.shape[1]
+        seq_len = _vision_encoder_seq_len(num_patches)
+
+        per_user_embeds: list[torch.Tensor] = []
+        _t0 = time.perf_counter()
+        for c in range(num_chunks):
+            off = c * chunk_size
+            pv = pixel_values_batch[off : off + chunk_size]
+            pi = image_position_ids_batch[off : off + chunk_size]
+            pooled_tt, mask = self.vision_tower(pv, pi, seq_len, data_parallel=dp)
+            ttnn.synchronize_device(self.mesh_device)
+            projected_tt = self.embed_vision(pooled_tt)  # [1, chunk, output_length, text_hidden] (sharded)
+            ttnn.synchronize_device(self.mesh_device)
+            if hasattr(pooled_tt, "deallocate"):
+                pooled_tt.deallocate(True)
+            # Gather the sharded projection to host -> [1, chunk, output_length, text_hidden].
+            projected_host = ttnn.to_torch(projected_tt)
+            if hasattr(projected_tt, "deallocate"):
+                projected_tt.deallocate(True)
+            # mask: [chunk, output_length] host (True = valid). Strip padded soft tokens per user.
+            for u in range(chunk_size):
+                valid_idx = torch.where(mask[u])[0]  # [num_valid_u]
+                user_embeds = projected_host[0, u][valid_idx]  # [num_valid_u, text_hidden]
+                per_user_embeds.append(user_embeds.contiguous().to(torch.bfloat16))
+        logger.info(
+            f"Vision batch encode: {batch_size} images in {num_chunks} chunk(s) of {chunk_size} "
+            f"(dp={dp}) in {(time.perf_counter() - _t0) * 1000.0:.1f} ms"
+        )
+        return per_user_embeds
+
+    def _replicate_mapper(self):
+        return ttnn.ReplicateTensorToMesh(self.mesh_device) if hasattr(self.mesh_device, "shape") else None
+
+    def prefill_forward_multimodal(
+        self,
+        tokens: torch.Tensor,
+        pixel_values: torch.Tensor = None,
+        image_position_ids: torch.Tensor = None,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        enable_trace: bool = False,
+        image_embeds_tt=None,
+    ) -> torch.Tensor:
+        """Prefill an image+text prompt and return next-token logits on host.
+
+        Feeds precomputed merged embeddings straight into
+        ``Gemma4Model.ttnn_prefill_forward`` (which accepts hidden states
+        directly), so the only deviation from the text path is the embedding
+        step — the decoder body, RoPE, paged attention and lm_head are
+        unchanged. Decode reuses the inherited ``decode_forward``.
+
+        Args:
+            tokens: ``[1, prompt_len]`` long ids (image_token_id placeholders included).
+            pixel_values / image_position_ids: from Gemma4Processor. Optional if
+                ``image_embeds_tt`` is supplied (precomputed vision embeds).
+            page_table: ``[1, num_blocks]`` int32 identity page table (or None).
+            kv_cache: ``[per_model_cache]`` list as returned by ``from_pretrained``
+                (unwrapped to the per-layer ``[k, v]`` list internally).
+            prompt_lens: list[int] of real (unpadded) prompt lengths.
+            image_embeds_tt: optional precomputed vision soft tokens on device
+                (``[num_valid, text_hidden]``, replicated) — skips the vision
+                encoder. Used by the batched demo, which runs the tower 4-at-a-time
+                (DP) once for all users and reuses the per-user embeds here.
+
+        Returns:
+            torch logits ``[1, vocab]`` for the last prompt token.
+        """
+        del enable_trace  # Multimodal prefill is not traced (vision encoder + on-device merge).
+        if not self.is_multimodal:
+            raise RuntimeError("prefill_forward_multimodal requires from_pretrained(..., multimodal=True).")
+        model = self.model[0]
+        if getattr(model, "hidden_size_per_layer_input", 0):
+            raise NotImplementedError(
+                "Multimodal prefill + per-layer inputs (PLI) is not supported. "
+                "Use a non-PLI multimodal checkpoint (gemma-4 12B / 26B-A4B / 31B IT)."
+            )
+        prompt_len = int(tokens.shape[1])
+        last_token_idx = (prompt_lens[0] if prompt_lens is not None else prompt_len) - 1
+        prefill_seq_len = get_padded_prefill_len(prompt_len)
+
+        # 1. Vision -> valid projected soft tokens on device: [num_valid, text_hidden].
+        _vision_t0 = time.perf_counter()
+        if image_embeds_tt is None:
+            if pixel_values is None or image_position_ids is None:
+                raise ValueError(
+                    "prefill_forward_multimodal needs either pixel_values+image_position_ids "
+                    "or a precomputed image_embeds_tt."
+                )
+            image_embeds_tt = self.encode_vision(pixel_values, image_position_ids)
+            vision_prefill_ms = (time.perf_counter() - _vision_t0) * 1000.0
+            logger.info(f"Vision encoder prefill: {vision_prefill_ms:.1f} ms")
+        else:
+            # Precomputed embeds (batched demo): vision already timed by encode_vision_batch.
+            _ = time.perf_counter() - _vision_t0
+        num_valid = int(image_embeds_tt.shape[0])
+        text_hidden = int(image_embeds_tt.shape[1])
+
+        # 2. Build llm_ids on host (cheap int ops): replace image_token_id with pad,
+        #    then pad the prompt out to the prefill bucket with pad_token_id. Embedding
+        #    this on device yields the text embeddings with pad-token rows already in
+        #    place, so only the image_token slots need filling.
+        input_ids = tokens[0].to(torch.long)
+        image_mask = input_ids == self.image_token_id
+        n_image = int(image_mask.sum().item())
+        if n_image != num_valid:
+            raise ValueError(
+                f"Image placeholder count ({n_image}) != vision soft tokens ({num_valid}). "
+                "The processor's image_seq_length and the image processor's max_soft_tokens must agree."
+            )
+        image_positions = torch.where(image_mask)[0].to(torch.int32)  # [num_valid], within prompt_len
+        llm_ids = input_ids.clone()
+        llm_ids[image_mask] = self.pad_token_id
+        pad = prefill_seq_len - prompt_len
+        if pad > 0:
+            llm_ids = torch.cat([llm_ids, torch.full((pad,), self.pad_token_id, dtype=torch.long)], dim=0)
+        llm_ids_tt = ttnn.from_torch(
+            llm_ids.view(1, prefill_seq_len),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_mapper(),
+        )
+
+        # 3. Text embeddings on device (lookup + sqrt(hidden) scale + all-gather).
+        text_embeds_tt = model.embed_tokens(llm_ids_tt)  # [1, prefill_seq, text_hidden] (or 4D under TP)
+        text_embeds_tt = ttnn.reshape(text_embeds_tt, (prefill_seq_len, text_hidden))
+        # scatter wants interleaved DRAM; force it regardless of the embed output layout.
+        text_embeds_tt = ttnn.to_layout(text_embeds_tt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # 4. Scatter the projected vision tokens into the image_token slots (on device).
+        scatter_index = image_positions.view(num_valid, 1).expand(num_valid, text_hidden).contiguous()
+        scatter_index_tt = ttnn.from_torch(
+            scatter_index,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._replicate_mapper(),
+        )
+        merged_tt = ttnn.scatter(text_embeds_tt, 0, scatter_index_tt, image_embeds_tt)  # [prefill_seq, text_hidden]
+        if hasattr(text_embeds_tt, "deallocate"):
+            text_embeds_tt.deallocate(True)
+        if hasattr(image_embeds_tt, "deallocate"):
+            image_embeds_tt.deallocate(True)
+        merged_tt = ttnn.reshape(merged_tt, (1, 1, prefill_seq_len, text_hidden))
+
+        # 5. Page table -> device.
+        tt_page_table = None
+        if page_table is not None:
+            tt_page_table = ttnn.from_torch(
+                page_table.to(torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._replicate_mapper(),
+            )
+
+        # 6. Prefill: feed merged embeddings directly (bypass embed_tokens).
+        # ``from_pretrained`` returns ``[tt_kv_cache]`` (a list indexed by model_id,
+        # matching the base Generator contract), so unwrap once to get the per-layer
+        # cache the model expects (``caches[i]`` -> ``[k_cache, v_cache]``).
+        model_id = 0
+        model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
+        logger.info(
+            f"Multimodal prefill: prompt={prompt_len} (image tokens={n_image}), "
+            f"padded={prefill_seq_len}, last_token={last_token_idx}"
+        )
+        get_last_token = (last_token_idx // 32) * 32
+        _llm_t0 = time.perf_counter()
+        logits_tt = model.ttnn_prefill_forward(
+            x=merged_tt,
+            page_table=tt_page_table,
+            kv_cache=model_kv_cache,
+            get_last_token=get_last_token,
+            batch_size=1,
+            input_ids_torch=None,
+            embeds_torch=None,
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        llm_prefill_ms = (time.perf_counter() - _llm_t0) * 1000.0
+        logger.info(
+            f"LLM prefill: {llm_prefill_ms:.1f} ms "
+            f"(vision+LLM prefill total ≈ {vision_prefill_ms + llm_prefill_ms:.1f} ms)"
+        )
+
+        # 7. Read last-token logits to host.
+        if model.mesh_config is not None and model.mesh_config.tp > 1:
+            torch_logits = ttnn.to_torch(ttnn.get_device_tensors(logits_tt)[0])
+        else:
+            torch_logits = ttnn.to_torch(logits_tt)
+        return torch_logits[..., last_token_idx % 32, : model.vocab_size]
+
+    def warmup_vision(self, pixel_values: torch.Tensor, image_position_ids: torch.Tensor):
+        """Compile the vision tower + projector + gather on a real (or dummy) image."""
+        if not self.is_multimodal:
+            raise RuntimeError("warmup_vision requires from_pretrained(..., multimodal=True).")
+        logger.info("Warming up vision tower + projector...")
+        image_embeds_tt = self.encode_vision(pixel_values, image_position_ids)
+        if hasattr(image_embeds_tt, "deallocate"):
+            image_embeds_tt.deallocate(True)
+        logger.info("Vision warmup complete")
