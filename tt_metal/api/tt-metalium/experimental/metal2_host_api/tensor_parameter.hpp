@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxation.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/strong_type.hpp>
 
@@ -40,9 +40,9 @@ struct TensorParameter {
     tt::tt_metal::TensorSpec spec;
 
     ////////////////////////////////////////////////
-    // Advanced options (see advanced_options.hpp)
+    // TensorSpec match relaxations
     ////////////////////////////////////////////////
-    TensorParameterAdvancedOptions advanced_options;
+    TensorSpecRelaxation relaxations;
 };
 
 }  // namespace tt::tt_metal::experimental
