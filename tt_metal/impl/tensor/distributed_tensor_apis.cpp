@@ -9,7 +9,7 @@
 
 #include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
-#include "tensor_buffer_alloc.hpp"
+#include "tensor_impl.hpp"
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>

@@ -7,7 +7,6 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/float8.hpp>
 
-#include "tensor_buffer_alloc.hpp"
 #include "tensor_impl.hpp"
 
 #include <vector>

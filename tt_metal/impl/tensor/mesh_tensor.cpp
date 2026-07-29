@@ -9,7 +9,7 @@
 
 #include "mesh_tensor_impl.hpp"
 #include "spec/layout/tensor_layout_impl.hpp"
-#include "tensor_buffer_alloc.hpp"
+#include "tensor_impl.hpp"
 
 namespace tt::tt_metal {
 
