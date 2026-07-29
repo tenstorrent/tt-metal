@@ -589,13 +589,15 @@ struct PendingKernelInfo {
     std::string kernel_name;  // kernel source path, for the ASAN trace
 };
 
-// DFB allocation info for a single DFB on a core. Only dfb_id and base_addr
+// DFB allocation info for a single DFB on a core. Only device_slot and base_addr
 // are genuinely new per-core state; everything else (entry_size, num_entries,
 // risc masks, num_producers/consumers, cap) is read from the borrowed config
 // pointer, whose backing DataflowBufferImpl is owned by ProgramImpl and
 // outlives one program execution.
 struct DFBAllocInfo {
-    uint32_t dfb_id = 0;
+    // Matches the dfb::<name> accessor value the emulated kernel uses, so all per-core tables
+    // (CB sync, tile counters, interface slots) are keyed by slot rather than by program-wide id.
+    uint32_t device_slot = 0;
     uint32_t base_addr = 0;
     const tt::tt_metal::experimental::dfb::DataflowBufferConfig* cfg = nullptr;
 };
@@ -2829,7 +2831,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     constexpr uint16_t TENSIX_MASK = 0xFF00u;  // bits 8-15
     std::unordered_map<uint64_t, uint32_t> bridge_consumer_alloc;
     for (auto& dfb_impl : dfb_impls) {
-        uint32_t dfb_id = dfb_impl->id;
+        uint32_t device_slot = dfb_impl->device_slot;
         auto& cfg = dfb_impl->config;
         uint32_t total = cfg.entry_size * cfg.num_entries;
         uint64_t dim_key = (static_cast<uint64_t>(cfg.entry_size) << 32) | cfg.num_entries;
@@ -2861,21 +2863,21 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
         uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
         uint32_t capacity = cfg.num_entries / M;
-        core->init_dfb_sync(dfb_id, base, cfg.entry_size, cfg.num_entries, capacity);
+        core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
-        if (dfb_id < EMULE_NUM_CBS) {
-            core->init_cb_sync(static_cast<uint8_t>(dfb_id), base, cfg.entry_size, cfg.num_entries);
+        if (device_slot < EMULE_NUM_CBS) {
+            core->init_cb_sync(static_cast<uint8_t>(device_slot), base, cfg.entry_size, cfg.num_entries);
         }
 
         // Initialize tile counters for this DFB.
         // STRIDED: M TCs. ALL DM-DM: P*C TCs. Counter IDs are spaced by
         // MAX_TC_SLOTS_PER_DFB to prevent cross-DFB collisions.
-        if (dfb_id >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
-            throw std::out_of_range("dfb_id exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
+        if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
+            throw std::out_of_range("DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
         }
-        uint8_t counter_base = static_cast<uint8_t>(dfb_id * tt_emule::MAX_TC_SLOTS_PER_DFB);
+        uint8_t counter_base = static_cast<uint8_t>(device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
         uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
         for (uint32_t tc_idx = 0; tc_idx < num_tcs_to_init; ++tc_idx) {
             auto& tc = core->tile_counters()->get(0, counter_base + static_cast<uint8_t>(tc_idx));
@@ -2884,13 +2886,13 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             tc.acked.store(0, std::memory_order_relaxed);
         }
 
-        dfb_allocs.push_back({dfb_id, base_addr, &cfg});
+        dfb_allocs.push_back({device_slot, base_addr, &cfg});
         log_debug(
             tt::LogMetal,
             "  Core({},{}) DFB[{}]: addr=0x{:x} entry_size={} num_entries={} total={}",
             logical_core.x,
             logical_core.y,
-            dfb_id,
+            device_slot,
             base_addr,
             cfg.entry_size,
             cfg.num_entries,
@@ -2964,10 +2966,10 @@ static void populate_dfb_interface_slots(
     bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
     uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
     uint32_t stride_size = M * cfg.entry_size;
-    if (alloc.dfb_id >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
+    if (alloc.device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
         return;
     }
-    uint8_t counter_base = static_cast<uint8_t>(alloc.dfb_id * tt_emule::MAX_TC_SLOTS_PER_DFB);
+    uint8_t counter_base = static_cast<uint8_t>(alloc.device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
 
     bool is_producer = (cfg.producer_risc_mask & proc_bit) != 0;
     bool is_consumer = (cfg.consumer_risc_mask & proc_bit) != 0;
@@ -3056,11 +3058,11 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
     for (size_t t = 0; t < ki_list.size(); t++) {
         per_thread_dfbs[t] = std::make_unique<tt_emule::EmuleDFBInterface[]>(tt_emule::MAX_DFBS);
         for (const auto& alloc : dfb_allocs) {
-            if (alloc.dfb_id >= tt_emule::MAX_DFBS) {
+            if (alloc.device_slot >= tt_emule::MAX_DFBS) {
                 continue;
             }
             populate_dfb_interface_slots(
-                per_thread_dfbs[t][alloc.dfb_id], alloc, ki_list[t].processor_id, ki_list[t].is_tensix);
+                per_thread_dfbs[t][alloc.device_slot], alloc, ki_list[t].processor_id, ki_list[t].is_tensix);
         }
     }
     return per_thread_dfbs;
