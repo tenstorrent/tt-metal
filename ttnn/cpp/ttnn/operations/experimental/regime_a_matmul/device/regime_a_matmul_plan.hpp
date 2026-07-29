@@ -34,6 +34,21 @@
 namespace ttnn::operations::experimental::regime_a_matmul::plan {
 
 // ------------------------------------------------------------------------------------------------
+// Shared constants (SINGLE SOURCE OF TRUTH)
+// ------------------------------------------------------------------------------------------------
+// Hardware / layout constants shared by the pure planner (this header), the device auto-selector +
+// weight-memory-config helper (regime_a_matmul_config.cpp), and the program factory
+// (regime_a_matmul_program_factory.cpp) — the latter two reach these via the `plan::` alias. Keep values
+// EXACTLY as-is: tile-byte sizes feed compile-time kernel args and the L1 budget / bank count / core-count
+// window drive config feasibility, so any change here changes codegen or picker behaviour.
+constexpr uint32_t kTileBytesBf16 = 2048u;          // bf16 tile bytes
+constexpr uint32_t kTileBytesFp32 = 4096u;          // fp32 tile bytes
+constexpr uint32_t kNumBanks = 8u;                  // Regime-A fixes the in1 DRAM width-shard to 8 banks (== G)
+constexpr uint32_t kL1BudgetBytes = 1440u * 1024u;  // BH usable L1 per core
+constexpr uint32_t kMinCores = 16u;                 // auto-picker feasibility: core-count window [kMin, kMax]
+constexpr uint32_t kMaxCores = 104u;
+
+// ------------------------------------------------------------------------------------------------
 // Inputs
 // ------------------------------------------------------------------------------------------------
 
@@ -74,15 +89,23 @@ struct PlanInputs {
     std::set<PlanXY> holes;
 
     // L1 budget per core (bytes). BH usable ~1440 KB.
-    uint32_t l1_budget_bytes{1440u * 1024u};
+    uint32_t l1_budget_bytes{kL1BudgetBytes};
 
     // Tile byte sizes.
-    uint32_t tb{2048};  // bf16 tile
-    uint32_t tf{4096};  // fp32 tile
+    uint32_t tb{kTileBytesBf16};  // bf16 tile
+    uint32_t tf{kTileBytesFp32};  // fp32 tile
 
-    // in0 ring / reduction chain ordering: false = bank order [0..7]; true = nearest-neighbour
-    // Hamiltonian over physical coords (matches --chain nn). v1 defaults to bank order.
-    bool nn_chain{false};
+    // in1 CB depth in BLOCKS. Production is 4 (the historical value); a TEST-ONLY override lets the depth be
+    // swept to separate a latency-x-concurrency-bound in1 read from a bandwidth-bound one. It only changes
+    // cb1's size and therefore the L1 total, so a too-large depth is rejected by the L1 budget check below —
+    // which is the intended, explicit failure mode rather than a silent clamp.
+    uint32_t cb1_depth{4};
+
+    // Depth of the split-K reduction CB (cb7) in BLOCKS. Production is 2 (double-buffered). A deeper buffer
+    // lets a band forward sub-block nb+1 while nb is still being consumed downstream, so the chain pipelines
+    // further across sub-blocks. TEST-ONLY sweep knob; the kernel derives the slot modulus from the same
+    // value (it is passed as the `use_reduce` compile arg), so the two can never disagree.
+    uint32_t cb7_depth{2};
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -159,7 +182,7 @@ struct CorePlan {
     uint32_t ring_next_idx{};  // core index of (pos+1)%8 in this ring
     uint32_t ring_prev_idx{};  // core index of (pos+7)%8 in this ring
 
-    // split-K reduction (spec §4).
+    // split-K reduction chain (spec §4).
     bool is_bottom{};         // kk == 0
     bool is_top{};            // kk == Pk-1
     uint32_t red_next_idx{};  // core index of next k-slice (i+mfac); self if is_top
@@ -294,10 +317,11 @@ inline PlanResult build_plan(const PlanInputs& in) {
     // --- CB sizing + L1 check (spec §5; cb7 only when Pk>1) ---
     CbSizes cb;
     cb.cb0_tiles = g.M_block_capacity * g.K_slice_capacity;  // == K_num_blocks_eff * M_block * kb
-    cb.cb1_tiles = 4u * kb * g.N_sub;
+    cb.cb1_tiles = (in.cb1_depth ? in.cb1_depth : 4u) * kb * g.N_sub;
     cb.cb2_tiles = 2u * g.M_block_capacity * g.N_sub;
     cb.cb3_tiles = g.M_block_capacity * g.N_sub;
-    cb.cb7_tiles = (Pk > 1u) ? (2u * g.M_block_capacity * g.N_sub) : 0u;
+    const uint32_t cb7_depth = in.cb7_depth ? in.cb7_depth : 2u;
+    cb.cb7_tiles = (Pk > 1u) ? (cb7_depth * g.M_block_capacity * g.N_sub) : 0u;
     cb.l1_bytes = (cb.cb0_tiles + cb.cb1_tiles + cb.cb2_tiles + cb.cb7_tiles) * in.tb + cb.cb3_tiles * in.tf;
     if (cb.l1_bytes > in.l1_budget_bytes) {
         res.error = "L1 over budget: needs " + std::to_string(cb.l1_bytes) + " B > " +
@@ -381,7 +405,7 @@ inline PlanResult build_plan(const PlanInputs& in) {
                 return res;
             }
 
-            // reduction links (spec §4)
+            // reduction chain links (spec §4)
             cp.is_bottom = (kk == 0u);
             cp.is_top = (kk == Pk - 1u);
             cp.red_next_idx = cp.is_top ? i : (i + g.mfac);
@@ -392,42 +416,13 @@ inline PlanResult build_plan(const PlanInputs& in) {
     }
 
     // --- Ring membership + ordering (spec §3) ---
-    // For each slice index j, the ring is the 8 cores {order[pos]*preaders + j}. Bank order by
-    // default; nn_chain does a greedy nearest-neighbour Hamiltonian over physical coords (which the
-    // device op supplies as logical here — Manhattan on logical is a proxy; the op can re-run in
-    // physical space if it matters).
+    // For each slice index j, the ring is the 8 cores {pos*preaders + j} in BANK ORDER [0..7]. This is the
+    // canonical plan output (unit-tested offline); the program factory re-derives the physical PARETO ring
+    // order at runtime (optimize_in0_ring_order) from the device's NoC hop distances.
     for (uint32_t j = 0; j < g.preaders; ++j) {
         std::vector<uint32_t> order(8);
         for (uint32_t k = 0; k < 8u; ++k) {
             order[k] = k;
-        }
-        if (in.nn_chain) {
-            std::vector<bool> vis(8, false);
-            std::vector<uint32_t> ord;
-            ord.reserve(8);
-            uint32_t cur = 0;
-            vis[0] = true;
-            ord.push_back(0);
-            for (uint32_t step = 1; step < 8u; ++step) {
-                const auto& cc = plan.cores[cur * g.preaders + j].coord;
-                int best = -1;
-                uint32_t bestd = 0xffffffffu;
-                for (uint32_t cand = 0; cand < 8u; ++cand) {
-                    if (vis[cand]) {
-                        continue;
-                    }
-                    const auto& xc = plan.cores[cand * g.preaders + j].coord;
-                    uint32_t dd = (uint32_t)(std::abs((int)xc.x - (int)cc.x) + std::abs((int)xc.y - (int)cc.y));
-                    if (dd < bestd) {
-                        bestd = dd;
-                        best = (int)cand;
-                    }
-                }
-                vis[best] = true;
-                ord.push_back((uint32_t)best);
-                cur = (uint32_t)best;
-            }
-            order = ord;
         }
         for (uint32_t pos = 0; pos < 8u; ++pos) {
             const uint32_t ci = order[pos] * g.preaders + j;

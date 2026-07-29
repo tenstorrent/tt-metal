@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t red_sem_id = get_compile_time_arg_val(10);      // reduction recv semaphore
     constexpr uint32_t N_bpc = get_compile_time_arg_val(11);           // N-sub-blocks per core
     constexpr uint32_t redfree_sem_id = get_compile_time_arg_val(12);  // cb_reduce reverse credit
-    constexpr uint32_t use_reduce = get_compile_time_arg_val(13);      // 1 when Pk>1 (reduction chain active)
+    constexpr uint32_t use_reduce = get_compile_time_arg_val(13);      // 0 when Pk==1; else cb_reduce DEPTH
     constexpr auto in0_args = TensorAccessorArgs<14>();
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     // Optional fused-epilogue operands (appended by the factory in this order: bias, then ternary_a/_b).
@@ -316,7 +316,9 @@ void kernel_main() {
         return;
     }
 
-    // Pk > 1: linear reduction chain.
+    // Pk > 1: linear reduction chain. `use_reduce` carries the cb_reduce DEPTH (>=2); guard the modulus so the
+    // Pk==1 compile (use_reduce == 0) does not instantiate a division by zero in this unreachable branch.
+    constexpr uint32_t red_depth = use_reduce ? use_reduce : 1u;
     // cb_reduce holds 2 blocks (double-buffered). reduce_base captured ONCE BEFORE any cb_reduce use (the
     // write ptr drifts after receives).
     const uint32_t reduce_base = get_write_ptr(cb_reduce);
@@ -366,7 +368,7 @@ void kernel_main() {
         uint32_t r = get_read_ptr(out_cb);
         if (!is_top) {
             noc_semaphore_wait_min(redfree_ptr, nb + 1);  // next signalled its slot (nb%2) is free
-            uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + (nb % 2) * out_blk_bytes);
+            uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + (nb % red_depth) * out_blk_bytes);
             noc_async_write(r, dst, out_blk_bytes);
             // Pipelined: payload THEN signal to the SAME peer on the SAME NoC (ordered, like the in0 ring) so
             // the receiver never observes readiness before its partial-sum has landed. Flush (not a full
