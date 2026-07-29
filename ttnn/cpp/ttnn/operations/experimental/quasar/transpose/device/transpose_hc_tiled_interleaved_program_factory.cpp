@@ -126,12 +126,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     spec.tensor_parameters.push_back(TensorParameter{
         .unique_id = INPUT,
         .spec = input_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     });
     spec.tensor_parameters.push_back(TensorParameter{
         .unique_id = OUTPUT,
         .spec = output_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     });
 
     // NEEDS_PADDING define gates the conditional PAD_CB binding on both kernels.
