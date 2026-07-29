@@ -9,6 +9,7 @@
 
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
@@ -217,7 +218,7 @@ void kernel_main() {
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_in0_id, cb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm_id = cb_repack_id;
@@ -240,7 +241,7 @@ void kernel_main() {
 #endif
     cb_in.wait_front(per_core_MN);
 #else
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
 
     if constexpr (welford_unpack_fp32_active) {

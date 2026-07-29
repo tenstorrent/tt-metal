@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"  // FillScalar
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr auto cb_output = tt::CBIndex::c_2;
     constexpr float M_PI = 3.14159265358979323846f;
 
-    init_sfpu(cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_output);
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),

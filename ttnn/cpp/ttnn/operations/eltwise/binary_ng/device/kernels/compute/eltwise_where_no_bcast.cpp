@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp"   // Where
@@ -39,7 +40,7 @@ void kernel_main() {
     constexpr auto kFillSlot = ckl::Dst::D1;
 #endif
 
-    init_sfpu(cb_cond, cb_out);
+    compute_kernel_hw_startup(cb_cond, cb_tensor, cb_out);
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),

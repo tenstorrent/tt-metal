@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
@@ -26,9 +27,9 @@ void kernel_main() {
     constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
-    init_sfpu(cb_output_grad, cb_input_grad);
-
 #if defined(DIVISOR)
+    compute_kernel_hw_startup(cb_divisor, cb_tmp1);
+
     ckl::unary<
         ckl::Recip<D::D0>,
         ckl::input(cb_divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
@@ -59,6 +60,8 @@ void kernel_main() {
     dfb_output_grad_obj.pop_front(1);
     dfb_tmp1_obj.pop_front(1);
 #else
+    compute_kernel_hw_startup(cb_tmp_weight, cb_output_grad, cb_input_grad);
+
     dfb_output_grad_obj.wait_front(1);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {

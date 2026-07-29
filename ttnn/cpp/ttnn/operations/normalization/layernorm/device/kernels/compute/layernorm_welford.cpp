@@ -99,7 +99,7 @@ void kernel_main() {
     cb_eps_obj.wait_front(1);  // comes from the reader
 
     if constexpr (fuse_pre_add) {
-        binary_op_init_common(cb_in, cb_inb, cb_x);
+        compute_kernel_hw_startup(cb_in, cb_inb, cb_x);
         pack_reconfig_data_format(cb_x);
     } else {
         compute_kernel_hw_startup(cb_in, cb_ex);

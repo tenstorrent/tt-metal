@@ -8,6 +8,7 @@
 #define BCAST_DIM BroadcastType::COL
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -361,11 +362,11 @@ void kernel_main() {
     // that will be done
     if constexpr (fuse_pre_add) {
         // Init for x = in + b
-        binary_op_init_common(cb_in, cb_inb, cb_interm_pre_add);
+        compute_kernel_hw_startup(cb_in, cb_inb, cb_interm_pre_add);
     } else {
         // Init for transpose
         constexpr auto first_out_cb = cb_ex;
-        unary_op_init_common(cb_in, first_out_cb);
+        compute_kernel_hw_startup(cb_in, first_out_cb);
     }
 
     cb_eps_obj.wait_front(onetile);  // comes from the reader

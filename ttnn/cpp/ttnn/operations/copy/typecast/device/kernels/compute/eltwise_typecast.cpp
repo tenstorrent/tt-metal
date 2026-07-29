@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Typecast
@@ -13,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(2);
     constexpr uint32_t output_cb = get_compile_time_arg_val(3);
 
-    init_sfpu(input_cb, output_cb);
+    compute_kernel_hw_startup(input_cb, output_cb);
 
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     compute_kernel_lib::unary<

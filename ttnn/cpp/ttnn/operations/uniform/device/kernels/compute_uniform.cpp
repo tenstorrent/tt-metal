@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_rand.hpp"  // RandTile (owns rand_tile_init via init())
@@ -22,7 +23,7 @@ void kernel_main() {
     f2u_scale.f = f2u_to.f - f2u_from.f;
     const uint32_t num_tiles = get_arg_val<uint32_t>(3);
 
-    init_sfpu(intermed_cb_id, intermed_cb_id);
+    compute_kernel_hw_startup(intermed_cb_id, intermed_cb_id);
 
     eltwise_chain(
         EltwiseShape::tiles(num_tiles),
