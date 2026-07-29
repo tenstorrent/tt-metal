@@ -1422,7 +1422,13 @@ def _plan_generic(
         and not in_geo["nd"]
         and in_geo["h"] % TILE_HW == 0
         and chunk_row_bytes == in_page_bytes
-        and in_page_bytes % 32 == 0
+        # The accessor strides by the ALIGNED page size (`tensor_accessor.h:310`), so
+        # the fold is only byte-identical when page == aligned page. 64 covers every
+        # allocator alignment on both architectures (L1 16, WH DRAM 32, BH DRAM 64)
+        # and is free for every supported dtype (shard_w % 32 == 0 x elem >= 2), which
+        # is what keeps this from silently mis-striding a DRAM-sharded source
+        # (`ttnn-static-analyzer`, cleared-with-a-caveat #4).
+        and in_page_bytes % 64 == 0
         and (levers["coal"] == 2 or (levers["coal"] == 1 and coalesce_rows_pays(chunk_row_bytes, in_page_bytes)))
     )
     # b13 / c7 == 2 force the lever past its payoff gate (the structural conditions
@@ -1438,7 +1444,18 @@ def _plan_generic(
     #   * one source page per logical row (the helper's page index steps by 1), and
     #   * one column chunk per core, so both kernels agree on the block order
     #     without also agreeing on the chunk order.
-    split_read_expressible = row_page_stride == 1 and not coalesce_rows and not blocks_row_major
+    # `not alias_in` is a HANG fix, not a payoff clause (`ttnn-static-analyzer`, F1).
+    # C7 is a two-party protocol keyed on `alias_mode` being the same on both kernels:
+    # on `alias_out` the reader (alias_mode 0) reserves and signals while the writer
+    # (alias_mode 1) does the read half inside its alias branch. On `alias_in` the two
+    # values are SWAPPED, so the party that signals is compiled out and the party that
+    # waits is compiled in -- BRISC spins in `noc_semaphore_wait_min(sem_reserve)`
+    # forever. Reachable from a plain public call (a HEIGHT-sharded RM input with a
+    # 32-wide shard gives `chunk_row_bytes == 64` and 1 block/core, which is exactly
+    # `split_read_pays`), and invisible to a suite whose sharded cells are all 64 wide.
+    # Excluded rather than wired up on purpose: on `alias_in` the CB *is* the input
+    # shard, so a second reader writing into it would overwrite the source.
+    split_read_expressible = row_page_stride == 1 and not coalesce_rows and not blocks_row_major and not alias_in
     if alias_out:
         # MEASURED NO. The freed BRISC really is idle, and C7 really does halve the
         # reads each RISC-V issues -- but the read leg is DRAM-BANDWIDTH bound

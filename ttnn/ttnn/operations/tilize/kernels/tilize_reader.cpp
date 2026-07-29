@@ -243,6 +243,15 @@ void kernel_main() {
     // the block sequence (the host keeps C7 to one chunk per core, where the two
     // orders coincide and this flag is 0).
     static_assert(!blocks_row_major || !split_read, "row-major block order and the C7 hand-off are exclusive");
+    // Lever C7 is a two-party protocol and THIS kernel is the party that reserves the
+    // window and signals `sem_reserve`. Every branch that returns before doing so
+    // leaves the writer spinning forever, so each one needs a tripwire: the aliased
+    // read (which has no reads at all -- `ttnn-static-analyzer` F1, a hang reachable
+    // from a plain public call), and the two Refinement-3 read-loop disjuncts that do
+    // not already have one (F2, latent).
+    static_assert(!alias_mode || !split_read, "an aliased read has no half to hand to BRISC");
+    static_assert(read_group == 1 || !split_read, "the grouped read loop does not signal the C7 hand-off");
+    static_assert(!addr_probe || !split_read, "the address probe does not signal the C7 hand-off");
     static_assert(
         !blocks_row_major || (prefetch_blocks == 1 && !fanin_mode && !stagger),
         "row-major block order owns the block sequence; B8/fan-in/rotation cannot also own it");
@@ -517,7 +526,20 @@ void kernel_main() {
                 }
                 // ONE barrier for the whole group (lever B7 at group granularity).
                 noc_async_read_barrier();
-                cb_push_back(cb_rm_input, group * chunk_wt);
+                // ONE push PER WINDOW, not one push of `group * chunk_wt`. A single
+                // push may not straddle the end of the FIFO -- `cb_push_back` only
+                // handles the exact-hit wrap ("no other wrap is legal", it advances
+                // `fifo_wr_ptr` and then subtracts `fifo_size` only on equality,
+                // dataflow_api.h:213-222) -- and with `depth == group + 1` a group DOES
+                // straddle it every other iteration. Caught by the lightweight
+                // `ASSERT(fifo_wr_ptr <= fifo_limit)` under `--dev` (an ebreak, i.e. a
+                // HANG) while the default build silently left the pointer past the
+                // limit. Per-window pushes are each contiguous by construction, and
+                // publishing them back-to-back after the shared barrier keeps the
+                // lever's meaning (one barrier per group) intact.
+                for (uint32_t i = 0; i < group; ++i) {
+                    cb_push_back(cb_rm_input, chunk_wt);
+                }
             }
             if constexpr (read_vc_spread) {  // NOC_CTRL is sticky across launches
                 noc_async_read_one_packet_set_state<true>(

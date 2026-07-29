@@ -631,6 +631,100 @@ def test_address_probe_is_unreachable_by_default(device):
 
 
 # ---------------------------------------------------------------------------
+# Static-analysis findings (`ttnn-static-analyzer`, this refinement)
+# ---------------------------------------------------------------------------
+#
+# F1 was a HANG reachable from a plain public call, and the observable is a
+# *timeout*, so these tests are the ones that must not be deleted: they run the
+# exact cell that hung and assert the plan combination that caused it is impossible.
+
+
+# A HEIGHT-sharded RM input with a 32-WIDE shard: `chunk_wt == shard_wt == 1`, so
+# `chunk_row_bytes == 64` and `blocks_per_core == 1` — precisely `split_read_pays`.
+# Every other sharded cell in this suite is 64 wide (128 B), which is why 316 green
+# tests did not see it.
+F1_SHAPE = (1, 1, 64, 32)
+F1_SHARD = (32, 32)
+
+
+def test_f1_alias_in_never_ships_the_c7_handshake(device):
+    """C7 is a two-party protocol keyed on `alias_mode` being the SAME on both
+    kernels. On `alias_in` the two values are swapped: the reader takes its aliased
+    branch (and never signals `sem_reserve`) while the writer takes the generic C7
+    branch (and waits for it) — BRISC spins forever.
+
+    The gate is therefore STRUCTURAL, not a payoff clause: wiring the reader into the
+    handshake instead would have BRISC write into `cb_rm_input`, which on this path IS
+    the input tensor's shard, i.e. it would overwrite the source mid-flight.
+    """
+    in_cfg = _shard(_HEIGHT, _crs(1, 0), F1_SHARD, _ROW)
+    plan = _plan(device, F1_SHAPE, in_cfg, DRAM)
+    assert plan["path"] == "alias_in"
+    assert plan["chunk_row_bytes"] == 64 and plan["blocks_per_core"] == 1, "the C7 payoff clauses DO hold"
+    assert plan["split_read"] == 0, "...and C7 must still be off: it would hang (analyzer F1)"
+
+
+def test_f1_the_cell_that_hung_now_runs(device):
+    """The observable for F1 is a dispatch timeout, so the regression test is the cell
+    itself. If the exclusion is ever removed this test hangs rather than failing."""
+    in_cfg = _shard(_HEIGHT, _crs(1, 0), F1_SHARD, _ROW)
+    _exact(device, F1_SHAPE, in_cfg, DRAM, repeats=2)
+
+
+def test_f1_forcing_c7_cannot_reach_an_aliased_read(device):
+    """`TILIZE_LEVER_C7=2` bypasses the payoff gate but must NOT bypass this one — a
+    forced counterfactual is still not allowed to hang the device."""
+    for shape, in_cfg in (
+        (F1_SHAPE, _shard(_HEIGHT, _crs(1, 0), F1_SHARD, _ROW)),
+        ((1, 1, 128, 64), _shard(_HEIGHT, _crs(3, 0), (32, 64), _ROW)),
+    ):
+        with _levers(c7=2, b13=0, b8=0):
+            plan = _plan(device, shape, in_cfg, DRAM)
+            assert plan["path"] == "alias_in"
+            assert plan["split_read"] == 0
+            _exact(device, shape, in_cfg, DRAM)
+
+
+def test_f2_c7_never_coexists_with_a_read_loop_that_cannot_signal(device):
+    """F2 (latent): the grouped read loop and the address probe also return without
+    signalling `sem_reserve`. The kernel now carries a `static_assert` for each, so
+    this test guards the HOST side of the same invariant — if a future gate produced
+    the pair, the kernel would fail to compile, which is the intended tripwire."""
+    shape = (1, 1, 2048, 512)
+    out_cfg = _shard(_BLOCK, _crs(7, 7), (256, 64), _ROW)
+    tpd.READ_GROUP_OVERRIDE = 2
+    try:
+        with _levers(c7=2, b13=0, b8=0):
+            plan = _plan(device, shape, DRAM, out_cfg)
+            assert plan["read_group"] == 1 or plan["split_read"] == 0
+            _exact(device, shape, DRAM, out_cfg)
+    finally:
+        tpd.READ_GROUP_OVERRIDE = None
+    with _levers(c7=2, addr=1, b13=0, b8=0):
+        plan = _plan(device, shape, DRAM, out_cfg)
+        assert plan["addr_probe"] == 0 or plan["split_read"] == 0
+
+
+def test_coalesce_requires_a_64b_aligned_page(device):
+    """The fold strides by the page size, but the accessor strides by the ALIGNED page
+    size, so the two must agree. 64 covers every allocator alignment on both
+    architectures and is free for every supported dtype — the gate is explicit rather
+    than incidental (analyzer, cleared-with-a-caveat #4)."""
+    shape = (1, 1, 2048, 512)
+    in_cfg = _shard(_BLOCK, _crs(7, 7), (256, 64), _ROW)
+    with _levers(r3=0):
+        plan = _plan(device, shape, in_cfg, DRAM)
+        assert plan["coalesce_rows"] == 1
+        assert plan["source_page_bytes"] % 64 == 0
+    # ... and a cell where the 2D split picks a chunk NARROWER than the page keeps the
+    # lever off, which is the same invariant from the other side.
+    with _levers(r3=0):
+        narrow = _plan(device, (1, 1, 512, 64), _shard(_HEIGHT, _crs(3, 0), (128, 64), _ROW), DRAM)
+        assert narrow["chunk_row_bytes"] < narrow["source_page_bytes"]
+        assert narrow["coalesce_rows"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Non-regression: the interleaved plans this refinement must not touch
 # ---------------------------------------------------------------------------
 
