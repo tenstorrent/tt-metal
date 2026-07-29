@@ -1,11 +1,11 @@
 # b06u02 — non-determinism confirmed (Blackhole Galaxy, 2026-07-29)
 
-**One Tensix core on physical device 14 (PCI `0000:47:00.0`, mesh shard 21) has an
-intermittently wrong matmul FPU path. DRAM and SFPU on the same die are bit-exact. Not a
-tt-metal bug — but not proven to be a bad die either: this box runs fw `19.8.1.0` / KMD
-`2.8.0`, and both known-passing boxes run the newer pair. Firmware owns the operating point,
-so it can be the trigger and the weakest core the place it shows. See "Caveat and open
-items".**
+**Logical Tensix core (6,8) — physical (7,10) per the mesh translation — on physical device 14
+(PCI `0000:47:00.0`, mesh shard 21) has an intermittently wrong matmul FPU path. DRAM and SFPU
+on the same die are bit-exact. Not a tt-metal bug — but not proven to be a bad die either: this
+box runs fw `19.8.1.0` / KMD `2.8.0`, and both known-passing boxes run the newer pair. Firmware
+owns the operating point, so it can be the trigger and the weakest core the place it shows. See
+"Caveat and open items".**
 
 Host `bh-glx-b06u02`, HEAD `da6f15e849a`, driver `tenstorrent 2.8.0`, fw bundle `19.8.1.0`,
 32 Blackhole boards.
@@ -26,6 +26,7 @@ Second independent confirmation run: **6 failed, 21 passed, 14:12.** Log:
 | `core_locality[base]` | **FAIL** | pass | rows 80-89, cols 72-83, blk (M 8/10, N 6/12) |
 | `core_locality[halfN]` | **FAIL** | pass | rows 80-89, cols 36-41, blk (M 8/10, N 6/12) |
 | `core_locality[halfM]` | **FAIL** | pass | rows 40-44, cols 72-83, blk (M 8/10, N 6/12) |
+| `matmul_core_sweep` | **FAIL** | — | `{(6, 8): {21: 44}}` — 1 of 120 cores, 85 s |
 | `report_device_mapping` | pass | pass | row 5 → dev [10, **14**, 22, 18], identical on both boxes |
 
 Every failure is a matmul test, and every one names shard 21 alone. `local_compute` uses **no
@@ -44,8 +45,39 @@ the matmul moves the rectangle and leaves the block index fixed:
 | 1600 × 4608 | 50 × 144 | 40-44 (5 tall) | 72-83 (12 wide) | **M 8 of 10, N 6 of 12** |
 
 An address-bound fault (bad DRAM page, bad L1 range) would have stayed at rows 80-89 /
-cols 72-83 while the block index drifted. Which logical core x/y block (8,6) resolves to
-depends on `transpose_mcast` in the chosen program config.
+cols 72-83 while the block index drifted.
+
+## The core, named
+
+`test_matmul_core_sweep` removes the block-index-to-coordinate inference. It confines a matmul
+to a chosen window of cores with `allowed_worker_cores`, hands each core the same 10x12 output
+tiles over the full K that the failing matmul does, and walks all 120 cores of the 12x10 grid.
+Exactly one core fails, and it is the one the block index predicted:
+
+| window | cores under test | verdict |
+|---|---|---|
+| 1x1 at (6,8) | (6,8) alone | **FAIL**, chip 21, 2 elements |
+| 2x2 at (5,8) | (5,8) (6,8) (5,9) (6,9) | **FAIL**, chip 21, 16 elements, all inside (6,8) |
+| 2x2 at (6,8) | (6,8) (7,8) (6,9) (7,9) | **FAIL**, chip 21, 26 elements, all inside (6,8) |
+| the other 116 | — | bit-exact, 10 iterations, 32 chips |
+
+The 2x2 windows are the load-bearing evidence: four cores run identical work inside one window
+and only (6,8) diverges, so the result does not rest on the window origin resolving the way the
+factory documents. Two independent methods — block-index arithmetic over a 120-core matmul, and
+a confined matmul that names its cores — agree on the same core of the same chip.
+
+The grid confirms the arithmetic: 12x10, so Mt 100 / per_core_M 10 = 10 M-blocks = grid y and
+Nt 144 / per_core_N 12 = 12 N-blocks = grid x. With `transpose_mcast=False` block (M 8, N 6)
+is logical (x=6, y=8).
+
+Physical (7,10) is the *mesh* translation. Harvesting is per chip (`ENABLED_TENSIX_COL` dev 14 =
+`0x3ffd`), so confirm that translation against device 14 before filing a harvest request.
+
+A 1x1 window cannot sit on the last grid row or column: the 2D factory reads its neighbours at
+`start_core_x + 1` / `start_core_y + 1` unconditionally while building the mcast ranges
+(`matmul_multicore_reuse_mcast_2d_program_factory.cpp:1173,1176`), so an origin there asks for a
+core that does not exist and the op throws `No core coordinate found at location`. Those 21
+cores are covered by the 2x2 pass instead.
 
 ## Magnitudes
 
@@ -81,8 +113,10 @@ Full suite: drop the `-k`. The 18 CCL tests are the slow half and pass on the ba
   variable, same silicon (`fw_pack-19.8.1.fwbundle` is kept for rollback); (2) run the subset
   on b07u02 and record *which* shard fails; (3) diff `tt-smi -s --snapshot_no_tty` against a
   passing box on `ENABLED_TENSIX_COL`, `asic_fmax`, and the VDD limits.
-- Resolve block (8,6) to a logical core x/y via `transpose_mcast` so the core can be named in a
-  harvest request.
+- Confirm the logical → physical translation of core (6,8) against device 14 itself rather than
+  the mesh handle, since harvesting is per chip and a harvest request needs the die's own
+  coordinate. The Python `MeshDevice` binding exposes `get_device_id` but no per-device handle,
+  so this needs the C++ API or `tt-triage`.
 - **A wedged board is a no-result, not a failure.** If every test errors in ~20 s with
   `MMIO per-op timeout: 4B load took N us (budget=2 ms)` at `distributed.py:671`, the box failed
   at `open_mesh_device` before any kernel ran. `tt-smi -glx_reset_auto` clears it — do not use

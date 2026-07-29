@@ -21,6 +21,8 @@ so a marginal core can pass under one firmware and drift under another. Rule out
 firmware/KMD pair before calling it a bad die. Only the first two tests implicate tt-metal.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -551,3 +553,130 @@ def test_local_matmul_core_locality(mesh_device, device_params, seq, hidden):
 
     assert not r2r and not xchip, f"matmul {seq}x{hidden} not deterministic: run_to_run={r2r} chip_vs_chip0={xchip}"
     logger.success(f"matmul {seq}x{hidden} bit-exact across {ITERS} iterations and all 32 chips")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_matmul_core_sweep(mesh_device, device_params):
+    """Name the core outright: confine a matmul to a known window of cores and sweep the grid.
+
+    test_local_matmul_core_locality infers a core from an output-tile rectangle, which needs the
+    program config and transpose_mcast to become a coordinate. This removes the inference:
+    allowed_worker_cores confines the whole matmul to a window, so a 1x1 window makes a failure
+    name that core directly and a pass exonerates it. The logical coordinate is reported alongside
+    the physical (NOC) coordinate as the *mesh* translates it; harvesting is per chip, so confirm
+    that translation on the failing chip before filing it as a harvest request.
+
+    The per-core block matches what the failing 3200x4608 matmul hands a single core (10x12 output
+    tiles over the full K), so a core that drifts there gets the same amount of work here. A
+    smaller block is not equivalent: the fault is intermittent, and less work per core means fewer
+    chances to trip it.
+
+    A 1x1 window cannot sit on the last row or column: the 2D factory reads the neighbours at
+    start+1 unconditionally when it builds the mcast ranges, so an origin there asks for a core
+    that does not exist. Those cores get a second pass with a 2x2 window anchored one back, where
+    the output rectangle picks one of four candidates.
+
+    Restrict the sweep with TT_DET_CORES="x,y;x,y", and raise the iteration count with
+    TT_DET_SWEEP_ITERS, when a core needs more attempts to trip.
+    """
+    ITERS = int(os.environ.get("TT_DET_SWEEP_ITERS", "10"))
+    PER_CORE_M, PER_CORE_N = 10, 12  # the block one core owns in the failing 3200x4608 matmul
+    IN0_BLOCK_W = 8  # must divide Kt = EMB_DIM/32 = 224; keeps the in0 L1 block inside 1.5 MB
+    torch.manual_seed(0)
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    operands = {}
+
+    def window(ox, oy, gx, gy):
+        """Run the matmul on the gx x gy core window at (ox, oy); return {chip: {core: ndiff}}."""
+        if (gx, gy) not in operands:
+            seq, hidden = gy * PER_CORE_M * 32, gx * PER_CORE_N * 32
+            operands[(gx, gy)] = tuple(
+                ttnn.from_torch(
+                    t,
+                    device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                for t in (torch.randn(1, 1, seq, EMB_DIM) * 0.02, torch.randn(EMB_DIM, hidden) * 0.02)
+            )
+        x, w = operands[(gx, gy)]
+        pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=IN0_BLOCK_W,
+            out_subblock_h=2,  # h*w must stay within the 8-tile dest register
+            out_subblock_w=4,
+            per_core_M=PER_CORE_M,
+            per_core_N=PER_CORE_N,
+            transpose_mcast=False,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(ox, oy), ttnn.CoreCoord(ox + gx - 1, oy + gy - 1))}
+            ),
+        )
+
+        def blame(a, b):
+            """Which cores of this window own the differing elements. transpose_mcast=False, so
+            the M block index is the grid y and the N block index is the grid x."""
+            d = (a != b).nonzero()
+            return {(ox + int(t[-1]) // 32 // PER_CORE_N, oy + int(t[-2]) // 32 // PER_CORE_M) for t in d}
+
+        hits, baseline = {}, None
+        for i in range(ITERS):
+            out = ttnn.matmul(x, w, program_config=pc)
+            ttnn.synchronize_device(mesh_device)
+            cur = _shards(out)
+            ttnn.deallocate(out)
+
+            # chip-vs-chip0 stands on its own at iteration 0; run-to-run needs the baseline.
+            pairs = [(c, cur[0], cur[c]) for c in range(1, len(cur)) if not torch.equal(cur[0], cur[c])]
+            if i == 0:
+                baseline = cur
+            else:
+                _, _, _, bad = _first_diff(baseline, cur)
+                pairs += [(c, baseline[c], cur[c]) for c in bad]
+            for c, a, b in pairs:
+                per_chip = hits.setdefault(c, {})
+                for core in blame(a, b):
+                    per_chip[core] = per_chip.get(core, 0) + int((a != b).sum())
+        return hits
+
+    env = os.environ.get("TT_DET_CORES", "").strip()
+    if env:
+        cores = [tuple(int(v) for v in tok.split(",")) for tok in env.split(";") if tok]
+    else:
+        cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)]
+    pinnable = [(cx, cy) for cx, cy in cores if cx < grid.x - 1 and cy < grid.y - 1]
+    edge = sorted({(min(cx, grid.x - 2), min(cy, grid.y - 2)) for cx, cy in cores if (cx, cy) not in pinnable})
+    logger.info(
+        f"grid {grid.x}x{grid.y}, {PER_CORE_M}x{PER_CORE_N} output tiles per core over K={EMB_DIM}, "
+        f"{ITERS} iterations: {len(pinnable)} cores pinned 1x1, "
+        f"{len(cores) - len(pinnable)} on the last row/col covered by {len(edge)} 2x2 windows"
+    )
+
+    failures = {}
+    for (ox, oy), (gx, gy) in [(c, (1, 1)) for c in pinnable] + [(a, (2, 2)) for a in edge]:
+        for chip, per_core in window(ox, oy, gx, gy).items():
+            for core, ndiff in per_core.items():
+                failures.setdefault(core, {})
+                failures[core][chip] = failures[core].get(chip, 0) + ndiff
+                phys = mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*core))
+                logger.warning(
+                    f"  logical core {core} -> physical ({phys.x},{phys.y}) per the mesh, chip {chip}: "
+                    f"NOT deterministic, {ndiff} elements (window {gx}x{gy} at ({ox},{oy}))"
+                )
+
+    assert not failures, f"matmul is core-dependent: {failures}"
+    logger.success(f"all {len(cores)} cores bit-exact across {ITERS} iterations and all 32 chips")

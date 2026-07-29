@@ -15,11 +15,11 @@ fast path, so the threshold of 1.0 is not a tolerance. When that fails, all you 
 mpirun --bind-to none --pernode --tag-output bash -c 'source $TT_METAL_HOME/python_env/bin/activate; export PYTHONPATH=$TT_METAL_HOME; python3 -u -m pytest models/demos/deepseek_v3_d_p/tests/test_det_ccl_micro.py -p no:randomly -s -q'
 ```
 
-Run from the repo root with `TT_METAL_HOME` set. 27 tests, all of which pass on a healthy box.
-Local tests only (the fast hardware check, 9 tests):
+Run from the repo root with `TT_METAL_HOME` set. 28 tests, all of which pass on a healthy box.
+Local tests only (the fast hardware check, 10 tests):
 
 ```
-mpirun --bind-to none --pernode --tag-output bash -c 'source $TT_METAL_HOME/python_env/bin/activate; export PYTHONPATH=$TT_METAL_HOME; python3 -u -m pytest models/demos/deepseek_v3_d_p/tests/test_det_ccl_micro.py -k "test_local_ or test_report_device_mapping" -p no:randomly -s -q'
+mpirun --bind-to none --pernode --tag-output bash -c 'source $TT_METAL_HOME/python_env/bin/activate; export PYTHONPATH=$TT_METAL_HOME; python3 -u -m pytest models/demos/deepseek_v3_d_p/tests/test_det_ccl_micro.py -k "test_local_ or test_report_device_mapping or test_matmul_core_sweep" -p no:randomly -s -q'
 ```
 
 ## What each test decides
@@ -31,6 +31,7 @@ mpirun --bind-to none --pernode --tag-output bash -c 'source $TT_METAL_HOME/pyth
 | `test_local_compute_determinism` | 1 | Local matmul chain, **no collective**. Identical input+weights replicated to all 32 chips, so a failure is a chip. |
 | `test_local_op_determinism` | 4 | Which subsystem: `readback` (DRAM), `eltwise` (unpack/SFPU/pack), `matmul1`, `matmul2`. First rung to fail names it. |
 | `test_local_matmul_core_locality` | 3 | Whether a bad matmul footprint tracks the core grid or an output address. Three shapes; if the *block index* is invariant while the tile offsets scale, it is one core. |
+| `test_matmul_core_sweep` | 1 | Which core, by coordinate. `allowed_worker_cores` confines the matmul to one core at a time and the sweep walks the grid, so a failure names the core instead of implying it. |
 | `test_report_device_mapping` | 1 | shard index -> physical device id. Never assume identity. |
 
 Everything from `test_local_compute_determinism` down replicates identical inputs to all 32
@@ -49,6 +50,7 @@ readback fails                      -> DRAM / storage on that chip.
 eltwise fails, readback passes      -> unpack/SFPU/pack path.
 matmul* fail, readback+eltwise pass -> the matmul (FPU) path.
 core_locality block index invariant -> one Tensix core on that chip. Not a code bug.
+matmul_core_sweep names one core     -> that core, by logical coordinate.
                                        Next: same box on a newer fw/KMD pair. Still fails
                                        -> the die (harvest or RMA). Passes -> firmware.
 ```
@@ -169,9 +171,28 @@ The rectangle's tile offsets scale with the shape while the block index does not
 
 Halving N halves the column offset; halving M halves the row offset. An address-bound or
 tile-index-bound fault would have stayed at the same tiles. Block (8,6) of the 10x12 core
-grid is invariant across all three, which is one core. The exact logical x/y depends on
-`transpose_mcast` in the program config ttnn picks — read it off the config if an RMA needs
-the physical core.
+grid is invariant across all three, which is one core. Turning that block index into a
+coordinate needs `transpose_mcast` from the program config, which is what the next test
+removes the need for.
+
+### `test_matmul_core_sweep` — the core, by coordinate
+
+`allowed_worker_cores` sets both the origin and the grid of the 2D matmul factory
+(`matmul_multicore_reuse_mcast_2d_program_factory.cpp:3174,3467`), so a 1x1 range runs the whole
+matmul on one core. Each core gets the same 10x12 output tiles over the full K that the failing
+matmul hands it, since less work per core means fewer chances to trip an intermittent fault.
+120 cores, 10 iterations each, ~85 s.
+
+On b06u02 one core fails and 119 are bit-exact: logical **(6,8)**, physical (7,10) per the mesh,
+on chip 21 — the coordinate the block index predicted. A 2x2 window over (5,8) and another over
+(6,8) also fail, and in both the differing elements sit entirely inside (6,8) while its three
+neighbours doing identical work stay bit-exact. That is what makes the result independent of how
+the factory resolves a window origin.
+
+A 1x1 window cannot sit on the last grid row or column: the factory reads its neighbours at
+`start + 1` unconditionally when building the mcast ranges (same file, lines 1173 and 1176), so
+the op throws `No core coordinate found at location`. The sweep covers those 21 cores with 2x2
+windows anchored one back.
 
 Magnitudes matter for the diagnosis: `maxabs` is ~5e-3 against 0.02-scale activations, and
 only ~0.1-0.3% of the elements *inside* that core's block differ per run. Low-order
