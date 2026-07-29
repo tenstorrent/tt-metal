@@ -743,10 +743,13 @@ struct FlashMLADecode {
             constexpr bool transpose_k = true;
             constexpr bool transpose_v = false;
 
-            reconfig_data_format<false, true>(cb_k_in, cb_q_in);
+            reconfig_data_format<SrcOrder::Regular, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-            PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true, DST_ACCUM_MODE));
+            PACK(SFPU_UNARY_INIT_FN(
+                exponential,
+                sfpu::exp_init,
+                (true /*APPROXIMATION_MODE*/, scale_fp32, true /*CLAMP_NEGATIVE*/, DST_ACCUM_MODE)));
             sdpa_custom_mm_block_init_pack_short();
 
             uint32_t cur_pos = args.local_cur_pos;
@@ -840,7 +843,7 @@ struct FlashMLADecode {
                 pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);
                 cb_push_back(sdpa_ms_cb, Sq_chunk_t);
             } else {
-                compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16>(
+                compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16, output_granularity>(
                     cb_q_in, sum_dst_offset, corr_exp_dst_offset, mm2_dst_offset);
             }
             for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
@@ -860,7 +863,7 @@ struct FlashMLADecode {
             constexpr uint32_t block_size = vDHt / num_blocks;
 
             if (do_reduce && num_cores_to_wait > 0) {
-                reconfig_data_format_srca<false, true>(cb_ms_in);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(cb_ms_in);
                 exp_tile_init<exp_approx_mode, scale_fp32>();
                 for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
                     sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(

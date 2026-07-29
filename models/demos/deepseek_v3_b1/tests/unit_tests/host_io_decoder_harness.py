@@ -89,10 +89,10 @@ from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.decoder_stage import HostIoDecoderStage
 from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES, StageContext
 from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
-from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
+from models.demos.deepseek_v3_b1.metadata.metadata import MAX_MTP_LEVELS, DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
-from models.demos.deepseek_v3_b1.model import InputField, TokenType, parse_output_page
+from models.demos.deepseek_v3_b1.model import Field, parse_output_page
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.tests.unit_tests.debug_trace_io import load_reference_kv, load_reference_trace
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
@@ -332,13 +332,13 @@ def _to_hidden_state_input(
     hidden_state: torch.Tensor,
     *,
     token_id: int,
-    prefill_token_id: int,
-    user_id: int,
+    prefill_token_ids: list[int] | None = None,
+    slot_id: int = 0,
+    lane_id: int = 0,
     position_id: int,
-    token_type: int,
     temperature: float,
     top_k: int,
-    probability_mass_threshold: float,
+    top_p: float,
 ) -> ttnn.Tensor:
     """Build an H2D passthrough page = ``hidden_state || DeepseekMetadata`` (uint32-typed).
 
@@ -356,15 +356,18 @@ def _to_hidden_state_input(
     hidden_int32 = hidden_state.contiguous().view(torch.int32)  # (HIDDEN_SIZE / 2,) int32
 
     metadata_words = torch.zeros(DeepseekMetadata.aligned_size_bytes() // 4, dtype=torch.int32)
-    metadata_words[InputField.TOKEN_ID] = token_id
-    metadata_words[InputField.PREFILL_TOKEN_ID] = prefill_token_id
-    metadata_words[InputField.TOKEN_TYPE] = token_type
-    metadata_words[InputField.USER_ID] = user_id
-    metadata_words[InputField.POSITION_ID] = position_id
-    metadata_words[InputField.TOKEN0_POSITION_ID] = position_id
-    metadata_words[InputField.TEMPERATURE] = float_to_uint32(temperature)
-    metadata_words[InputField.TOP_K] = top_k
-    metadata_words[InputField.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
+    metadata_words[Field.LANE_ID] = lane_id
+    metadata_words[Field.SLOT_ID] = slot_id
+    metadata_words[Field.TOKEN_ID] = token_id
+    metadata_words[Field.POSITION_ID] = position_id
+    for i in range(MAX_MTP_LEVELS):
+        metadata_words[Field.PREFILL_TOKENS + i] = -1
+    if prefill_token_ids:
+        for i, ptid in enumerate(prefill_token_ids[:MAX_MTP_LEVELS]):
+            metadata_words[Field.PREFILL_TOKENS + i] = ptid
+    metadata_words[Field.TEMPERATURE] = float_to_uint32(temperature)
+    metadata_words[Field.TOP_K] = top_k
+    metadata_words[Field.TOP_P] = float_to_uint32(top_p)
 
     combined = torch.cat([hidden_int32, metadata_words]).reshape(1, -1)
     return ttnn.from_torch(combined, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -380,24 +383,23 @@ def _build_per_iteration_input(
 
     Thin wrapper over :func:`_to_hidden_state_input` that fixes the canonical
     decode-step defaults (matching ``demo/model_pipeline.py:_write_spec_pair``):
-    ``prefill_token_id=-1``, ``token_type=TokenType.BASE``, ``temperature=0.6``,
-    ``top_k=1``, ``probability_mass_threshold=1.0``.
+    ``prefill_token_ids=None``, ``temperature=0.6``, ``top_k=1``, ``top_p=1.0``.
 
-    In multi-turn mode the same ``global_pos`` is written to ``token_id``,
-    ``position_id`` (which also propagates to ``token0_pos``). This keeps the
-    metadata round-trip assertions a single source of truth: the global
-    position is the only "address" the decoder sees, no trace-local indices.
+    In multi-turn mode the same ``global_pos`` is written to ``token_id`` and
+    ``position_id``. This keeps the metadata round-trip assertions a single
+    source of truth: the global position is the only "address" the decoder
+    sees, no trace-local indices.
     """
     return _to_hidden_state_input(
         hidden_state,
         token_id=global_pos,
-        prefill_token_id=-1,
-        user_id=slot_id,
+        prefill_token_ids=None,
+        slot_id=slot_id,
+        lane_id=0,
         position_id=global_pos,
-        token_type=TokenType.BASE,
         temperature=0.6,
         top_k=1,
-        probability_mass_threshold=1.0,
+        top_p=1.0,
     )
 
 
@@ -420,7 +422,7 @@ def _extract_metadata_from_d2h(output_tensor: ttnn.Tensor):
 
     Returns:
         metadata_flat: torch.Tensor of shape ``(64,)`` int32 — raw idx reads
-            (e.g. ``metadata_flat[InputField.POSITION_ID]`` for the input-side
+            (e.g. ``metadata_flat[Field.POSITION_ID]`` for the input-side
             position_id field, which ``parse_output_page`` does not expose).
         parsed: ``DecodeResult`` — convenience accessors for ``slot_id`` and
             the ``token_0_*`` output fields.
@@ -564,8 +566,8 @@ def _run_prompt_sweep(
 
             if config.validate_metadata_roundtrip:
                 metadata_flat, parsed = _extract_metadata_from_d2h(output_tensor)
-                actual_position_id = int(metadata_flat[InputField.POSITION_ID].item())
-                actual_token_id = int(metadata_flat[InputField.TOKEN_ID].item())
+                actual_position_id = int(metadata_flat[Field.POSITION_ID].item())
+                actual_token_id = int(metadata_flat[Field.TOKEN_ID].item())
                 assert parsed.slot_id == slot_id, (
                     f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
                     f"slot_id round-trip mismatch (got {parsed.slot_id})"
@@ -577,10 +579,6 @@ def _run_prompt_sweep(
                 assert actual_token_id == global_pos, (
                     f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
                     f"token_id round-trip mismatch (got {actual_token_id})"
-                )
-                assert parsed.token_0_type == TokenType.BASE, (
-                    f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
-                    f"token_0_type round-trip mismatch (got {parsed.token_0_type})"
                 )
 
             collected_for_prompt[slot_id][p_local, :] = _extract_activation_from_d2h(output_tensor)
@@ -797,13 +795,13 @@ def _run_decoder_layer_pass(
     termination_dummy = _to_hidden_state_input(
         zero_hidden_state,
         token_id=0,
-        prefill_token_id=-1,
-        user_id=config.num_slots - 1,
+        prefill_token_ids=None,
+        slot_id=config.num_slots - 1,
+        lane_id=0,
         position_id=config.max_seq_len - 1,
-        token_type=TokenType.BASE,
         temperature=0.6,
         top_k=1,
-        probability_mass_threshold=1.0,
+        top_p=1.0,
     )
     logger.info(
         f"{layer_prefix}: pushing termination dummy " f"at slot={config.num_slots - 1} pos={config.max_seq_len - 1}"

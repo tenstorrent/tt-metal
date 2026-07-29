@@ -77,12 +77,6 @@ def create_parser() -> argparse.ArgumentParser:
         help="synthetic: random prepare path; real: TensorCache + HF safetensors; state_dict: HF safetensors + prepare path (no cache)",
     )
     parser.add_argument(
-        "--seed",
-        type=int,
-        default=520,
-        help="Seed for synthetic decoder weights",
-    )
-    parser.add_argument(
         "--fp32",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -182,6 +176,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Temperature for softmax in probablistic sampling",
     )
     parser.add_argument(
+        "--num-mtp-levels",
+        type=int,
+        default=1,
+        help="Number of MTP stages to use for the pipeline",
+    )
+    parser.add_argument(
         "--io-socket-descriptor-prefix",
         type=str,
         default=None,
@@ -217,7 +217,6 @@ def run_demo(
     model_path: Path | None = None,
     lm_head_fp32_dest_acc_en: bool = True,
     lm_head_persistent_mode: bool = True,
-    seed: int = 520,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     launch_only: bool = False,
@@ -227,7 +226,7 @@ def run_demo(
     top_k: int = 1,
     top_p: float = 1.0,
     temperature: float = 0.6,
-    enable_speculative_decode: bool = True,
+    num_mtp_levels: int = 1,
     enable_sram_hot_experts: bool = False,
     sram_hot_experts_ceiling: int = 64,
     bspm_dir: Path | None = None,
@@ -248,7 +247,7 @@ def run_demo(
         stop_at_eos,
     )
 
-    with open_mesh_device(enable_speculative_decode=enable_speculative_decode) as mesh_device:
+    with open_mesh_device(num_mtp_levels=num_mtp_levels) as mesh_device:
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             weights_mode=weights_mode,
@@ -256,7 +255,6 @@ def run_demo(
             model_path=model_path,
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode=lm_head_persistent_mode,
-            seed=seed,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             io_socket_descriptor_prefix=io_socket_descriptor_prefix,
@@ -265,7 +263,7 @@ def run_demo(
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
-            enable_speculative_decode=enable_speculative_decode,
+            num_mtp_levels=num_mtp_levels,
             enable_sram_hot_experts=enable_sram_hot_experts,
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
             bspm_dir=bspm_dir,
@@ -373,7 +371,6 @@ def main(argv: list[str] | None = None) -> int:
         model_path=args.model_path,
         lm_head_fp32_dest_acc_en=args.fp32,
         lm_head_persistent_mode=args.persistent_mode,
-        seed=args.seed,
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
@@ -383,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,
-        enable_speculative_decode=args.enable_speculative_decode,
+        num_mtp_levels=args.num_mtp_levels,
         enable_sram_hot_experts=args.enable_sram_hot_experts,
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
