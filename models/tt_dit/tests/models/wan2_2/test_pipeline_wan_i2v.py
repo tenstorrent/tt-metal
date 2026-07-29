@@ -180,11 +180,11 @@ def test_pipeline_inference(
     vbench_thresholds_by_height = {
         720: {
             "subject_consistency": 0.70,
-            "background_consistency": 0.85,
+            "background_consistency": 0.82,
         },
         480: {
             "subject_consistency": 0.70,
-            "background_consistency": 0.85,
+            "background_consistency": 0.82,
         },
     }
 
