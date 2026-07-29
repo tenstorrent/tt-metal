@@ -5,11 +5,11 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "mesh_tensor_impl.hpp"
 #include "spec/layout/tensor_layout_impl.hpp"
+#include "tensor_buffer_alloc.hpp"
 
 namespace tt::tt_metal {
 

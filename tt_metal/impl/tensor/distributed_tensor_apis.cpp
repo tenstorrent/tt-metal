@@ -9,9 +9,9 @@
 
 #include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
+#include "tensor_buffer_alloc.hpp"
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
@@ -115,7 +115,11 @@ HostTensor enqueue_read_tensor(
     distributed_host_buffer.emplace_shards(
         {coords.begin(), coords.end()},
         [&](const distributed::MeshCoordinate&) {
-            return tensor_impl::allocate_host_buffer(device_tensor.tensor_spec());
+            auto shard = HostTensor::allocate_for_overwrite(device_tensor.tensor_spec())
+                             .buffer()
+                             .get_shard(distributed::MeshCoordinate(0, 0));
+            TT_FATAL(shard.has_value(), "HostTensor::allocate_for_overwrite must produce a shard at (0, 0)");
+            return std::move(*shard);
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 

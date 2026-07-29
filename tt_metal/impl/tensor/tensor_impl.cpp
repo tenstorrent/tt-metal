@@ -9,6 +9,8 @@
 
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 
+#include "tensor_buffer_alloc.hpp"
+
 #include <vector>
 
 #include <tt_stl/span.hpp>
