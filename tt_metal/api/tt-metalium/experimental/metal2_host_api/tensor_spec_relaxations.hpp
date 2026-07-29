@@ -13,7 +13,7 @@ class TensorSpec;
 namespace tt::tt_metal::experimental {
 
 // ============================================================================
-//  TensorSpecRelaxation
+//  TensorSpecRelaxations
 // ============================================================================
 //
 // A Program may declare a TensorParameter with a particular TensorSpec.
@@ -21,24 +21,24 @@ namespace tt::tt_metal::experimental {
 // By default, the MeshTensor argument provided at execution time must EXACTLY
 // match the TensorParameter's declared TensorSpec.
 //
-// A TensorSpecRelaxation can "relax" this requirement: it declares the way(s) in
+// A TensorSpecRelaxations can "relax" this requirement: it declares the way(s) in
 // which the MeshTensor argument's TensorSpec is permitted to deviate from the
 // TensorParameter's declared TensorSpec.
 //
-// A default-constructed TensorSpecRelaxation requires an exact match.
+// A default-constructed TensorSpecRelaxations requires an exact match.
 //
 // CAUTION: These options are UNSAFE if set. Most kernels will NOT function
 // correctly if the tensor argument's spec deviates from the declared spec! You
 // must guarantee that your kernel logic outside of the TensorAccessor itself
 // tolerates any relaxations that you declare.
 //
-// NOTE: The TensorSpecRelaxation structure is under active development and will
+// NOTE: The TensorSpecRelaxations structure is under active development and will
 // change. We are starting with a crude "bag of bools" approach, introducing new
 // relaxations as they are needed. This will be replaced with a more structured
 // construct after the set of required relaxations is better understood.
 //
 // ============================================================================
-struct TensorSpecRelaxation {
+struct TensorSpecRelaxations {
     // Permit tensor arguments whose logical_shape differs from the declared shape.
     // The MeshTensor argument's padded_shape must still match exactly.
     //
@@ -69,26 +69,26 @@ struct TensorSpecRelaxation {
     bool dynamic_tensor_shape = false;
 };
 
-// Do two TensorSpecs "match" under a TensorSpecRelaxation?
+// Do two TensorSpecs "match" under a TensorSpecRelaxations?
 //
 // A relaxation defines an equivalence relation on TensorSpecs:
 // Two TensorSpecs match under relaxation when they agree on every field the relaxation defines
 // as pertinent. A given relaxation implies an equivalence relationship as defined in the
-// TensorSpecRelaxation documentation above.
+// TensorSpecRelaxations documentation above.
 //
 // NOTE: This check is used by SetProgramRunArgs, UpdateProgramRunArgs, and UpdateTensorArgs when
 // validating a supplied MeshTensor argument against its TensorParameter's declared TensorSpec.
 //
 bool tensorspecs_match_with_relaxation(
-    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const TensorSpecRelaxation& relaxation);
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const TensorSpecRelaxations& relaxation);
 
-// Hash a TensorSpec's pertinent fields under a TensorSpecRelaxation.
+// Hash a TensorSpec's pertinent fields under a TensorSpecRelaxations.
 // If two TensorSpecs match under a given relaxation, they will return the same hash.
 //
 // NOTE: Return type is std::uint64_t, not ttsl::hash::hash_t.
 // This is done so this public header need not include <tt_stl/reflection.hpp>.
 //
 std::uint64_t hash_tensorspec_with_relaxation(
-    const tt::tt_metal::TensorSpec& spec, const TensorSpecRelaxation& relaxation);
+    const tt::tt_metal::TensorSpec& spec, const TensorSpecRelaxations& relaxation);
 
 }  // namespace tt::tt_metal::experimental

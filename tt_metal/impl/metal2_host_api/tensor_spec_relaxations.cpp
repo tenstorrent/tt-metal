@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxation.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/reflection.hpp>
@@ -21,7 +21,7 @@ enum class RelaxationMode {
     DynamicRank,      // tensor_layout + logical_shape rank (per-dim shape values may differ)
 };
 
-RelaxationMode relaxation_mode(const TensorSpecRelaxation& relaxation) {
+RelaxationMode relaxation_mode(const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
         return RelaxationMode::DynamicRank;
     }
@@ -36,7 +36,7 @@ RelaxationMode relaxation_mode(const TensorSpecRelaxation& relaxation) {
 // Return type spelled std::uint64_t to match the public header (== ttsl::hash::hash_t); the body
 // works in ttsl::hash and its combiners, which is why reflection.hpp is included here, not there.
 std::uint64_t hash_tensorspec_with_relaxation(
-    const tt::tt_metal::TensorSpec& spec, const TensorSpecRelaxation& relaxation) {
+    const tt::tt_metal::TensorSpec& spec, const TensorSpecRelaxations& relaxation) {
     // Hash exactly the load-bearing fields for the mode, so two specs that match under the
     // relaxation hash equally. (logical_shape + tensor_layout are TensorSpec's own reflected
     // attributes, so the Strict case is equivalent to hashing the whole spec.)
@@ -51,7 +51,7 @@ std::uint64_t hash_tensorspec_with_relaxation(
 }
 
 bool tensorspecs_match_with_relaxation(
-    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const TensorSpecRelaxation& relaxation) {
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const TensorSpecRelaxations& relaxation) {
     // Compare exactly the load-bearing fields for the mode. This must compare fields, never hash
     // equality: a hash collision would otherwise report a false match -- the very failure the
     // exact-comparison key machinery exists to prevent.

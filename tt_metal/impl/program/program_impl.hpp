@@ -18,7 +18,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorParameter registry
-#include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxation.hpp"  // Metal 2.0 TensorParameter relaxations
+#include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
@@ -361,7 +361,7 @@ public:
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
     void register_tensor_parameter(
-        const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxation& relaxations);
+        const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
@@ -371,7 +371,7 @@ public:
     const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
     // Returns the relaxations the parameter was registered with (default-constructed / strict if the
     // name is unknown; the caller validates known-ness separately).
-    experimental::TensorSpecRelaxation get_tensor_parameter_relaxations(const std::string& name) const;
+    experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
@@ -508,7 +508,7 @@ private:
         // the per-parameter lookup for completeness checks.
         struct RegisteredTensorParameter {
             TensorSpec spec;
-            experimental::TensorSpecRelaxation relaxations;
+            experimental::TensorSpecRelaxations relaxations;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 

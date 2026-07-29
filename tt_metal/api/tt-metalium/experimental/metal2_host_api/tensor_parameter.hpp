@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxation.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/strong_type.hpp>
 
@@ -42,7 +42,7 @@ struct TensorParameter {
     ////////////////////////////////////////////////
     // TensorSpec match relaxations
     ////////////////////////////////////////////////
-    TensorSpecRelaxation relaxations;
+    TensorSpecRelaxations relaxations;
 };
 
 }  // namespace tt::tt_metal::experimental

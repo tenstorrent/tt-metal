@@ -722,7 +722,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxation& relaxations) {
+    const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -742,7 +742,7 @@ const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& na
     return &it->second.spec;
 }
 
-experimental::TensorSpecRelaxation ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
+experimental::TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
     if (!metal2_registry_) {
         return {};
     }

@@ -35,7 +35,7 @@ set(UNIT_TESTS_API_SOURCES
     metal2_host_api/test_scratchpad_hw.cpp
     metal2_host_api/test_program_run_args.cpp
     metal2_host_api/test_table.cpp
-    metal2_host_api/test_tensor_spec_relaxation.cpp
+    metal2_host_api/test_tensor_spec_relaxations.cpp
     test_kernel_thread_sync.cpp
     test_banked.cpp
     test_bit_utils.cpp

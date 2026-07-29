@@ -13,7 +13,7 @@
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxation.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -42,7 +42,7 @@ static void report_tensor_arg_mismatch(
     const TensorParamName& param_name,
     const TensorSpec& runtime_spec,
     const TensorSpec& expected_spec,
-    const TensorSpecRelaxation& relaxation) {
+    const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
         TT_FATAL(
             runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
@@ -118,7 +118,7 @@ void ValidateTensorArgs(
         const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(param_name.get());
         TT_FATAL(expected_spec != nullptr, "TensorArgument references unknown TensorParameter '{}'.", param_name);
         const TensorSpec& runtime_spec = mesh_tensor_of(tensor_arg).tensor_spec();
-        const TensorSpecRelaxation relaxation = program_impl.get_tensor_parameter_relaxations(param_name.get());
+        const TensorSpecRelaxations relaxation = program_impl.get_tensor_parameter_relaxations(param_name.get());
         // Authoritative accept/reject via the same predicate the program-cache hash keys on, so
         // run-time validation and cache-equivalence cannot disagree. On rejection,
         // report_tensor_arg_mismatch emits a specific diagnostic (and always throws).
