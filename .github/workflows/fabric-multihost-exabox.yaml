@@ -413,11 +413,20 @@ jobs:
         timeout-minutes: 20
         run: |
           TTRUN_DIR=/etc/ttop
-          # Host order defines the 32x4 ring for --config 4x32 (the script only
-          # canonicalizes host order for the Z configs). ttop's hostfile order is
-          # the allocation's rank order, which is the ring order.
-          PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
           WORKER_HOME=/home/user/tt-metal
+
+          # Host ORDER defines the 32x4 ring: --config 4x32 launches one rank per
+          # --hosts entry against a host_topology 4x1 descriptor, and (unlike the Z
+          # configs) the script does not reorder them. Take ttop's own rank order
+          # from the rankfile -- that is the placement the SC4 fabric test runs
+          # with -- and fall back to hostfile order if it can't be parsed.
+          PIPELINE_HOSTS=$(sed -n 's/^rank[[:space:]]*[0-9]*=\([^[:space:]]*\).*/\1/p' "${TTRUN_DIR}/rankfile" 2>/dev/null \
+            | awk '!seen[$0]++' | paste -sd, -)
+          if [ "$(tr -cd ',' <<< "$PIPELINE_HOSTS" | wc -c)" -ne 3 ]; then
+            echo "Could not read 4 hosts from ${TTRUN_DIR}/rankfile; falling back to hostfile order"
+            PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+          fi
+          echo "Ring order: $PIPELINE_HOSTS"
 
           set -o pipefail
           ./tools/scaleout/exabox/run_fabric_tests.sh \
@@ -425,7 +434,7 @@ jobs:
             --image none \
             --config 4x32 \
             --test-binary "$WORKER_HOME/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric" \
-            --test-config "$WORKER_HOME/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml" \
+            --test-config "$WORKER_HOME/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml" \
             --mesh-graph-desc-path "$WORKER_HOME/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto" \
             --filter name.2DTorusXYNeighborExchange \
             --mpi-args "--wdir $WORKER_HOME" 2>&1 | tee dc_quad_result.log
@@ -434,6 +443,14 @@ jobs:
           # log for the success marker instead: the script's own failure banner
           # quotes that marker ("Expected '...' once per rank"), so a grep passes
           # on a failed run.
+          #
+          # Belt and braces against a vacuous green: test_tt_fabric reports
+          # "Tests: <N> executed, <M> failed" per rank, so require that at least
+          # one test actually ran.
+          if ! grep -qE "Tests: [1-9][0-9]* executed" dc_quad_result.log; then
+            echo "::error::DC validation ran no tests (check the --test-config path and --filter)"
+            exit 1
+          fi
 
       - name: Upload fabric test logs
         if: always()
