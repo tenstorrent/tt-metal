@@ -5,10 +5,33 @@
 //
 // Modes, selected by compile-time args:
 //
-//   alias_mode == 1  (Path B, zero-copy)
+//   alias_mode == 1  (Path B, and Refinement 3's `alias_in` — zero-copy READ)
 //       cb_rm_input is aliased onto the resident L1 ROW_MAJOR shard, so the
 //       bytes are already at the CB's address. One cb_reserve_back /
 //       cb_push_back arms the whole shard; there is no NoC traffic at all.
+//       Refinement 3 reaches this branch for a sharded RM input whose OUTPUT is
+//       interleaved as well (`path == "alias_in"`): the work split gives this core
+//       exactly its own shard, so the unpacker reads the shard in place and only
+//       the writer talks to the NoC. That deletes 12 749 ns of 19 734 on
+//       `g_sharded_to_dram` (65 % of the runtime — the one-sided DM ablation).
+//
+//   coalesce_rows == 1  (Refinement 3, levers B5/B6 — bigger sharded reads)
+//       A ROW_MAJOR-*sharded* source stores one page per logical row and exactly
+//       ONE page column per shard, and `core_to_host_pages` pages a shard
+//       row-major — so the 32 rows of a chunk-block are 32 CONSECUTIVE pages
+//       inside a single core's L1. When the chunk covers the whole source page the
+//       L1 destination is contiguous too, so the whole block is ONE read of
+//       `32 * page_bytes` instead of 32 reads of `page_bytes`. `g_sharded_to_dram`
+//       plans 128 B pages, 4x under the one-packet threshold, and its read leg is
+//       issue-rate bound (~50 ns per read), which is exactly what this removes.
+//
+//   blocks_row_major == 1  (Refinement 3, the chunked `alias_out` order)
+//       With the OUTPUT CB aliased onto the shard, CB page k IS shard tile k, and
+//       a shard's tiles are stored row-major. So when the shard is wider than one
+//       chunk the reader must iterate tile-row-OUTER / column-chunk-INNER, which
+//       is the opposite of the generic path's order. With one chunk per core the
+//       two orders coincide and this stays 0 (which is what keeps lever C7, whose
+//       hand-off is chunk-outer, available on the crossover).
 //
 //   alias_mode == 0, split_read == 0  (Path A / C, single reader)
 //       Chunk-outer, tile-row-inner. For each column chunk we hand a whole
@@ -161,7 +184,10 @@ void kernel_main() {
     constexpr uint32_t sem_fanin_id = get_compile_time_arg_val(21);
     constexpr uint32_t cb_stage = get_compile_time_arg_val(22);
     constexpr uint32_t stagger = get_compile_time_arg_val(23);  // Refinement 2b
-    constexpr auto src_args = TensorAccessorArgs<24>();
+    // --- Refinement 3: crossover paths --------------------------------------------
+    constexpr uint32_t coalesce_rows = get_compile_time_arg_val(24);     // levers B5/B6
+    constexpr uint32_t blocks_row_major = get_compile_time_arg_val(25);  // chunked alias_out
+    constexpr auto src_args = TensorAccessorArgs<26>();
 
     using dataflow_kernel_lib::StickReadMode;
     constexpr StickReadMode read_mode = stateful_read ? StickReadMode::Stateful : StickReadMode::Generic;
@@ -191,6 +217,21 @@ void kernel_main() {
     // condition below is false, so the host would report the lever ON while the kernel
     // silently took the raw strided fallback -- correct output, lever quietly lost.
     static_assert(!stagger || row_page_stride == 1, "the read-order rotation needs one source page per row");
+    // Refinement 3. The coalesced read replaces the whole 32-read row loop with one
+    // transaction, so every lever that reshapes that loop is exclusive with it; and
+    // it is only VALID when the chunk covers exactly one source page (otherwise the
+    // 32 pages it folds together are not contiguous in the source shard's L1).
+    static_assert(
+        !coalesce_rows || (chunk_row_bytes == source_page_bytes && !stateful_read && !split_read &&
+                           prefetch_blocks == 1 && !stagger && !fanin_mode),
+        "the coalesced sharded read owns the row loop, and needs chunk == one source page");
+    // The row-major block order and lever C7's chunk-outer hand-off cannot both own
+    // the block sequence (the host keeps C7 to one chunk per core, where the two
+    // orders coincide and this flag is 0).
+    static_assert(!blocks_row_major || !split_read, "row-major block order and the C7 hand-off are exclusive");
+    static_assert(
+        !blocks_row_major || (prefetch_blocks == 1 && !fanin_mode && !stagger),
+        "row-major block order owns the block sequence; B8/fan-in/rotation cannot also own it");
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -367,6 +408,65 @@ void kernel_main() {
             // back with the firmware's default tag.
             noc_async_read_set_trid(0);
             if constexpr (read_vc_spread) {
+                noc_async_read_one_packet_set_state<true>(
+                    accessor.get_noc_addr(start_row), chunk_row_bytes, default_read_vc);
+            }
+            return;
+        }
+
+        if constexpr (coalesce_rows || blocks_row_major) {
+            // --- Refinement 3: one explicit (row-block, chunk) sequence ----------
+            // `blocks_row_major` selects WHICH order (row-outer for the chunked
+            // aliased output, chunk-outer otherwise — identical when either count
+            // is 1), `coalesce_rows` selects HOW each block is read. Both keep the
+            // block contract lever B7 rests on: reserve chunk_wt, issue this
+            // block's reads, ONE barrier, push chunk_wt.
+            const uint32_t blocks = num_rows / tile_height;
+            const uint32_t total = blocks * chunk_count;
+            for (uint32_t o = 0; o < total; ++o) {
+                const uint32_t block = blocks_row_major ? (o / chunk_count) : (o % blocks);
+                const uint32_t c = blocks_row_major ? (o % chunk_count) : (o / blocks);
+                const uint32_t row0 = start_row + block * tile_height;
+                const uint32_t byte_offset = (chunk_start + c) * chunk_row_bytes;
+
+                cb_reserve_back(cb_rm_input, chunk_wt);
+                const uint32_t l1_addr = get_write_ptr(cb_rm_input);
+                if constexpr (coalesce_rows) {
+                    // The chunk covers a whole source page (static_assert above), so
+                    // `byte_offset` selects a page COLUMN and never an intra-page
+                    // offset; rows row0..row0+31 are then 32 consecutive pages of the
+                    // SAME shard (the host gates shard_h % 32 == 0), i.e. one
+                    // contiguous run in the owner's L1 — and the destination is
+                    // contiguous as well, because the L1 row stride IS the page size.
+                    const uint32_t page_col = byte_offset / source_page_bytes;
+                    if constexpr (!skip_dm) {
+                        noc_async_read(
+                            accessor.get_noc_addr(row0 * row_page_stride + page_col),
+                            l1_addr,
+                            tile_height * chunk_row_bytes);
+                    } else {
+                        volatile uint32_t sink =
+                            static_cast<uint32_t>(accessor.get_noc_addr(row0 * row_page_stride + page_col));
+                        (void)sink;
+                    }
+                    // Checked, not assumed: the run this folds into one transaction
+                    // must really be contiguous in the source (watcher builds only).
+                    ASSERT(
+                        accessor.get_noc_addr((row0 + tile_height - 1) * row_page_stride + page_col) ==
+                        accessor.get_noc_addr(row0 * row_page_stride + page_col) + (tile_height - 1) * chunk_row_bytes);
+                } else if constexpr (!skip_dm) {
+                    dataflow_kernel_lib::read_stick_rows_for_tilize<read_mode, 1>(
+                        accessor, row0, chunk_row_bytes, byte_offset, l1_addr, chunk_row_bytes, tile_height);
+                } else {
+                    for (uint32_t row = 0; row < tile_height; ++row) {
+                        volatile uint32_t sink = static_cast<uint32_t>(accessor.get_noc_addr(row0 + row, byte_offset));
+                        (void)sink;
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_rm_input, chunk_wt);
+            }
+            if constexpr (read_vc_spread) {  // NOC_CTRL is sticky across launches
                 noc_async_read_one_packet_set_state<true>(
                     accessor.get_noc_addr(start_row), chunk_row_bytes, default_read_vc);
             }

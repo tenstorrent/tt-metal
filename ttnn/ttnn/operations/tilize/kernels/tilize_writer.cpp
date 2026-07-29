@@ -3,10 +3,16 @@
 //
 // tilize writer (BRISC / NoC1).
 //
-//   alias_mode == 1  (Path B, zero-copy)
+//   alias_mode == 1  (Path B, and Refinement 3's `alias_out` — zero-copy WRITE)
 //       cb_tiled_output is aliased onto the resident L1 TILE shard, so compute
 //       has already written the bytes to their final address. One
 //       cb_wait_front / cb_pop_front drains the shard; no NoC traffic.
+//       Refinement 3 reaches this branch for an interleaved RM input with a sharded
+//       TILE output: the work split gives this core exactly its own output shard
+//       (`_one_sided_shard_split`), so CB page k IS shard tile k and the tilize LLK
+//       packs straight into its final address. That deletes 6 786 ns of 19 150 on
+//       `g_dram_to_sharded` (35 % of the runtime — the one-sided DM ablation) and
+//       leaves BRISC free for lever C7 below.
 //
 //   alias_mode == 0  (Path A / C)
 //       Whole-TILE-page writes through the output TensorAccessor, chunk_wt
@@ -28,10 +34,19 @@
 //       that block's tilized output. NCRISC stays the ONLY producer of
 //       cb_rm_input (single-producer rule): it reserves the window and hands it
 //       over through sem_reserve, this kernel writes into it and answers on
-//       sem_done. `depth == 1` (host gate) is what makes the reserved window
-//       always the CB base address, which is what get_write_ptr returns here —
-//       this kernel never reserves or pushes cb_rm_input, so its copy of the CB
-//       write pointer never moves off the base.
+//       sem_done.
+//
+//       Refinement 3 lifts the old `depth == 1` restriction. This kernel never
+//       reserves or pushes cb_rm_input, so its copy of the CB write pointer never
+//       leaves the base — which used to mean `get_write_ptr` was only the RIGHT
+//       window at depth 1. The window is now DERIVED instead:
+//       `cb_base + (block % cb_depth) * window_bytes`, which is exactly where the
+//       FIFO write pointer stands after `block` pushes of chunk_wt pages (the same
+//       identity lever B8 relies on, and the reserve NCRISC already did is what
+//       guarantees the window is free). That matters on the `alias_out` crossover:
+//       there the only thing left to overlap the reads with is the tilize LLK, so
+//       C7 must not cost the depth-2 reader/compute pipeline to get its second
+//       issuer.
 //
 // RAW-API NOTE (helper substitution, deliberate): there is no kernel_lib
 // dataflow helper that moves TILE pages from a CB to a TensorAccessor-addressed
@@ -72,7 +87,10 @@ void kernel_main() {
     constexpr uint32_t vc_spread = get_compile_time_arg_val(11);  // lever B10 (bitmask)
     constexpr bool write_vc_spread = (vc_spread & 2u) != 0;       // bit 1 == spread the writes
     constexpr uint32_t stagger = get_compile_time_arg_val(12);    // Refinement 2b
-    constexpr auto dst_args = TensorAccessorArgs<13>();
+    // Refinement 3: the input CB's window count, so the C7 read half can derive the
+    // window NCRISC reserved at ANY depth (see the header).
+    constexpr uint32_t cb_in_depth = get_compile_time_arg_val(13);
+    constexpr auto dst_args = TensorAccessorArgs<14>();
     // Declared unconditionally (never inside `if constexpr`) so the CT arg offsets
     // are the same in both configurations; only used when split_read.
     [[maybe_unused]] constexpr auto src_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
@@ -85,6 +103,43 @@ void kernel_main() {
     static_assert(!stagger || !split_read, "the write-order rotation and the C7 split reader are not paired");
 
     if constexpr (alias_mode) {
+        if constexpr (split_read) {
+            // --- lever C7 on the `alias_out` crossover -------------------------
+            // With the output aliased this kernel has NO writes, so its whole job
+            // is the other half of each block's stick reads. Same two-semaphore
+            // hand-off as the generic branch below (NCRISC stays the only producer
+            // of cb_rm_input), just hoisted ahead of the single output drain —
+            // there is no per-block output wait to interleave with.
+            const uint32_t row_start = get_arg_val<uint32_t>(1);
+            const uint32_t row_count = get_arg_val<uint32_t>(2);
+            const uint32_t chunk_start = get_arg_val<uint32_t>(3);
+            const uint32_t src_addr = get_arg_val<uint32_t>(5);
+            const auto src_accessor = TensorAccessor(src_args, src_addr);
+            volatile tt_l1_ptr uint32_t* sem_reserve =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_reserve_id));
+            volatile tt_l1_ptr uint32_t* sem_done =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_done_id));
+            const uint32_t cb_in_base = get_write_ptr(cb_rm_input);
+            constexpr uint32_t cb_in_window_bytes = chunk_wt * get_tile_size(cb_rm_input);
+
+            for (uint32_t r = 0; r < row_count; ++r) {
+                const uint32_t seq = r + 1;
+                noc_semaphore_wait_min(sem_reserve, seq);
+                if constexpr (!skip_dm) {
+                    dataflow_kernel_lib::read_stick_rows_for_tilize<read_mode, 2>(
+                        src_accessor,
+                        (row_start + r) * tile_height,
+                        chunk_row_bytes,
+                        chunk_start * chunk_row_bytes,
+                        cb_in_base + ((seq - 1) % cb_in_depth) * cb_in_window_bytes,
+                        chunk_row_bytes,
+                        tile_height,
+                        /*split_id=*/1);
+                }
+                noc_async_read_barrier();
+                noc_semaphore_set(sem_done, seq);
+            }
+        }
         cb_wait_front(cb_tiled_output, shard_tiles);
         cb_pop_front(cb_tiled_output, shard_tiles);
         return;
@@ -107,6 +162,13 @@ void kernel_main() {
         // Refinement 2b: this core's rotation of the in-block write order. Read as a
         // constant 0 when the lever is off, so the loop below folds back to `k`.
         const uint32_t col_rot = stagger ? get_arg_val<uint32_t>(7) : 0;
+        // Lever C7's window base. Read BEFORE the loop and never updated: this
+        // kernel is not a producer of cb_rm_input, so its CB write pointer stays at
+        // the base for the whole launch (the firmware re-runs
+        // setup_local_cb_read_write_interfaces() per launch, so this is the base even
+        // for a cached program whose previous launch pushed).
+        [[maybe_unused]] const uint32_t cb_in_base = split_read ? get_write_ptr(cb_rm_input) : 0;
+        constexpr uint32_t cb_in_window_bytes = chunk_wt * get_tile_size(cb_rm_input);
 
         for (uint32_t c = 0; c < chunk_count; ++c) {
             const uint32_t col0 = (chunk_start + c) * chunk_wt;
@@ -122,13 +184,17 @@ void kernel_main() {
 
                     const uint32_t seq = c * row_count + r + 1;
                     noc_semaphore_wait_min(sem_reserve, seq);
+                    // The window NCRISC reserved for block `seq - 1`. At depth 1 this
+                    // is the base (the old `get_write_ptr` value); past that it
+                    // rotates, exactly like the FIFO write pointer does.
+                    const uint32_t window = cb_in_base + ((seq - 1) % cb_in_depth) * cb_in_window_bytes;
                     if constexpr (!skip_dm) {
                         dataflow_kernel_lib::read_stick_rows_for_tilize<read_mode, 2>(
                             src_accessor,
                             (row_start + r) * tile_height,
                             chunk_row_bytes,
                             (chunk_start + c) * chunk_row_bytes,
-                            get_write_ptr(cb_rm_input),
+                            window,
                             chunk_row_bytes,
                             tile_height,
                             /*split_id=*/1);

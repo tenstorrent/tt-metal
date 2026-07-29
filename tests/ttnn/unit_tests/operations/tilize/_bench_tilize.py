@@ -417,6 +417,50 @@ REGIMES = {
     "x_tall_narrow_stg": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, levers=dict(b13=0, c7=0, stg=2)),
     "p_wide_short_8k_stg_off": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=0)),
     "x_wide_short_8k_stg": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=2)),
+    # --- Refinement 3: the interleaved<->sharded crossover ---------------------
+    # PREDICTION ROW, measured BEFORE the kernel exists (the Refinement-2b lesson:
+    # price the algorithm's own ceiling first). One-sided output aliasing makes each
+    # core own exactly its OUTPUT SHARD, and a BLOCK-sharded shard of [1,1,2048,512]
+    # on an 8x8 grid is 256x64, i.e. 64 columns => the reader's row slice is 128 B
+    # instead of the 1024 B the generic 2D split gives it. `chunk_cap=2` reproduces
+    # that transaction shape on the generic path (8 blocks x 32 x 128 B per core,
+    # same core count, same tiles), so `TILIZE_BENCH_SPLIT_DM=1`'s `no_write` row on
+    # this regime IS the aliased path's predicted cost.
+    "x_g_to_sharded_chunk2": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        chunk_cap=2,
+    ),
+    # ... and the same prediction row at depth 1 with each read-issue lever forced,
+    # because the chunk-2 read leg is ISSUE-RATE bound (256 reads/core at ~40 ns of
+    # command programming each), not DRAM-bandwidth bound: `no_write` here says
+    # whether C7 (a second issuer on BRISC, which the output alias frees completely)
+    # or B13 (cheaper per-read) can pay for the narrow read the alias forces.
+    "p_g_to_sharded_chunk2_d1": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        chunk_cap=2,
+        double_buffer=False,
+        levers=dict(b8=0, b13=0, c7=0),
+    ),
+    "x_g_to_sharded_chunk2_d1_c7": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        chunk_cap=2,
+        double_buffer=False,
+        levers=dict(b8=0, b13=0, c7=2),
+    ),
+    "x_g_to_sharded_chunk2_d1_b13": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        chunk_cap=2,
+        double_buffer=False,
+        levers=dict(b8=0, b13=2, c7=0),
+    ),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(

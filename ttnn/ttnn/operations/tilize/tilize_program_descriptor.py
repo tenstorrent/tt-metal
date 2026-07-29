@@ -129,6 +129,9 @@ CB_RM_INPUT = 0
 CB_STAGE = 1
 CB_TILED_OUTPUT = 16
 
+_HEIGHT_SHARDED = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+_WIDTH_SHARDED = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
 # --- Refinement 1c: the two sub-one-packet read-path levers -------------------
 #
 # `d_tall_narrow` [1,1,2048,32] reads 32 x 64 B sticks per block (a W=32 bf16
@@ -380,6 +383,104 @@ def stagger_pays(ncores: int, nt_h: int, chunk_wt: int) -> int:
     return STAGGER_READ | STAGGER_WRITE
 
 
+# --- Refinement 3: the interleaved <-> sharded crossover -----------------------
+#
+# Phase 0 routed BOTH sides of a crossover through the generic `TensorAccessor`, so
+# the sharded side paid a full NoC leg it does not need. The one-sided DM ablation
+# (`TILIZE_BENCH_SPLIT_DM=1`) prices that leg on each direction (7 rounds x 10
+# launches, CV <= 1.1 %):
+#
+#   regime            | shape / spec              | full   | read leg | write leg | floor
+#   ------------------|---------------------------|--------|----------|-----------|------
+#   g_dram_to_sharded | [1,1,2048,512] -> B-shard | 19 150 |    9 832 |     6 786 | 2 697
+#   g_sharded_to_dram | [1,1,2048,512] B-shard -> | 19 734 |   12 749 |    12 812 | 3 685
+#
+# so the leg the alias deletes is 6 786 ns (35 %) on DRAM->sharded and 12 749 ns
+# (65 %) on sharded->DRAM. Two levers, both measured below:
+#
+#   C14 one-sided aliasing (`path == "alias_out"` / `"alias_in"`) -- the sharded
+#       side's CB is built with `cb_descriptor_from_sharded_tensor`, so its base
+#       address IS the shard's, and each core owns exactly the shard's own tiles
+#       (`_one_sided_shard_split`). On `alias_out` the tilize LLK packs straight
+#       into the output shard (zero write traffic); on `alias_in` the unpacker
+#       reads straight out of the input shard (zero read traffic).
+#
+#       The COST, which is why this is a measured lever and not a free win: the
+#       work split is no longer free to choose the read transaction size, because a
+#       core owns exactly its shard's columns. A BLOCK-sharded [1,1,2048,512] on
+#       8x8 has 64-column shards, so `alias_out` reads 128 B rows where the generic
+#       2D split reads 1024 B. Measured on the generic path with `chunk_cap=2`
+#       (same transaction shape, same cores -- the prediction row
+#       `x_g_to_sharded_chunk2*`), `no_write` == what the aliased path must beat:
+#
+#         plan (chunk 2, 8 blk/core, 64 cores) | no_write ns | vs chunk-16 full
+#         -------------------------------------|-------------|------------------
+#         depth 1, no read lever               |      16 874 | 0.88
+#         depth 1, + B13 stateful reads        |      16 244 | 0.85
+#         depth 1, + C7 split reader           |    * 14 259 | 0.74
+#         depth 3, + B8 trid double-issue      |      15 866 | 0.83
+#
+#       -- i.e. the narrow read costs ~0 in DRAM time (2.10 MB / ~10 us = 212 GB/s
+#       at BOTH 128 B and 1024 B, which is R2b's finding again) and the whole
+#       difference between those rows is per-read ISSUE cost on the RISC.
+#
+#   C7 split reader ON THE ALIAS PATH -- with the output aliased BRISC has nothing
+#       left to do but one `cb_wait_front`/`cb_pop_front`, so handing it half the
+#       stick reads is free of the read/write-overlap cost that made C7 negative on
+#       the generic path past 1 block per core (R1c). That is the 0.845 above.
+#       Refinement 3 also GENERALISES C7 to depth >= 2 (it was depth-1-only,
+#       because BRISC read the reserved window out of `get_write_ptr`): BRISC now
+#       derives the window from `cb_base + (block % depth) * window_bytes`, the
+#       same identity lever B8 already relies on. That matters because at depth 1
+#       the reader and the tilize LLK serialize, and on the alias path the LLK is
+#       the only thing left to overlap with.
+#
+#   B5/B6 coalesced sharded read (`coalesce_rows`) -- a ROW_MAJOR-*sharded* source
+#       stores one page per logical row and one page COLUMN per shard, so the 32
+#       rows of a chunk-block are 32 CONSECUTIVE pages inside a single core's L1
+#       (`core_to_host_pages` pages a shard row-major). When the chunk covers the
+#       whole source page the L1 destination is contiguous too, so the whole block
+#       is ONE read of `32 * page_bytes` instead of 32 reads of `page_bytes`.
+#       `g_sharded_to_dram` plans `chunk_wt = 2` => 128 B reads, 4x below the
+#       one-packet threshold, and its read leg is 12 749 ns for 2.10 MB (164 GB/s)
+#       at ~50 ns per read -- issue-rate bound, which is exactly what this removes.
+#       It is the fallback for every sharded-RM input the alias declines (wide
+#       shards, ND specs, `use_multicore=False`, cross-spec reshards).
+ALIAS_OUT_MIN_CORES = 2
+ALIAS_IN_MIN_CORES = 2
+
+
+def alias_out_pays(ncores: int) -> bool:
+    """C14 gate, DRAM/interleaved RM -> sharded TILE: is the write leg worth the
+    narrower read the shard-shaped work split forces?
+
+    One clause: more than one core. On a single core the whole tensor is one
+    "shard" only when the grid is 1x1, and `use_multicore=False` deliberately means
+    exactly one core on the GENERIC path (Refinement 1), so the alias never
+    competes with it.
+    """
+    return ncores >= ALIAS_OUT_MIN_CORES
+
+
+def alias_in_pays(ncores: int) -> bool:
+    """C14 gate, sharded RM -> DRAM/interleaved TILE: same clause as
+    ``alias_out_pays``. The read leg it deletes is 65 % of `g_sharded_to_dram`."""
+    return ncores >= ALIAS_IN_MIN_CORES
+
+
+def coalesce_rows_pays(chunk_row_bytes: int, source_page_bytes: int) -> bool:
+    """B5/B6 gate: fold a chunk-block's 32 same-shard page reads into one.
+
+    The structural half (the source must be a ROW_MAJOR shard whose pages are
+    contiguous in one core's L1, and the chunk must cover the whole page) is
+    checked by the caller. The payoff half is that the coalesced read is strictly
+    bigger and strictly fewer -- 1 x 32*page_bytes instead of 32 x page_bytes -- so
+    it pays whenever it is legal; the gate exists to keep the counterfactual
+    switchable (`TILIZE_LEVER_COAL=0`) rather than to exclude a regime.
+    """
+    return chunk_row_bytes == source_page_bytes
+
+
 def _lever_flags():
     """Env counterfactual switches for the read-path levers (Mode-C ledger).
 
@@ -391,6 +492,10 @@ def _lever_flags():
     ``r2b`` additionally accepts 3 == the *measurement probe*: phase 1 only (the
     whole-piece staged read straight into the CB, no exchange), which prices the
     read-side ceiling on its own. Output is garbage, so it is bench-only.
+
+    ``r3`` is Refinement 3's one-sided CB alias: 0 == off (the Phase-0 generic
+    path on both sides of a crossover, i.e. the counterfactual), 1 == gated,
+    2 == force past the payoff gate. ``coal`` is its coalesced sharded read.
     """
     return dict(
         b13=int(os.environ.get("TILIZE_LEVER_B13", "1")),
@@ -400,6 +505,8 @@ def _lever_flags():
         a3=int(os.environ.get("TILIZE_LEVER_A3", "1")),
         r2b=int(os.environ.get("TILIZE_LEVER_R2B", "1")),
         stg=int(os.environ.get("TILIZE_LEVER_STG", "1")),
+        r3=int(os.environ.get("TILIZE_LEVER_R3", "1")),
+        coal=int(os.environ.get("TILIZE_LEVER_COAL", "1")),
     )
 
 
@@ -740,6 +847,12 @@ def _shard_geometry(tensor):
         "orientation": orientation,
         "layout": memory_config.memory_layout,
         "buffer": memory_config.buffer_type,
+        # True for an NdShardSpec. The shard -> core order of an ND spec is
+        # row-major over the *ND* shard grid with a round-robin core assignment
+        # (buffer_distribution_spec.cpp:53-86,152-191), which only agrees with the
+        # flattened 2D map when the fold is consistent -- so Refinement 3's
+        # one-sided alias, which needs that map exactly, declines ND.
+        "nd": shard_spec is None,
     }
 
 
@@ -762,6 +875,73 @@ def _alias_eligible(in_geo, out_geo, folded_h: int, width: int) -> bool:
         return False
     # Whole shard width is one tilize block, so it must fit the LLK limit.
     return shard_w // TILE_HW < MAX_BLOCK_WIDTH_TILES
+
+
+# ---------------------------------------------------------------------------
+# Refinement 3: the shard -> global-tile map behind one-sided CB aliasing
+# ---------------------------------------------------------------------------
+#
+# `op_design.md` Risk #2 (and the verifier's note on this refinement) is that a
+# WRONG map keeps every CB count balanced and silently transposes blocks. The map
+# is therefore derived from the tt-metal page mapping rather than guessed:
+#
+#   * legacy 2D shard specs get their core list from
+#     `corerange_to_cores(shard_grid, num_cores, row_wise = orientation == ROW_MAJOR)`
+#     (`buffer.cpp:271`), and
+#   * `core_to_host_pages` (`buffer.cpp:119-180`) walks shards COLUMN-inner /
+#     ROW-outer over the shard grid, and pages ROW-major *within* each shard
+#     (`i` over shard rows outer, `j` over shard columns inner).
+#
+# So shard `(sh, sw)` is linear index `sh * n_sw + sw` and lives on
+# `cores[sh * n_sw + sw]`, and its pages are its own tiles in row-major order --
+# which is exactly the order `compute_kernel_lib::tilize` pushes them in when the
+# reader iterates tile-row-outer / column-chunk-inner. That identity is what makes
+# an aliased CB legal: the CB's page k IS the shard's tile k.
+#
+# ND shard specs are DECLINED (see `_shard_geometry`'s "nd" key): their shard ->
+# core order is row-major over the ND shard grid with a round-robin assignment, and
+# for a shard that splits a leading dim while leaving an inner one whole the
+# flattened row order does not agree. Those cells keep the generic accessor path.
+
+
+def _one_sided_shard_split(geo, folded_h: int, width: int):
+    """(shard_ht, shard_wt, [(core, shard_row, shard_col), ...]) or ``None``.
+
+    ``None`` means "this shard geometry is not one the map above covers" -- the
+    caller then keeps the generic ``TensorAccessor`` path, which is correct for
+    every geometry.
+    """
+    if geo is None or geo["nd"]:
+        return None
+    # A CB can only be aliased onto L1.
+    if geo["buffer"] != ttnn.BufferType.L1:
+        return None
+
+    shard_h, shard_w = geo["h"], geo["w"]
+    if shard_h % TILE_HW or shard_w % TILE_HW:
+        return None
+    if folded_h % shard_h or width % shard_w:
+        return None
+
+    n_sh, n_sw = folded_h // shard_h, width // shard_w
+    grid = geo["grid"]
+    # One shard per core, exactly -- with fewer shards than cores the legacy map
+    # leaves cores empty and with more it wraps, neither of which this map covers.
+    if n_sh * n_sw != grid.num_cores():
+        return None
+    # HEIGHT/WIDTH sharding pin one of the two shard-grid dims by definition; a
+    # spec that disagrees would take a different branch of `core_to_host_pages`.
+    if geo["layout"] == _HEIGHT_SHARDED and n_sw != 1:
+        return None
+    if geo["layout"] == _WIDTH_SHARDED and n_sh != 1:
+        return None
+    # Whole shard width is at most one tilize block, so it must fit the LLK limit.
+    if shard_w // TILE_HW >= MAX_BLOCK_WIDTH_TILES:
+        return None
+
+    cores = ttnn.corerange_to_cores(grid, n_sh * n_sw, geo["orientation"] == ttnn.ShardOrientation.ROW_MAJOR)
+    units = [(cores[sh * n_sw + sw], sh, sw) for sh in range(n_sh) for sw in range(n_sw)]
+    return shard_h // TILE_HW, shard_w // TILE_HW, units
 
 
 # ---------------------------------------------------------------------------
@@ -835,13 +1015,38 @@ def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_d
     if use_multicore and _alias_eligible(in_geo, out_geo, folded_h, width):
         return _plan_alias(plan, in_geo)
 
+    # Refinement 3, lever C14: one-sided aliasing on a crossover. The sharded side
+    # gets its CB aliased onto the shard and each core owns exactly its own shard's
+    # tiles; the interleaved side keeps the generic accessor. Only when the OTHER
+    # side is interleaved -- with both sides sharded (a cross-spec reshard) the
+    # generic path is already correct on both and this refinement does not touch it.
+    levers = _lever_flags()
+    shard_split = None
+    if use_multicore and levers["r3"]:
+        if out_geo is not None and in_geo is None:
+            shard_split = _one_sided_shard_split(out_geo, folded_h, width)
+            if shard_split is not None:
+                shard_split = ("alias_out", out_geo) + shard_split
+        elif in_geo is not None and out_geo is None:
+            shard_split = _one_sided_shard_split(in_geo, folded_h, width)
+            if shard_split is not None:
+                shard_split = ("alias_in", in_geo) + shard_split
+
     chunk_cap = None
     if use_double_buffer is None:
         # C16 gate. The depth feeds the L1 chunk-width budget, which feeds the
         # 2D split, which decides ncores / blocks-per-core -- i.e. the gate's own
         # inputs. Resolve it with a depth-2 trial plan (pure host arithmetic, no
         # device work) and re-plan once at the chosen depth.
-        trial = _plan_generic(dict(plan), input_tensor, device, in_geo, use_multicore=use_multicore, depth_request=2)
+        trial = _plan_generic(
+            dict(plan),
+            input_tensor,
+            device,
+            in_geo,
+            use_multicore=use_multicore,
+            depth_request=2,
+            shard_split=shard_split,
+        )
         if depth2_pays(trial["ncores"], trial["blocks_per_core"]):
             depth_request = 2
         else:
@@ -869,6 +1074,7 @@ def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_d
         # ("depth-2, +L1" / "depth-1, minimal L1") exactly -- a caller who pinned
         # the depth gets the depth they asked for.
         depth_forced=use_double_buffer is not None,
+        shard_split=shard_split,
     )
 
 
@@ -887,12 +1093,19 @@ def _plan_alias(plan, geo):
     plan.update(
         {
             "path": "alias",
+            # Refinement 3: Path B aliases BOTH sides (the one-sided crossover
+            # paths set exactly one of these).
+            "alias_in": 1,
+            "alias_out": 1,
+            "coalesce_rows": 0,
+            "blocks_row_major": 0,
             "core_ranges": grid,
             "cores": cores,
             "chunk_wt": chunk_wt,
             "shard_tiles": shard_tiles,
             "num_blocks": num_blocks,
             "blocks_per_core": num_blocks,
+            "chunks_per_core": 1,
             "depth": 1,  # the CB *is* the shard; use_double_buffer is inert here
             "row_page_stride": 1,
             "source_page_bytes": shard_w * plan["elem_in"],
@@ -915,18 +1128,35 @@ def _plan_alias(plan, geo):
             "piece_bytes": 0,
             "ncores": len(cores),
             "cb_bytes_per_core": shard_tiles * (plan["tile_in"] + plan["tile_out"]),
+            "alias_cb_bytes": shard_tiles * (plan["tile_in"] + plan["tile_out"]),
         }
     )
     return plan
 
 
 def _plan_generic(
-    plan, input_tensor, device, in_geo, *, use_multicore, depth_request, chunk_cap=None, depth_forced=False
+    plan,
+    input_tensor,
+    device,
+    in_geo,
+    *,
+    use_multicore,
+    depth_request,
+    chunk_cap=None,
+    depth_forced=False,
+    shard_split=None,
 ):
     """Path A/C: 2D height-first rectangular split over the compute grid.
 
     ``chunk_cap`` pins the chunk width from a previous (depth-2) pass so the C16
     depth gate cannot change the transaction shape — see ``build_plan``.
+
+    ``shard_split`` (Refinement 3) replaces the 2D split with the sharded side's own
+    shard map — ``("alias_out"|"alias_in", geo, shard_ht, shard_wt, units)`` from
+    ``_one_sided_shard_split``. Everything downstream (source-page geometry, the CB
+    depth budget, every read/write lever) is shared with the generic path on
+    purpose: the alias changes *which tiles a core owns* and *which side pays a NoC
+    leg*, nothing else.
     """
     nt_h, wt = plan["nt_h"], plan["wt"]
     tile_in, tile_out = plan["tile_in"], plan["tile_out"]
@@ -967,67 +1197,145 @@ def _plan_generic(
         max_cores = a0_active_cores(grid_cores, plan["total_tiles"])
 
     bytes_per_chunk_tile = tile_in + tile_out
-    # "Depth-2 only if it fits": the smallest possible depth-2 footprint is one
-    # chunk tile-pair. If even that exceeds the budget, fall back to depth 1
-    # rather than OOM (the ttnn.concat pattern). Decided BEFORE the chunk width
-    # so `max_chunk_l1` is computed against the depth actually used; the
-    # post-loop assert below is then an invariant, not a second clamp.
-    depth = depth_request
-    if depth * bytes_per_chunk_tile > L1_CB_BUDGET_BYTES:
-        depth = 1
-    max_chunk_l1 = max(1, L1_CB_BUDGET_BYTES // (depth * bytes_per_chunk_tile))
-
-    n_h = min(nt_h, max_cores)
-    want_chunks = _div_up(max_cores, n_h)
-    max_chunk_par = max(1, wt // want_chunks)
-    max_chunk = min(WT_CHUNK_MAX, max_chunk_l1, max_chunk_par)
-    if chunk_cap is not None:
-        max_chunk = min(max_chunk, chunk_cap)
-    if CHUNK_CAP_OVERRIDE is not None:  # sweep hook, never set in production
-        max_chunk = min(max_chunk, int(CHUNK_CAP_OVERRIDE))
-
-    chunk_wt = _largest_divisor_le(chunk_unit, max_chunk)
-    assert wt % chunk_wt == 0, f"chunk_wt={chunk_wt} must divide Wt={wt}"
-    assert depth * chunk_wt * bytes_per_chunk_tile <= L1_CB_BUDGET_BYTES, (
-        f"CB budget blown: depth={depth} chunk_wt={chunk_wt} "
-        f"bytes_per_chunk_tile={bytes_per_chunk_tile} > {L1_CB_BUDGET_BYTES}"
-    )
-    n_chunks = wt // chunk_wt
-    n_w = min(n_chunks, max(1, max_cores // n_h))
-    ncores = n_h * n_w
-
-    # --- lever A3: work-unit -> core assignment order ------------------------
-    # Default is A1's row-major line (`grid_to_cores(..., row_wise=True)`).
-    # `bank_placement` re-orders the SAME core set so that work unit 0..NUM_BANKS-1
-    # land on the NoC-optimal worker of DRAM bank 0..NUM_BANKS-1. Decided here
-    # because it needs `ncores`; whether it fires is gated below.
     levers = _lever_flags()
-    bank_placement = int(
-        levers["a3"] == 2 or (levers["a3"] == 1 and bank_placement_pays(ncores)),
-    )
-    if bank_placement:
-        cores, core_ranges = _bank_ordered_cores(device, grid, ncores)
-    else:
-        cores = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
-        core_ranges = ttnn.num_cores_to_corerangeset(ncores, grid, True)
+    path = "generic"
+    alias_in = alias_out = 0
+    shard_tiles = 0
+    alias_cb_bytes = 0
 
-    row_ranges = _split_contiguous(nt_h, n_h)
-    chunk_ranges = _split_contiguous(n_chunks, n_w)
+    if shard_split is not None:
+        # --- Refinement 3, lever C14: the work unit IS the shard ---------------
+        path, shard_geo, shard_ht, shard_wt, units = shard_split
+        alias_out = int(path == "alias_out")
+        alias_in = 1 - alias_out
+        shard_tiles = shard_ht * shard_wt
+        # The aliased side costs no *CB* L1 (the CB is the tensor's own shard), so
+        # only the plain side is budgeted -- and only IT can be chunked. On
+        # `alias_in` the unpacker reads the RM shard in place, so a block must be 32
+        # whole shard rows: chunk_wt == shard_wt exactly, no chunking possible.
+        plain_tile_bytes = tile_in if alias_out else tile_out
+        alias_cb_bytes = shard_tiles * (tile_out if alias_out else tile_in)
+        depth = depth_request
+        if depth * plain_tile_bytes > L1_CB_BUDGET_BYTES:
+            depth = 1
+        max_chunk_l1 = max(1, L1_CB_BUDGET_BYTES // (depth * plain_tile_bytes))
+        if alias_in:
+            chunk_wt = shard_wt
+            if depth * chunk_wt * plain_tile_bytes > L1_CB_BUDGET_BYTES:
+                return _plan_generic(  # too wide a shard to hold a whole block
+                    plan,
+                    input_tensor,
+                    device,
+                    in_geo,
+                    use_multicore=use_multicore,
+                    depth_request=depth_request,
+                    chunk_cap=chunk_cap,
+                    depth_forced=depth_forced,
+                    shard_split=None,
+                )
+        else:
+            max_chunk = min(WT_CHUNK_MAX, max_chunk_l1, shard_wt)
+            if chunk_cap is not None:
+                max_chunk = min(max_chunk, chunk_cap)
+            if CHUNK_CAP_OVERRIDE is not None:  # sweep hook, never set in production
+                max_chunk = min(max_chunk, int(CHUNK_CAP_OVERRIDE))
+            # A chunk must also not straddle a source page (the generic invariant).
+            chunk_wt = _largest_divisor_le(gcd(shard_wt, chunk_unit), max_chunk)
+        chunks_per_shard = shard_wt // chunk_wt
+        assert shard_wt % chunk_wt == 0, f"chunk_wt={chunk_wt} must divide shard_wt={shard_wt}"
 
-    work = []
-    for i in range(n_h):
-        row_start, row_count = row_ranges[i]
-        for j in range(n_w):
-            chunk_start, chunk_count = chunk_ranges[j]
-            work.append(
-                {
-                    "core": cores[i * n_w + j],
-                    "row_start": row_start,
-                    "row_count": row_count,
-                    "chunk_start": chunk_start,
-                    "chunk_count": chunk_count,
-                }
+        ncores = len(units)
+        if not (levers["r3"] == 2 or (alias_out and alias_out_pays(ncores)) or (alias_in and alias_in_pays(ncores))):
+            return _plan_generic(
+                plan,
+                input_tensor,
+                device,
+                in_geo,
+                use_multicore=use_multicore,
+                depth_request=depth_request,
+                chunk_cap=chunk_cap,
+                depth_forced=depth_forced,
+                shard_split=None,
             )
+
+        bank_placement = 0
+        cores = [core for core, _, _ in units]
+        core_ranges = shard_geo["grid"]
+        # The shard grid IS the work grid: n_w shard columns x n_h shard rows.
+        n_w = width // (shard_wt * TILE_HW)
+        n_h = ncores // n_w
+        n_chunks = wt // chunk_wt
+        work = [
+            {
+                "core": core,
+                "row_start": sh * shard_ht,
+                "row_count": shard_ht,
+                "chunk_start": sw * chunks_per_shard,
+                "chunk_count": chunks_per_shard,
+            }
+            for core, sh, sw in units
+        ]
+    else:
+        # "Depth-2 only if it fits": the smallest possible depth-2 footprint is one
+        # chunk tile-pair. If even that exceeds the budget, fall back to depth 1
+        # rather than OOM (the ttnn.concat pattern). Decided BEFORE the chunk width
+        # so `max_chunk_l1` is computed against the depth actually used; the
+        # post-loop assert below is then an invariant, not a second clamp.
+        depth = depth_request
+        if depth * bytes_per_chunk_tile > L1_CB_BUDGET_BYTES:
+            depth = 1
+        max_chunk_l1 = max(1, L1_CB_BUDGET_BYTES // (depth * bytes_per_chunk_tile))
+
+        n_h = min(nt_h, max_cores)
+        want_chunks = _div_up(max_cores, n_h)
+        max_chunk_par = max(1, wt // want_chunks)
+        max_chunk = min(WT_CHUNK_MAX, max_chunk_l1, max_chunk_par)
+        if chunk_cap is not None:
+            max_chunk = min(max_chunk, chunk_cap)
+        if CHUNK_CAP_OVERRIDE is not None:  # sweep hook, never set in production
+            max_chunk = min(max_chunk, int(CHUNK_CAP_OVERRIDE))
+
+        chunk_wt = _largest_divisor_le(chunk_unit, max_chunk)
+        assert wt % chunk_wt == 0, f"chunk_wt={chunk_wt} must divide Wt={wt}"
+        assert depth * chunk_wt * bytes_per_chunk_tile <= L1_CB_BUDGET_BYTES, (
+            f"CB budget blown: depth={depth} chunk_wt={chunk_wt} "
+            f"bytes_per_chunk_tile={bytes_per_chunk_tile} > {L1_CB_BUDGET_BYTES}"
+        )
+        n_chunks = wt // chunk_wt
+        n_w = min(n_chunks, max(1, max_cores // n_h))
+        ncores = n_h * n_w
+
+        # --- lever A3: work-unit -> core assignment order --------------------
+        # Default is A1's row-major line (`grid_to_cores(..., row_wise=True)`).
+        # `bank_placement` re-orders the SAME core set so that work unit
+        # 0..NUM_BANKS-1 land on the NoC-optimal worker of DRAM bank 0..NUM_BANKS-1.
+        # Decided here because it needs `ncores`; whether it fires is gated below.
+        bank_placement = int(
+            levers["a3"] == 2 or (levers["a3"] == 1 and bank_placement_pays(ncores)),
+        )
+        if bank_placement:
+            cores, core_ranges = _bank_ordered_cores(device, grid, ncores)
+        else:
+            cores = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
+            core_ranges = ttnn.num_cores_to_corerangeset(ncores, grid, True)
+
+        row_ranges = _split_contiguous(nt_h, n_h)
+        chunk_ranges = _split_contiguous(n_chunks, n_w)
+
+        work = []
+        for i in range(n_h):
+            row_start, row_count = row_ranges[i]
+            for j in range(n_w):
+                chunk_start, chunk_count = chunk_ranges[j]
+                work.append(
+                    {
+                        "core": cores[i * n_w + j],
+                        "row_start": row_start,
+                        "row_count": row_count,
+                        "chunk_start": chunk_start,
+                        "chunk_count": chunk_count,
+                    }
+                )
 
     # --- Refinement 1c read-path levers (see the module header) ---------------
     # Both need one source page per logical row: the helpers' page index advances
@@ -1036,13 +1344,48 @@ def _plan_generic(
     b13, c7 = levers["b13"], levers["c7"]
     chunk_row_bytes = chunk_wt * TILE_HW * elem_in
     blocks_per_core = max(u["row_count"] * u["chunk_count"] for u in work)
+    chunks_per_core = max(u["chunk_count"] for u in work)
+    # Refinement 3: with the OUTPUT CB aliased onto the shard, CB page k IS shard
+    # tile k and a shard's tiles are row-major, so a shard wider than one chunk
+    # forces tile-row-OUTER / chunk-INNER order on the reader. Every lever that owns
+    # the block sequence (B8's flattened trid pipeline, C7's chunk-outer hand-off) is
+    # therefore excluded; with one chunk per core the two orders coincide and this is
+    # 0, which is what keeps C7 available on the crossover regimes.
+    blocks_row_major = int(alias_out and chunks_per_core > 1)
+    # --- Refinement 3, lever B5/B6: coalesce a block's same-shard page reads ----
+    # Structural: the source must be a ROW_MAJOR shard (so its pages are one page
+    # COLUMN wide and therefore contiguous in one core's L1), the chunk must cover
+    # the whole source page, the shard must be a whole number of tile-rows tall (so
+    # a 32-row block never straddles two shards, which are on different cores), and
+    # the page must be NoC-aligned (no inter-page padding to skip).
+    coalesce_rows = int(
+        alias_in == 0
+        and in_geo is not None
+        and not in_geo["nd"]
+        and in_geo["h"] % TILE_HW == 0
+        and chunk_row_bytes == in_page_bytes
+        and in_page_bytes % 32 == 0
+        and (levers["coal"] == 2 or (levers["coal"] == 1 and coalesce_rows_pays(chunk_row_bytes, in_page_bytes)))
+    )
     # b13 / c7 == 2 force the lever past its payoff gate (the structural conditions
     # still apply) so the bench can measure it on regimes the gate excludes.
-    split_read = int(
-        row_page_stride == 1
-        and depth == 1
-        and (c7 == 2 or (c7 == 1 and split_read_pays(depth, blocks_per_core, chunk_row_bytes)))
-    )
+    #
+    # Refinement 3 relaxes C7's depth-1 clause: BRISC now derives the reserved
+    # window from `cb_base + (block % depth) * window_bytes` instead of reading
+    # `get_write_ptr`, so the split works at any depth (the identity lever B8
+    # already relies on). Its measured PAYOFF clause still stands on the generic
+    # path (`split_read_pays`: 1 block, <= 64 B reads); on `alias_out` the writer
+    # has no writes left to overlap with, which is what made C7 negative past one
+    # block, so the gate there is just "the split is expressible":
+    #   * one source page per logical row (the helper's page index steps by 1), and
+    #   * one column chunk per core, so both kernels agree on the block order
+    #     without also agreeing on the chunk order.
+    split_read_expressible = row_page_stride == 1 and not coalesce_rows and not blocks_row_major
+    if alias_out:
+        c7_pays = chunks_per_core == 1
+    else:
+        c7_pays = depth == 1 and split_read_pays(depth, blocks_per_core, chunk_row_bytes)
+    split_read = int(split_read_expressible and (c7 == 2 or (c7 == 1 and c7_pays)))
     # The two levers are mutually exclusive by measurement, not by construction:
     # C7 already halves the reads each RISC-V issues, so B13's saved command
     # programming is halved too while its bank-major serialization cost is not.
@@ -1052,7 +1395,10 @@ def _plan_generic(
     # it does not pay where C7 runs. Every regime therefore ships exactly ONE of
     # the two levers.
     stateful_read = int(
-        row_page_stride == 1 and (b13 == 2 or (b13 == 1 and not split_read and stateful_read_pays(chunk_row_bytes)))
+        row_page_stride == 1
+        and not coalesce_rows
+        and not alias_in
+        and (b13 == 2 or (b13 == 1 and not split_read and stateful_read_pays(chunk_row_bytes)))
     )
 
     # --- lever B8: trid double-issue on the read path -------------------------
@@ -1069,6 +1415,9 @@ def _plan_generic(
     prefetch_ok = (
         row_page_stride == 1
         and not split_read
+        and not coalesce_rows
+        and not alias_in
+        and not blocks_row_major
         and not depth_forced
         and blocks_per_core >= TRID_PREFETCH_MIN_BLOCKS
         and prefetch_cb_bytes <= L1_CB_BUDGET_PREFETCH_BYTES
@@ -1119,7 +1468,8 @@ def _plan_generic(
     piece_bytes = FANIN_GROUP_ROWS * chunk_row_bytes
     fanin_cb_bytes = depth * chunk_wt * bytes_per_chunk_tile + piece_bytes
     fanin_ok = (
-        row_page_stride == 1
+        shard_split is None
+        and row_page_stride == 1
         and n_h == 1
         and n_w == ncores
         and blocks_per_core == 1
@@ -1172,7 +1522,9 @@ def _plan_generic(
     # 4 = write only, so the ledger can attribute the delta to one mechanism.
     stg = levers["stg"]
     stagger_ok = (
-        row_page_stride == 1
+        shard_split is None
+        and row_page_stride == 1
+        and not coalesce_rows
         and fanin_mode == 0
         and not split_read
         and prefetch_blocks == 1
@@ -1223,7 +1575,13 @@ def _plan_generic(
 
     plan.update(
         {
-            "path": "generic",
+            "path": path,
+            # Refinement 3: which SIDE is aliased onto its shard. "generic" has
+            # neither, Path B ("alias") has both, and a crossover has exactly one.
+            "alias_in": alias_in,
+            "alias_out": alias_out,
+            "coalesce_rows": coalesce_rows,
+            "blocks_row_major": blocks_row_major,
             "core_ranges": core_ranges,
             "cores": cores,
             "work": work,
@@ -1231,7 +1589,7 @@ def _plan_generic(
             "chunk_row_bytes": chunk_row_bytes,
             "row_page_stride": row_page_stride,
             "source_page_bytes": in_page_bytes,
-            "shard_tiles": 0,
+            "shard_tiles": shard_tiles,
             "stateful_read": stateful_read,
             "split_read": split_read,
             "prefetch_blocks": prefetch_blocks,
@@ -1256,7 +1614,17 @@ def _plan_generic(
             # anything to pipeline?" input, and the per-block sync cost's
             # multiplier (measured ~612 ns/block, see A0_KNEE_CORES).
             "blocks_per_core": blocks_per_core,
-            "cb_bytes_per_core": (fanin_cb_bytes if fanin_mode == 1 else depth * chunk_wt * bytes_per_chunk_tile),
+            "chunks_per_core": chunks_per_core,
+            # ALLOCATED CB bytes per core. On a one-sided alias the aliased side is
+            # the tensor's own shard (not CB L1), so only the plain side counts here
+            # and `alias_cb_bytes` reports the shard it points at -- which is what
+            # keeps `PROPERTIES["bounded_cb"]` a statement about the op's own sizing.
+            "cb_bytes_per_core": (
+                fanin_cb_bytes
+                if fanin_mode == 1
+                else depth * chunk_wt * ((tile_in if alias_out else tile_out) if shard_split else bytes_per_chunk_tile)
+            ),
+            "alias_cb_bytes": alias_cb_bytes,
         }
     )
     return plan
@@ -1344,19 +1712,27 @@ def _ablation_flags():
 
 def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.ProgramDescriptor:
     alias = plan["path"] == "alias"
+    # Refinement 3: each side is aliased independently. Path B has both, a crossover
+    # exactly one, the generic path neither. The aliased side's CB base address IS
+    # the shard's, and the work split guarantees this core owns exactly that shard's
+    # tiles in the CB's page order (`_one_sided_shard_split`).
+    alias_in = bool(plan["alias_in"])
+    alias_out = bool(plan["alias_out"])
     core_ranges = plan["core_ranges"]
     chunk_wt = plan["chunk_wt"]
     reader_skip_dm, writer_skip_dm, skip_compute = _ablation_flags()
 
     # ---------------- circular buffers ----------------
-    if alias:
-        pages = plan["shard_tiles"]
-        cb_rm_input = _aliased_cb(CB_RM_INPUT, input_tensor, plan["tile_in"], pages, core_ranges)
-        cb_tiled_output = _aliased_cb(CB_TILED_OUTPUT, output_tensor, plan["tile_out"], pages, core_ranges)
+    shard_tiles = plan["shard_tiles"]
+    plain_pages = plan["depth"] * chunk_wt
+    if alias_in:
+        cb_rm_input = _aliased_cb(CB_RM_INPUT, input_tensor, plan["tile_in"], shard_tiles, core_ranges)
     else:
-        pages = plan["depth"] * chunk_wt
-        cb_rm_input = _plain_cb(CB_RM_INPUT, input_tensor.dtype, plan["tile_in"], pages, core_ranges)
-        cb_tiled_output = _plain_cb(CB_TILED_OUTPUT, output_tensor.dtype, plan["tile_out"], pages, core_ranges)
+        cb_rm_input = _plain_cb(CB_RM_INPUT, input_tensor.dtype, plan["tile_in"], plain_pages, core_ranges)
+    if alias_out:
+        cb_tiled_output = _aliased_cb(CB_TILED_OUTPUT, output_tensor, plan["tile_out"], shard_tiles, core_ranges)
+    else:
+        cb_tiled_output = _plain_cb(CB_TILED_OUTPUT, output_tensor.dtype, plan["tile_out"], plain_pages, core_ranges)
 
     # Refinement 2b staging buffer. One page of `piece_bytes`, never reserved or
     # pushed -- the reader owns it as scratch (`get_write_ptr` is the base address
@@ -1366,8 +1742,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     if plan["fanin_mode"] == 1:
         cb_stage = _plain_cb(CB_STAGE, input_tensor.dtype, plan["piece_bytes"], 1, core_ranges)
 
-    alias_flag = 1 if alias else 0
-
     split_read = plan["split_read"]
     stateful_read = plan["stateful_read"]
     prefetch_blocks = plan["prefetch_blocks"]
@@ -1375,7 +1749,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
 
     # ---------------- reader ----------------
     reader_ct_args = [
-        alias_flag,
+        1 if alias_in else 0,
         chunk_wt,
         plan["chunk_row_bytes"],
         plan["row_page_stride"],
@@ -1399,6 +1773,11 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         SEM_FANIN_READY,
         CB_STAGE,
         plan["stagger"] & STAGGER_READ,  # Refinement 2b: rotate the read issue order
+        # Refinement 3: coalesce a block's 32 same-shard page reads into one, and
+        # iterate tile-row-outer / chunk-inner (which is the order the aliased
+        # OUTPUT CB's pages are in -- see `_one_sided_shard_split`).
+        plan["coalesce_rows"],
+        plan["blocks_row_major"],
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1408,7 +1787,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # kernel declares them outside any `if constexpr`), so the CT arg layout does
     # not depend on the lever.
     writer_ct_args = [
-        alias_flag,
+        1 if alias_out else 0,
         chunk_wt,
         plan["tile_out"],
         plan["wt"],
@@ -1421,6 +1800,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         SEM_SPLIT_DONE,
         vc_spread,  # lever B10: write VC comes from runtime arg 6
         1 if (plan["stagger"] & STAGGER_WRITE) else 0,  # Refinement 2b: write order
+        # Refinement 3: the input CB's window count, so lever C7's read half can
+        # derive the window NCRISC reserved at any depth (it was depth-1 only).
+        plan["depth"],
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
