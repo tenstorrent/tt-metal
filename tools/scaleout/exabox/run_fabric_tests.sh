@@ -278,6 +278,21 @@ else
     fi
 fi
 
+# Launcher for the no-docker paths. Exabox hosts ship ULFM OpenMPI as
+# `mpirun-ulfm`, but some environments (e.g. the ttop worker images used by CI)
+# only provide the plain `mpirun`. Fall back to it the way tt-run does, instead
+# of dying with "mpirun-ulfm: command not found". The docker paths go through
+# mpi-docker, which picks its own launcher.
+if command -v mpirun-ulfm &> /dev/null; then
+    MPI_LAUNCHER="mpirun-ulfm"
+elif command -v mpirun &> /dev/null; then
+    echo "Note: mpirun-ulfm not found; falling back to mpirun."
+    MPI_LAUNCHER="mpirun"
+else
+    echo "Error: neither mpirun-ulfm nor mpirun found on PATH" >&2
+    exit 1
+fi
+
 # For the Nx32x4 family, capture the mesh/host count N (empty for all other configs).
 NX32X4_NUM_MESHES=""
 if [[ "$CONFIG" =~ ^([2-9])x32x4$ ]]; then
@@ -800,6 +815,9 @@ highlight_fabric_test_success() {
 }
 
 # After the run, summarize pass/fail from the log (one success line per MPI rank).
+# Returns 0 only when every rank reported success, so callers (CI in particular)
+# can key off the exit status instead of grepping this output -- the failure
+# banner quotes the success marker verbatim, so a naive grep for it false-greens.
 print_fabric_final_summary() {
     local log_file="$1"
     local success_count=0
@@ -848,6 +866,7 @@ print_fabric_final_summary() {
         echo -e "\033[42m\033[1;30m                                                                                \033[0m"
         echo -e "\033[42m\033[1;30m                                                                                \033[0m"
         echo ""
+        return 0
     else
         echo -e "\033[1;31m================================================================================\033[0m"
         echo -e "\033[1;31m FABRIC TESTS DID NOT FULLY PASS \033[0m"
@@ -856,6 +875,7 @@ print_fabric_final_summary() {
         echo -e "\033[1;31m See log: ${log_file}\033[0m"
         echo -e "\033[1;31m================================================================================\033[0m"
         echo ""
+        return 1
     fi
 }
 
@@ -1003,7 +1023,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
     fi
 
     if [[ "$DOCKER_IMAGE" == "none" ]]; then
-        mpirun-ulfm \
+        "$MPI_LAUNCHER" \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
             --mca btl_tcp_if_include "$MPI_IF" \
@@ -1022,13 +1042,13 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
             "${Z_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     fi
 elif [[ "$DOCKER_IMAGE" == "none" ]]; then
-    # No-docker path: invoke mpirun-ulfm directly against the local build.
+    # No-docker path: invoke the MPI launcher directly against the local build.
     if [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
         SINGLE_HOST="${HOSTS%%,*}"
         echo "Running single-host $CONFIG on: $SINGLE_HOST (no docker)"
         echo ""
 
-        mpirun-ulfm \
+        "$MPI_LAUNCHER" \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
             --mca btl_tcp_if_include "$MPI_IF" \
@@ -1044,7 +1064,7 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
         echo "Running single-mesh $CONFIG across $NONZ_NUM_RANKS hosts (no docker): $HOSTS"
         echo ""
 
-        mpirun-ulfm \
+        "$MPI_LAUNCHER" \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
             --mca btl_tcp_if_include "$MPI_IF" \
@@ -1101,4 +1121,9 @@ for report in pairwise_validation_summary.log pairwise_validation_detailed.log; 
 done
 
 print_fabric_final_summary "$LOG_FILE"
+FABRIC_RESULT=$?
 echo "=========================================="
+
+# Exit non-zero when the run did not fully pass, so callers (CI, wrapper
+# scripts) fail on a failed run instead of having to parse the banner above.
+exit "$FABRIC_RESULT"
