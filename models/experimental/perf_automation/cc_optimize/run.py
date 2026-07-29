@@ -1341,6 +1341,53 @@ def _pg_cpu_jiffies(pgid: int) -> int:
     return total
 
 
+def _tree_cpu_jiffies(root_pid: int) -> int:
+    """Sum utime+stime over the WHOLE process TREE rooted at root_pid (every descendant, ACROSS
+    process groups / sessions). The build's on-device validation is spawned with start_new_session
+    (its own pgrp), so _pg_cpu_jiffies(pgid) cannot see its CPU -- and the no-output watchdog would
+    then false-kill a validation that is actually pegging the device (observed on XTTS: a ~10 min
+    perf-test validation killed as a wedge). Walking the tree counts that busy child as progress."""
+    ppid_of: dict[int, int] = {}
+    cpu_of: dict[int, int] = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()  # [0]=state [1]=ppid [2]=pgrp ... [11]=utime [12]=stime
+        if len(fields) <= 12:
+            continue
+        try:
+            ppid_of[int(entry)] = int(fields[1])
+            cpu_of[int(entry)] = int(fields[11]) + int(fields[12])
+        except (ValueError, IndexError):
+            continue
+    children: dict[int, list] = {}
+    for pid, ppid in ppid_of.items():
+        children.setdefault(ppid, []).append(pid)
+    total = 0
+    stack = [int(root_pid)]
+    seen: set = set()
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        total += cpu_of.get(pid, 0)
+        stack.extend(children.get(pid, []))
+    return total
+
+
 def _llm_child_alive(pgid: int) -> bool:
     target = str(pgid)
     try:
@@ -1426,12 +1473,12 @@ def _run_device_proc(
             pgid = proc.pid
             start = time.monotonic()
             last_progress = start
-            last_cpu = _pg_cpu_jiffies(pgid)
+            last_cpu = _tree_cpu_jiffies(proc.pid)
             max_gap = 0.0
             while proc.poll() is None:
                 time.sleep(5)
                 now = time.monotonic()
-                cpu = _pg_cpu_jiffies(pgid)
+                cpu = _tree_cpu_jiffies(proc.pid)
                 moved = cpu > last_cpu + 10 or _act[0] > last_progress or _llm_child_alive(pgid)
                 last_cpu = cpu
                 if moved:

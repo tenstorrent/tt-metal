@@ -964,6 +964,13 @@ def make_run_profiled(
         log_path = profiles_dir / f"run{i}_tracy.log"
         env = dict(os.environ)
         env["TT_METAL_DEVICE_PROFILER"] = "1"
+        # EAGER-ONLY under tracy. tracy profiles per-op device time from eager dispatch; a trace replay
+        # runs as one fused program that emits NO per-op device data, so profiling it just floods tracy's
+        # post-processor with one "device data missing" warning per traced op (~180k for a whole pipeline)
+        # -- slow enough that the no-output watchdog false-kills the run. The end-to-end trace_replay
+        # verdict is measured SEPARATELY (check_full_pipeline_latency, profiler off), so the tracy run
+        # needs only device_ms. Keep the two apart; the redundant per-token this used to scrape is None-safe.
+        env["TT_PERF_TRACE"] = "0"
         env.update(extra_env or {})
         _prof = os.environ.get("PERF_MCP_PROFILE_ENV")
         if _prof:
