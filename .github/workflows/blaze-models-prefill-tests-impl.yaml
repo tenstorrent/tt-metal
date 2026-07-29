@@ -6,7 +6,7 @@ on:
       docker-image:
         required: true
         type: string
-        description: "Dev docker image (repository:tag) used as WORKER_REPOSITORY/WORKER_TAG for the multihost-ci helm chart"
+        description: "Dev docker image used by the multihost runner to provision remote worker pods"
       build-artifact-name:
         required: true
         type: string
@@ -44,25 +44,12 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
-      worker-repository: ${{ steps.parse-image.outputs.repository }}
-      worker-tag: ${{ steps.parse-image.outputs.tag }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/blaze_models_prefill_tests.yaml
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
-
-      - name: Parse docker image
-        id: parse-image
-        run: |
-          IMAGE="${{ inputs.docker-image }}"
-          REPOSITORY="${IMAGE%:*}"
-          TAG="${IMAGE##*:}"
-          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "WORKER_REPOSITORY=$REPOSITORY"
-          echo "WORKER_TAG=$TAG"
 
       - name: Install dependencies
         run: pip3 install PyYAML
@@ -155,9 +142,6 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      # Consumed by the multihost-ci helm chart to provision the worker pods.
-      WORKER_REPOSITORY: ${{ needs.load-test-matrix.outputs.worker-repository }}
-      WORKER_TAG: ${{ needs.load-test-matrix.outputs.worker-tag }}
       # /ci is the NFS volume shared with the runner; worker /home/user is per-node, invisible to it.
       # Rank 0 writes; the run/attempt/job subpath keeps reused-PVC runs from colliding.
       PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
@@ -166,15 +150,16 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # Consumed by the multihost runner container hook to provision remote worker pods.
+    # Job steps still run on the CPU/control runner; the hook handles worker image setup.
+    container:
+      image: ${{ inputs.docker-image }}
     outputs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
-
-      # Allocation + test environment are provisioned by the multihost-ci helm chart
-      # (runs_on: exabox-multihost-ci-sc{1,4,16} from sku_config.yaml).
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
