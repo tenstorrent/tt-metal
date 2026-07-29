@@ -432,6 +432,40 @@ build (the earlier fine-grained zone system was removed in a cleanup and would n
 attempted without room to validate it: this session already shipped one regression from a gate fitted against a
 baseline that had shifted, and caught it only by closing the loop against a fixed external reference.
 
+### CLOSED: the in0 gather cannot be overlapped, because it saturates DRAM while it runs
+
+The last open question was why the in1 read does not run ahead during the in0 gather. Answered with a
+zero-build experiment - the pair interaction between the two reads. If deleting both saves as much as deleting
+each separately, they are serialized:
+
+| shape | wall | skip in0 | skip in1 | sum | skip both | verdict |
+|---|---|---|---|---|---|---|
+| 256x15360x768 | 87.8 | 15.8 | 32.1 | 47.9 | **48.6** | fully serialized |
+| 256x6144x4608 | 143.5 | 7.9 | 50.9 | 58.9 | 55.2 | fully serialized |
+| 512x6144x2304 | 109.7 | 14.1 | 6.3 | 20.4 | 18.2 | partial overlap |
+| 512x6144x4608 | 180.6 | 14.7 | 7.6 | 22.3 | 19.6 | partial overlap |
+
+They are serialized. But the cause is NOT the in1 buffer being too small (which is why deepening it never
+helped) - it is that **the in0 read saturates DRAM for the whole time it runs**, leaving no bandwidth for
+anything else:
+
+| shape | in0 bytes | time it is exposed | effective rate | share of the 512 GB/s peak |
+|---|---|---|---|---|
+| 256x15360x768 | 7.7 MB | 15.8 us | 487 GB/s | **95%** |
+| 512x6144x2304 | 6.3 MB | 14.1 us | 447 GB/s | 87% |
+| 512x6144x4608 | 6.3 MB | 14.7 us | 428 GB/s | 84% |
+
+So the 14-16 us gather is not a scheduling failure that better buffering or read-ahead could hide. It is
+hardware-limit DRAM work that simply cannot share the bus. And in0 is already read exactly once per core (Ns=1
+on all these shapes), so there are no redundant bytes to remove either. **The in0 gather is irreducible.**
+
+That makes the honest floor for 256x15360x768 about 62 us (15.8 us of gather that cannot overlap, plus 46 us of
+in1 bytes at peak bandwidth) against an 87.8 us wall. The residual 26 us is overlap loss spread thinly across
+compute tail, reduction and latencies, with no single stage responsible - compute deletion only saves 1.1%.
+Resolving that specific residual is the only remaining lever, and it needs per-RISC timeline zones, since every
+knob (config, buffer depths, placement, ring order, reduction topology, subblock shape) has now been measured
+and closed.
+
 ## Total progress this session
 
 | shape | at log start | now | change |
