@@ -612,6 +612,18 @@ class ZERO_POINT(RuntimeParameter):
 
 
 @dataclass
+class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
+    """Quant-family SMAG32 datapath toggle; read only by the quant binary ops."""
+
+    sign_magnitude: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
+        )
+
+
+@dataclass
 class L1_ACC(RuntimeParameter):
     l1_acc: L1Accumulation = L1Accumulation.No
 

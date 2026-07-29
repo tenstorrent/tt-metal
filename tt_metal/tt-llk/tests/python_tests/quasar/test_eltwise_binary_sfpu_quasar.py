@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import struct
 from typing import List
 
 import pytest
@@ -44,6 +45,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     SFPU_BINARY_OP,
     SFPU_TILE_INDICES,
+    SIGN_MAGNITUDE_FORMAT,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -148,6 +150,8 @@ def _run_sfpu_binary_llk_golden(
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
+            # 2's-complement datapath (default); only the quant family reads this.
+            SIGN_MAGNITUDE_FORMAT(False),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
@@ -530,6 +534,8 @@ def _run_max_min(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
+            # 2's-complement datapath (default); only the quant family reads this.
+            SIGN_MAGNITUDE_FORMAT(False),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
@@ -663,10 +669,18 @@ def _fp32_bits_as_int32(t: torch.Tensor) -> torch.Tensor:
     return t.to(torch.float32).contiguous().view(torch.int32)
 
 
+def _int32_to_smag32(t: torch.Tensor) -> torch.Tensor:
+    """Encode a 2's-complement int32 tensor as sign-magnitude 32-bit (SMAG32):
+    bit31 = sign, bits[30:0] = magnitude. Used to stage operands for and model
+    the SIGN_MAGNITUDE_FORMAT kernel path, which skips the 2's-comp<->SM casts."""
+    v = t.to(torch.int64)
+    return (v.abs() | ((v < 0).to(torch.int64) << 31)).to(torch.int32)
+
+
 _QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
 
 
-def _run_quant(binary_op, tile_indices):
+def _run_quant(binary_op, tile_indices, sign_magnitude=False):
     src0_idx, src1_idx, dst_idx = tile_indices
     dest_acc = DestAccumulation.Yes  # all quant endpoints are 32-bit
     num_faces = MAX_NUM_FACES
@@ -687,7 +701,9 @@ def _run_quant(binary_op, tile_indices):
         # int32 operand A in a modest range so int*scale stays well within int8.
         a_vals = torch.randint(-2000, 2000, (n,), dtype=torch.int32)
         a_float = a_vals.to(torch.float32)
-        a_staged = a_vals  # already int32 (2's-comp; twos_complement=True stages raw)
+        # The SIGN_MAGNITUDE_FORMAT path skips the 2's-comp->SM input cast, so operand
+        # A must already be SMAG32; the default path expects raw 2's-complement.
+        a_staged = _int32_to_smag32(a_vals) if sign_magnitude else a_vals
     else:
         # fp32 operand A.
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0  # +/-2000
@@ -708,23 +724,27 @@ def _run_quant(binary_op, tile_indices):
     else:
         prod = a_float * scale + zero_point
         rounded = torch.round(prod)  # round-half-to-even matches SFP STOCH_RND NearEven
-        clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX)
-        golden_active = clamped.to(torch.int32)
-        # STOCH_RND emits a sign-magnitude result: a negative value whose magnitude
-        # rounds to 0 becomes sign-magnitude negative-zero (0x80000000). The
-        # SM32_TO_2SC cast maps that to 2's-complement -1 (not +0), so model it.
-        neg_zero = (golden_active == 0) & (prod < 0)
-        golden_active[neg_zero] = -1
+        clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
+        # STOCH_RND emits a sign-magnitude int8 result. A negative value whose
+        # magnitude rounds to 0 becomes sign-magnitude negative-zero (0x80000000).
+        neg_zero = (clamped == 0) & (prod < 0)
+        if sign_magnitude:
+            # SM path stores the STOCH_RND SMAG32 result as-is (no SM32_TO_2SC cast):
+            # negatives keep bit31|magnitude and negative-zero stays 0x80000000.
+            golden_active = _int32_to_smag32(clamped)
+            golden_active[neg_zero] = torch.tensor(-(2**31), dtype=torch.int32)
+        else:
+            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to -1 (not +0).
+            golden_active = clamped
+            golden_active[neg_zero] = -1
         out_dtype = torch.int32
 
     golden_tensor = torch.zeros(MAX_TILE_ELEMENTS, dtype=out_dtype)
     golden_tensor[:_PROCESSED_ELEMS] = golden_active[:_PROCESSED_ELEMS]
 
     # zero_point bits passed to the kernel init (DEQUANT negates the contract).
-    import struct as _struct
-
     zp_for_kernel = -zero_point if is_dequant else zero_point
-    zp_bits = _struct.unpack("<I", _struct.pack("<f", zp_for_kernel))[0]
+    zp_bits = struct.unpack("<I", struct.pack("<f", zp_for_kernel))[0]
 
     # buffer_A is raw int32; operand B's fp32 bits ride along as int32 words.
     formats = InputOutputFormat(
@@ -740,6 +760,7 @@ def _run_quant(binary_op, tile_indices):
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             TYPECAST_FORMATS(),
         ],
         runtimes=[
@@ -784,16 +805,18 @@ def _run_quant(binary_op, tile_indices):
         golden_tensor[:_PROCESSED_ELEMS],
         res_tensor[:_PROCESSED_ELEMS],
         output_format,
-    ), f"{binary_op} mismatch (tile_indices={tile_indices})"
+    ), f"{binary_op} (sign_magnitude={sign_magnitude}) mismatch (tile_indices={tile_indices})"
 
 
 @pytest.mark.quasar
 @parametrize(
     binary_op=_QUANT_OPS,
+    sign_magnitude=[False, True],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
-def test_eltwise_binary_sfpu_quant_quasar(binary_op, tile_indices):
+def test_eltwise_binary_sfpu_quant_quasar(binary_op, sign_magnitude, tile_indices):
     """Binary SFPU quant family (quant / requant / dequant), Int32-staged operands
     with a runtime fp32 zero-point; output Int32 (quant/requant) or Float32
-    (dequant)."""
-    _run_quant(binary_op, tile_indices)
+    (dequant). Exercised on both the 2's-complement and SIGN_MAGNITUDE_FORMAT
+    (SMAG32) datapaths."""
+    _run_quant(binary_op, tile_indices, sign_magnitude)

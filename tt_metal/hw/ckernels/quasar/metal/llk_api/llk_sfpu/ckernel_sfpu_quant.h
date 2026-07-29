@@ -16,9 +16,10 @@ namespace ckernel::sfpu {
 // init/execute pair below (quant / requant / dequant).
 enum class QuantVariant : std::uint8_t { Quant, Requant, Dequant };
 
-inline constexpr bool is_quant_variant(QuantVariant op) {
-    return op == QuantVariant::Quant || op == QuantVariant::Requant || op == QuantVariant::Dequant;
-}
+// Never-true predicate for the terminal `else` of an OP dispatch: keeps the static_assert
+// dependent on OP so it only fires for a QuantVariant the dispatch does not handle.
+template <QuantVariant>
+inline constexpr bool quant_unhandled_variant = false;
 
 // Shared LREG layout across all three quant ops:
 //   LREG0 = operand A load / running accumulator / result before store
@@ -31,21 +32,13 @@ inline constexpr bool is_quant_variant(QuantVariant op) {
 // STOCH_RND emits sign-magnitude (SMAG32). Inputs/outputs are therefore cast on
 // the !SIGN_MAGNITUDE_FORMAT path; the true path stores STOCH_RND output as-is.
 //
-// Replay-buffer optimization (mirrors the Blackhole reference):
-// the per-iteration REGISTER-ONLY compute middle of each op (no runtime
-// addresses) is recorded ONCE by the matching init via load_replay_buf and
-// then replayed per loop iteration with TTI_REPLAY. The runtime-address
-// SFPLOADs/SFPSTORE (base + (d<<1)) stay INLINE and are NOT recorded - exactly
-// as Blackhole keeps its runtime-address loads/stores inline. Recording uses
-// load_mode=1 with execute_while_loading=false (the load_replay_buf default),
-// i.e. the body is streamed into the replay buffer WITHOUT executing it at
-// record time, so it never reads the undefined LREG0/LREG1 at init.
+// The init records once the register-to-register math that turns the loaded
+// operands into the result; the kernel replays it each iteration around inline
+// operand loads and a result store.
 //
 // Per-op slots are non-overlapping and sized to the larger (2's-complement)
-// variant; the matching sign-magnitude variant records fewer instructions into
-// the same slot and replays the shorter length. Distinct slots between ops let
-// a single compute kernel mix all three ops without an init clobbering another
-// op's recording.
+// variant (the sign-magnitude variant records fewer instructions into the same
+// slot), so one compute kernel can mix all three ops without cross-clobbering:
 //   QUANT   (2s-comp, 3) : SFPMAD, STOCH_RND, SFPCAST
 //   QUANT   (sign-m, 2)  : SFPMAD, STOCH_RND
 //   REQUANT (2s-comp, 5) : SFPCAST(in), SFPCAST(int->fp32), SFPMAD, STOCH_RND, SFPCAST(out)
@@ -72,8 +65,10 @@ inline constexpr std::uint32_t quant_replay_slot() {
         return QUANT_REPLAY_SLOT;
     } else if constexpr (OP == QuantVariant::Requant) {
         return REQUANT_REPLAY_SLOT;
-    } else {
+    } else if constexpr (OP == QuantVariant::Dequant) {
         return DEQUANT_REPLAY_SLOT;
+    } else {
+        static_assert(quant_unhandled_variant<OP>, "quant_replay_slot: unhandled QuantVariant");
     }
 }
 
@@ -83,8 +78,10 @@ inline constexpr std::uint32_t quant_replay_len() {
         return SIGN_MAGNITUDE_FORMAT ? QUANT_REPLAY_LEN_SIGN_MAGN : QUANT_REPLAY_LEN_2S_COMP;
     } else if constexpr (OP == QuantVariant::Requant) {
         return SIGN_MAGNITUDE_FORMAT ? REQUANT_REPLAY_LEN_SIGN_MAGN : REQUANT_REPLAY_LEN_2S_COMP;
-    } else {
+    } else if constexpr (OP == QuantVariant::Dequant) {
         return SIGN_MAGNITUDE_FORMAT ? DEQUANT_REPLAY_LEN_SIGN_MAGN : DEQUANT_REPLAY_LEN_2S_COMP;
+    } else {
+        static_assert(quant_unhandled_variant<OP>, "quant_replay_len: unhandled QuantVariant");
     }
 }
 
@@ -93,7 +90,7 @@ inline constexpr std::uint32_t quant_replay_len() {
  *
  * Loads the fp32 zero-point into LREG2, then streams the op's compute body into a replay
  * buffer (NoExec: LREG0/LREG1 are undefined at init time). The body is replayed per loop
- * iteration by @ref _quant_family_. Op math (A = operand, B = fp32 scale, zp = zero-point):
+ * iteration by @ref quant_family. Op math (A = operand, B = fp32 scale, zp = zero-point):
  *   Quant   : out = round_to_int8(A_fp32 * B + zp)
  *   Requant : out = round_to_int8(int32_to_fp32(A) * B + zp)
  *   Dequant : out = (int32_to_fp32(A) + zp) * B   -- caller passes bits of -zero_point
@@ -101,12 +98,10 @@ inline constexpr std::uint32_t quant_replay_len() {
  * @tparam OP: Which quant-family op, values = <Quant/Requant/Dequant>
  * @tparam SIGN_MAGNITUDE_FORMAT: If true, treat int32 dest as SMAG32 and skip the SM<->2's-comp casts.
  * @param zero_point: fp32 bit-pattern of the zero-point (Dequant expects the bits of -zero_point).
- * @note Call once before @ref _quant_family_ with the same OP / SIGN_MAGNITUDE_FORMAT.
+ * @note Call once before @ref quant_family with the same OP / SIGN_MAGNITUDE_FORMAT.
  */
 template <QuantVariant OP, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void _quant_family_init_(const std::uint32_t zero_point) {
-    static_assert(is_quant_variant(OP), "_quant_family_init_: OP must be Quant/Requant/Dequant");
-
+inline void quant_family_init(const std::uint32_t zero_point) {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, zero_point & 0xFFFF);  // zp low half
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, zero_point >> 16);     // zp high half -> LREG2 = fp32 zp
 
@@ -152,24 +147,22 @@ inline void _quant_family_init_(const std::uint32_t zero_point) {
  *
  * Operand A is loaded as fp32 for Quant and int32 for Requant/Dequant; the result is stored as
  * int32 for Quant/Requant and fp32 for Dequant. The runtime-address loads/store stay inline; the
- * register-only middle recorded by @ref _quant_family_init_ is replayed each iteration.
+ * register-only middle recorded by @ref quant_family_init is replayed each iteration.
  *
  * @tparam OP: Which quant-family op, values = <Quant/Requant/Dequant>
  * @tparam ITERATIONS: Number of SFPU passes spanning the tile (default = SFPU_ITERATIONS).
- * @tparam SIGN_MAGNITUDE_FORMAT: Must match the value passed to @ref _quant_family_init_.
+ * @tparam SIGN_MAGNITUDE_FORMAT: Must match the value passed to @ref quant_family_init.
  * @tparam TILE_SHAPE: Dest tile shape used to scale the tile indices into row offsets.
  * @param dst_index_in0,dst_index_in1,dst_index_out: Dest tile indices of operand A, operand B, and the result.
- * @note Call @ref _quant_family_init_ with the same OP / SIGN_MAGNITUDE_FORMAT before this.
+ * @note Call @ref quant_family_init with the same OP / SIGN_MAGNITUDE_FORMAT before this.
  */
 template <
     QuantVariant OP,
     int ITERATIONS = SFPU_ITERATIONS,
     bool SIGN_MAGNITUDE_FORMAT = false,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
-inline void _quant_family_(
+inline void quant_family(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-    static_assert(is_quant_variant(OP), "_quant_family_: OP must be Quant/Requant/Dequant");
-
     constexpr std::uint32_t slot = quant_replay_slot<OP>();
     constexpr std::uint32_t len = quant_replay_len<OP, SIGN_MAGNITUDE_FORMAT>();
     constexpr auto A_FORMAT = (OP == QuantVariant::Quant) ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::INT32;
