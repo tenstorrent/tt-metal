@@ -145,7 +145,21 @@ declaring a sentinel. The C16 lever itself (the shipped perf/L1 win) is untouche
 
 ---
 
-### [ ] Refinement 1c — `d_tall_narrow` sub-one-packet read path: B13 `set_state` on the 32 stick reads, then C7 split reader
+### [x] Refinement 1c — `d_tall_narrow` sub-one-packet read path: B13 `set_state` on the 32 stick reads, then C7 split reader
+
+> **Outcome (2026-07-29): COMPLETE via the second gate clause.** Both levers landed, each swept over
+> **five read-transaction sizes × two block counts** and gated to exactly where it was measured to
+> pay, each with its counterfactual bench row. `d_tall_narrow` **3 609 → 3 431 ns (−4.9 %)**; zero
+> regressions across all 22 cumulative bench regimes (max +0.6 %); golden 126/126, unit suite 153/153
+> in both modes. The **1.5× gate (≤ 2 439 ns) is not met and is shown unreachable** from this lever
+> set: the 437 ns address-gen prize is real (re-priced **461 ns** by the same subtraction) but
+> **≈ 73 % of it is hidden behind DRAM service latency**, so removing 20 of 32 accessor calls buys
+> only **78 ns** end-to-end. What is left is the 735 ns launch/CB/handshake floor, ~250 ns of LLK, and
+> the DRAM **64 B packet rate**, whose only lever (fewer transactions) is measured *slower* because
+> the required row permutation costs 32 local L1 gathers per block. Two findings worth carrying:
+> the levers are **mutually exclusive** (B13 on top of C7 is +0.9 %), and
+> `noc_async_read_one_packet_with_state` **hangs every core on a watcher build** (metalium bug — the
+> general `set_state`/`with_state` API is fine). Full ledger: `changelog.md` § "Refinement 1c".
 
 **Goal**: the remaining half of Refinement 1 — get `d_tall_narrow` `[1,1,2048,32]` below
 **2 439 ns** (the parent's 1.5× gate) from its measured **3 609 ns**. Refinement 1 proved the parent's
@@ -207,14 +221,27 @@ both default and `--dev` mode.
 
 ### [ ] Refinement 2 — Close the read-path transaction-overhead gap on the DM-bound interleaved regimes
 
+> **Re-scope before running (Refinement 1c finding, measured on this exact regime): B13 and C7 are
+> REFUTED on `b_wide_short`, do not re-try them.** Refinement 1c implemented both, and forced each
+> onto this regime as a bench row: at `b_wide_short`'s 512 B reads **B13 = 15 981 ns vs 13 423 ns
+> (+19.1 %)** and **C7 = 15 265 ns (+13.7 %)**; at 256 B they are +3.0 % / +6.2 %, and only at
+> **≤ 128 B** does B13 pay. Mechanism, both measured: `set_state` pins the NoC coordinate, so B13 can
+> only issue **bank-major**, and queueing 2-3 consecutive same-bank reads of ≥ 256 B costs more
+> DRAM-endpoint serialization than the saved command programming buys; C7 doubles the read issuers per
+> core, which helps only while each core reads its **own** rows — `b_wide_short` has `nt_h == 1`, so
+> all 64 cores read the same 32 source pages and a second issuer just deepens the hot spot. The
+> counterfactual rows are permanent (`x_wide_short_b13_forced`, `x_wide_short_c7_forced`,
+> `x_wide_short_8k_b13_forced`, `x_wide_short_8k_c7_forced`), so the verdict is re-measurable. This
+> leaves **B8, B10 and A3** as this entry's real lever set.
+
 **Goal**: move `b_wide_short` and `c_single_core` toward their computed bounds with the per-transaction
 levers Phase 0 left unapplied (all four are `master.md` Part 2 items explicitly pre-classified
 `deferred` in `op_design.md`'s Mode-D table):
 
 - **B8 trid double-issue** — keep ≥ 1 read request in flight across the per-block barrier instead of
   draining to zero 32 times per block.
-- **B13 `set_state` / `with_state`** — the reader issues **32 same-shape reads per block**, which is
-  precisely this lever's use case; today each read re-programs the full NoC command.
+- ~~**B13 `set_state` / `with_state`**~~ — **refuted on this regime by Refinement 1c** (+19.1 %); see
+  the re-scope note above. Landed and gated to ≤ 128 B reads, where it pays 3-5 %.
 - **B10 per-reader VC assignment** and **A3 reader-adjacent-to-its-DRAM-bank placement**
   (`get_optimal_dram_bank_to_logical_worker_assignment`, which *is* bound on this build) — both stack
   on top of the already-applied A1 `row_wise=True` placement.
@@ -235,7 +262,8 @@ Watch for the interaction with the reader's `noc_async_read_barrier()`: B8's who
 barrier non-draining, so do not also convert the barrier to a per-read one (that would re-break B7,
 which the design measured at +52 % composed).
 
-**Done when**: `b_wide_short` ≥ 1.2× faster than 13 383 ns **or** each of the four levers has a
+**Done when**: `b_wide_short` ≥ 1.2× faster than 13 383 ns **or** each of the remaining three levers
+(B13's verdict is already recorded by Refinement 1c) has a
 recorded measured-no-payoff verdict with its counterfactual number; tt-npe re-pinned (cycles + DRAM
 util + congestion %) for `b_wide_short` and `c_single_core`; no regression beyond noise on any prior
 bench regime; golden suite still 126/126.

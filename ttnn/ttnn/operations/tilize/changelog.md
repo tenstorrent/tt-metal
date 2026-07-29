@@ -812,3 +812,264 @@ inverted in place) in **both** default and `--dev` mode.
    address-gen (B13 `set_state`) plus a share of the 1 504 ns read issue/service (B13 + C7 split
    reader). Nothing in this pass touched it.
 2. Refinements 2–5 unchanged.
+
+---
+
+## Refinement 1c — `d_tall_narrow` sub-one-packet read path: B13 `set_state` on the 32 stick reads, then C7 split reader
+
+- **Date**: 2026-07-29
+- **Outcome**: **full (`[x]`)** via the entry's second gate clause. Both levers were implemented,
+  swept across **five read-transaction sizes × two block counts**, gated to exactly where each was
+  measured to pay, and each carries its counterfactual number. `d_tall_narrow` improves
+  **3 609 → 3 431 ns (−4.9 %, in-run A/B)**; the parent's **1.5× gate (≤ 2 439 ns) is NOT met and is
+  shown to be unreachable** from these two levers, with the residual re-priced by the same
+  subtraction method R1 used. The interesting result is *why*: the 437 ns address-gen term the entry
+  was priced on is **real (re-priced 461 ns) but ~73 % hidden behind DRAM service latency**, so
+  removing 20 of its 32 accessor calls buys only 78 ns end-to-end.
+
+### What was done
+
+**1. B13 — stateful bank-major reads. LANDED, gated to reads ≤ 128 B.**
+
+New `kernel_lib` helper (so the reader keeps calling helpers rather than inlining raw NoC API):
+
+| symbol | file | what |
+|---|---|---|
+| `StickReadMode{Generic,Stateful}` | `tilize_helpers_dataflow.hpp` | selects the read mode |
+| `read_stick_rows_for_tilize<mode, num_splits>()` | `.hpp` / `.inl` | one tile-height band into a **caller-owned** L1 window, splittable across both DM RISC-Vs |
+| `read_sticks_for_tilize<cb, granularity, mode>()` | `.inl` | gained the `mode` param; its TILE branch now calls the above (byte-identical for existing callers — both new template params default to the old behaviour) |
+
+The mechanism: `set_state` pins the NoC **coordinate**, and for an interleaved tensor page `p` lives
+in bank `p % num_banks` at bank-page `p / num_banks` (`dataflow_api_addrgen.h:19-42,236-244`), so
+pages `g, g+nb, g+2nb, …` share one bank **one aligned page apart**. Visiting the block's rows
+bank-major therefore lets one armed command cover ~32/12 rows with the source address as a running
+increment: **12 accessor calls per block instead of 32, and no per-read coordinate write**. The bank
+period comes from `NUM_DRAM_BANKS` / `NUM_L1_BANKS` selected by `DSpec::is_dram`, because the
+interleaved `TensorAccessor` specialisation is an `InterleavedAddrGen` and has **no `dspec()` at
+all** (`DSpec::num_banks_ct == 0`) — the first compile error of this pass.
+
+The identity this rests on is **checked on device, not assumed**: an `ASSERT` in the inner loop
+re-derives every row's address through `accessor.get_noc_addr` and compares it with the incremented
+one, so any accessor/allocator change that breaks the assumption fails a `--dev` run instead of
+silently transposing data.
+
+**2. C7 — split reader. LANDED, gated to 64 B reads with one block per core.**
+
+BRISC (the writer kernel) takes half of each block's 32 stick reads; it is otherwise parked in
+`cb_wait_front` for the entire read window. NCRISC stays the **only** producer of `cb_rm_input`
+(single-producer rule) and hands the reserved window over with two monotonic per-launch counting
+semaphores, both in the core's own L1 so set/wait are plain local loads and stores:
+
+```
+NCRISC: reserve -> sem_reserve = blk+1 -> read its groups -> barrier
+        -> wait sem_done >= blk+1 -> push
+BRISC : wait sem_reserve >= blk+1 -> read its groups -> barrier -> sem_done = blk+1
+```
+
+`depth == 1` is a **structural** precondition (not a payoff question): BRISC never touches the CB
+pointers, so the reserved window must be at the CB base address on every block. The band is split by
+**bank group**, not by contiguous row range — under B13 a group is a whole bank's rows, so a row-range
+split would halve the rows per arm in both halves instead of halving the number of arms.
+
+**3. The two levers are mutually exclusive — by measurement.** C7 already halves the reads each
+RISC-V issues, so B13's saved command programming is halved while its bank-major DRAM serialization
+is not. Three in-run A/B pairs on `[1,1,2048,32]`: C7 alone **3 411.1 / 3 404.1 / 3 419.6 ns** vs
+C7+B13 **3 462.4 / 3 431.6 / 3 434.2 ns** (+0.9 % mean, never negative). Since a lever that does not
+move the number is a defect, the planner now ships exactly one:
+
+| read bytes | blocks/core | ships | vs no lever |
+|---|---|---|---|
+| 64 B | 1 | **C7** | 0.948 – 0.956 |
+| 64 B | ≥ 2 | **B13** | 0.950 – 0.957 |
+| 128 B | any | **B13** | 0.950 – 0.968 |
+| ≥ 256 B | any | neither | both measured **negative** |
+
+### Issues encountered
+
+1. **`noc_async_read_one_packet_with_state` hangs every core on a watcher build.** The first
+   implementation used the `one_packet` flavour (it also saves the per-read length write). Production
+   mode passed 153/153, but `--dev` hung with **all 64 cores' NCRISC at waypoint `NATW`** inside
+   `noc_async_read_one_packet_with_state` (`dataflow_api.h:642`) — found from the triage report's
+   callstacks, and bisected to the lever with `TILIZE_LEVER_B13=0` (60/60 pass) vs `TILIZE_LEVER_C7=0`
+   (hang). The two APIs differ in **exactly one thing**: the `one_packet` sanitize macro
+   `DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE` (`sanitize.h:781`) reads the
+   transfer length back out of `NOC_AT_LEN_BE`, while the general API's `..._WITH_ADDR_STATE`
+   (`sanitize.h:792`) takes the length as an argument. Switching to
+   `noc_async_read_set_state` / `noc_async_read_with_state` made `--dev` green (153/153) at the same
+   measured payoff, and the finding is recorded as a "do not optimize this back" note in the helper
+   with the exact command that reproduces it. **This is a metalium-infrastructure bug, not an op bug**
+   — worth filing upstream.
+2. **The interleaved `TensorAccessor` has no `dspec()`.** It is a separate specialisation deriving
+   from `InterleavedAddrGen` (`tensor_accessor.h:387`), so `accessor.dspec().num_banks()` does not
+   compile and `DSpec::num_banks_ct` is 0. The bank count has to come from the firmware defines.
+3. **B13 is a *bank-major-order* lever, and that is what turns it over.** Because `set_state` pins the
+   coordinate, the lever cannot be applied in row-major order. At 64 B a bank's 2-3 reads are one
+   packet each and the saved command programming dominates; from 256 B up, queueing them
+   back-to-back on one DRAM endpoint costs more than it saves (+2.3 % at 256 B, **+19.1 % at 512 B**).
+   The verifier's framing ("32 same-shape reads per block is exactly this lever's use case") is true
+   only in the sub-one-packet corner.
+4. **C7 spends the read/write overlap across the block boundary.** BRISC's read of block i+1 queues
+   behind its write of block i, so the split is free only at one block per core: 0.956 at 1 block vs
+   **1.145 at 4 blocks** (forced). It also doubles the read issuers per core, which only helps while
+   each core reads its **own** rows — every ≥ 128 B regime here has `nt_h == 1`, i.e. all 64 cores
+   read the same 32 source pages, so a second issuer just deepens an existing DRAM hot spot (+1.4 %
+   at 128 B, +13.7 % at 512 B).
+5. **A self-inflicted device wedge cost ~6 runs.** Deliberately corrupting the address increment to
+   check that the in-helper `ASSERT` net is live produced a hang that left the device in a state where
+   `--dev` failed and production passed; two clean runs cleared it. The check itself was worth it (the
+   ASSERT does halt the core), but it should be done on a single-shape probe, not on a suite.
+
+### Accuracy achieved
+
+Unchanged and **bit-exact** — this refinement moves no arithmetic, only the order and the command
+programming of the reads. `torch.equal` (PCC = 1.0, rtol = atol = 0, 0 mismatching elements) on
+`[1,1,2048,32]`, `[1,1,8192,32]`, `[1,1,32,4096]`, `[1,1,32,8192]`, `[1,1,64,32]`, `[1,1,32,32]`,
+`[1,1,96,96]`, `[2,3,64,64]`, at the gated default, at both forced depths, for **all four lever
+combinations** (including the forced both-on path), single- and multi-core, DRAM- and
+L1-interleaved, and over 10 repeated launches. Inputs are `arange` rather than `randn` on purpose:
+every element is unique, so a misplaced row — the failure mode a wrong bank-major address or a wrong
+split half produces — cannot cancel out. bf8b / narrowing-cast tolerances untouched (Phase-0
+precision baseline still 20/20).
+
+### Golden test progress
+
+**126 / 126** registry cells (90 INVALID-skipped) — unchanged, 0 xfail / xpass / drift. Whole golden
+dir minus `test_translated.py`, run to completion with no `-k` filter:
+`PASSED=240 FAILED=0 ERRORS=2 SKIPPED=118 HANGS=0 TOTAL=360` — byte-identical to the Phase-0,
+Refinement-1 and Refinement-1b baselines. `eval.verify_supported`: `supported_pass=126,
+supported_fail=0, xfail_expected=0, xpass_drift=0, xfail_wrong_mode=0, invalid_unexpected=0`.
+`SUPPORTED` is unchanged (this is a perf refinement; it unlocks no cell and declares no axis value).
+**No hangs** in either mode.
+
+### Perf gate
+
+#### 1. Bound classification + the re-priced decomposition (ablation, 7 × 10 launches)
+
+| variant | no levers | **shipped (C7)** | B13 only |
+|---|---|---|---|
+| full | 3 602.9 | **3 437.8** | 3 525.3 |
+| no_compute | 2 786.5 | 3 175.0 | 2 910.5 |
+| no_dm | 1 491.6 | 972.9 | 1 492.2 |
+| sync_only | 1 196.7 | **735.5** | 1 191.6 |
+
+**Re-priced terms** (same subtraction method as Refinement 1, so directly comparable to its
+437 / 764 / 1 504 / 931 ns split):
+
+| term | R1 | **now** | how |
+|---|---|---|---|
+| 32 × `accessor.get_noc_addr` (address-gen) | 437 | **461.2** | `sync_only`(no levers) − `sync_only`(C7): the C7 reader's `skip_dm` drops the whole read call incl. address-gen, the baseline's keeps the 32-call loop behind a `volatile` sink |
+| launch + CB handshakes (1 block) | 764 | **735.5** | `sync_only`(C7), which *includes* the new semaphore handshake |
+| tilize LLK, 1 tile | 931 | **237 – 295** | `no_dm` − `sync_only` (both levers off / on) |
+
+**The headline correction: R1's four terms are not additive.** The LLK alone is ~240-295 ns, not
+931 (931 was `full − no_compute`, i.e. the cost of *serializing* compute into the chain, not the
+LLK's duration). And B13 removes 20 of the 32 accessor calls — ~288 ns of the 461 ns term — for a
+measured **−77.6 ns** end-to-end (3 602.9 → 3 525.3), i.e. **≈ 73 % of the address-gen term is
+hidden behind DRAM service latency and is not on the critical path**. That is the reason this
+entry's budget (−1 197 ns) was not reachable: the only term left large enough is the DRAM 64 B
+**packet rate** (32 reads × 64 cores = 2 048 requests over 12 banks), and reducing the transaction
+*count* needs a row permutation the tilize LLK cannot consume — quantified this pass: coalescing a
+bank's 3 contiguous pages into one 192 B read would then need 32 local L1 gather copies per block,
+~10 cycles of issue each on the only two DM RISC-Vs, i.e. **more** than the DRAM reads it saves.
+
+Ceiling: R1's per-core serialized NoC bracket `[2 892 … 4 461] ns` (1 block ⇒ no read/write
+overlap). Measured **3 430.9** ⇒ **achieved 0.84** against the optimistic end (was 0.80) and 1.30
+against the contended end — the regime still sits **inside its own bracket**. DRAM floor 910 ns.
+
+#### 2. Cumulative bench set — non-regression (median of 7 × 10 launches, WH B0 8×8, AICLK ≈ 985 MHz)
+
+Whole set re-measured, not a subset. Noise floor ±2 %; all CVs ≤ 1.8 %.
+
+| regime | cores | chk | d | blk | B13 | C7 | R1b ns | **now ns** | Δ |
+|---|---|---|---|---|---|---|---|---|---|
+| a_square | 64 | 16 | 1 | 4 | 0 | 0 | 85 859 | **85 775** | −0.1 % |
+| b_wide_short | 64 | 8 | 1 | 1 | 0 | 0 | 13 340 | **13 423** | +0.6 % |
+| c_single_core | 1 | 16 | 2 | 16 | 0 | 0 | 30 478 | **30 359** | −0.4 % |
+| **d_tall_narrow** | 64 | 1 | 1 | 1 | 0 | **1** | 3 598 | **3 431** | **−4.6 %** |
+| e_square_fp32 | 64 | 8 | 2 | 8 | 0 | 0 | 183 003 | **182 008** | −0.5 % |
+| e_square_bf8b_out | 64 | 16 | 1 | 4 | 0 | 0 | 64 601 | **64 628** | +0.0 % |
+| e_square_fp32_to_bf16 | 64 | 8 | 2 | 8 | 0 | 0 | 120 982 | **121 126** | +0.1 % |
+| f_sharded_small | 4 | 2 | 1 | 4 | 0 | 0 | 1 368 | **1 363** | −0.4 % |
+| f_sharded_large | 64 | 2 | 1 | 8 | 0 | 0 | 2 073 | **2 071** | −0.1 % |
+| g_dram_to_sharded | 64 | 16 | 1 | 1 | 0 | 0 | 19 117 | **18 964** | −0.8 % |
+| g_sharded_to_dram | 64 | 2 | 2 | 8 | 0 | 0 | 19 721 | **19 841** | +0.6 % |
+| x_square_depth1 | 64 | 16 | 1 | 4 | 0 | 0 | 85 813 | **85 618** | −0.2 % |
+| x_square_depth2 | 64 | 16 | 2 | 4 | 0 | 0 | 85 887 | **85 610** | −0.3 % |
+| x_tall_narrow_depth2 | 64 | 1 | 2 | 1 | **1** | 0 | 3 642 | **3 553** | −2.5 % |
+| x_single_core_depth1 | 1 | 16 | 1 | 16 | 0 | 0 | 40 155 | **40 076** | −0.2 % |
+| x_square_fp32_depth2 | 64 | 8 | 2 | 8 | 0 | 0 | 181 906 | **182 074** | +0.1 % |
+| x_fp32_to_bf16_depth2 | 64 | 8 | 2 | 8 | 0 | 0 | 120 999 | **121 161** | +0.1 % |
+| x_sharded_to_dram_depth2 | 64 | 2 | 2 | 8 | 0 | 0 | 19 740 | **19 546** | −1.0 % |
+| x_square_bf8b_depth2 | 64 | 16 | 2 | 4 | 0 | 0 | 64 191 | **64 309** | +0.2 % |
+| **x_tall_narrow_16c** | 16 | 1 | 1 | 4 | **1** | 0 | 8 866 | **8 126** | **−8.3 %** |
+| x_wide_short_1core | 1 | 16 | 2 | 32 | 0 | 0 | 57 229 | **57 401** | +0.3 % |
+| x_sharded_small_depth1 | 4 | 2 | 1 | 4 | 0 | 0 | 1 368 | **1 362** | −0.5 % |
+
+**Zero regressions** — max deviation **+0.6 %**, well inside the ±2 % noise floor, and 13 of 22
+regimes are faster. Two real improvements: the target regime **−4.6 %** and the A0-counterfactual row
+**−8.3 %** (it has 4 blocks/core at 64 B, so it picks up B13). Per-core CB bytes are **unchanged
+everywhere** — neither lever costs L1; C7 adds two 4-byte semaphores.
+
+New rows added to the cumulative set for future phases (this phase's own regimes and
+counterfactuals): `x_tall_narrow_no_levers` 3 609.4 · `x_tall_narrow_b13_only` 3 506.4 ·
+`x_tall_narrow_c7_only` 3 431.1 · `n_tall_narrow_4blk` 13 227.8 · `x_tall_narrow_4blk_no_levers`
+13 901.4 · `x_tall_narrow_4blk_c7_forced` 15 767.1 · `m_wide_short_4k` 4 718.6 ·
+`x_wide_short_4k_no_levers` 5 031.8 · `x_wide_short_4k_c7_forced` 5 101.2 · `m_wide_short_8k`
+8 067.0 · `x_wide_short_8k_b13_forced` 8 310.6 · `x_wide_short_8k_c7_forced` 8 571.2 ·
+`x_wide_short_b13_forced` 15 981.0 · `x_wide_short_c7_forced` 15 265.5 · `x_square_b13_forced`
+86 810.4 · `x_g_to_sharded_b13_forced` 20 107.0 · `x_g_to_sharded_c7_forced` 19 901.8.
+
+#### 3. Mode-C used-optimization ledger
+
+| lever | id | predicted Δ | **measured Δ (lever/none)** | verdict |
+|---|---|---|---|---|
+| stateful bank-major reads | **B13** | "most of the 437 ns of address-gen plus a share of the per-read command programming" | **0.978** (64 B, 1 blk) · **0.957** (64 B, 4 blk) · **0.950** (128 B) · 1.023 (256 B) · **1.199** (512 B) · 1.057 (1024 B DRAM→shard) · 1.012 (1024 B square) | **KEEP, gated ≤ 128 B.** Pays 2-5 % where the read is one small packet; a **+19.9 %** regression at 512 B because `set_state` forces bank-major order. The priced 437 ns prize is real (461 ns) but 73 % hidden behind DRAM latency ⇒ only 78 ns of it is recoverable. |
+| split reader | **C7** | "halve what is left of the issue cost by putting the idle BRISC to work"; `examples/split_reader` up to 1.7× | **0.948-0.956** (64 B, 1 blk) · 1.018 (128 B) · 1.056 (256 B) · **1.146** (512 B) · 1.045 (1024 B) · **1.145** (64 B, 4 blk) | **KEEP, gated to 64 B + 1 blk/core.** The single biggest term this entry recovered (−165 ns). Turns over on two independent axes: the lost read/write overlap across a block boundary, and doubling the issuers into a shared DRAM hot spot when `nt_h == 1`. |
+| — sub-lever: B13 **and** C7 together | B13+C7 | additive ("neither alone is likely to be enough") | **+0.9 %** vs C7 alone, over 3 in-run A/B pairs | **DROP the combination** — mutually exclusive in the planner. |
+| — sub-lever: the `one_packet` state API | B13 | + the per-read length write | correctness: **hangs all 64 cores under `--dev`** at the same measured perf | **DROP** — use the general state API (see issue 1). |
+
+#### 4. DM lever checklist review (`master.md` Part 2)
+
+Applied this pass: **B13** (gated). Re-confirmed still applied: B7 one barrier per block, B5/B6
+width coalescing, A0 2D split, A1 `row_wise`, B9 reads NoC0 / writes NoC1, C14 alias, C16 gated
+depth, D18/D19 program-cache args. **C7** (Part 1 example `split_reader`) newly applied, gated.
+Deliberately **not** applied here and left to their owners: B8 trid double-issue (R2), B10 per-reader
+VC (R2), A3 DRAM-bank-adjacent placement (R2), C14 one-sided aliasing (R3), B5/B6 on the sharded read
+(R3). Not applicable: bigger read transactions on this regime — a `W=32` RM input has 64 B pages that
+land on *different* banks, and the coalesced alternative is measured slower (see §1).
+
+### Tests added
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement1c.py` — **33 cells**: both payoff
+  gates pinned to the sweep that set them (raising a threshold fails here, with the numbers in the
+  docstring); the mutual-exclusion invariant on 5 read sizes; plan lever selection per read size and
+  block count; `use_double_buffer=True` swaps C7 for B13 rather than corrupting the window;
+  levers off on the alias path and on a `row_page_stride > 1` sharded input; **bit-exactness** on 8
+  shapes at the gated default, for all four lever combinations, on the forced multi-block /
+  multi-chunk split path (the only cover for the per-block sequence counter and the chunk-outer ×
+  block-inner handshake order), over 10 repeated launches (semaphore re-arm), single-core, and
+  L1-interleaved (the in-kernel `period * 2 <= num_rows` fallback); program-cache hit with the split
+  reader's two semaphores and extra runtime arg.
+- `_bench_tilize.py` — a `levers` spec key (`b13`/`c7` ∈ {0 = off, 1 = gated, **2 = force past the
+  gate**}) plus `B13`/`C7` report columns, and **17 new regimes**: the 4-way lever matrix on the
+  64 B target, the same at 4 blocks/core, a read-size sweep at 128 B / 256 B, and forced-lever
+  counterfactuals on 512 B / 1024 B / the square. Every gate threshold in the planner now has a
+  re-measurable bench row behind it.
+- `probes/probe_011.py`, `probe_012.py` — the first-light correctness probes for the two levers.
+
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **153 passed** (120 prior + 33 new) in
+**both** default and `--dev` mode.
+
+### Ranked follow-ups
+
+1. **`d_tall_narrow` is done from the DM side.** Of its 3 431 ns, 735 ns is the launch + CB +
+   handshake floor, ~240-295 ns is the 1-tile LLK, and the rest is the DRAM **64 B packet rate**
+   (2 048 requests over 12 banks). Every remaining lever needs either fewer transactions (blocked by
+   the layout — quantified above) or a lower per-launch floor (Refinement 4's kernel-count reduction,
+   which is the same B0 lever on a different path).
+2. **Refinement 2 must not re-try B13 or C7 on `b_wide_short`** — both are measured regressions there
+   (+19.1 % / +13.7 %). Annotated in `op_requirements.md` under that entry. Its remaining levers (B8
+   trid double-issue, B10 VC, A3 placement) are untouched by this pass.
+3. **File upstream: `noc_async_read_one_packet_with_state` + watcher = guaranteed hang** (issue 1).
+   Any op adopting the one-packet stateful read will hit it, and the failure mode is a hang with no
+   sanitizer message.
