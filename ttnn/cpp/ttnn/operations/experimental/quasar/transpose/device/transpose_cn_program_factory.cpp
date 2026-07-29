@@ -95,12 +95,12 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     spec.tensor_parameters.push_back(TensorParameter{
         .unique_id = INPUT,
         .spec = input_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     });
     spec.tensor_parameters.push_back(TensorParameter{
         .unique_id = OUTPUT,
         .spec = output_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     });
 
     // Defines (CN_RM define preserved verbatim).
