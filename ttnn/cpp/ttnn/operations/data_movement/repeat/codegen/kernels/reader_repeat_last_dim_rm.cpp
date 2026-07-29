@@ -26,6 +26,10 @@
 //          cb_id, NUM_REPEATS, BATCH
 // RT args: src_addr, num_pages, start_page
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -42,25 +46,28 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
 
+    Noc noc;
+    CircularBuffer cb_in(cb_id);
+
     uint32_t src_page = start_page;
     uint32_t pages_left = num_pages;
 
     while (pages_left > 0) {
         uint32_t batch = (pages_left < BATCH) ? pages_left : BATCH;
-        cb_reserve_back(cb_id, batch);
-        uint32_t l1_base = get_write_ptr(cb_id);
+        cb_in.reserve_back(batch);
+        // Absolute L1 base is still needed for the L1-local within-stick
+        // replication below (CoreLocalMem / NoC L1->L1 addressing).
+        uint32_t l1_base = cb_in.get_write_ptr();
 
         for (uint32_t t = 0; t < batch; t++) {
-            uint32_t l1_addr = l1_base + t * out_l1_stride;
-
             // Read the aligned input page into the first position of this slot.
-            uint64_t noc_addr = s.get_noc_addr(src_page);
-            noc_async_read(noc_addr, l1_addr, in_read_size);
+            noc.async_read(
+                s, cb_in, in_read_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = t * out_l1_stride});
             src_page++;
         }
 
         // Wait for all DRAM reads to complete before L1-to-L1 copies.
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // Replicate each stick's real bytes NUM_REPEATS-1 more times within slot.
         if constexpr (NUM_REPEATS > 1) {
@@ -68,14 +75,21 @@ void kernel_main() {
                 // Large 16B-aligned sticks: NOC L1->L1 DMA. Both size and the
                 // dest offset (l1_addr + r*stick_size, l1_addr already 16B-aligned)
                 // must be 16B-aligned for the NOC copy — hence the % 16 gate.
+                UnicastEndpoint self_ep;
+                const uint32_t my_noc_x = my_x[noc.get_noc_id()];
+                const uint32_t my_noc_y = my_y[noc.get_noc_id()];
                 for (uint32_t t = 0; t < batch; t++) {
                     uint32_t l1_addr = l1_base + t * out_l1_stride;
-                    uint64_t src_noc = get_noc_addr(l1_addr);
                     for (uint32_t r = 1; r < NUM_REPEATS; r++) {
-                        noc_async_read(src_noc, l1_addr + r * stick_size, stick_size);
+                        noc.async_read(
+                            self_ep,
+                            cb_in,
+                            stick_size,
+                            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = l1_addr},
+                            {.offset_bytes = t * out_l1_stride + r * stick_size});
                     }
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
             } else {
                 // Sub-16B OR non-16B-aligned sticks (e.g. W=12 -> 24B): NOC L1->L1
                 // needs 16B-aligned size+dest, so a non-aligned stick lands the
@@ -84,37 +98,41 @@ void kernel_main() {
                 for (uint32_t t = 0; t < batch; t++) {
                     uint32_t l1_addr = l1_base + t * out_l1_stride;
                     if constexpr (stick_size == 2) {
-                        uint16_t v = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
+                        CoreLocalMem<volatile uint16_t> src(l1_addr);
+                        uint16_t v = *src;
                         for (uint32_t r = 1; r < NUM_REPEATS; r++) {
-                            *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr + r * stick_size) = v;
+                            CoreLocalMem<volatile uint16_t> dst(l1_addr + r * stick_size);
+                            *dst = v;
                         }
                     } else if constexpr (stick_size == 4) {
-                        uint32_t v = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
+                        CoreLocalMem<volatile uint32_t> src(l1_addr);
+                        uint32_t v = *src;
                         for (uint32_t r = 1; r < NUM_REPEATS; r++) {
-                            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr + r * stick_size) = v;
+                            CoreLocalMem<volatile uint32_t> dst(l1_addr + r * stick_size);
+                            *dst = v;
                         }
                     } else if constexpr (stick_size == 8) {
-                        uint64_t v = *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_addr);
+                        CoreLocalMem<volatile uint64_t> src(l1_addr);
+                        uint64_t v = *src;
                         for (uint32_t r = 1; r < NUM_REPEATS; r++) {
-                            *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_addr + r * stick_size) = v;
+                            CoreLocalMem<volatile uint64_t> dst(l1_addr + r * stick_size);
+                            *dst = v;
                         }
                     } else if constexpr (stick_size == 12) {
-                        volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
+                        CoreLocalMem<volatile uint32_t> src(l1_addr);
                         uint32_t v0 = src[0];
                         uint32_t v1 = src[1];
                         uint32_t v2 = src[2];
                         for (uint32_t r = 1; r < NUM_REPEATS; r++) {
-                            volatile tt_l1_ptr uint32_t* dst =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr + r * stick_size);
+                            CoreLocalMem<volatile uint32_t> dst(l1_addr + r * stick_size);
                             dst[0] = v0;
                             dst[1] = v1;
                             dst[2] = v2;
                         }
                     } else {
-                        volatile tt_l1_ptr uint8_t* src = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_addr);
+                        CoreLocalMem<volatile uint8_t> src(l1_addr);
                         for (uint32_t r = 1; r < NUM_REPEATS; r++) {
-                            volatile tt_l1_ptr uint8_t* dst =
-                                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_addr + r * stick_size);
+                            CoreLocalMem<volatile uint8_t> dst(l1_addr + r * stick_size);
                             for (uint32_t b = 0; b < stick_size; b++) {
                                 dst[b] = src[b];
                             }
@@ -124,7 +142,7 @@ void kernel_main() {
             }
         }
 
-        cb_push_back(cb_id, batch);
+        cb_in.push_back(batch);
         pages_left -= batch;
     }
 }

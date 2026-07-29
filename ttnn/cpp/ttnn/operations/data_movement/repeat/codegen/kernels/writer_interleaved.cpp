@@ -7,6 +7,9 @@
 // When BATCH > 1: pipelined — overlaps NOC DMA of batch N with compute
 // delivering batch N+1. Requires cb_out depth >= 2 * BATCH.
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -14,18 +17,35 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr uint32_t REQUESTED_WRITE_SIZE = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
     constexpr uint32_t BATCH = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
 
-    const auto d = TensorAccessor(dst_args, dst_addr, page_size);
+    // TensorAccessorArgs owns the destination's physical address pitch. The
+    // caller's historical CT[1] is only the requested bytes copied per page;
+    // it may be a compact payload or a placement-specific aligned size.
+    const uint32_t destination_page_size = dst_args.get_aligned_page_size();
+    const auto d = TensorAccessor(dst_args, dst_addr, destination_page_size);
 
-    // CB pages are laid out in L1 on a 16B-aligned stride. When page_size is not
-    // a multiple of 16 (RM sub-stick slice: 10B/4B/254B sticks) the batched path
-    // must step the L1 read pointer by the aligned stride while still writing the
-    // compact page_size bytes to the DRAM page. Aligned callers (TILE 2048B,
-    // aligned RM) are unaffected: l1_page_stride == page_size.
-    constexpr uint32_t l1_page_stride = (page_size + 15u) & ~15u;
+    // Source-CB stride and destination transport pitch are independent. Most
+    // paths configure the CB at the destination page size, but RM concat can
+    // read a 16-byte BF16 stick from a 32-byte-aligned DRAM source and write it
+    // to a 16-byte interleaved-L1 page.  Its CB must retain the larger 32-byte
+    // source page; deriving the read stride from destination pitch then
+    // consumes source padding as every other output stick.  The CB descriptor is
+    // the authority for its L1 page stride. Convert the CB field to bytes
+    // explicitly; cb_addr_shift is zero on dataflow RISCs but
+    // keeping it here prevents this generic writer from depending on that fact.
+    const uint32_t l1_page_stride = get_local_cb_interface(cb_out).fifo_page_size << cb_addr_shift;
+    // Never read beyond the staging slot or write beyond the destination page.
+    // The minimum preserves placement-specific or nonstandard page layouts and
+    // is unchanged for ordinary equal-pitch cases.
+    const uint32_t write_size_dst =
+        REQUESTED_WRITE_SIZE < destination_page_size ? REQUESTED_WRITE_SIZE : destination_page_size;
+    const uint32_t write_size = write_size_dst < l1_page_stride ? write_size_dst : l1_page_stride;
+
+    Noc noc;
+    CircularBuffer cb(cb_out);
 
     uint32_t tile_id = start_id;
 
@@ -38,11 +58,12 @@ void kernel_main() {
 
         // Prime the pipeline: issue first batch without prior flush
         uint32_t batch = (tiles_left < BATCH) ? tiles_left : BATCH;
-        cb_wait_front(cb_out, batch);
-        uint32_t l1_addr = get_read_ptr(cb_out);
+        cb.wait_front(batch);
+        uint32_t l1_read_offset = 0;
         for (uint32_t t = 0; t < batch; t++) {
-            noc_async_write_page(tile_id++, d, l1_addr);
-            l1_addr += l1_page_stride;
+            noc.async_write(
+                cb, d, write_size, {.offset_bytes = l1_read_offset}, {.page_id = tile_id++, .offset_bytes = 0});
+            l1_read_offset += l1_page_stride;
         }
         tiles_left -= batch;
         uint32_t prev_batch = batch;
@@ -52,29 +73,30 @@ void kernel_main() {
         // been popped yet and are still counted as "available" by cb_wait_front.
         while (tiles_left > 0) {
             batch = (tiles_left < BATCH) ? tiles_left : BATCH;
-            cb_wait_front(cb_out, prev_batch + batch);  // wait for NEW batch to arrive
-            noc_async_writes_flushed();                 // flush prev (NOC drained during wait)
-            cb_pop_front(cb_out, prev_batch);           // reclaim prev batch space
+            cb.wait_front(prev_batch + batch);  // wait for NEW batch to arrive
+            noc.async_writes_flushed();         // flush prev (NOC drained during wait)
+            cb.pop_front(prev_batch);           // reclaim prev batch space
 
-            l1_addr = get_read_ptr(cb_out);
+            l1_read_offset = 0;
             for (uint32_t t = 0; t < batch; t++) {
-                noc_async_write_page(tile_id++, d, l1_addr);
-                l1_addr += l1_page_stride;
+                noc.async_write(
+                    cb, d, write_size, {.offset_bytes = l1_read_offset}, {.page_id = tile_id++, .offset_bytes = 0});
+                l1_read_offset += l1_page_stride;
             }
             tiles_left -= batch;
             prev_batch = batch;
         }
 
         // Drain final batch
-        noc_async_writes_flushed();
-        cb_pop_front(cb_out, prev_batch);
+        noc.async_writes_flushed();
+        cb.pop_front(prev_batch);
     } else {
         for (uint32_t i = 0; i < num_tiles; i++) {
-            cb_wait_front(cb_out, 1);
-            noc_async_write_page(tile_id++, d, get_read_ptr(cb_out));
-            noc_async_writes_flushed();
-            cb_pop_front(cb_out, 1);
+            cb.wait_front(1);
+            noc.async_write(cb, d, write_size, {.offset_bytes = 0}, {.page_id = tile_id++, .offset_bytes = 0});
+            noc.async_writes_flushed();
+            cb.pop_front(1);
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }
