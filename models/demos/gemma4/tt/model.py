@@ -16,6 +16,8 @@ Compatible with tt_transformers Generator interface.
 """
 
 
+import os
+
 import torch
 from loguru import logger
 from tracy import signpost
@@ -219,11 +221,18 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared
 
 
 class Gemma4Model:
-    # Generator-interface flags. Decode inputs are recomputed on host every
-    # token (host embedding + PLI), so the captured trace's input buffers
-    # have to be refreshed on every replay rather than just on the first
-    # call after a token-shape change.
+    # Generator-interface flag. PLI models (E2B/E4B) recompute host per-layer
+    # inputs from the token every step, so their decode-trace input buffers
+    # must be restaged every replay. Non-PLI models (12B/26B/31B) keep this
+    # False and rely on on-device token feedback + position plus_one — required
+    # for async scheduling (#51186); host restage under async lag re-processes
+    # the previous token ("TheThe user user...").
+    # Overridden in ``__init__`` from ``hidden_size_per_layer_input``.
     _tt_vllm_always_refresh_decode_trace_inputs = True
+    # Sampling writes a tile-aligned [1,1,1,32] token vector; decode embeds only
+    # the active batch. Non-PLI prepare_decode pads tokens to this width so the
+    # sampled ids can be written straight back into the trace input buffer.
+    _DECODE_TOKEN_FEEDBACK_WIDTH = 32
     # NOTE: This is a runtime capability (depends on mesh shape / per-device vocab).
     # It is set during __init__ after the sampling module is constructed.
     _supports_on_device_sampling = False
@@ -257,6 +266,16 @@ class Gemma4Model:
         self.ccl_manager = ccl_manager
         self.max_seq_len = max_seq_len
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
+        # Host restage every step only when PLI must be recomputed from the token.
+        # Non-PLI keeps device token/pos continuity for async decode (#51186).
+        # Debug/kill-switch: GEMMA4_ALWAYS_REFRESH_DECODE=1 forces host restage
+        # (disables async-safe continuity; platform will also disable async).
+        force_refresh = os.environ.get("GEMMA4_ALWAYS_REFRESH_DECODE", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
@@ -1781,13 +1800,25 @@ class Gemma4Model:
         batch = tok_flat.shape[0]
 
         # Stage token IDs (not embeddings): embed_tokens runs on device in
-        # ttnn_decode_forward. One device embedding op handles all B users —
-        # the host-embedding path was hardcoded single-token. [1, batch] uint32.
+        # ttnn_decode_forward. Non-PLI models pad to sampling width [1,1,1,32] so
+        # ``ttnn.sampling(output_tensor=...)`` can write the next token into this
+        # buffer for async continuity. PLI models keep compact [1, batch] and
+        # restage from host every step (always_refresh=True).
         # int64 (not int32) source: ttnn downcasts int64 to uint32 host-side, so the
         # C++ to_dtype path is skipped. An int32->uint32 conversion would instead query
         # tile metadata on a row-major host buffer and emit the #18536 warning.
+        tok_i64 = tok_flat.to(torch.int64)
+        if self._tt_vllm_always_refresh_decode_trace_inputs:
+            tok_host = tok_i64.reshape(1, batch)
+        else:
+            pad_w = self._DECODE_TOKEN_FEEDBACK_WIDTH
+            if batch > pad_w:
+                raise ValueError(f"Decode batch {batch} exceeds token feedback width {pad_w}")
+            if batch < pad_w:
+                tok_i64 = F.pad(tok_i64, (0, pad_w - batch), "constant", 0)
+            tok_host = tok_i64.reshape(1, 1, 1, pad_w)
         tokens_tt = ttnn.from_torch(
-            tok_flat.to(torch.int64).reshape(1, batch),
+            tok_host,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
             mesh_mapper=replicate,
@@ -1887,8 +1918,19 @@ class Gemma4Model:
         #     the batched-decode path (one device embedding op handles all B
         #     users; the host-embedding path is hardcoded single-token).
         #   * bf16 pre-computed embedding → use directly (legacy / unit tests).
+        # Active batch comes from the int32 KV-position tensor (exact B). The
+        # token buffer may be sampling-width padded ([1,1,1,32]) for feedback.
+        active_batch = None
+        if rot_mat_idxs is not None:
+            active_batch = int(rot_mat_idxs.shape[-1])
         if x.dtype in (ttnn.uint32, ttnn.int32):
-            input_embeds = self.embed_tokens(x)
+            x_embed = x
+            if active_batch is not None and len(x.shape) == 4 and int(x.shape[-1]) > active_batch:
+                x_embed = ttnn.slice(x, [0, 0, 0, 0], [1, 1, 1, active_batch])
+            if len(x_embed.shape) == 4:
+                # embed_tokens expects a compact [1, B] (or [B]) id tensor.
+                x_embed = ttnn.reshape(x_embed, (1, int(x_embed.shape[-1])))
+            input_embeds = self.embed_tokens(x_embed)
             if len(input_embeds.shape) == 3:
                 input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
             input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
@@ -1929,6 +1971,13 @@ class Gemma4Model:
                 "decode forward got on_device_logits=True but no on-device sampling "
                 "module exists (self.sampling is None)."
             )
+            # Advance device positions for the next decode step (async-safe).
+            # Mirror tt_transformers Transformer._increment_decode_positions_device.
+            if not self._tt_vllm_always_refresh_decode_trace_inputs:
+                if current_pos is not None:
+                    ttnn.plus_one(current_pos, skip_negative_entries=True)
+                if rot_mat_idxs is not None:
+                    ttnn.plus_one(rot_mat_idxs)
             batch_dim = logits.shape[2]
             if batch_dim < 32:
                 logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)

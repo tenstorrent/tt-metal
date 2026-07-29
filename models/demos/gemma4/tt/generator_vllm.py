@@ -217,9 +217,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     ttnn_decode_forward}`` (mirrors the gpt-oss bridge).
     """
 
+    # Async decode closes the ~15–20% metal↔server B=1 gap (#51186): with
+    # ``async_scheduling`` the plugin overlaps CPU scheduling with the previous
+    # device step via ``decode_forward(read_from_device=False)`` +
+    # ``read_decode_output(async_read=True)`` (inherited from ``Generator``).
+    # Requires on-device token feedback + position plus_one (non-PLI only;
+    # see ``Gemma4Model._tt_vllm_always_refresh_decode_trace_inputs``).
+    # Kill-switch: ``GEMMA4_SUPPORTS_ASYNC_DECODE=0``. PLI models (E2B/E4B)
+    # force False in ``__init__`` regardless of the env default.
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": False,
+        "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower()
+        not in ("0", "false", "no"),
         "supports_sample_on_device": True,
     }
 
@@ -272,14 +281,26 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         else:
             _bounded_default = "1" if self._HYBRID_KV_CACHE_GROUPS_ENABLED else "0"
             self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
+        # PLI models must restage decode inputs from host every step; async lag
+        # would restage a stale token. Force capability off even if env default
+        # is on (platform then disables async_scheduling).
+        if model0 is not None and (
+            bool(getattr(model0, "hidden_size_per_layer_input", 0))
+            or bool(getattr(model0, "_tt_vllm_always_refresh_decode_trace_inputs", False))
+        ):
+            self.model_capabilities = {
+                **self.model_capabilities,
+                "supports_async_decode": False,
+            }
         # Host-side TTFT / decode tok/s for metal↔server parity checks.
         # Compare these to demo ``inference_prefill`` / decode tok/s/user logs.
         self._perf_decode_tokens = 0
         self._perf_decode_s = 0.0
         self._perf_log_every = max(1, int(os.environ.get("GEMMA4_VLLM_PERF_LOG_EVERY", "32")))
-        # Extra synchronize_device after every decode was for wall-clock parity
-        # logging; it stalls the client path. Default: sync only on log ticks.
-        self._perf_decode_sync_every = os.environ.get("GEMMA4_VLLM_DECODE_SYNC_EVERY", "log")
+        # Extra synchronize_device stalls async overlap (#51186). Default off;
+        # set GEMMA4_VLLM_DECODE_SYNC_EVERY=log/1 for sync wall-clock parity.
+        _sync_default = "0" if self.model_capabilities.get("supports_async_decode") else "log"
+        self._perf_decode_sync_every = os.environ.get("GEMMA4_VLLM_DECODE_SYNC_EVERY", _sync_default)
 
     def warmup_model_decode(self, kv_cache, enable_trace, max_batch_size, num_blocks, can_sample_on_device, **kwargs):
         """Warm decode traces at B=1 and B=max (trace-region friendly).
@@ -488,11 +509,28 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 
         min_bounded_cols = self._bounded_sliding_min_page_table_cols(kv_cache)
 
+        # vLLM token-chunked prefill / APC: ``prefill_len`` is the full prompt
+        # while ``prefill_seq_len`` is only the padded *current* chunk. Truncating
+        # to the chunk width leaves continuation ``chunk_page_table`` slices as
+        # all -1 → ``paged_fill_cache`` skips writing tokens past the first
+        # scheduler chunk (LB 12B ~9k coherence cliff, #51186). Keep the full
+        # mapping whenever the prompt is longer than this chunk's pad.
+        # ``prefill_len`` is a list under batched prefill — only compare scalars.
+        if (
+            not use_full_prompt_len
+            and prefill_seq_len is not None
+            and prefill_len is not None
+            and not isinstance(prefill_len, (list, tuple))
+            and int(prefill_len) > int(prefill_seq_len)
+        ):
+            use_full_prompt_len = True
+
         if use_batched_prefill:
             from models.tt_transformers.tt.common import get_block_size
 
             block_size = get_block_size(kv_cache)
             batch_dim = padded_batch_size if padded_batch_size is not None else self.model_args[0].max_batch_size
+            # Batched path always sizes to the padded chunk grid (slot layout).
             num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
             if min_bounded_cols is not None:
                 num_blocks = max(num_blocks, min_bounded_cols)
@@ -1100,15 +1138,22 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # If persistent page-table buffers grew after decode-trace capture,
         # drop the stale Metal traces so the next step recaptures against
         # the new addresses (see Gemma4Model._page_tables_to_ttnn).
+        # Under async decode this must not happen after warmup — a grow while
+        # a prior step is still in flight rebinds buffers the pending read
+        # still references (#51186).
         if any(getattr(m, "_invalidate_decode_traces_after_page_table_realloc", False) for m in self.model):
+            after_warmup = bool(getattr(self, "tt_warmed_decode_batch_sizes", None))
             self.trace_ids_decode = defaultdict(lambda: None)
             self.trace_inputs_decode = defaultdict(lambda: None)
             self.trace_output_decode = defaultdict(lambda: None)
             self._prev_decode_batch = None
             for m in self.model:
                 m._invalidate_decode_traces_after_page_table_realloc = False
-            logger.warning(
-                "Gemma4 vLLM: cleared decode traces after per-layer page-table " "buffer grow (addresses changed)"
+            log = logger.error if after_warmup else logger.warning
+            suffix = " [AFTER WARMUP — unsafe under async_scheduling]" if after_warmup else ""
+            log(
+                "Gemma4 vLLM: cleared decode traces after per-layer page-table "
+                f"buffer grow (addresses changed){suffix}"
             )
         t0 = time.perf_counter()
         with self._route_per_layer_page_tables(per_submesh):
@@ -1264,15 +1309,20 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return kv_cache
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
-        """Broadcast legacy ``page_table`` when hybrid OR bounded sliding needs
-        per-layer tables (parent only broadcasts for hybrid-ON).
+        """Broadcast legacy ``page_table`` to per-layer whenever the plugin
+        only sent the legacy view.
+
+        Parent only broadcasts for hybrid-ON. Gemma4 always routes fills
+        through ``_chunk_prefill_page_table`` / per-layer aliases (incl.
+        unbounded hybrid-OFF + vLLM APC), so a missing stash falls back to a
+        truncated legacy table and continuation chunks write through -1
+        (#51186). Broadcasting the (full-width) legacy map is cheap and keeps
+        APC absolute fills correct.
         """
         if page_tables_per_layer is not None or page_table is None:
             return page_tables_per_layer
-        if self._HYBRID_KV_CACHE_GROUPS_ENABLED or self._bounded_sliding_kv_cache:
-            num_layers = len(self.model[0].layers)
-            return [page_table] * num_layers
-        return page_tables_per_layer
+        num_layers = len(self.model[0].layers)
+        return [page_table] * num_layers
 
     def _build_per_layer_page_tables(self, page_tables_per_layer, legacy_page_table):
         """Compose the inherited per-layer broadcast/passthrough with
