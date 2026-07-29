@@ -200,6 +200,16 @@ class DistributedRMSNorm(Module):
             packer_l1_acc=False,
         )
 
+        # Matches the caller-side RoPE config (packer_l1_acc on) so the composite
+        # path's RoPE fallback is numerically identical to rotating outside the norm.
+        self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         n = self.TILE_SIZE * self.mesh_width
 
         # https://github.com/tenstorrent/tt-metal/issues/31216
@@ -350,6 +360,10 @@ class DistributedRMSNorm(Module):
         if composite_weight is not None and len(composite_weight.shape) != 2:
             composite_weight = ttnn.reshape(composite_weight, (1, composite_weight.shape[-1]))
 
+        # post_allgather only accepts RoPE broadcast across heads ([1, 1, N, head_dim]);
+        # per-head cos/sin has to rotate as a separate op after the norm.
+        composite_rope = rope_cos is not None and rope_cos.shape[1] == 1
+
         x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
             x,
             stats,
@@ -357,15 +371,20 @@ class DistributedRMSNorm(Module):
             num_heads_per_device=num_heads_per_device,
             weight=composite_weight,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-            transformation_mat=trans_mat,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
+            transformation_mat=trans_mat if composite_rope else None,
+            rope_cos=rope_cos if composite_rope else None,
+            rope_sin=rope_sin if composite_rope else None,
             dtype=dtype,
         )
         # post_allgather has no bias input, so the AdaLN shift is a trailing add here
-        # (the fused single-op path above folds it in).
+        # (the fused single-op path above folds it in). Must precede the RoPE
+        # fallback: the fused kernel's order is weight -> bias -> rotate.
         if dynamic_bias is not None:
             x = ttnn.add(x, dynamic_bias)
+        if rope_cos is not None and not composite_rope:
+            x = ttnn.experimental.rotary_embedding_llama(
+                x, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+            )
         return x
 
 
