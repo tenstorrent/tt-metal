@@ -2,25 +2,23 @@
 
 The one-shot generator + regex error-scraping (`_extract_error`) cannot parse the open-ended error
 formats a component perf test hits (python tracebacks, ttnn TT_FATAL, C++ `unordered_map::at`,
-unpack/shape errors). This builder instead lets an SDK agent write the test, RUN it through an
-in-process tool that routes to `_run_perf_node` (device self-heal + output bounding live there, and
-the agent never touches the device), READ the raw output itself, and iterate until it passes or the
-module is genuinely eager-only. The agent's own conversation carries what it built and what it
-already tried, so it does not repeat dead ends.
+unpack/shape errors). This builder instead drives the claude-code CLI (`claude -p`, login auth, no
+SDK, no model tier — like the rest of the cc engine) to write the test, RUN it through an
+out-of-process MCP tool (perf_test_mcp.py) that routes to `_run_perf_node` (device self-heal + output
+bounding live there, and the agent never touches the device), READ the raw output itself, and iterate
+until it passes or the module is genuinely eager-only. The agent's own conversation carries what it
+built and what it already tried, so it does not repeat dead ends.
 
-Returns False (never raises) when the SDK lacks the in-process MCP API or the env is not wired, so
-the caller degrades to the one-shot generator.
+Returns False (never raises) when the claude CLI / MCP server is not wired, so the caller degrades to
+the one-shot generator.
 """
 
 from __future__ import annotations
 
 import re
-import asyncio
 import os
+import sys
 from pathlib import Path
-
-PERF_RUN_SERVER = "perfrun"
-PERF_RUN_TOOL = "mcp__perfrun__run_perf_test"
 
 
 def _component_run_timeout() -> int:
@@ -99,29 +97,13 @@ def _run_and_format(node_abs: str, state: dict | None = None) -> str:
     return f"VERDICT={verdict}\nrc={rc}\n----- raw test output -----\n{_bound_output(out)}"
 
 
-def _make_perf_run_server(node_abs: str, state: dict):
-    try:
-        from claude_agent_sdk import create_sdk_mcp_server, tool
-    except Exception:  # noqa: BLE001
-        return None
+_PERF_TEST_MCP_REL = "models/experimental/perf_automation/cc_optimize/perf_test_mcp.py"
+_PERF_RUN_TOOL = "mcp__perftest-mcp__run_perf_test"
 
-    @tool(
-        "run_perf_test",
-        "Run the perf test you have written on the device and return its RAW output. It routes "
-        "through the harness runner, which handles ALL device execution and recovery (reset, "
-        "cooldown) for you — you must NEVER run pytest/tt-smi/kill or open a device yourself. Read "
-        "the returned output: the first line is VERDICT=PASS_TRACE / WEDGE / FAIL. On FAIL the raw "
-        "traceback + the input the test built follow — fix and call again. On WEDGE the trace hung — "
-        "restructure the captured region to be host-free and keep attempting the trace. There is NO "
-        "eager fallback; PASS_TRACE is the only success (eager mode exists only when the operator sets "
-        "TT_PERF_TRACE=0, which is outside your control).",
-        {},
-    )
-    async def run_perf_test(args):  # noqa: ANN001
-        text = await asyncio.to_thread(_run_and_format, node_abs, state)
-        return {"content": [{"type": "text", "text": text}]}
 
-    return create_sdk_mcp_server(PERF_RUN_SERVER, tools=[run_perf_test])
+def _repo_root() -> Path:
+    # .../models/experimental/perf_automation/agent/perf_test_agent.py -> repo root is parents[4]
+    return Path(__file__).resolve().parents[4]
 
 
 _SYSTEM = (
@@ -141,34 +123,44 @@ _SYSTEM = (
 
 
 def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_body: str, max_turns: int = 48) -> bool:
+    """Author ONE single-component perf test with the claude-code CLI (`claude -p`), exactly like the
+    rest of the cc engine: login auth, NO claude SDK, NO model tier / escalation ladder (claude's own
+    default model). The one device tool (run_perf_test) is exposed out-of-process via --mcp-config to
+    perf_test_mcp.py; success is signalled back through a status file the server updates each run."""
+    import json as _json
+    import signal
+    import subprocess
+    import tempfile
+
     root = Path(root)
     node_abs = f"{root / out_rel}::test_{task}_perf"
-    state = {"wedges": 0, "passed": False}
-    server = _make_perf_run_server(node_abs, state)
-    if server is None:
+    repo_root = _repo_root()
+    server = repo_root / _PERF_TEST_MCP_REL
+    if not server.is_file():
         return False
     try:
-        from .config import agent_effort, apply_agent_env, get_edit_model
-
-        resolved = apply_agent_env(Path(__file__).parent.parent / ".env.agent")
+        from .agent_bin import resolve_claude_bin
     except Exception:  # noqa: BLE001
         return False
 
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        TextBlock,
-        query,
-    )
+    status_fd, status_path = tempfile.mkstemp(prefix=f"perftest_status_{task}_", suffix=".json")
+    os.close(status_fd)
+    Path(status_path).write_text(_json.dumps({"passed": False}))
 
-    from .sdk_retry import run_with_retry
-
-    try:
-        from .structural_agent import device_call_timeout_s
-
-        _agent_timeout = device_call_timeout_s()
-    except Exception:  # noqa: BLE001
-        _agent_timeout = None
+    server_env = {"PERF_TEST_NODE": node_abs, "PERF_TEST_STATUS_FILE": status_path}
+    if "TT_PERF_TRACE" in os.environ:
+        server_env["TT_PERF_TRACE"] = os.environ["TT_PERF_TRACE"]
+    cfg = {
+        "mcpServers": {
+            "perftest-mcp": {
+                "command": sys.executable or "python",
+                "args": [str(server)],
+                "env": server_env,
+            }
+        }
+    }
+    cfg_path = server.parent / f".perftest_mcp_config_{task}.json"
+    cfg_path.write_text(_json.dumps(cfg, indent=2))
 
     prompt = (
         prompt_body + f"\n\nWrite the test file at `{out_rel}` (relative to your working directory) with the Write "
@@ -177,29 +169,66 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
         "captured region to be host-free and keep attempting the trace; there is no eager fallback. Do NOT "
         "finish until run_perf_test returns PASS_TRACE."
     )
-    opts = ClaudeAgentOptions(
-        model=get_edit_model(0, resolved),
-        system_prompt=_SYSTEM,
-        allowed_tools=["Read", "Write", "Edit", "Glob", "Grep", PERF_RUN_TOOL],
-        permission_mode="bypassPermissions",
-        setting_sources=[],
-        mcp_servers={PERF_RUN_SERVER: server},
-        max_turns=max_turns,
-        max_buffer_size=50 * 1024 * 1024,
-        effort=agent_effort(resolved),
-        cwd=str(root),
-    )
-    chunks: list[str] = []
 
-    async def _go() -> None:
-        async for msg in query(prompt=prompt, options=opts):
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock):
-                        chunks.append(block.text)
+    env = dict(os.environ)
+    for _k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(_k, None)
+
+    overall_timeout = int(os.environ.get("PERF_TEST_AGENT_TIMEOUT_S", "") or max(3600, _component_run_timeout() * 8))
+    log_path = Path(tempfile.gettempdir()) / f"perftest_{task}.agent.log"
+    cmd = [
+        resolve_claude_bin(),
+        "-p",
+        prompt,
+        "--mcp-config",
+        str(cfg_path),
+        "--strict-mcp-config",
+        "--system-prompt",
+        _SYSTEM,
+        "--allowedTools",
+        "Read,Write,Edit,Glob,Grep," + _PERF_RUN_TOOL,
+        "--permission-mode",
+        "bypassPermissions",
+        "--max-turns",
+        str(max_turns),
+        "--output-format",
+        "text",
+    ]
+    try:
+        _lf = open(log_path, "w", buffering=1, errors="ignore")
+    except OSError:
+        _lf = subprocess.DEVNULL
+    proc = subprocess.Popen(cmd, cwd=str(root), env=env, start_new_session=True, stdout=_lf, stderr=subprocess.STDOUT)
+    try:
+        proc.communicate(timeout=overall_timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+        try:
+            proc.wait(timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        if _lf not in (None, subprocess.DEVNULL):
+            try:
+                _lf.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            cfg_path.unlink()
+        except OSError:
+            pass
 
     try:
-        run_with_retry(_go, lambda: chunks.clear(), timeout=_agent_timeout)
+        passed = bool(_json.loads(Path(status_path).read_text()).get("passed"))
     except Exception:  # noqa: BLE001
-        return bool(state.get("passed"))
-    return bool(state.get("passed"))
+        passed = False
+    try:
+        Path(status_path).unlink()
+    except OSError:
+        pass
+    return passed
