@@ -26,6 +26,8 @@
 
 #include <tt-logger/tt-logger.hpp>
 
+#include "profiler_paths.hpp"
+
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::jit_build::utils {
@@ -302,6 +304,94 @@ FileRenamer::~FileRenamer() {
             temp_path_,
             target_path_,
             ec.message());
+    }
+}
+
+void harvest_zone_src_locations_from_ii(const std::vector<std::uint8_t>& ii_content) {
+    // Serialize appends to the shared log: interleaved writes from concurrent compiles produce
+    // corrupted lines that fail to parse. JitBuildState::extract_zone_src_locations() serializes its
+    // own grep for the same reason.
+    static std::mutex zone_log_mutex;
+
+    // Reconstruct the string the device hashed, mirroring C++ string-literal concatenation:
+    // `#pragma message("zone" "," "file" "," "line" ",KERNEL_PROFILER")` -> the joined contents.
+    const auto concat_pragma_literals = [](const std::string& line, std::size_t open_paren) {
+        std::string zone;
+        bool in_str = false;
+        for (std::size_t i = open_paren + 1; i < line.size(); ++i) {
+            const char c = line[i];
+            if (in_str) {
+                if (c == '\\' && i + 1 < line.size()) {
+                    zone.push_back(line[++i]);  // keep the escaped character verbatim
+                } else if (c == '"') {
+                    in_str = false;
+                } else {
+                    zone.push_back(c);
+                }
+            } else if (c == '"') {
+                in_str = true;
+            } else if (c == ')') {
+                break;  // end of message(...) argument list
+            }
+        }
+        return zone;
+    };
+
+    std::ofstream log_file;
+    std::unique_lock<std::mutex> lock(zone_log_mutex, std::defer_lock);
+    const char* data = reinterpret_cast<const char*>(ii_content.data());
+    const std::size_t n = ii_content.size();
+    std::size_t pos = 0;
+    while (pos < n) {
+        std::size_t eol = pos;
+        while (eol < n && data[eol] != '\n') {
+            ++eol;
+        }
+        const std::string line(data + pos, eol - pos);
+        pos = eol + 1;
+
+        if (line.find("#pragma message(") == std::string::npos || line.find("KERNEL_PROFILER") == std::string::npos) {
+            continue;
+        }
+        const std::size_t open_paren = line.find('(');
+        if (open_paren == std::string::npos) {
+            continue;
+        }
+        const std::string zone = concat_pragma_literals(line, open_paren);
+        if (zone.empty()) {
+            continue;
+        }
+        if (!log_file.is_open()) {
+            lock.lock();
+            std::error_code ec;
+            std::filesystem::create_directories(
+                std::filesystem::path(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG).parent_path(), ec);
+            log_file.open(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, std::ios::app);
+            if (!log_file.is_open()) {
+                return;  // best-effort: never block compilation on profiler bookkeeping
+            }
+        }
+        // populateZoneSrcLocations() locates the delimiter "'#pragma message: " and strips the final
+        // character of the line, so wrap the zone string in a trailing sentinel quote to match.
+        log_file << "'#pragma message: " << zone << "'\n";
+    }
+}
+
+void harvest_zone_src_locations_from_dir(const std::string& out_dir) {
+    std::error_code ec;
+    std::filesystem::directory_iterator it(out_dir, ec);
+    if (ec) {
+        return;  // best-effort: a missing/unreadable dir just means no zones to recover
+    }
+    for (const auto& entry : it) {
+        if (entry.path().extension() != ".ii") {
+            continue;
+        }
+        try {
+            harvest_zone_src_locations_from_ii(read_file_bytes(entry.path().string()));
+        } catch (const std::exception&) {
+            // Unreadable .ii: skip it. Profiler bookkeeping must never fail a build.
+        }
     }
 }
 
