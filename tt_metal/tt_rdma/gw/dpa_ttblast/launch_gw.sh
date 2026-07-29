@@ -15,11 +15,12 @@ set -u
 BIN=/home/ubuntu/flexio_samples/build/packet_processor/host/flexio_packet_processor
 COUNT="${TTDPA_COUNT:-100000}"
 PLEN="${TTDPA_PLEN:-256}"
+DTHREADS="${TTDPA_DRAIN_THREADS:-1}"   # A5 fan-out: N parallel DPA drain threads (interleaved stripe)
 
 sudo pkill -f flexio_packet_processor 2>/dev/null
 sleep 0.5
 sudo rm -f /tmp/gw.log /tmp/gw.done
 sudo setsid bash -c "stdbuf -oL -eL env TTDPA_DOORBELL=1 TTDPA_ROCE=1 TTDPA_HOSTSRC=1 \
-  TTDPA_COUNT=$COUNT TTDPA_PLEN=$PLEN TTDPA_NOCRC=1 $BIN mlx5_0 >/tmp/gw.log 2>&1; \
+  TTDPA_COUNT=$COUNT TTDPA_PLEN=$PLEN TTDPA_NOCRC=1 TTDPA_DRAIN_THREADS=$DTHREADS $BIN mlx5_0 >/tmp/gw.log 2>&1; \
   echo GW_EXIT=\$? >>/tmp/gw.log; touch /tmp/gw.done" </dev/null >/dev/null 2>&1 &
-echo "gateway launched detached -> /tmp/gw.log (count=$COUNT plen=$PLEN)"
+echo "gateway launched detached -> /tmp/gw.log (count=$COUNT plen=$PLEN drain_threads=$DTHREADS)"

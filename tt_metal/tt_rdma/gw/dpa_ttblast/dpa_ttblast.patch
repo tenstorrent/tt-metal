@@ -11,7 +11,7 @@
  
  /* Structure for transfer CQ data */
  struct app_transfer_cq {
-@@ -83,6 +83,31 @@
+@@ -83,6 +83,36 @@
  	struct app_transfer_cq sq_cq_transf;
  	/* SQ transfer information. */
  	struct app_transfer_wq sq_transf;
@@ -40,12 +40,17 @@
 +	uint32_t tt_outbox_id;           /* explicit outbox id (over process UAR): the DPA must RESTORE this after
 +	                                  * each window access, or the shared thread-config slot leaves the SQ
 +	                                  * doorbell pointing at the window and sends silently fail to egress. */
++	/* Multi-thread DRAIN fan-out (A5 pattern on the re-head): N DPA drain threads share ONE doorbell + landing
++	 * buffer but each owns its SQ; thread `tt_thread_idx` handles frames {idx, idx+N, idx+2N, ...} < produced
++	 * (INTERLEAVED so all N drain in parallel as the monotonic doorbell grows). */
++	uint32_t tt_thread_idx;
++	uint32_t tt_nthreads;
  	uint8_t not_first_run;
  } __attribute__((__packed__, aligned(8)));
  
 --- a/packet_processor/dev/flexio_packet_processor_dev.c
 +++ b/packet_processor/dev/flexio_packet_processor_dev.c
-@@ -178,6 +178,287 @@
+@@ -178,6 +178,293 @@
  	flexio_dev_dbr_rq_inc_pi(app_ctx.rq_ctx.rq_dbr);
  }
  
@@ -230,8 +235,12 @@
 +	const int gather = (d->tt_src_mkey != 0);
 +	const uint8_t *src = (const uint8_t *)d->tt_src_daddr;
 +	const uint64_t SPIN_MAX = 4000000000ull; /* ~watchdog backstop if the producer stalls */
++	/* INTERLEAVED stripe: this thread owns frames {idx, idx+N, idx+2N, ...}. N drain threads share the doorbell
++	 * + landing buffer but each has its own SQ, so all N drain in parallel as the monotonic doorbell grows. */
++	const uint32_t nthreads = d->tt_nthreads ? d->tt_nthreads : 1u;
 +	volatile uint64_t *produced;
-+	uint64_t consumed = 0, spin = 0;
++	uint64_t consumed = d->tt_thread_idx; /* my first frame index */
++	uint64_t egressed = 0, spin = 0;
 +
 +	tt_ctx_init(&c, d);
 +	if (!d->tt_no_crc)
@@ -249,61 +258,63 @@
 +
 +	while (consumed < d->tt_count) {
 +		uint64_t p;
++		uint32_t j, b;
 +
-+		/* peek the host doorbell (switch to window, read, switch back to outbox for the sends) */
++		/* Peek the host doorbell: switch to the window, read `produced`, switch back to the outbox. BOTH
++		 * configs are REQUIRED per batch -- empirically the SQ doorbell ring only lands right after this
++		 * toggle re-establishes the thread config (draining multiple batches per toggle HANGS). This toggle
++		 * is also what SERIALIZES the N drain threads (shared per-thread config path) -> the drain does NOT
++		 * scale with N (~42G ceiling); the raw A5 blast scales because it has no doorbell/window. */
 +		flexio_dev_window_config(FLEXIO_DEV_WINDOW_ENTITY_0, (uint16_t)d->tt_win_id, d->tt_db_mkey);
 +		__dpa_thread_fence(__DPA_MEMORY, __DPA_R, __DPA_R);
-+		p = *produced; /* live host doorbell read via the window */
++		p = *produced;
 +		flexio_dev_outbox_config(NULL, (uint16_t)d->tt_outbox_id);
 +		if (p > d->tt_count)
 +			p = d->tt_count;
-+		if (consumed >= p) { /* caught up -> wait for more arrivals (bounded) */
++		if (consumed >= p) { /* my stripe caught up -> wait for more arrivals (bounded) */
 +			if (++spin > SPIN_MAX)
 +				break;
 +			continue;
 +		}
 +		spin = 0;
-+		/* drain [consumed, p) in SQ-CQ-paced batches */
-+		while (consumed < p) {
-+			uint64_t end = consumed + BATCH;
-+			uint32_t j, b;
++		/* one batch of up to BATCH of MY stripe frames < p, on my own SQ */
++		b = 0;
++		for (j = 0; j < BATCH && consumed < p; j++) {
++			uint8_t *f = (uint8_t *)get_next_dte(&c.dt_ctx, DATA_IDX_MASK, LOG_WQD_CHUNK_BSIZE);
++			union flexio_dev_sqe_seg *cseg, *swqe;
++			int is_last = (consumed + nthreads >= p) || (j == BATCH - 1);
 +
-+			if (end > p)
-+				end = p;
-+			b = (uint32_t)(end - consumed);
-+			for (j = 0; j < b; j++) {
-+				uint8_t *f = (uint8_t *)get_next_dte(&c.dt_ctx, DATA_IDX_MASK, LOG_WQD_CHUNK_BSIZE);
-+				union flexio_dev_sqe_seg *cseg, *swqe;
-+
-+				tt_build_frame(f, d, plen, (uint32_t)(consumed + 1), src, gather);
-+				cseg = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
-+				flexio_dev_swqe_seg_ctrl_set(cseg, c.sq_ctx.sq_pi, c.sq_ctx.sq_number,
-+							     (j == b - 1) ? FLEXIO_CTRL_SEG_CE_CQE_ALWAYS
-+									  : FLEXIO_CTRL_SEG_CE_CQE_ON_CQE_ERROR,
-+							     FLEXIO_CTRL_SEG_TYPE_SEND_EN);
-+				if (gather)
-+					((uint8_t *)&cseg->ctrl.qpn_ds)[3] = 4u;
-+				swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
-+				flexio_dev_swqe_seg_eth_set(swqe, 0, 0, 0, NULL);
-+				swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
-+				flexio_dev_swqe_seg_mem_ptr_data_set(swqe, gather ? hdr_len : flen, c.lkey, (uint64_t)f);
-+				swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
-+				if (gather)
-+					flexio_dev_swqe_seg_mem_ptr_data_set(swqe, plen, d->tt_src_mkey, d->tt_src_daddr);
-+				c.sq_ctx.sq_pi++;
-+				consumed++;
-+			}
-+			__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
-+			flexio_dev_qp_sq_ring_db(c.sq_ctx.sq_pi, c.sq_ctx.sq_number);
-+			__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
-+			while (flexio_dev_cqe_get_owner(c.sq_cq_ctx.cqe) != c.sq_cq_ctx.cq_hw_owner_bit)
-+				;
-+			com_step_cq(&c.sq_cq_ctx);
++			tt_build_frame(f, d, plen, (uint32_t)(consumed + 1), src, gather);
++			cseg = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++			flexio_dev_swqe_seg_ctrl_set(cseg, c.sq_ctx.sq_pi, c.sq_ctx.sq_number,
++						     is_last ? FLEXIO_CTRL_SEG_CE_CQE_ALWAYS
++							     : FLEXIO_CTRL_SEG_CE_CQE_ON_CQE_ERROR,
++						     FLEXIO_CTRL_SEG_TYPE_SEND_EN);
++			if (gather)
++				((uint8_t *)&cseg->ctrl.qpn_ds)[3] = 4u;
++			swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++			flexio_dev_swqe_seg_eth_set(swqe, 0, 0, 0, NULL);
++			swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++			flexio_dev_swqe_seg_mem_ptr_data_set(swqe, gather ? hdr_len : flen, c.lkey, (uint64_t)f);
++			swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++			if (gather)
++				flexio_dev_swqe_seg_mem_ptr_data_set(swqe, plen, d->tt_src_mkey, d->tt_src_daddr);
++			c.sq_ctx.sq_pi++;
++			consumed += nthreads;
++			egressed++;
++			b++;
 +		}
++		(void)b;
++		__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
++		flexio_dev_qp_sq_ring_db(c.sq_ctx.sq_pi, c.sq_ctx.sq_number);
++		__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
++		while (flexio_dev_cqe_get_owner(c.sq_cq_ctx.cqe) != c.sq_cq_ctx.cq_hw_owner_bit)
++			;
++		com_step_cq(&c.sq_cq_ctx);
 +	}
-+	flexio_dev_print("TT-RDMA drain done: %u frames egressed (doorbell peek %u)\n", (uint32_t)consumed,
-+			 (uint32_t)*produced);
-+	return consumed;
++	flexio_dev_print("TT-RDMA drain[%u/%u] done: %u frames egressed (doorbell peek %u)\n", d->tt_thread_idx,
++			 nthreads, (uint32_t)egressed, (uint32_t)*produced);
++	return egressed;
 +}
 +
 +/* ---- A3.2 doorbell seam test: read one uint64 from HOST memory via a flexio_window ----
@@ -333,7 +344,7 @@
  /* Entry point function that host side call for the execute.
   *  thread_arg - pointer to the host2dev_packet_processor_data structure
   *     to transfer data from the host side.
-@@ -194,6 +475,15 @@
+@@ -194,6 +481,15 @@
  		data_from_host->not_first_run = 1;
  	}
  
@@ -699,7 +710,7 @@
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -887,6 +1163,682 @@
+@@ -887,6 +1163,756 @@
  /* dev msg stream buffer built from chunks of 2^FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE each */
  #define MSG_HOST_BUFF_BSIZE (512 * L2V(FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE))
  
@@ -798,6 +809,16 @@
 +	/* Blocking synchronous RPC: runs tt_blast_rpc on the DPA, returns the frame count. The concurrency
 +	 * question this whole path answers: do N such calls run in parallel on N DPA EUs, or serialize? */
 +	a->status = flexio_process_call(a->process, &tt_blast_rpc, &a->ret, a->app_data_daddr);
++	return NULL;
++}
++
++/* A5-fan-out on the re-head: one of N parallel DPA drain threads, each blocking on tt_drain_rpc with its own
++ * SQ + stripe index (shared doorbell + landing buffer). */
++static void *tt_drain_worker(void *v)
++{
++	struct tt_worker_arg *a = v;
++
++	a->status = flexio_process_call(a->process, &tt_drain_rpc, &a->ret, a->app_data_daddr);
 +	return NULL;
 +}
 +
@@ -1004,6 +1025,13 @@
 +	volatile int roce_ready = 0, roce_failed = 0;
 +	pthread_t rt;
 +	int have_roce = 0;
++	/* A5 fan-out on the drain: N parallel DPA drain threads (each own SQ), interleaved-striped over the one
++	 * shared doorbell + landing buffer. TTDPA_DRAIN_THREADS=N. */
++	int drain_threads = getenv("TTDPA_DRAIN_THREADS") ? atoi(getenv("TTDPA_DRAIN_THREADS")) : 1;
++	struct tt_sq *dsqs = NULL;
++	struct tt_worker_arg *dargs = NULL;
++	pthread_t *dtids = NULL;
++	int dcreated = 0, dlaunched = 0, di;
 +
 +	total = tt_fill_hdr_params(&h);
 +	if (!total)
@@ -1062,10 +1090,14 @@
 +		h.tt_db_mkey = dbmr->lkey;
 +		h.tt_db_haddr = (flexio_uintptr_t)(uintptr_t)dbpage;
 +	}
-+	h.sq_cq_transf = app_ctx->sq_cq_transf; /* reuse the single SQ created in main */
++	h.sq_cq_transf = app_ctx->sq_cq_transf; /* reuse the single SQ created in main (single-drain path) */
 +	h.sq_transf = app_ctx->sq_transf;
 +	h.rq_cq_transf = app_ctx->rq_cq_transf;
 +	h.rq_transf = app_ctx->rq_transf;
++	if (drain_threads < 1)
++		drain_threads = 1;
++	h.tt_nthreads = (uint32_t)drain_threads; /* single-drain => 1; multi => set per-thread below */
++	h.tt_thread_idx = 0;
 +
 +	if (flexio_window_create(app_ctx->flexio_process, app_ctx->process_pd, &win)) {
 +		fprintf(stderr, "doorbell: flexio_window_create failed\n");
@@ -1151,7 +1183,55 @@
 +	}
 +
 +	clock_gettime(CLOCK_MONOTONIC, &t0);
-+	if (flexio_process_call(app_ctx->flexio_process, &tt_drain_rpc, &ret, app_data)) {
++	if (drain_threads > 1) {
++		/* A5 fan-out: N drain threads, each its own SQ, striped interleaved over the shared doorbell. */
++		printf("A3: MULTI-THREAD DRAIN x%d (interleaved stripe over the shared doorbell + landing)\n",
++		       drain_threads);
++		dsqs = calloc(drain_threads, sizeof(*dsqs));
++		dargs = calloc(drain_threads, sizeof(*dargs));
++		dtids = calloc(drain_threads, sizeof(*dtids));
++		if (!dsqs || !dargs || !dtids) {
++			rc = -1;
++			goto out;
++		}
++		for (di = 0; di < drain_threads; di++) {
++			struct host2dev_packet_processor_data hi = h; /* shared doorbell/landing/outbox/win/count */
++
++			if (create_tt_sq(app_ctx, &dsqs[di])) {
++				rc = -1;
++				goto out;
++			}
++			dcreated++;
++			hi.sq_cq_transf = dsqs[di].sq_cq_transf; /* this thread's own SQ */
++			hi.sq_transf = dsqs[di].sq_transf;
++			hi.tt_thread_idx = (uint32_t)di;
++			hi.tt_nthreads = (uint32_t)drain_threads;
++			if (flexio_copy_from_host(app_ctx->flexio_process, &hi, sizeof(hi), &dsqs[di].app_data_daddr)) {
++				fprintf(stderr, "drain[%d]: copy app_data failed\n", di);
++				rc = -1;
++				goto out;
++			}
++			dargs[di].process = app_ctx->flexio_process;
++			dargs[di].app_data_daddr = dsqs[di].app_data_daddr;
++			dargs[di].idx = di;
++		}
++		for (di = 0; di < drain_threads; di++) {
++			if (pthread_create(&dtids[di], NULL, tt_drain_worker, &dargs[di])) {
++				fprintf(stderr, "drain[%d]: pthread_create failed\n", di);
++				rc = -1;
++				break;
++			}
++			dlaunched++;
++		}
++		for (di = 0; di < dlaunched; di++) {
++			pthread_join(dtids[di], NULL);
++			if (dargs[di].status) {
++				fprintf(stderr, "drain thread %d flexio_process_call failed (%d)\n", di, dargs[di].status);
++				rc = -1;
++			}
++			ret += dargs[di].ret;
++		}
++	} else if (flexio_process_call(app_ctx->flexio_process, &tt_drain_rpc, &ret, app_data)) {
 +		fprintf(stderr, "doorbell: drain RPC failed\n");
 +		rc = -1;
 +	}
@@ -1171,6 +1251,11 @@
 +	}
 +
 +out:
++	for (di = 0; di < dcreated; di++)
++		destroy_tt_sq(app_ctx, &dsqs[di]);
++	free(dsqs);
++	free(dargs);
++	free(dtids);
 +	if (app_data)
 +		flexio_buf_dev_free(app_ctx->flexio_process, app_data);
 +	if (outbox)
@@ -1382,7 +1467,7 @@
  /* Application name in string format for Flex IO app get. */
  #define DEV_APP_NAME_STR(_app_name) #_app_name
  #define DEV_APP_NAME_XSTR(_app_name) DEV_APP_NAME_STR(_app_name)
-@@ -1068,20 +2020,63 @@
+@@ -1068,20 +2094,63 @@
  
  	printf("Ready to receive messages\n");
  
@@ -1398,19 +1483,19 @@
 +	if (getenv("TTDPA_WINTEST") && strtoul(getenv("TTDPA_WINTEST"), NULL, 0) > 0) {
 +		if (tt_run_wintest(&app_ctx))
 +			err = -1;
++		goto cleanup;
++	}
++
++	/* A3.2 full doorbell datapath: DPA drains a host doorbell + gather-egresses each landed frame, then exit. */
++	if (getenv("TTDPA_DOORBELL") && strtoul(getenv("TTDPA_DOORBELL"), NULL, 0) > 0) {
++		if (tt_run_doorbell(&app_ctx))
++			err = -1;
  		goto cleanup;
  	}
  
 -	/* Wait for Enter - the DPA sample is running in the meanwhile */
 -	if (!fread(buf, 1, 1, stdin)) {
 -		fprintf(stderr, "Failed in fread\n");
-+	/* A3.2 full doorbell datapath: DPA drains a host doorbell + gather-egresses each landed frame, then exit. */
-+	if (getenv("TTDPA_DOORBELL") && strtoul(getenv("TTDPA_DOORBELL"), NULL, 0) > 0) {
-+		if (tt_run_doorbell(&app_ctx))
-+			err = -1;
-+		goto cleanup;
-+	}
-+
 +	/* TT-RDMA A1: if a blast count was requested, drive the DPA blast SYNCHRONOUSLY via flexio_process_call
 +	 * (an event handler only fires on an RX CQE, which a pure TX blast never gets). Otherwise fall back to the
 +	 * original event-handler RX-reflect demo. */
@@ -1457,7 +1542,7 @@
  	}
  
  cleanup:
-@@ -1096,6 +2091,28 @@
+@@ -1096,6 +2165,28 @@
  		err = -1;
  	}
  
