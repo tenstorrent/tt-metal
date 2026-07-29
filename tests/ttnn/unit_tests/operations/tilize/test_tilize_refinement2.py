@@ -36,6 +36,8 @@ block written into the wrong prefetch window cannot cancel out.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 
@@ -326,13 +328,28 @@ def test_b8_off_on_a_multi_page_row_sharded_input(device):
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    # Sharded RM in -> DRAM-interleaved TILE out, so the generic path runs with the
-    # sharded source's multi-page rows (the same-spec case would take the alias
-    # path and have no reads at all).
-    plan = _plan(device, shape, memory_config=cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # Sharded RM in -> DRAM-interleaved TILE out. Refinement 3 now takes this exact
+    # cell down the `alias_in` path (input CB aliased onto the shard, ZERO reads), so
+    # reaching the generic reader here needs R3 off -- which is also the honest form
+    # of this test's claim: it is about the raw strided FALLBACK, and that fallback is
+    # only reachable when the alias declines.
+    monkey = os.environ.get("TILIZE_LEVER_R3")
+    os.environ["TILIZE_LEVER_R3"] = "0"
+    try:
+        plan = _plan(device, shape, memory_config=cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    finally:
+        if monkey is None:
+            os.environ.pop("TILIZE_LEVER_R3", None)
+        else:
+            os.environ["TILIZE_LEVER_R3"] = monkey
     assert plan["path"] == "generic"
     assert plan["row_page_stride"] > 1
     assert plan["prefetch_blocks"] == 1
+
+    # ... and with R3 on (the default) the same cell has no read loop for B8 to own.
+    aliased = _plan(device, shape, memory_config=cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert aliased["path"] == "alias_in"
+    assert aliased["prefetch_blocks"] == 1
 
 
 # ---------------------------------------------------------------------------

@@ -898,7 +898,17 @@ def _shard_geometry(tensor):
         # (buffer_distribution_spec.cpp:53-86,152-191), which only agrees with the
         # flattened 2D map when the fold is consistent -- so Refinement 3's
         # one-sided alias, which needs that map exactly, declines ND.
-        "nd": shard_spec is None,
+        #
+        # NB this fires for a spec that STAYS ND, not for the ND *API*: the allocator
+        # normalises every 2D-representable ND request to a legacy layout (verified on
+        # device, `probes/probe_024.py` -- including the dangerous-looking case where a
+        # LEADING dim is split while the row dim is whole, which normalises to
+        # HEIGHT_SHARDED over the folded rows), and the buffer then uses the legacy
+        # page mapping the 2D map above is derived from. What is left as genuinely ND
+        # is e.g. a round-robin with more shards than cores, which the one-shard-per-
+        # core clause would decline anyway. Both are pinned by
+        # `test_tilize_refinement3.py::test_nd_*`.
+        "nd": shard_spec is None or memory_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED,
     }
 
 
