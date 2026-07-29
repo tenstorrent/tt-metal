@@ -1,0 +1,18 @@
+{
+  "problemMatcher": [
+    {
+      "owner": "gcc-clang-target-warnings",
+      "severity": "warning",
+      "pattern": [
+        {
+          "regexp": "^(.*?):(\\d+):(\\d+):\\s+(warning|error):\\s+(.+?)\\s+\\[(-W(?:error=)?(?:unused-but-set-variable|deprecated-declarations))\\]$",
+          "file": 1,
+          "line": 2,
+          "severity": 3,
+          "message": 4,
+          "code": 5
+        }
+      ]
+    }
+  ]
+}
