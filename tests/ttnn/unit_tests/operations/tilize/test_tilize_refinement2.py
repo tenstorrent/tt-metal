@@ -361,6 +361,27 @@ def test_b8_is_bit_exact(device, shape, use_multicore):
     _roundtrip_exact(device, shape, use_multicore=use_multicore)
 
 
+def test_b8_is_bit_exact_on_an_uneven_split(device):
+    """Some cores run the prefetch with `total_blocks == 1`, and that must be safe.
+
+    The gate keys on the BUSIEST core (`blocks_per_core = max(...)`) while
+    `_split_contiguous` hands `total % parts` cores one extra unit — so an uneven
+    split produces a *heterogeneous* per-core block count with B8 on everywhere.
+    `[1,1,3200,32]`: nt_h = 100 over 64 cores => 36 cores with 2 blocks and **28
+    with 1**. Every other B8 test shape divides evenly, so this is the only cover
+    for the degenerate pipeline (prologue reserve is the only reserve, the loop
+    body never issues a next block, and the barrier parity must still match the
+    trid the prologue set).
+    """
+    shape = (1, 1, 3200, 32)
+    plan = _plan(device, shape)
+    assert plan["prefetch_blocks"] == 2
+    assert plan["blocks_per_core"] == 2
+    counts = {u["row_count"] * u["chunk_count"] for u in plan["work"]}
+    assert counts == {1, 2}, f"expected a heterogeneous split, got block counts {counts}"
+    _roundtrip_exact(device, shape)
+
+
 def test_b8_is_bit_exact_over_repeated_launches(device):
     """The trid tag and the CB base are re-derived per launch; a stale
     NOC_PACKET_TAG or a write pointer that did not start at the CB base would show

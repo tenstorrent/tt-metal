@@ -1383,9 +1383,50 @@ read transactions on `b_wide_short` — see the finding below.
    around a plain `tt-probe.sh` run produces the same `noc_trace_dev0_ID*.json` files that tt-npe
    consumes. Worth knowing — the documented path is a dead end here.
 
+### Static-analysis pass on the B8 pipeline (`ttnn-static-analyzer`, this entry)
+
+B8 is a hand-rolled software pipeline over a circular buffer, so it was reviewed with a fresh context
+*after* the tests were green — the class of bug it could carry (a window computed instead of asked for)
+is exactly the class that passes a bit-exactness suite and fails later under different timing.
+
+**Zero structural findings.** All four premises the review was pointed at turn out to be *guaranteed*
+rather than observed, and the proofs are worth recording because they are the reason the scheme is
+allowed to exist:
+
+1. `cb_base + (b % depth) * window_bytes` — `circular_buffer.cpp:112-136` keeps `page_size` verbatim
+   (no alignment round-up), `cb_push_back` advances `fifo_wr_ptr += num_pages * fifo_page_size` and
+   wraps only on landing exactly on `fifo_limit`, and `cb_addr_shift == 0` on the DM RISC-Vs — so with
+   `num_pages == chunk_wt` the pointer visits exactly `base + k*window_bytes` and returns to base.
+   `get_tile_size(cb)` is the same `tt::tile_size(dataformat)` the host used for `page_size`.
+   **Across launches** it holds because the firmware re-runs `setup_local_cb_read_write_interfaces()`
+   at the top of every launch (`ncrisc.cc:157`), so a cached program's `fifo_wr_ptr` is re-zeroed
+   regardless of the previous launch's push count.
+2. `cb_reserve_back(2 * chunk_wt)` is **exact, with zero margin**: at depth 3 it guarantees blocks
+   `0 … b-1` are popped, and the window block `b+1` targets last held block `b-2`. So
+   `static_assert(cb_depth >= 3)` is load-bearing (and generalises correctly to any depth > 3).
+3. Issuing block `b+1`'s reads before block `b`'s barrier is safe, and the "popped ⇒ overwritable"
+   link is real hardware ordering, not an assumption: `llk_pop_tiles` does
+   `TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK)` before storing the acked counter
+   (`llk_io_unpack.h:94-97`), so the counter the reader polls is only visible after the unpacker has
+   drained that window.
+4. Two trids suffice: block `b+2` shares block `b`'s parity but is issued at iteration `b+1`, strictly
+   after iteration `b`'s barrier drove that trid's outstanding count to zero — so at most one block
+   carries a given trid at any instant. `ncrisc_noc_fast_read` never rewrites `NOC_PACKET_TAG`, and
+   `ncrisc_noc_set_transaction_id` waits for `noc_cmd_buf_ready` before retagging, so a retag cannot
+   reach an already-latched request.
+
+Four non-severity observations, all acted on:
+
+| # | observation | action |
+|---|---|---|
+| O1 | `skip_dm` on the B8 path dropped **address generation** too (the whole helper call is inside the guard), while the non-prefetched fallback deliberately keeps its 32 accessor calls behind a `volatile` sink. Any future `TILIZE_SKIP_DM` A/B between B8 and its counterfactual would have been biased in B8's favour by the entire address-gen term (~437 ns of 3 609 on `d_tall_narrow`, per Refinement 1). | **Fixed** — the B8 branch now keeps the 32 accessor calls behind a `volatile` sink under `skip_dm`, matching the fallback. (Production numbers unaffected; this is an ablation-fidelity fix.) |
+| O2 | The gate keys on the **busiest** core (`blocks_per_core = max(...)`) while `_split_contiguous` gives `total % parts` cores one extra unit, so an **uneven** split runs B8 on cores with `total_blocks == 1`. Traced safe (the prologue reserve covers the single push, the barrier parity matches the trid the prologue set, the tag is restored) but **untested** — all four B8 test shapes divide evenly. | **Test added** — `test_b8_is_bit_exact_on_an_uneven_split` on `[1,1,3200,32]` (nt_h 100 over 64 cores ⇒ 36 cores × 2 blocks + **28 × 1**), asserting the heterogeneity is really there before checking bit-exactness. Header comment corrected. |
+| O3 | No `static_assert` paired `prefetch_blocks == 2` with `row_page_stride == 1`; a future host change could size the CB to 3 windows and then silently take the raw strided fallback — correct output, lever quietly lost, no diagnostic. | **Fixed** — `static_assert` added, plus one recording that the depth-3 bound is exact. |
+| O4 | `get_write_ptr` is called before the first `cb_reserve_back`, against the documented contract (value is correct per proof 1; in-tree precedent in the dram prefetcher's reader). | **Comment added** naming the per-launch CB re-init that makes it valid. |
+
 ### Tests added
 
-- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement2.py` — **40 cells**: both B8 gate
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement2.py` — **41 cells**: both B8 gate
   clauses pinned to the sweep that set them (with the tables in the docstrings, so raising a threshold
   fails here with the numbers attached); the structural min-blocks clause; the L1-budget refusal
   (declining rather than shrinking `chunk_wt`); trid values distinct and non-zero; plan selection on 6
@@ -1405,7 +1446,7 @@ read transactions on `b_wide_short` — see the finding below.
   every regime with real traffic.
 - `probes/probe_014.py` — the first-light 6 shapes × 5 lever combinations bit-exactness probe.
 
-Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **193 passed** (153 prior + 40 new) in
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **194 passed** (153 prior + 41 new) in
 **both** default and `--dev` mode.
 
 ### Ranked follow-ups

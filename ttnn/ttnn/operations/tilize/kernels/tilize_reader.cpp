@@ -44,6 +44,13 @@
 //       because it only needs them to have DEPARTED, whereas the reader needs the
 //       bytes PRESENT before it pushes, which is what the second trid buys.
 //
+//       NB the host gate keys on the BUSIEST core's block count, so on an uneven
+//       split (`_split_contiguous` gives `total % parts` cores one extra unit) some
+//       cores run this path with `total_blocks == 1`. That is safe by construction —
+//       the prologue reserve covers the single push, the barrier parity matches the
+//       trid the prologue set, and the tag is restored — and it is covered by
+//       `test_tilize_refinement2.py::test_b8_is_bit_exact_on_an_uneven_split`.
+//
 //       It needs a THIRD CB window. `cb_reserve_back` does not move the write
 //       pointer, so `get_write_ptr` returns the *current* block's window until
 //       `cb_push_back` — the reader cannot ask the CB for the next block's address
@@ -109,7 +116,14 @@ void kernel_main() {
     static_assert(!split_read || row_page_stride == 1, "the split reader needs one source page per logical row");
     static_assert(prefetch_blocks == 1 || prefetch_blocks == 2, "B8 double-issues exactly two transaction ids");
     static_assert(prefetch_blocks == 1 || !split_read, "B8 and C7 both own the read window; they are exclusive");
+    // cb_depth >= 3 is EXACT, not conservative: `cb_reserve_back(2 * chunk_wt)`
+    // guarantees blocks 0..b-(depth-2) are popped, and block b+1's window last held
+    // block b+1-depth, so depth 3 gives precisely the needed guarantee with zero
+    // margin. Do not relax it (any depth > 3 is also sound).
     static_assert(prefetch_blocks == 1 || cb_depth >= 3, "B8 needs a third CB window (see the header)");
+    // The host would otherwise size the CB to 3 windows and then silently get the
+    // raw strided fallback (correct output, lever quietly lost, no diagnostic).
+    static_assert(prefetch_blocks == 1 || row_page_stride == 1, "B8 needs one source page per logical row");
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -142,8 +156,13 @@ void kernel_main() {
             constexpr uint32_t window_bytes = chunk_wt * tile_bytes;
             const uint32_t blocks_per_chunk = num_rows / tile_height;
             const uint32_t total_blocks = chunk_count * blocks_per_chunk;
-            // The FIFO write pointer starts at the CB base and advances one window
-            // per `cb_push_back(chunk_wt)`, so window w is always base + w*bytes.
+            // The FIFO write pointer starts at the CB base and advances exactly one
+            // window per `cb_push_back(chunk_wt)`, wrapping after cb_depth pushes, so
+            // window w is always base + w*window_bytes. Read BEFORE the first reserve
+            // on purpose: the firmware re-runs
+            // setup_local_cb_read_write_interfaces() at the top of every launch
+            // (ncrisc.cc), so fifo_wr_ptr == fifo_addr here regardless of how many
+            // pushes the PREVIOUS launch of this cached program made.
             const uint32_t cb_base = get_write_ptr(cb_rm_input);
 
             // Two windows free => the one block 0 lands in, and the one block 1
@@ -167,7 +186,19 @@ void kernel_main() {
                     const uint32_t nc = nxt / blocks_per_chunk;
                     const uint32_t nr = nxt - nc * blocks_per_chunk;
                     noc_async_read_set_trid((nxt & 1u) ? trid_b : trid_a);
-                    if constexpr (!skip_dm) {
+                    if constexpr (skip_dm) {
+                        // Ablation: the payload goes, the address generation stays.
+                        // The non-prefetched fallback below keeps its 32 accessor
+                        // calls behind a volatile sink for exactly this reason, and
+                        // Refinement 1 priced address-gen at ~437 ns of 3 609 ns on
+                        // `d_tall_narrow` — dropping it here would bias every
+                        // skip_dm A/B in this lever's favour by that whole term.
+                        for (uint32_t row = 0; row < tile_height; ++row) {
+                            volatile uint32_t sink = static_cast<uint32_t>(accessor.get_noc_addr(
+                                start_row + nr * tile_height + row, (chunk_start + nc) * chunk_row_bytes));
+                            (void)sink;
+                        }
+                    } else {
                         dataflow_kernel_lib::read_stick_rows_for_tilize<StickReadMode::Generic, 1>(
                             accessor,
                             start_row + nr * tile_height,
