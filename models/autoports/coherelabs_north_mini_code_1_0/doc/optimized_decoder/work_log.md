@@ -572,3 +572,31 @@ external pinned tt-mlir environment lacks both `ttnn-advise` and `ttnn_jit`.
 Per the shard-advisor skill, building that environment inside this model
 experiment is prohibited operator setup. Exact failure and recovery commands
 are retained under `shard_advise/` and `AUTOFIX.md`.
+
+## Independent review 6 and checkpoint ledger
+
+45. Committed the review-5 AutoFix closure as `c1b26703d85` (`Fix North Mini
+    final prefill geometry`). Repository hooks pass, and
+    `git diff --name-only 78dbd88bec7..c1b26703d85` contains only
+    `models/autoports/coherelabs_north_mini_code_1_0/` paths.
+46. `STAGE_REVIEW_6.md` independently confirms that the review-5 prefill
+    geometry finding is closed: the promoted default reproduces
+    96.750/96.440 ms, authentic PCC passes for both MoE layer kinds, decode
+    does not regress, and the fresh profiler, watcher, capacity, and combined
+    suite evidence are mutually consistent. The review report is committed as
+    `1774f50bf8c` (`Review North Mini optimized decoder closure`).
+47. Review 6 returns `more-work-needed` solely for mandatory OPT-015 after
+    this ledger correction. The available external tt-mlir checkout is on
+    `mvasiljevic/5738-distributed-rmsnorm-rulebook` at `21c1b3bc4a81`, not the
+    required shard-advisor revision, and exposes neither `ttnn-advise` nor
+    `ttnn_jit`. AutoFix cannot proceed without prohibited in-experiment
+    toolchain construction.
+
+The complete later checkpoint sequence omitted by the earlier ledger is:
+
+- `770f70051f9` — Record isolated North Mini stage history.
+- `74c95ddaf4f` — Point North Mini docs at final review suite.
+- `c1b26703d85` — Fix North Mini final prefill geometry.
+- `1774f50bf8c` — Review North Mini optimized decoder closure.
+
+No commit was pushed.
