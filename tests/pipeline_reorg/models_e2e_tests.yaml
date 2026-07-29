@@ -275,9 +275,6 @@
 - name: Qwen2.5-Coder-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-Coder-32B-Instruct MESH_DEVICE=T3K
-    # TTTv2 demo substitutes the TTTv1 simple_text_demo legs (same T3K SKU/tier, no coverage dropped):
-    # token-accuracy<->ci-token-matching, eval-32<->ci-eval-32. TT_CACHE_PATH is a fresh TTTv2-namespaced
-    # LazyWeight cache (cold weight conversion on first run; warm re-runs faster).
     pytest --timeout 1800 models/common/tests/demos/qwen25_coder_32b/demo.py -k "token-accuracy and performance"
     pytest --timeout 1800 models/common/tests/demos/qwen25_coder_32b/demo.py -k "eval-32 and performance"
   model: qwen2.5-coder-32b
@@ -294,9 +291,6 @@
 - name: Qwen2.5-7B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
-    # --timeout 600 (not the TTTv1 leg's 420) so the pytest cap covers the one-time cold TTTv2
-    # weight-cache build: measured cold wall ~6 min vs warm ~1.2 min. Lower back to 420 once
-    # tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct is populated.
     pytest --timeout 600 models/common/tests/demos/qwen25_7b/demo.py -k "token-accuracy and performance"
   model: qwen2.5-7b
   model_family: Qwen
@@ -568,16 +562,8 @@
 
 - name: Mistral-7B e2e tests
   cmd: |
-    # TTTv2 token-accuracy leg (replaces TTTv1 performance-ci-token-matching): teacher-forcing top1/top5
-    # vs the same book .refpt. MESH_DEVICE is required (module-level skip) and TTTv2 uses its OWN
-    # tt_cache/tttv2 namespace (the TTTv1 cache format is incompatible); the demo builds it on a miss.
     export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mistralai/Mistral-7B-Instruct-v0.3 MESH_DEVICE=N150
     pytest --timeout 600 models/common/tests/demos/mistral_7b/demo.py -k "token-accuracy and performance"
-    # TTTv1 performance-ci-eval-32 leg RETAINED (its own TTTv1 cache namespace, per-command so it does not
-    # inherit the tttv2 TT_CACHE_PATH above): the TTTv2 eval-32 case is an N150 capability skip (a single
-    # unsharded device can't hold the 7B eval-32 fresh-executor churn — see demo.py), so it cannot cover
-    # this on wh_n150. Retaining the TTTv1 leg preserves coverage exactly (same precedent as the retained
-    # TTTv1 unit legs below). TTTv2 eval-32 IS exercised on sharded N300/T3K in the demo matrix.
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3 pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: mistral-7b
   model_family: Mistral
