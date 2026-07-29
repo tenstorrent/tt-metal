@@ -78,4 +78,11 @@ python .../traced_synthetic_pcc.py --decoder fused --kind {full,linear} \
   Remediation implemented both packing families; all final profiler rows improve.
 - Fresh independent rereview: `clean-pass`, no required work; recorded in
   `stage_review.md`.
-- Scoped local commit SHA: pending.
+- Scoped local stage implementation/evidence commit created.
+
+## Local checkpoint
+
+- Repository: `/home/mvasiljevic/tt-metal`
+- Branch: `skillexp-cell/fuse-advise/qwen`
+- Stage implementation/evidence commit: `03d31d7bbc6`
+- Push: not performed.
