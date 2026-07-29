@@ -117,6 +117,18 @@
 #define WALLCLOCK_REG_H 0xFFB121F8ULL /* RISCV_DEBUG_REG_WALL_CLOCK_1_AT (latched high half) */
 
 #define kNonceHartZones (1ull << 19) /* P_NONCE bit19: harts emit per-drain zones IN-BAND (+ hart0 inline calib) */
+/* P_NONCE bits 32..39: base ctrl WORD index of the per-RISC ring tails (host's
+ * kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER). NOT derivable here: it is the host's
+ * PROFILER_MAX_RISC_COUNT, which went 5 -> 24 with Quasar. This used to be hardcoded as word 5 below,
+ * which silently became dead reserved slots -- tail always == head, so the drain stopped and producers
+ * blocked forever. 0 means an old host that does not pass it; fall back to the historical NRISC. */
+#define kNonceTailIdxShift 32
+#define kNonceTailIdxMask 0xFFull
+/* P_NONCE bits 40..55: BYTE offset from a worker's control-buffer base to its per-RISC marker rings
+ * (host's kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE). Was hardcoded as 128 here, correct only while
+ * the control vector was 32 words; upstream doubled it to 64 words (256 B). 0 => old host, fall back. */
+#define kNonceRingOffShift 40
+#define kNonceRingOffMask 0xFFFFull
 #define PP_X280_ZONE 2u              /* in-band X280 hart-zone packet (3 words); MUST match prof_packet.h */
 static uint32_t g_hartzones = 0;     /* set in main() from nonce bit19; read by reader_run/relay */
 /* X280-zone kinds (MUST match prof_packet.h): 0=drain, 1=bulk, 2=hostwait, 3=spscwait */
@@ -244,6 +256,8 @@ static void reader_run(
     uint64_t hartid,
     uint64_t num_cores,
     uint64_t prof_l1,
+    uint32_t tail_idx0, /* base ctrl word of the per-RISC ring tails (see kNonceTailIdxShift) */
+    uint32_t ring_off,  /* byte offset from ctrl base to the marker rings (see kNonceRingOffShift) */
     uint64_t nread,
     uint64_t read_noc,
     uint64_t fullread,
@@ -304,9 +318,9 @@ static void reader_run(
             uint64_t hz_t = g_hartzones ? rdcycle() : 0; /* core-visit start (rdcycle) */
             uint32_t hz_prod0 = prod;                    /* prod baseline: did this visit drain? */
             uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
-            uint64_t rbufs = cbase + 128;
+            uint64_t rbufs = cbase + (uint64_t)ring_off;
             uint32_t tails[NRISC];
-            read_tails(cbase + 5u * 4, tails); /* all 5 RISC tails in one NoC read */
+            read_tails(cbase + (uint64_t)tail_idx0 * 4, tails); /* all 5 RISC tails in one NoC read */
             /* ADAPTIVE SWITCH: the tails are already in hand, so decide per-core whether to do one bulk read
              * (amortized, best when the core is mostly full) or per-risc drains (efficient at light load,
              * skips empty riscs). A single dynamic switch, not separate modes. Threshold = ADAPT_THRESH words
@@ -843,6 +857,8 @@ static void drain_direct(
     uint64_t ndrain,
     uint64_t num_cores,
     uint64_t prof_l1,
+    uint32_t tail_idx0, /* base ctrl word of the per-RISC ring tails (see kNonceTailIdxShift) */
+    uint32_t ring_off,  /* byte offset from ctrl base to the marker rings (see kNonceRingOffShift) */
     uint64_t host_base,
     uint64_t hring_words,
     uint64_t pcie_enc,
@@ -916,10 +932,10 @@ static void drain_direct(
         uint64_t pending = 0;
         for (uint64_t c = lo; c < hi; c++) {
             uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
-            uint64_t rbufs = cbase + 128;
+            uint64_t rbufs = cbase + (uint64_t)ring_off;
             for (uint32_t r = 0; r < NRISC; r++) {
                 uint64_t L = c * NRISC + r;
-                uint32_t tail = r32(cbase + (5u + r) * 4);
+                uint32_t tail = r32(cbase + ((uint64_t)tail_idx0 + r) * 4);
                 uint32_t head = heads[L];
                 if (tail == head) {
                     continue;
@@ -1049,6 +1065,18 @@ int main(uint64_t hartid) {
     uint64_t use_socket = (nonce >> 17) & 1ull; /* NONCE bit 17: relay uses the D2HSocket transport */
     uint64_t calib = (nonce >> 18) & 1ull;      /* NONCE bit 18: CALIB mode (hart0 clock co-sample, no drain) */
     uint64_t hartzones = (nonce >> 19) & 1ull;  /* NONCE bit 19: harts emit busy/idle spans + hart0 inline calib */
+    /* Base ctrl word of the ring tails, from the host's ControlBuffer enum. 0 => old host: keep the
+     * historical NRISC so an out-of-date host still drains instead of silently reading dead slots. */
+    uint32_t tail_idx0 = (uint32_t)((nonce >> kNonceTailIdxShift) & kNonceTailIdxMask);
+    if (tail_idx0 == 0) {
+        tail_idx0 = NRISC;
+    }
+    /* Byte offset to the marker rings, from the host's control-buffer size. 0 => old host: keep the
+     * historical 32-word (128 B) control vector so an out-of-date host still lands on real ring data. */
+    uint32_t ring_off = (uint32_t)((nonce >> kNonceRingOffShift) & kNonceRingOffMask);
+    if (ring_off == 0) {
+        ring_off = 128u;
+    }
     g_hartzones = (uint32_t)hartzones;
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
@@ -1138,9 +1166,10 @@ int main(uint64_t hartid) {
 
     if (direct) {
         uint64_t eff_noc = splitnoc ? (hartid & 1ull) : read_noc; /* split reads across NoC0/NoC1 per hart */
-        drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, eff_noc, wnoc);
+        drain_direct(
+            hartid, ndrain, num_cores, prof_l1, tail_idx0, ring_off, host_base, hring_words, pcie_enc, eff_noc, wnoc);
     } else if (hartid < nread) {
-        reader_run(hartid, num_cores, prof_l1, nread, read_noc, fullread, bulkcore, adaptive);
+        reader_run(hartid, num_cores, prof_l1, tail_idx0, ring_off, nread, read_noc, fullread, bulkcore, adaptive);
     } else {
         uint64_t hri = hartid - nread; /* relay index 0..nrelay-1 */
         uint64_t rlo = (nrelay == 1) ? 0 : hri;

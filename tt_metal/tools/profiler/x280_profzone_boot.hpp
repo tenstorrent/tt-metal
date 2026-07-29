@@ -26,6 +26,7 @@
 
 #include "tools/profiler/x280_driver.hpp"
 #include "prof_packet.h"  // PP_STICKY_SRC, pp_word0 (2-word + split-sticky format contract)
+#include "hostdevcommon/profiler_common.h"  // SpscControlBuffer: SPSC_RING_TAIL_0, ring offset
 
 namespace tt::tt_metal::profiler {
 
@@ -68,6 +69,25 @@ inline constexpr uint64_t kNonceCalib =
 inline constexpr uint64_t kProfzoneCalibBase = 0x08011600ULL;
 inline constexpr uint32_t kProfzoneCalibN = 256;
 inline constexpr uint64_t kNonceHartZones = 0x80000ULL;  // bit19: harts emit busy/idle spans + hart0 inline calib
+
+// bits 32..39: base WORD index of the per-RISC ring tails inside a worker's profiler control buffer,
+// i.e. kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER. The firmware cannot derive this -- it is
+// PROFILER_MAX_RISC_COUNT, a host-side constant upstream changed from 5 to 24 when Quasar landed (24
+// processors per core). profzone.c used to hardcode word 5, so after that change it read dead reserved
+// slots: tail always == head, nothing ever drained, the worker rings filled and every producer blocked
+// forever. Passing it keeps ONE source of truth -- the enum both sides already share. P_NONCE is read
+// exactly once by the firmware (see the staleness note in profzone.c main()) and only bits 0..19 are
+// mode flags, so the upper half is free.
+inline constexpr uint64_t kNonceTailIdxShift = 32;
+inline constexpr uint64_t kNonceTailIdxMask = 0xFFULL;
+
+// bits 40..55: BYTE offset from a worker's profiler control-buffer base to its per-RISC marker rings, i.e.
+// kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE. Same failure mode as the tail index above and the same
+// reason it cannot live in the firmware: profzone.c hardcoded 128, which was only correct while the control
+// vector was 32 words. Upstream doubled it to 64 words (256 B), so the firmware started reading the tail of
+// the control vector as marker data. 16 bits is ample for a buffer bounded by mailboxes_t.
+inline constexpr uint64_t kNonceRingOffShift = 40;
+inline constexpr uint64_t kNonceRingOffMask = 0xFFFFULL;
 // Per-hart zone buffer: kProfzoneHZoneBase + hart*kProfzoneHZoneStride. [+0]=marker count (u64), then 16 B markers
 // {u64 rdcycle_ts, u32 tag (state | bit31=START), u32 pad}. Only reader harts (0..nread-1) emit for now.
 inline constexpr uint64_t kProfzoneHZoneBase = 0x08040000ULL;
@@ -174,12 +194,27 @@ inline bool boot_profzone(X280Driver& drv, const ProfzoneBootCfg& cfg, uint64_t&
         detail::pz_pack<uint64_t>(params, kPOffNumCores, cfg.num_cores);
         detail::pz_pack<uint64_t>(params, kPOffHringWords, static_cast<uint64_t>(cfg.hring_words));
         detail::pz_pack<uint64_t>(params, kPOffStop, 0);  // resident: never stop at boot
-        uint64_t nonce = cfg.read_noc | (cfg.direct ? kNonceDirect : 0) | (cfg.split_noc ? kNonceSplitNoc : 0) |
-                         (cfg.wnoc1 ? kNonceWnoc1 : 0) | (cfg.nodrain ? kNonceNodrain : 0) |
-                         (cfg.fullread ? kNonceFullread : 0) | (cfg.bulkcore ? kNonceBulkcore : 0) |
-                         (cfg.dualrelay ? kNonceDualrelay : 0) | (cfg.adaptive ? kNonceAdaptive : 0) |
-                         (cfg.socket ? kNonceSocket : 0) | (cfg.calib ? kNonceCalib : 0) |
-                         (cfg.hartzones ? kNonceHartZones : 0);
+        uint64_t nonce =
+            cfg.read_noc | (cfg.direct ? kNonceDirect : 0) | (cfg.split_noc ? kNonceSplitNoc : 0) |
+            (cfg.wnoc1 ? kNonceWnoc1 : 0) | (cfg.nodrain ? kNonceNodrain : 0) | (cfg.fullread ? kNonceFullread : 0) |
+            (cfg.bulkcore ? kNonceBulkcore : 0) | (cfg.dualrelay ? kNonceDualrelay : 0) |
+            (cfg.adaptive ? kNonceAdaptive : 0) | (cfg.socket ? kNonceSocket : 0) | (cfg.calib ? kNonceCalib : 0) |
+            (cfg.hartzones ? kNonceHartZones : 0) |
+            ((static_cast<uint64_t>(kernel_profiler::SPSC_RING_TAIL_0) & kNonceTailIdxMask) << kNonceTailIdxShift) |
+            ((static_cast<uint64_t>(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE) & kNonceRingOffMask)
+             << kNonceRingOffShift);
+        static_assert(
+            static_cast<uint64_t>(kernel_profiler::SPSC_RING_TAIL_0) <= kNonceTailIdxMask,
+            "ring-tail base word index must fit in the P_NONCE tail-index field");
+        static_assert(
+            static_cast<uint64_t>(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE) <= kNonceRingOffMask,
+            "ring-data byte offset must fit in the P_NONCE ring-offset field");
+        // The firmware's RING_CAP is the per-RISC ring depth in words and MUST equal the host's ring
+        // sizing, or the reader's modulo arithmetic wraps at the wrong point. Checked here because this is
+        // the one place both constants are visible.
+        static_assert(
+            kernel_profiler::PROFILER_L1_VECTOR_SIZE == 512,
+            "profzone.c RING_CAP is 512; PROFILER_L1_VECTOR_SIZE changed -- update the firmware too");
         detail::pz_pack<uint64_t>(params, kPOffNonce, nonce);
         detail::pz_pack<uint64_t>(params, kPOffNRead, cfg.direct ? cfg.ndrain : cfg.nread);
         drv.write_block(params.data(), static_cast<uint32_t>(params.size()), kProfzoneMboxParams);
