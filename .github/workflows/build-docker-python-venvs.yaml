@@ -118,6 +118,14 @@ jobs:
             echo "$SET"
             echo "EOF"
           } >> $GITHUB_OUTPUT
+          # Consumed directly by manual-docker-bake.sh (SBOM attest generator,
+          # oras binary for SBOM enrichment), not as a build-stage context.
+          # This workflow has no harbor-prefix input, so these resolve to
+          # direct GHCR pulls (still no docker.io dependency, just without
+          # the Harbor pull-through cache layer the other callers get).
+          TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$GITHUB_REPOSITORY")
+          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> $GITHUB_OUTPUT
+          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> $GITHUB_OUTPUT
 
       - name: Build and push missing venv images
         if: steps.bake.outputs.targets != ''
@@ -127,3 +135,7 @@ jobs:
           set-lines: ${{ steps.bake.outputs.set }}
           ubuntu-version: ${{ steps.bake.outputs.ubuntu-version }}
           python-version: ${{ steps.bake.outputs.python-version }}
+          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
+          oras-image: ${{ steps.bake.outputs.oras-image }}
+          retries: "2"
+          retry-delay-seconds: "15"

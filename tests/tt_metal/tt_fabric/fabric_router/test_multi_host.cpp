@@ -1191,6 +1191,254 @@ TEST(MultiHost, SC16BlitzSuperpodIntermeshPortAssignment) {
     check_intermesh_port_assignment_against_golden("SC16BlitzSuperpod_intermesh");
 }
 
+// Subtorus 4x4 pipeline rings (8/32/40-stage): every pinned chip must land on the exact
+// (tray_id, asic_location) from the hardcoded even/odd full-mesh profiles below. Uses the
+// MetalContext control plane (same instance as ControlPlaneFixture tests in the tt-run filter).
+// RevC vs RevAB pin tables differ by trays 2/3 via psd.is_bh_galaxy_rev_c().
+TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        GTEST_SKIP() << "Subtorus 4x4 pipeline pinning check requires a Blackhole Galaxy mock cluster";
+    }
+
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    const bool log_on_rank0 = *distributed_context.rank() == 0;
+
+    // Hardcoded full-mesh pin profiles (chip_id -> tray_id, asic_location). Each 4x4 mesh must
+    // match the even or odd profile exactly — all 16 chips are checked per mesh.
+    struct ExpectedPin {
+        std::uint32_t chip_id;
+        std::uint32_t tray_id;
+        std::uint32_t asic_location;
+    };
+    static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_c = {{
+        {0, 1, 3},
+        {1, 1, 7},
+        {2, 2, 7},
+        {3, 2, 3},
+        {4, 1, 4},
+        {5, 1, 8},
+        {6, 2, 8},
+        {7, 2, 4},
+        {8, 3, 4},
+        {9, 3, 8},
+        {10, 4, 8},
+        {11, 4, 4},
+        {12, 3, 3},
+        {13, 3, 7},
+        {14, 4, 7},
+        {15, 4, 3},
+    }};
+    static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_c = {{
+        {0, 3, 2},
+        {1, 3, 6},
+        {2, 4, 6},
+        {3, 4, 2},
+        {4, 3, 1},
+        {5, 3, 5},
+        {6, 4, 5},
+        {7, 4, 1},
+        {8, 1, 1},
+        {9, 1, 5},
+        {10, 2, 5},
+        {11, 2, 1},
+        {12, 1, 2},
+        {13, 1, 6},
+        {14, 2, 6},
+        {15, 2, 2},
+    }};
+    static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_ab = {{
+        {0, 1, 3},
+        {1, 1, 7},
+        {2, 3, 7},
+        {3, 3, 3},
+        {4, 1, 4},
+        {5, 1, 8},
+        {6, 3, 8},
+        {7, 3, 4},
+        {8, 2, 4},
+        {9, 2, 8},
+        {10, 4, 8},
+        {11, 4, 4},
+        {12, 2, 3},
+        {13, 2, 7},
+        {14, 4, 7},
+        {15, 4, 3},
+    }};
+    static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_ab = {{
+        {0, 2, 2},
+        {1, 2, 6},
+        {2, 4, 6},
+        {3, 4, 2},
+        {4, 2, 1},
+        {5, 2, 5},
+        {6, 4, 5},
+        {7, 4, 1},
+        {8, 1, 1},
+        {9, 1, 5},
+        {10, 3, 5},
+        {11, 3, 1},
+        {12, 1, 2},
+        {13, 1, 6},
+        {14, 3, 6},
+        {15, 3, 2},
+    }};
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto& even_mesh_pins = psd.is_bh_galaxy_rev_c() ? even_mesh_pins_rev_c : even_mesh_pins_rev_ab;
+    const auto& odd_mesh_pins = psd.is_bh_galaxy_rev_c() ? odd_mesh_pins_rev_c : odd_mesh_pins_rev_ab;
+    const char* rev_label = psd.is_bh_galaxy_rev_c() ? "revC" : "revAB";
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+
+    if (log_on_rank0) {
+        const std::string mgd_path = rtoptions.is_custom_fabric_mesh_graph_desc_path_specified()
+                                         ? rtoptions.get_custom_fabric_mesh_graph_desc_path()
+                                         : "<default>";
+        log_info(
+            tt::LogTest,
+            "TestSubtorus4x4PipelineMgdPinningsExact: MetalContext control plane, MGD={}, {}, checking all {} pins "
+            "per matched profile across {} 4x4 meshes",
+            mgd_path,
+            rev_label,
+            even_mesh_pins.size(),
+            mesh_ids.size());
+    }
+
+    std::size_t total_pin_checks = 0;
+
+    auto verify_all_pins = [&](MeshId mesh_id, const auto& pins, std::string_view profile_name) {
+        if (log_on_rank0) {
+            log_info(
+                tt::LogTest,
+                "Mesh {}: verifying all {} {} pins (chips 0-15)",
+                mesh_id.get(),
+                pins.size(),
+                profile_name);
+        }
+        for (const auto& pin : pins) {
+            const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
+            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+            const auto actual_tray = *psd.get_tray_id(asic_id);
+            const auto actual_loc = *psd.get_asic_location(asic_id);
+            if (log_on_rank0) {
+                log_info(
+                    tt::LogTest,
+                    "  pin check {} M{} chip {} -> tray {} loc {} (expected tray {} loc {})",
+                    profile_name,
+                    mesh_id.get(),
+                    pin.chip_id,
+                    actual_tray,
+                    actual_loc,
+                    pin.tray_id,
+                    pin.asic_location);
+            }
+            EXPECT_EQ(actual_tray, pin.tray_id)
+                << fabric_node_id << " tray_id (" << profile_name << " pin tray " << pin.tray_id << ")";
+            EXPECT_EQ(actual_loc, pin.asic_location)
+                << fabric_node_id << " asic_location (" << profile_name << " pin loc " << pin.asic_location << ")";
+            ++total_pin_checks;
+        }
+    };
+
+    // Actual (tray_id, asic_location) for every chip of a mesh, indexed by chip_id.
+    auto actual_mesh_layout = [&](MeshId mesh_id) {
+        std::array<std::pair<std::uint32_t, std::uint32_t>, 16> layout{};
+        for (std::uint32_t chip_id = 0; chip_id < layout.size(); ++chip_id) {
+            const FabricNodeId fabric_node_id(mesh_id, chip_id);
+            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+            layout[chip_id] = {*psd.get_tray_id(asic_id), *psd.get_asic_location(asic_id)};
+        }
+        return layout;
+    };
+
+    auto count_profile_mismatches = [](const auto& layout, const auto& pins) {
+        std::size_t mismatches = 0;
+        for (const auto& pin : pins) {
+            const auto& [actual_tray, actual_loc] = layout[pin.chip_id];
+            if (actual_tray != pin.tray_id || actual_loc != pin.asic_location) {
+                ++mismatches;
+            }
+        }
+        return mismatches;
+    };
+
+    for (const MeshId mesh_id : mesh_ids) {
+        ASSERT_EQ(mesh_graph.get_mesh_shape(mesh_id).mesh_size(), 16u)
+            << "mesh " << mesh_id.get() << " must be 4x4 (16 ASICs)";
+
+        const auto layout = actual_mesh_layout(mesh_id);
+        const std::size_t even_mismatches = count_profile_mismatches(layout, even_mesh_pins);
+        const std::size_t odd_mismatches = count_profile_mismatches(layout, odd_mesh_pins);
+        const bool even_profile_matches = even_mismatches == 0;
+        const bool odd_profile_matches = odd_mismatches == 0;
+
+        const bool matches_either_profile = even_profile_matches || odd_profile_matches;
+        if (!matches_either_profile) {
+            // Dump the full actual layout next to both expected profiles so the closest profile and the
+            // exact deviating chips are visible without re-running under a debugger.
+            const auto& closest_pins = (even_mismatches <= odd_mismatches) ? even_mesh_pins : odd_mesh_pins;
+            const char* closest_name = (even_mismatches <= odd_mismatches) ? "even-mesh" : "odd-mesh";
+            log_error(
+                tt::LogTest,
+                "Mesh {} ({}) matches neither profile: {}/{} chips differ from even-mesh, {}/{} from odd-mesh "
+                "(closest: {})",
+                mesh_id.get(),
+                rev_label,
+                even_mismatches,
+                even_mesh_pins.size(),
+                odd_mismatches,
+                odd_mesh_pins.size(),
+                closest_name);
+            for (std::uint32_t chip_id = 0; chip_id < layout.size(); ++chip_id) {
+                const auto& [actual_tray, actual_loc] = layout[chip_id];
+                const auto& even_pin = even_mesh_pins[chip_id];
+                const auto& odd_pin = odd_mesh_pins[chip_id];
+                const auto& closest_pin = closest_pins[chip_id];
+                const bool differs = actual_tray != closest_pin.tray_id || actual_loc != closest_pin.asic_location;
+                log_error(
+                    tt::LogTest,
+                    "  M{} chip {:>2} -> tray {} loc {} | even expects tray {} loc {} | odd expects tray {} loc {}{}",
+                    mesh_id.get(),
+                    chip_id,
+                    actual_tray,
+                    actual_loc,
+                    even_pin.tray_id,
+                    even_pin.asic_location,
+                    odd_pin.tray_id,
+                    odd_pin.asic_location,
+                    differs ? "  <== MISMATCH vs closest" : "");
+            }
+        }
+        EXPECT_TRUE(matches_either_profile)
+            << "mesh " << mesh_id.get() << " must match the even-mesh or odd-mesh pin profile (" << even_mismatches
+            << " chips differ from even-mesh, " << odd_mismatches << " from odd-mesh)";
+
+        if (even_profile_matches) {
+            verify_all_pins(mesh_id, even_mesh_pins, "even-mesh");
+        } else if (odd_profile_matches) {
+            verify_all_pins(mesh_id, odd_mesh_pins, "odd-mesh");
+        }
+    }
+
+    if (log_on_rank0) {
+        log_info(
+            tt::LogTest,
+            "TestSubtorus4x4PipelineMgdPinningsExact: completed {} pin checks ({} pins per matched profile)",
+            total_pin_checks,
+            even_mesh_pins.size());
+    }
+}
+
 // CPU-only channel-rule check on the SC20 80-mesh Blitz decode ring (relaxed policy). Verifies the relaxed
 // rule -- every requested inter-mesh boundary resolves at least one channel -- and reports the fulfilled-vs-
 // dropped channel tally produced by the round-robin allocator (dropped channels are the expected torus-wrap
