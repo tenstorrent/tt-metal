@@ -27,6 +27,8 @@
 #   TTDPA_THREADS N host pthreads / DPA SQs (fan-out; 1=single) TTDPA_ZC=1 zero-copy gather (A4 re-head)
 #   TTDPA_NOCRC=1 skip header CRC (pool doesn't check it; needed for line rate)
 #   TTDPA_PERSRC=1 per-thread source buffer+mkey (diagnostic; no measurable gain)
+#   TTDPA_HOSTSRC=1 A3.1: gather the payload from HOST memory (ibv_mr on the process PD) instead of DPA heap
+#                  -- proves the PF DPA can egress the RoCE-landed buffer (the A3 re-head memory seam)
 #   TTDPA_DMAC/TTDPA_RKEY tune the frame dst/rkey (see the patch).
 #
 # NOTE (steering): the TX->wire rule matches on dst MAC. Phase C points it at the BH dst MAC (TT_BH_DMAC

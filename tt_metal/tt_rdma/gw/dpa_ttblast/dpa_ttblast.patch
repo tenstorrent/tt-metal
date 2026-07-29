@@ -247,15 +247,20 @@
  
  /* Application context struct holding necessary host side variables. */
  struct app_context {
-@@ -122,6 +130,26 @@
+@@ -122,6 +130,31 @@
  	 * information struct.
  	 */
  	flexio_uintptr_t app_data_daddr;
 +
 +	/* ---- TT-RDMA shared payload source (A2/A4), created once and shared by all blast threads ---- */
-+	flexio_uintptr_t tt_src_daddr;      /* DPA-heap source buffer (simulated RoCE-landed payload) */
-+	uint32_t tt_src_mkey;               /* mkey over the source (A4 zero-copy gather); 0 => copy/none */
-+	struct flexio_mkey *tt_src_mkey_ptr; /* keep for cleanup */
++	flexio_uintptr_t tt_src_daddr;      /* source addr: DPA-heap daddr, or (A3.1) a HOST virtual address */
++	uint32_t tt_src_mkey;               /* mkey/lkey over the source (A4 gather); 0 => copy/none */
++	struct flexio_mkey *tt_src_mkey_ptr; /* flexio mkey (DPA-heap source) — keep for cleanup */
++	/* A3.1 host-memory source (TTDPA_HOSTSRC=1): the payload lives in HOST memory (where the SF RoCE QP
++	 * lands it), registered as a plain ibv_mr on the flexio process PD. The DPA gather WQE's 2nd data seg
++	 * references mr->lkey + the host VA; the NIC TX engine DMA-reads it (the DPA never dereferences it). */
++	struct ibv_mr *tt_src_ibv_mr;
++	void *tt_src_hostbuf;
 +};
 +
 +/* ---- TT-RDMA multi-thread fan-out: per-thread SQ + its own DPA-side app_data ---- */
@@ -274,7 +279,7 @@
  };
  
  /* Open ibv device
-@@ -178,8 +206,8 @@
+@@ -178,8 +211,8 @@
  /* Number of entries in each RQ/SQ/CQ is 2^LOG_Q_DEPTH. */
  #define LOG_Q_DEPTH 7
  #define Q_DEPTH L2V(LOG_Q_DEPTH)
@@ -285,7 +290,7 @@
  /* SQ/RQ data entry byte size log to value. */
  #define Q_DATA_ENTRY_BSIZE L2V(LOG_Q_DATA_ENTRY_BSIZE)
  /* SQ/RQ DATA byte size is queue depth times entry byte size. */
-@@ -217,6 +245,9 @@
+@@ -217,6 +250,9 @@
  
  /* Source MAC address to match for incoming packets. */
  #define SMAC 0x02427e7feb02
@@ -295,7 +300,7 @@
  /* Creates steering rules for application.
   * Returns 0 on success and -1 if the allocation was failed.
   * app_ctx - pointer to app_context structure.
-@@ -255,15 +286,17 @@
+@@ -255,15 +291,17 @@
  			return -1;
  		}
  
@@ -316,7 +321,7 @@
  		if (!app_ctx->tx_rule_vport) {
  			fprintf(stderr, "Failed to create TX vport steering rule\n");
  			return -1;
-@@ -686,6 +719,137 @@
+@@ -686,6 +724,165 @@
  	return 0;
  }
  
@@ -410,6 +415,34 @@
 +		printf("A4 floor: HEADER-ONLY per-frame (no payload write)\n");
 +		return 0;
 +	}
++	/* A3.1: payload source in HOST memory (models the RoCE-landed buffer). Register it as an ibv_mr on the
++	 * process PD; the DPA gather references mr->lkey + the host VA. Proves the PF DPA can egress a payload
++	 * from host memory (the memory seam for the real re-head). */
++	if (getenv("TTDPA_HOSTSRC") && strtoul(getenv("TTDPA_HOSTSRC"), NULL, 0) > 0) {
++		uint32_t hp = plen ? plen : 256;
++		const char *tag = "A3-HOSTMEM-GATHER-";
++		size_t tl = strlen(tag), i;
++		void *hb = NULL;
++
++		if (posix_memalign(&hb, 4096, hp)) {
++			fprintf(stderr, "A3.1: host buffer alloc failed\n");
++			return -1;
++		}
++		for (i = 0; i < hp; i++)
++			((char *)hb)[i] = (i < tl) ? tag[i] : (char)i;
++		app_ctx->tt_src_ibv_mr =
++			ibv_reg_mr(app_ctx->process_pd, hb, hp, IBV_ACCESS_LOCAL_WRITE);
++		if (!app_ctx->tt_src_ibv_mr) {
++			fprintf(stderr, "A3.1: ibv_reg_mr on host buffer failed\n");
++			free(hb);
++			return -1;
++		}
++		app_ctx->tt_src_hostbuf = hb;
++		app_ctx->tt_src_daddr = (flexio_uintptr_t)(uintptr_t)hb; /* HOST virtual address */
++		app_ctx->tt_src_mkey = app_ctx->tt_src_ibv_mr->lkey;
++		printf("A3.1 HOST-MEM GATHER: src host VA %p (%u B) lkey=0x%x\n", hb, hp, app_ctx->tt_src_mkey);
++		return 0;
++	}
 +	want_src = getenv("TTDPA_SRC") && strtoul(getenv("TTDPA_SRC"), NULL, 0) > 0;
 +	want_zc = getenv("TTDPA_ZC") && strtoul(getenv("TTDPA_ZC"), NULL, 0) > 0;
 +	if (!want_src && !want_zc)
@@ -454,7 +487,7 @@
  /* Copy application information to DPA.
   * DPA side needs queue information in order to process the packets.
   * The DPA heap memory address will be passed as the event handler argument.
-@@ -716,6 +880,18 @@
+@@ -716,6 +913,18 @@
  	h2d_data->rq_cq_transf = app_ctx->rq_cq_transf;
  	/* Set RQ's information. */
  	h2d_data->rq_transf = app_ctx->rq_transf;
@@ -473,7 +506,7 @@
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -887,6 +1063,219 @@
+@@ -887,6 +1096,219 @@
  /* dev msg stream buffer built from chunks of 2^FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE each */
  #define MSG_HOST_BUFF_BSIZE (512 * L2V(FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE))
  
@@ -693,7 +726,7 @@
  /* Application name in string format for Flex IO app get. */
  #define DEV_APP_NAME_STR(_app_name) #_app_name
  #define DEV_APP_NAME_XSTR(_app_name) DEV_APP_NAME_STR(_app_name)
-@@ -1068,20 +1457,49 @@
+@@ -1068,20 +1490,49 @@
  
  	printf("Ready to receive messages\n");
  
@@ -757,7 +790,7 @@
  	}
  
  cleanup:
-@@ -1096,6 +1514,16 @@
+@@ -1096,6 +1547,20 @@
  		err = -1;
  	}
  
@@ -766,7 +799,11 @@
 +		fprintf(stderr, "Failed to destroy TT source mkey\n");
 +		err = -1;
 +	}
-+	if (app_ctx.tt_src_daddr > 1 && flexio_buf_dev_free(app_fp, app_ctx.tt_src_daddr)) {
++	if (app_ctx.tt_src_ibv_mr) {
++		/* A3.1 host-memory source: free the ibv_mr + host buffer, and don't treat the host VA as a DPA daddr. */
++		ibv_dereg_mr(app_ctx.tt_src_ibv_mr);
++		free(app_ctx.tt_src_hostbuf);
++	} else if (app_ctx.tt_src_daddr > 1 && flexio_buf_dev_free(app_fp, app_ctx.tt_src_daddr)) {
 +		fprintf(stderr, "Failed to free TT source buffer\n");
 +		err = -1;
 +	}
