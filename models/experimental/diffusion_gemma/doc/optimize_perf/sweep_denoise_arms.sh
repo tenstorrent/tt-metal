@@ -39,7 +39,7 @@ REPS="${REPS:-3}"
 UPFRONT="${UPFRONT:-0}"
 REVEAL_PMAX="${REVEAL_PMAX:-}"
 GUMBEL_MODE="${GUMBEL_MODE:-}"
-TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB. Measured 2026-07-27: the 48 up-front traces need 3.04 GiB at reveal_pmax=4096 (3 GiB fails, 4 GiB is the floor), so the historical 12 GiB reserved ~8 GiB of DRAM that nothing could allocate. Scale this WITH reveal_pmax - it is not a universal constant. See doc/optimize_perf/bisect_trace_region.sh
+TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-4294967296}" # 4 GiB. Measured: the 48 up-front traces fit at reveal_pmax=4096 (3.04 GiB used, 3 GiB fails) AND in the same 4 GiB at reveal_pmax=16384 (48/48 captured, MeshTraceId 0..47, run local100_trace4g 2026-07-29), so trace memory does NOT scale with reveal_pmax -- the "Scale this WITH reveal_pmax" note this line used to carry was wrong. Over-reserving is not free: the region is DRAM nothing else can allocate, and 6->4 GiB returns exactly 2.0 GiB to the pool, which is what keeps the per-request leak from OOMing the engine at max_model_len 16384. Undersizing fails loudly at capture. See doc/optimize_perf/bisect_trace_region.sh
 # The shipped degeneracy guard ends a request at the first collapsed block. That is right for
 # serving and wrong for a latency A/B: arms would emit different block counts and the steady-state
 # mean would be taken over different work. Off by default here; the arms are compared on

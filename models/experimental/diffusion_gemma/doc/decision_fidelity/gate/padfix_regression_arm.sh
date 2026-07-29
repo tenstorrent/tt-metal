@@ -43,7 +43,7 @@ for i in $QUESTIONS; do
     for arm in off on; do
         tag="${q}_${arm}"
         [ -f "$OUT/m_${tag}.json" ] && { echo "$tag SKIP"; continue; }
-        env TT_METAL_HOME=$R PYTHONPATH=$R MESH_DEVICE=P150x4 DG_TRACE_REGION_SIZE=12884901888 \
+        env TT_METAL_HOME=$R PYTHONPATH=$R MESH_DEVICE=P150x4 DG_TRACE_REGION_SIZE="${DG_TRACE_REGION_SIZE:-4294967296}" \
             DG_DENOISE_HIDE_PREFILL_PADS=$([ "$arm" = on ] && echo 1 || echo 0) \
             "$PY" -u -m models.experimental.diffusion_gemma.demo.serving_smoke \
             --checkpoint "$CKPT" --mesh P150x4 \

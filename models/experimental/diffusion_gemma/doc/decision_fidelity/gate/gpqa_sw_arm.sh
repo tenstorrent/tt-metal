@@ -46,7 +46,7 @@ for i in $QUESTIONS; do
         continue
     fi
     started=$(date +%s)
-    env TT_METAL_HOME=$R PYTHONPATH=$R MESH_DEVICE=P150x4 DG_TRACE_REGION_SIZE=12884901888 \
+    env TT_METAL_HOME=$R PYTHONPATH=$R MESH_DEVICE=P150x4 DG_TRACE_REGION_SIZE="${DG_TRACE_REGION_SIZE:-4294967296}" \
         DG_DENOISE_SLIDING_WINDOW=1 \
         "$PY" -u -m models.experimental.diffusion_gemma.demo.serving_smoke \
         --checkpoint "$CKPT" --mesh P150x4 \

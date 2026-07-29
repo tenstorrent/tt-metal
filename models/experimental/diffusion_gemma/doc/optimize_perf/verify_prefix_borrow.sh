@@ -35,7 +35,7 @@ NUM_LAYERS="${NUM_LAYERS:-}"     # empty = full 30
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-2048}"
 PMAX="${PMAX:-${MAX_SEQ_LEN}}"
 NUM_BLOCKS="${NUM_BLOCKS:-3}"
-TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB. Measured 2026-07-27: the 48 up-front traces need 3.04 GiB at reveal_pmax=4096 (3 GiB fails, 4 GiB is the floor), so the historical 12 GiB reserved ~8 GiB of DRAM that nothing could allocate. Scale this WITH reveal_pmax - it is not a universal constant. See doc/optimize_perf/bisect_trace_region.sh
+TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-4294967296}" # 4 GiB. Measured: the 48 up-front traces fit at reveal_pmax=4096 (3.04 GiB used, 3 GiB fails) AND in the same 4 GiB at reveal_pmax=16384 (48/48 captured, MeshTraceId 0..47, run local100_trace4g 2026-07-29), so trace memory does NOT scale with reveal_pmax -- the "Scale this WITH reveal_pmax" note this line used to carry was wrong. Over-reserving is not free: the region is DRAM nothing else can allocate, and 6->4 GiB returns exactly 2.0 GiB to the pool, which is what keeps the per-request leak from OOMing the engine at max_model_len 16384. Undersizing fails loudly at capture. See doc/optimize_perf/bisect_trace_region.sh
 OUT_DIR="${OUT_DIR:-/tmp/dg_prefix_borrow}"
 
 mkdir -p "$OUT_DIR"

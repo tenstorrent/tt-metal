@@ -4,9 +4,9 @@
 #
 # Find the smallest DG_TRACE_REGION_SIZE that still captures the 48 up-front denoise traces.
 #
-# Why: every serving script and gate reserves 12 GiB (doc/decision_fidelity/gate/*.sh,
-# doc/vllm_integration/README.md), a number sized from an estimate that our own later measurement
-# refuted — doc/vllm_integration/traced_serving.md:86-89 measures the 48 resident traces at
+# Why: the serving scripts and gates used to reserve 12 GiB (and later 6 GiB), a number sized from an
+# estimate that our own later measurement refuted. They now default to 4 GiB; this script is how that
+# number is re-derived if the denoise shape changes — doc/vllm_integration/traced_serving.md:86-89 measures the 48 resident traces at
 # ~1.41-1.44 GiB/chip and explicitly calls the ~168 MB/trace estimate in
 # multistep_trace_batching.md "confirmed WRONG". The reservation is carved out of DRAM whether or
 # not it is used (that doc's sweep shows used 13.27 + free 8.60 = 21.87 = 31.87 - 10 GiB), so the
@@ -21,12 +21,18 @@
 #   bisect_trace_region.sh [SIZE_BYTES...]     # default ladder 12G 8G 6G 4G 3G 2G 1.5G 1G
 #
 # Report: for each size, capture success + free DRAM after model build.
+#
+# Measured result, 2026-07-29: 4 GiB captures all 48 traces at reveal_pmax=16384, not just at the 4096
+# this was first bisected at (MeshTraceId 0..47 in run local100_trace4g). Trace memory therefore does
+# NOT scale proportionally with reveal_pmax -- a 4x pmax moved the need from 3.04 GiB to under 4 GiB,
+# where proportional growth would have demanded ~12 GiB. The scripts previously carried the opposite
+# advice on their TRACE_REGION_SIZE line; it is removed.
 
 # Gumbel source: `device`. `--upfront` needs a MATERIALIZED full-vocabulary Gumbel and `device` is
 # now the only one: the `host` mode this script used was DELETED on 2026-07-28 after being measured
 # NOT to be the TT language-drift cause (it drifts on exactly the same prompts as `device`, repairs
 # 0, and costs 1.40x per request; the real cause was the canvas attending prefill pad keys, fixed in
-# d0936d4da4f).
+# 205e87956cc -- NOT d0936d4da4f, which was reverted the same day).
 
 set -uo pipefail
 
