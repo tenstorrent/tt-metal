@@ -185,12 +185,16 @@ is recorded under `triage/` and was not treated as model evidence.
 - [x] watcher-clean correctness run
 - [x] raw profiler dumps removed; compact evidence retained
 - [x] independent `$stage-review` clean pass
-- [ ] local stage commit and SHA
+- [x] local stage commit and SHA
 
 Fresh final stage review returned `clean-pass`: no required work and no
 hard-check gaps. The reviewer independently checked the current source/test
 hashes, advisor artifacts, PCC, trace/stress, batch-32 timing/prefill evidence,
 candidate matrix, and all four compact profiler reports.
+
+Local implementation checkpoint: `9c405211e7f` (`Optimize Gemma 4 decoder`).
+No push was performed. The compact profiler CSVs and this SHA record are added
+in the documentation follow-up checkpoint.
 
 ## First stage-review remediation
 
