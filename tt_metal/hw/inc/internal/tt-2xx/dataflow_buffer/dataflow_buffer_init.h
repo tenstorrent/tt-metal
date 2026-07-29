@@ -53,6 +53,10 @@ FORCE_INLINE void wait_all_tcs_initialized(uint32_t tt_l1_ptr* dfb_config_base, 
             base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
         }
     }
+    // [#48552 FIX] Acquire fence pairing the release fence in the producer TC init (before tc_init_done):
+    // once this barrier has observed every producer's tc_init_done, guarantee their overlay/tile-counter
+    // capacity writes are visible to this RISC's subsequent get_capacity reads (reserve_back / wait_front).
+    asm volatile("fence" : : : "memory");
     WAYPOINT("TCID");
     // DPRINT("all_tcs_initialized\n");
 }
@@ -374,12 +378,45 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     ckernel::trisc::tile_counters[tc_id].f.buf_capacity = init_ptr->capacity;
 #elif !defined(COMPILE_FOR_TRISC)
                     uint8_t tensix_id = dfb::get_tensix_id(ptc);
-                    // DPRINT("dfb {} initializing tc tensix_id: {} tc_id: {}\n", logical_dfb_id, tensix_id,
-                    // tc_id);
                     overlay::llk_intf_reset(tensix_id, tc_id);
                     overlay::llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
+                    // [#48552 FIX] `llk_intf_set_capacity` is a POSTED overlay MMIO register write. A bare
+                    // memory fence orders it but does NOT wait for the remote overlay register to update —
+                    // confirmed on the emulator: fence alone still reads the stale capacity, while adding a
+                    // DPRINT's worth of delay lets it settle. Physical tile counters are shared and reused
+                    // across back-to-back programs (each program's allocator restarts at tc_id 0), so counter
+                    // (0,0) holds e.g. 224 for this matmul's cb_in0 but 28 for the neighbouring slice_write. If
+                    // this program's 224 write has not landed when its in0 reader runs reserve_back, the reader
+                    // sees the previous program's 28 (< 224) and spins forever (RBFAIL dfb=0 need=224 cap=28).
+                    // Read the register back until it reflects the write, forcing the posted write to complete
+                    // before we publish tc_init_done.
+                    while (overlay::llk_intf_get_capacity(tensix_id, tc_id) != init_ptr->capacity) {
+                    }
+                    // [#48552 DEBUG] Pair with RBFAIL. Prints the GLOBAL dfb id + the PHYSICAL (tensix,tc) this
+                    // program's init wrote + the confirmed read-back capacity. If DFBINIT shows gid=0 (cb_in0)
+                    // -> (0,0)=224 yet RBFAIL then reads (0,0)=28, some OTHER program overwrote (0,0) after
+                    // init (cross-program race). If DFBINIT maps cb_in0 to a DIFFERENT (tensix,tc) than the
+                    // reader's (0,0), the g_dfb_interface tc mapping is wrong (config vs interface mismatch).
+                    DPRINT(
+                        "DFBINIT gid={} tensix={} tc={} cap={}\n",
+                        (uint32_t)init_ptr->logical_id,
+                        (uint32_t)tensix_id,
+                        (uint32_t)tc_id,
+                        (uint32_t)overlay::llk_intf_get_capacity(tensix_id, tc_id));
 #endif
                 }
+                // [#48552 FIX] The tile-counter capacity is written just above via overlay MMIO register
+                // writes (llk_intf_set_capacity / llk_intf_reset) and TRISC tile_counters[], which are NOT
+                // self-fencing — the overlay API explicitly requires "after bulk of these functions add
+                // memory fence" (llk_intf_api.hpp:158). Physical tile counters are shared and reused across
+                // back-to-back programs (each program's allocator restarts at tc_id 0), so counter (0,0) is
+                // rewritten e.g. 224 (this matmul's cb_in0) then 28 (the next slice_write). Without a fence,
+                // the plain-L1 `tc_init_done = 1` store below can become visible to wait_all_tcs_initialized
+                // BEFORE the MMIO capacity writes retire, so a RISC that passes the barrier reads a STALE
+                // capacity (the neighbouring program's value, e.g. 28) and spins forever in reserve_back
+                // (RBFAIL dfb=0 need=224 cap=28). Publish the capacity writes with a release fence before
+                // signalling tc_init_done so the barrier truly implies "capacity visible".
+                asm volatile("fence" : : : "memory");
                 // Only the RISC that actually performed the TC hardware init sets tc_init_done.
 #if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
                 per_risc_ptr->num_tcs_and_init.tc_init_done = 1;

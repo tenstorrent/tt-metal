@@ -48,8 +48,10 @@ enum class WaitMode : uint8_t {
 // Fast tilize truncates fp32 to tf32 precision during tilization (lossy).
 // Use Lossless when exact fp32 preservation is required.
 enum class Fp32Mode : uint8_t {
-    Fast,     // Default — uses fast_tilize for fp32 (lossy, truncates to tf32 precision)
-    Lossless  // Forces standard tilize path for fp32 data (exact, no truncation)
+    Fast,     // Default — uses fast_tilize when eligible (lossy for fp32: truncates to tf32 precision)
+    Lossless  // Forces the standard (non-fast) tilize path for ALL formats — exact for fp32 (no tf32
+              // truncation), and also the way callers opt out of fast tilize where it is structurally
+              // unsafe (e.g. WH tilize→transpose, where fast_tilize_block deadlocks). See #48552.
 };
 
 // Controls whether BH fast tilize configures DEST remap during init.

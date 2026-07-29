@@ -7,6 +7,22 @@
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
 #include "risc_common.h"
+#include "api/debug/ring_buffer.h"
+
+// Compile-time FNV-1a (32-bit) hash of __FILE__. Lets the lightweight (bare-ebreak) ASSERT self-report its
+// source location through the watcher ring buffer — the ebreak pc is runtime-relocated and unmappable, and
+// the assert_status mailbox path is disabled (WATCHER_DISABLE_ASSERT). Map a hash back to a file with:
+//   python3 -c "import sys;h=2166136261
+//   [h:=((h^ord(c))*16777619)&0xffffffff for c in open('/dev/stdin').read().strip()];print(hex(h))"
+// fed the exact __FILE__ string the compiler saw (see the -c argument / DFULL_KERNEL_NAME in the build cmd).
+constexpr uint32_t tt_kernel_assert_file_hash(const char* s) {
+    uint32_t h = 2166136261u;
+    while (*s) {
+        h ^= static_cast<uint32_t>(static_cast<unsigned char>(*s++));
+        h *= 16777619u;
+    }
+    return h;
+}
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
@@ -91,7 +107,20 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #if defined(LIGHTWEIGHT_KERNEL_ASSERTS)
 
-#define ASSERT(condition, ...) (void(not(condition) ? ({ asm("ebreak"); }), 0 : 0))
+// Before the (locationless) ebreak, push a locator to the watcher ring buffer:
+//   [0xA55E7000, FNV-1a(__FILE__), __LINE__]
+// so a lightweight assert self-reports file+line (the ebreak pc is unmappable). No-op when the ring
+// buffer is compiled out (WATCHER off / WATCHER_DISABLE_RING_BUFFER).
+#define ASSERT(condition, ...)                                              \
+    (void(                                                                  \
+        not(condition) ? ({                                                 \
+            WATCHER_RING_BUFFER_PUSH(0xA55E7000u);                          \
+            WATCHER_RING_BUFFER_PUSH(tt_kernel_assert_file_hash(__FILE__)); \
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(__LINE__));      \
+            asm("ebreak");                                                  \
+        }),                                                                 \
+        0                                                                   \
+                       : 0))
 
 #define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 1

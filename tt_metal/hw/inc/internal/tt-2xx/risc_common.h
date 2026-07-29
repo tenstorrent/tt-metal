@@ -271,12 +271,20 @@ inline __attribute__((always_inline)) void invalidate_l2_cache_range(uintptr_t s
     if (size == 0) {
         return;
     }
+    // Order prior accesses before the invalidation (mirrors flush_l2_cache_full). Without the leading fence
+    // an in-flight prior read could repopulate a line we are about to invalidate.
+    __asm__ __volatile__("fence" ::: "memory");
     uintptr_t aligned_start = start_addr & ~(uintptr_t)63;  // align to 64B
     uintptr_t end_addr = start_addr + size;
 
     for (uintptr_t addr = aligned_start; addr < end_addr; addr += 64) {
         invalidate_l2_cache_line(addr);
     }
+    // Trailing fence: the invalidation must complete before any subsequent load, else the load can be
+    // reordered ahead of it and return the STALE cached line. This is the missing fence that caused the
+    // quasar maxpool scratch->output reader (reader_pool_2d.cpp, single-buffered scratch, constant L1 read
+    // address per stick) to read stick-0's stale line for every stick (constant output -> PCC ~0).
+    __asm__ __volatile__("fence" ::: "memory");
 }
 
 // Flush entire L2 cache to TL1.

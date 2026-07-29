@@ -7,8 +7,13 @@
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>  // std::getenv (TT_METAL_QSR_TC_ISOLATE #48552)
+#include <deque>    // per-dispatch FIFO tile-counter pool (#48552)
 #include <limits>
+#include <mutex>  // per-dispatch tile-counter pool (#48552)
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 
 #include "impl/context/metal_context.hpp"
@@ -107,27 +112,143 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
 
 namespace detail {
 
-::dfb::PackedTileCounter TileCounterAllocator::allocate(
-    const CoreCoord& core, uint8_t tensix_id, bool use_t6_only) {
-    TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
-    auto& counters = next_tc_id_[core];
+namespace {
+bool tc_lifetime_isolation_enabled() {
+    static const bool v = (std::getenv("TT_METAL_QSR_TC_ISOLATE") != nullptr);
+    return v;
+}
+// [#48552] No-reuse triage mode: unique physical counters per program, freed on destruction, FATAL on
+// exhaustion (never reuses a live counter -> no incoherent-reuse hang; loud, attributable failure instead).
+bool tc_unique_enabled() {
+    static const bool v = (std::getenv("TT_METAL_QSR_TC_UNIQUE") != nullptr);
+    return v;
+}
+// Used-mask physical pool for the UNIQUE mode: per (core,tensix), a bitmask of counters currently held by a
+// live program (bit i => physical counter i in use). Reserved at finalize, cleared on program destruction.
+struct UniqueTcPool {
+    std::mutex mu;
+    std::unordered_map<CoreCoord, std::array<uint32_t, ::dfb::NUM_TENSIX>> used_mask;
+};
+UniqueTcPool& unique_tc_pool() {
+    static UniqueTcPool pool;
+    return pool;
+}
 
+// [#48552 POC] Per-DISPATCH, free-on-completion physical tile-counter pool (SLOW dispatch). Physical counters
+// per (core,tensix) are DM [0, NUM_TENSIX_TILE_COUNTERS_FOR_DM) and Tensix-only [TC_TENSIX_POOL_START,
+// NUM_TILE_COUNTERS_PER_TENSIX). We keep a FIFO free-list per tensix per pool (GLOBAL across cores for the POC
+// — a counter reserved is treated as busy on every core; over-constrains slightly but is always safe). Programs
+// RESERVE fresh counters just before each dispatch (FIFO front = freed longest ago = settled the most) and
+// RETURN them when the program COMPLETES, so only in-flight programs hold counters (no exhaustion) and reuse is
+// maximally spaced. Finalize still assigns a stable baseline via the ORIGINAL per-program allocator below; the
+// per-dispatch rebase (ProgramImpl::qsr_rebase_dispatch_tile_counters) overwrites packed_tile_counter and
+// ConfigureDeviceWithProgram re-serializes it to L1 on every slow-dispatch LaunchProgram.
+struct FifoTcPool {
+    std::mutex mu;
+    struct PerTensix {
+        std::deque<uint8_t> dm_free;
+        std::deque<uint8_t> t6_free;
+        bool inited = false;
+    };
+    std::array<PerTensix, ::dfb::NUM_TENSIX> per_tensix;
+    // In-flight reservations keyed by the owning ProgramImpl*, returned on completion. tuple = (tensix, tc, is_t6).
+    std::unordered_map<const void*, std::vector<std::tuple<uint8_t, uint8_t, bool>>> in_flight;
+
+    PerTensix& tensix(uint8_t t) {
+        auto& pt = per_tensix[t];
+        if (!pt.inited) {
+            for (uint8_t i = 0; i < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM; ++i) {
+                pt.dm_free.push_back(i);
+            }
+            for (uint8_t i = ::dfb::TC_TENSIX_POOL_START; i < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX; ++i) {
+                pt.t6_free.push_back(i);
+            }
+            pt.inited = true;
+        }
+        return pt;
+    }
+};
+FifoTcPool& fifo_tc_pool() {
+    static FifoTcPool p;
+    return p;
+}
+static_assert(::dfb::NUM_TILE_COUNTERS_PER_TENSIX <= 32, "tc id fits in the pools as used");
+}  // namespace
+
+::dfb::PackedTileCounter TileCounterAllocator::allocate(const CoreCoord& core, uint8_t tensix_id, bool use_t6_only) {
+    TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
+
+    if (tc_unique_enabled()) {
+        // NO-REUSE triage mode: reserve the lowest FREE physical counter from the global pool and hold it for
+        // this program's lifetime (freed in ~TileCounterAllocator). Never reuses a live counter, so it can't
+        // hit the incoherent-reuse hang; if a (core,tensix) pool is exhausted it FATALs with a clear message
+        // (correlate with the op being built) instead of silently colliding/hanging.
+        const uint8_t lo = use_t6_only ? ::dfb::TC_TENSIX_POOL_START : 0;
+        const uint8_t hi = use_t6_only ? ::dfb::NUM_TILE_COUNTERS_PER_TENSIX : ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+        auto& pool = unique_tc_pool();
+        std::lock_guard<std::mutex> lk(pool.mu);
+        uint32_t& mask = pool.used_mask[core][tensix_id];
+        uint8_t tc_id = 0xFF;
+        for (uint8_t t = lo; t < hi; ++t) {
+            if ((mask & (1u << t)) == 0u) {
+                tc_id = t;
+                break;
+            }
+        }
+        TT_FATAL(
+            tc_id != 0xFF,
+            "TT_METAL_QSR_TC_UNIQUE: out of {} tile counters on core ({},{}) tensix {} — all {} are held by "
+            "concurrently-live programs. This op needs more physical counters than exist on that (core,tensix); "
+            "the durable fix is coherent counter reuse (see #48552). NOT a wrap-around (by design).",
+            use_t6_only ? "Tensix-only" : "DM-visible",
+            core.x,
+            core.y,
+            tensix_id,
+            hi - lo);
+        mask |= (1u << tc_id);
+        owned_physical_tcs_.push_back(OwnedTc{core, tensix_id, tc_id});
+        return static_cast<::dfb::PackedTileCounter>((tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
+    }
+
+    // Finalize-time baseline: per-program monotonic (restarts at tc_id 0 each program). Under
+    // TT_METAL_QSR_TC_ISOLATE this is only a placeholder — the real physical assignment is done per dispatch
+    // in ProgramImpl::qsr_rebase_dispatch_tile_counters() and freed on completion.
+    auto& counters = next_tc_id_[core];
     uint8_t tc_id;
     if (use_t6_only) {
         TT_FATAL(
             ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
             "Out of Tensix-only tile counters for tensix {} on core ({}, {})",
-            tensix_id, core.x, core.y);
+            tensix_id,
+            core.x,
+            core.y);
         tc_id = ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id]++;
     } else {
         TT_FATAL(
             counters.dm_next[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
             "Out of DM-visible tile counters for tensix {} on core ({}, {})",
-            tensix_id, core.x, core.y);
+            tensix_id,
+            core.x,
+            core.y);
         tc_id = counters.dm_next[tensix_id]++;
     }
     return static_cast<::dfb::PackedTileCounter>(
         (tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
+}
+
+TileCounterAllocator::~TileCounterAllocator() {
+    if (owned_physical_tcs_.empty()) {
+        return;  // baseline / ISOLATE modes reserve nothing here
+    }
+    // TT_METAL_QSR_TC_UNIQUE: return this program's physical counters to the global pool on destruction.
+    auto& pool = unique_tc_pool();
+    std::lock_guard<std::mutex> lk(pool.mu);
+    for (const auto& owned : owned_physical_tcs_) {
+        auto it = pool.used_mask.find(owned.core);
+        if (it != pool.used_mask.end()) {
+            it->second[owned.tensix_id] &= ~(1u << owned.tc_id);
+        }
+    }
 }
 
 uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
@@ -643,6 +764,23 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
         capacity,
         max_capacity);
     log_debug(tt::LogMetal, "DFB {} capacity={} stride_in_entries={}", dfb.id, capacity, stride_in_entries);
+    // [#48552 DEBUG -- remove before merge] Fires when the capacity was divided below num_entries (our
+    // borrowed-in0 bug: num_entries=224 -> capacity=28 because max(num_producers,num_consumers)=8). Shows
+    // which count is 8 and the access pattern, so we can trace the wrong binding for the borrowed self-loop.
+    if (config.borrows_memory || capacity != config.num_entries) {
+        log_warning(
+            tt::LogMetal,
+            "[QSR-DFBCAP #48552] DFB {}: num_entries={} -> capacity={} | num_producers={} num_consumers={} "
+            "cap_pattern={} borrows_memory={} stride_in_entries={}",
+            dfb.id,
+            config.num_entries,
+            capacity,
+            config.num_producers,
+            config.num_consumers,
+            static_cast<uint32_t>(config.cap),
+            config.borrows_memory,
+            stride_in_entries);
+    }
     return {static_cast<uint16_t>(capacity), stride_in_entries};
 }
 
@@ -1054,6 +1192,104 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
     }
 }
 
+// [#48552 POC] Per-dispatch, free-on-completion physical tile-counter isolation (SLOW dispatch only).
+// Called from LaunchProgram just before ConfigureDeviceWithProgram re-serializes packed_tile_counter to L1.
+// For each SHARED-counter (non-remapper) DFB, reassign every packed_tile_counter to a FRESH physical counter
+// popped FIFO from the global per-tensix pool (freed longest ago => settled most), keeping producer/consumer
+// consistent (same (tensix,old_tc) within a DFB -> same new tc). Reservations are freed on completion via
+// qsr_release_dispatch_tile_counters(). Gated by TT_METAL_QSR_TC_ISOLATE. use_remapper DFBs are left untouched.
+void ProgramImpl::qsr_rebase_dispatch_tile_counters() {
+    // UNIQUE (no-reuse) mode assigns unique physical counters at finalize; no per-dispatch rebase (and it takes
+    // precedence over ISOLATE if both are set).
+    if (tt::tt_metal::experimental::dfb::detail::tc_unique_enabled()) {
+        return;
+    }
+    if (!tt::tt_metal::experimental::dfb::detail::tc_lifetime_isolation_enabled()) {
+        return;
+    }
+    auto& pool = tt::tt_metal::experimental::dfb::detail::fifo_tc_pool();
+    std::lock_guard<std::mutex> lk(pool.mu);
+    // SLOW-DISPATCH free-on-completion: programs run serially, so by the time we rebase for THIS dispatch every
+    // previously-dispatched program has completed. Return ALL outstanding reservations to the pool (FIFO back)
+    // before reserving fresh, so only the in-flight program holds counters (no exhaustion) and reuse is maximally
+    // spaced (front = freed longest ago = settled). Valid under slow serial dispatch only; a fast-dispatch port
+    // would instead free at a real per-program completion hook. Because the freed counters go to the back and we
+    // take from the front, a just-freed counter is not immediately reused.
+    for (auto& [prog, rsv] : pool.in_flight) {
+        for (const auto& [tensix, tc, is_t6] : rsv) {
+            auto& q = is_t6 ? pool.tensix(tensix).t6_free : pool.tensix(tensix).dm_free;
+            q.push_back(tc);
+        }
+    }
+    pool.in_flight.clear();
+    auto& reserved = pool.in_flight[this];
+    for (auto& dfb : this->dataflow_buffers_) {
+        if (dfb->use_remapper) {
+            continue;  // don't touch remapper-paired producer/consumer counters
+        }
+        std::unordered_map<uint16_t, uint8_t> remap;  // key = (tensix<<8 | old_tc) -> new physical tc
+        for (auto& group : dfb->groups) {
+            for (auto& rc : group.hw_risc_configs) {
+                for (uint8_t s = 0; s < rc.config.num_tcs_to_rr; ++s) {
+                    const ::dfb::PackedTileCounter oldp = rc.config.packed_tile_counter[s];
+                    const uint8_t tensix = ::dfb::get_tensix_id(oldp);
+                    const uint8_t old_tc = ::dfb::get_counter_id(oldp);
+                    const uint16_t key = (static_cast<uint16_t>(tensix) << 8) | old_tc;
+                    uint8_t new_tc;
+                    auto it = remap.find(key);
+                    if (it != remap.end()) {
+                        new_tc = it->second;
+                    } else {
+                        const bool is_t6 = old_tc >= ::dfb::TC_TENSIX_POOL_START;
+                        auto& q = is_t6 ? pool.tensix(tensix).t6_free : pool.tensix(tensix).dm_free;
+                        TT_FATAL(
+                            !q.empty(),
+                            "QSR per-dispatch tile-counter pool empty on tensix {} ({} pool): more DFBs live at "
+                            "once than physical counters. (POC: pool is global-per-tensix.)",
+                            tensix,
+                            is_t6 ? "Tensix-only" : "DM");
+                        new_tc = q.front();
+                        q.pop_front();
+                        remap[key] = new_tc;
+                        reserved.emplace_back(tensix, new_tc, is_t6);
+                    }
+                    rc.config.packed_tile_counter[s] = static_cast<::dfb::PackedTileCounter>(
+                        (static_cast<uint32_t>(tensix) << ::dfb::PACKED_TC_COUNTER_ID_BITS) | new_tc);
+                }
+                // Shared-counter (non-remapper) DFBs also carry the counter id(s) in `consumer_tcs` (packed
+                // 5-bit ids, serialized and read on-device). For these the consumer tc mirrors the producer's
+                // packed_tile_counter, so re-derive it from the just-remapped values to keep them consistent.
+                if (rc.config.consumer_tcs != 0) {
+                    uint32_t new_ctcs = 0;
+                    for (uint8_t i = 0; i < rc.config.num_tcs_to_rr; ++i) {
+                        new_ctcs |=
+                            (static_cast<uint32_t>(::dfb::get_counter_id(rc.config.packed_tile_counter[i])) & 0x1F)
+                            << (i * 5);
+                    }
+                    rc.config.consumer_tcs = new_ctcs;
+                }
+            }
+        }
+    }
+}
+
+void ProgramImpl::qsr_release_dispatch_tile_counters() {
+    if (!tt::tt_metal::experimental::dfb::detail::tc_lifetime_isolation_enabled()) {
+        return;
+    }
+    auto& pool = tt::tt_metal::experimental::dfb::detail::fifo_tc_pool();
+    std::lock_guard<std::mutex> lk(pool.mu);
+    auto it = pool.in_flight.find(this);
+    if (it == pool.in_flight.end()) {
+        return;
+    }
+    for (const auto& [tensix, tc, is_t6] : it->second) {
+        auto& q = is_t6 ? pool.tensix(tensix).t6_free : pool.tensix(tensix).dm_free;
+        q.push_back(tc);  // FIFO: returned counters go to the back (reused last => longest settle)
+    }
+    pool.in_flight.erase(it);
+}
+
 void ProgramImpl::finalize_single_dfb_config(
     std::shared_ptr<DataflowBufferImpl>& dfb, const CoreCoord& core, bool core_has_remapper) {
     const auto& config = dfb->config;
@@ -1328,6 +1564,23 @@ void ProgramImpl::finalize_single_dfb_config(
                     consumer_idx,
                     consumer_risc_id,
                     use_remapper);
+                // [#48552 DEBUG -- remove before merge] Which PHYSICAL (tensix_id, tc_id) did this DFB land on?
+                // The allocator resets per program and reuses tc_id 0.., so a small (28-cap) DFB and the borrowed
+                // cb_in0 (224) can share (tensix,tc)=(0,0); whoever inits last wins -> reader reads 28 -> hang.
+                log_warning(
+                    tt::LogMetal,
+                    "[QSR-DFBTC #48552] DFB {} core=({},{}) STRIDED: producer_tc=(tensix={},tc={}) "
+                    "consumer_tc=(tensix={},tc={}) "
+                    "use_remapper={} num_entries={}",
+                    dfb->id,
+                    core.x,
+                    core.y,
+                    (uint32_t)::dfb::get_tensix_id(group.producer_tc),
+                    (uint32_t)::dfb::get_counter_id(group.producer_tc),
+                    (uint32_t)::dfb::get_tensix_id(group.consumer_tcs.front()),
+                    (uint32_t)::dfb::get_counter_id(group.consumer_tcs.front()),
+                    use_remapper,
+                    config.num_entries);
             } else if (config.cap == dfb::AccessPattern::ALL) {
                 if (dm_dm_all) {
                     // DM-DM ALL: allocate one TC per consumer (tc_slot == consumer_idx).
@@ -1343,6 +1596,18 @@ void ProgramImpl::finalize_single_dfb_config(
                         tc_slot,
                         tensix_id,
                         tc_slot);
+                    // [#48552 DEBUG] cover the DM-DM path too (slice_write's dfb::in0 is DM producer ->
+                    // DM consumer). Shows which PHYSICAL (tensix,tc) it landed on so we can see if the
+                    // isolation rotation WRAPPED and slice_write collides with a still-live counter.
+                    log_warning(
+                        tt::LogMetal,
+                        "[QSR-DFBTC #48552] DFB {} core=({},{}) ALL-DMDM: shared_tc=(tensix={},tc={}) num_entries={}",
+                        dfb->id,
+                        core.x,
+                        core.y,
+                        (uint32_t)::dfb::get_tensix_id(group.producer_tc),
+                        (uint32_t)::dfb::get_counter_id(group.producer_tc),
+                        config.num_entries);
                 } else {
                     // Tensix-involved ALL: use remapper for 1-to-many
                     uint8_t producer_tensix_id = producer_risc_ids[producer_idx] % 4;

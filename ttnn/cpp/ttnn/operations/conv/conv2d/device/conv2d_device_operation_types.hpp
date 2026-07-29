@@ -129,6 +129,13 @@ struct Conv2dConfig {
     // Replicate: pads by replicating the nearest edge pixel.
     sliding_window::PaddingMode padding_mode = sliding_window::PaddingMode::Zeros;
 
+    // Opt-in: suppress the height-sharded "fully buffered weights" optimization, which otherwise
+    // inflates the weights CB (e.g. 3x for a 3x3 kernel) so the writer reads weights from DRAM once
+    // and keeps every kernel-row weight block resident across activation height blocks. Setting this
+    // true trades that DRAM-bandwidth optimization for a smaller weights CB. Numerics are unchanged;
+    // default false preserves existing behavior for every caller.
+    bool disable_fully_buffered_weights = false;
+
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
         "activation",
@@ -150,7 +157,8 @@ struct Conv2dConfig {
         "enable_activation_reuse",
         "force_split_reader",
         "override_output_sharding_config",
-        "padding_mode");
+        "padding_mode",
+        "disable_fully_buffered_weights");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -173,7 +181,8 @@ struct Conv2dConfig {
             std::cref(this->enable_activation_reuse),
             std::cref(this->force_split_reader),
             std::cref(this->override_output_sharding_config),
-            std::cref(this->padding_mode));
+            std::cref(this->padding_mode),
+            std::cref(this->disable_fully_buffered_weights));
     }
 };
 
@@ -218,6 +227,7 @@ struct Conv2dParams {
     bool config_tensors_in_dram = false;
     uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
+    bool disable_fully_buffered_weights = false;
 
     static constexpr auto attribute_names = std::make_tuple(
         "sliding_window_config",
@@ -237,7 +247,8 @@ struct Conv2dParams {
         "full_inner_dim",
         "enable_activation_reuse",
         "config_tensors_in_dram",
-        "force_split_reader");
+        "force_split_reader",
+        "disable_fully_buffered_weights");
 
     auto attribute_values() const {
         return std::make_tuple(
@@ -258,7 +269,8 @@ struct Conv2dParams {
             this->full_inner_dim,
             this->enable_activation_reuse,
             this->config_tensors_in_dram,
-            this->force_split_reader);
+            this->force_split_reader,
+            this->disable_fully_buffered_weights);
     }
 };
 
@@ -280,6 +292,7 @@ struct Conv2dHashableParams {
     bool enable_activation_reuse = false;
     bool config_tensors_in_dram = false;
     std::optional<bool> force_split_reader;
+    bool disable_fully_buffered_weights = false;
 };
 
 struct Conv2dInputs {

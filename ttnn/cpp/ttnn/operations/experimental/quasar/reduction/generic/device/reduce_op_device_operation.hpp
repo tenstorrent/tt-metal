@@ -57,6 +57,15 @@ struct ReduceDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // Custom program hash: the branch predates the origin/main default-hash collision fixes
+    // (#46385 / #47232), whose buggy default reflection hash lets differently-configured reduces
+    // collide and reuse a STALE compiled program. Defining a custom hash opts this op out of that
+    // default path and folds the distinguishing fields (notably scaler / post_mul_scaler) in
+    // explicitly, so e.g. avg_pool2d's reduce_scaler=1.0 + post_mul=1/49 gets a distinct cache key
+    // from a plain scaler=1/49 reduce and the REDUCE_POST_MUL kernel actually gets compiled/run.
+    static ttsl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 ttnn::Tensor reduce(

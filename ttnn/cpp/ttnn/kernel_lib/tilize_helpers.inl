@@ -12,6 +12,9 @@
  */
 #include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#ifdef TILIZE_DEBUG_BLOCKS
+#include "api/debug/ring_buffer.h"
+#endif
 
 // JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
 // The arrays are available in scope but guarded by TRISC type:
@@ -85,11 +88,14 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     ASSERT(num_blocks > 0);
 
     // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format).
-    // Fp32Mode::Lossless disables fast tilize only for fp32 inputs to preserve exact values
-    // (fast tilize truncates fp32 → tf32). Has no effect on non-fp32 formats.
-    constexpr bool lossless_fp32_override =
-        (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_dfb>();
-    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
+    // Fp32Mode::Lossless forces the standard (non-fast) tilize path. For fp32 this preserves exact values
+    // (fast tilize truncates fp32 → tf32); for other formats fast/regular tilize are bit-identical, so
+    // Lossless is used by callers that must avoid the fast path for a *structural* reason — e.g. the
+    // tilize→transpose kernels, where WH fast_tilize_block self-deadlocks in its per-block dest-section
+    // handshake (#48552). Previously this override was gated on fp32 input only, which let those bf16
+    // callers silently keep the (deadlocking) fast path on WH.
+    constexpr bool lossless_override = (fp32_mode == tilize_config::Fp32Mode::Lossless);
+    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_override;
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
@@ -150,7 +156,9 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
 #endif
             }
         } else {
-            tilize_init(input_dfb, block_width_tiles, output_dfb);
+            // Thread block_width_tiles as a compile-time template arg so the Quasar UnpackToDestEn batched
+            // tilize can program its block MOP (ignored on WH/BH and the non-UNPACK_TO_DEST paths).
+            tilize_init<block_width_tiles>(input_dfb, block_width_tiles, output_dfb);
         }
     }
 
@@ -182,6 +190,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             // Asymmetric: min(32, pages_left)
             input_pages = (pages_left < 32) ? pages_left : 32;
         }
+#ifdef TILIZE_DEBUG_BLOCKS
+        // DIAGNOSTIC (split-conv tilize-only WH hang): push per-block progress to the NON-BLOCKING watcher ring
+        // buffer (NOT DPRINT — DPRINT blocks the RISC at "DPW" once its FIFO fills on a hung program, which
+        // cascades into a false full-pipeline freeze). 0x7A = block ENTER (before reserve/tilize). The last
+        // 0x7A/0x7B pair in the watcher ring dump = the exact block the tilize froze on. Gated to this kernel.
+        WATCHER_RING_BUFFER_PUSH(0x7A000000u | (block & 0xffff));
+#endif
 
         if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
             in_dfb.wait_front(input_pages);
@@ -198,11 +213,27 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             ASSERT(false);
 #endif
         } else {
-            tilize_block(input_dfb, block_width_tiles, output_dfb);
+            // Compile-time block_width_tiles: enables the Quasar UnpackToDestEn batched tilize-to-DEST path
+            // (ignored on WH/BH and the non-UNPACK_TO_DEST Quasar path).
+            tilize_block<block_width_tiles>(input_dfb, block_width_tiles, output_dfb);
         }
 
         out_dfb.push_back(block_width_tiles);
-        in_dfb.pop_front(input_pages);
+#ifdef TILIZE_DEBUG_BLOCKS
+        // 0x7B = block EXIT (after push_back). If 0x7B is present for block N but 0x7A of N+1 is the last entry,
+        // the tilize completed N and froze entering N+1; if 0x7A(N) is last with no 0x7B(N), it froze INSIDE N.
+        WATCHER_RING_BUFFER_PUSH(0x7B000000u | (block & 0xffff));
+#endif
+#if defined(ARCH_QUASAR)
+        // TEN-4746: on Quasar the unpacker traps on a trailing pop_front with no following TDMA op to flush it.
+        // The final block's pop_front is the last unpacker op in a tilize-only program (nothing follows), so it
+        // hangs at issue (dprint_tr3, UNP_DEST). That pop is unnecessary — the input is never reused after the
+        // last tilize — so skip it on the final block. Applies to BOTH Quasar tilize paths (datacopy + UNP_DEST);
+        // the fused conv is unaffected (its matmul's unpacker activity follows and flushes the pop, and
+        // over-retaining one act block for the rest of a fresh program is harmless).
+        if (block + 1 < num_blocks)
+#endif
+            in_dfb.pop_front(input_pages);
 
         if (asymmetric_dfb_pages) {
             pages_left -= input_pages;

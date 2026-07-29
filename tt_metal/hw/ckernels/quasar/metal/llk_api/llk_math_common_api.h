@@ -88,9 +88,16 @@ inline constexpr MathFidelity get_effective_math_fidelity() {
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  **/
-template <std::uint8_t SET_DEST_DVALID>
+template <std::uint8_t SET_DEST_DVALID, DstSync DST = DstSync::SyncFull, typename Blocked_ = void>
 inline void llk_math_set_dvalid() {
-    _llk_math_set_dvalid_<SET_DEST_DVALID>();
+    static_assert(
+        sizeof(Blocked_) == 0,
+        "llk_math_set_dvalid belongs to the dest-dvalid sync scheme, should not be mixed with semaphores which are "
+        "currently used in tt-metal.");
+    // Fixed: forward the DST (sync-mode) template arg. _llk_math_set_dvalid_ takes <SET_DEST_DVALID, DST>
+    // (DST has no default there), so the old single-arg forward failed to instantiate -- this wrapper was
+    // effectively uncallable. DST controls whether both dest banks are cleared (SyncFull) or one (SyncHalf).
+    _llk_math_set_dvalid_<SET_DEST_DVALID, DST>();
 }
 
 /**
@@ -153,6 +160,18 @@ inline void llk_math_pack_sync_init() {
         constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
         _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
     }
+}
+
+/**
+ * @brief MATH-side init for the DIRECT UNPACK<->PACK batched-tilize DEST handshake: SEMINIT the UNPACK_MATH
+ *        token (one per DEST bank, max=N). MATH issues NO DEST op on the tilize path — it owns only the SEMINIT
+ *        so it is ordered before PACK's first wait (same role/location as llk_math_pack_sync_init for matmul).
+ *        PACK waits on UNPACK_MATH directly (no MATH bridge), so MATH_PACK is intentionally NOT seeded here.
+ */
+template <DstSync DST>
+inline void llk_math_tilize_dest_sync_init() {
+    constexpr std::uint32_t N = (DST == DstSync::SyncFull) ? 1 : 2;
+    _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
 }
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.

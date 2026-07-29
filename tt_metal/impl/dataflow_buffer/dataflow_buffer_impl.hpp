@@ -129,12 +129,31 @@ public:
     ::dfb::PackedTileCounter allocate(const CoreCoord& core, uint8_t tensix_id, bool use_t6_only = false);
     void reset() { next_tc_id_.clear(); }
 
+    // [#48552] TT_METAL_QSR_TC_UNIQUE=1 (no-reuse triage mode): allocate() reserves each program's physical
+    // counters from a process-global pool at finalize and returns them here on destruction, so no live counter
+    // is ever reused (no incoherent-reuse hang) — instead it FATALs with a clear op/core/tensix message when a
+    // (core,tensix) pool is exhausted. Move-only (ProgramImpl is move-only; a moved-from allocator owns none).
+    TileCounterAllocator() = default;
+    ~TileCounterAllocator();
+    TileCounterAllocator(TileCounterAllocator&&) = default;
+    TileCounterAllocator& operator=(TileCounterAllocator&&) = default;
+    TileCounterAllocator(const TileCounterAllocator&) = delete;
+    TileCounterAllocator& operator=(const TileCounterAllocator&) = delete;
+
 private:
     struct PerCoreCounters {
         std::array<uint8_t, 4> dm_next     = {};  // next available TC id in [0, NUM_TENSIX_TILE_COUNTERS_FOR_DM)
         std::array<uint8_t, 4> t6_only_next = {};  // next available TC id offset from TC_TENSIX_POOL_START
     };
     std::unordered_map<CoreCoord, PerCoreCounters> next_tc_id_;
+
+    // [#48552] Physical counters reserved by this program in TT_METAL_QSR_TC_UNIQUE mode, freed on destruction.
+    struct OwnedTc {
+        CoreCoord core;
+        uint8_t tensix_id;
+        uint8_t tc_id;
+    };
+    std::vector<OwnedTc> owned_physical_tcs_;
 };
 
 class RemapperIndexAllocator {

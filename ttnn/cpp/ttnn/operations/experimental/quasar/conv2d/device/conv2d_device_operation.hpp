@@ -93,6 +93,7 @@ Tensor conv2d(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader);
+    std::optional<bool> force_split_reader,
+    bool disable_fully_buffered_weights = false);
 
 }  // namespace ttnn::prim::qsr
