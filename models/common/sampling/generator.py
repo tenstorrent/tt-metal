@@ -601,9 +601,6 @@ class SeedManager:
         # True only for the most recent get_new_values() call when at least
         # one active slot used an explicit request seed.
         self._active_request_seed = False
-        # Last non-identity slot remap applied, used to ignore a steady-state
-        # remap that is (incorrectly) re-emitted verbatim every decode step.
-        self._last_applied_remap = None
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1.
         if tt_sampling._sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
@@ -668,7 +665,7 @@ class SeedManager:
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
-    def reset_seed_from_slots_if_needed(self, seeds, user_ids) -> bool:
+    def reset_seed_from_slots_if_needed(self, seeds, user_ids) -> None:
         """Reset only active slots whose slot-indexed seed changed."""
         if user_ids is None:
             user_ids = range(self.max_batch_size)
@@ -677,10 +674,8 @@ class SeedManager:
             slot = int(user)
             if self._seed_from_slot_params(seeds, slot) != self.seeds[slot]:
                 reset_slots.append(slot)
-        if not reset_slots:
-            return False
-        self.reset_seed_from_slots(seeds, reset_slots)
-        return True
+        if reset_slots:
+            self.reset_seed_from_slots(seeds, reset_slots)
 
     def align_seed_counters_to_positions(self, seeds, user_ids, positions, offset: int = 1):
         """Make explicit-seed decode independent of persistent slot lifetime.
@@ -739,28 +734,16 @@ class SeedManager:
         no-ops. Only non-identity entries trigger a move.
         """
         if not self._seed_active:
-            self._last_applied_remap = None
             return
-        remap_key = tuple(int(remap[i]) for i in range(len(remap)))
-        moves = [(remap_key[i], i) for i in range(len(remap_key)) if remap_key[i] != i]
+        moves = [(int(remap[i]), i) for i in range(len(remap)) if int(remap[i]) != i]
         if not moves:
-            # Identity: nothing moved. Clear the dedupe guard so a later genuine
-            # condense with the same shape is still applied.
-            self._last_applied_remap = None
             return
-        # A genuine condense emits a one-shot delta: vLLM pops the remap and
-        # resets it to identity, so the next step is identity. A non-identity
-        # remap repeated verbatim on consecutive steps is a steady-state
-        # replication/layout map, not a condense — re-applying it every token
-        # would keep relabelling slots and corrupt per-user RNG state. Apply it
-        # once and ignore the verbatim repeats.
-        if remap_key == self._last_applied_remap:
-            return
-        self._last_applied_remap = remap_key
         # Snapshot the state we're about to overwrite.
         old_seeds = list(self.seeds)
         old_counters = list(self.seed_counters)
         old_rngs = list(self.rngs)
+        moved_sources = {old_slot for old_slot, _ in moves}
+        moved_destinations = {new_slot for _, new_slot in moves}
         for old_slot, new_slot in moves:
             self.seeds[new_slot] = old_seeds[old_slot]
             self.seed_counters[new_slot] = old_counters[old_slot]
@@ -768,12 +751,11 @@ class SeedManager:
             # independent object so the old slot reference does not alias
             # the new one.
             self.rngs[new_slot] = copy.copy(old_rngs[old_slot])
-        # NOTE: deliberately do not clear "moved source" slots to None here.
-        # A source that was genuinely vacated by a condense is harmless to leave
-        # populated (an inactive slot is pushed MAX_UINT32/SKIP and is never read
-        # back, and a reused slot is reset via reset_seed). Clearing was unsafe
-        # because a replication map lists real, still-active requests as sources;
-        # zeroing them dropped reproducible seeds and broke determinism.
+        # A condense moves the highest live request down into the lowest empty
+        # slot, so a source that is not itself a destination has been vacated.
+        for old_slot in moved_sources - moved_destinations:
+            self.seeds[old_slot] = None
+            self.seed_counters[old_slot] = 0
         self._seed_active = any(s is not None for s in self.seeds)
 
     def reset_seed(self, seeds, user_ids):

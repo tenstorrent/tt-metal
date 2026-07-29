@@ -90,56 +90,42 @@ def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
     assert seed_manager.seed_counters == [6, 0, 0, 0]
 
 
-def test_slot_remap_repeated_steady_state_preserves_seeds():
-    """A non-identity remap re-emitted verbatim every decode step (a steady-state
-    replication/layout map, not a condense) must not corrupt per-user seeds.
+def test_slot_remap_condense_relabels_destination_and_vacates_source():
+    """A condense map moves the source slot's RNG state to its new slot and leaves
+    the vacated source unseeded.
 
-    Regression for the Galaxy determinism failures: vLLM replicated rank 0's
-    requests across DP ranks and re-emitted the same remap every token. The old
-    code cleared the (still-active) source slots to None each step, so seeded
-    requests silently became unseeded and lost reproducibility.
+    vLLM's condense moves the highest live request down into the lowest empty slot
+    (``InputBatch.condense``: ``_slot_remap[empty_index] = _slot_remap[last_req_index]``),
+    so a source that is not itself a destination has genuinely been vacated.
     """
-    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
-    seed_manager.reset_seed([42, 43], [0, 1])  # slots 0,1 seeded; 2,3 unseeded
-    assert seed_manager.seeds == [42, 43, None, None]
-
-    # remap[2]=0, remap[3]=1: slots 2,3 replicate slots 0,1 (sources stay active).
-    remap = torch.tensor([0, 1, 0, 1], dtype=torch.int32)
-    for _ in range(50):  # the bug applied this 1400+ times
-        seed_manager.apply_slot_remap(remap)
-
-    # Source slots keep their real seeds; replicas mirror them.
-    assert seed_manager.seeds[0] == 42
-    assert seed_manager.seeds[1] == 43
-    assert seed_manager.seeds[2] == 42
-    assert seed_manager.seeds[3] == 43
-    assert seed_manager._seed_active is True
-
-
-def test_slot_remap_genuine_condense_relabels_and_repeats_when_spaced():
-    """A real one-shot condense still relabels, and an identity step in between
-    re-arms the dedupe so a later same-shape condense is applied again."""
     seed_manager = _make_host_only_seed_manager(max_batch_size=4)
     seed_manager.reset_seed([42, 99], [0, 3])  # slot0=42, slot3=99
     assert seed_manager.seeds == [42, None, None, 99]
 
-    # Condense: request leaves slot1; slot3 moves into slot1. remap[1]=3.
-    condense = torch.tensor([0, 3, 2, 3], dtype=torch.int32)
-    seed_manager.apply_slot_remap(condense)
-    assert seed_manager.seeds[1] == 99  # relabelled
+    # Condense: the request in slot3 moves into empty slot1. remap[1]=3; indices
+    # 0/2/3 keep their identity values (the map does not mark slot3 as empty).
+    seed_manager.apply_slot_remap(torch.tensor([0, 3, 2, 3], dtype=torch.int32))
 
-    # Verbatim repeat is ignored (no re-relabel needed, state already correct).
-    seed_manager.apply_slot_remap(condense)
-    assert seed_manager.seeds[1] == 99
+    assert seed_manager.seeds[1] == 99  # relabelled into its new slot
+    assert seed_manager.seeds[3] is None  # source vacated
+    assert seed_manager.seed_counters[3] == 0
+    assert seed_manager.seeds[0] == 42  # untouched slot keeps its seed
+    assert seed_manager._seed_active is True
 
-    # An identity remap clears the dedupe guard...
+
+def test_slot_remap_identity_is_a_noop():
+    """The steady state is an identity map (vLLM pops the remap and resets it to
+    identity every step, and lane-DP never condenses at all), which must not touch
+    any slot's RNG state."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 43], [0, 1])
+
     identity = torch.tensor([0, 1, 2, 3], dtype=torch.int32)
-    seed_manager.apply_slot_remap(identity)
-    # ...so a genuinely new condense with the same shape applies again.
-    seed_manager.seeds[1] = None  # pretend slot1 emptied again
-    seed_manager._seed_active = any(s is not None for s in seed_manager.seeds)
-    seed_manager.apply_slot_remap(condense)
-    assert seed_manager.seeds[1] == 99
+    for _ in range(50):
+        seed_manager.apply_slot_remap(identity)
+
+    assert seed_manager.seeds == [42, 43, None, None]
+    assert seed_manager._seed_active is True
 
 
 def test_broadcast_sampling_params_preserves_none_list_fields():

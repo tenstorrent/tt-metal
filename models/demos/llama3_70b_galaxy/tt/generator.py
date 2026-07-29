@@ -632,8 +632,6 @@ class Generator(WarmupForwardMixin):
 
             # Save output logits (PCC check / return_logits path). Batched prefill fills
             # one row per slot (padded_batch rows); non-batched fills a single row.
-            # (Previously always 1 row, which silently dropped all but the last batched
-            # user's logits -> garbage host-sampled tokens/logprobs for the rest.)
             tt_out_logits_saved = None
             if save_logits_to_host:
                 num_logit_rows = padded_batch if use_batched_prefill else 1
@@ -1276,16 +1274,15 @@ class Generator(WarmupForwardMixin):
             reset_inputs = True
             reset_reasons.append("decode_inputs_need_reset")
             self._decode_inputs_need_reset = False
-        # Mixed greedy+random batches intentionally do NOT force a host input reload here:
-        # like all-greedy batches they use device-resident tokens/positions (sampled token
-        # fed back on-device, current_pos advanced in-trace). Forcing a per-step host reload
-        # would route the device-sampled token through a host readback that, under async/traced
-        # overlap, is enqueue-mis-ordered vs the next step's trace overwrite -> interleaved
-        # stale/current tokens -> deterministic garbage for the whole mixed batch. Per-request
-        # sampling params are fixed for a request's lifetime (uploaded at batch setup / refreshed
-        # on reset_batch), so no per-step re-upload is needed. The residual reset-driven greedy
-        # "doubling" is handled by preserving device current_pos across page_table / reset_batch
-        # reloads -- see the page_table_changed branch below and the pre-reload drain in the lane runner.
+        # TEMP FIX (tenstorrent/vllm#449): reload decisions belong in vLLM, which is the
+        # only side that knows when host inputs are valid under async draining. Until then
+        # the model decides here, and the rules below are the model-side half.
+        #
+        # Mixed greedy+random batches use device-resident tokens/positions like all-greedy
+        # batches: the sampled token is fed back on-device and current_pos is advanced
+        # in-trace, so no per-step host input reload is needed here. Per-request sampling
+        # params are fixed for a request's lifetime (uploaded at batch setup / refreshed on
+        # reset_batch).
         page_table_changed = False
         if page_table is not None:
             page_table_changed = self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()
