@@ -941,3 +941,81 @@ sub-block's matmul needing to reserve it.
    Reset must be its own command - the same lesson already recorded once in this log.
 
 Kept behind default-off diagnostic bits so it can be picked up later; nothing in the production path changed.
+
+### F14. S-WAY STRIPED OWNER-GATHER now WORKS and is measured: beats the ring 8-9% at Pk=12, still loses to the chain. NOT shipped.
+
+F13 left this deadlocked with no numbers. It now runs correctly and is fully measured. Three real bugs were
+found; all three were in flow control, and each one is a trap worth remembering.
+
+**Bug 1 (the deadlock): the writer's runtime args were never pushed.** The patch that was supposed to add them
+asserted on a pattern that matched the COMPUTE arg site first, so the writer block was never inserted, and
+`rs_b_sem` was never created (it lived in the same patch, which died on an assertion mid-way and wrote nothing).
+DPRINT showed the writer reading `S=5914240` (a buffer address) and `expb=4294967284` at arg 24 while `P=4` at
+arg 22 was correct - i.e. args 17-23 fine, 24+ garbage. With garbage arrival counts the semaphore waits could
+never be satisfied. **Lesson: when a patch asserts on a code pattern that appears at more than one call site,
+the assertion proves nothing about WHICH site was edited.**
+
+**Bug 2 (PCC 0.26): mixed-format reduction.** Seeding fp32 DST from the fp32 partial and then accumulating bf16
+peer slots gives garbage. The working direct-exchange path was accidentally homogeneous (its loopback write made
+the core's own partial arrive as bf16 like everyone else's). Fixed by packing the owner's own stripe to bf16 in a
+spare CB (c_6) first - a LOCAL pack, so the no-loopback-NoC requirement still holds - and reducing one format.
+
+**Bug 3 (PCC 0.996 / nan, and the instructive one): TWO aggregate-counter races.**
+- Credits: all S owners incremented ONE counter, so a fast owner's credits satisfied a sender's threshold while
+  a DIFFERENT owner had not yet freed its buffer -> the sender overwrote live data. Fixed with per-owner credit
+  counters (a sender must see nb-1 on EVERY owner it writes to).
+- Arrivals: one CUMULATIVE counter had the same flaw in time rather than space. The credit wait only engages at
+  nb>=2, so a sender can reach nb=1 unimpeded and its SECOND increment alone satisfies the owner's nb=0
+  threshold while a slower sender's slot still holds garbage. Fixed with PER-GENERATION arrival counters
+  (gen = nb & 1) that the owner resets after consuming, so the threshold means "this many DISTINCT senders
+  arrived for THIS generation".
+The error grew exactly with N_bpc (1 -> exact, 3 -> 0.9996, 18 -> 0.994/nan), which is the signature of a
+pipelining race and is what located it. **Lesson: a summed semaphore cannot enforce a per-source guarantee -
+neither across sources nor across pipeline generations.**
+
+**Bug 4 (+26.6% on one shape): empty stripes.** rs_T=6 with S=4 splits 2,2,2,**0** - the fourth owner owns
+nothing yet runs the whole protocol and every sender issues it a zero-byte write. Now S is capped so every
+stripe is non-empty.
+
+**Measured (2 relaunches, mask order reversed; chain / ring / striped S=2 / striped S=4):**
+
+| shape | Pk | chain | ring | striped S=2 | striped S=4 | S4 vs chain | S4 vs ring |
+|---|---|---|---|---|---|---|---|
+| 512x6144x4608 | 12 | 180.23 | 240.22 | 248.94 | 218.47 | +21.2% | **-9.1%** |
+| 512x6144x2304 | 12 | 110.12 | 131.94 | 136.10 | 120.90 | +9.8% | **-8.4%** |
+| 256x6144x6144 | 6 | 194.50 | 187.13 | 184.26 | **183.74** | **-5.5%** | -1.8% |
+| 256x6144x1536 | 6 | 61.20 | 60.75 | 59.07 | **59.01** | **-3.6%** | -2.9% |
+| 256x2048x1024 | 4 | 22.97 | 19.63 | 20.80 | 20.03 | -12.8% | +2.0% |
+
+S=4 beats S=2 nearly everywhere, as the load-imbalance argument predicts (more owners = better balance).
+
+**WHY it still loses to the chain at Pk=12 - the zone breakdown** (S=4, 512x6144x4608, 18 sub-blocks, per-core
+totals, median over cores):
+
+| zone | median us | cores recording it |
+|---|---|---|
+| **Z_RSS_CREDITWAIT** | **119.61** | 96 (all) |
+| Z_RSS_REDUCEWAIT | 40.18 | 32 (owners) |
+| Z_RSS_PAYLOAD | 22.90 | 96 |
+| Z_RSS_CREDITSEND | 7.63 | 32 |
+| Z_RSS_OUTWRITE | 5.75 | 32 |
+| Z_RSS_ARRIVE | 5.57 | 32 |
+
+**The dominant cost is not messages at all - it is LOAD IMBALANCE.** Credit-wait is 119.6 us: the 64 non-owner
+cores sit idle while the 32 owners do all the reduction (40.2 us) and all the output. Concentrating the
+reduction on S of Pk cores makes each owner perform (Pk-1)*rs_T/S tile-adds against a chain core's rs_T - a
+2.75x overload at Pk=12,S=4 - and the other Pk-S cores simply wait. At Pk=6,S=4 the overload is only 1.5x, which
+is precisely why the two Pk=6 shapes win.
+
+**So the three reduction topologies measured so far trade along one axis:**
+chain = minimum messages, minimum imbalance, maximum serialization;
+ring = minimum bytes on the critical path, Pk x messages, Pk-1 sequential rounds;
+striped owner-gather = few messages AND no serialization, but imbalance proportional to Pk/S.
+At Pk=12 there is no setting that beats the chain, because the reduction work has to live somewhere.
+
+**DECISION: not shipped.** The two clear wins (256x6144x6144 -1.8%, 256x6144x1536 -2.9% vs the shipping ring)
+have NO structural discriminator against the Pk=6 shapes that were neutral-or-worse (256x6144x4608 +0.3%,
+256x15360x1536 +1.0%), and the rest of the adopted corpus is a wash (128x15360x768 -1.1%, 256x15360x768 -0.6%,
+64x2048x1024 -0.1%, 128x2048x2048 +0.8%, 256x2048x2048 +2.0%). Per the lesson already recorded in this log,
+2 stable shapes without a structural trigger is not enough to ship. Kept behind default-off bits 27-28 with
+zones and DPRINT markers both opt-in via env vars, so production is byte-identical. 111/111 tests pass.
