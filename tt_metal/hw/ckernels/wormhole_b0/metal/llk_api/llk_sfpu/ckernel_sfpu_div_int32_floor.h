@@ -106,7 +106,11 @@ sfpi_inline void calculate_div_int32_body(
     a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
     a_s = sfpi::abs(a_s);
     sfpi::vInt r = a_s - qb;
-    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    // Shift before conversion so the valid magnitude 2**31 is representable as
+    // a positive sign-magnitude integer. Dropping the low bit can change the
+    // approximate correction by at most one, which the final adjustment handles.
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r) >> 1, sfpi::RoundMode::Nearest);
+    r_f = sfpi::addexp(r_f, 1);
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
@@ -123,7 +127,9 @@ sfpi_inline void calculate_div_int32_body(
 
     sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
     sfpi::vUInt cor = correction;
-    v_if(r >= 0) {
+    // When q is zero, qb is also zero, so r=INT_MIN represents the valid
+    // positive magnitude 2**31 rather than a negative remainder.
+    v_if(r >= 0 || q == 0) {
         tmp = -tmp;
         cor = -cor;
     }
@@ -132,8 +138,8 @@ sfpi_inline void calculate_div_int32_body(
     r += tmp;
 
     // Since the correction might have been rounded, we may need to correct one
-    // additional bit.  The (r - 1) < 0 check is required to handle r=INT_MIN.
-    v_if(r < 0 && (r - 1) < 0) {
+    // additional bit.  The corrected remainder cannot be INT_MIN.
+    v_if(r < 0) {
         q -= 1;
         r += b;
     }

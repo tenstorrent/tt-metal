@@ -54,8 +54,12 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // Compute initial remainder
     sfpi::vInt r = a - qb;
 
-    // Compute correction for approximation error: correction = |r| / b
+    // Compute correction for approximation error: correction = |r| / b.
+    // abs(INT_MIN) remains INT_MIN, whose sign-magnitude conversion produces
+    // -0.0 instead of the valid magnitude 2**31.
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    v_if(r_f < 0.0f) { r_f = TWO_POW_31; }
+    v_endif;
     sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(r_f * inv_b_f, sfpi::RoundMode::Nearest);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
@@ -64,12 +68,15 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vInt b_hi = sfpi::fractional_mul(correction, b >> 23);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
-    v_if(r < 0) { tmp = -tmp; }
+    // r=INT_MIN represents the valid positive magnitude 2**31. Subtracting
+    // one wraps only that value, distinguishing it from negative remainders.
+    v_if(r < 0 && (r - 1) < 0) { tmp = -tmp; }
     v_endif;
     r -= tmp;
 
-    // Final adjustment to ensure r is in [0, b)
-    v_if(r < 0 && (r - 1) < 0) { r += b; }
+    // Final adjustment to ensure r is in [0, b). The corrected remainder
+    // cannot be INT_MIN.
+    v_if(r < 0) { r += b; }
     v_elseif(r >= b) { r -= b; }
     v_endif;
 

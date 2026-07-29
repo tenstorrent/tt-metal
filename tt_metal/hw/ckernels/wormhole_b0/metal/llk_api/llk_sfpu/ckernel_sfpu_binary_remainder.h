@@ -91,8 +91,11 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     a = sfpi::abs(a_signed);
     sfpi::vInt r{a - qb};
 
-    // Use abs(r) for correction computation
+    // abs(INT_MIN) remains INT_MIN, whose sign-magnitude conversion produces
+    // -0.0 instead of the valid magnitude 2**31.
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    v_if(r_f < 0.0f) { r_f = TWO_POW_31; }
+    v_endif;
 
     // Compute correction: r / b in float32
     sfpi::vFloat correction_f = r_f * inv_b_f;
@@ -111,13 +114,16 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
 
     sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
-    v_if(r < 0) { tmp = -tmp; }
+    // r=INT_MIN represents the valid positive magnitude 2**31. Subtracting
+    // one wraps only that value, distinguishing it from negative remainders.
+    v_if(r < 0 && (r - 1) < 0) { tmp = -tmp; }
     v_endif;
     r -= tmp;
 
-    // Final adjustment - recompute b to reduce register pressure
+    // Final adjustment - recompute b to reduce register pressure. The
+    // corrected remainder cannot be INT_MIN.
     b = sfpi::abs(b_signed);
-    v_if(r < 0 && (r - 1) < 0) { r += b; }
+    v_if(r < 0) { r += b; }
     v_elseif(r >= b) { r -= b; }
     v_endif;
 

@@ -904,6 +904,48 @@ def test_div_edge_cases(rounding_mode, device):
         assert torch.equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+def test_div_int32_min_rounding_modes(rounding_mode, device):
+    divisors = [
+        2**21 - 1,
+        2**21,
+        2**22 - 1,
+        2**22,
+        2**22 + 1,
+        239823930,
+        2**30,
+        -(2**30),
+        2**31 - 1,
+        -(2**31),
+    ]
+    torch_input_tensor_a = torch.full((len(divisors),), -(2**31), dtype=torch.int32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(divisors, dtype=torch.int32)
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    expected = torch.div(torch_input_tensor_a, torch_input_tensor_b, rounding_mode=rounding_mode)
+    actual = ttnn.to_torch(ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode))
+    assert_equal(expected, actual)
+
+    for divisor in [2**22, 239823930, -(2**30)]:
+        expected = torch.div(torch_input_tensor_a, divisor, rounding_mode=rounding_mode)
+        actual = ttnn.to_torch(ttnn.div(input_tensor_a, divisor, rounding_mode=rounding_mode))
+        assert_equal(expected, actual)
+
+
 def test_div_inf_nan_cases(device):
     torch_input_tensor_a = torch.tensor([0, 1, -1, 0, 0, 1, -1, -1, 1, 2147483647, 0], dtype=torch.int32)
     input_tensor_a = ttnn.from_torch(
@@ -1277,6 +1319,55 @@ def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.remainder,
+        ttnn.fmod,
+    ],
+)
+def test_binary_remainder_fmod_int32_min(ttnn_op, device):
+    divisors = [
+        2**21 - 1,
+        2**21,
+        2**22 - 1,
+        2**22,
+        2**22 + 1,
+        239823930,
+        2**30,
+        -(2**30),
+        2**31 - 1,
+        -(2**31),
+    ]
+    numerators = [-(2**31)] * len(divisors)
+    # Exercises an odd correction magnitude that must remain exact.
+    numerators.append(-2140947629)
+    divisors.append(-1)
+
+    torch_input_tensor_a = torch.tensor(numerators, dtype=torch.int32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(divisors, dtype=torch.int32)
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+    actual = ttnn.to_torch(ttnn_op(input_tensor_a, input_tensor_b))
+    assert_equal(expected, actual)
 
 
 @pytest.mark.parametrize(
