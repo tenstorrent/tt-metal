@@ -92,7 +92,7 @@
 #define MEM_MAILBOX_BASE 16
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 58608
+#define MEM_MAILBOX_SIZE 58752
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 
 #define MEM_LLK_DEBUG_BASE ((MEM_MAILBOX_END + 31) & ~31)
@@ -185,6 +185,9 @@
 // Read-write reserved memory boundary for watcher checks
 #define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
 
+// Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).
+#define MEM_KERNEL_CONFIG_SIZE (100 * 1024)
+
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
 
@@ -207,6 +210,25 @@
 // Chip sizes must round up to nearest multiple of 4 to deal with uint32_t alignment for L1 to local copies.
 #define MEM_LOGICAL_TO_VIRTUAL_SCRATCH (MEM_BANK_TO_NOC_SCRATCH + MEM_BANK_TO_NOC_SIZE)
 #define MEM_LOGICAL_TO_VIRTUAL_SIZE ((20 + 12) * sizeof(uint8_t))
+
+// Dispatch-engine tile: per-DM cq kernel text (DRAM-parity direct load; not config-ring binary packing).
+// RTA/semaphore ring remains at MEM_MAP_END (MEM_DISPATCH_KERNEL_CONFIG_SIZE); see create_dispatch_mem_map().
+#define MEM_DISPATCH_KERNEL_CONFIG_SIZE (2 * 1024)
+#define MEM_DISPATCH_DM0_KERNEL_BASE (((MEM_LOGICAL_TO_VIRTUAL_SCRATCH + MEM_LOGICAL_TO_VIRTUAL_SIZE) + 15) & ~15)
+#define MEM_DISPATCH_DM1_KERNEL_BASE (MEM_DISPATCH_DM0_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+#define MEM_DISPATCH_DM2_KERNEL_BASE (MEM_DISPATCH_DM1_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+#define MEM_DISPATCH_DM3_KERNEL_BASE (MEM_DISPATCH_DM2_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+#define MEM_DISPATCH_DM4_KERNEL_BASE (MEM_DISPATCH_DM3_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+#define MEM_DISPATCH_DM5_KERNEL_BASE (MEM_DISPATCH_DM4_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+#define MEM_DISPATCH_DM6_KERNEL_BASE (MEM_DISPATCH_DM5_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+#define MEM_DISPATCH_DM7_KERNEL_BASE (MEM_DISPATCH_DM6_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+#define DISPATCH_MEM_MAP_END (MEM_DISPATCH_DM7_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
+
+// Dispatch-engine firmware/kernels use an extended reserved L1 layout; protect it in watcher NOC sanitize.
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+#undef MEM_MAP_READ_ONLY_END
+#define MEM_MAP_READ_ONLY_END DISPATCH_MEM_MAP_END
+#endif
 
 /////////////
 // Stack info

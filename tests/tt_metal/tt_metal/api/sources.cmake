@@ -39,6 +39,7 @@ set(UNIT_TESTS_API_SOURCES
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
+    test_tt_memory.cpp
     test_graph_tracking.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
@@ -58,6 +59,8 @@ set(UNIT_TESTS_API_SOURCES
     test_offline_kernel_compile.cpp
     test_memory_pin.cpp
     test_noc.cpp
+    test_blaze_named_args_hashing.cpp
+    test_blaze_named_runtime_args.cpp
     test_runtime_args.cpp
     test_semaphores.cpp
     test_shape_base.cpp

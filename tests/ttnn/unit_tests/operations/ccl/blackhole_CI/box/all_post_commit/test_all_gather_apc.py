@@ -104,7 +104,6 @@ def test_all_gather_subcore_grid(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
         sub_core_grids=sub_core_grids,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -187,7 +186,6 @@ def test_all_gather_2D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -261,7 +259,6 @@ def test_all_gather_4D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -335,7 +332,6 @@ def test_all_gather_ring(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -407,7 +403,6 @@ def test_all_gather_8D_vertical(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -490,7 +485,6 @@ def test_all_gather_failing_shapes(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 

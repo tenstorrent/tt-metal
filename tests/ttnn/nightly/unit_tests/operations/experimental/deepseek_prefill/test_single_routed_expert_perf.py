@@ -15,7 +15,7 @@ localizes to the FFN kernel.
 The ROW_MAJOR x layout (``x_rm``) is measured — the Blackhole fused-tilize
 production fast path (x tilized + bf8-packed inside the op, fresh output).
 
-Baselines in ``_EXPECTED_NS`` were MEASURED LOCALLY on a BH board on 2026-07-20
+Baselines in ``_EXPECTED_NS`` were MEASURED LOCALLY on a BH board on 2026-07-27
 and must be RECALIBRATED on the perf CI runner: device times are DDR-speed
 dependent, so the canonical baselines have to come from the CI runner the check
 actually runs on (mirrors the dated recalibration comments in the sibling
@@ -44,24 +44,24 @@ _WORKER = (
 _LAYOUT_ID = "x_rm"  # Blackhole fused-tilize production fast path (ROW_MAJOR bf16 input)
 
 # Per-(model, active) UnifiedRoutedExpertFfnDeviceOperation device time in ns, measured
-# on a Blackhole P150. Recalibrate on the perf CI runner (device times are HW-dependent).
+# on a Blackhole P150 (2026-07-27). Recalibrate on the perf CI runner (device times are HW-dependent).
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k26", 0): 3_968,
-    ("kimi_k26", 128): 685_713,
-    ("kimi_k26", 256): 690_787,
-    ("kimi_k26", 512): 714_651,
-    ("kimi_k26", 1024): 709_885,
-    ("kimi_k26", 2048): 1_270_645,
-    ("kimi_k26", 4096): 1_896_629,
-    ("kimi_k26", 5120): 1_932_320,
-    ("glm_51", 0): 3_947,
-    ("glm_51", 128): 672_022,
-    ("glm_51", 256): 669_477,
-    ("glm_51", 512): 673_966,
-    ("glm_51", 1024): 674_371,
-    ("glm_51", 2048): 1_166_843,
-    ("glm_51", 4096): 1_705_639,
-    ("glm_51", 5120): 1_745_545,
+    ("kimi_k26", 0): 3_962,
+    ("kimi_k26", 128): 209_611,
+    ("kimi_k26", 256): 221_190,
+    ("kimi_k26", 512): 280_076,
+    ("kimi_k26", 1024): 402_655,
+    ("kimi_k26", 2048): 659_392,
+    ("kimi_k26", 4096): 1_294_679,
+    ("kimi_k26", 5120): 1_681_466,
+    ("glm_51", 0): 3_941,
+    ("glm_51", 128): 186_853,
+    ("glm_51", 256): 194_073,
+    ("glm_51", 512): 244_886,
+    ("glm_51", 1024): 351_959,
+    ("glm_51", 2048): 576_561,
+    ("glm_51", 4096): 1_141_564,
+    ("glm_51", 5120): 1_459_484,
 }
 
 _MARGIN = 0.03
