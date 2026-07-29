@@ -110,7 +110,6 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_
 | RoPE write ×4 (cos/sin pos+neg) | H2D ×4 | per-position rotary embeddings for pos & neg LM attention |
 | noise write | H2D | this frame's diffusion init noise |
 | `to_torch(audio_chunk)` | D2H | pull frame audio to host |
-| `loopbreaker.update` | hostCPU | anti-repetition detector (long-context drift safeguard) |
 | `_emit_audio` (append) | hostCPU | accumulate frame audio into the waveform |
 | `to_torch(token_idx)` | D2H | read constrained-argmax → next token; AR control |
 | `_gen_tokens.append` / `valid_ids[idx]` / `noise[i]` | hostCPU | token record; local→global id; select noise row |
@@ -128,7 +127,7 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_
 
 | Op | Type | Used for |
 |----|------|----------|
-| voice-clone encode (per speaker, per chunk): audio up / latents down | H2D/D2H | encode the reference voices → acoustic latents |
+| voice-clone encode (per speaker, per chunk): audio up / latents down | H2D/D2H | encode the reference voices → acoustic latents. The chunk graph is ttnn-traced (`_ensure_encode_trace`) and replayed per chunk, so only the audio H2D + latent D2H stay on the host; the trace is released before the LM prefill |
 | scale/bias + `feats=(lat+bias)*scale` | hostCPU | normalize latents before the acoustic connector |
 | embed scatter (embeds→host→scatter→up) | D2H→host→H2D | build prefill `inputs_embeds` (voice embeds into speech slots) |
 | `reset_*_cache` | H2D | reset conv streaming caches for a fresh generation |

@@ -12,12 +12,10 @@ Pipeline (aligned with reference):
 
 import os
 import time
-from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-import numpy as np
 import torch
 import ttnn
 
@@ -143,11 +141,6 @@ def _apply_token_constraint(
     return ttnn.add(logits, mask_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def _embeds_to_host_2d(inputs_embeds: ttnn.Tensor) -> torch.Tensor:
-    """[1, 1, S, H] device tensor → [S, H] float32 on host."""
-    return ttnn.to_torch(inputs_embeds).to(torch.float32).squeeze(0).squeeze(0)
-
-
 def _host_2d_to_embeds(embeds_2d: torch.Tensor, device, dtype: torch.dtype = torch.bfloat16) -> ttnn.Tensor:
     """[S, H] or [1, H] host → [1, 1, S, H] on device."""
     if embeds_2d.dim() == 1:
@@ -172,101 +165,6 @@ def _condition_from_hidden(last_hidden: ttnn.Tensor) -> ttnn.Tensor:
         [1, 1, h + 1, last_hidden.shape[-1]],
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
-
-class _LoopBreaker:
-    """Detect a sustained acoustic repeat-loop in the streamed audio and break it by
-    re-drawing that frame's diffusion init noise (+ clamp the clipping the escape causes).
-
-    Long-context bf16 numerical drift in the ~40k-step AR feedback loop can tip the
-    trajectory into a degenerate attractor where the same short phrase is re-synthesised
-    for minutes (the fp32 reference, per-step error ~1e-7, never does this).  The loop is
-    NOT a raw-waveform repeat — each frame is acoustically distinct — but the CONTENT
-    recurs, so we detect it from a per-frame log-spectral envelope: a high correlation at
-    a phrase-scale lag (>= ``_MINLAG`` frames), sustained across a trailing window.
-
-    Thresholds are calibrated on the eager 89-min render (``4p_climate_100min``): clean
-    multi-speaker speech peaks at ~0.32 window-fraction (self-similarity sits at lag 1,
-    excluded), the min-78..83 loop holds ~0.37-0.5 at lag ~15 (the 2 s phrase).  With
-    ``_ON=0.40`` the detector never fires on clean audio, so on a clean render it is a
-    no-op and output stays byte-identical.
-
-    Intervention: on the frames of a detected loop, re-draw that frame's diffusion init noise
-    from a frame-local RNG.  Perturbing the loop-carried *hidden* instead is not viable — the
-    kick compounds through the on-device hidden-carry into worse loops and energy collapse.
-    The re-draw does not fully prevent a loop but shortens it, recovering ~4 min earlier on the
-    calibration render.  The forced escape can briefly over-drive the diffusion into clipping,
-    so the emitted audio is clamped to [-1, 1] during the loop episode + a recovery tail
-    (never on clean audio, whose legitimate peaks can exceed 1.0).  Frame-local RNG →
-    deterministic; the global draw order is untouched, so non-loop frames are unchanged.
-    """
-
-    _NB = 32  # log-spectral-envelope bins
-    _MINLAG, _LMAX = 6, 24  # phrase-scale lag search (0.8 s .. 3.2 s @ 7.5 fps)
-    _RMS_FLOOR, _TAU = 0.02, 0.92
-    _W, _ON, _OFF = 90, 0.40, 0.18  # trailing window (frames); on/off fraction (hysteresis)
-    _CLAMP_HOLD = 450  # clamp this many frames (~60 s) after an episode (recovery tail)
-
-    def __init__(self, seed: int = 0x100B):
-        self._seed = seed
-        self._win = None
-        self._edges = None
-        self._vecs: deque = deque(maxlen=self._LMAX)  # recent normalised envelopes (past frames)
-        self._rmss: deque = deque(maxlen=self._LMAX)
-        self._flags: deque = deque(maxlen=self._W)  # recent repeat-ish flags (0/1)
-        self._flagsum = 0
-        self.active = False
-        self._clamp_hold = 0
-
-    def _feat(self, chunk_1d: torch.Tensor):
-        x = chunk_1d.detach().to(torch.float32).numpy()
-        if self._win is None or len(self._win) != len(x):
-            self._win = np.hanning(len(x))
-            nfreq = len(x) // 2 + 1
-            self._edges = np.logspace(np.log10(4), np.log10(nfreq - 1), self._NB + 1).astype(int)
-        rms = float(np.sqrt(np.mean(x**2))) if len(x) else 0.0
-        mag = np.abs(np.fft.rfft(x * self._win))
-        env = np.array([np.log1p(mag[self._edges[b] : self._edges[b + 1] + 1].mean()) for b in range(self._NB)])
-        env -= env.mean()
-        env /= np.sqrt((env**2).sum()) + 1e-9
-        return env, rms
-
-    def update(self, chunk_1d: torch.Tensor) -> None:
-        """Feed one diffusion frame's audio; refresh ``active`` for the NEXT frame."""
-        v, rms = self._feat(chunk_1d)
-        repeatish = False
-        if rms >= self._RMS_FLOOR and len(self._vecs) >= self._MINLAG:
-            best = 0.0
-            for lag in range(self._MINLAG, min(self._LMAX, len(self._vecs)) + 1):
-                if self._rmss[-lag] >= self._RMS_FLOOR:
-                    best = max(best, float(v @ self._vecs[-lag]))
-            repeatish = best >= self._TAU
-        self._vecs.append(v)
-        self._rmss.append(rms)
-        flag = 1 if repeatish else 0
-        if len(self._flags) == self._W:
-            self._flagsum -= self._flags[0]
-        self._flags.append(flag)
-        self._flagsum += flag
-        frac = self._flagsum / len(self._flags)
-        if not self.active and frac >= self._ON:
-            self.active = True
-        elif self.active and frac <= self._OFF:
-            self.active = False
-        if self.active:
-            self._clamp_hold = self._CLAMP_HOLD
-        elif self._clamp_hold > 0:
-            self._clamp_hold -= 1
-
-    def clamp_now(self) -> bool:
-        """Clamp emitted audio during an episode + its recovery tail (never on clean audio)."""
-        return self.active or self._clamp_hold > 0
-
-    def perturb(self, noise_2x: torch.Tensor, frame_idx: int) -> torch.Tensor:
-        """Fresh diffusion-init noise from a frame-local RNG (reproducible; leaves the global
-        draw order / other frames' noise untouched, so non-loop frames stay unchanged)."""
-        g = torch.Generator().manual_seed(self._seed + int(frame_idx))
-        return torch.randn(*noise_2x.shape, generator=g, dtype=torch.float32).to(noise_2x.dtype)
 
 
 class TTVibeVoiceGenerator:
@@ -356,6 +254,12 @@ class TTVibeVoiceGenerator:
         # against the eager device-RoPE path; its bf16 RoPE puts it at ~0.9999 vs the fp32
         # reference, the same accepted precision as the bf16 SDPA-decode.
         self._trace_segment = os.environ.get("VV_TRACE_SEGMENT", "0") == "1"
+        # Voice-clone acoustic-encode chunk trace (see _ensure_encode_trace): (trace_id, out_tensor)
+        # for the steady chunk and for the row's final chunk, plus their shared input buffer.  Lives
+        # only for the duration of the prefill encode.
+        self._enc_step: Optional[Tuple[int, ttnn.Tensor]] = None
+        self._enc_final: Optional[Tuple[int, ttnn.Tensor]] = None
+        self._enc_in: Optional[ttnn.Tensor] = None
         self._sf_tid = None
         self._sf_warm = 0
         self._sf_hidden_buf: Optional[ttnn.Tensor] = None  # loop-carried cond_pos source
@@ -421,21 +325,6 @@ class TTVibeVoiceGenerator:
         # only one small [1,1,1,H] D2H read per frame.
         self._traj_path = os.environ.get("VV_LOG_TRAJ", "")
         self._traj_fh = None
-        # Silence-latch escape (VV_STALL_FRAMES=<n>, 0 disables).  ``_LoopBreaker`` cannot see this
-        # failure: its ``_RMS_FLOOR`` excludes near-silent frames from repeat detection, so a
-        # trajectory that latches into the zero basin is invisible to it and it never fires.
-        # Measured on the 4p_climate_100min render: natural pauses reach 24 frames (3.2 s) over
-        # 33k frames, while the latch runs thousands and never recovers on its own — so a
-        # threshold at 4x the longest natural pause separates them with a wide margin.
-        # Escape re-seeds the loop-carried hidden from the most recent frame that produced
-        # speech (kept in _sf_hidden_ok), which is a state known to decode to audio; the KV
-        # cache and script position are untouched, so this is not a re-prefill.
-        self._stall_frames = int(os.environ.get("VV_STALL_FRAMES", "96"))
-        self._stall_rms = float(os.environ.get("VV_STALL_RMS", "0.005"))
-        self._stall_run = 0
-        self._stall_cooldown = 0
-        self._stall_escapes = 0
-        self._sf_hidden_ok: Optional[ttnn.Tensor] = None  # last known-speaking hidden snapshot
 
     _SF_WARMUP = 2
 
@@ -509,6 +398,67 @@ class TTVibeVoiceGenerator:
             return out.unsqueeze(0)
         return out
 
+    def _ensure_encode_trace(self, chunk: int) -> bool:
+        """Capture the streaming acoustic-encode chunk graph once; replayed for every chunk.
+
+        The voice-clone encode dispatches the whole conv encoder per 3200-sample chunk (~663
+        chunks for the 4 climate prompts), and measured it is entirely HOST-bound: ~38.6 ms of
+        op dispatch per chunk against an idle device.  Capturing the graph once and replaying it
+        drops that to the device floor (10.9 ms/chunk measured, vs 11.1 ms achieved).
+
+        Trace-safe by the same properties the fused-frame decode trace relies on: TTConv1d holds
+        its streaming cache in a fixed-address buffer updated in place (``ttnn.copy``), and the
+        prepared conv weights are cached per input geometry — one geometry here, since every
+        chunk is `chunk` samples wide.  Two graphs are captured because ``is_final_chunk`` adds a
+        ceil-alignment right-pad and so changes conv widths; a row's last chunk replays that one.
+
+        Warm-up runs both variants eagerly first (allocate caches, prepare weights, fill the
+        program cache) so capture records no allocation.  Warm-up and capture leave the streaming
+        caches dirty; the caller zeroes them in place before the first real chunk, which restores
+        exactly the fresh ``ttnn.zeros`` state the eager path starts from.  Verified bit-exact vs
+        the eager encode (maxabsdiff 0.0) on the climate voice prompts.
+
+        Returns False when no trace region is reserved (``--no-trace``), leaving the eager path.
+        """
+        if self._enc_step is not None:
+            return True
+        if not self._trace_segment:
+            return False
+        dev = self.device
+        self._enc_in = ttnn.from_torch(
+            torch.zeros(1, 1, 1, chunk, dtype=torch.bfloat16),
+            device=dev,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.acoustic_tok._encoder_tt.reset_cache()
+        for _final in (False, False, True, True):
+            self.acoustic_tok.encode(self._enc_in, use_cache=True, is_final_chunk=_final)
+        ts = ttnn.begin_trace_capture(dev, cq_id=0)
+        out_s = self.acoustic_tok.encode(self._enc_in, use_cache=True, is_final_chunk=False)
+        ttnn.end_trace_capture(dev, ts, cq_id=0)
+        tf = ttnn.begin_trace_capture(dev, cq_id=0)
+        out_f = self.acoustic_tok.encode(self._enc_in, use_cache=True, is_final_chunk=True)
+        ttnn.end_trace_capture(dev, tf, cq_id=0)
+        self._enc_step, self._enc_final = (ts, out_s), (tf, out_f)
+        _vv_debug(f"acoustic encode: captured chunk trace (chunk={chunk})")
+        return True
+
+    def _release_encode_trace(self) -> None:
+        """Drop the encode traces.  Called once the voice prompts are encoded, so the eager LM
+        prefill that follows — and later the fused-frame captures — never allocate against a live
+        capture (the coexistence hazard `_reset_segment_frame_trace` guards for the decode path)."""
+        if self._enc_step is None:
+            return
+        ttnn.release_trace(self.device, self._enc_step[0])
+        ttnn.release_trace(self.device, self._enc_final[0])
+        self._enc_step = self._enc_final = None
+        self._enc_in = None
+        # Free the fixed-address streaming caches too: nothing references their addresses now, and
+        # the decode path allocates its own.
+        self.acoustic_tok._encoder_tt.reset_cache()
+
     def _encode_acoustic_latents(self, wav_1d: torch.Tensor) -> torch.Tensor:
         """Encode audio → [T_enc, vae_dim] float32 on host (with fix-std sampling).
 
@@ -523,6 +473,7 @@ class TTVibeVoiceGenerator:
             return torch.zeros(0, 0)
 
         if total_samples <= chunk:
+            self._release_encode_trace()  # reset_cache() below would move the captured addresses
             self.acoustic_tok._encoder_tt.reset_cache()
             lat_tt = self.acoustic_tok.encode(
                 self._audio_row_to_tt(wav),
@@ -531,7 +482,13 @@ class TTVibeVoiceGenerator:
             )
             lat = self._latents_from_encode_output(lat_tt)
         else:
-            self.acoustic_tok._encoder_tt.reset_cache()
+            traced = self._ensure_encode_trace(chunk)
+            if traced:
+                # Zero the streaming caches IN PLACE (the fresh-alloc state is ttnn.zeros, so this
+                # is exactly equivalent) — reset_cache() would free them out from under the trace.
+                self.acoustic_tok._encoder_tt.reset_cache_inplace()
+            else:
+                self.acoustic_tok._encoder_tt.reset_cache()
             frames: List[torch.Tensor] = []
             pos = 0
             while pos < total_samples:
@@ -541,11 +498,23 @@ class TTVibeVoiceGenerator:
                 if chunk_wav.numel() < chunk:
                     # conv2d caches prepared weights per input width; keep chunks fixed-size.
                     chunk_wav = torch.nn.functional.pad(chunk_wav, (0, chunk - chunk_wav.numel()))
-                lat_tt = self.acoustic_tok.encode(
-                    self._audio_row_to_tt(chunk_wav),
-                    use_cache=True,
-                    is_final_chunk=is_final,
-                )
+                if traced:
+                    ttnn.copy_host_to_device_tensor(
+                        ttnn.from_torch(
+                            chunk_wav.to(torch.bfloat16).view(1, 1, 1, -1),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                        ),
+                        self._enc_in,
+                    )
+                    tid, lat_tt = self._enc_final if is_final else self._enc_step
+                    ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+                else:
+                    lat_tt = self.acoustic_tok.encode(
+                        self._audio_row_to_tt(chunk_wav),
+                        use_cache=True,
+                        is_final_chunk=is_final,
+                    )
                 out = self._latents_from_encode_output(lat_tt)
                 frames.append(out[-1:])
                 pos += n
@@ -571,13 +540,18 @@ class TTVibeVoiceGenerator:
         self,
         speech_tensors: torch.Tensor,
         speech_masks: torch.Tensor,
-    ) -> torch.Tensor:
-        """Return speech_embeds [N_slots, hidden] for scatter into prefill (host float32)."""
+    ) -> ttnn.Tensor:
+        """Return speech embeds [1, 1, N_slots, hidden] float32 ON DEVICE for the prefill scatter."""
         scale = self.speech_scaling_factor
         bias = self.speech_bias_factor
         latents_per_row = []
-        for i in range(speech_tensors.shape[0]):
-            latents_per_row.append(self._encode_acoustic_latents(speech_tensors[i]))
+        try:
+            for i in range(speech_tensors.shape[0]):
+                latents_per_row.append(self._encode_acoustic_latents(speech_tensors[i]))
+        finally:
+            # Everything after this — the connector, the LM prefill, the fused-frame captures —
+            # allocates eagerly, so the encode capture must not still be live.
+            self._release_encode_trace()
 
         if scale is None or bias is None:
             scale, bias = self._compute_scale_bias(latents_per_row, speech_masks)
@@ -595,16 +569,18 @@ class TTVibeVoiceGenerator:
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            conn_out = self.acoustic_conn(feats_tt)
-            conn_torch = ttnn.to_torch(conn_out).to(torch.float32)
-            if conn_torch.dim() == 4:
-                conn_torch = conn_torch.squeeze(0).squeeze(0)
-            elif conn_torch.dim() == 3:
-                conn_torch = conn_torch.squeeze(0)
-            conn_torch = conn_torch[:n]
-            speech_embeds_parts.append(conn_torch)
+            # Stay on device: fp32 here is the same exact widening the host path did via
+            # to_torch().to(float32), and the prefill embed tensor is fp32.
+            conn_out = ttnn.typecast(self.acoustic_conn(feats_tt), ttnn.float32)
+            if conn_out.shape[2] != n:
+                conn_out = ttnn.slice(
+                    conn_out, [0, 0, 0, 0], [1, 1, n, conn_out.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            speech_embeds_parts.append(conn_out)
 
-        return torch.cat(speech_embeds_parts, dim=0)
+        if len(speech_embeds_parts) == 1:
+            return speech_embeds_parts[0]
+        return ttnn.concat(speech_embeds_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _build_prefill_embeds(
         self,
@@ -629,17 +605,60 @@ class TTVibeVoiceGenerator:
         if speech_input_mask is None:
             return inputs_embeds
 
-        embed_2d = _embeds_to_host_2d(inputs_embeds)
         if prefill_speech_embeds is not None:
-            speech_embeds = prefill_speech_embeds.to(torch.float32)
+            speech_dev = _host_2d_to_embeds(prefill_speech_embeds.to(torch.float32), self.device, dtype=torch.float32)
         elif speech_tensors is not None and speech_masks is not None:
-            speech_embeds = self._process_speech_prefill(speech_tensors, speech_masks)
+            speech_dev = self._process_speech_prefill(speech_tensors, speech_masks)
         else:
             return inputs_embeds
-        mask = speech_input_mask[0].cpu().bool()
-        n_slots = int(mask.sum().item())
-        embed_2d[mask[: embed_2d.shape[0]]] = speech_embeds[:n_slots].to(embed_2d.dtype)
-        return _host_2d_to_embeds(embed_2d, self.device, dtype=torch.float32)
+        return self._scatter_speech_embeds(inputs_embeds, speech_dev, speech_input_mask[0].cpu().bool())
+
+    def _scatter_speech_embeds(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        speech_dev: ttnn.Tensor,
+        mask: torch.Tensor,
+    ) -> ttnn.Tensor:
+        """Splice the voice embeds into the text embeds' speech slots, entirely on device.
+
+        Replaces a host round trip that pulled the whole [S, hidden] prefill embed down as fp32
+        (~141 MB D2H), did a boolean-mask assign, and pushed it back (~141 MB H2D) — measured
+        0.39 s.  The speech slots are contiguous runs (one per speaker: the mask for the 4-speaker
+        climate prompt is 9 runs total), so the scatter is just alternating slices of the text and
+        speech tensors concatenated back together — pure data movement, no arithmetic.
+
+        Bit-exact vs the host path: ``inputs_embeds`` is bf16 and the widening to fp32 is exact,
+        the speech side is already fp32, and slice/concat move values unchanged.  Tile alignment
+        is not required — the run boundaries are arbitrary and TILE-layout concat handles them.
+        """
+        S, hidden = inputs_embeds.shape[2], inputs_embeds.shape[-1]
+        m = mask[:S].to(torch.int8)
+        # Run-length decompose the mask: boundaries are where it flips.
+        bounds = [0] + ((m[1:] != m[:-1]).nonzero().reshape(-1) + 1).tolist() + [S]
+        made_f32 = inputs_embeds.dtype != ttnn.float32
+        text_f32 = ttnn.typecast(inputs_embeds, ttnn.float32) if made_f32 else inputs_embeds
+
+        parts, spos = [], 0
+        for a, b in zip(bounds[:-1], bounds[1:]):
+            if int(m[a]) == 0:
+                parts.append(
+                    ttnn.slice(text_f32, [0, 0, a, 0], [1, 1, b, hidden], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                )
+            else:
+                parts.append(
+                    ttnn.slice(
+                        speech_dev,
+                        [0, 0, spos, 0],
+                        [1, 1, spos + (b - a), hidden],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                )
+                spos += b - a
+        if made_f32:
+            ttnn.deallocate(text_f32)  # the slices above are copies; the 141 MB source is dead
+        if len(parts) == 1:
+            return parts[0]
+        return ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _ensure_diffusion_t_embs(self) -> list:
         """Build schedule-constant DPM timestep tensors + embeddings once (eager + traced)."""
@@ -782,34 +801,6 @@ class TTVibeVoiceGenerator:
             ttnn.from_torch(noise_2x[:1].to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
             self._sf_noise,
         )
-
-    def _stall_escape(self, frame_idx: int, audio_1d: torch.Tensor) -> bool:
-        """Track consecutive near-silent frames; on a latch, re-seed the loop-carried hidden.
-
-        Snapshots the hidden every 16th speaking frame so an escape restores a *recent*
-        speaking state rather than the segment start.  Returns True when an escape fired.
-        """
-        if self._sf_hidden_buf is None:
-            return False
-        if self._stall_cooldown > 0:
-            self._stall_cooldown -= 1
-        if float(audio_1d.pow(2).mean().sqrt()) >= self._stall_rms:
-            self._stall_run = 0
-            if frame_idx % 16 == 0:
-                if self._sf_hidden_ok is None:
-                    self._sf_hidden_ok = ttnn.clone(self._sf_hidden_buf, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                else:
-                    ttnn.copy(input_a=self._sf_hidden_buf, input_b=self._sf_hidden_ok)
-            return False
-        self._stall_run += 1
-        if self._stall_run < self._stall_frames or self._stall_cooldown > 0 or self._sf_hidden_ok is None:
-            return False
-        ttnn.copy(input_a=self._sf_hidden_ok, input_b=self._sf_hidden_buf)
-        self._stall_run = 0
-        self._stall_cooldown = self._stall_frames
-        self._stall_escapes += 1
-        _vv_debug(f"stall escape #{self._stall_escapes} at frame {frame_idx}: re-seeded loop-carried hidden")
-        return True
 
     def _log_traj(self, frame_idx: int, abs_pos: int, audio_1d: torch.Tensor) -> None:
         """Append one row of loop-state diagnostics to VV_LOG_TRAJ (see __init__).
@@ -1538,12 +1529,6 @@ class TTVibeVoiceGenerator:
         if self.ref_inference is None:
             diffusion_noise = torch.randn(max_steps, 2, 1, 1, 64, dtype=torch.float32, generator=rng).to(torch.bfloat16)
 
-        # Anti-repetition loop-break (VV_LOOPBREAK, default on): watch the streamed audio for a
-        # sustained content-repeat loop (long-context bf16-drift failure); on the loop frames re-draw
-        # that frame's diffusion init noise to break out, and clamp the emitted audio to [-1, 1] over
-        # the episode.  A no-op on clean audio (never fires) — see _LoopBreaker.
-        loopbreaker = _LoopBreaker() if os.environ.get("VV_LOOPBREAK", "1") != "0" else None
-
         diffusion_frames = 0
         # Steady-state decode timing (cf. tt_transformers/llama demos): time ONLY the fused-frame
         # trace-replay frames — warmup and capture frames are not timed.
@@ -1567,9 +1552,6 @@ class TTVibeVoiceGenerator:
                 _frame_t0 = time.perf_counter() if _sf_replay else None
                 diffusion_frames += 1
                 noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
-                # Loop-break: on the frames of a detected loop, re-draw the diffusion init noise.
-                if loopbreaker is not None and loopbreaker.active and noise_2x is not None:
-                    noise_2x = loopbreaker.perturb(noise_2x, diffusion_frames)
                 start_pos = prefill_len + step
                 with prof.section("segment_frame"):
                     audio_chunk, _tok_or_logits = self._run_segment_frame_traced(
@@ -1577,12 +1559,6 @@ class TTVibeVoiceGenerator:
                     )
                 neg_prev_diffusion_token = current_token
                 _frame_audio = ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)  # syncs frame
-                if loopbreaker is not None:
-                    loopbreaker.update(_frame_audio)  # detect on the raw (unclamped) audio
-                    if loopbreaker.clamp_now():
-                        _frame_audio = _frame_audio.clamp(-1.0, 1.0)
-                if self._stall_frames > 0:
-                    self._stall_escape(diffusion_frames, _frame_audio)
                 if self._traj_path:
                     self._log_traj(diffusion_frames, start_pos, _frame_audio)
                 _emit_audio(_frame_audio)
@@ -1630,8 +1606,6 @@ class TTVibeVoiceGenerator:
 
                 with prof.section("diffusion (CFG x num_steps)"):
                     noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
-                    if loopbreaker is not None and loopbreaker.active and noise_2x is not None:
-                        noise_2x = loopbreaker.perturb(noise_2x, diffusion_frames)
                     if _profile_diff and diffusion_frames == _profile_diff:
                         import tracy
 
@@ -1662,10 +1636,6 @@ class TTVibeVoiceGenerator:
                         if isinstance(audio_chunk, torch.Tensor)
                         else ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)
                     )
-                    if loopbreaker is not None:
-                        loopbreaker.update(_chunk)  # detect on the raw (unclamped) audio
-                        if loopbreaker.clamp_now():
-                            _chunk = _chunk.clamp(-1.0, 1.0)
                     _emit_audio(_chunk)
                 chunk_samples = _chunk.numel()
                 _vv_debug(
