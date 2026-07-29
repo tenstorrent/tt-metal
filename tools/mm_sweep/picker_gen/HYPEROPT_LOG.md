@@ -298,6 +298,24 @@ Implementation notes for whoever picks this up:
   Back then that was measured at Pk=4 where the chain is only 3 deep and it was neutral-to-negative. We have
   now measured the tail exposed at 14.3% with Pk=12, which is a different regime.
 
+### F5. FAILED: a deeper reduction buffer does not help (and caught a real bug)
+
+If the reduction chain's 9-14% cost were credit stalls, giving cb_reduce more than its 2 slots would help. It
+does not: depth 4 and depth 8 measured +0.1% to +0.8% (all inside noise) on all four shapes tried. So the cost
+really is the serial DEPTH of the chain - transfer plus add, once per hop - which is what the
+meet-in-the-middle design above targets. Useful negative: it rules out buffering as the fix.
+
+The knob was kept (diag bits 18-19 select depth 2/4/8, default 2 = production) because the refactor that
+carries the depth through the existing `use_reduce` compile argument makes the CB size and the remote write
+offset impossible to disagree - the exact class of mismatch that caused a PCC 0.38 bug in earlier reduction
+work.
+
+**This experiment also caught a real bug in itself, which is worth recording:** the first version wrote
+`nb % use_reduce`, and for Pk==1 shapes `use_reduce` is 0. The unreachable branch still gets compiled, so the
+kernel failed to build with "division by zero" and **20 of 111 correctness tests failed**. Fixed by guarding
+the modulus with a constant. Lesson: always run the full correctness suite after touching a kernel, even for
+a change that looks like pure buffering - the compiler sees code paths that the hardware never runs.
+
 ## Total progress this session
 
 | shape | at log start | now | change |

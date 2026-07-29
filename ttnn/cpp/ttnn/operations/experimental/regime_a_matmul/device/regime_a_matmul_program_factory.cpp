@@ -1152,7 +1152,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t Pk = cfg.k_slices ? cfg.k_slices : 1u;
     const uint32_t Sm = cfg.m_slices ? cfg.m_slices : 1u;
     const uint32_t kb = cfg.k_block_tiles ? cfg.k_block_tiles : 1u;
-    const uint32_t use_reduce = (Pk > 1u) ? 1u : 0u;
+    // `use_reduce` doubles as the reduction-CB DEPTH: 0 when Pk==1 (no chain), else the number of cb7 slots.
+    // The kernel takes its slot modulus from this same value, so the CB size and the remote write offset can
+    // never disagree - the failure mode that produced a PCC 0.38 bug in earlier reduction work.
+    const uint32_t use_reduce = (Pk > 1u) ? (cb.cb7_tiles / (geo.M_block_capacity * geo.N_sub)) : 0u;
 
     // ---- Fused epilogue + output-split detection (all off => byte-identical no-fusion path). ----
     const bool has_bias = tensor_args.bias_tensor.has_value();
