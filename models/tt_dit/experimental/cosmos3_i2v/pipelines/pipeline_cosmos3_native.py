@@ -971,8 +971,14 @@ def build_cosmos3_i2v_native_pipeline(
         sequence_parallel=ParallelFactor(sp_factor, sp_axis),
         tensor_parallel=ParallelFactor(tp_factor, tp_axis),
     )
+    # TT_COSMOS3_CCL_RING routes the trunk collectives (RowParallel RS/AG + ring SDPA)
+    # over Ring instead of Linear — the prerequisite for fusing matmul+reduce-scatter,
+    # which only supports Ring topology.
+    _ccl_topology = (
+        ttnn.Topology.Ring if os.environ.get("TT_COSMOS3_CCL_RING") in ("1", "true", "True") else ttnn.Topology.Linear
+    )
     ccl_manager = (
-        CCLManager(mesh_device=device, num_links=num_links, topology=ttnn.Topology.Linear)
+        CCLManager(mesh_device=device, num_links=num_links, topology=_ccl_topology)
         if tp_factor > 1 or sp_factor > 1
         else None
     )
