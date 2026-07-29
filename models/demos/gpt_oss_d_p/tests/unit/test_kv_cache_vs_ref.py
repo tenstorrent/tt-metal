@@ -141,3 +141,69 @@ def test_blockcyclic_reorder_positions_inverse():
     recovered[p] = reordered
     assert torch.equal(recovered, nat), "block-cyclic scatter/gather did not round-trip to natural order"
     logger.info(f"block-cyclic reorder/positions inverse OK (sp={sp}, seq_len={seq_len})")
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("chunk, n_chunks", [(128, 3)], ids=["c128x3"])
+def test_kv_cache_multichunk_write_vs_ref(mesh_device, chunk, n_chunks, reset_seeds):
+    """Write N tile-aligned chunks at increasing ``kv_actual`` offsets (0, chunk, 2*chunk, ...) into a
+    multi-chunk cache and verify every position reads back in natural order.
+
+    Exercises ``update_padded_kv_cache``'s nonzero-``kv_actual`` chunk placement — the round-trip test
+    above only writes ``kv_actual=0`` (one chunk == whole cache), so this is the only coverage of the
+    chunk-offset write."""
+    rows, cols = tuple(mesh_device.shape)
+    sp, tp = rows, cols
+    sp_axis, tp_axis = 0, 1
+    nkv = tp
+    assert chunk % (32 * sp) == 0, f"chunk {chunk} must be a multiple of 32*sp ({32 * sp})"
+    max_seq_len = chunk * n_chunks
+
+    torch.manual_seed(0)
+    sent_k = torch.randn(nkv, max_seq_len, HEAD_DIM)  # natural-order K/V over the whole cache
+    sent_v = torch.randn(nkv, max_seq_len, HEAD_DIM)
+
+    kv_cache = allocate_kv_cache(
+        mesh_device, num_layers=1, max_seq_len=max_seq_len, sp_axis=sp_axis, num_users=1, head_dim=HEAD_DIM
+    )
+
+    in_dims = [None, None]
+    in_dims[sp_axis] = 2
+    in_dims[tp_axis] = 1
+
+    def to_chunk(nat):  # [nkv, chunk, HD] -> device [1, nkv, chunk, HD], SP+TP sharded
+        return ttnn.from_torch(
+            nat.reshape(1, nkv, chunk, HEAD_DIM),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
+        )
+
+    for i in range(n_chunks):
+        lo = i * chunk  # kv_actual for this chunk: 0, chunk, 2*chunk (all tile-aligned)
+        tt_k = to_chunk(sent_k[:, lo : lo + chunk])
+        tt_v = to_chunk(sent_v[:, lo : lo + chunk])
+        write_kv_chunk(kv_cache, tt_k, tt_v, slot_idx=0, layer_idx=0, kv_actual=lo, sp_axis=sp_axis)
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+    ttnn.synchronize_device(mesh_device)
+
+    # Read back the whole cache and invert the block-cyclic layout (per-chunk-global key = chunk).
+    p = blockcyclic_positions(sp, chunk, max_seq_len)
+
+    def gather(cache_tensor, col):
+        dts = ttnn.get_device_tensors(cache_tensor)
+        dev = torch.cat([ttnn.to_torch(dts[r * cols + col])[0, 0].float() for r in range(rows)], dim=0)
+        nat = torch.empty_like(dev)
+        nat[p] = dev
+        return nat[:max_seq_len]
+
+    host_k = torch.stack([gather(kv_cache.k, c) for c in range(nkv)], dim=0)
+    host_v = torch.stack([gather(kv_cache.v, c) for c in range(nkv)], dim=0)
+    ok_k, pcc_k = comp_pcc(sent_k, host_k, 0.99)
+    ok_v, pcc_v = comp_pcc(sent_v, host_v, 0.99)
+    logger.info(f"multi-chunk write ({n_chunks} x {chunk} tokens): K pcc={pcc_k} V pcc={pcc_v}")
+    assert ok_k, f"K multi-chunk mismatch: {pcc_k}"
+    assert ok_v, f"V multi-chunk mismatch: {pcc_v}"
