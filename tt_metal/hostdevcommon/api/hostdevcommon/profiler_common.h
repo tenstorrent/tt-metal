@@ -105,6 +105,19 @@ enum ControlBuffer {
     HOST_BUFFER_END_INDEX_T1,
     HOST_BUFFER_END_INDEX_T2,
     // slots [5, PROFILER_MAX_RISC_COUNT) reserved for additional processors (e.g. Quasar DM/Neo)
+    //
+    // Host->kernel terminate signal (SPSC/X280 backend): set at teardown when the X280 consumer is
+    // stopping. While clear, a producing RISC BLOCKS on a full ring (lossless). While set, the producer
+    // stops blocking and proceeds, so a dispatch core cannot get stuck in ring_ensure_room and wedge
+    // wait_until_cores_done() during device close.
+    //
+    // It borrows the TOP of that reserved band instead of being appended to the end of this enum,
+    // because the control vector has NO room to grow: on Wormhole sizeof(mailboxes_t) is EXACTLY
+    // MEM_MAILBOX_SIZE (13296 bytes, measured), so appending even one slot trips wh_hal_tensix's
+    // static_assert (and 8-byte padding makes the true cost of +1 word 16 bytes). The band is reserved
+    // for processors 5..23, which exist only on Quasar -- and the SPSC backend is never compiled there
+    // (see the arch dispatch at the top of kernel_profiler.hpp), so on tt-1xx these slots are dead space.
+    PROFILER_TERMINATE = PROFILER_MAX_RISC_COUNT - 1,
     DEVICE_BUFFER_END_INDEX_BR_ER = PROFILER_MAX_RISC_COUNT,
     DEVICE_BUFFER_END_INDEX_NC,
     DEVICE_BUFFER_END_INDEX_T0,
@@ -134,7 +147,12 @@ enum ControlBuffer {
     DRAM_PROFILER_ADDRESS_T2_0,
 };
 
-enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B };
+// STICKY_META (SPSC/X280 backend): an 8B context packet emitted once per RISC per launch at the main
+// zone scope. High word carries (core_x, core_y, risc) + this type; low word a 32-bit host-side ID. The
+// host forward-fills that identity onto the following timing markers so the X280 reader can bulk-copy raw
+// markers with NO per-marker reshape. Its type sits in the same bits (28-30 of w0) as a marker's type, so
+// the host distinguishes it before decoding the rest. Must stay <= 7 (3-bit type field).
+enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B, STICKY_META };
 
 // Number of expected uint64_t data values for each PacketType
 template <PacketTypes packet_type>
@@ -154,8 +172,31 @@ struct TimestampedDataSize<TS_DATA_16B> {
 };
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
+// NOTE: this cannot be grown. On Wormhole sizeof(mailboxes_t) is EXACTLY MEM_MAILBOX_SIZE (13296 bytes),
+// so +1 word here fails the static_assert in llrt/hal/tt-1xx/wormhole/wh_hal_tensix.cpp; 8-byte padding
+// makes the real cost of one extra word 16 bytes. Measured, not assumed: 64 -> 13296, 66 -> 13312,
+// 72 -> 13328. Anything new must reuse a slot (see PROFILER_TERMINATE above), not append one.
+//
+// PRE-EXISTING OVERFLOW, not introduced here and not fixable by growing: with
+// PROFILER_MAX_RISC_COUNT = 24 the two RISC-indexed blocks consume [0,48), which pushes the tail entries
+// to 48..64, so DRAM_PROFILER_ADDRESS_T2_0 evaluates to 64 -- one past the last valid index of a 64-word
+// vector. Host-side that is an out-of-bounds write into a 64-element std::vector (profiler.cpp resizes to
+// PROFILER_L1_CONTROL_VECTOR_SIZE); device-side it writes past control_vector[] inside mailboxes_t. It is
+// latent because only device debug-dump mode touches those five slots. Fixing it properly means moving
+// the DRAM_PROFILER_ADDRESS_*_0 block into the reserved band too, which is an upstream layout decision.
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 64;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
+
+// Guards this backend's own slot. Deliberately not asserted on DRAM_PROFILER_ADDRESS_T2_0: that entry is
+// already out of bounds upstream (see above), so asserting it would fail the build on a defect this
+// branch neither introduced nor can fix here.
+static_assert(
+    PROFILER_TERMINATE < PROFILER_L1_CONTROL_VECTOR_SIZE &&
+        PROFILER_TERMINATE >= 5,  // inside the [5, PROFILER_MAX_RISC_COUNT) reserved band, not a real RISC slot
+    "PROFILER_TERMINATE must live in the reserved processor band and inside the L1 control vector");
+// Governs the L1 buffer SIZING (part of mailboxes_t, which is L1-size-bounded) and the DRAM path.
+// The X280 SPSC markers are 4 words (see SPSC_MARKER_WORDS in kernel_profiler.hpp) but this stays 2
+// so the L1 profiler ring keeps its size (holding 128 4-word markers instead of 256 2-word ones).
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
 constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
