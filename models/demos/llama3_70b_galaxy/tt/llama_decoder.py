@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
 import ttnn
 from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
@@ -147,6 +148,25 @@ class TtTransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
+        # Bring-up probe: log + device-sync at each stage boundary so a device hang can be
+        # localized to a specific op (the last "[probe]" line printed is the culprit stage).
+        _probe_on = os.environ.get("QWEN_BH_PROBE", "0") == "1" and mode == "decode"
+
+        def _probe(tag):
+            if _probe_on:
+                logger.info(f"[probe] before sync: {tag}")
+                # synchronize_device is illegal during trace capture; swallow that so the probe
+                # is a no-op on the trace-capture pass and only actually syncs on the eager
+                # compile pass (where a device deadlock can be localized to the last logged tag).
+                try:
+                    ttnn.synchronize_device(self.mesh_device)
+                except Exception as e:
+                    logger.info(f"[probe] sync skipped ({tag}): {str(e)[:80]}")
+                    return
+                logger.info(f"[probe] after  sync: {tag}")
+
+        _probe("entry (flushes dram_prefetcher)")
+
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         # On the BH no-prefetch path the residual stream defaults to bf8, so it is re-quantized on
         # every layer's residual add. Over 64 layers that accumulated bf8 error degrades the final
@@ -183,6 +203,8 @@ class TtTransformerBlock(LightweightModule):
             else:
                 attn_in_sharded, _ = self.attention_norm(x, h, mode)
 
+        _probe("attention_norm")
+
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -196,6 +218,7 @@ class TtTransformerBlock(LightweightModule):
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
+        _probe("attention.forward")
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=res_dtype)  # bf16 on BH no-prefetch
             x.deallocate(True)
@@ -226,8 +249,11 @@ class TtTransformerBlock(LightweightModule):
             if h is not attn_out:
                 attn_out.deallocate(True)
 
+        _probe("ff_norm")
+
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
+        _probe("feed_forward.forward")
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=res_dtype)
             if mode == "decode":
