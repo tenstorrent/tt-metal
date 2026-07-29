@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
+from helpers.device_io import read_from_device, write_to_device
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -20,7 +21,6 @@ from helpers.tile_constants import (
 from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
-from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 
 @dataclass

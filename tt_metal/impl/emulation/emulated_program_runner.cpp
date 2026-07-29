@@ -88,6 +88,15 @@
 #error "TT_EMULE_INCLUDE_DIR must be defined by CMake (path to tt-emule's include/)"
 #endif
 
+////////////////////////////////////////////////////////////
+// Blaze-only experimental named args
+// Removal is tracked by issue #50953
+namespace tt::tt_metal::experimental::blaze {
+bool emit_named_args_header(
+    const std::string& dir, const NamedCTArgNamespaces& ct_namespaces, const NamedRuntimeArgNamespaces& rt_namespaces);
+}  // namespace tt::tt_metal::experimental::blaze
+////////////////////////////////////////////////////////////
+
 // ---------------------------------------------------------------------------
 // Thread-local context for JIT kernels.
 // Exported via -rdynamic so dlopen'd .so files can resolve them at load time.
@@ -552,6 +561,12 @@ struct DeferredCompile {
     std::string src_path;
     std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    NamedCTArgNamespaces named_ct_arg_namespaces;
+    NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
+    ////////////////////////////////////////////////////////////
     std::map<std::string, std::string> defines;
     std::string extra_inc;
     Metal2BindingsSnapshot bindings;
@@ -814,9 +829,9 @@ static void emit_metal2_namespaces(
             // which is not a valid flat C++ identifier, so emitting
             // `constexpr CtaVal<uint32_t> cp.dst{...}` here would fail to compile;
             // skip them to keep the flat `args::` form namespaced-safe. This change
-            // does NOT emit the matching `ct_args::<ns>` structs — that is a separate
+            // does NOT emit the matching `blaze_ct_args::<ns>` structs — that is a separate
             // emission step (it needs a Kernel::process_named_ct_arg_namespaces API);
-            // a kernel that references `ct_args::<ns>` requires that step to be
+            // a kernel that references `blaze_ct_args::<ns>` requires that step to be
             // present, so skipping here only prevents invalid flat C++, it does not
             // itself make namespaced args available.
             if (name.find('.') != std::string::npos) {
@@ -878,6 +893,10 @@ static std::function<void()> jit_compile_kernel(
     const std::string& kernel_src_path,
     const std::vector<uint32_t>& compile_args,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
+    // Blaze-only experimental named args (issue #50953) — begin
+    const NamedCTArgNamespaces& named_ct_arg_namespaces,
+    const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces,
+    // Blaze-only experimental named args (issue #50953) — end
     const std::map<std::string, std::string>& defines,
     const std::string& extra_include_flags,
     const Metal2BindingsSnapshot& bindings = {},
@@ -936,6 +955,16 @@ static std::function<void()> jit_compile_kernel(
         tt::emule::patch_kernel_source(abs_kernel, patched_kernel_path, kernel_inc_roots, emule_inc_roots);
     }
 
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // 2c. Blaze EXPERIMENTAL named kernel args.
+    // Emule's JIT path bypasses genfiles; call the experimental helper to
+    // emit named_args_generated.h. Included from wrapper.cpp when non-empty.
+    bool has_named_args =
+        experimental::blaze::emit_named_args_header(dir, named_ct_arg_namespaces, named_runtime_arg_namespaces);
+    ////////////////////////////////////////////////////////////
+
     // 3. Write wrapper.cpp
     // Kernel defines are written as #define directives in the wrapper to avoid
     // shell quoting issues (values like SFPU_OP_CHAIN_0 contain parentheses).
@@ -954,7 +983,16 @@ static std::function<void()> jit_compile_kernel(
             }
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
+        // Metal-2.0 `namespace args` (base).
         emit_metal2_namespaces(f, bindings, named_compile_args);
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        // Blaze experimental `blaze_ct_args::` header (additive layer on top of Metal-2.0 args).
+        if (has_named_args) {
+            f << "#include \"" << dir << "/named_args_generated.h\"\n";
+        }
+        ////////////////////////////////////////////////////////////
         f << "#include \"" << patched_kernel_path << "\"\n";
         f << "extern \"C\" { void __emule_kernel_entry() { kernel_main(); } }\n";
     }
@@ -1593,6 +1631,19 @@ static void collect_kernels(
 
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
+            ////////////////////////////////////////////////////////////
+            // Blaze-only experimental named args
+            // Removal is tracked by issue #50953
+            NamedCTArgNamespaces named_ct_arg_namespaces;
+            kernel->process_named_ct_arg_namespaces([&named_ct_arg_namespaces](const NamedCTArgNamespaces& namespaces) {
+                named_ct_arg_namespaces = namespaces;
+            });
+            NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
+            kernel->process_named_runtime_args(
+                [&named_runtime_arg_namespaces](const NamedRuntimeArgNamespaces& namespaces) {
+                    named_runtime_arg_namespaces = namespaces;
+                });
+            ////////////////////////////////////////////////////////////
             auto defines = build_kernel_defines(
                 *kernel, impl, num_dram_channels, num_l1_banks, worker_col_map_str, worker_row_map_str, emule_sem_base);
 
@@ -1622,7 +1673,30 @@ static void collect_kernels(
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
             const std::string metal2_key_suffix = bindings.cache_key_suffix();
 
-            // Helper: compute cache key from a defines map.
+            // GENERAL emule fix — intentionally NOT part of the Blaze named-args feature and NOT
+            // fenced: it is required by any compute or data-movement kernel built under emule and
+            // must remain in place after the named-args feature is deleted (issue #50953). It is
+            // grouped here only because it shares this per-kernel `defines` map.
+            //
+            // COMPILE_FOR_{TRISC,BRISC,NCRISC} defines — silicon's per-RISC kernel build sets
+            // exactly one of these. Kernel-author API headers use them to pick the right include
+            // chain and to define `is_brisc` / `is_ncrisc` / `is_trisc` constexpr bools; without
+            // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all RISCs in one unified
+            // thread, so we set the corresponding macro based on the kernel's processor class.
+            if (is_tensix) {
+                defines["COMPILE_FOR_TRISC"] = "1";
+            } else if (auto* dm_kernel = dynamic_cast<DataMovementKernel*>(kernel.get()); dm_kernel != nullptr) {
+                auto cfg_variant = dm_kernel->config();
+                const auto& cfg = std::get<DataMovementConfig>(cfg_variant);
+                switch (cfg.processor) {
+                    case DataMovementProcessor::RISCV_0: defines["COMPILE_FOR_BRISC"] = "1"; break;
+                    case DataMovementProcessor::RISCV_1: defines["COMPILE_FOR_NCRISC"] = "1"; break;
+                    default: break;
+                }
+            }
+
+            // Helper: compute cache key from a defines map (preserves upstream's sorted
+            // iteration of named_compile_args and defines for key stability).
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
                 std::string key;
                 if (ksrc.source_type_ == KernelSource::FILE_PATH) {
@@ -1641,6 +1715,30 @@ static void collect_kernels(
                 for (const auto& [k, v] : sorted_named) {
                     key += ":N" + k + "=" + std::to_string(v);
                 }
+                ////////////////////////////////////////////////////////////
+                // Blaze-only experimental named args
+                // Removal is tracked by issue #50953
+                // The compiled wrapper depends on named_runtime_arg_namespaces through
+                // named_args_generated.h (the blaze_rt_args:: Arg/ArrayArg descriptors),
+                // so the full named RT schema — ns, field, index, length, dispatch — must
+                // be part of the key. Without it, two kernels sharing source/CT args/defines
+                // but differing in Blaze RT names or layout alias in the JIT and disk caches
+                // and load a stale descriptor layout (the .so then reads runtime args from
+                // the wrong slots). The named CT namespaces need no separate entry: they are
+                // a deterministic split of the flat named_compile_args serialized above.
+                // Determinism: NamedRuntimeArgNamespaces is a std::map (sorted ns order) of
+                // declaration-ordered vectors, so this iteration order is fixed; ns/field are
+                // validated C++ identifiers (alnum + '_'), so they cannot contain the
+                // ':'/'='/',' separators and the serialization is unambiguous.
+                for (const auto& [ns, entries] : named_runtime_arg_namespaces) {
+                    key += ":brtns:" + ns;
+                    for (const auto& entry : entries) {
+                        key += ":brt:" + entry.field + "=" + std::to_string(entry.index) + "," +
+                               std::to_string(entry.length) + "," +
+                               std::to_string(static_cast<uint32_t>(entry.dispatch));
+                    }
+                }
+                ////////////////////////////////////////////////////////////
                 for (const auto& [k, v] : defs) {
                     key += ":" + k + "=" + v;
                 }
@@ -1681,8 +1779,17 @@ static void collect_kernels(
                         resolved_fns[key] = disk_fn;
                         g_jit_cache[key] = disk_fn;
                     } else {
-                        deferred_compiles[key] =
-                            DeferredCompile{src_path, compile_args, named_compile_args, defs, kernel_extra_inc, bindings};
+                        deferred_compiles[key] = DeferredCompile{
+                            src_path,
+                            compile_args,
+                            named_compile_args,
+                            // Blaze-only experimental named args (issue #50953) — begin
+                            named_ct_arg_namespaces,
+                            named_runtime_arg_namespaces,
+                            // Blaze-only experimental named args (issue #50953) — end
+                            defs,
+                            kernel_extra_inc,
+                            bindings};
                     }
                 }
             };
@@ -1886,9 +1993,19 @@ static void jit_compile_pending(
                               } slot_guard;
                               std::string tmp_path = cache_path + ".tmp." + std::to_string(::getpid()) + "." +
                                                      std::to_string(g_compile_tmp_seq.fetch_add(1));
+                              // Blaze-only experimental named args (issue #50953) are threaded through here.
                               auto fn = jit_compile_kernel(
-                                  dc_copy.src_path, dc_copy.compile_args, dc_copy.named_compile_args,
-                                  dc_copy.defines, dc_copy.extra_inc, dc_copy.bindings, tmp_path);
+                                  dc_copy.src_path,
+                                  dc_copy.compile_args,
+                                  dc_copy.named_compile_args,
+                                  // Blaze named args (issue #50953) — begin
+                                  dc_copy.named_ct_arg_namespaces,
+                                  dc_copy.named_runtime_arg_namespaces,
+                                  // Blaze named args (issue #50953) — end
+                                  dc_copy.defines,
+                                  dc_copy.extra_inc,
+                                  dc_copy.bindings,
+                                  tmp_path);
                               std::filesystem::rename(tmp_path, cache_path);
                               return fn;
                           }).share();
