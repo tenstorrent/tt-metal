@@ -136,6 +136,13 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 
+# tt::tests::prefill_test::LayerCompletionConsumer is a test-only scheduler stand-in; keep it out of
+# the shipped module. The matching nanobind registration is gated on the same flag via
+# TTNN_WITH_LAYER_COMPLETION_CONSUMER.
+if(TTNN_BUILD_TESTS)
+    list(APPEND TTNN_SRC_PYBIND cpp/ttnn-nanobind/layer_completion_consumer.cpp)
+endif()
+
 # experimental/ccl/'s, point_to_point's, and debug/'s own nanobind sources
 # are registered directly on the `ttnn` target from those ops' own
 # CMakeLists.txt — not listed here.

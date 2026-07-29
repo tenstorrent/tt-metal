@@ -8,6 +8,10 @@
 // `layer_completion` submodule via bind_layer_completion_api(); it was previously a standalone
 // `_layer_completion` extension. The tt_metal types are consumed via the sanctioned
 // `tt_metal/api/internal/disaggregation/` surface.
+//
+// The consumer is test-only and lives here rather than in tt_metal, so its binding is compiled only
+// under TTNN_BUILD_TESTS (TTNN_WITH_LAYER_COMPLETION_CONSUMER) and is absent from a shipped wheel.
+// The ring and router bindings are unconditional — they are production API.
 
 #include "ttnn-nanobind/layer_completion.hpp"
 
@@ -22,17 +26,19 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 
-#include <internal/disaggregation/layer_completion_consumer.hpp>
 #include <internal/disaggregation/layer_completion_message.hpp>
 #include <internal/disaggregation/layer_completion_queue.hpp>
 #include <internal/disaggregation/layer_completion_router.hpp>
+
+#ifdef TTNN_WITH_LAYER_COMPLETION_CONSUMER
+#include "ttnn-nanobind/layer_completion_consumer.hpp"
+#endif
 
 namespace ttnn::layer_completion {
 
 namespace nb = nanobind;
 
 void bind_layer_completion_api(nb::module_& mod) {
-    using tt::tests::prefill_test::LayerCompletionConsumer;
     using tt::tt_metal::internal::LayerCompletionMessage;
     using tt::tt_metal::internal::LayerCompletionQueue;
     using tt::tt_metal::internal::LayerCompletionRouter;
@@ -114,6 +120,9 @@ void bind_layer_completion_api(nb::module_& mod) {
         .def_prop_ro("processed", &LayerCompletionRouter::processed)
         .def_prop_ro("is_master", &LayerCompletionRouter::is_master);
 
+#ifdef TTNN_WITH_LAYER_COMPLETION_CONSUMER
+    using tt::tests::prefill_test::LayerCompletionConsumer;
+
     nb::class_<LayerCompletionConsumer>(mod, "LayerCompletionConsumer")
         .def(
             "__init__",
@@ -133,6 +142,7 @@ void bind_layer_completion_api(nb::module_& mod) {
         .def("stop", &LayerCompletionConsumer::stop, "Idempotent: stop + join + final drain + shutdown channel.")
         .def_prop_ro("total", &LayerCompletionConsumer::total)
         .def_prop_ro("reached_expected", &LayerCompletionConsumer::reached_expected);
+#endif
 }
 
 }  // namespace ttnn::layer_completion

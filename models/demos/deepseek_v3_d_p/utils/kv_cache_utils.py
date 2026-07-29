@@ -232,15 +232,6 @@ def reconstruct_scaled_fp8_kv_cache(packed: torch.Tensor, geometry: MlaKvCacheGe
     return torch.cat((scaled.to(torch.bfloat16), rope), dim=-1)
 
 
-def get_num_dram_banks(mesh_device):
-    """Usable DRAM banks on this device. Full Blackhole = 8; harvested parts expose fewer (e.g. 7).
-
-    The KV cache ND-shards round-robin across these banks and the disaggregation address table replays
-    that exact striping (`curr_bank_id = (curr_bank_id + 1) % num_banks`), so both MUST derive the count
-    from the same device. dram_grid_size().x is the number of DRAM cores/banks the device exposes."""
-    return mesh_device.dram_grid_size().x
-
-
 def create_kv_chunk_address_table_ds(
     config, mesh_device, mesh_shape, seq_len, sp_axis, kvpe_cache, chunk_size_bytes, num_users=1
 ):

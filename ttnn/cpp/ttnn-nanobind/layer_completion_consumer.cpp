@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/disaggregation/layer_completion_consumer.hpp>
+#include "ttnn-nanobind/layer_completion_consumer.hpp"
 
 #include <chrono>
 
@@ -47,7 +47,7 @@ void LayerCompletionConsumer::run() {
         // Only this thread writes total_, so a plain accumulate suffices (fetch_add(0) is a no-op).
         const uint64_t cur = total_.fetch_add(n, std::memory_order_relaxed) + n;
         if (cur - logged >= log_step_) {
-            log_error(LogMetal, "[completion-check] C++ consumer drained {}/{} completions", cur, expected_);
+            log_debug(LogMetal, "[completion-check] C++ consumer drained {}/{} completions", cur, expected_);
             logged = cur;
         }
         if (cur >= expected_) {
@@ -57,7 +57,7 @@ void LayerCompletionConsumer::run() {
     }
     const uint64_t fin = total_.load(std::memory_order_relaxed);
     if (fin >= expected_) {
-        log_error(LogMetal, "[completion-check] PASS: C++ consumer drained {} == {} (expected)", fin, expected_);
+        log_info(LogMetal, "[completion-check] PASS: C++ consumer drained {} == {} (expected)", fin, expected_);
     }
 }
 
