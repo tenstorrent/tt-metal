@@ -159,6 +159,13 @@ _KV_SDPA_MAX_CHUNK_TILES = 64
 # so at 8 MQA heads it uses 8 of ~120 cores and Sq is a single tile (no Q-parallelism to exploit).
 # Splitting the 32-tile prefix S ways uses 8*S cores. Env-tunable while it is being characterised.
 _KV_SPLITS = int(os.environ.get("PI05_KV_SPLITS", "1"))
+# Pass the REAL expert attention mask to the SDPA call instead of dropping it. The tiny-tile kv_sdpa
+# has no mask support, so the compat shim routes any masked call to the GENERAL SDPA -- correct but
+# slower. Needed for workloads that mask real prefix columns (LIBERO pads camera slot 3, so 256
+# full-magnitude image-token columns must be masked); pipeline_16_decode otherwise raises rather than
+# drop them silently. NOTE: only valid at TILE_HEIGHT=32 -- bf8 q/k/v + a dense mask + a 16-row tile
+# inverts the output sign (test_sdpa_bf8_mask_corrupts), which is why the mask was dropped originally.
+_PASS_EXPERT_MASK = int(os.environ.get("PI05_PASS_EXPERT_MASK", "0")) == 1
 _QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = (16, 16, 16) if TILE_HEIGHT < 32 else (40, 32, 32)
 
 _LOFI = ttnn.WormholeComputeKernelConfig(
@@ -403,7 +410,7 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                 q,
                 k,
                 v,
-                attn_mask=None,
+                attn_mask=attention_mask if _PASS_EXPERT_MASK else None,
                 scale=self.scale,
                 past_k=past_k,
                 past_v=past_v,

@@ -756,3 +756,53 @@ Always use trace + 2CQ for the e2e number: it overlaps H2D on CQ1 with compute o
 hidden rather than measured, which is why it is both the ground truth and remarkably repeatable.
 Never judge a per-layer change on the old per-sample single-layer median: at +-4% it cannot see the
 1-4% effects that all of this pipeline's tuning decisions turn on.
+
+---
+
+# CRITICAL: the tiny-tile merge regressed LIBERO capability (the dropped mask is not cosmetic)
+
+Attempting the 40-episode LIBERO accuracy check at tile-16 failed immediately -- on the guard added in
+`cb5fd7e8a3e`, which did exactly its job:
+
+```
+NotImplementedError: pipeline_16_decode built an expert attention mask that blocks REAL prefix columns
+(absent camera or padded language), but the tiny-tile denoise block drops the mask entirely -- kv_sdpa's
+fused two-source path has no mask support.
+```
+
+**Why LIBERO hits this and the perf test does not.** `_bench_runs/pi05_production.env` records
+`PI0_NUM_CAMERAS=3  # 3 image slots per openpi training spec; LIBERO pads slot 3 with -1`. So LIBERO
+supplies `img_masks` with one absent camera, and **256 full-magnitude image-token prefix columns must be
+masked**. The 16-chip perf test feeds random images for all three slots, so every `img_mask` is 1, nothing
+real is masked, the guard never fires, and kv_sdpa's maskless fast path is used. That is why perf has been
+green all along while the real workload cannot run at all.
+
+This is a **capability regression introduced by the merge**, not a pre-existing gap: the pre-merge kv_sdpa
+had a mask path (`cb_mask_in` + a `use_provided_mask` compile-time gate) and it was lost when their
+kv_sdpa was taken wholesale. It affects **both tile heights**, because `denoise_block.py` hardcoded
+`attn_mask=None` on the kv_sdpa call regardless of tile height.
+
+**Consequence for every perf number in this document.** They are all measured in the
+all-cameras-present configuration, which does not need a mask. The real LIBERO configuration does, and
+the only currently-correct route for a masked call is the compat shim's fallback to the GENERAL SDPA --
+which is slower than kv_sdpa. So the production LIBERO number is worse than the 26.78 ms recorded here,
+by however much the general-SDPA fallback costs. That has to be measured, not assumed.
+
+**Added `PI05_PASS_EXPERT_MASK=1`** (default 0, behaviour unchanged): forwards the real expert mask to
+SDPA, so the shim routes it to the general SDPA instead of dropping it, and relaxes the guard. Valid only
+at `TILE_HEIGHT=32` -- at tile-16, bf8 q/k/v + a dense mask + a 16-row tile inverts the output sign
+(`test_sdpa_bf8_mask_corrupts`), which is the original reason the mask was dropped.
+
+## What this means for the tiny-tile work
+
+Tile-16 currently cannot run masked workloads at all: the fused path has no mask support, and the general
+SDPA fallback is numerically broken at a 16-row tile with bf8. So **tiny tile is perf-validated but not
+usable for LIBERO** until one of:
+
+1. **Restore the fused mask path in kv_sdpa** (`cb_mask_in` + `use_provided_mask`) on top of the
+   two-phase prefix/suffix chunking. This is the real fix -- it keeps the fast path AND supports masks.
+   It was listed as "stage 8" and never done.
+2. Fix the bf8 + dense-mask + 16-row-tile sign inversion so the general-SDPA fallback works at tile-16
+   (slower, but correct). This is one of the three bugs to report upstream to Sankar.
+
+Until then the honest status is: tile-16 is a perf result on an unmaskable configuration.

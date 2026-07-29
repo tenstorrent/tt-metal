@@ -12,6 +12,11 @@ host-side KV handoff from the replicated prefill output.
 from __future__ import annotations
 
 import os
+
+# When set, the denoise block forwards the real expert mask to SDPA (via the general-SDPA fallback),
+# so masking real prefix columns is no longer silently dropped and this guard need not fire.
+# Must match PI05_PASS_EXPERT_MASK in denoise_block.py.
+_PASS_EXPERT_MASK_16 = int(os.environ.get("PI05_PASS_EXPERT_MASK", "0")) == 1
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -297,7 +302,7 @@ class Pi0_5GLX16DecodePipeline:
         if suffix_padded > action_horizon:  # the tolerated phantom-suffix tail
             _dropped[:, prefix_padded + action_horizon : kv_total] = 0.0
             _dropped[action_horizon:suffix_padded, :] = 0.0
-        if bool((_dropped != 0).any()):
+        if bool((_dropped != 0).any()) and not _PASS_EXPERT_MASK_16:
             raise NotImplementedError(
                 "pipeline_16_decode built an expert attention mask that blocks REAL prefix columns "
                 "(absent camera or padded language), but the tiny-tile denoise block drops the mask "
