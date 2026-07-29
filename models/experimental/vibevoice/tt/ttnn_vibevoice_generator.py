@@ -99,7 +99,7 @@ from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
     TTDPMSolverMultistepScheduler,
     sample_speech_latents,
 )
-from models.experimental.vibevoice.tt.reference_lm_runner import ReferenceLMRunner
+from models.experimental.vibevoice.reference.lm_runner import ReferenceLMRunner
 
 
 @dataclass
