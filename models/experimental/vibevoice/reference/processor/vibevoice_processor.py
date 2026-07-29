@@ -20,6 +20,9 @@ from transformers.tokenization_utils_base import (
     TruncationStrategy,
 )
 from transformers.utils import TensorType, logging
+
+from models.experimental.vibevoice.common.safe_paths import safe_join, safe_output_path
+
 from .vibevoice_tokenizer_processor import AudioNormalizer
 
 logger = logging.get_logger(__name__)
@@ -75,8 +78,9 @@ class VibeVoiceProcessor:
             VibeVoiceTextTokenizerFast,
         )
 
-        # Try to load from local path first, then from HF hub
-        config_path = os.path.join(pretrained_model_name_or_path, "preprocessor_config.json")
+        # Try to load from local path first, then from HF hub.  The checkpoint dir is
+        # operator-supplied, so the join is pinned inside it.
+        config_path = safe_join(pretrained_model_name_or_path, "preprocessor_config.json")
         config = None
 
         if os.path.exists(config_path):
@@ -87,7 +91,7 @@ class VibeVoiceProcessor:
             # Try to load from HF hub
             try:
                 config_file = cached_file(pretrained_model_name_or_path, "preprocessor_config.json", **kwargs)
-                with open(config_file, "r") as f:
+                with open(safe_output_path(config_file), "r") as f:
                     config = json.load(f)
             except Exception as e:
                 logger.warning(f"Could not load preprocessor_config.json from {pretrained_model_name_or_path}: {e}")
@@ -147,7 +151,9 @@ class VibeVoiceProcessor:
         import os
         import json
 
-        os.makedirs(save_directory, exist_ok=True)
+        # Caller names the directory outright; normalize it before creating anything.
+        save_dir = safe_output_path(save_directory)
+        os.makedirs(save_dir, exist_ok=True)
 
         # Save processor configuration
         processor_config = {
@@ -163,7 +169,7 @@ class VibeVoiceProcessor:
             },
         }
 
-        config_path = os.path.join(save_directory, "preprocessor_config.json")
+        config_path = safe_join(save_dir, "preprocessor_config.json")
         with open(config_path, "w") as f:
             json.dump(processor_config, f, indent=2)
 
@@ -535,7 +541,8 @@ class VibeVoiceProcessor:
         """
         import json
 
-        with open(json_file, "r", encoding="utf-8") as f:
+        # Caller names the script file outright; normalize it before reading.
+        with open(safe_output_path(json_file), "r", encoding="utf-8") as f:
             data = json.load(f)
 
         if not isinstance(data, list):
@@ -580,7 +587,8 @@ class VibeVoiceProcessor:
 
         Handles edge cases like multiple colons in a line.
         """
-        with open(text_file, "r", encoding="utf-8") as f:
+        # Caller names the script file outright; normalize it before reading.
+        with open(safe_output_path(text_file), "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         script_lines = []

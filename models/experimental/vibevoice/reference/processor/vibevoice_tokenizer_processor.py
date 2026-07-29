@@ -17,6 +17,8 @@ import torch
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.utils import logging
 
+from models.experimental.vibevoice.common.safe_paths import safe_join, safe_output_path
+
 from .audio_utils import AudioNormalizer
 
 logger = logging.get_logger(__name__)
@@ -335,7 +337,8 @@ class VibeVoiceTokenizerProcessor(FeatureExtractionMixin):
         # Handle based on shape or type
         if isinstance(audio_np, list):
             # Multiple separate audios to save
-            output_dir = output_path
+            # Caller names the directory outright; normalize it, then pin each wav inside it.
+            output_dir = safe_output_path(output_path)
 
             # Ensure output directory exists
             os.makedirs(output_dir, exist_ok=True)
@@ -343,7 +346,7 @@ class VibeVoiceTokenizerProcessor(FeatureExtractionMixin):
             # Save each audio
             for i, audio_item in enumerate(audio_np):
                 audio_item = self._prepare_audio_for_save(audio_item, normalize)
-                file_path = os.path.join(output_dir, f"{batch_prefix}{i}.wav")
+                file_path = str(safe_join(output_dir, f"{batch_prefix}{i}.wav"))
                 sf.write(file_path, audio_item, sampling_rate)
                 saved_paths.append(file_path)
 
@@ -355,7 +358,8 @@ class VibeVoiceTokenizerProcessor(FeatureExtractionMixin):
 
                 if batch_size > 1:
                     # Multiple audios in a batch
-                    output_dir = output_path
+                    # Caller names the directory outright; normalize it, then pin each wav.
+                    output_dir = safe_output_path(output_path)
 
                     # Ensure output directory exists
                     os.makedirs(output_dir, exist_ok=True)
@@ -369,20 +373,22 @@ class VibeVoiceTokenizerProcessor(FeatureExtractionMixin):
                                 single_audio = single_audio.squeeze(0)
 
                         single_audio = self._prepare_audio_for_save(single_audio, normalize)
-                        file_path = os.path.join(output_dir, f"{batch_prefix}{i}.wav")
+                        file_path = str(safe_join(output_dir, f"{batch_prefix}{i}.wav"))
                         sf.write(file_path, single_audio, sampling_rate)
                         saved_paths.append(file_path)
                 else:
                     # Single audio with batch and channel dims
                     audio_item = audio_np.squeeze()  # Remove batch and channel dimensions
                     audio_item = self._prepare_audio_for_save(audio_item, normalize)
-                    sf.write(output_path, audio_item, sampling_rate)
-                    saved_paths.append(output_path)
+                    out_file = str(safe_output_path(output_path, suffix=".wav"))
+                    sf.write(out_file, audio_item, sampling_rate)
+                    saved_paths.append(out_file)
             else:
                 # Single audio without batch dimension
                 audio_item = self._prepare_audio_for_save(audio_np, normalize)
-                sf.write(output_path, audio_item, sampling_rate)
-                saved_paths.append(output_path)
+                out_file = str(safe_output_path(output_path, suffix=".wav"))
+                sf.write(out_file, audio_item, sampling_rate)
+                saved_paths.append(out_file)
 
         return saved_paths
 

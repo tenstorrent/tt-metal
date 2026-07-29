@@ -32,6 +32,7 @@ from models.experimental.vibevoice.common.config import (
     TEXT_EXAMPLES_DIR,
     VIBEVOICE_ROOT,
 )
+from models.experimental.vibevoice.common.safe_paths import safe_join
 from models.experimental.vibevoice.common.resource_utils import build_voice_samples, load_script
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
@@ -232,8 +233,8 @@ def test_e2e_wer_teacher_forced(mesh_device):
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     import soundfile as sf
 
-    sf.write(str(_OUT_DIR / f"{TF_DEMO_ID}_tf_ref.wav"), ref_speech.clamp(-1.0, 1.0).numpy(), SR)
-    sf.write(str(_OUT_DIR / f"{TF_DEMO_ID}_tf_tt.wav"), tt_speech.clamp(-1.0, 1.0).numpy(), SR)
+    sf.write(str(safe_join(_OUT_DIR, f"{TF_DEMO_ID}_tf_ref.wav")), ref_speech.clamp(-1.0, 1.0).numpy(), SR)
+    sf.write(str(safe_join(_OUT_DIR, f"{TF_DEMO_ID}_tf_tt.wav")), tt_speech.clamp(-1.0, 1.0).numpy(), SR)
     assert torch.isfinite(ref_speech).all() and torch.isfinite(tt_speech).all(), "non-finite audio"
 
     ref_words = _normalize(_transcribe(asr, ref_speech))
@@ -260,7 +261,7 @@ def test_e2e_wer_teacher_forced(mesh_device):
         "ref_transcript": " ".join(ref_words),
         "tt_transcript": " ".join(tt_words),
     }
-    (_OUT_DIR / f"{TF_DEMO_ID}_tf_wer.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    safe_join(_OUT_DIR, f"{TF_DEMO_ID}_tf_wer.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
 
     print(
         f"\n[tf] TEACHER-FORCED WER (bf16 ref embedding -> TT LM), demo={TF_DEMO_ID} cap={TF_MAX_NEW_TOKENS}\n"
