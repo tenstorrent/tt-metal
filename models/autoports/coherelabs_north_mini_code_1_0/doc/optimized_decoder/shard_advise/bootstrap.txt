@@ -1,0 +1,3 @@
+shard-advise: 'ttnn-advise' not on PATH after activating the advisor env.
+  The tt-mlir build may lack -DTTMLIR_ENABLE_TTNN_JIT=ON, or was not
+  reinstalled after a code change (run: cmake --build build).

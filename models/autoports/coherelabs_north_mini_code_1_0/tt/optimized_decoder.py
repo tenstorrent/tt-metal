@@ -93,6 +93,25 @@ class OptimizationConfig:
     dense_expert_down_per_core_n: int = 0
     dense_expert_down_subblock_h: int = 0
     dense_expert_down_subblock_w: int = 0
+    dense_expert_prefill_gate_up_grid: tuple[int, int] = (10, 8)
+    dense_expert_prefill_gate_up_in0_block_w: int = 8
+    dense_expert_prefill_gate_up_per_core_m: int = 4
+    dense_expert_prefill_gate_up_per_core_n: int = 5
+    dense_expert_prefill_gate_up_out_block_h: int = 4
+    dense_expert_prefill_gate_up_out_block_w: int = 5
+    dense_expert_prefill_gate_up_subblock_h: int = 1
+    dense_expert_prefill_gate_up_subblock_w: int = 5
+    dense_expert_prefill_gate_up_transpose_mcast: bool = False
+    dense_expert_prefill_down_grid: tuple[int, int] = (10, 8)
+    dense_expert_prefill_down_in0_block_w: int = 6
+    dense_expert_prefill_down_per_core_m: int = 4
+    dense_expert_prefill_down_per_core_n: int = 7
+    dense_expert_prefill_down_out_block_h: int = 4
+    dense_expert_prefill_down_out_block_w: int = 7
+    dense_expert_prefill_down_subblock_h: int = 1
+    dense_expert_prefill_down_subblock_w: int = 7
+    dense_expert_prefill_down_transpose_mcast: bool = False
+    prefill_packed_dense_experts: bool = True
     packed_dense_experts: bool = False
     packed_dense_gate_up: bool = False
     fused_kv_update: bool = True
@@ -196,7 +215,42 @@ def _sparse_program(grid: tuple[int, int], n: int, in0_block_w: int, fused_activ
     )
 
 
-def _dense_expert_program(cfg: OptimizationConfig, *, down: bool):
+def _dense_expert_program(cfg: OptimizationConfig, *, down: bool, prefill: bool = False):
+    if prefill:
+        prefix = "dense_expert_prefill_down" if down else "dense_expert_prefill_gate_up"
+        grid = getattr(cfg, f"{prefix}_grid")
+        if grid == (0, 0):
+            # Preserve the legacy opt-in program fields when no phase-specific
+            # prefill geometry was requested. The final defaults still return
+            # None here and leave selection to TTNN.
+            return _dense_expert_program(cfg, down=down)
+        fields = {
+            name: getattr(cfg, f"{prefix}_{name}")
+            for name in (
+                "in0_block_w",
+                "per_core_m",
+                "per_core_n",
+                "out_block_h",
+                "out_block_w",
+                "subblock_h",
+                "subblock_w",
+            )
+        }
+        if grid[0] <= 0 or grid[1] <= 0 or any(value <= 0 for value in fields.values()):
+            raise ValueError(f"incomplete {prefix} geometry: grid={grid}, fields={fields}")
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=fields["in0_block_w"],
+            out_subblock_h=fields["subblock_h"],
+            out_subblock_w=fields["subblock_w"],
+            out_block_h=fields["out_block_h"],
+            out_block_w=fields["out_block_w"],
+            per_core_M=fields["per_core_m"],
+            per_core_N=fields["per_core_n"],
+            transpose_mcast=getattr(cfg, f"{prefix}_transpose_mcast"),
+            fused_activation=None,
+            fuse_batch=False,
+        )
     prefix = "dense_expert_down" if down else "dense_expert_gate_up"
     in0_block_w = getattr(cfg, f"{prefix}_in0_block_w")
     if not in0_block_w:
@@ -210,6 +264,15 @@ def _dense_expert_program(cfg: OptimizationConfig, *, down: bool):
         per_core_M=getattr(cfg, f"{prefix}_per_core_m"),
         per_core_N=getattr(cfg, f"{prefix}_per_core_n"),
     )
+
+
+def _use_packed_dense_experts(cfg: OptimizationConfig, *, phase: str):
+    """Keep the selected packed topology local to prefill unless globally requested."""
+    return cfg.packed_dense_experts or (phase == "prefill" and cfg.prefill_packed_dense_experts)
+
+
+def _needs_packed_dense_expert_weights(cfg: OptimizationConfig):
+    return cfg.packed_dense_experts or cfg.prefill_packed_dense_experts
 
 
 def _to_device(
@@ -476,7 +539,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 weights["dense_expert_down"] = weights["expert_down"]
             else:
                 weights["dense_expert_down"] = _to_device(down, mesh_device, dtype=cfg.dense_expert_down_dtype)
-            if cfg.packed_dense_experts:
+            if _needs_packed_dense_expert_weights(cfg):
                 weights["dense_expert_gate_up"] = _to_device(
                     torch.cat((gate, up), dim=-1),
                     mesh_device,
@@ -1155,16 +1218,15 @@ class OptimizedDecoder(FunctionalDecoder):
             reduced = ttnn.slice(reduced, (0, 0, 0, 0), (1, 1, token_count, self.hidden_size))
         return reduced
 
-    def _dense_expert_moe_chunk(self, normalized, token_count):
+    def _dense_expert_moe_chunk(self, normalized, token_count, *, phase="decode"):
         """Batched expert path used where sparse output padding is counterproductive."""
         cfg = self.optimization_config
-        expert_grid_kwargs = (
-            {"core_grid": _rect_grid(cfg.dense_expert_cores)}
-            if cfg.dense_expert_cores and not cfg.dense_expert_gate_up_in0_block_w
-            else {}
-        )
-        gate_program = _dense_expert_program(cfg, down=False)
-        down_program = _dense_expert_program(cfg, down=True)
+        prefill = phase == "prefill"
+        gate_program = _dense_expert_program(cfg, down=False, prefill=prefill)
+        down_program = _dense_expert_program(cfg, down=True, prefill=prefill)
+        default_grid_kwargs = {"core_grid": _rect_grid(cfg.dense_expert_cores)} if cfg.dense_expert_cores else {}
+        gate_grid_kwargs = {} if gate_program is not None else default_grid_kwargs
+        down_grid_kwargs = {} if down_program is not None else default_grid_kwargs
         flat = ttnn.reshape(normalized, (token_count, self.hidden_size))
         logits = ttnn.linear(
             flat,
@@ -1192,7 +1254,7 @@ class OptimizedDecoder(FunctionalDecoder):
             self.weights["dense_expert_down"],
             (self.num_experts, self.intermediate_size, self.hidden_size),
         )
-        if cfg.packed_dense_experts:
+        if _use_packed_dense_experts(cfg, phase=phase):
             packed = ttnn.matmul(
                 expert_input,
                 ttnn.reshape(
@@ -1203,7 +1265,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.expert_gate_up_compute,
                 program_config=gate_program,
-                **expert_grid_kwargs,
+                **gate_grid_kwargs,
             )
             gate, up = ttnn.split(packed, self.intermediate_size, dim=-1)
         else:
@@ -1214,7 +1276,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.expert_gate_up_compute,
                 program_config=gate_program,
-                **expert_grid_kwargs,
+                **gate_grid_kwargs,
             )
             up = ttnn.matmul(
                 expert_input,
@@ -1223,7 +1285,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.expert_gate_up_compute,
                 program_config=gate_program,
-                **expert_grid_kwargs,
+                **gate_grid_kwargs,
             )
         gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         activated = ttnn.multiply(
@@ -1239,7 +1301,7 @@ class OptimizedDecoder(FunctionalDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.expert_down_compute,
             program_config=down_program,
-            **({} if down_program else expert_grid_kwargs),
+            **down_grid_kwargs,
         )
         routing = ttnn.permute(routing, (1, 0))
         routing = ttnn.reshape(routing, (self.num_experts, token_count, 1))
@@ -1305,7 +1367,7 @@ class OptimizedDecoder(FunctionalDecoder):
         active_prefill = phase == "prefill" and self.batch == 1 and cfg.batch1_prefill_active_experts
         if not active_prefill and total_tokens >= cfg.dense_expert_batch_threshold:
             chunks = ttnn.split(flat, cfg.dense_expert_chunk_size, dim=2)
-            outputs = [self._dense_expert_moe_chunk(chunk, chunk.shape[2]) for chunk in chunks]
+            outputs = [self._dense_expert_moe_chunk(chunk, chunk.shape[2], phase=phase) for chunk in chunks]
             result = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=0)
             return restore_batch_shape(result)
         if active_prefill and cfg.prefill_grouped_sparse:
