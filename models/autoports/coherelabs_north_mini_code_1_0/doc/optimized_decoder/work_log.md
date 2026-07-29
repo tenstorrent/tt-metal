@@ -328,6 +328,9 @@ Primary closure artifacts are
 `artifacts/synthetic_bfp4_dense_expert_rejection.xml`, and
 `artifacts/dram_sharded_expert_candidate_full_lower_bound.xml`.
 
+Second-review repair/evidence checkpoint: `0085f30d237` (`Close North Mini
+optimized decoder review gaps`).
+
 21. Ran the expanded final suite normally and under watcher after the two
     hardware-discovered layout repairs. Both runs exercised the optimized
     implementation directly and passed all 30 tests: `175.26s` normally and
