@@ -381,10 +381,16 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool want_managed, b
 
     const auto now = std::chrono::system_clock::now();
     bool trash_dir_ready = false;
+    size_t entries_remaining = stats.entries.size();
 
     for (const auto& entry : stats.entries) {
-        const DiskCacheEviction decision = disk_cache_decide_eviction(entry, config, live_bytes, now, honor_limits);
+        const DiskCacheEviction decision =
+            disk_cache_decide_eviction(entry, config, live_bytes, entries_remaining, now, honor_limits);
         if (decision == DiskCacheEviction::StopScan) {
+            break;
+        }
+        if (decision == DiskCacheEviction::KeepWorkingSet) {
+            result.entries_kept_as_working_set++;
             break;
         }
         if (decision == DiskCacheEviction::KeepInUse) {
@@ -421,6 +427,7 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool want_managed, b
         // Gone from the lookup namespace either way; the bytes are only reclaimed if the
         // recursive removal completes.
         result.entries_removed++;
+        entries_remaining--;
         live_bytes -= std::min(live_bytes, entry.size_bytes);
         if (*staged == entry.path || tt::filesystem::safe_remove_all(*staged)) {
             result.bytes_reclaimed += entry.size_bytes;
@@ -516,13 +523,23 @@ DiskCacheEviction disk_cache_decide_eviction(
     const DiskCacheEntry& entry,
     const DiskCacheConfig& config,
     uint64_t live_bytes,
+    size_t entries_remaining,
     std::chrono::system_clock::time_point now,
     bool honor_limits) {
     const std::chrono::seconds idle = idle_for(now, entry.last_used);
-    if (honor_limits && !(config.max_size_bytes > 0 && live_bytes > config.max_size_bytes)) {
-        // Under budget. Entries arrive least recently used first, and evicting only shrinks
-        // live_bytes, so nothing after this one can be over budget either.
-        return DiskCacheEviction::StopScan;
+    if (honor_limits) {
+        if (!(config.max_size_bytes > 0 && live_bytes > config.max_size_bytes)) {
+            // Under budget. Entries arrive least recently used first, and evicting only shrinks
+            // live_bytes, so nothing after this one can be over budget either. This must be
+            // checked before the working-set rule below, or a cache that has just been trimmed
+            // down to one entry would be reported as stuck over its bound when it is not.
+            return DiskCacheEviction::StopScan;
+        }
+        if (entries_remaining <= 1) {
+            // Still over budget with one entry left, so the bound is unreachable: evicting
+            // would only have the next run regenerate the tree and land us right back here.
+            return DiskCacheEviction::KeepWorkingSet;
+        }
     }
     if (entry.in_use) {
         return DiskCacheEviction::KeepInUse;

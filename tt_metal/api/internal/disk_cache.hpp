@@ -198,6 +198,10 @@ struct DiskCacheTrimResult {
     // Entries that were eviction candidates but used more recently than min_eviction_age.
     size_t entries_skipped_too_young = 0;
 
+    // Set when the pass stopped because evicting further would empty the cache. The bound is
+    // then still exceeded, and deliberately so -- see DiskCacheEviction::KeepWorkingSet.
+    size_t entries_kept_as_working_set = 0;
+
     // True when no scan happened at all: trimming is disabled or unsafe here, the root does
     // not exist, or another process already holds the trim lock.
     bool skipped = false;
@@ -211,14 +215,18 @@ enum class DiskCacheEviction : uint8_t {
     KeepInUse,
     // Used more recently than min_eviction_age.
     KeepTooYoung,
+    // Evicting this would leave the cache empty. A tree larger than the bound can never satisfy
+    // it, so evicting would only have the next run regenerate the tree and the next trim remove
+    // it again. Keeping the last entry costs one tree's overshoot and buys termination.
+    KeepWorkingSet,
     // This entry is within the limits, and because entries arrive least recently used
     // first, so is every entry after it. Stop scanning.
     StopScan,
 };
 
-// The single definition of eviction policy. Feed entries in DiskCacheStats order, passing
-// the bytes still live ahead of each one; `honor_limits` false means "evict everything not
-// in use", which is what disk_cache_clear() does.
+// The single definition of eviction policy. Feed entries in DiskCacheStats order, passing the
+// bytes still live ahead of each one and how many entries are still on disk; `honor_limits`
+// false means "evict everything not in use", which is what disk_cache_clear() does.
 //
 // Exported so the CLI's --dry-run reports the decisions a real trim would make rather than
 // reimplementing them and drifting.
@@ -226,6 +234,7 @@ DiskCacheEviction disk_cache_decide_eviction(
     const DiskCacheEntry& entry,
     const DiskCacheConfig& config,
     uint64_t live_bytes,
+    size_t entries_remaining,
     std::chrono::system_clock::time_point now,
     bool honor_limits);
 

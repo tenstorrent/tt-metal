@@ -150,6 +150,12 @@ void print_trim_result(const DiskCacheTrimResult& result) {
     if (result.entries_skipped_in_use > 0) {
         std::printf("Kept %s in use by a live process.\n", entries(result.entries_skipped_in_use).c_str());
     }
+    if (result.entries_kept_as_working_set > 0) {
+        std::printf(
+            "Kept the last entry rather than empty the cache, so the limit is still exceeded.\n"
+            "  A single tree larger than the limit cannot satisfy it; evicting would only force\n"
+            "  a rebuild and leave you here again. Raise --max-size or investigate the tree.\n");
+    }
     if (result.entries_skipped_too_young > 0) {
         std::printf(
             "Kept %s used too recently to evict safely.\n"
@@ -165,12 +171,20 @@ void print_dry_run(const DiskCacheConfig& config, const DiskCacheStats& stats, b
     uint64_t live_bytes = stats.total_size_bytes;
     uint64_t would_reclaim = 0;
     size_t would_remove = 0;
+    size_t entries_remaining = stats.entries.size();
 
     std::printf("Cache root: %s\n", config.root.c_str());
     for (const auto& entry : stats.entries) {
         const DiskCacheEviction decision =
-            tt::tt_metal::disk_cache_decide_eviction(entry, config, live_bytes, now, honor_limits);
+            tt::tt_metal::disk_cache_decide_eviction(entry, config, live_bytes, entries_remaining, now, honor_limits);
         if (decision == DiskCacheEviction::StopScan) {
+            break;
+        }
+        if (decision == DiskCacheEviction::KeepWorkingSet) {
+            std::printf(
+                "  keep   %-24s %12s (last entry; evicting it would only force a rebuild)\n",
+                entry.name.c_str(),
+                size_of(entry.size_bytes).c_str());
             break;
         }
         if (decision != DiskCacheEviction::Evict) {
@@ -187,6 +201,7 @@ void print_dry_run(const DiskCacheConfig& config, const DiskCacheStats& stats, b
             size_of(entry.size_bytes).c_str(),
             format_age(entry.last_used).c_str());
         would_remove++;
+        entries_remaining--;
         would_reclaim += entry.size_bytes;
         live_bytes -= std::min(live_bytes, entry.size_bytes);
     }

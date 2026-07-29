@@ -163,33 +163,36 @@ TEST_F(DiskCacheTest, DecideEvictionAppliesPolicyInPriorityOrder) {
 
     // Within the limits: stop, because entries arrive least recently used first.
     EXPECT_EQ(
-        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/900, now, /*honor_limits=*/true),
+        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/900, /*entries_remaining=*/2, now, /*honor_limits=*/true),
         DiskCacheEviction::StopScan);
     // Over the size cap: evict.
     EXPECT_EQ(
-        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/2000, now, /*honor_limits=*/true),
+        disk_cache_decide_eviction(
+            entry, cfg, /*live_bytes=*/2000, /*entries_remaining=*/2, now, /*honor_limits=*/true),
         DiskCacheEviction::Evict);
 
     // In use outranks every other verdict except StopScan.
     entry.in_use = true;
     EXPECT_EQ(
-        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/2000, now, /*honor_limits=*/true),
+        disk_cache_decide_eviction(
+            entry, cfg, /*live_bytes=*/2000, /*entries_remaining=*/2, now, /*honor_limits=*/true),
         DiskCacheEviction::KeepInUse);
     EXPECT_EQ(
-        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/0, now, /*honor_limits=*/false),
+        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/0, /*entries_remaining=*/2, now, /*honor_limits=*/false),
         DiskCacheEviction::KeepInUse);
     entry.in_use = false;
 
     // Too recently used to evict safely, even while over the cap.
     entry.last_used = now - std::chrono::seconds{30};
     EXPECT_EQ(
-        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/2000, now, /*honor_limits=*/true),
+        disk_cache_decide_eviction(
+            entry, cfg, /*live_bytes=*/2000, /*entries_remaining=*/2, now, /*honor_limits=*/true),
         DiskCacheEviction::KeepTooYoung);
 
     // honor_limits=false is what clear does: no size cap and no grace period, so being under
     // budget does not stop it.
     EXPECT_EQ(
-        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/0, now, /*honor_limits=*/false),
+        disk_cache_decide_eviction(entry, cfg, /*live_bytes=*/0, /*entries_remaining=*/2, now, /*honor_limits=*/false),
         DiskCacheEviction::Evict);
 }
 
@@ -325,17 +328,67 @@ TEST_F(DiskCacheTest, StatReportsHeldEntryAsInUse) {
 }
 
 TEST_F(DiskCacheTest, TrimRespectsMinEvictionAge) {
-    make_entry("recent");
-    set_idle_for("recent", std::chrono::seconds{30});
+    // Two entries, both recent. One candidate alone would be kept by the working-set rule
+    // regardless of age, which would mask what this test is about.
+    make_entry("recent_a");
+    make_entry("recent_b");
+    set_idle_for("recent_a", std::chrono::seconds{30});
+    set_idle_for("recent_b", std::chrono::seconds{20});
 
     DiskCacheConfig cfg = config(1);
     cfg.min_eviction_age = std::chrono::hours{1};
 
     const DiskCacheTrimResult result = disk_cache_trim(cfg);
 
-    EXPECT_EQ(result.entries_skipped_too_young, 1u);
+    EXPECT_EQ(result.entries_skipped_too_young, 2u);
     EXPECT_EQ(result.entries_removed, 0u);
-    EXPECT_TRUE(entry_exists("recent"));
+    EXPECT_TRUE(entry_exists("recent_a"));
+    EXPECT_TRUE(entry_exists("recent_b"));
+}
+
+// A single entry bigger than the bound can never satisfy it, so evicting it would only have
+// the next run regenerate it and the next trim remove it again -- unbounded churn, and a
+// process that crashed mid-build would lose the tree it is about to reuse.
+TEST_F(DiskCacheTest, TrimKeepsTheLastEntryRatherThanEmptyTheCache) {
+    make_entry("only_one");
+    set_idle_for("only_one", std::chrono::hours{50});
+
+    const DiskCacheTrimResult result = disk_cache_trim(config(1));
+
+    EXPECT_FALSE(result.skipped);
+    EXPECT_EQ(result.entries_removed, 0u);
+    EXPECT_EQ(result.entries_kept_as_working_set, 1u);
+    EXPECT_TRUE(entry_exists("only_one"));
+
+    // Repeating it must be equally inert -- that is the anti-churn property.
+    const DiskCacheTrimResult again = disk_cache_trim(config(1));
+    EXPECT_EQ(again.entries_removed, 0u);
+    EXPECT_TRUE(entry_exists("only_one"));
+}
+
+// The under-budget check must be tested before the working-set rule. Getting that order wrong
+// makes a cache that was just trimmed down to one entry report itself as stuck over its bound.
+TEST_F(DiskCacheTest, ATrimThatReachesItsBoundDoesNotReportBeingStuck) {
+    make_entry("old");
+    make_entry("newer");
+    set_idle_for("old", std::chrono::hours{50});
+    set_idle_for("newer", std::chrono::hours{10});
+
+    // Room for one entry: "old" goes, "newer" is then both the last entry AND under budget.
+    const DiskCacheTrimResult result = disk_cache_trim(config(kEntryFileBytes + kEntryFileBytes / 2));
+
+    EXPECT_EQ(result.entries_removed, 1u);
+    EXPECT_EQ(result.entries_kept_as_working_set, 0u) << "under budget is not 'stuck'";
+    EXPECT_TRUE(entry_exists("newer"));
+}
+
+// clear is an explicit human action and is not subject to the working-set rule.
+TEST_F(DiskCacheTest, ClearStillEmptiesASingleEntryCache) {
+    make_entry("only_one");
+    const DiskCacheTrimResult result = disk_cache_clear(config(0));
+    EXPECT_EQ(result.entries_removed, 1u);
+    EXPECT_EQ(result.entries_kept_as_working_set, 0u);
+    EXPECT_FALSE(entry_exists("only_one"));
 }
 
 TEST_F(DiskCacheTest, TrimIsSkippedWhenDisabled) {
@@ -400,7 +453,9 @@ TEST_F(DiskCacheTest, TrimDrainsLeftoverTrash) {
 
 TEST_F(DiskCacheTest, TrimStagesEvictionsThroughTrashRatherThanDeletingInPlace) {
     make_entry("doomed");
+    make_entry("survivor");  // so "doomed" is not the last entry, which would be kept
     set_idle_for("doomed", std::chrono::hours{50});
+    set_idle_for("survivor", std::chrono::hours{10});
 
     disk_cache_trim(config(1));
 
@@ -510,14 +565,16 @@ TEST_F(DiskCacheTest, EntryLockIsSharedBetweenConcurrentUsers) {
 // the locking protocol never creates that file, so a trimmer cannot mistake its live tree for
 // garbage -- and never considers it at all.
 TEST_F(DiskCacheTest, UnmanagedTreesAreNeverTouchedAutomatically) {
-    make_entry("managed");
+    make_entry("managed_a");
+    make_entry("managed_b");  // two, so trim can evict one without hitting the working-set rule
     make_unmanaged_entry("old_build_key");
-    set_idle_for("managed", std::chrono::hours{50});
+    set_idle_for("managed_a", std::chrono::hours{50});
+    set_idle_for("managed_b", std::chrono::hours{10});
     set_idle_for("old_build_key", std::chrono::hours{100});
 
     // A limit of 1 byte makes everything a candidate, and clear ignores limits entirely.
     disk_cache_trim(config(1));
-    EXPECT_FALSE(entry_exists("managed"));
+    EXPECT_FALSE(entry_exists("managed_a"));
     EXPECT_TRUE(entry_exists("old_build_key"));
 
     disk_cache_clear(config(0));
