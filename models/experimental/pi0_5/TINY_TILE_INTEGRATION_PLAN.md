@@ -723,3 +723,55 @@ verifiable with `test_l1_single_layer_pcc` + walltime):
 
 Keep the fused-norm path behind a compile-time flag defaulting OFF so the existing path is byte
 -identical until the A/B passes -- and remember runtime args are NOT free here (R9/R11: they cost 12%).
+
+---
+
+# RETRACTION: the "dispatch-bound, ~3.7 us per op" conclusion is FALSIFIED
+
+The section above concluded, from the `kv_splits` experiment, that this block is dispatch-bound at
+~3.7 us per op and therefore that **removing** an op should be worth ~3.7 us on top of its kernel time.
+That prediction was tested directly by implementing the norm fusion it recommended, and it **failed**.
+
+The fusion (branch `pi05_fuse_norm_matmul`, commit `b3999234ea0`, `PI05_FUSE_NORM=1`) is correct --
+`test_l1_single_layer_pcc` passes at PCC 0.9999 -- and it removes exactly the ops it was designed to
+remove, confirmed by profile op counts per block iteration:
+
+| | ops/iter | LayerNorm calls | InterleavedToSharded calls |
+|---|---|---|---|
+| fusion off | 322 | 64 | 66 |
+| fusion on | 258 | 32 | 34 |
+
+Two ops per iteration gone. And yet:
+
+| per iteration | kernel time | traced wall-clock | non-kernel |
+|---|---|---|---|
+| fusion off | 88.2 us | 116.5 us | 28.3 us |
+| fusion on | 91.3 us | 123.0 us | **31.7 us** |
+
+Non-kernel time went **UP** 28.3 -> 31.7 us despite two fewer dispatches. The predicted ~7.4 us saving
+did not appear at all. (The prologue itself costs ~7.5 us on the wqkv call; batching it over DST -- one
+`tile_regs` cycle per 8 tiles instead of per tile -- changed nothing, so that part is real work: the
+full-row square+reduce on every core plus the per-core weight/bias fetch.)
+
+**So both levers have now failed to move wall-clock:** kv_sdpa's kernel time fell 27% and wall rose;
+op count fell by 2/iteration and wall rose. What is actually established is only this:
+
+* ~24% of traced single-layer wall-clock (28.3 of 116.5 us) is NOT accounted for by summed device
+  kernel durations.
+* That gap responds to neither less kernel time nor fewer ops.
+
+Its true nature is **unknown**. Candidates worth testing before any further optimization:
+1. The profiler's `DEVICE KERNEL DURATION` excludes per-op device-side cost (program setup, CB drain,
+   semaphore waits), so "kernel time" is simply not the right denominator.
+2. A critical-path / serialization effect: total kernel time is a SUM, but wall-clock follows the
+   longest dependency chain, so shrinking a non-critical op changes nothing.
+3. Fixed per-program cost in trace replay that scales with something other than op count.
+
+Hypothesis 2 deserves the first look: it would explain BOTH failures at once, and would mean the whole
+"sum the kernel times" framing was wrong -- one should instead find which ops are on the critical path
+(e.g. from per-op start/end timestamps in `profile_log_device.csv`, which the current tooling
+aggregates away).
+
+**Do not treat "fewer ops" or "less kernel time" as a proxy for this pipeline's wall-clock.** The one
+result that has held up across every experiment is the opposite direction: adding CORES to an op
+reliably hurts (kv_splits S=2/4/8, "64 cores beats 80", `_RESHARD_CORES=2` beats 4 and 8).
