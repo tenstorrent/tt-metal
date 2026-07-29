@@ -1143,11 +1143,21 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const RegimeAMatmulConfig cfg = operation_attributes.config.value_or(auto_select_config(Mt_r, Kt_r, Nt_r));
 
     // ---- Run the pure host planner ----
-    auto planres = make_and_build_plan(device, in0, in1, cfg);
+    auto planres = make_and_build_plan(device, in0, in1, cfg, operation_attributes.cb1_depth);
     TT_FATAL(planres.ok(), "regime_a_matmul planner rejected config: {}", planres.error);
     plan::ExecutionPlan& P = *planres.plan;  // mutable: the ring-order diag overrides ring_pos/next/prev below
     const plan::Geometry& geo = P.geo;
     const plan::CbSizes& cb = P.cb;
+
+    if (operation_attributes.cb1_depth != 0u) {
+        log_info(
+            tt::LogOp,
+            "regime_a_matmul cb1_depth={} -> cb1={} tiles, total L1 {} B of {} B budget",
+            operation_attributes.cb1_depth,
+            cb.cb1_tiles,
+            cb.l1_bytes,
+            plan::kL1BudgetBytes);
+    }
 
     const uint32_t Pk = cfg.k_slices ? cfg.k_slices : 1u;
     const uint32_t Sm = cfg.m_slices ? cfg.m_slices : 1u;
@@ -1182,10 +1192,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // single-output path is supported (the read-skip flag is appended at writer arg index 17, which must be
     // free). Compute defines (SKIP_COMPUTE / SKIP_REDUCTION) are merged into cdefs at compute-kernel creation. ----
     const uint32_t diag_mask = operation_attributes.diag_mask;
+    const bool diag_reduce_meet = (diag_mask & 0x100000u) != 0u;  // bit20: meet-in-the-middle reduction
     std::map<std::string, std::string> ddefs_compute;  // diagnostic compute defines
     // Bits 0..7 and bit11 alter kernel behaviour (and produce invalid output) => restricted to
     // unfused/single-output. Bits 8..10 are host-only + correctness-preserving, so they are allowed everywhere.
-    constexpr uint32_t kDiagKernelBits = 0xFFu | 0x800u;
+    constexpr uint32_t kDiagKernelBits = 0xFFu | 0x800u | 0x100000u | 0x200000u;  // bit20 = meet-in-the-middle reduction
     if ((diag_mask & kDiagKernelBits) != 0u) {
         TT_FATAL(
             !has_bias && !has_ternary && !has_activation && n_chunks == 1u,
@@ -1209,6 +1220,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         }
         if (diag_mask & 0x20u) {
             wdefs["SKIP_OUTPUT_WRITE"] = "1";
+        }
+        if (diag_mask & 0x100000u) {
+            wdefs["REDUCE_MEET"] = "1";
+            ddefs_compute["REDUCE_MEET"] = "1";
         }
         if (diag_mask & 0x40u) {
             wdefs["FWD_NEAR"] = "1";
@@ -1317,7 +1332,9 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     mkcb(program, all_cores, 2, cb.cb2_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // out
     mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
     if (cb.cb7_tiles > 0u) {
-        mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1 only)
+        // meet-in-the-middle: the root holds two channels x two phases, so it needs 4 blocks, not 2.
+        const uint32_t cb7 = diag_reduce_meet ? (2u * cb.cb7_tiles) : cb.cb7_tiles;
+        mkcb(program, all_cores, 7, cb7, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1 only)
     }
     // Fused-epilogue operand CBs (only when the matching fusion is active). c_4 bias [1,N_sub], c_5 residual
     // [M,N] block, c_6 gate [1,N_sub] (broadcast) or [M,N] block. Sized to hold a full sub-block so the
@@ -1336,7 +1353,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
 
     // ---- Semaphores ----
     const uint32_t fwd_sem = CreateSemaphore(program, all_cores, 0u);      // in0 ring recv
-    const uint32_t red_sem = CreateSemaphore(program, all_cores, 0u);      // reduction recv
+    const uint32_t red_sem = CreateSemaphore(program, all_cores, 0u);   // reduction recv (channel 0)
+    // Channel-1 receive semaphore for the meet-in-the-middle root. Created IMMEDIATELY after red_sem so the
+    // kernel can address it as red_sem_id + 1 without another compile arg (which would shift the accessors).
+    const uint32_t red_sem2 = CreateSemaphore(program, all_cores, 0u);
+    (void)red_sem2;
     const uint32_t redfree_sem = CreateSemaphore(program, all_cores, 0u);  // cb_reduce reverse credit
     uint32_t in1valid_sem = 0u, in1ready_sem = 0u;                         // M-split reader<->slaves
     if (Sm > 1u) {
@@ -1591,12 +1612,26 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             wa.push_back(diag_near[i].x);
             wa.push_back(diag_near[i].y);
         }
+        // TEST-ONLY (bit20): meet-in-the-middle reduction. red_slots is the channel count at this core's
+        // DESTINATION root, which is what decides the slot stride the sender must use.
+        if (diag_reduce_meet) {
+            const auto p2 = phys(cp.red_prev2_idx);
+            const uint32_t dest_slots = P.cores[cp.red_next_idx].red_nrecv;
+            wa.push_back(cp.red_nrecv);
+            wa.push_back(cp.red_channel);
+            wa.push_back(p2.x);
+            wa.push_back(p2.y);
+            wa.push_back(dest_slots == 0u ? 1u : dest_slots);
+        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
         // N_bpc sub-blocks (spec §7); zero-filled tail positions contribute zero. When a fusion is active the
         // reduction-root flag (is_top) follows, then the addcmul scalar bits + gate-broadcast flag.
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
+        if (diag_reduce_meet) {
+            ca.push_back(cp.red_nrecv);  // 0 at a chain end, 1 normally, 2 at the meet root
+        }
         if (has_bias || has_ternary || has_activation) {
             ca.push_back(cp.is_top ? 1u : 0u);
         }

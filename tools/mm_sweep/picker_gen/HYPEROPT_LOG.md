@@ -316,6 +316,35 @@ kernel failed to build with "division by zero" and **20 of 111 correctness tests
 the modulus with a constant. Lesson: always run the full correctness suite after touching a kernel, even for
 a change that looks like pure buffering - the compiler sees code paths that the hardware never runs.
 
+### F7. FAILED: the M-split in1 forward is free, so read-ahead in the reader is not the lever
+
+On M-split shapes the reader does read -> wait for the slave's credit -> forward -> flush, strictly per block,
+which looked like a serialization worth breaking with read-ahead. Added a diagnostic that drops the forward
+payload (bit21) to size it first. It costs nothing:
+
+| shape | wall | cost of the forward | cost of the in1 DRAM read |
+|---|---|---|---|
+| 256x15360x768 | 87.4 | -0.5% (nothing) | +35.7% |
+| 256x6144x4608 | 143.9 | +0.0% | +35.4% |
+| 256x2048x2048 | 39.4 | +0.6% | +19.5% |
+| 256x6144x1536 | 61.1 | -0.3% | +22.4% |
+
+So the reader's time is the DRAM read, not the copy to its slave, and read-ahead over the forward would buy
+nothing. Closed without building it - the diagnostic cost one build and saved the implementation.
+
+### What the remaining gap actually is (256x15360x768 as the worked example)
+
+Its in1 read needs 46 us of DRAM time and its in0 read needs 15 us, so the DRAM floor is 62 us against an 87
+us wall. The gap is almost exactly the in0 read: the in0 gather runs FIRST and the in1 read does not overlap it
+(in0's measured exposure, 15.8 us, is essentially its whole DRAM time, meaning nothing else happens during
+it). Perfect overlap would put the wall near 65 us.
+
+The obvious unlock - let the in1 reader run ahead during the gather by deepening its buffer - does NOT work
+(F3: +0.7%, -0.1%, +0.3% at depths 8/16/32). On M-split shapes the reader is also gated by its slave's credit,
+and deepening the buffer deepens both, so the reason it fails is not yet explained. **This is the most
+promising open question**: why the in1 read refuses to run ahead during the in0 gather even with buffer space.
+Answering it needs per-RISC timeline zones (which stage is actually waiting), not another blind knob.
+
 ## Total progress this session
 
 | shape | at log start | now | change |
