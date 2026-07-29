@@ -27,7 +27,22 @@
 #include <thread>
 
 namespace tt::tt_metal::detail {
-inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+// Worker count for the global Taskflow executor. TT_METAL_EXECUTOR_NTHREADS overrides the
+// hardware_concurrency() default. Required under ThreadSanitizer: a full-width pool deadlocks
+// in tf::Notifier::commit_wait on the emplace_shards PARALLEL path. taskset is not a substitute
+// -- libstdc++ hardware_concurrency() reads _SC_NPROCESSORS_ONLN and ignores CPU affinity.
+inline size_t executor_nthreads() {
+    if (const char* env = std::getenv("TT_METAL_EXECUTOR_NTHREADS")) {
+        const long n = std::strtol(env, nullptr, 10);
+        if (n > 0) {
+            return static_cast<size_t>(n);
+        }
+    }
+    const unsigned hc = std::thread::hardware_concurrency();
+    return hc ? hc : 1;
+}
+
+inline static const size_t EXECUTOR_NTHREADS = executor_nthreads();
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;

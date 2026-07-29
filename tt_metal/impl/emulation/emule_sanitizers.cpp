@@ -134,6 +134,8 @@ void set_sanitizer_thread_locals(const EmuleOobTensorState& oob, uint32_t sem_ba
     auto& san = __emule_self->san;
     san.sem_l1_range_start = oob.asan_enabled ? sem_base : 0;
     san.sem_l1_range_end = oob.asan_enabled ? (sem_base + sem_size) : 0;
+    san.mailbox_l1_range_start = oob.mailbox_l1_range_start;
+    san.mailbox_l1_range_end = oob.mailbox_l1_range_end;
     san.l1_unreserved_base = oob.l1_unreserved_base;
     san.l1_tensor_ranges = oob.tensor_ranges;
     san.l1_tensor_ranges_count = oob.tensor_ranges_count;
@@ -152,6 +154,8 @@ void clear_sanitizer_thread_locals() {
     auto& san = __emule_self->san;
     san.sem_l1_range_start = 0;
     san.sem_l1_range_end = 0;
+    san.mailbox_l1_range_start = 0;
+    san.mailbox_l1_range_end = 0;
     san.l1_unreserved_base = 0;
     san.l1_tensor_ranges = nullptr;
     san.l1_tensor_ranges_count = 0;
@@ -279,6 +283,20 @@ OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
     owner.live_ranges = tt::tt_metal::emule::LiveL1Ranges::snapshot(device_id);
     owner.state.l1_unreserved_base =
         static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+
+    // §13 Launch-Mailbox Clobber window, from the HAL rather than the per-arch
+    // MEM_MAILBOX_* macros: this TU is compiled once for the host and has no
+    // ARCH_* define, so a compile-time constant would use the wrong arch's
+    // bounds. TENSIX is the right core type — the check guards worker L1 only.
+    {
+        const auto& hal = MetalContext::instance().hal();
+        const auto mb_base =
+            static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX));
+        const auto mb_size =
+            static_cast<uint32_t>(hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX));
+        owner.state.mailbox_l1_range_start = mb_base;
+        owner.state.mailbox_l1_range_end = mb_base + mb_size;
+    }
     owner.state.tensor_ranges = owner.live_ranges.empty() ? &kEmptyRange : owner.live_ranges.data();
     owner.state.tensor_ranges_count = static_cast<uint32_t>(owner.live_ranges.size());
 

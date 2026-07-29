@@ -40,6 +40,11 @@ namespace tt::tt_metal::emule {
 struct EmuleOobTensorState {
     bool asan_enabled = false;
     uint32_t l1_unreserved_base = 0;
+    // Launch-Mailbox Clobber (§13): the reserved firmware mailbox window, read
+    // from the HAL so it is arch-correct (the runner TU has no ARCH_* defines).
+    // end == 0 means "not armed" and disables the check.
+    uint32_t mailbox_l1_range_start = 0;
+    uint32_t mailbox_l1_range_end = 0;
     const uint64_t* tensor_ranges = nullptr;
     uint32_t tensor_ranges_count = 0;
     uint32_t dram_unreserved_base = 0;

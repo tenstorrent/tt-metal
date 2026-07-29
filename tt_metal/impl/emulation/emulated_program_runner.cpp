@@ -75,6 +75,7 @@
 #include "tt_emule/kernel_patcher.hpp"  // tt::emule::patch_kernel_source (the extracted JIT patch pass)
 #include "tt_emule/tile_counter.hpp"
 #include "jit_hw/internal/emule_thread_ctx.h"
+#include "jit_hw/asan/emule_asan.h"  // §13 mailbox-region guard (declaration-only for __emule_asan_panic)
 #include "emule_fiber_scheduler.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
@@ -341,9 +342,17 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
-            uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
-                                  ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                                  : static_cast<uint32_t>(local_addr);
+            const bool is_worker = it->second->role() == tt_emule::CoreRole::WORKER;
+            uint32_t offset =
+                is_worker ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK) : static_cast<uint32_t>(local_addr);
+            // §13 Launch-Mailbox Clobber. Worker L1 only — a DRAM offset is not an
+            // L1 offset and would alias the mailbox range numerically. This is the
+            // cross-core arm of the check: the local chokepoint never sees this
+            // path (see asan_l1_checks.h), so without it a Gather/socket write that
+            // lands on a receiver's run message is silent.
+            if (is_worker && tt::tt_metal::emule::emule_asan_enabled()) {
+                __emule_asan_check_mailbox(offset, "NOC write");
+            }
             return it->second->l1_ptr(offset);
         }
     }
@@ -391,6 +400,14 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     emule_require_self(__func__);
     if (!__emule_self->core_map) {
         return;
+    }
+
+    // §13 Launch-Mailbox Clobber. The offset is identical for every delivery
+    // target, so one test before the rectangle walk covers all of them — this is
+    // the "reduced mcast target buffer" shape, where the rectangle reaches cores
+    // the target CB was never allocated on.
+    if (tt::tt_metal::emule::emule_asan_enabled()) {
+        __emule_asan_check_mailbox(static_cast<uint32_t>(l1_offset), "multicast write");
     }
 
     // Sender coordinates (from the TLS that thread launch wires up). Used to

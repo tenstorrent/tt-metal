@@ -85,6 +85,10 @@ if(TT_METAL_USE_EMULE)
         APPEND
         UNIT_TESTS_API_SOURCES
         test_alignment_writes.cpp
+        test_asan_crosscore_gap.cpp
+        # Reachability controls: violations via the PUBLIC kernel API only, to
+        # distinguish "check logic works" from "a real kernel can reach it".
+        asan_controls/test_asan_reachability.cpp
         test_cb_leak.cpp
         test_cb_pages.cpp
         # Per-fiber ASAN sanitizer-state isolation (pure unit test, no device/death):

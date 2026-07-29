@@ -103,6 +103,7 @@ happens to the core the `abort()` would otherwise produce:
 | NOC Transfer Alignment | kernel | `[emule] api/dataflow/asan/asan_dataflow.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
 | Dirty CB Detected | runner | `[metal] emule_sanitizers.cpp` (counters in `[emule] asan/asan_cb.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
 | Object Intent Violation | runner | `[metal] emule_sanitizers.cpp` | a kernel changed a buffer it never resolved a pointer into |
+| Launch-Mailbox Clobber | kernel + runner | `[emule] asan/emule_asan.h`; hooked at the local chokepoint and at `__emule_resolve_noc_addr` / `__emule_multicast_write` in `[metal] emulated_program_runner.cpp` | kernel-initiated data movement lands in the reserved firmware launch-mailbox window |
 
 ---
 
@@ -489,6 +490,68 @@ the violation.
 
 ---
 
+## 13. Launch-Mailbox Clobber
+
+**Lives in:** `__emule_asan_check_mailbox` in
+`[emule] include/jit_hw/asan/emule_asan.h`. Hooked in three places: the
+local chokepoint `__emule_local_l1_to_ptr`
+(`[emule] include/jit_hw/internal/emule_l1_to_ptr.h`) and, host-side,
+`__emule_resolve_noc_addr` and `__emule_multicast_write`
+(`[metal] emulated_program_runner.cpp`).
+**What it catches:** kernel-initiated data movement landing in the reserved
+firmware launch-mailbox window (`dev_msgs_t` — launch_msg_t, go_msg, watcher,
+profiler). The canonical symptom on silicon is a corrupted run message, e.g.
+`run_mailbox=0xbf`, from a buffer the allocator placed low enough to overlap the
+mailbox.
+
+**Why it is not just a case of §4.** Two independent reasons, which is why this
+is a separate check rather than a relaxation of the OOB check:
+- §4 **deliberately** early-returns for `l1_off < l1_unreserved_base` ("below
+  this is firmware/system, passes through"). The mailbox sits far below that
+  boundary — on Blackhole `[0x60, 0x32D0)` vs a measured base of `0x1B200` — so
+  a write there is exempt by design.
+- The canonical failure is **cross-core** (a Gather or socket write into a
+  receiver core whose destination CB was placed low). Cross-core traffic never
+  reaches `__emule_local_l1_to_ptr`; it goes through `__emule_resolve_noc_addr`
+  / `__emule_multicast_write`, which perform no liveness validation. Hence the
+  two host-side hooks — a local-only guard would miss the real bug.
+
+**How it works:** a single range test against `san.mailbox_l1_range_{start,end}`,
+armed per launch by `build_oob_tensor_state` from the HAL
+(`hal.get_dev_addr/get_dev_size(HalProgrammableCoreType::TENSIX,
+HalL1MemAddrType::MAILBOX)`). The bounds come from the HAL rather than the
+per-arch `MEM_MAILBOX_*` macros because this runner TU is compiled once for the
+host and never sees the `ARCH_*` defines that JIT kernel TUs get — a
+compile-time region would silently apply Wormhole bounds on a Blackhole run.
+`_end == 0` means "not armed" and disables the check. On the multicast path the
+offset is identical for every delivery target, so one test before the rectangle
+walk covers all of them. Restricted to `CoreRole::WORKER` on the NOC path: a
+DRAM offset is not an L1 offset and would alias the range numerically.
+
+**Deliberately scoped to the mailbox, not the whole reserved band.** Kernels
+legitimately access other sub-`l1_unreserved_base` regions — they NOC-read
+`MEM_ZEROS_BASE` for zero-fill, and fabric kernels write their packet headers
+into `MEM_PACKET_HEADER_POOL_BASE`. A band-wide guard would false-positive on
+both; a mailbox-only guard measured a 0 % FP rate over the 20-test Blaze p150
+gate with every check armed.
+
+**Ordering requirement:** callers must invoke this **before** any CB resolution.
+The canonical failure leaves the address inside a *registered* CB, so a
+`cb_resolve`-first order would return it as ordinary CB memory and never report.
+
+*Diagnostic:* `Launch-Mailbox Clobber: <local write|NOC write|multicast write> to
+offset 0x… is inside the reserved launch-mailbox region [0x…, 0x…)`. The `how`
+field distinguishes a local stomp from a cross-core one.
+*Opt-out:* `TT_METAL_EMULE_ASAN_SKIP_MAILBOX_GUARD`.
+*Exercised by:* `test_asan_crosscore_gap.cpp` — `Mailbox_LocalWrite_Detected`,
+`Mailbox_CrossCoreNocWrite_Detected` (the bug shape this check exists for) and
+`Mailbox_SkipGate_Respected`. The same file's `GapAddr_*` /
+`BelowUnreservedBase_*` probes document the coverage gaps that remain open:
+cross-core writes to a *non-mailbox* unallocated address are still unchecked,
+which needs per-core liveness in `LiveL1Ranges`.
+
+---
+
 ## Each check's core mechanism + home, in one line
 
 | Check | Lives in | The trick |
@@ -505,3 +568,4 @@ the violation.
 | NOC Transfer Alignment | `[emule] api/dataflow/asan/asan_dataflow.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
 | Dirty CB | `[metal] emule_sanitizers.cpp` (+ `[emule] asan/asan_cb.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; opt out with `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` |
 | Object Intent | `[metal] emule_sanitizers.cpp` | post-launch `memcmp` of buffers never resolved into |
+| Launch-Mailbox Clobber | `[emule] asan/emule_asan.h` + local chokepoint & `__emule_resolve_noc_addr` / `__emule_multicast_write` | offset ∈ HAL-armed `san.mailbox_l1_range_*`; checked before CB resolution, and on the cross-core paths §4 never sees; opt out with `TT_METAL_EMULE_ASAN_SKIP_MAILBOX_GUARD=1` |
