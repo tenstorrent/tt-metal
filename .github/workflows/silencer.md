@@ -69,6 +69,9 @@ safe-outputs:
     draft: false
     title-prefix: "[silencer] "
     labels: [automation]
+    # Scope patches to source-like files only: a mistaken or manipulated agent response
+    # cannot touch unrelated files outside Silencer's noise-fix scope.
+    allowed-files: ["*.cpp", "*.cc", "*.cxx", "*.h", "*.hpp", "*.py", "*.pyi", "*.cmake", "CMakeLists.txt"]
     max: 3
   push-to-pull-request-branch:
     target: "*"
@@ -88,7 +91,7 @@ safe-outputs:
     max: 5
     target: "*"
 
-source: https://github.com/githubnext/agentics/blob/main/workflows/ci-doctor.md
+source: githubnext/agentics/workflows/ci-doctor.md@497230d3867fe453aae74b15d06178d45a39fcce
 engine: copilot
 ---
 
@@ -145,17 +148,20 @@ waste money. **You must treat logs as files to grep, not text to read.**
 
 Do all of the following with `bash`, keeping only small, aggregated results in context:
 
-1. **Download once, to disk.** Fetch logs to a working dir and never re-download:
+1. **Download once, to disk.** Fetch logs to a working dir and never re-download. Use
+   `/tmp/silencer/`, **not** `/tmp/gh-aw/agent/` — the compiled workflow uploads
+   `/tmp/gh-aw/agent/` as the agent artifact on every run, so multi-megabyte CI logs
+   parked there would be re-uploaded each time (artifact storage + transfer cost).
    ```bash
-   mkdir -p /tmp/gh-aw/agent/silencer/logs
-   gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/gh-aw/agent/silencer/logs/$RUN_ID.log 2>&1 \
-     || gh run download "$RUN_ID" --repo "${{ github.repository }}" --dir /tmp/gh-aw/agent/silencer/logs
+   mkdir -p /tmp/silencer/logs
+   gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/silencer/logs/$RUN_ID.log 2>&1 \
+     || gh run download "$RUN_ID" --repo "${{ github.repository }}" --dir /tmp/silencer/logs
    ```
    For a specific failed/large job, prefer `gh run view --job <job-id> --log`.
 2. **Grep for warning signatures, don't read.** Extract only the lines that matter:
    ```bash
    grep -nE 'warning:|-W[A-Za-z0-9=_-]+|[|][[:space:]]*[Ww]arning[[:space:]]*[|]|DeprecationWarning|FutureWarning|SyntaxWarning|deprecated|\[WARN(ING)?\]|WARN(ING)?[: ]' \
-     /tmp/gh-aw/agent/silencer/logs/*.log > /tmp/gh-aw/agent/silencer/hits.txt
+     /tmp/silencer/logs/*.log > /tmp/silencer/hits.txt
    ```
    The `[|] *[Ww]arning *[|]` alternative is **essential**: tt-metal's **runtime logger** prints
    `<timestamp> | warning  | <subsystem> | <message> (file.cpp:line)` — a pipe-delimited format
@@ -172,9 +178,9 @@ Do all of the following with `bash`, keeping only small, aggregated results in c
    out of scope for Silencer. Then normalize away line numbers/addresses/timestamps so
    identical messages collapse together:
    ```bash
-   grep -vE 'note:|^[[:space:]]*#[[:space:]]*define|::(warning|error)::' /tmp/gh-aw/agent/silencer/hits.txt \
+   grep -vE 'note:|^[[:space:]]*#[[:space:]]*define|::(warning|error)::' /tmp/silencer/hits.txt \
      | sed -E 's/[0-9]+/N/g; s/0x[0-9a-fA-F]+/0xADDR/g' \
-     | sort | uniq -c | sort -rn | head -50 > /tmp/gh-aw/agent/silencer/top_noise.txt
+     | sort | uniq -c | sort -rn | head -50 > /tmp/silencer/top_noise.txt
    ```
    Keep the unfiltered `hits.txt` around: once you have picked a target `warning:` you *do*
    want its trailing `note:` lines, because they name the exact file/line to fix.
@@ -253,9 +259,14 @@ a fresh scan always governs priority, and new patterns you discover there are in
   mute it. Note it also says "will become a hard error" — fixing the emitter is the real ask.
 - **#22639**: enabling `-Wdouble-promotion` surfaces unintended `float`→`double` conversions
   (also a perf issue). A category-1 target if/when it is in the build's warning set.
-- **#38338** (tt-train): a `-Wno-deprecated-declarations` workaround that should be removed
-  (root-cause the deprecation) rather than left suppressing. Exactly the "unsuppress + fix"
-  spirit — but respect `skip-tt-train=true` in the default CI verification.
+- **#38338** (tt-train): a `-Wno-deprecated-declarations` workaround that must **stay in
+  place until the build moves to libstdc++ 14+**. The emitter is libstdc++ 12's internal
+  `std::stable_sort` implementation — the suppression is documented and currently necessary
+  on the clang-20/libstdc++-12 toolchain that `pr-gate.yaml` uses. Treat this as a
+  **category-4 deprecation to migrate only after the toolchain upgrade lands**, not an
+  "unsuppress + fix now" target: removing it today produces a predictably failing PR.
+  Also note the current gate builds tt-train (`skip-tt-train: false`), so any change here
+  is fully exercised by CI.
 - **#31345 / #31591 / #43380 / #18933**: runtime `log_warning` messages (firmware-version
   mismatch, conv2d weight-prep hint, non-fatal constraint warnings, ring-buffer dispatch note)
   — evaluate each for category 3 (fix condition) vs category 6 (demote severity).
@@ -278,7 +289,7 @@ a fresh scan always governs priority, and new patterns you discover there are in
    ```bash
    # Extract the tracked workflow files from the triage config (source of truth).
    sed -n '/workflow_ids:/,/]/p' .github/workflows/aggregate-workflow-data.yaml \
-     | grep -oE '[A-Za-z0-9_.-]+\.ya?ml' | sort -u > /tmp/gh-aw/agent/silencer/tracked_workflows.txt
+     | grep -oE '[A-Za-z0-9_.-]+\.ya?ml' | sort -u > /tmp/silencer/tracked_workflows.txt
    ```
    That list currently spans the full tracked CI surface — sanity/e2e/demo/unit/integration/
    perf/profiler/stress suites across **Blackhole, Galaxy, T3000, and single-card**, the
@@ -311,22 +322,38 @@ a fresh scan always governs priority, and new patterns you discover there are in
    understand why the noise is emitted, and design the minimal correct fix per its category
    above. Use DeepWiki-style reasoning only for orientation on sibling repos; verify against
    current code before committing anything.
-6. **Open the PR** (see below), record the pattern + PR + expected CI run in memory, and
-   **stop** — do not chase more patterns in the same run. One quiet step at a time.
+6. **Fetch the base before you patch.** In scheduled / dispatch runs the agent checkout is
+   on the default branch (the PR-context checkout at `silencer.lock.yml:611-615` does not
+   run). If you are amending an **existing** `[silencer]` PR branch via
+   `push-to-pull-request-branch`, `git fetch origin <branch>` and check it out first so
+   your patch applies to the branch's current content, not to stale `main`. For a **new**
+   PR, branch from current `origin/main`.
+7. **Open the PR** (see below). gh-aw creates it in the `safe_outputs` job **after** your
+   agent turn ends — so you do **not** know the new PR number or its CI run ID yet. Record
+   in memory only what you have now: the pattern you targeted, the branch name, and the
+   scanned run IDs. The **next** run resolves the PR number and build outcome from
+   `gh pr list --search "[silencer]"` / `gh pr checks`. Then **stop** — one quiet step
+   at a time.
 
 ## Validating changes via CI
 
 Because you cannot build locally, changes are validated through
 `.github/workflows/build-artifact.yaml`, invoked automatically on `pull_request` by
-`pr-gate.yaml` with the standard verification defaults (build-type **Release**, default
-runner `tt-ubuntu-2204-large-stable`, `distributed=true`, `build-wheel=false`,
-`skip-tt-train=true`).
+`pr-gate.yaml`. At time of writing (`pr-gate.yaml:130-160`) the gate calls it with
+platform **Ubuntu 24.04**, toolchain `cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake`,
+build-type **ASan**, `tracy: true`, `build-wheel: false`, `skip-tt-train: false`,
+`checkout-filter: tree:0` — **not** the older Release/2204/skip-tt-train=true defaults.
+When reasoning about what your PR will be validated against, trust the current
+`pr-gate.yaml` contents, not this prose — it drifts.
 
 - **Open the PR ready-for-review** (not draft) so `pr-gate.yaml` runs.
 - **Do not block waiting for the build** — tt-metal builds far exceed the 60-minute budget.
-  On the current run, open the PR, record the build run ID in memory, and note under **Test
-  Status** that the build is queued/running.
-- **On a later run**, check the recorded build with `gh pr checks <pr>` /
+  gh-aw creates the PR in the `safe_outputs` job *after* your agent turn, so on the current
+  run you cannot know the PR number or its build run ID: note under **Test Status** that
+  the build is queued, and record only the pattern + branch name in memory. Resolve the
+  actual PR number and run ID on the next invocation.
+- **On a later run**, find the PR from the branch name (`gh pr list --search "[silencer]
+  <branch>"`), check the recorded build with `gh pr checks <pr>` /
   `gh run view <run-id>`, then:
   - Build **failed due to your change** → push a fix commit to the same branch (re-triggers
     CI) and update **Test Status**. After a couple of failed attempts, stop, mark the PR
@@ -349,7 +376,10 @@ runner `tt-ubuntu-2204-large-stable`, `distributed=true`, `build-wheel=false`,
   - **Root cause** — *why* the noise was emitted, and why this fix removes it at the source.
   - **Why this is not suppression** — one sentence confirming you fixed the emitter (or, for
     the rare justified suppression, why the source is unreachable and the scope is minimal).
-  - **Test Status** — the CI build run link and its state.
+  - **Test Status** — on PR creation, state that the CI build is **queued** and will be
+    linked on the next Silencer run (the PR and its build do not exist until gh-aw's
+    `safe_outputs` job runs after your agent turn, so no run ID is available yet). On
+    later runs, update with the actual build run link and its state.
   - A 🤖 disclosure that this PR was opened by Silencer, an automated AI assistant.
 - Follow `CONTRIBUTING.md` and match tt-metal's existing C++/Python style. **No new
   dependencies, no broad refactors, no behavior changes** — noise removal must be
