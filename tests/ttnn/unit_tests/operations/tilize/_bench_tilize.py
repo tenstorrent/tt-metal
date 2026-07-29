@@ -298,17 +298,17 @@ REGIMES = {
     # the read-side ceiling on its own: it moves the same bytes with the same cores
     # in 1 transaction instead of 32, so `probe/off` is the most this algorithm can
     # ever buy and `forced/probe` is what the extra L1 hop + barrier costs.
-    "p_wide_short_r2b_off": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0)),
-    "x_wide_short_r2b_probe": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=3)),
-    "x_wide_short_r2b_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=2)),
+    "p_wide_short_r2b_off": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0, stg=0)),
+    "x_wide_short_r2b_probe": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=3, stg=0)),
+    "x_wide_short_r2b_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=2, stg=0)),
     # ... and on the two narrower members of the same family, where the fan-in slice
     # is 256 B / 128 B so the staged read is 8192 B / 4096 B instead of 16384 B.
-    "p_wide_short_8k_r2b_off": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0)),
-    "x_wide_short_8k_r2b_probe": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=3, b13=0)),
-    "x_wide_short_8k_r2b_forced": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=2, b13=0)),
-    "p_wide_short_4k_r2b_off": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0)),
-    "x_wide_short_4k_r2b_probe": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=3, b13=0)),
-    "x_wide_short_4k_r2b_forced": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=2, b13=0)),
+    "p_wide_short_8k_r2b_off": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=0)),
+    "x_wide_short_8k_r2b_probe": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=3, b13=0, stg=0)),
+    "x_wide_short_8k_r2b_forced": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=2, b13=0, stg=0)),
+    "p_wide_short_4k_r2b_off": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0, stg=0)),
+    "x_wide_short_4k_r2b_probe": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=3, b13=0, stg=0)),
+    "x_wide_short_4k_r2b_forced": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=2, b13=0, stg=0)),
     # --- Refinement 2b, second lever: read/write OVERLAP on the wide-short regime.
     # The one-sided DM decomposition of b_wide_short (TILIZE_BENCH_SPLIT_DM=1) prices
     # the read leg at 5 966 ns and the WRITE leg at 7 751 ns, while the whole op takes
