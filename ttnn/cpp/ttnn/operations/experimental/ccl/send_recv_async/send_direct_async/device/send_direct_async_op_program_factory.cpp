@@ -51,27 +51,11 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
 
     tt::tt_metal::Program program{};
-    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
-    const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
 
     std::vector<CoreCoord> sender_core_coords;
     std::vector<CoreCoord> receiver_core_coords;
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
-    std::vector<size_t> connection_indices;
-
-    for (size_t conn_idx = 0; conn_idx < socket_connection_config.size(); ++conn_idx) {
-        const auto& connection = socket_connection_config[conn_idx];
-        if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
-            sender_core_coords.push_back(connection.sender_core.core_coord);
-            receiver_core_coords.push_back(connection.receiver_core.core_coord);
-            sender_fabric_node_ids.push_back(
-                input_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord));
-            receiver_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
-                tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord));
-            connection_indices.push_back(conn_idx);
-        }
-    }
     uint32_t num_cores = sender_core_coords.size();
 
     // cores must not exceed available fabric links
