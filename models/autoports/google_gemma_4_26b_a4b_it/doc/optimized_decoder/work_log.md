@@ -296,11 +296,15 @@ full raw health dump remains in `final_device_health.txt`.
 - [x] Final Tracy and advice-enabled `tt-perf-report` for both layer kinds.
 - [x] Stress/repeated replay and watcher-clean optimized correctness.
 - [x] Independent final `stage-review` clean-pass.
-- [ ] Local stage commits and recorded SHAs.
+- [x] Local stage commits and recorded SHAs.
 
 ## Local commits
 
-Checkpoint and final documentation SHAs will be appended after clean review.
+Implementation, tests, and complete evidence checkpoint:
+`b79bcad4c17` (`Add optimized Gemma 4 decoder stage`).
+
+The documentation-finalization SHA is recorded by the following bookkeeping
+commit after it is created; the final local HEAD is also reported at handoff.
 
 The persistent `/dev/shm` warning did not abort any gate. All evidence above
 was regenerated from base `bae72d8aa452c8bcdf2d8d70216de58a1fb32c25`.
