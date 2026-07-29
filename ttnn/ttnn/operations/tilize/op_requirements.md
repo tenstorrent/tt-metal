@@ -109,7 +109,7 @@ suite still 126/126.
 
 
 
-### [ ] Refinement 1b — Per-core-overhead gating for the low-work-per-core regimes (A0 knee + B0 + depth-2 default) (debug: fix gate violations)
+### [x] Refinement 1b — Per-core-overhead gating for the low-work-per-core regimes (A0 knee + B0 + depth-2 default) (debug: fix gate violations)
 
 **Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
 
