@@ -403,6 +403,35 @@ more than 3% off:
 Note this corpus is Mt<=8 only, so the two largest wins of the session (512x6144x2304 and 512x6144x4608) are
 not in it.
 
+### F8. FAILED: no better config exists for 256x15360x768 (the largest unexplained gap)
+
+Swept the config space on the shape with the biggest unexplained gap. The deployed config wins outright:
+
+| config (Ns,Pk,Sm,kb,nsb) | wall |
+|---|---|
+| **1, 6, 2, 2, 3 (deployed)** | **87.63** |
+| 1, 12, 1, 1, 3 | 92.03 |
+| 1, 10, 1, 2, 3 | 102.07 |
+| 1, 8, 1, 2, 3 | 122.86 |
+| 1, 12, 1, 2, 3 | 123.59 |
+| 1, 6, 1, 2, 3 | infeasible (L1) |
+
+So the picker is right here too, and the config dimension is exhausted for this shape.
+
+### State of the remaining gap, and what it needs
+
+Ablations on 256x15360x768 account for only about half its 87.6 us: in0 read 15.8, in1 read 31.2, reduction
+2.3, output 0.9, ring 0.7, compute 1.1. Its DRAM bytes need 61 us. No single stage removal explains the rest,
+which means the remainder is overlap loss spread across stages rather than one fixable item. Compute is NOT the
+problem (deleting it saves 1.1%), and the config space is exhausted (F8), and the in1 buffer depth does not
+unlock it (F3), and the M-split forward is free (F7).
+
+Answering this needs per-RISC TIMELINE instrumentation - zones that record when each RISC is waiting and on
+what - not another knob. Every knob has now been tried and measured. That instrumentation is a substantial
+build (the earlier fine-grained zone system was removed in a cleanup and would need a port), and it must not be
+attempted without room to validate it: this session already shipped one regression from a gate fitted against a
+baseline that had shifted, and caught it only by closing the loop against a fixed external reference.
+
 ## Total progress this session
 
 | shape | at log start | now | change |
