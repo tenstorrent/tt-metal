@@ -1,0 +1,646 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import gc
+import inspect
+import json
+import math
+import os
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+import torch
+import torch.nn.functional as F
+from safetensors import safe_open
+
+import ttnn
+from models.autoports.coherelabs_north_mini_code_1_0.tests.test_functional_decoder import (
+    REAL_REVISION,
+    _assert_pcc,
+    _attention_reference,
+    _config,
+    _decode_inputs,
+    _dense_reference,
+    _normalized,
+    _page_table,
+    _randn,
+    _rope_interleaved,
+    _sparse_moe_reference,
+    _synthetic_state,
+    _to_host_tt,
+    _to_tt,
+)
+from models.autoports.coherelabs_north_mini_code_1_0.tt.functional_decoder import FunctionalDecoder
+from models.autoports.coherelabs_north_mini_code_1_0.tt.optimized_decoder import OptimizationConfig, OptimizedDecoder
+
+
+def _position_zero_reference(hidden, state, config, layer_idx):
+    prefix = f"model.layers.{layer_idx}."
+    normalized = _normalized(hidden, state, config, layer_idx)
+    value = F.linear(normalized, state[prefix + "self_attn.v_proj.weight"])
+    value = value.view(hidden.shape[0], 1, config.num_key_value_heads, config.head_dim)
+    attention = value.repeat_interleave(config.num_attention_heads // config.num_key_value_heads, dim=2)
+    attention = attention.reshape(hidden.shape[0], 1, -1)
+    attention = F.linear(attention, state[prefix + "self_attn.o_proj.weight"])
+    if config.mlp_layer_types[layer_idx] == "dense":
+        return _dense_reference(hidden, torch.zeros(hidden.shape[0], 1, dtype=torch.long), state, config)[0]
+    moe, _ = _sparse_moe_reference(normalized, state, config, layer_idx)
+    return hidden + attention + moe.reshape_as(hidden)
+
+
+def _decode_once(decoder, hidden, config, mesh_device):
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    page_table = _to_tt(
+        _page_table(decoder.batch, math.ceil(decoder.max_cache_len / decoder.page_size)),
+        mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    current, cos, sin = _decode_inputs(decoder, config, mesh_device, [0] * decoder.batch)
+    return decoder.decode_forward(
+        _to_tt(hidden.unsqueeze(0), mesh_device),
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        current_positions=current,
+        position_cos=cos if decoder.use_rope else None,
+        position_sin=sin if decoder.use_rope else None,
+    )
+
+
+def _expert_sweep_policy():
+    name = os.environ.get("NORTH_MINI_EXPERT_POLICY", "selected")
+    if name == "selected":
+        return OptimizationConfig()
+    if name == "bfp8_lofi":
+        return OptimizationConfig(
+            expert_gate_up_dtype=ttnn.bfloat8_b,
+            expert_down_dtype=ttnn.bfloat8_b,
+        )
+    if name == "bfp4_lofi":
+        return OptimizationConfig(
+            expert_gate_up_dtype=ttnn.bfloat4_b,
+            expert_down_dtype=ttnn.bfloat4_b,
+            expert_gate_up_fidelity=ttnn.MathFidelity.LoFi,
+            expert_down_fidelity=ttnn.MathFidelity.LoFi,
+        )
+    if name == "bfp4_hifi2":
+        return OptimizationConfig(
+            expert_gate_up_dtype=ttnn.bfloat4_b,
+            expert_down_dtype=ttnn.bfloat4_b,
+            expert_gate_up_fidelity=ttnn.MathFidelity.HiFi2,
+            expert_down_fidelity=ttnn.MathFidelity.HiFi2,
+        )
+    if name == "bfp4_gate":
+        return OptimizationConfig(expert_gate_up_dtype=ttnn.bfloat4_b)
+    if name == "bfp4_down":
+        return OptimizationConfig(expert_down_dtype=ttnn.bfloat4_b)
+    if name == "bfp8_hifi2":
+        return OptimizationConfig(
+            expert_gate_up_dtype=ttnn.bfloat8_b,
+            expert_down_dtype=ttnn.bfloat8_b,
+            expert_gate_up_fidelity=ttnn.MathFidelity.HiFi2,
+            expert_down_fidelity=ttnn.MathFidelity.HiFi2,
+        )
+    if name == "bf16_hifi2":
+        return OptimizationConfig(
+            expert_gate_up_dtype=ttnn.bfloat16,
+            expert_down_dtype=ttnn.bfloat16,
+            expert_gate_up_fidelity=ttnn.MathFidelity.HiFi2,
+            expert_down_fidelity=ttnn.MathFidelity.HiFi2,
+        )
+    if name == "bf16_hifi2_auto_grid":
+        return OptimizationConfig(
+            expert_gate_up_dtype=ttnn.bfloat16,
+            expert_down_dtype=ttnn.bfloat16,
+            expert_gate_up_fidelity=ttnn.MathFidelity.HiFi2,
+            expert_down_fidelity=ttnn.MathFidelity.HiFi2,
+            dense_expert_cores=0,
+        )
+    raise ValueError(f"unknown NORTH_MINI_EXPERT_POLICY={name!r}")
+
+
+def _real_layer_zero_state():
+    return _real_layer_state(0)
+
+
+def _real_snapshot():
+    explicit = os.environ.get("NORTH_MINI_REAL_WEIGHT_DIR")
+    roots = [Path(explicit)] if explicit else []
+    roots.extend((Path("/huggingface"), Path("/huggingface/hub")))
+    snapshot = next(
+        (
+            path
+            for root in roots
+            for path in root.glob(f"models--CohereLabs--North-Mini-Code-1.0/snapshots/{REAL_REVISION}")
+            if path.is_dir()
+        ),
+        None,
+    )
+    if snapshot is None:
+        pytest.skip("North-Mini checkpoint is not cached")
+    return snapshot
+
+
+def _real_layer_state(layer_idx):
+    snapshot = _real_snapshot()
+    index = json.loads((snapshot / "model.safetensors.index.json").read_text())
+    prefix = f"model.layers.{layer_idx}."
+    shard_names = sorted({value for key, value in index["weight_map"].items() if key.startswith(prefix)})
+    shards = [snapshot / name for name in shard_names]
+    if not shards or not all(shard.is_file() for shard in shards):
+        pytest.skip(f"North-Mini layer-{layer_idx} shards are not cached")
+    state = {}
+    for shard in shards:
+        with safe_open(shard, framework="pt", device="cpu") as handle:
+            state.update({key: handle.get_tensor(key) for key in handle.keys() if key.startswith(prefix)})
+    return state
+
+
+def _real_embedding_hidden(token_id=123, sequence=1):
+    shard = _real_snapshot() / "model-00001-of-00049.safetensors"
+    with safe_open(shard, framework="pt", device="cpu") as handle:
+        return handle.get_slice("model.embed_tokens.weight")[token_id : token_id + sequence].reshape(1, sequence, -1)
+
+
+def _real_moe_reference(hidden, state, config, layer_idx):
+    prefix = f"model.layers.{layer_idx}."
+    attention_residual, _ = _attention_reference(
+        hidden,
+        torch.zeros(hidden.shape[0], 1, dtype=torch.long),
+        state,
+        config,
+        layer_idx,
+    )
+    normalized = _normalized(hidden, state, config, layer_idx)
+    logits = F.linear(normalized.reshape(-1, config.hidden_size), state[prefix + "mlp.gate.weight"])
+    scores, experts = torch.topk(logits, config.num_experts_per_tok, dim=-1)
+    scores = torch.sigmoid(scores)
+    moe = torch.zeros_like(normalized.reshape(-1, config.hidden_size))
+    for token in range(hidden.shape[0]):
+        for topk_index, expert in enumerate(experts[token].tolist()):
+            gate = F.linear(
+                normalized[token],
+                state[f"{prefix}mlp.experts.{expert}.gate_proj.weight"],
+            )
+            up = F.linear(
+                normalized[token],
+                state[f"{prefix}mlp.experts.{expert}.up_proj.weight"],
+            )
+            contribution = F.linear(
+                F.silu(gate) * up,
+                state[f"{prefix}mlp.experts.{expert}.down_proj.weight"],
+            )
+            moe[token] += contribution.reshape_as(moe[token]) * scores[token, topk_index]
+    return attention_residual + moe.reshape_as(hidden)
+
+
+def _real_hidden_at_layer(layer_idx, config):
+    hidden = _real_embedding_hidden()
+    positions = torch.zeros(1, 1, dtype=torch.long)
+    for previous_layer in range(layer_idx):
+        state = _real_layer_state(previous_layer)
+        if config.mlp_layer_types[previous_layer] == "dense":
+            hidden = _dense_reference(hidden, positions, state, config)[0]
+        else:
+            hidden = _real_moe_reference(hidden, state, config, previous_layer)
+        del state
+        gc.collect()
+    return hidden
+
+
+def test_optimized_path_audit():
+    assert issubclass(OptimizedDecoder, FunctionalDecoder)
+    for method_name in (
+        "from_state_dict",
+        "prefill_forward",
+        "decode_forward",
+        "_attention_prefill",
+        "_attention_decode",
+        "_dense_mlp_decode",
+        "_dense_mlp_prefill",
+        "_sparse_moe_chunk",
+        "_dense_expert_moe_chunk",
+    ):
+        assert method_name in OptimizedDecoder.__dict__, f"{method_name} would fall back to functional code"
+    runtime_source = "\n".join(
+        inspect.getsource(OptimizedDecoder.__dict__[name])
+        for name in (
+            "prefill_forward",
+            "decode_forward",
+            "_attention_prefill",
+            "_attention_decode",
+            "_dense_mlp_decode",
+            "_dense_mlp_prefill",
+            "_sparse_moe_chunk",
+            "_dense_expert_moe_chunk",
+        )
+    )
+    for forbidden in ("import torch", "from_torch", "to_torch", "untilize", "tilize"):
+        assert forbidden not in runtime_source
+    assert "sparse_matmul" in inspect.getsource(OptimizedDecoder._sparse_moe_chunk)
+    assert "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" in inspect.getsource(
+        __import__(
+            "models.autoports.coherelabs_north_mini_code_1_0.tt.optimized_decoder",
+            fromlist=["_decode_dram_program"],
+        )._decode_dram_program
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("seq_len", [1, 31, 33, 65])
+def test_optimized_dense_non_aligned_prefill_matches_reference(mesh_device, seq_len):
+    config = _config()
+    state = _synthetic_state(config, 0)
+    decoder = OptimizedDecoder.from_state_dict(
+        state, hf_config=config, layer_idx=0, mesh_device=mesh_device, batch=1, max_cache_len=96
+    )
+    generator = torch.Generator().manual_seed(22000 + seq_len)
+    hidden = _randn(generator, 1, seq_len, config.hidden_size, scale=0.02)
+    reference, _ = _dense_reference(hidden, torch.arange(seq_len).reshape(1, -1), state, config)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    page_table = _to_tt(_page_table(1, 3), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    cos, sin = decoder.build_rope_rows(torch.arange(seq_len), hf_config=config)
+    actual = decoder.prefill_forward(
+        _to_tt(hidden.unsqueeze(0), mesh_device),
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        position_cos=_to_tt(cos, mesh_device),
+        position_sin=_to_tt(sin, mesh_device),
+    )
+    _assert_pcc(f"optimized-dense-prefill-{seq_len}", reference, ttnn.to_torch(actual).squeeze(0))
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("layer_idx,batch", [(0, 1), (0, 32), (1, 1), (1, 32), (4, 1)])
+def test_optimized_traced_decode_layer_kinds_and_batches(mesh_device, layer_idx, batch):
+    config = _config()
+    state = _synthetic_state(config, layer_idx, sparse_weights=layer_idx != 0)
+    kv_dtype = (
+        ttnn.bfloat8_b if os.environ.get("NORTH_MINI_KV_DTYPE") == "bfp8" else OptimizationConfig().kv_cache_dtype
+    )
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=layer_idx,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=32,
+        optimization_config=OptimizationConfig(kv_cache_dtype=kv_dtype),
+    )
+    generator = torch.Generator().manual_seed(23000 + layer_idx + batch)
+    hidden = _randn(generator, batch, 1, config.hidden_size, scale=0.02)
+    reference = _position_zero_reference(hidden, state, config, layer_idx)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    page_table = _to_tt(_page_table(batch, 1), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    current, cos, sin = _decode_inputs(decoder, config, mesh_device, [0] * batch)
+    hidden_tt = _to_tt(hidden.unsqueeze(0), mesh_device)
+    kwargs = dict(
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        current_positions=current,
+        position_cos=cos if decoder.use_rope else None,
+        position_sin=sin if decoder.use_rope else None,
+    )
+    decoder.decode_forward(hidden_tt, **kwargs)
+    ttnn.synchronize_device(mesh_device)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    actual = decoder.decode_forward(hidden_tt, **kwargs)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        _assert_pcc(
+            f"optimized-layer-{layer_idx}-batch-{batch}-trace",
+            reference,
+            ttnn.to_torch(actual).squeeze(0),
+        )
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_optimized_decode_determinism_and_repeated_trace(mesh_device):
+    config = _config()
+    state = _synthetic_state(config, 1, sparse_weights=True)
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=1,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=32,
+        optimization_config=_expert_sweep_policy(),
+    )
+    generator = torch.Generator().manual_seed(24001)
+    hidden_a = _randn(generator, 1, 1, config.hidden_size, scale=0.02)
+    hidden_b = _randn(generator, 1, 1, config.hidden_size, scale=0.02)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    page_table = _to_tt(_page_table(1, 1), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    current, cos, sin = _decode_inputs(decoder, config, mesh_device, [0])
+    hidden_tt = _to_tt(hidden_a.unsqueeze(0), mesh_device)
+    kwargs = dict(
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        current_positions=current,
+        position_cos=cos,
+        position_sin=sin,
+    )
+    decoder.decode_forward(hidden_tt, **kwargs)
+    ttnn.synchronize_device(mesh_device)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    actual = decoder.decode_forward(hidden_tt, **kwargs)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        outputs = []
+        for _ in range(10):
+            ttnn.copy_host_to_device_tensor(_to_host_tt(hidden_b.unsqueeze(0), mesh_device), hidden_tt)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            outputs.append(ttnn.to_torch(actual))
+        assert all(torch.equal(outputs[0], output) for output in outputs[1:])
+        reference = _position_zero_reference(hidden_b, state, config, 1)
+        _assert_pcc("optimized-repeated-trace", reference, outputs[-1].squeeze(0))
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("layer_idx", [1, 4])
+def test_optimized_real_weight_moe_decode(mesh_device, layer_idx):
+    config = _config()
+    hidden = _real_hidden_at_layer(layer_idx, config)
+    state = _real_layer_state(layer_idx)
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=layer_idx,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=32,
+        optimization_config=_expert_sweep_policy(),
+    )
+    reference = _real_moe_reference(hidden, state, config, layer_idx)
+    actual = _decode_once(decoder, hidden, config, mesh_device)
+    _assert_pcc(
+        f"optimized-real-layer{layer_idx}-decode-{os.environ.get('NORTH_MINI_EXPERT_POLICY', 'selected')}",
+        reference,
+        ttnn.to_torch(actual).squeeze(0),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("layer_idx,batch,sequence", [(1, 1, 33), (4, 1, 33)])
+def test_optimized_non_aligned_sparse_prefill_exercises_active_experts(
+    mesh_device, monkeypatch, layer_idx, batch, sequence
+):
+    config = _config()
+    total_tokens = batch * sequence
+    selected_tokens = [0, total_tokens // 2, total_tokens - 1]
+    state = _synthetic_state(config, layer_idx, sparse_weights=True)
+    prefix = f"model.layers.{layer_idx}."
+    for projection in ("q_proj", "k_proj", "v_proj", "o_proj"):
+        state[prefix + f"self_attn.{projection}.weight"].zero_()
+    generator = torch.Generator().manual_seed(26000 + layer_idx)
+    hidden = _randn(generator, batch, sequence, config.hidden_size, scale=0.02)
+    normalized = _normalized(hidden, state, config, layer_idx)
+    reference_moe, experts = _sparse_moe_reference(
+        normalized,
+        state,
+        config,
+        layer_idx,
+        flat_indices=selected_tokens,
+    )
+    assert torch.unique(experts).numel() > config.num_experts_per_tok
+    reference = hidden.reshape(-1, config.hidden_size)[selected_tokens] + reference_moe
+    policy = replace(
+        _expert_sweep_policy(),
+        dense_expert_batch_threshold=1 << 30,
+        sparse_intermediate_dram=True,
+    )
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=layer_idx,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=64,
+        optimization_config=policy,
+    )
+    sparse_chunks = []
+    original_sparse = decoder._sparse_moe_chunk
+
+    def counted_sparse(value, token_count):
+        sparse_chunks.append(token_count)
+        return original_sparse(value, token_count)
+
+    def forbidden_dense(*_args, **_kwargs):
+        pytest.fail("active-expert test entered dense all-expert execution")
+
+    monkeypatch.setattr(decoder, "_sparse_moe_chunk", counted_sparse)
+    monkeypatch.setattr(decoder, "_dense_expert_moe_chunk", forbidden_dense)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
+    actual = decoder.prefill_forward(
+        _to_tt(hidden.unsqueeze(0), mesh_device),
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        position_cos=_to_tt(cos, mesh_device) if decoder.use_rope else None,
+        position_sin=_to_tt(sin, mesh_device) if decoder.use_rope else None,
+    )
+    expected_chunks = [policy.moe_chunk_size] * math.ceil(total_tokens / policy.moe_chunk_size)
+    assert sparse_chunks == expected_chunks
+    actual = ttnn.to_torch(actual).squeeze(0).reshape(-1, config.hidden_size)[selected_tokens]
+    for token, (reference_row, actual_row) in enumerate(zip(reference, actual)):
+        _assert_pcc(
+            f"optimized-active-experts-layer-{layer_idx}-sample-{token}",
+            reference_row,
+            actual_row,
+            threshold=-1.0,
+        )
+    _assert_pcc(f"optimized-active-experts-layer-{layer_idx}", reference, actual)
+
+
+@pytest.mark.parametrize("batch,sequence", [(32, 1), (2, 33)])
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_optimized_serving_prefill_exercises_selected_dense_experts(mesh_device, monkeypatch, batch, sequence):
+    config = _config()
+    layer_idx = 1
+    state = _synthetic_state(config, layer_idx, sparse_weights=True)
+    prefix = f"model.layers.{layer_idx}."
+    for projection in ("q_proj", "k_proj", "v_proj", "o_proj"):
+        state[prefix + f"self_attn.{projection}.weight"].zero_()
+    router = state[prefix + "mlp.gate.weight"]
+    router.fill_(-1.0)
+    for expert in range(config.num_experts_per_tok):
+        router[expert].fill_(1.0 - 0.05 * expert)
+    generator = torch.Generator().manual_seed(27001)
+    hidden = _randn(generator, batch, sequence, config.hidden_size, scale=0.02).abs() + 0.01
+    normalized = _normalized(hidden, state, config, layer_idx)
+    reference_moe, _ = _sparse_moe_reference(normalized, state, config, layer_idx)
+    reference = hidden + reference_moe.reshape_as(hidden)
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=layer_idx,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=64,
+    )
+    dense_calls = []
+    original_dense = decoder._dense_expert_moe_chunk
+
+    def counted_dense(value, token_count):
+        dense_calls.append(token_count)
+        return original_dense(value, token_count)
+
+    def forbidden_sparse(*_args, **_kwargs):
+        pytest.fail("selected serving prefill entered sparse expert execution")
+
+    monkeypatch.setattr(decoder, "_dense_expert_moe_chunk", counted_dense)
+    monkeypatch.setattr(decoder, "_sparse_moe_chunk", forbidden_sparse)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
+    actual = decoder.prefill_forward(
+        _to_tt(hidden.unsqueeze(0), mesh_device),
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        position_cos=_to_tt(cos, mesh_device),
+        position_sin=_to_tt(sin, mesh_device),
+    )
+    assert dense_calls == [batch * sequence]
+    _assert_pcc(
+        f"optimized-serving-prefill-dense-experts-b{batch}-s{sequence}",
+        reference,
+        ttnn.to_torch(actual).squeeze(0),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_optimized_nonzero_positions_update_permuted_paged_cache(mesh_device):
+    config = _config()
+    state = _synthetic_state(config, 0)
+    batch, positions = 4, [5, 17, 31, 63]
+    decoder = OptimizedDecoder.from_state_dict(
+        state, hf_config=config, layer_idx=0, mesh_device=mesh_device, batch=batch, max_cache_len=64
+    )
+    generator = torch.Generator().manual_seed(26463)
+    hidden = _randn(generator, batch, 1, config.hidden_size, scale=0.02)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    table = _page_table(batch, 2)
+    page_table = _to_tt(table, mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    current, cos, sin = _decode_inputs(decoder, config, mesh_device, positions)
+    decoder.decode_forward(
+        _to_tt(hidden.unsqueeze(0), mesh_device),
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        current_positions=current,
+        position_cos=cos,
+        position_sin=sin,
+    )
+    prefix = "model.layers.0."
+    normalized = _normalized(hidden, state, config, 0)
+    expected_key = F.linear(normalized, state[prefix + "self_attn.k_proj.weight"])
+    expected_key = expected_key.view(batch, 1, config.num_key_value_heads, config.head_dim).transpose(1, 2)
+    expected_key = _rope_interleaved(expected_key, torch.tensor(positions).reshape(batch, 1), config)
+    expected_key = torch.cat((expected_key[..., ::2], expected_key[..., 1::2]), dim=-1)
+    expected_value = F.linear(normalized, state[prefix + "self_attn.v_proj.weight"])
+    expected_value = expected_value.view(batch, 1, config.num_key_value_heads, config.head_dim).transpose(1, 2)
+    physical_key, physical_value = ttnn.to_torch(key_cache), ttnn.to_torch(value_cache)
+    for user, position in enumerate(positions):
+        block = int(table[user, position // decoder.page_size])
+        slot = position % decoder.page_size
+        _assert_pcc(
+            f"optimized-key-slot-{user}",
+            expected_key[user, :, 0],
+            physical_key[block, :, slot],
+        )
+        _assert_pcc(
+            f"optimized-value-slot-{user}",
+            expected_value[user, :, 0],
+            physical_value[block, :, slot],
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("mode", ["decode", "prefill"])
+def test_optimized_real_weight_dense_precision_policy(mesh_device, mode):
+    config = _config()
+    state = _real_layer_zero_state()
+    policy_name = os.environ.get("NORTH_MINI_PRECISION_POLICY", "selected")
+    policies = {
+        "selected": OptimizationConfig(),
+        "all_bfp4_lofi": OptimizationConfig(
+            attention_weight_dtype=ttnn.bfloat4_b,
+            dense_gate_up_dtype=ttnn.bfloat4_b,
+            dense_down_dtype=ttnn.bfloat4_b,
+            prefill_dense_gate_up_dtype=ttnn.bfloat4_b,
+            prefill_dense_down_dtype=ttnn.bfloat4_b,
+            attention_fidelity=ttnn.MathFidelity.LoFi,
+            dense_gate_up_fidelity=ttnn.MathFidelity.LoFi,
+            dense_down_fidelity=ttnn.MathFidelity.LoFi,
+            prefill_dense_gate_up_fidelity=ttnn.MathFidelity.LoFi,
+            prefill_dense_down_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        "bfp8_attention_bfp4_mlp_lofi": OptimizationConfig(
+            dense_gate_up_dtype=ttnn.bfloat4_b,
+            dense_down_dtype=ttnn.bfloat4_b,
+            attention_fidelity=ttnn.MathFidelity.LoFi,
+            dense_gate_up_fidelity=ttnn.MathFidelity.LoFi,
+            dense_down_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        "bfp8_attention_bfp4_mlp": OptimizationConfig(
+            dense_gate_up_dtype=ttnn.bfloat4_b,
+            dense_down_dtype=ttnn.bfloat4_b,
+            dense_gate_up_fidelity=ttnn.MathFidelity.LoFi,
+            dense_down_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        "bfp4_gate_only": OptimizationConfig(
+            dense_gate_up_dtype=ttnn.bfloat4_b,
+            dense_gate_up_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+    }
+    if policy_name not in policies:
+        raise ValueError(f"unknown NORTH_MINI_PRECISION_POLICY={policy_name!r}")
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=0,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=64,
+        optimization_config=policies[policy_name],
+    )
+    sequence = 1 if mode == "decode" else 33
+    hidden = _real_embedding_hidden(token_id=124, sequence=sequence)
+    reference = _dense_reference(hidden, torch.arange(sequence).reshape(1, -1), state, config)[0]
+    if mode == "decode":
+        actual = _decode_once(decoder, hidden, config, mesh_device)
+    else:
+        key_cache, value_cache = decoder.create_paged_kv_cache()
+        page_table = _to_tt(_page_table(1, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
+        actual = decoder.prefill_forward(
+            _to_tt(hidden.unsqueeze(0), mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            position_cos=_to_tt(cos, mesh_device),
+            position_sin=_to_tt(sin, mesh_device),
+        )
+    _assert_pcc(
+        f"optimized-real-layer0-{mode}-{policy_name}",
+        reference,
+        ttnn.to_torch(actual).squeeze(0),
+    )
