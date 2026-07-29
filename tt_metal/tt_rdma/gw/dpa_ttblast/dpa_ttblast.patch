@@ -383,7 +383,7 @@
  
  /* Application context struct holding necessary host side variables. */
  struct app_context {
-@@ -122,6 +140,31 @@
+@@ -122,6 +140,37 @@
  	 * information struct.
  	 */
  	flexio_uintptr_t app_data_daddr;
@@ -397,6 +397,12 @@
 +	 * references mr->lkey + the host VA; the NIC TX engine DMA-reads it (the DPA never dereferences it). */
 +	struct ibv_mr *tt_src_ibv_mr;
 +	void *tt_src_hostbuf;
++	/* A3.3b MERGED gateway (one process, no shm): the SAME landing buffer is ALSO registered on a SECOND
++	 * device (the RoCE SF, e.g. mlx5_2) so a real RoCEv2 WRITE_IMM lands into it, while the FlexIO DPA on
++	 * mlx5_0 gathers it via tt_src_ibv_mr. Env TTDPA_ROCE_DEV selects the SF device. */
++	struct ibv_context *roce_ctx;
++	struct ibv_pd *roce_pd;
++	struct ibv_mr *roce_mr; /* landing buffer on the RoCE PD (REMOTE_WRITE); rkey advertised to the requester */
 +};
 +
 +/* ---- TT-RDMA multi-thread fan-out: per-thread SQ + its own DPA-side app_data ---- */
@@ -415,7 +421,7 @@
  };
  
  /* Open ibv device
-@@ -178,8 +221,8 @@
+@@ -178,8 +227,8 @@
  /* Number of entries in each RQ/SQ/CQ is 2^LOG_Q_DEPTH. */
  #define LOG_Q_DEPTH 7
  #define Q_DEPTH L2V(LOG_Q_DEPTH)
@@ -426,7 +432,7 @@
  /* SQ/RQ data entry byte size log to value. */
  #define Q_DATA_ENTRY_BSIZE L2V(LOG_Q_DATA_ENTRY_BSIZE)
  /* SQ/RQ DATA byte size is queue depth times entry byte size. */
-@@ -217,6 +260,9 @@
+@@ -217,6 +266,9 @@
  
  /* Source MAC address to match for incoming packets. */
  #define SMAC 0x02427e7feb02
@@ -436,7 +442,7 @@
  /* Creates steering rules for application.
   * Returns 0 on success and -1 if the allocation was failed.
   * app_ctx - pointer to app_context structure.
-@@ -255,15 +301,17 @@
+@@ -255,15 +307,17 @@
  			return -1;
  		}
  
@@ -457,7 +463,7 @@
  		if (!app_ctx->tx_rule_vport) {
  			fprintf(stderr, "Failed to create TX vport steering rule\n");
  			return -1;
-@@ -686,6 +734,165 @@
+@@ -686,6 +740,212 @@
  	return 0;
  }
  
@@ -490,6 +496,50 @@
 +		       h->tt_count, h->tt_plen, h->tt_rkey, m[0], m[1], m[2], m[3], m[4], m[5],
 +		       h->tt_no_crc ? "OFF" : "on");
 +	return h->tt_count;
++}
++
++/* A3.3b MERGED gateway: in the SAME process, ALSO register the landing buffer on a SECOND device (the RoCE SF,
++ * TTDPA_ROCE_DEV) with REMOTE_WRITE, so a real RoCEv2 WRITE_IMM from the x86 requester lands into the very
++ * bytes the FlexIO DPA (mlx5_0) gathers. No shared memory: one process, one buffer, two device registrations.
++ * Prints the rkey the requester must target. Returns 0 (or if the device isn't set, a no-op). */
++static int tt_reg_roce_landing(struct app_context *app_ctx, void *buf, size_t len)
++{
++	const char *dev = getenv("TTDPA_ROCE_DEV");
++	struct ibv_device **list;
++	int i, n = 0;
++
++	if (!dev)
++		return 0; /* single-device / sim mode — no RoCE dest registration */
++	list = ibv_get_device_list(&n);
++	if (!list) {
++		fprintf(stderr, "A3.3b: ibv_get_device_list failed\n");
++		return -1;
++	}
++	for (i = 0; i < n; i++) {
++		if (!strcmp(ibv_get_device_name(list[i]), dev)) {
++			app_ctx->roce_ctx = ibv_open_device(list[i]);
++			break;
++		}
++	}
++	ibv_free_device_list(list);
++	if (!app_ctx->roce_ctx) {
++		fprintf(stderr, "A3.3b: RoCE device %s not found/openable\n", dev);
++		return -1;
++	}
++	app_ctx->roce_pd = ibv_alloc_pd(app_ctx->roce_ctx);
++	if (!app_ctx->roce_pd) {
++		fprintf(stderr, "A3.3b: alloc_pd on %s failed\n", dev);
++		return -1;
++	}
++	app_ctx->roce_mr = ibv_reg_mr(app_ctx->roce_pd, buf, len,
++				      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
++	if (!app_ctx->roce_mr) {
++		fprintf(stderr, "A3.3b: reg_mr on %s (REMOTE_WRITE) failed\n", dev);
++		return -1;
++	}
++	printf("A3.3b MERGED: landing buffer ALSO on %s (RoCE dest) rkey=0x%x addr=%p len=%zu\n", dev,
++	       app_ctx->roce_mr->rkey, buf, len);
++	return 0;
 +}
 +
 +/* Create ONE payload source buffer of `sp` bytes on the DPA heap, filled with the tag pattern (simulated
@@ -577,6 +627,9 @@
 +		app_ctx->tt_src_daddr = (flexio_uintptr_t)(uintptr_t)hb; /* HOST virtual address */
 +		app_ctx->tt_src_mkey = app_ctx->tt_src_ibv_mr->lkey;
 +		printf("A3.1 HOST-MEM GATHER: src host VA %p (%u B) lkey=0x%x\n", hb, hp, app_ctx->tt_src_mkey);
++		/* A3.3b: same buffer also as a RoCE landing dest on the SF (one process, no shm). */
++		if (tt_reg_roce_landing(app_ctx, hb, hp))
++			fprintf(stderr, "A3.3b: RoCE landing registration failed (continuing single-device)\n");
 +		return 0;
 +	}
 +	want_src = getenv("TTDPA_SRC") && strtoul(getenv("TTDPA_SRC"), NULL, 0) > 0;
@@ -623,7 +676,7 @@
  /* Copy application information to DPA.
   * DPA side needs queue information in order to process the packets.
   * The DPA heap memory address will be passed as the event handler argument.
-@@ -716,6 +923,18 @@
+@@ -716,6 +976,18 @@
  	h2d_data->rq_cq_transf = app_ctx->rq_cq_transf;
  	/* Set RQ's information. */
  	h2d_data->rq_transf = app_ctx->rq_transf;
@@ -642,7 +695,7 @@
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -887,6 +1106,492 @@
+@@ -887,6 +1159,492 @@
  /* dev msg stream buffer built from chunks of 2^FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE each */
  #define MSG_HOST_BUFF_BSIZE (512 * L2V(FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE))
  
@@ -1135,7 +1188,7 @@
  /* Application name in string format for Flex IO app get. */
  #define DEV_APP_NAME_STR(_app_name) #_app_name
  #define DEV_APP_NAME_XSTR(_app_name) DEV_APP_NAME_STR(_app_name)
-@@ -1068,20 +1773,63 @@
+@@ -1068,20 +1826,63 @@
  
  	printf("Ready to receive messages\n");
  
@@ -1210,7 +1263,7 @@
  	}
  
  cleanup:
-@@ -1096,6 +1844,20 @@
+@@ -1096,6 +1897,28 @@
  		err = -1;
  	}
  
@@ -1219,6 +1272,14 @@
 +		fprintf(stderr, "Failed to destroy TT source mkey\n");
 +		err = -1;
 +	}
++	/* A3.3b: tear down the RoCE-side landing registration first (references the same buffer). */
++	if (app_ctx.roce_mr)
++		ibv_dereg_mr(app_ctx.roce_mr);
++	if (app_ctx.roce_pd)
++		ibv_dealloc_pd(app_ctx.roce_pd);
++	if (app_ctx.roce_ctx)
++		ibv_close_device(app_ctx.roce_ctx);
++
 +	if (app_ctx.tt_src_ibv_mr) {
 +		/* A3.1 host-memory source: free the ibv_mr + host buffer, and don't treat the host VA as a DPA daddr. */
 +		ibv_dereg_mr(app_ctx.tt_src_ibv_mr);
