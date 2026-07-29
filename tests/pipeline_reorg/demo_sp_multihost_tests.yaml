@@ -97,54 +97,35 @@
 # =============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
 # =============================================================================
-# Count allocation + generate_blitz_decode_pipeline_configs.py (not tt-run automapper).
-# Needs build/test/tt_metal/tt_fabric/test_physical_discovery.
+# Count + SC16 topologyKey, then tt-run automapper (same pattern as tt-blaze
+# kimi-decode-ladder): --mesh-graph-descriptor + --hosts from /etc/ttop/hostfile.
+# Phase-1 generate_rank_bindings places meshes; do NOT assume hostfile order.
+# --bind-to none (required for Phase 1; hwt fights map-by hwthread).
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
-    TTRUN_DIR=/etc/ttop
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs"
+    MGD="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
-    RANKLOG_DIR="${PIPELINE_DIR}/ranklogs"
-    BINDINGS_DIR="${PIPELINE_DIR}/blitz_bindings"
-    mkdir -p "${RANKLOG_DIR}" "${BINDINGS_DIR}"
-    export LOGURU_LEVEL=ERROR
-    export TT_LOGGER_LEVEL=error
+    mkdir -p "${PIPELINE_DIR}/ranklogs"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
 
-    cd "${BINDINGS_DIR}"
-    python3 "${SCALEOUT_DIR}/generate_blitz_decode_pipeline_configs.py" \
-      "${SCALEOUT_DIR}/blitz_pipeline_config_superpod_ci.yaml" \
-      --hostfile "${TTRUN_DIR}/hostfile" \
-      --preserve-hostfile-order \
-      --stage-size 4x2 \
-      --worker-tt-metal-home "${TT_METAL_HOME}" \
-      --output-dir "${BINDINGS_DIR}" \
-      > "${PIPELINE_DIR}/launch-generate-bindings.log" 2>&1
-
-    RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
-    RF=blitz_decode_pipeline_rank_file_superpod_ci
-    LOCAL_BIND="${TT_METAL_HOME}/generated/blitz_sc16"
-    mkdir -p "${LOCAL_BIND}"
-    cp -f "${BINDINGS_DIR}/${RB}" "${BINDINGS_DIR}/${RF}" "${LOCAL_BIND}/"
-    mpirun --pernode bash -lc "mkdir -p '${LOCAL_BIND}' && cp -f '${BINDINGS_DIR}/${RB}' '${BINDINGS_DIR}/${RF}' '${LOCAL_BIND}/'"
-
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --skip-executable-check \
       --tcp-interface ens5f0np0 \
-      --rank-binding "generated/blitz_sc16/${RB}" \
-      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
-      bash -c "python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
-        --prompt 'Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts.' \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --reference-file /mnt/models/ref_data/output1_reference.txt \
-        --output-file output1_teacher_forcing_results.json \
+        --output-file "${PIPELINE_DIR}/teacher_forcing_output.json" \
         --chunk-accuracy 256 \
-        > \"${RANKLOG_DIR}/rank-\${TT_RUN_RANK}.log\" 2>&1" \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
     bh_sc16:
@@ -155,48 +136,27 @@
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
-    TTRUN_DIR=/etc/ttop
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs"
+    MGD="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
-    RANKLOG_DIR="${PIPELINE_DIR}/ranklogs"
-    BINDINGS_DIR="${PIPELINE_DIR}/blitz_bindings"
-    mkdir -p "${RANKLOG_DIR}" "${BINDINGS_DIR}"
-    export LOGURU_LEVEL=ERROR
-    export TT_LOGGER_LEVEL=error
+    mkdir -p "${PIPELINE_DIR}/ranklogs"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
 
-    cd "${BINDINGS_DIR}"
-    python3 "${SCALEOUT_DIR}/generate_blitz_decode_pipeline_configs.py" \
-      "${SCALEOUT_DIR}/blitz_pipeline_config_superpod_ci.yaml" \
-      --hostfile "${TTRUN_DIR}/hostfile" \
-      --preserve-hostfile-order \
-      --stage-size 4x2 \
-      --worker-tt-metal-home "${TT_METAL_HOME}" \
-      --output-dir "${BINDINGS_DIR}" \
-      > "${PIPELINE_DIR}/launch-generate-bindings.log" 2>&1
-
-    RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
-    RF=blitz_decode_pipeline_rank_file_superpod_ci
-    LOCAL_BIND="${TT_METAL_HOME}/generated/blitz_sc16"
-    mkdir -p "${LOCAL_BIND}"
-    cp -f "${BINDINGS_DIR}/${RB}" "${BINDINGS_DIR}/${RF}" "${LOCAL_BIND}/"
-    mpirun --pernode bash -lc "mkdir -p '${LOCAL_BIND}' && cp -f '${BINDINGS_DIR}/${RB}' '${BINDINGS_DIR}/${RF}' '${LOCAL_BIND}/'"
-
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --skip-executable-check \
       --tcp-interface ens5f0np0 \
-      --rank-binding "generated/blitz_sc16/${RB}" \
-      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
-      bash -c "python3 -m models.demos.deepseek_v3_b1.demo.cli \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
-        --prompt 'Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts.' \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
-        > \"${RANKLOG_DIR}/rank-\${TT_RUN_RANK}.log\" 2>&1" \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
     bh_sc16:
@@ -207,49 +167,28 @@
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
-    TTRUN_DIR=/etc/ttop
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs"
+    MGD="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
-    RANKLOG_DIR="${PIPELINE_DIR}/ranklogs"
-    BINDINGS_DIR="${PIPELINE_DIR}/blitz_bindings"
-    mkdir -p "${RANKLOG_DIR}" "${BINDINGS_DIR}"
-    export LOGURU_LEVEL=ERROR
-    export TT_LOGGER_LEVEL=error
+    mkdir -p "${PIPELINE_DIR}/ranklogs"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
 
-    cd "${BINDINGS_DIR}"
-    python3 "${SCALEOUT_DIR}/generate_blitz_decode_pipeline_configs.py" \
-      "${SCALEOUT_DIR}/blitz_pipeline_config_superpod_ci.yaml" \
-      --hostfile "${TTRUN_DIR}/hostfile" \
-      --preserve-hostfile-order \
-      --stage-size 4x2 \
-      --worker-tt-metal-home "${TT_METAL_HOME}" \
-      --output-dir "${BINDINGS_DIR}" \
-      > "${PIPELINE_DIR}/launch-generate-bindings.log" 2>&1
-
-    RB=blitz_decode_pipeline_rank_binding_superpod_ci.yaml
-    RF=blitz_decode_pipeline_rank_file_superpod_ci
-    LOCAL_BIND="${TT_METAL_HOME}/generated/blitz_sc16"
-    mkdir -p "${LOCAL_BIND}"
-    cp -f "${BINDINGS_DIR}/${RB}" "${BINDINGS_DIR}/${RF}" "${LOCAL_BIND}/"
-    mpirun --pernode bash -lc "mkdir -p '${LOCAL_BIND}' && cp -f '${BINDINGS_DIR}/${RB}' '${BINDINGS_DIR}/${RF}' '${LOCAL_BIND}/'"
-
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --skip-executable-check \
       --tcp-interface ens5f0np0 \
-      --rank-binding "generated/blitz_sc16/${RB}" \
-      --mpi-args "--host ${PIPELINE_HOSTS} --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/blitz_sc16/${RF} -x LOGURU_LEVEL=ERROR" \
-      bash -c "python3 -m models.demos.deepseek_v3_b1.demo.cli \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
         --no-stop-at-eos \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
-        --prompt 'Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts.' \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
-        > \"${RANKLOG_DIR}/rank-\${TT_RUN_RANK}.log\" 2>&1" \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
     bh_sc16:

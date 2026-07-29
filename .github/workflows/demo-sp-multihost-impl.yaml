@@ -366,7 +366,7 @@ jobs:
           eval "$CMD"
 
       # MUST precede teardown: NFS staging stays until workers are reclaimed.
-      - name: Upload launch + per-rank logs and blitz bindings
+      - name: Upload launch + per-rank logs and automapper outputs
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -374,10 +374,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
-            ${{ env.PIPELINE_DIR }}/launch.log
-            ${{ env.PIPELINE_DIR }}/launch-generate-bindings.log
-            ${{ env.PIPELINE_DIR }}/ranklogs/
-            ${{ env.PIPELINE_DIR }}/blitz_bindings/
+            ${{ env.PIPELINE_DIR }}/
+            /home/user/tt-metal/generated/ttrun/
             /tmp/cluster_validation_logs/
 
       - name: Delete test environment
