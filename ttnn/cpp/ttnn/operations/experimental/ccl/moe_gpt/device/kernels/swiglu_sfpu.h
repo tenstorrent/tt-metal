@@ -109,8 +109,15 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
 }
 
 inline void swiglu_init() {
-    // SwiGLU uses sigmoid internally, which needs reciprocal table init.
-    recip_init<false, false>();
+    // SwiGLU's sigmoid uses sfpu_reciprocal_iter<>, whose Newton correction reads the
+    // programmable constant vConstFloatPrgm0, which is set by sfpu_reciprocal_init() -- NOT by
+    // recip_init<false,false>(). On Wormhole recip_init() happens to call sfpu_reciprocal_init()
+    // internally so the constant was set; on Blackhole recip_init<false,false>() only programs
+    // the (unused-here) fast calculate_reciprocal() SFPLOADMACRO templates and leaves
+    // vConstFloatPrgm0 uninitialized -> sfpu_reciprocal_iter diverges for ALL inputs
+    // (recip(2.0)~5e18) -> sigmoid ~1e19 -> swiglu ~1e20 -> gpt-oss MoE decode logits collapse to 0.
+    // sfpu_reciprocal_init<false>() sets exactly the constants the iter needs on both archs.
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace ckernel::sfpu
