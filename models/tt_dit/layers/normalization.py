@@ -221,7 +221,7 @@ class DistributedRMSNorm(Module):
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
     def _ensure_fused_stats_buffer(
-        self, x: ttnn.Tensor, num_heads_per_device: int, rope_cos=None, rope_sin=None, trans_mat=None
+        self, x: ttnn.Tensor, num_heads_per_device: int, weight=None, rope_cos=None, rope_sin=None, trans_mat=None
     ):
         """Lazy-allocate the persistent stats buffer for the fused device op.
 
@@ -232,9 +232,13 @@ class DistributedRMSNorm(Module):
         default num_links (=1), so we leave create_stats_buffer at its default too;
         but we MUST forward weight/RoPE or the buffer is sized for a different chunk
         than the kernel writes, silently corrupting each chunk's last AG row.
+
+        `weight` presence (static gamma or dynamic AdaLN scale) is part of the key:
+        the same norm can be called both with and without a weight (e.g. AdaLN vs a
+        plain cross-attn norm), and those two size the streaming chunk differently.
         """
         has_rope = rope_cos is not None
-        key = (tuple(x.shape), num_heads_per_device, has_rope)
+        key = (tuple(x.shape), num_heads_per_device, has_rope, weight is not None)
         cache = getattr(self, "_fused_stats_buffer_cache", None)
         if cache is None:
             cache = {}
@@ -256,7 +260,7 @@ class DistributedRMSNorm(Module):
                     self.mesh_axis,
                     self.mesh_device,
                     num_heads_per_device=num_heads_per_device,
-                    weight=self.weight.data if self.weight is not None else None,
+                    weight=weight if weight is not None else (self.weight.data if self.weight is not None else None),
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
                     rope_sin=rope_sin,
@@ -281,6 +285,8 @@ class DistributedRMSNorm(Module):
         rope_sin=None,
         trans_mat=None,
         dtype=None,
+        dynamic_weight=None,
+        dynamic_bias=None,
     ) -> ttnn.Tensor:
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
@@ -290,9 +296,23 @@ class DistributedRMSNorm(Module):
             )
             raise ValueError(msg)
 
+        # Dynamic weight/bias fuse an AdaLN (shift + norm(x) * scale) into the norm's
+        # post step: norm(x) * weight + bias, with weight/bias broadcast across tokens.
+        # Requires no static gamma (the weight slot is the AdaLN scale).
+        assert (dynamic_weight is None) == (
+            dynamic_bias is None
+        ), "dynamic_weight and dynamic_bias must be either both provided or both None"
+        if dynamic_weight is not None:
+            assert (
+                not self.norm_elementwise_affine
+            ), "Module must not have a weight parameter when dynamic_weight/dynamic_bias are provided"
+            weight = dynamic_weight
+        else:
+            weight = self.weight.data if self.weight is not None else None
+
         if _USE_FUSED_RMSNORM:
             persistent_output_buffer = self._ensure_fused_stats_buffer(
-                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+                x, num_heads_per_device, weight=weight, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
             )
             return ttnn.experimental.wan_fused_distributed_rmsnorm(
                 x,
@@ -303,7 +323,8 @@ class DistributedRMSNorm(Module):
                 persistent_output_buffer=persistent_output_buffer,
                 epsilon=self.norm_eps,
                 num_heads_per_device=num_heads_per_device,
-                weight=self.weight.data if self.weight is not None else None,
+                weight=weight,
+                bias=dynamic_bias,
                 compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
                 transformation_mat=trans_mat,
                 rope_cos=rope_cos,
@@ -328,13 +349,17 @@ class DistributedRMSNorm(Module):
             stats,
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
-            weight=self.weight.data if self.weight is not None else None,
+            weight=weight,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             transformation_mat=trans_mat,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
         )
+        # post_allgather has no bias input, so the AdaLN shift is a trailing add here
+        # (the fused single-op path above folds it in).
+        if dynamic_bias is not None:
+            x = ttnn.add(x, dynamic_bias)
         return x
 
 

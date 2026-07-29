@@ -276,8 +276,7 @@ class LTXTransformerBlock(Module):
 
         Ring fuses ff1(AG) + ff2 + RS + addcmul; Linear needs explicit AG + plain ffn().
         """
-        normed = norm(x_1BND)
-        normed = ttnn.addcmul(shift_ff, normed, scale_ff_p1)
+        normed = norm(x_1BND, dynamic_weight=scale_ff_p1, dynamic_bias=shift_ff)
         if self.ccl_manager.topology == ttnn.Topology.Ring:
             return ffn.forward_fused_addcmul(
                 normed,
@@ -337,8 +336,7 @@ class LTXTransformerBlock(Module):
             v_shift_ca, v_scale_ca_p1, v_gate_ca = chunks[6], chunks[7], chunks[8]
 
         # Video self-attention
-        video_normed = self.norm1(video_1BND)
-        video_normed = ttnn.addcmul(v_shift_sa, video_normed, v_scale_sa_p1)
+        video_normed = self.norm1(video_1BND, dynamic_weight=v_scale_sa_p1, dynamic_bias=v_shift_sa)
         video_1BND = self.attn1(
             spatial_1BND=video_normed,
             N=video_N,
@@ -352,7 +350,7 @@ class LTXTransformerBlock(Module):
 
         # Video text cross-attention
         if self.cross_attention_adaln:
-            video_ca_input = ttnn.addcmul(v_shift_ca, self.norm2(video_1BND), v_scale_ca_p1)
+            video_ca_input = self.norm2(video_1BND, dynamic_weight=v_scale_ca_p1, dynamic_bias=v_shift_ca)
             if video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
                 v_kv_shift, v_kv_scale_p1 = ttnn.chunk(shifted_prompt_v, 2, dim=0)
@@ -390,8 +388,7 @@ class LTXTransformerBlock(Module):
             a_shift_ca, a_scale_ca_p1, a_gate_ca = a_chunks[6], a_chunks[7], a_chunks[8]
 
         # Audio self-attention
-        audio_normed = self.audio_norm1(audio_1BND)
-        audio_normed = ttnn.addcmul(a_shift_sa, audio_normed, a_scale_sa_p1)
+        audio_normed = self.audio_norm1(audio_1BND, dynamic_weight=a_scale_sa_p1, dynamic_bias=a_shift_sa)
         audio_1BND = self.audio_attn1(
             spatial_1BND=audio_normed,
             N=audio_N,
@@ -406,7 +403,7 @@ class LTXTransformerBlock(Module):
 
         # Audio text cross-attention
         if self.cross_attention_adaln:
-            audio_ca_input = ttnn.addcmul(a_shift_ca, self.audio_norm2(audio_1BND), a_scale_ca_p1)
+            audio_ca_input = self.audio_norm2(audio_1BND, dynamic_weight=a_scale_ca_p1, dynamic_bias=a_shift_ca)
             if audio_prompt_temb is not None:
                 shifted_prompt_a = self.audio_prompt_scale_shift_table.data + audio_prompt_temb
                 a_kv_shift, a_kv_scale_p1 = ttnn.chunk(shifted_prompt_a, 2, dim=0)
