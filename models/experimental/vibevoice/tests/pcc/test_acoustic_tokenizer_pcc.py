@@ -9,9 +9,6 @@ Three tests:
   3. test_acoustic_tokenizer_decode_real_latents_pcc: decode encoder latents PCC >= 0.99
 """
 
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
@@ -28,12 +25,6 @@ from models.experimental.vibevoice.tt.ttnn_acoustic_tokenizer import (
     TTAcousticTokenizer,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import load_vibevoice_model_config
-
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 AUDIO_LEN = 24000
 
@@ -58,8 +49,10 @@ def ac_tokenizer_tt(mesh_device, ac_tok_state, vv_config):
 
 
 def _reference_acoustic_encode(hf_state, audio, vv_config):
-    from modular.configuration_vibevoice import VibeVoiceAcousticTokenizerConfig
-    from modular.modular_vibevoice_tokenizer import VibeVoiceAcousticTokenizerModel
+    from models.experimental.vibevoice.reference.modular.configuration_vibevoice import VibeVoiceAcousticTokenizerConfig
+    from models.experimental.vibevoice.reference.modular.modular_vibevoice_tokenizer import (
+        VibeVoiceAcousticTokenizerModel,
+    )
 
     cfg = vv_config.acoustic_tokenizer
     tok_cfg = VibeVoiceAcousticTokenizerConfig(
@@ -84,8 +77,10 @@ def _reference_acoustic_encode(hf_state, audio, vv_config):
 
 
 def _reference_acoustic_decode(hf_state, latents, vv_config):
-    from modular.configuration_vibevoice import VibeVoiceAcousticTokenizerConfig
-    from modular.modular_vibevoice_tokenizer import VibeVoiceAcousticTokenizerModel
+    from models.experimental.vibevoice.reference.modular.configuration_vibevoice import VibeVoiceAcousticTokenizerConfig
+    from models.experimental.vibevoice.reference.modular.modular_vibevoice_tokenizer import (
+        VibeVoiceAcousticTokenizerModel,
+    )
 
     cfg = vv_config.acoustic_tokenizer
     tok_cfg = VibeVoiceAcousticTokenizerConfig(
@@ -109,6 +104,7 @@ def _reference_acoustic_decode(hf_state, latents, vv_config):
     return out  # [1, 1, T_audio]
 
 
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_acoustic_tokenizer_encode_pcc(mesh_device, ac_tok_state, vv_config, ac_tokenizer_tt):
@@ -146,6 +142,7 @@ def test_acoustic_tokenizer_encode_pcc(mesh_device, ac_tok_state, vv_config, ac_
     )
 
 
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_acoustic_tokenizer_decode_pcc(mesh_device, ac_tok_state, vv_config, ac_tokenizer_tt):
@@ -190,6 +187,7 @@ def test_acoustic_tokenizer_decode_pcc(mesh_device, ac_tok_state, vv_config, ac_
     )
 
 
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_acoustic_tokenizer_decode_real_latents_pcc(mesh_device, ac_tok_state, vv_config, ac_tokenizer_tt):

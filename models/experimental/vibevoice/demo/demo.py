@@ -54,11 +54,6 @@ from models.experimental.vibevoice.demo.perf_metrics import (
 )
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
-_VV_ROOT = Path(__file__).resolve().parent.parent
-for _p in (_VV_ROOT / "reference", _VV_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
 SR = 24000
 
 
@@ -76,10 +71,9 @@ def _split_script(script: str, n: int) -> list[str]:
     100-min script), so chunking is the way to render a script that needs longer than that.
     Balancing is by character count, so parts are only approximately equal in duration.
 
-    NOTE: chunking is no longer needed for output quality.  It was added when a single pass
-    collapsed around min 72; that collapse was a CFG bug (the negative branch was fed a constant
-    token embedding instead of the audio feedback) and is fixed — a single pass now renders 93 min
-    clean.  Each extra boundary costs ~1 garbled minute while the new prefill settles.
+    Chunking is only needed to exceed the single-pass position limit, not for output quality: a
+    single pass renders 93 min clean.  Each extra boundary costs ~1 garbled minute while the new
+    prefill settles, so prefer the fewest chunks that fit.
 
     Split on single newlines, not blank lines: ``load_script`` collapses the blank lines that
     separate turns in the resource .txt files, so by the time the script reaches here one turn is
@@ -204,14 +198,14 @@ def main() -> int:
     if args.debug:
         os.environ["VV_DEBUG"] = "1"
         os.environ["VV_PROFILE"] = "1"
-        print("[demo_ttnn] debug enabled (VV_DEBUG=1 VV_PROFILE=1)", flush=True)
+        print("[vibevoice_demo] debug enabled (VV_DEBUG=1 VV_PROFILE=1)", flush=True)
 
     if args.trace:
         os.environ["VV_TRACE_SEGMENT"] = "1"
-        print("[demo_ttnn] trace enabled: whole-segment fused frame (VV_TRACE_SEGMENT=1, llama shape)", flush=True)
+        print("[vibevoice_demo] trace enabled: whole-segment fused frame (VV_TRACE_SEGMENT=1, llama shape)", flush=True)
     else:
         os.environ["VV_TRACE_SEGMENT"] = "0"
-        print("[demo_ttnn] trace disabled (--no-trace): eager decode", flush=True)
+        print("[vibevoice_demo] trace disabled (--no-trace): eager decode", flush=True)
 
     if args.text:
         text_path = Path(args.text)
@@ -228,11 +222,11 @@ def main() -> int:
         ensure_demo_resources()
         model_path = str(ensure_model_weights(args.model_path))
     except Exception as exc:
-        print(f"[demo_ttnn] ERROR: {exc}", file=sys.stderr)
+        print(f"[vibevoice_demo] ERROR: {exc}", file=sys.stderr)
         return 1
 
     if not text_path.is_file():
-        print(f"[demo_ttnn] ERROR: text file not found: {text_path}", file=sys.stderr)
+        print(f"[vibevoice_demo] ERROR: text file not found: {text_path}", file=sys.stderr)
         return 1
 
     script = load_script(text_path)
@@ -247,7 +241,7 @@ def main() -> int:
         for voice_ref in args.voice:
             voice_path = Path(voice_ref)
             if not voice_path.is_file():
-                print(f"[demo_ttnn] ERROR: voice file not found: {voice_path}", file=sys.stderr)
+                print(f"[vibevoice_demo] ERROR: voice file not found: {voice_path}", file=sys.stderr)
                 return 1
             voice_paths.append(voice_path)
         use_voice_cloning = not args.no_voice_cloning
@@ -264,20 +258,20 @@ def main() -> int:
         use_voice_cloning = True
         voice_samples, voice_mapping = build_voice_samples(script, voice_preset_demo_id(demo_id))
 
-    print(f"[demo_ttnn] demo={demo_id}  text={text_path.name}", flush=True)
-    print(f"[demo_ttnn] output dir: {paths['dir']}", flush=True)
-    print("[demo_ttnn] TT-only inference (no HuggingFace reference model)", flush=True)
+    print(f"[vibevoice_demo] demo={demo_id}  text={text_path.name}", flush=True)
+    print(f"[vibevoice_demo] output dir: {paths['dir']}", flush=True)
+    print("[vibevoice_demo] TT-only inference (no HuggingFace reference model)", flush=True)
     if use_voice_cloning:
-        print("[demo_ttnn] voice cloning enabled (on-device speech prefill):", flush=True)
+        print("[vibevoice_demo] voice cloning enabled (on-device speech prefill):", flush=True)
         for entry in voice_mapping or []:
             print(
                 f"  Speaker {entry['speaker_id']} ({entry['name']}) → {entry['voice_file']}",
                 flush=True,
             )
     else:
-        print("[demo_ttnn] text-only prompt (no voice cloning samples)", flush=True)
+        print("[vibevoice_demo] text-only prompt (no voice cloning samples)", flush=True)
 
-    from processor.vibevoice_processor import VibeVoiceProcessor
+    from models.experimental.vibevoice.reference.processor.vibevoice_processor import VibeVoiceProcessor
 
     processor = VibeVoiceProcessor.from_pretrained(model_path)
 
@@ -295,7 +289,7 @@ def main() -> int:
     scripts = _split_script(script, max(1, args.chunks))
     if len(scripts) > 1:
         print(
-            f"[demo_ttnn] chunked render: {len(scripts)} parts "
+            f"[vibevoice_demo] chunked render: {len(scripts)} parts "
             f"({', '.join(f'{len(s)}ch' for s in scripts)}), each prefilled independently",
             flush=True,
         )
@@ -304,7 +298,7 @@ def main() -> int:
     if args.isl is not None:
         inputs = crop_processor_inputs_to_isl(inputs, args.isl)
         print(
-            f"[demo_ttnn] ISL crop: {full_prefill_len} → {args.isl} tokens (post-tokenization)",
+            f"[vibevoice_demo] ISL crop: {full_prefill_len} → {args.isl} tokens (post-tokenization)",
             flush=True,
         )
     prefill_len = int(inputs["input_ids"].shape[1])
@@ -315,7 +309,7 @@ def main() -> int:
         if voice_samples and inputs.get("speech_tensors") is not None:
             voice_samples_sec = inputs["speech_tensors"].shape[-1] / SR
         print(
-            "[demo_ttnn] stage 1/5 processor: "
+            "[vibevoice_demo] stage 1/5 processor: "
             f"input_ids={tuple(inputs['input_ids'].shape)} "
             f"speech_slots={speech_slots} "
             f"voice_audio_sec={voice_samples_sec}",
@@ -326,7 +320,7 @@ def main() -> int:
     if max_ar_steps is None:
         max_ar_steps = int(args.max_length_times * prefill_len)
     print(
-        f"[demo_ttnn] prefill tokens={prefill_len}  max AR steps≈{max_ar_steps} "
+        f"[vibevoice_demo] prefill tokens={prefill_len}  max AR steps≈{max_ar_steps} "
         f"(max_new_tokens={args.max_new_tokens} max_length_times={args.max_length_times})",
         flush=True,
     )
@@ -341,8 +335,8 @@ def main() -> int:
     mesh = ttnn.open_device(**_open_kwargs)
     try:
         if args.debug:
-            print("[demo_ttnn] stage 2/5 open_device: device_id=0 l1_small_size=32768", flush=True)
-        print("[demo_ttnn] Loading TTVibeVoiceModel...", flush=True)
+            print("[vibevoice_demo] stage 2/5 open_device: device_id=0 l1_small_size=32768", flush=True)
+        print("[vibevoice_demo] Loading TTVibeVoiceModel...", flush=True)
         _t_load0 = _time.perf_counter()
         tt_model = TTVibeVoiceModel.from_checkpoint(
             mesh,
@@ -350,19 +344,19 @@ def main() -> int:
             cfg_scale=args.cfg_scale,
             num_diffusion_steps=args.num_steps,
         )
-        print(f"[demo_ttnn] model load: {_time.perf_counter() - _t_load0:.1f}s", flush=True)
+        print(f"[vibevoice_demo] model load: {_time.perf_counter() - _t_load0:.1f}s", flush=True)
         if args.debug:
             print(
-                "[demo_ttnn] stage 3/5 model loaded: LM + connectors + diffusion_head + "
+                "[vibevoice_demo] stage 3/5 model loaded: LM + connectors + diffusion_head + "
                 "acoustic/semantic tokenizers + DPM scheduler",
                 flush=True,
             )
 
         torch.manual_seed(args.seed)
-        print("[demo_ttnn] TT generate...", flush=True)
+        print("[vibevoice_demo] TT generate...", flush=True)
         if args.debug:
             print(
-                "[demo_ttnn] stage 4/5 generate: prefill (voice encode + LM) → "
+                "[vibevoice_demo] stage 4/5 generate: prefill (voice encode + LM) → "
                 f"AR loop up to {max_ar_steps} steps (see [VV_DEBUG] per step)",
                 flush=True,
             )
@@ -382,13 +376,13 @@ def main() -> int:
 
         if args.warmup:
             warm_n = max(1, int(args.warmup_tokens))
-            print(f"[demo_ttnn] warmup generate (max_new_tokens={warm_n}, untimed)...", flush=True)
+            print(f"[vibevoice_demo] warmup generate (max_new_tokens={warm_n}, untimed)...", flush=True)
             warm_kw = dict(generate_kwargs)
             warm_kw["max_new_tokens"] = warm_n
             torch.manual_seed(args.seed)
             _ = tt_model.generate(**warm_kw)
             ttnn.synchronize_device(mesh)
-            print("[demo_ttnn] warmup done; starting timed generate", flush=True)
+            print("[vibevoice_demo] warmup done; starting timed generate", flush=True)
 
         speech_parts: list[torch.Tensor] = []
         _stream_base = os.environ.get("VV_STREAM_AUDIO", "")
@@ -407,7 +401,7 @@ def main() -> int:
                     generate_kwargs["speech_masks"] = inputs["speech_masks"]
             if len(scripts) > 1:
                 print(
-                    f"[demo_ttnn] --- chunk {chunk_idx + 1}/{len(scripts)}: " f"prefill={prefill_len} tokens ---",
+                    f"[vibevoice_demo] --- chunk {chunk_idx + 1}/{len(scripts)}: " f"prefill={prefill_len} tokens ---",
                     flush=True,
                 )
                 # generate() opens VV_STREAM_AUDIO with "wb", so every chunk would truncate the
@@ -421,7 +415,7 @@ def main() -> int:
             tt_out = tt_model.generate(**generate_kwargs)
             ttnn.synchronize_device(mesh)
             _generate_wall = _time.perf_counter() - _t_gen0
-            print(f"[demo_ttnn] generate wall: {_generate_wall:.1f}s", flush=True)
+            print(f"[vibevoice_demo] generate wall: {_generate_wall:.1f}s", flush=True)
             speech_parts.append(tt_out.speech_outputs[0].to(torch.float32).reshape(-1))
             tt_gen = tt_out.sequences[0, prefill_len:]
             _ar_tokens = int(tt_gen.numel())
@@ -434,11 +428,11 @@ def main() -> int:
                 steady_decode_s=tt_out.steady_decode_s,
                 steady_decode_frames=tt_out.steady_decode_frames,
             )
-            print(f"[demo_ttnn] {format_perf_line(perf)}", flush=True)
+            print(f"[vibevoice_demo] {format_perf_line(perf)}", flush=True)
         tt_speech = speech_parts[0] if len(speech_parts) == 1 else torch.cat(speech_parts)
         if len(speech_parts) > 1:
             print(
-                f"[demo_ttnn] concatenated {len(speech_parts)} chunks → " f"{tt_speech.numel() / SR / 60:.2f} min",
+                f"[vibevoice_demo] concatenated {len(speech_parts)} chunks → " f"{tt_speech.numel() / SR / 60:.2f} min",
                 flush=True,
             )
             if _stream_base:
@@ -450,7 +444,7 @@ def main() -> int:
 
     if args.debug:
         print(
-            f"[demo_ttnn] stage 5/5 save: wav + meta under {paths['dir']}",
+            f"[vibevoice_demo] stage 5/5 save: wav + meta under {paths['dir']}",
             flush=True,
         )
 
@@ -475,10 +469,10 @@ def main() -> int:
     paths["meta"].write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
     print(
-        f"[demo_ttnn] TT: {tt_gen.numel()} AR tokens, {tt_speech.numel() / SR:.2f}s → {tt_path}",
+        f"[vibevoice_demo] TT: {tt_gen.numel()} AR tokens, {tt_speech.numel() / SR:.2f}s → {tt_path}",
         flush=True,
     )
-    print(f"[demo_ttnn] DONE → {tt_path.name}  under {paths['dir']}/", flush=True)
+    print(f"[vibevoice_demo] DONE → {tt_path.name}  under {paths['dir']}/", flush=True)
     return 0
 
 

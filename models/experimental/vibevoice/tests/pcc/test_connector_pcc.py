@@ -57,6 +57,7 @@ def vv_config():
     return load_vibevoice_model_config(MODEL_PATH)
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @pytest.mark.parametrize("connector_name", ["acoustic_connector", "semantic_connector"])
 def test_connector_pcc(mesh_device, loaded_weights, vv_config, connector_name):

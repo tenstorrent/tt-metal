@@ -7,9 +7,6 @@ Tests scheduler math alone with synthetic eps tensors (same torch.manual_seed).
 After 10 steps, latent PCC >= 0.99.
 """
 
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
@@ -19,15 +16,9 @@ from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
     TTDPMSolverMultistepScheduler,
 )
 
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
 
 def _build_reference_scheduler():
-    from schedule.dpm_solver import DPMSolverMultistepScheduler as RefScheduler
+    from models.experimental.vibevoice.reference.schedule.dpm_solver import DPMSolverMultistepScheduler as RefScheduler
 
     return RefScheduler(
         num_train_timesteps=1000,
@@ -45,6 +36,7 @@ NUM_STEPS = 10
 LATENT_SIZE = 64
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_dpm_scheduler_pcc(mesh_device):
     torch.manual_seed(42)
