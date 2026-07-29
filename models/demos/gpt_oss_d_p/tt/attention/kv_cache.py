@@ -140,6 +140,14 @@ def write_kv_chunk(kv_cache: GptOssKVCache, tt_k, tt_v, *, slot_idx, layer_idx, 
     cols, sequence SP-sharded on the ``sp_axis`` rows) — exactly the per-chip cache layout, so they write
     in place. ``kv_actual`` is the cumulative valid prefix before this chunk (0 for the first/only chunk).
     """
+    # One user per call: update_padded_kv_cache writes a single (slot_idx, layer_idx) and ignores the
+    # leading/batch dim, so a batched (batch>1) tt_k/tt_v would silently write only slot_idx and drop the
+    # rest. Require batch==1 and fail loud; batched multi-user prefill must loop this per user (slot_idx+b)
+    # at the call site. The scatter-to-slots write lands with the runtime multi-user path (P4).
+    assert tt_k.shape[0] == 1 and tt_v.shape[0] == 1, (
+        f"write_kv_chunk writes one user per call, but got leading (batch) dim "
+        f"k={tt_k.shape[0]}, v={tt_v.shape[0]}; loop over users (slot_idx + b) at the call site"
+    )
     # Fail loud on a bad slot/layer (would otherwise be a silent OOB write into another user's slot) and
     # on a misaligned chunk offset (the block-cyclic per-device write assumes a tile-aligned boundary).
     assert 0 <= slot_idx < kv_cache.num_users, f"slot_idx {slot_idx} out of range [0, {kv_cache.num_users})"
