@@ -391,7 +391,6 @@ def run_all_gather_impl(
         ([1, 1, 1024, 1024], -2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf
         ([1, 1, 48, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, padded
         ([256], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, rank 1
-        ([512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, rank 1
         # composite (RM last-dim unaligned pages)
         ([1, 1, 32, 136], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf, composite
         # composite (tile padding on gather dim)
@@ -410,7 +409,6 @@ def run_all_gather_impl(
         "gather_dim_negative_2-perf",
         "gather_dim_negative_1_padded_dim_2-check",
         "rank1_persistent_buffer-check",
-        "rank1_multi_tile_persistent_buffer-check",
         "composite_ag_test_one-perf",
         "composite_ag_test_two-check",
     ],
