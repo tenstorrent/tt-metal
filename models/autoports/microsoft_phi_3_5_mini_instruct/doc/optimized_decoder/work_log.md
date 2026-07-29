@@ -233,4 +233,10 @@ fused batch-1 K/V update. Remediation evidence is in
 `logs/fused_cache_update_b1_adapted.log` (passing synthetic control), and
 `logs/fused_cache_update_b1_real.log` (real-weight PCC and 200-replay timing).
 After remediation the full default suite again passed 7 tests with the same 3
-opt-in skips; batch-32 traced PCC remained 0.9999852.
+opt-in skips; batch-32 traced PCC remained 0.9999852. The initially stated
+full-suite result had not been persisted after remediation, which the second
+fresh rereview correctly flagged as an evidence gap. The suite was therefore
+rerun from commit `106503402d3`; all 7 default tests passed and the 3
+documented opt-in tests skipped in 28.66 seconds. The complete console is
+`logs/final_tests_fused_cache_remediation.log`. The second review and its
+resolution are recorded in `stage_review_fused_second.md`.

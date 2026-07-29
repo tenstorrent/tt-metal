@@ -147,3 +147,12 @@ Nanobind reference-leak diagnostics occur during Python teardown after the
 tests pass, the watcher reports no kernel error, and device close succeeds;
 they are binding teardown noise rather than a decoder/watcher failure.
 Commands and additional evidence are in `work_log.md`.
+
+After the fused batch-1 cache-update remediation, the complete optimized
+decoder suite was rerun from the committed source: 7 passed and 3 documented
+opt-in stress tests skipped in 28.66 seconds. The authoritative post-fix
+console is `logs/final_tests_fused_cache_remediation.log`. The separate
+post-fix watcher run passed all four selected checks, including full-context
+decode, with no watcher kernel error; see
+`watcher_fused_cache_final_console.log` and
+`watcher_fused_cache_final/generated/watcher/watcher.log`.
