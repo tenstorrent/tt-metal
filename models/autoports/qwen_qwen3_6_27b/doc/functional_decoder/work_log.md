@@ -269,6 +269,12 @@ AutoFix rounds. Verdict: `clean-pass`, with no required work or hard-check
 gaps. Residual risk is long-prefill speed, explicitly deferred to the optimize
 stage. The recorded review is `stage_review.md`.
 
+Local checkpoint (never pushed):
+
+- repo: `/home/mvasiljevic/tt-metal`
+- branch: `mvasiljevic/qb2/skillexp/base`
+- implementation commit: `8e09249fae8012e98f437446f9a5a8f48174ede6`
+
 Two fallback-audit runs set `ttnn.CONFIG.throw_exception_on_fallback = True`;
 both nonzero traced layer kinds pass. Hardware recovery during AutoFix reset
 only the exact failing devices 3 then 2 after a stale fatal and ERISC heartbeat
