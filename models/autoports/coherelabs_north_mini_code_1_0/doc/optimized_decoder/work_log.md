@@ -608,3 +608,16 @@ No commit was pushed.
     defect exists. Its sole remaining P1 is the externally blocked mandatory
     OPT-015 advisor run. The rereview report is committed as `57e7f984220`
     (`Rereview North Mini optimized decoder closure`). No commit was pushed.
+49. Rechecked OPT-015 after continuation. The bootstrap still exits before
+    capture because `ttnn-advise` is absent. A fresh AutoFix audit exhaustively
+    searched accessible system roots, every discovered Python environment,
+    arbitrary-name Git checkouts, CMake/build/install trees, cached
+    wheels/archives, and container access. It found no advisor executable,
+    importable `ttnn_jit`, `ttrt`, prebuilt environment, or accessible copy of
+    the formerly working container layer. The sole tt-mlir checkout remains
+    `21c1b3bc4a81` with `TTMLIR_ENABLE_TTNN_JIT=OFF`; the required
+    `618cd4e75d` object and branch are absent. This proves the failure is not a
+    shell-activation bug and leaves no safe non-build recovery path. Exact
+    evidence is committed as `c266acbc235` (`Document North Mini advisor
+    environment audit`). No TT device, build, install, fetch, checkout, or
+    runtime-code change was performed, and no commit was pushed.
