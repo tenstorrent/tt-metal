@@ -211,6 +211,76 @@ No TT device, profiler, watcher, or model execution was opened.
 Verdict: the model capture hypothesis is verified; the required advisor run
 is blocked by unavailable external operator setup. OPT-015 remains open.
 
+### Review 7 activation-hypothesis recheck
+
+AutoFix separately tested the last environment-side hypothesis: a correct
+prebuilt advisor might already be present but hidden behind the wrong shell
+activation. The recheck was read-only, did not open a TT device, and did not
+build, install, fetch, clone, or change either external checkout.
+
+The accessible filesystem was searched by exact executable/package name under
+`/home/mvasiljevic`, `/opt`, and `/usr/local`, plus the container root
+filesystem outside the separately mounted home. Git metadata was searched
+independently so a checkout with an arbitrary directory name would still be
+found. All discovered Python virtual environments were queried with their own
+interpreters for the `ttnn_jit` import, its distribution metadata, and the
+`ttnn-advise` entry point. CMake caches, build/install trees, shell activation
+files, local wheel/archive caches, symlinks, and current environment metadata
+were also checked.
+
+Results:
+
+- No `ttnn-advise` executable, `ttnn_jit` installed package, matching entry
+  point, or prebuilt wheel/archive exists in the accessible roots. `ttrt` is
+  also absent as an executable.
+- The only tt-mlir Git checkout is
+  `/home/mvasiljevic/tt-xla/third_party/tt-mlir/src/tt-mlir`, at
+  `21c1b3bc4a81cba1642c170fb08ef0b048040a8a` on
+  `mvasiljevic/5738-distributed-rmsnorm-rulebook`. Its sole CMake cache records
+  `TTMLIR_ENABLE_OPMODEL=ON` but `TTMLIR_ENABLE_TTNN_JIT=OFF`; neither its
+  build nor install tree contains the advisor.
+- The required `618cd4e75d` commit is not an object in that repository, and no
+  local `mvasiljevic/shard-advisor-dram-sharding` ref exists. The current
+  source tree itself contains no `ttnn-advise` implementation.
+- The checkout's `env/activate` defaults to
+  `/opt/ttmlir-toolchain/venv`. Activating that venv, then repeating with the
+  checkout-local untracked `venv`, produces the same result in both cases:
+  `command -v ttnn-advise` is empty and
+  `importlib.util.find_spec("ttnn_jit")` is `None`. Thus the original
+  bootstrap failure is not merely selection of the wrong one of the two
+  visible venvs.
+- Historical experiment notes mention a working advisor only in the private
+  writable layer of a different container, `mvasiljevic-ttxla-dram`.
+  This container has no Docker or Podman client, no Docker socket, no
+  `/home/mvasiljevic/tt-mlir` checkout, and no mounted copy of that writable
+  layer. It is therefore not an addressable prebuilt environment from this
+  workspace.
+
+Focused reproduction:
+
+```text
+git -C /home/mvasiljevic/tt-xla/third_party/tt-mlir/src/tt-mlir rev-parse HEAD
+# 21c1b3bc4a81cba1642c170fb08ef0b048040a8a
+
+rg '^(TTMLIR_ENABLE_OPMODEL|TTMLIR_ENABLE_TTNN_JIT):' \
+  /home/mvasiljevic/tt-xla/third_party/tt-mlir/src/tt-mlir/build/CMakeCache.txt
+# TTMLIR_ENABLE_OPMODEL:BOOL=ON
+# TTMLIR_ENABLE_TTNN_JIT:BOOL=OFF
+
+git -C /home/mvasiljevic/tt-xla/third_party/tt-mlir/src/tt-mlir \
+  cat-file -t 618cd4e75d
+# fatal: Not a valid object name 618cd4e75d
+
+/opt/ttmlir-toolchain/venv/bin/python -c \
+  'import importlib.util; print(importlib.util.find_spec("ttnn_jit"))'
+# None
+```
+
+Verdict: the hidden/mis-activated-prebuilt hypothesis is refuted. There is no
+safe activation or `PYTHONPATH` adjustment that can supply a missing CLI,
+compiled package, and required pinned source revision. AutoFix therefore
+confirms an external operator-setup blocker rather than a model or shell bug.
+
 ### Candidate comparison and safe application boundary
 
 The current selected decode baseline is explicit and remains unchanged:
