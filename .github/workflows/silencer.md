@@ -162,13 +162,22 @@ Do all of the following with `bash`, keeping only small, aggregated results in c
    with **no** `warning:` token — so a naive `warning:`-only grep silently misses every runtime
    and log-spam line (e.g. the matmul `allowed_worker_cores` spam in #48660). When in doubt,
    broaden the signature set, never narrow it: a missed pattern is noise that never gets fixed.
-3. **Aggregate and rank by frequency.** The *count* is what tells you what to fix first and
-   what is "spam". Normalize away line numbers/addresses/timestamps so identical messages
-   collapse together:
+3. **Aggregate and rank by frequency — but rank only real warnings.** The *count* is what
+   tells you what to fix first and what is "spam". Before ranking, **drop lines that are not
+   themselves warnings**, or the ranking points you at non-fixes: compiler `note:` lines are
+   *follow-ups* to a preceding `warning:` (they say where the deprecated symbol was declared);
+   `#define ..._DEPRECATED` lines are macro definitions that merely contain the word; and
+   `::warning::` / `::error::` are **GitHub Actions infra annotations** (cache/S3/runner
+   hiccups like "CPM cache upload failed, continuing") — operational, not code-emitted, and
+   out of scope for Silencer. Then normalize away line numbers/addresses/timestamps so
+   identical messages collapse together:
    ```bash
-   sed -E 's/[0-9]+/N/g; s/0x[0-9a-fA-F]+/0xADDR/g' /tmp/gh-aw/agent/silencer/hits.txt \
+   grep -vE 'note:|^[[:space:]]*#[[:space:]]*define|::(warning|error)::' /tmp/gh-aw/agent/silencer/hits.txt \
+     | sed -E 's/[0-9]+/N/g; s/0x[0-9a-fA-F]+/0xADDR/g' \
      | sort | uniq -c | sort -rn | head -50 > /tmp/gh-aw/agent/silencer/top_noise.txt
    ```
+   Keep the unfiltered `hits.txt` around: once you have picked a target `warning:` you *do*
+   want its trailing `note:` lines, because they name the exact file/line to fix.
 4. **Only then** read the *small* summary files (`top_noise.txt`, a handful of representative
    lines per pattern) into context. Pull the full source-file/line for a pattern from the
    grep hit, then read **just that source file** — not the log — to design the fix.
@@ -259,9 +268,24 @@ a fresh scan always governs priority, and new patterns you discover there are in
 
 ## Scan procedure (scheduled mode)
 
-1. **Pick runs to scan.** Use `gh run list --repo ${{ github.repository }}
-   --workflow build-artifact.yaml --status completed --limit 5` (and the other main build
-   workflows) to find the most recent completed builds. Prefer runs on `main`.
+1. **Pick runs to scan — cover BOTH build and test/model workflows.** This matters: compile
+   and JIT warnings (categories 1–2, and most category-4 `-Wdeprecated-declarations`) live in
+   *build* logs, but runtime warnings and log spam (categories 3, 5, 6 — e.g. the #48660
+   matmul `allowed_worker_cores` spam) appear **only in test/model run logs**. A build-only
+   scan structurally cannot see half the categories, so sample from both groups. Use
+   `gh run list --repo ${{ github.repository }} --workflow <wf> --status completed --limit 5`
+   per workflow, preferring runs on `main`:
+   - **Build group** (compile / JIT / deprecated-decl warnings): `build-artifact.yaml`,
+     `build-and-test-wheels.yaml`, `fabric-build-and-unit-tests.yaml`,
+     `fast-dispatch-build-and-unit-tests.yaml`.
+   - **Test / model / perf group** (runtime warnings + log spam, the pipe-delimited
+     `| warning |` lines the *Token discipline* grep is tuned for): `all-model-tests.yaml`,
+     `blackhole-e2e-tests.yaml`, `galaxy-integration-tests.yaml`, `galaxy-perf-tests.yaml`,
+     the ttnn sweeps nightly, and similar suites.
+   Rotate which workflows you sample across runs (record the last-sampled set in memory) so
+   over successive runs you cover the CI surface instead of re-scanning the same one. Note the
+   frequency counts differ in kind: build logs report warnings **per compile**, test logs
+   report them **per tile/core/device iteration** — the latter is where true log spam lives.
 2. **Deduplicate against memory.** Read your memory index of already-scanned run IDs and
    already-fixed noise patterns. **Skip** runs/patterns you have already handled or that
    already have an open `[silencer]` PR. Do not re-open a PR for a pattern in flight.
