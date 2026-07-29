@@ -521,6 +521,11 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
+// Cached pinned logical coordinates for skip-link decode: cached once at setup so transit does no
+// divide/mod. Populated in kernel_main when skip_links_enabled.
+uint8_t skip_link_local_y = 0;
+uint8_t skip_link_local_x = 0;
+
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
@@ -966,6 +971,316 @@ FORCE_INLINE void forward_to_local_destination(
             local_relay_interface, packet_start, payload_size_bytes, transaction_id, rx_channel_id);
     } else {
         execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+    }
+}
+
+// ============================================================================
+// Skip-link routing — admit/forward dispatch
+// ============================================================================
+// Realizes packet action-byte decode with the dense packed-key dispatch: the four
+// non-self eth outputs (IndexedMeshRoutingFields::fwd_dirs<MY_DIR>) pack into a 4-bit
+// key, LOCAL_DELIVER stays outside the key, admission for every selected local destination must
+// succeed before any copy is committed, and every selected eth output receives the identical
+// complete packet image with local delivery last. Skip-link transit never calls the legacy
+// hop-program header updates, never increments hop_index, and never rewrites per branch.
+//
+// Reachable only when skip_links_enabled; otherwise the RX hot path calls none of this and the
+// templates are never instantiated.
+
+// admit_combo<KEY>: local relay capacity when ld, plus the local downstream queue for every
+// eth output selected by KEY. The relay check mirrors check_downstream_has_space's self-direction
+// branch: only UDM mode queues local delivery through a relay interface.
+template <uint8_t KEY, typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
+FORCE_INLINE bool admit_skip_link_combo(
+    bool ld,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    LocalRelayInterfaceT& local_relay_interface) {
+    constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
+    bool ok = true;
+    if constexpr (udm_mode) {
+        ok = !ld || local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
+    }
+    if constexpr ((KEY >> 0) & 1) {
+        ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[0]>(
+                       downstream_edm_interfaces, local_relay_interface);
+    }
+    if constexpr ((KEY >> 1) & 1) {
+        ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[1]>(
+                       downstream_edm_interfaces, local_relay_interface);
+    }
+    if constexpr ((KEY >> 2) & 1) {
+        ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[2]>(
+                       downstream_edm_interfaces, local_relay_interface);
+    }
+    if constexpr ((KEY >> 3) & 1) {
+        ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[3]>(
+                       downstream_edm_interfaces, local_relay_interface);
+    }
+    return ok;
+}
+
+// forward_combo<KEY>: one immutable full-packet copy per selected eth output, then local
+// delivery. Remote receiver credit is deliberately absent here; the sender step applies bubble flow
+// control before send.
+template <
+    uint8_t rx_channel_id,
+    uint8_t KEY,
+    typename DownstreamSenderT,
+    typename LocalRelayInterfaceT,
+    size_t DOWNSTREAM_EDM_SIZE>
+FORCE_INLINE void forward_skip_link_combo(
+    bool ld,
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    uint16_t payload_size_bytes,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    LocalRelayInterfaceT& local_relay_interface,
+    uint8_t transaction_id) {
+    constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
+    if constexpr ((KEY >> 0) & 1) {
+        constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            packet_start,
+            payload_size_bytes,
+            cached_routing_fields,
+            downstream_edm_interfaces[edm_index],
+            transaction_id);
+    }
+    if constexpr ((KEY >> 1) & 1) {
+        constexpr auto edm_index = get_downstream_edm_interface_index<dirs[1]>();
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            packet_start,
+            payload_size_bytes,
+            cached_routing_fields,
+            downstream_edm_interfaces[edm_index],
+            transaction_id);
+    }
+    if constexpr ((KEY >> 2) & 1) {
+        constexpr auto edm_index = get_downstream_edm_interface_index<dirs[2]>();
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            packet_start,
+            payload_size_bytes,
+            cached_routing_fields,
+            downstream_edm_interfaces[edm_index],
+            transaction_id);
+    }
+    if constexpr ((KEY >> 3) & 1) {
+        constexpr auto edm_index = get_downstream_edm_interface_index<dirs[3]>();
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            packet_start,
+            payload_size_bytes,
+            cached_routing_fields,
+            downstream_edm_interfaces[edm_index],
+            transaction_id);
+    }
+    if (ld) {
+        forward_to_local_destination<rx_channel_id>(
+            local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+    }
+}
+
+// Hand-written 16-arm admit dispatch over the dense key. Compile-time KEY selection keeps
+// each admitted output compile-time visible and removes unselected queue checks.
+template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
+FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_skip_link_dispatch(
+    uint8_t key,
+    bool ld,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    LocalRelayInterfaceT& local_relay_interface) {
+    switch (key) {
+        case 0: return admit_skip_link_combo<0>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 1: return admit_skip_link_combo<1>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 2: return admit_skip_link_combo<2>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 3: return admit_skip_link_combo<3>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 4: return admit_skip_link_combo<4>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 5: return admit_skip_link_combo<5>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 6: return admit_skip_link_combo<6>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 7: return admit_skip_link_combo<7>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 8: return admit_skip_link_combo<8>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 9: return admit_skip_link_combo<9>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 10: return admit_skip_link_combo<10>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 11: return admit_skip_link_combo<11>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 12: return admit_skip_link_combo<12>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 13: return admit_skip_link_combo<13>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 14: return admit_skip_link_combo<14>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 15: return admit_skip_link_combo<15>(ld, downstream_edm_interfaces, local_relay_interface);
+        default: return false;
+    }
+}
+
+// Hand-written 16-arm forward dispatch over the same dense key.
+template <uint8_t rx_channel_id, typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
+FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_skip_link_dispatch(
+    uint8_t key,
+    bool ld,
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    LocalRelayInterfaceT& local_relay_interface,
+    uint8_t transaction_id) {
+    const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+    switch (key) {
+        case 0:
+            forward_skip_link_combo<rx_channel_id, 0>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 1:
+            forward_skip_link_combo<rx_channel_id, 1>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 2:
+            forward_skip_link_combo<rx_channel_id, 2>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 3:
+            forward_skip_link_combo<rx_channel_id, 3>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 4:
+            forward_skip_link_combo<rx_channel_id, 4>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 5:
+            forward_skip_link_combo<rx_channel_id, 5>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 6:
+            forward_skip_link_combo<rx_channel_id, 6>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 7:
+            forward_skip_link_combo<rx_channel_id, 7>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 8:
+            forward_skip_link_combo<rx_channel_id, 8>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 9:
+            forward_skip_link_combo<rx_channel_id, 9>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 10:
+            forward_skip_link_combo<rx_channel_id, 10>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 11:
+            forward_skip_link_combo<rx_channel_id, 11>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 12:
+            forward_skip_link_combo<rx_channel_id, 12>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 13:
+            forward_skip_link_combo<rx_channel_id, 13>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 14:
+            forward_skip_link_combo<rx_channel_id, 14>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        case 15:
+            forward_skip_link_combo<rx_channel_id, 15>(
+                ld,
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                transaction_id);
+            break;
+        default: break;
     }
 }
 
@@ -1741,7 +2056,9 @@ FORCE_INLINE
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
-        if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
+        // Skip-link 2D transit consumes no hop program, so the sender step must not run the
+        // legacy 2D header update (hop_index advance / branch-offset jump).
+        if constexpr (!UPDATE_PKT_HDR_ON_RX_CH && !skip_links_enabled) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
@@ -1924,28 +2241,100 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
         uint32_t hop_cmd;
+        uint8_t skip_link_fwd_key = 0;
+        bool skip_link_local_deliver = false;
+        // Intermesh egress handoff state: set only when this chip is the mesh's exit for the packet;
+        // carries the resolved INTERMESH downstream slot from admission to the forward phase.
+        bool skip_link_egress = false;
+        uint8_t skip_link_egress_index = 0;
         bool can_send_to_all_local_chip_receivers;
         if constexpr (is_2d_fabric) {
-            // read in the hop command from route buffer.
-            // Hop command is 4 bits. Each of the 4 bits signal one of the 4 possible outcomes for a packet.
-            // [0]->Forward East
-            // [1]->Forward West
-            // [2]->Forward North
-            // [3]->Forward South
-            // The hop command (4-bits) gets decoded as a local write and/or forward to the "other" 3 directions.
-            // Other 3 directions depend on the direction of fabric router.
-            // For example, a router that is connected West can write locally or forard East, North or South.
-            // A local write is encoded by setting the bit corresponding to fabric router's own direction to 1.
-            // For a West facing fabric router:
-            //  - Hop command of [0010] instructs fabric router to write the packet locally.
-            //  - Hop command of [0011] instructs fabric router to write the packet locally AND forward East (a line
-            //  mcast)
 #if defined(FABRIC_2D)
-            // need this ifdef since the packet header for 1D does not have router_buffer field in it.
-            hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
-            can_send_to_all_local_chip_receivers =
-                can_forward_packet_completely<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE>(
-                    hop_cmd, downstream_edm_interfaces, local_relay_interface);
+            // need the FABRIC_2D ifdef since the packet header for 1D does not have route_buffer field in it.
+            if constexpr (skip_links_enabled) {
+                // Skip-link RX hot path: landing intercept (boundary receivers only)
+                // -> decode -> validate -> intermesh-exit intercept -> admit. No hop program, no map
+                // rebuild beyond the landing encode, no header mutation.
+                if constexpr (receiver_channel_is_intermesh_ingress[receiver_channel]) {
+                    // INTERMESH ingress intercepts the landing BEFORE ordinary decode
+                    // can consume stale source-mesh maps. The codec landing encode
+                    // re-installs maps from this mesh's own vector table — intermediate: next-exit;
+                    // destination: final target — preserving the retained final destination; ordinary
+                    // decode then resumes below on the fresh maps.
+                    fabric_set_indexed_intermesh_landing_route(
+                        packet_header, routing_table, SKIP_LINK_MESH_Y_SIZE, SKIP_LINK_MESH_X_SIZE);
+                }
+                const std::uint8_t action =
+                    IndexedMeshRoutingFields::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                        packet_header->route_buffer, skip_link_local_y, skip_link_local_x, SKIP_LINK_MESH_Y_SIZE);
+                if (!IndexedMeshRoutingFields::action_is_valid<static_cast<eth_chan_directions>(my_direction)>(
+                        action)) {
+                    // Fail-stop on invalid actions: commit no copy and stall the parent RX packet.
+                    // There is no retransmission or recovery contract.
+                    ASSERT(false);
+                    can_send_to_all_local_chip_receivers = false;
+                } else {
+                    // Intermesh exit check (CT-gated so interior routers skip the mesh-id compare):
+                    // the installed maps say deliver here but the final mesh is elsewhere -> this
+                    // chip is the exit.
+                    bool intermesh_exit = false;
+                    if constexpr (is_intramesh_router_on_edge) {
+                        intermesh_exit = IndexedMeshRoutingFields::action_is_intermesh_exit(
+                            action, packet_header->dst_start_mesh_id, routing_table.my_mesh_id);
+                    }
+                    if (intermesh_exit) {
+                        // Intermesh egress: forward the packet AS-IS on the INTERMESH egress in
+                        // boundary_dir — no local delivery, no map rebuild. boundary_dir comes from
+                        // the retained inter_mesh_direction_table, never a packet compass field. An
+                        // invalid entry — or one naming this router's own direction, which the
+                        // compact downstream array cannot address — fail-stops.
+                        const auto boundary_dir = static_cast<eth_chan_directions>(
+                            routing_table.inter_mesh_direction_table.get_original_direction(
+                                packet_header->dst_start_mesh_id));
+                        if (boundary_dir >= eth_chan_directions::COUNT ||
+                            boundary_dir == static_cast<eth_chan_directions>(my_direction)) {
+                            ASSERT(false);
+                            can_send_to_all_local_chip_receivers = false;
+                        } else {
+                            skip_link_egress = true;
+                            skip_link_egress_index =
+                                static_cast<uint8_t>(get_downstream_edm_interface_index(boundary_dir));
+                            can_send_to_all_local_chip_receivers =
+                                downstream_edm_interfaces[skip_link_egress_index]
+                                    .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
+                        }
+                    } else {
+                        skip_link_local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
+                        skip_link_fwd_key =
+                            IndexedMeshRoutingFields::pack_fwd_key<static_cast<eth_chan_directions>(my_direction)>(
+                                action);
+                        can_send_to_all_local_chip_receivers = admit_skip_link_dispatch(
+                            skip_link_fwd_key,
+                            skip_link_local_deliver,
+                            downstream_edm_interfaces,
+                            local_relay_interface);
+                    }
+                }
+            } else {
+                // read in the hop command from route buffer.
+                // Hop command is 4 bits. Each of the 4 bits signal one of the 4 possible outcomes for a packet.
+                // [0]->Forward East
+                // [1]->Forward West
+                // [2]->Forward North
+                // [3]->Forward South
+                // The hop command (4-bits) gets decoded as a local write and/or forward to the "other" 3
+                // directions. Other 3 directions depend on the direction of fabric router.
+                // For example, a router that is connected West can write locally or forard East, North or South.
+                // A local write is encoded by setting the bit corresponding to fabric router's own direction to 1.
+                // For a West facing fabric router:
+                //  - Hop command of [0010] instructs fabric router to write the packet locally.
+                //  - Hop command of [0011] instructs fabric router to write the packet locally AND forward East (a
+                //  line mcast)
+                hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
+                can_send_to_all_local_chip_receivers =
+                    can_forward_packet_completely<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE>(
+                        hop_cmd, downstream_edm_interfaces, local_relay_interface);
+            }
 #endif
         } else {
 #ifndef FABRIC_2D
@@ -1970,13 +2359,37 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     receiver_buffer_index);
                 if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
-                    receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
-                        packet_header,
-                        cached_routing_fields,
-                        downstream_edm_interfaces,
-                        local_relay_interface,
-                        trid,
-                        hop_cmd);
+                    if constexpr (skip_links_enabled) {
+                        if (skip_link_egress) {
+                            // The exit chip's only output is the INTERMESH egress, sent
+                            // as-is — no local delivery, no header mutation.
+                            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                                packet_header,
+                                packet_header->payload_size_bytes,
+                                cached_routing_fields,
+                                downstream_edm_interfaces[skip_link_egress_index],
+                                trid);
+                        } else {
+                            // Same dense key as admission; immutable full-packet copies to the
+                            // selected eth outputs, then local delivery.
+                            forward_skip_link_dispatch<receiver_channel>(
+                                skip_link_fwd_key,
+                                skip_link_local_deliver,
+                                packet_header,
+                                cached_routing_fields,
+                                downstream_edm_interfaces,
+                                local_relay_interface,
+                                trid);
+                        }
+                    } else {
+                        receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
+                            packet_header,
+                            cached_routing_fields,
+                            downstream_edm_interfaces,
+                            local_relay_interface,
+                            trid,
+                            hop_cmd);
+                    }
 #endif
                 } else {
 #ifndef FABRIC_2D
@@ -2247,6 +2660,14 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
+
+    if constexpr (skip_links_enabled) {
+        // Cache the pinned logical coordinates once at setup; skip-link transit does no
+        // divide/mod on the hot path. Device-side id->coord math mirrors the host MeshGraph
+        // (y = chip_id / x_size, x = chip_id % x_size).
+        skip_link_local_y = routing_table.my_device_id / SKIP_LINK_MESH_X_SIZE;
+        skip_link_local_x = routing_table.my_device_id % SKIP_LINK_MESH_X_SIZE;
+    }
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
     // TODO: flatten all of these arrays into a single object (one array lookup) OR
