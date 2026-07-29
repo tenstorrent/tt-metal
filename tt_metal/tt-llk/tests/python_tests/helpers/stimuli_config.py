@@ -10,11 +10,8 @@ from pathlib import Path
 from typing import ClassVar
 
 import torch
-from ttexalens.tt_exalens_lib import (
-    read_from_device,
-    write_to_device,
-)
 
+from .device_io import read_from_device, write_to_device
 from .format_config import DataFormat
 from .golden_generators import GeneratorProxy, ProxyMode
 from .llk_params import format_tile_sizes

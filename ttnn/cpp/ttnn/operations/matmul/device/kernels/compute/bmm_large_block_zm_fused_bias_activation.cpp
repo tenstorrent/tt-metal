@@ -117,7 +117,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_reload_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    copy_block(mm_partials_reload_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     mm_partials_dfb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
@@ -407,7 +407,7 @@ void kernel_main() {
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+                                pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
@@ -430,7 +430,7 @@ void kernel_main() {
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                                pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 mm_partials_dfb.push_back(out_subblock_num_tiles);

@@ -553,7 +553,7 @@ void kernel_main() {
 
                             uint32_t start_dst_index = 0;
                             uint32_t start_tile_index = 0;
-                            copy_block_matmul_partials(
+                            copy_block(
                                 matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
@@ -609,7 +609,7 @@ void kernel_main() {
                             }
 
                             uint32_t start_dst_index = 0;
-                            pack_tile_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
 
                             tile_regs_release();
                             curr_out_cb.push_back(out_subblock_num_tiles);
