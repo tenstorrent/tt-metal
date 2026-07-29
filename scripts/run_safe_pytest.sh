@@ -90,6 +90,16 @@ TT_TIMING_ENTRY_MS=$(date +%s%3N)
 TT_TIMING_LOCK_ACQUIRED_MS=0
 TT_TIMING_SOURCE="run_safe_pytest"
 TT_TIMING_TEST_PATH=""
+# Precompile (JIT warm-pass) outcome, recorded in the device-timing record so a silent fall-back
+# to cold/inline compilation is observable downstream instead of being invisible. Modes:
+#   farm  - warm pass compiled on the remote JIT server (intended, healthy)
+#   local - warm pass compiled locally (no server configured)
+#   cold  - warm pass unusable; the real run compiles cache misses inline & serial
+#   off   - not attempted (--no-precompile, or sim)
+# precompile_warm() overwrites these; the defaults cover the not-attempted case.
+TT_TIMING_PRECOMPILE_MODE="off"
+TT_TIMING_PRECOMPILE_REASON="disabled"
+TT_TIMING_PRECOMPILE_S=0
 
 _emit_device_timing() {
     local ec=$?
@@ -103,8 +113,9 @@ _emit_device_timing() {
         # JSON-escape test_path: backslash first, then double-quote.
         esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
         esc_path="${esc_path//\"/\\\"}"
-        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d}\n' \
+        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d}\n' \
             "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
+            "$TT_TIMING_PRECOMPILE_MODE" "$TT_TIMING_PRECOMPILE_REASON" "$TT_TIMING_PRECOMPILE_S" \
             >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
     fi
     return $ec
@@ -266,13 +277,18 @@ precompile_warm() {
     # exported globally — only into this subprocess via SRV_ENV). A configured-but-unreachable
     # server is a setup error -> abort loudly (don't silently fall back to a slow local compile).
     local -a SRV_ENV=()
+    # Where the warm pass compiled, recorded in the device-timing record. Default: no server
+    # configured -> local warm pass.
+    local _pc_route="local"
     if [[ -n "$JIT_SERVER_ENDPOINT" && "$JIT_SERVER_DISABLED" == false ]]; then
         local _h="${JIT_SERVER_ENDPOINT%:*}" _p="${JIT_SERVER_ENDPOINT##*:}"
         if ! timeout 5 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" 2>/dev/null; then
+            TT_TIMING_PRECOMPILE_MODE="off"; TT_TIMING_PRECOMPILE_REASON="jit_unreachable"
             echo "SAFE_PYTEST_ERROR: JIT server '${JIT_SERVER_ENDPOINT}' unreachable — aborting." >&2
             echo "SAFE_PYTEST_ERROR: start the server, fix --jit-server, or pass --no-jit-server to compile the warm pass locally." >&2
             exit 4
         fi
+        _pc_route="farm"
         SRV_ENV=(TT_METAL_JIT_SERVER_ENABLE=1 TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
                  TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
         echo "PRECOMPILE: warm pass -> JIT server ${JIT_SERVER_ENDPOINT} (keepalive on; real run stays local)" >&2
@@ -312,15 +328,40 @@ precompile_warm() {
         pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
     cstatus=$?
     t1=$(date +%s)
-    # Don't pretend it warmed if the collect failed. A non-zero exit (pytest usage/collection error,
-    # plugin failure, OOM, etc.) means we warmed nothing -> say so plainly; the real run still runs COLD
-    # and CORRECT, just without the speedup. (pytest exit 5 = "no tests collected" counts as a failure.)
+    TT_TIMING_PRECOMPILE_S=$((t1-t0))
+    # The exit status is authoritative because up_front_collect OWNS it: on a genuine compile
+    # (every collected program built, zero errors) the plugin overrides pytest's status to 0, since
+    # under NO_DISPATCH every test verdict is meaningless -- a swallowed strict-xfail becomes
+    # XPASS(strict) and pytest exits 1 with a perfectly warm cache. So a non-zero status here means
+    # the warm pass ACTUALLY broke (collection error, no tests collected, plugin failure, compile
+    # errors, crash). No exit-code whitelist: whitelisting benign codes one at a time just defers
+    # the bug to the next benign code.
+    #
+    # The RESULT line is parsed for ATTRIBUTION ONLY (which reason to record) and is best-effort:
+    # if it is absent or malformed the reason degrades to a generic one, never the decision.
+    local rline rstatus="" rreason=""
+    rline=$(grep '^UP_FRONT_COLLECT_RESULT:' "$clog" 2>/dev/null | tail -1 || true)
+    [[ "$rline" =~ status=([^[:space:]]+) ]] && rstatus="${BASH_REMATCH[1]}"
+    [[ "$rline" =~ reason=([^[:space:]]+) ]] && rreason="${BASH_REMATCH[1]}"
+
     if [[ $cstatus -ne 0 ]]; then
-        echo "PRECOMPILE: ✗ warmup FAILED (pytest exit $cstatus) after $((t1-t0))s -> warmed NOTHING; running COLD." >&2
-        grep -iE "error|unrecognized|no tests ran|no tests collected" "$clog" 2>/dev/null | head -3 | sed 's/^/PRECOMPILE:   /' >&2
+        echo "PRECOMPILE: ✗ warmup unusable (exit $cstatus${rreason:+, $rreason}) after $((t1-t0))s -> the real run compiles cache misses inline." >&2
+        grep -E "UP_FRONT_COLLECT_RESULT:|(^|[[:space:]])(ERROR|error:)|unrecognized|no tests ran|no tests collected" \
+            "$clog" 2>/dev/null | head -4 | sed 's/^/PRECOMPILE:   /' >&2
         echo "PRECOMPILE:   (full collect log: $clog)" >&2
+        TT_TIMING_PRECOMPILE_MODE="cold"
+        # Only a collector-reported compile failure on the farm route is a JIT-farm refusal;
+        # pytest/collection/plugin failures are generic warm-up failures.
+        if [[ "$_pc_route" == "farm" && "$rstatus" == "failed" &&
+              "$rreason" =~ ^(compile_errors|incomplete|exception)$ ]]; then
+            TT_TIMING_PRECOMPILE_REASON="jit_refused"
+        else
+            TT_TIMING_PRECOMPILE_REASON="${rreason:-warmup_failed}"
+        fi
         return 0
     fi
+    TT_TIMING_PRECOMPILE_MODE="$_pc_route"
+    TT_TIMING_PRECOMPILE_REASON="${rreason:-ok}"
     echo "PRECOMPILE: ✓ warmup complete in $((t1-t0))s — the real run below reuses it. Log: $clog" >&2
 }
 
@@ -517,6 +558,7 @@ fi
 if [[ "$PRECOMPILE" == true ]]; then
     if [[ "$SIM_MODE" == true ]]; then
         echo "PRECOMPILE: skipped under simulator (no warm benefit)" >&2
+        TT_TIMING_PRECOMPILE_REASON="sim"
     else
         precompile_warm
     fi
