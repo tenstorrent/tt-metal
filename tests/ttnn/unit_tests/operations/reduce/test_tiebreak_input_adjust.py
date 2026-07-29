@@ -65,9 +65,7 @@ def _build_inputs(device, greedy_users, max_value=DEFAULT_MAX_VALUE, filler_valu
     # Global indices descend across the row, so array position 0 holds the HIGHEST
     # global index and the last tied position holds the lowest.
     indices = (
-        torch.arange(INDEX_BASE + NUM_CANDIDATES - 1, INDEX_BASE - 1, -1, dtype=torch.int32)
-        .expand(shape)
-        .contiguous()
+        torch.arange(INDEX_BASE + NUM_CANDIDATES - 1, INDEX_BASE - 1, -1, dtype=torch.int32).expand(shape).contiguous()
     )
 
     tie_positions = {}
