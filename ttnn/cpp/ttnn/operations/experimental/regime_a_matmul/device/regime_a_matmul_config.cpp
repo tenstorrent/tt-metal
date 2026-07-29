@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+
 #include "regime_a_matmul_config.hpp"
 
 #include <array>
@@ -265,7 +267,19 @@ plan::PlanResult make_and_build_plan(
         return out;
     };
     const auto opt0 = to_plan_xy(device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0));
-    const auto opt1 = to_plan_xy(device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1));
+    // NOTE: we deliberately use the NOC_0 assignment for BOTH NoCs. The API returns "the worker to the RIGHT
+    // of the DRAM controller" for either NoC, which is downstream (short) only for NOC_0: a NOC_1 read
+    // response from a DRAM column travels -x and therefore wraps most of the way round the torus to reach a
+    // worker on the column's right. So opt1 is not actually a good NOC_1 target, and measurement agrees -
+    // using the true per-NoC assignment cost 0.6-3.7% on the shapes that still use these targets
+    // (the mesh-placed shapes ignore them entirely). diag bit17 restores the per-NoC targets for A/B.
+    const bool use_per_noc_targets = [] {
+        const char* e = std::getenv("TT_REGIME_A_DIAG_MASK");
+        return e != nullptr && (std::strtol(e, nullptr, 10) & 0x20000L) != 0L;
+    }();
+    const auto opt1 = use_per_noc_targets
+                          ? to_plan_xy(device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1))
+                          : opt0;
 
     plan::PlanInputs in;
     in.Mt = Mt;
