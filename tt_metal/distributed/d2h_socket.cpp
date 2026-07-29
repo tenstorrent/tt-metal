@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <atomic>
 #include <internal/service/service_core_manager.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
@@ -138,14 +139,24 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
 
     auto* device = mesh_device->get_device(sender_core_.device_coord);
     auto device_id = device->id();
-    auto& sysmem_mgr = device->sysmem_manager();
-
-    auto [data_host_ptr, data_dev_addr] = sysmem_mgr.allocate_region(fifo_size_);
-    hugepage_data_host_ptr_ = static_cast<uint32_t*>(data_host_ptr);
-    std::memset(hugepage_data_host_ptr_, 0, fifo_size_);
 
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto& hal = MetalContext::instance().hal();
+
+    // sysmem_manager::allocate_region draws from a tiny (~8 KB) auxiliary region -- far too small for a real
+    // socket FIFO (the relay needs a FIFO that can hold a whole drain snapshot, up to tens of KB). Carve the
+    // FIFO (plus a contiguous bytes_sent slot) from the MAIN hugepage channel instead -- its upper half is
+    // free when the device's raw rings aren't in use, exactly what the X280 raw-ring path relies on. Each
+    // socket gets a 2 MB-aligned region (one X280 posted-TLB window) via a process-wide bump. The returned
+    // dev addr is the channel OFFSET (hi=0); the L2CPU sender ORs in pcie_base (NOC_XY_PCIE_ENCODING bit60).
+    static std::atomic<uint64_t> s_hugepage_bump{0};
+    uint64_t chan_sz = cluster.get_host_channel_size(device_id, 0);
+    uint64_t region = ((static_cast<uint64_t>(fifo_size_) + 64 + 0x1FFFFFull) & ~0x1FFFFFull);
+    uint64_t off = (chan_sz / 2) + s_hugepage_bump.fetch_add(region);
+    TT_FATAL(off + region <= chan_sz, "D2H socket FIFO overflows the host channel (off=0x{:x})", off);
+    uint64_t data_dev_addr = off;  // channel offset; sender reaches it at pcie_base | off
+    hugepage_data_host_ptr_ = static_cast<uint32_t*>(cluster.host_dma_address(off, device_id, 0));
+    std::memset(hugepage_data_host_ptr_, 0, fifo_size_ + 64);
     ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
     const auto& soc = cluster.get_soc_desc(mmio_device_id);
     const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
@@ -161,7 +172,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
         data_dev_addr,
         pcie_xy_enc);
 
-    return PinnedBufferInfo{.pcie_xy_enc = pcie_xy_enc, .addr_lo = data_dev_addr, .addr_hi = 0};
+    return PinnedBufferInfo{.pcie_xy_enc = pcie_xy_enc, .addr_lo = static_cast<uint32_t>(data_dev_addr), .addr_hi = 0};
 }
 
 void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
@@ -223,6 +234,20 @@ void D2HSocket::write_socket_metadata(
     if (config_buffer_) {
         distributed::WriteShard(
             mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
+    } else if (sender_is_l2cpu_) {
+        // Non-worker sender (X280 L2CPU): sender_core_.core_coord is a physical NoC coord and
+        // config_buffer_address_ is the full LIM address. Write directly via the cluster using
+        // the virtual coord (worker_core_from_logical_core / WORKER translation would target a
+        // Tensix worker instead).
+        const auto& cluster = MetalContext::instance().get_cluster();
+        IDevice* device = mesh_device->get_device(sender_core_.device_coord);
+        CoreCoord virt =
+            cluster.get_virtual_coordinate_from_physical_coordinates(device->id(), sender_core_.core_coord);
+        cluster.write_core(
+            config_data.data(),
+            static_cast<uint32_t>(config_data.size() * sizeof(uint32_t)),
+            tt_cxy_pair(device->id(), virt),
+            config_buffer_address_);
     } else {
         IDevice* device = mesh_device->get_device(sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(
@@ -246,8 +271,12 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
-        sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        if (!cluster.is_mock_or_emulated()) {
+        sender_virtual_core = sender_is_l2cpu_ ? cluster.get_virtual_coordinate_from_physical_coordinates(
+                                                     sender_device_id, sender_core_.core_coord)
+                                               : mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
+        // The L2CPU (X280) has no static TLB window (those exist for workers/PCIe/DRAM); use the
+        // dynamic cluster.write_core path below instead.
+        if (!sender_is_l2cpu_ && !cluster.is_mock_or_emulated()) {
             sender_core_tlb_ = cluster.get_driver()
                                    ->get_chip(sender_device_id)
                                    ->get_tlb_manager()
@@ -260,7 +289,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !sender_is_l2cpu_ && !cluster.is_mock_or_emulated()) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
@@ -285,6 +314,13 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
+    // NOTE: the L2CPU (X280) reaches a socket buffer by a posted write through the PCIe tile at pcie_base|addr
+    // (bit60 = NOC_XY_PCIE_ENCODING outbound routing). With IOMMU enabled that goes to the PCIe bus, so an
+    // IOMMU-pinned PinnedMemory IOVA is reachable the same way the hugepage channel is -- PROVIDED the sender
+    // is handed the FULL pcie_base|IOVA addr (a bare lo32 offset reads wrong on the X280). So L2CPU can use
+    // PinnedMemory too; profzone gets the full FIFO addr via P_HOST_BASE and writes it with bit60 set.
+    // The predicate this branch used to spell out by hand -- is_iommu_enabled() ||
+    // get_supports_64_bit_pcie_addressing() -- is exactly upstream's d2h_uses_hugepage_fallback(), so use theirs.
     bool can_use_pinned_memory = !d2h_uses_hugepage_fallback(MetalContext::instance());
 
     PinnedBufferInfo data_info;
@@ -312,16 +348,14 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
         }
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
-
-        auto* device = mesh_device->get_device(sender_core_.device_coord);
-        auto& sysmem_mgr = device->sysmem_manager();
-        auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
-        hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
+        // bytes_sent lives contiguously right after the FIFO (init_host_buffer_hugepage reserved the slot), so
+        // the sender derives it as data_addr + fifo_size -- one FIFO addr param suffices (no separate region).
+        hugepage_bytes_sent_host_ptr_ = hugepage_data_host_ptr_ + fifo_size_ / sizeof(uint32_t);
         *const_cast<uint32_t*>(hugepage_bytes_sent_host_ptr_) = 0;
-
+        uint64_t bs_dev = ((static_cast<uint64_t>(data_info.addr_hi) << 32) | data_info.addr_lo) + fifo_size_;
         bytes_sent_info = data_info;
-        bytes_sent_info.addr_lo = bs_dev_addr;
-        bytes_sent_info.addr_hi = 0;
+        bytes_sent_info.addr_lo = static_cast<uint32_t>(bs_dev & 0xFFFFFFFFull);
+        bytes_sent_info.addr_hi = static_cast<uint32_t>(bs_dev >> 32);
     }
 
     write_socket_metadata(mesh_device, data_info, bytes_sent_info);
@@ -364,6 +398,7 @@ D2HSocket::D2HSocket(
         external_config.address,
         l1_alignment);
     config_buffer_address_ = external_config.address;
+    sender_is_l2cpu_ = external_config.sender_is_l2cpu;
     init_common(mesh_device);
 }
 
