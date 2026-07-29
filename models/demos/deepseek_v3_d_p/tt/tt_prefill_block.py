@@ -227,6 +227,7 @@ class TtPrefillBlock(LightweightModule):
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
+        tp_shard_kv: bool = False,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -292,6 +293,7 @@ class TtPrefillBlock(LightweightModule):
             layer_num=layer_num,
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
+            tp_shard_kv=tp_shard_kv,
         )
 
         if kv_only:
