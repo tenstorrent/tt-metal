@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <functional>
 #include <cerrno>
 #include <chrono>
 #include <cctype>
@@ -774,12 +775,191 @@ inline bool topology_sat_encode_at_most_k_groups(
     return topology_sat_add_at_least_k_literals(solver, neg, num_present - k_hosts, kGroupBudgetCombClauses, &reason);
 }
 
+// ── EXPERIMENT: minimal-host solve mode (TT_TOPO_SAT_MIN_MODE) ────────────────────────────────
+//   0 baseline    : warm solve + soft descent + hard-cap lock (original).
+//   1 skipdescent : warm solve + hard-cap lock only (skip the one-at-a-time descent).
+//   2 greedy      : construct a host-packing greedily (no SAT search), verify by unit propagation.
+enum class TopoMinMode { Baseline = 0, SkipDescent = 1, Greedy = 2 };
+inline TopoMinMode topology_sat_min_mode() {
+    switch (topology_sat_env_long("TT_TOPO_SAT_MIN_MODE", 0)) {
+        case 1: return TopoMinMode::SkipDescent;
+        case 2: return TopoMinMode::Greedy;
+        default: return TopoMinMode::Baseline;
+    }
+}
+
+// GREEDY minimal-host fill. Walk target adjacency (BFS), placing each target on an unused, adjacency-consistent
+// global, preferring globals in an already-opened host group (fill a host before opening a new one) and compacting
+// toward low group ids. Then VERIFY the constructed assignment by assuming it and unit-propagating: an invalid or
+// dead-ended greedy simply returns false (never a wrong mapping). No SAT *search* — eliminates the descent/lock.
+inline bool topology_sat_greedy_minhost_fill(
+    TopologySatSolver& solver,
+    const TopologySatGraphView& graph_data,
+    const TopologySatHardEncoding& enc,
+    const TopologySatConstraintView& constraint_data,
+    const std::vector<int>& occ,
+    std::vector<int>& best_mapping_out,
+    size_t& best_k_out,
+    bool quiet_mode) {
+    const size_t nt = graph_data.n_target;
+    const size_t ng = graph_data.n_global;
+    best_mapping_out.clear();
+    best_k_out = 0;
+    if (nt == 0) {
+        return false;
+    }
+    std::vector<size_t> chosen_slot(nt, SIZE_MAX);
+    std::vector<char> global_used(ng, 0);
+    std::vector<int> group_open(constraint_data.same_rank_groups.size(), 0);
+    auto g_adj = [&](size_t a, size_t b) {
+        const auto& adj = graph_data.global_adj_idx[a];
+        return std::binary_search(adj.begin(), adj.end(), b);
+    };
+    auto group_of = [&](size_t g) -> int {
+        return (g < constraint_data.global_to_same_rank_group.size()) ? constraint_data.global_to_same_rank_group[g]
+                                                                      : -1;
+    };
+    // BFS order over targets so we extend along adjacency (ring/line stays connected).
+    std::vector<size_t> order;
+    order.reserve(nt);
+    {
+        std::vector<char> seen(nt, 0);
+        for (size_t s = 0; s < nt; ++s) {
+            if (seen[s]) {
+                continue;
+            }
+            std::vector<size_t> q{s};
+            seen[s] = 1;
+            for (size_t h = 0; h < q.size(); ++h) {
+                const size_t u = q[h];
+                order.push_back(u);
+                for (size_t v : graph_data.target_adj_idx[u]) {
+                    if (!seen[v]) {
+                        seen[v] = 1;
+                        q.push_back(v);
+                    }
+                }
+            }
+        }
+    }
+    // Capacity lower bound: don't open more than k_min host groups (forces packing to the minimum).
+    size_t max_cap = 0;
+    for (const auto& grp : constraint_data.same_rank_groups) {
+        max_cap = std::max(max_cap, grp.size());
+    }
+    const size_t k_min = (max_cap > 0) ? (nt + max_cap - 1) / max_cap : constraint_data.same_rank_groups.size();
+    size_t opened = 0;              // distinct host groups currently opened
+    long visit_budget = 3'000'000;  // backtracking cap -> fail (never hang) if no clean packing is found fast
+    // Backtracking DFS in BFS (adjacency) order, guided by the host-fill heuristic, pruned to <= k_min groups.
+    std::function<bool(size_t)> place = [&](size_t oi) -> bool {
+        if (--visit_budget < 0) {
+            return false;
+        }
+        if (oi == order.size()) {
+            return true;
+        }
+        const size_t t = order[oi];
+        const auto& globs = enc.allowed_global_idx[t];
+        std::vector<std::pair<long, size_t>> cands;  // (score, slot k)
+        for (size_t k = 0; k < globs.size(); ++k) {
+            const size_t g = globs[k];
+            if (global_used[g]) {
+                continue;
+            }
+            bool adj_ok = true;
+            for (size_t tn : graph_data.target_adj_idx[t]) {
+                if (chosen_slot[tn] == SIZE_MAX) {
+                    continue;
+                }
+                if (!g_adj(g, enc.allowed_global_idx[tn][chosen_slot[tn]])) {
+                    adj_ok = false;
+                    break;
+                }
+            }
+            if (!adj_ok) {
+                continue;
+            }
+            const int grp = group_of(g);
+            const bool opens_new = (grp < 0) || (group_open[grp] == 0);
+            if (opens_new && opened >= k_min) {
+                continue;  // k_min pruning: refuse to exceed the minimal host count
+            }
+            long score = 0;
+            if (grp >= 0 && group_open[grp] > 0) {
+                score += 1000000;  // fill an already-opened host first
+            }
+            if (grp >= 0) {
+                score -= grp;  // compact toward low group ids
+            }
+            cands.emplace_back(score, k);
+        }
+        std::sort(cands.begin(), cands.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        for (const auto& [sc, k] : cands) {
+            (void)sc;
+            const size_t g = globs[k];
+            const int grp = group_of(g);
+            const bool opens_new = (grp < 0) || (group_open[grp] == 0);
+            chosen_slot[t] = k;
+            global_used[g] = 1;
+            if (grp >= 0) {
+                ++group_open[grp];
+            }
+            if (opens_new) {
+                ++opened;
+            }
+            if (place(oi + 1)) {
+                return true;
+            }
+            if (opens_new) {
+                --opened;
+            }
+            if (grp >= 0) {
+                --group_open[grp];
+            }
+            global_used[g] = 0;
+            chosen_slot[t] = SIZE_MAX;
+        }
+        return false;
+    };
+    if (!place(0)) {
+        if (!quiet_mode) {
+            log_debug(
+                tt::LogFabric,
+                "[topo-sat-profile]   greedy.fill : no <= k_min={} packing found (dead-end/budget) -> greedy FAILED",
+                k_min);
+        }
+        return false;
+    }
+    // Verify by assumption + unit propagation. Correct-by-check: a bad construction returns UNSAT here.
+    for (size_t t = 0; t < nt; ++t) {
+        solver.assume(enc.assign_lit[t][chosen_slot[t]]);
+    }
+    if (solver.solve() != TopologySatSolver::kSat) {
+        if (!quiet_mode) {
+            log_debug(tt::LogFabric, "[topo-sat-profile]   greedy.verify : constructed assignment UNSAT -> greedy FAILED");
+        }
+        return false;
+    }
+    if (!topology_sat_decode_hard_solution(solver, enc, best_mapping_out)) {
+        return false;
+    }
+    size_t c = 0;
+    for (int o : occ) {
+        if (solver.val(o) == o) {
+            ++c;
+        }
+    }
+    best_k_out = c;
+    return !best_mapping_out.empty();
+}
+
 // SOFT: minimize the number of occupied groups, best-effort. Takes one warm feasible solve, then descends an
 // assumable "at most (current-1)" budget under a per-step conflict cap, keeping the best (fewest-group) model.
 // Never turns a feasible instance UNSAT (step 1 is unconstrained). Writes the best mapping to best_mapping_out and
 // its group count to best_k_out; returns true on any feasible model. `k_floor` stops the descent once reached
 // (e.g. the capacity lower bound) so we don't waste solves probing below the achievable minimum.
 inline bool topology_sat_solve_minimize_groups(
+    const TopologySatGraphView& graph_data,
     TopologySatSolver& solver,
     const TopologySatHardEncoding& enc,
     const TopologySatConstraintView& constraint_data,
@@ -806,6 +986,25 @@ inline bool topology_sat_solve_minimize_groups(
     topology_sat_build_group_occupancy(
         solver, constraint_data, enc, /*all_or_nothing=*/false, occ, &used_per_group);
     const size_t num_present = occ.size();
+
+    // EXPERIMENT dispatch: greedy-only host-fill (no SAT search). Returns the greedy result directly; on greedy
+    // failure returns false (greedy-only has no fallback -- the caller/harness records it as a failure).
+    const TopoMinMode min_mode = topology_sat_min_mode();
+    if (min_mode == TopoMinMode::Greedy) {
+        const auto t_greedy = std::chrono::steady_clock::now();
+        const bool ok =
+            topology_sat_greedy_minhost_fill(solver, graph_data, enc, constraint_data, occ, best_mapping_out, best_k_out, quiet_mode);
+        if (!quiet_mode) {
+            log_debug(
+                tt::LogFabric,
+                "[topo-sat-profile]   greedy.minhost_fill : {:.1f} ms (ok={}, occupied={}, num_present={})",
+                topology_sat_elapsed_ms(t_greedy),
+                ok,
+                best_k_out,
+                num_present);
+        }
+        return ok;
+    }
 
     if (!quiet_mode) {
         std::map<size_t, int> size_hist;
@@ -880,8 +1079,13 @@ inline bool topology_sat_solve_minimize_groups(
     }
 
     const size_t floor = std::max<size_t>(k_floor, 1);
+    // TT_TOPO_SAT_SKIP_DESCENT: skip the one-host-at-a-time soft descent and rely on the direct k_min hard-cap
+    // lock below (all-or-nothing packing at the target). Experiment: for dense packings (e.g. 2x4 64-stage,
+    // 24->16 descent) the incremental descent dominates while a single capped solve at k_min lands directly.
+    const bool skip_descent =
+        (min_mode == TopoMinMode::SkipDescent) || (topology_sat_env_long("TT_TOPO_SAT_SKIP_DESCENT", 0) != 0);
     size_t iter = 0;
-    while (best_k_out > floor) {
+    while (!skip_descent && best_k_out > floor) {
         const size_t target_k = best_k_out - 1;
         const int bound = atmost_lit(target_k);
         if (bound == 0) {
@@ -2201,6 +2405,7 @@ bool topology_sat_search(
                 // (the full-packing lock that actually reaches K). This split is what keeps the end-to-end solve ~90s;
                 // a single large budget lets a deep descent step grind for minutes before the lock runs.
                 const bool min_ok = topology_sat_solve_minimize_groups(
+                    graph_data,
                     solver,
                     enc,
                     constraint_data,
@@ -2454,6 +2659,7 @@ bool topology_sat_search_n(
         solver.set_progress_phase("descent");  // minimal-host warm descent -- the long pre-first-solution phase
         const auto t_prime = std::chrono::steady_clock::now();
         const bool primed = topology_sat_solve_minimize_groups(
+            graph_data,
             solver,
             enc,
             constraint_data,
@@ -2608,6 +2814,7 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
         size_t best_k = 0;
         bool hard_cap_met = false;
         const bool primed = topology_sat_solve_minimize_groups(
+            graph_data,
             session->solver,
             enc,
             constraint_data,
