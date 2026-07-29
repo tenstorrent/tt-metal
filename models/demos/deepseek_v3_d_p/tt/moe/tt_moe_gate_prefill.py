@@ -18,6 +18,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
@@ -572,11 +573,20 @@ class TtMoEGatePrefill(LightweightModule):
             epsilon=1e-20,
         )
 
-    def build_padding_config(self, actual_isl: int, padding_side: str = "right") -> ttnn.Tensor:
+    def build_padding_config(self, actual_isl: int, padding_side: str = "right", actual_start: int = 0) -> ttnn.Tensor:
         """Create the per-SP-shard [local_num_real_tokens, pad_side] config for moe_grouped_topk.
 
         Public so callers (TtMoe) can build the config once and share the same tensor between
         the gate topk and the dispatch op.
+
+        ``actual_start`` is the chunked-prefill absolute KV position of this chunk's first real
+        token (0 for single-shot / non-chunked). It is REQUIRED to get the per-chip counts right:
+        chunked prefill hands the MoE the KV-pad-aware ROTATED block-cyclic layout, in which chip c
+        does NOT hold global tokens [c*seq_len_per_chip, (c+1)*seq_len_per_chip). Deriving the count
+        as min(seq_len_per_chip, actual_isl - c*seq_len_per_chip) there sentinel-marks real tokens
+        (dropping them from MoE entirely) while dispatching pad rows as real. The rotated layout is
+        the identity exactly when actual_start is slab-aligned, so actual_start=0 reproduces the
+        sequential result bit-for-bit and every pre-existing caller is unaffected.
 
         When is_balanced=True, the sequence uses zigzag placement: the original sequence
         is split into 2*sp_factor chunks and device d holds chunks d and (2*sp_factor-1-d),
@@ -594,7 +604,24 @@ class TtMoEGatePrefill(LightweightModule):
 
         padding_config = []
 
-        if self.is_balanced:
+        if actual_start:
+            # Rotated chunked prefill. Both branches below assume the sequential layout, so neither
+            # is valid here; fail loudly rather than silently drop tokens. Rotation implies
+            # is_balanced=False (ttMLA._chunked_attn asserts it) and produces right-padding WITHIN
+            # each chip by construction, so those two combinations are unreachable, not merely
+            # unsupported.
+            if self.is_balanced:
+                raise ValueError("rotated chunked prefill (actual_start != 0) does not support is_balanced=True")
+            if padding_side != "right":
+                raise ValueError(
+                    f"rotated chunked prefill (actual_start != 0) is right-padded by construction; "
+                    f"got padding_side={padding_side!r}"
+                )
+            for local_real_tokens in rotated_chip_real_token_counts(
+                actual_start, actual_isl, sp_factor, seq_len_per_chip
+            ):
+                padding_config.append([local_real_tokens, pad_side])
+        elif self.is_balanced:
             num_chunks = 2 * sp_factor
             chunk_size = total_tokens // num_chunks
 
@@ -643,6 +670,7 @@ class TtMoEGatePrefill(LightweightModule):
         actual_isl: int = None,
         padding_side: str = "right",
         padding_config: ttnn.Tensor = None,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run moe_grouped_topk on device with fp32 typecast.
 
@@ -657,7 +685,9 @@ class TtMoEGatePrefill(LightweightModule):
         """
         owns_padding_config = padding_config is None
         if owns_padding_config:
-            padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
+            padding_config = (
+                self.build_padding_config(actual_isl, padding_side, actual_start) if actual_isl is not None else None
+            )
 
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
         bias_f32 = ttnn.typecast(self.bias, ttnn.float32)
@@ -687,6 +717,7 @@ class TtMoEGatePrefill(LightweightModule):
         actual_isl: int = None,
         padding_side: str = "right",
         padding_config: ttnn.Tensor = None,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run moe_hash_gate on device: fused tid2eid[input_ids] routing + score_func/normalize/scale.
 
@@ -698,7 +729,9 @@ class TtMoEGatePrefill(LightweightModule):
 
         owns_padding_config = padding_config is None
         if owns_padding_config:
-            padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
+            padding_config = (
+                self.build_padding_config(actual_isl, padding_side, actual_start) if actual_isl is not None else None
+            )
 
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
         input_ids_dev = self._input_ids_to_device(input_ids)
@@ -742,6 +775,7 @@ class TtMoEGatePrefill(LightweightModule):
         padding_side: str = "right",
         padding_config: ttnn.Tensor = None,
         input_ids: torch.Tensor = None,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
         logger.debug(f"[MoeGate] fallback_mode={mode.value}")
@@ -779,6 +813,7 @@ class TtMoEGatePrefill(LightweightModule):
                 actual_isl=actual_isl,
                 padding_side=padding_side,
                 padding_config=padding_config,
+                actual_start=actual_start,
             )
 
         elif mode == GateComputeMode.HOST_GROUPED_GATE:
@@ -814,6 +849,7 @@ class TtMoEGatePrefill(LightweightModule):
                 actual_isl=actual_isl,
                 padding_side=padding_side,
                 padding_config=padding_config,
+                actual_start=actual_start,
             )
         signpost(header="moe_gate_grouped_gate")
 
