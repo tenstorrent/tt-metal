@@ -409,6 +409,11 @@ def _build_decoder_layer(
             li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
+            # Route the folded-batch prefill WO projection through minimal_matmul (completes PLAN_01's
+            # QKV+FF2 minimal plumbing). WO is the least-efficient prefill matmul on ttnn.linear; the
+            # minimal op (already used for QKV above) recovers most of that gap and makes TTTv2 beat
+            # TTTv1's ttnn.linear WO. Gated by the same DISABLE_MINIMAL_MATMUL escape hatch.
+            prefill_wo_minimal_matmul=wh.prefill_minimal_matmul,
             # WO-matmul prefill M-chunk cutoff: regroup the folded batch-32 prefill WO matmul into
             # 2 chunks of 2048 (per_core_M=8) instead of 4 chunks of 1024, halving the WO weight
             # re-stream passes on the folded prefill. Bit-identical M-reblocking (see field doc).

@@ -208,6 +208,18 @@ class Attention1DConfig:
     prefill_qkv_minimal_matmul: bool = False
     prefill_xqkv_minimal_matmul_config: Callable[[int], "ttnn.MinimalMatmulConfig"] | None = None  # f(seq_len)
 
+    # Optional: use ttnn.experimental.minimal_matmul (instead of ttnn.linear) for the WO prefill
+    # matmul above seq_len > 128 — the completion of PLAN_01's QKV+FF2-only minimal plumbing. On the
+    # folded batched prefill the WO projection is the least-efficient prefill matmul on ttnn.linear
+    # (a per-op profile measured it ~3x slower than the same-fidelity QKV minimal_matmul); switching
+    # it to minimal_matmul recovers most of that gap. Default OFF so untouched models / decode stay
+    # byte-identical; the caller opts in. The factory yields a ttnn.MinimalMatmulConfig keyed on the
+    # folded seq_len (sibling to prefill_wo_prg_config, NOT a replacement — both coexist). NOT
+    # byte-identical vs the ttnn.linear WO (minimal accumulation differs) — same numerical class as
+    # the already-shipped QKV/FF2 minimal path; gate on token-accuracy + eval-32, not a byte-compare.
+    prefill_wo_minimal_matmul: bool = False
+    prefill_wo_minimal_matmul_config: Callable[[int], "ttnn.MinimalMatmulConfig"] | None = None  # f(seq_len)
+
     # Fused all-gather matmul (Ring topology only, decode path)
     use_fused_all_gather_matmul: bool | None = None  # None = auto-detect based on topology + dim
     decode_all_gather_matmul_prg_config: "ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None" = (
@@ -245,6 +257,15 @@ class Attention1DConfig:
         per-model opt-in is set. ``seq_len`` is the folded ``B*S`` length.
         """
         return bool(self.prefill_qkv_minimal_matmul) and seq_len > 128
+
+    def use_minimal_wo_matmul(self, seq_len: int) -> bool:
+        """Whether the WO prefill matmul should use ttnn.experimental.minimal_matmul.
+
+        Mirrors ``use_minimal_qkv_matmul`` — minimal_matmul only above ``seq_len > 128`` (the
+        folded-batch / long-prompt regime), and only when the per-model opt-in is set. ``seq_len``
+        is the folded ``B*S`` length.
+        """
+        return bool(self.prefill_wo_minimal_matmul) and seq_len > 128
 
     def is_resolved(self) -> bool:
         """Check if all required fields are resolved."""
@@ -616,14 +637,26 @@ class Attention1D(LightweightModule):
         attn_output_concat = self._all_gather_before_wo_prefill(attn_output_concat)
 
         # --- STAGE 14: WO Matmul ---
-        output = ttnn.linear(
-            attn_output_concat,
-            self.wo,
-            compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
-            dtype=cfg.activation_dtype or ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=cfg.prefill_wo_prg_config(seq_len),
-        )
+        # Above seq_len > 128 the folded-batch WO matmul is large and is the least-efficient prefill
+        # matmul on ttnn.linear; minimal_matmul (already used for QKV/FF2) recovers most of the gap.
+        # Opt-in via prefill_wo_minimal_matmul; output shape matches the ttnn.linear path so STAGE-15
+        # and the all-reduce/no-op are unchanged.
+        if cfg.use_minimal_wo_matmul(seq_len):
+            output = ttnn.experimental.minimal_matmul(
+                attn_output_concat,
+                self.wo,
+                compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
+                config=cfg.prefill_wo_minimal_matmul_config(seq_len),
+            )
+        else:
+            output = ttnn.linear(
+                attn_output_concat,
+                self.wo,
+                compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
+                dtype=cfg.activation_dtype or ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=cfg.prefill_wo_prg_config(seq_len),
+            )
 
         # --- STAGE 15: Reshape back (undo long sequence reshape) ---
         if seq_len > wo_cutoff:
@@ -1787,6 +1820,23 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             )
 
         to_set["prefill_xqkv_minimal_matmul_config"] = xqkv_minimal_matmul_config
+
+    # minimal_matmul config for WO (only materialized when the opt-in is set). Same block sizes / grid
+    # as the QKV minimal config — the folded WO matmul is the same shape class (full-K activation @ a
+    # PlacementShard(-1) column-sharded weight), so it tiles identically.
+    if config.prefill_wo_minimal_matmul and config.prefill_wo_minimal_matmul_config is None:
+        minimal_wo_grid = ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8)
+
+        @lru_cache
+        def wo_minimal_matmul_config(seq_len: int):
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                compute_with_storage_grid_size=minimal_wo_grid,
+            )
+
+        to_set["prefill_wo_minimal_matmul_config"] = wo_minimal_matmul_config
 
     if config.prefill_sdpa_prg_config is None:
 
