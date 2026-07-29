@@ -83,6 +83,6 @@ The required report and final IR exist. An additional batch-1 capture is in
 
 - `tt-metal`, branch `skillexp-nofuse-advise`: implementation checkpoint
   `ba942aefbd9` (`Add optimized Qwen3.6 27B decoder`)
-- Evidence/SHA-log follow-up: this documentation commit (see repository history)
+- Evidence checkpoint `72e1a09218e` (`Record Qwen optimized decoder evidence`)
 
 No commit was pushed.
