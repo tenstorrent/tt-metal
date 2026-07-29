@@ -9,6 +9,7 @@ Forward paths in tt/ must not import or call these functions at runtime.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Dict
 
@@ -17,21 +18,36 @@ from safetensors.torch import load_file as safetensors_load_file
 
 from models.experimental.vibevoice.common.safe_paths import safe_join
 
+_WEIGHT_INDEX = "model.safetensors.index.json"
+
+
+def _read_weight_index(model_path: Path) -> Dict[str, str]:
+    """Read the checkpoint's weight index and return its ``weight_map``.
+
+    The only place in this module that opens the index. The join and the containment
+    check are written out here rather than delegated, so the path reaching ``open`` is
+    visibly constrained to the absolute checkpoint directory at the call site.
+    """
+    base_dir = os.path.abspath(str(model_path))
+    index_path = os.path.abspath(os.path.join(base_dir, _WEIGHT_INDEX))
+    if not index_path.startswith(base_dir + os.sep):
+        raise ValueError(f"refusing path {index_path!r}: outside checkpoint directory {base_dir!r}")
+    with open(index_path) as f:
+        return json.load(f)["weight_map"]
+
 
 def load_vibevoice_state_dict(model_path: str) -> Dict[str, torch.Tensor]:
     """Load the full VibeVoice model state dict from safetensors (host only).
 
-    Every path is pinned under ``model_path`` with ``safe_join``: the checkpoint dir comes
-    from an env var / CLI argument, and the shard filenames come from the checkpoint's own
-    ``weight_map``, so neither is trusted to stay inside the directory on its own.
+    Every path is pinned under ``model_path``: the checkpoint dir comes from an env var /
+    CLI argument, and the shard filenames come from the checkpoint's own ``weight_map``,
+    so neither is trusted to stay inside the directory on its own.
     """
     model_path = Path(model_path)
-    index_path = safe_join(model_path, "model.safetensors.index.json")
+    index_path = safe_join(model_path, _WEIGHT_INDEX)
 
     if index_path.exists():
-        with open(index_path) as f:
-            index_data = json.load(f)
-        weight_map = index_data["weight_map"]
+        weight_map = _read_weight_index(model_path)
         shard_files = set(weight_map.values())
         state_dict: Dict[str, torch.Tensor] = {}
         for shard_file in shard_files:

@@ -21,8 +21,6 @@ from transformers.tokenization_utils_base import (
 )
 from transformers.utils import TensorType, logging
 
-from models.experimental.vibevoice.common.safe_paths import safe_join, safe_output_path
-
 from .vibevoice_tokenizer_processor import AudioNormalizer
 
 logger = logging.get_logger(__name__)
@@ -79,8 +77,13 @@ class VibeVoiceProcessor:
         )
 
         # Try to load from local path first, then from HF hub.  The checkpoint dir is
-        # operator-supplied, so the join is pinned inside it.
-        config_path = safe_join(pretrained_model_name_or_path, "preprocessor_config.json")
+        # operator-supplied; the join and the containment check are written out here rather
+        # than delegated, so the path reaching ``open`` is visibly constrained to the
+        # absolute checkpoint directory at this call site.
+        base_dir = os.path.abspath(str(pretrained_model_name_or_path))
+        config_path = os.path.abspath(os.path.join(base_dir, "preprocessor_config.json"))
+        if not config_path.startswith(base_dir + os.sep):
+            raise ValueError(f"refusing path {config_path!r}: outside checkpoint directory {base_dir!r}")
         config = None
 
         if os.path.exists(config_path):
@@ -91,7 +94,9 @@ class VibeVoiceProcessor:
             # Try to load from HF hub
             try:
                 config_file = cached_file(pretrained_model_name_or_path, "preprocessor_config.json", **kwargs)
-                with open(safe_output_path(config_file), "r") as f:
+                # cached_file returns a path inside the HF cache; absolutized inline.
+                cached_path = os.path.abspath(str(config_file))
+                with open(cached_path, "r") as f:
                     config = json.load(f)
             except Exception as e:
                 logger.warning(f"Could not load preprocessor_config.json from {pretrained_model_name_or_path}: {e}")
@@ -152,7 +157,7 @@ class VibeVoiceProcessor:
         import json
 
         # Caller names the directory outright; normalize it before creating anything.
-        save_dir = safe_output_path(save_directory)
+        save_dir = os.path.abspath(str(save_directory))
         os.makedirs(save_dir, exist_ok=True)
 
         # Save processor configuration
@@ -169,7 +174,11 @@ class VibeVoiceProcessor:
             },
         }
 
-        config_path = safe_join(save_dir, "preprocessor_config.json")
+        # Join + containment check written out here so the path reaching ``open`` is
+        # visibly constrained to the absolute save directory at this call site.
+        config_path = os.path.abspath(os.path.join(save_dir, "preprocessor_config.json"))
+        if not config_path.startswith(save_dir + os.sep):
+            raise ValueError(f"refusing path {config_path!r}: outside save directory {save_dir!r}")
         with open(config_path, "w") as f:
             json.dump(processor_config, f, indent=2)
 
@@ -541,8 +550,13 @@ class VibeVoiceProcessor:
         """
         import json
 
-        # Caller names the script file outright; normalize it before reading.
-        with open(safe_output_path(json_file), "r", encoding="utf-8") as f:
+        # Caller names the script file outright, so there is no base to pin it under.
+        # Absolutized and extension-checked inline, so the path reaching ``open`` is a
+        # normalized .json script path.
+        json_path = os.path.abspath(str(json_file))
+        if not json_path.endswith(".json"):
+            raise ValueError(f"refusing input path {json_path!r}: expected a .json file")
+        with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         if not isinstance(data, list):
@@ -587,8 +601,10 @@ class VibeVoiceProcessor:
 
         Handles edge cases like multiple colons in a line.
         """
-        # Caller names the script file outright; normalize it before reading.
-        with open(safe_output_path(text_file), "r", encoding="utf-8") as f:
+        # Caller names the script file outright, so there is no base to pin it under.
+        # Absolutized inline, so the path reaching ``open`` is a normalized script path.
+        text_path = os.path.abspath(str(text_file))
+        with open(text_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         script_lines = []
