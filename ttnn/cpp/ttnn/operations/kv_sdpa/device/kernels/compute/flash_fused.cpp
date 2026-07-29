@@ -114,6 +114,10 @@ void kernel_main() {
     constexpr uint32_t suffix_Sk_chunk_t = get_compile_time_arg_val(7);
     constexpr uint32_t suffix_qk_subblock_w = get_compile_time_arg_val(8);
     constexpr uint32_t suffix_out_subblock_w = get_compile_time_arg_val(9);
+    // Split-KV role, compile-time per core set. suffix_num_chunks (arg 6) is already the PER-CORE
+    // count -- only the reducer is given the suffix -- so the loops above stay fully specialized.
+    constexpr bool is_reducer = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t num_children = get_compile_time_arg_val(11);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;      // suffix K
@@ -122,6 +126,14 @@ void kernel_main() {
     constexpr uint32_t cb_v_prefix = tt::CBIndex::c_9;  // prefix V
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
+    // Split-KV reduction CBs (see the program factory). Unused when kv_splits == 1.
+    constexpr uint32_t cb_l_in = tt::CBIndex::c_11;                 // child sum
+    constexpr uint32_t cb_m_in = tt::CBIndex::c_12;                 // child max
+    constexpr uint32_t cb_out_o = tt::CBIndex::c_13;                // child out
+    constexpr uint32_t cb_prev_sum_2 = tt::CBIndex::c_14;           // child sum, staged for correction
+    constexpr uint32_t cb_out_accumulate_im_2 = tt::CBIndex::c_15;  // child out, staged for rescale
+    constexpr uint32_t cb_exp_max_diff_2 = tt::CBIndex::c_17;       // exp(child_max - cur_max)
+    constexpr uint32_t cb_partial_out = tt::CBIndex::c_18;          // this worker's (l, m, o) to send
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
     constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
@@ -146,7 +158,8 @@ void kernel_main() {
     uint32_t prev_out = cb_out_im_A, cur_out = cb_out_im_B;
 
     uint32_t processed = 0;
-    // Phase 1: resident prefix K/V (its own tile geometry, e.g. 32x32).
+    // Phase 1: resident prefix K/V (its own tile geometry, e.g. 32x32). Under split-KV this is only
+    // THIS core's slice of the prefix -- the reader is given the matching tile offset.
     for (uint32_t c = 0; c < prefix_num_chunks; ++c) {
         flash_accumulate_chunk<cb_qk_im, cb_identity_scale_in, scale_fp32, DHt>(
             cb_q_in,
@@ -165,7 +178,7 @@ void kernel_main() {
             processed);
         processed++;
     }
-    // Phase 2: new suffix K/V (model tiny tile, e.g. 16x32).
+    // Phase 2: new suffix K/V (model tiny tile, e.g. 16x32). Only the reducer owns the suffix.
     for (uint32_t c = 0; c < suffix_num_chunks; ++c) {
         flash_accumulate_chunk<cb_qk_im, cb_identity_scale_in, scale_fp32, DHt>(
             cb_q_in,
@@ -185,8 +198,49 @@ void kernel_main() {
         processed++;
     }
 
-    /* Final row-reduction of the partial sum, reciprocal, and output normalization. */
+    /* Collapse the partial row-sum into a true column vector. Every core does this BEFORE the
+       cross-split merge, because correction_block treats sum/max as column vectors. */
     matmul_reduce<Sq_chunk_t>(cb_col_identity, prev_sum);
+
+    if (!is_reducer) {
+        /* Worker: stage (l, m, o) for the writer to push to this head's reducer. No normalization --
+           the reducer owns the final divide. Order must match the writer's read order. */
+        move_block<false>(prev_sum, cb_partial_out, Sq_chunk_t);
+        move_block<false>(prev_max, cb_partial_out, Sq_chunk_t);
+        move_block<false>(prev_out, cb_partial_out, Sq_chunk_t * vDHt);
+        CircularBuffer(cb_q_in).pop_front(Sq_chunk_t * DHt);
+        return;
+    }
+
+    /* Reducer: merge each child's partial state into the running one. The writer feeds children in
+       one at a time (the 1-deep cb_l_in/cb_m_in/cb_out_o backpressure serializes it), and each merge
+       is the standard online-softmax combine:
+         cur_max = max(prev_max, child_max)
+         cur_sum = prev_sum*exp(prev_max-cur_max) + child_sum*exp(child_max-cur_max)
+         prev_out = prev_out*exp(prev_max-cur_max) + child_out*exp(child_max-cur_max)   */
+    for (uint32_t child = 0; child < num_children; ++child) {
+        move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
+        correction_block<scale_fp32>(
+            cb_m_in,
+            cb_prev_sum_2,
+            cur_max,
+            prev_max,
+            cur_sum,
+            prev_sum,
+            cb_exp_max_diff,
+            cb_exp_max_diff_2,
+            Sq_chunk_t);
+        move_block<true>(cb_out_o, cb_out_accumulate_im_2, Sq_chunk_t * vDHt);
+        mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(prev_out, cb_exp_max_diff);
+        mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im_2, cb_exp_max_diff_2);
+        add_block_inplace<true>(prev_out, cb_out_accumulate_im_2, Sq_chunk_t * vDHt);
+        CircularBuffer(prev_max).pop_front(Sq_chunk_t);
+        CircularBuffer(cb_m_in).pop_front(Sq_chunk_t);
+        move_block<true>(cur_max, prev_max, Sq_chunk_t);
+        move_block<true>(cur_sum, prev_sum, Sq_chunk_t);
+    }
+
+    /* Reciprocal and output normalization. */
     recip_block_inplace(prev_sum, Sq_chunk_t);
     pack_reconfig_data_format(cb_out);
     mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(prev_out, prev_sum, cb_out);

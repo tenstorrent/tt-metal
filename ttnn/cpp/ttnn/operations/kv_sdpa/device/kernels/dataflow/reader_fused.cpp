@@ -17,6 +17,7 @@ void kernel_main() {
     constexpr uint32_t prefix_num_chunks = get_compile_time_arg_val(4);
     constexpr uint32_t suffix_Kt = get_compile_time_arg_val(5);
     constexpr uint32_t suffix_Sk_chunk_t = get_compile_time_arg_val(6);
+    // PER-CORE under split-KV: only the reducer is given a non-zero suffix chunk count.
     constexpr uint32_t suffix_num_chunks = get_compile_time_arg_val(7);
     constexpr bool has_past = get_compile_time_arg_val(8) == 1;
 
@@ -33,6 +34,9 @@ void kernel_main() {
     const uint32_t kv_head = get_arg_val<uint32_t>(4);
     const uint32_t pk_addr = get_arg_val<uint32_t>(5);
     const uint32_t pv_addr = get_arg_val<uint32_t>(6);
+    // Split-KV: this core's first prefix TILE (s * prefix_Kt / kv_splits) and how many suffix chunks
+    // it owns (only the reducer takes the suffix). With kv_splits == 1 these are (0, suffix_num_chunks).
+    const uint32_t prefix_tile_start = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;      // suffix K
@@ -65,34 +69,43 @@ void kernel_main() {
     // Read one K/V source chunk-by-chunk. K is written transposed into cb_k: tile (seq=kt, dim=d) ->
     // offset (d*Sk_chunk + kt), i.e. a [DHt x Sk_chunk] tile grid, as the QK^T matmul expects. V stays
     // seq-major [Sk_chunk x DHt]. Page within a source = (kv_head * src_Kt + local) * DHt + d.
-#define READ_KV_SOURCE(CB_K, CB_V, K_ACC, V_ACC, K_TB, V_TB, SRC_KT, SK_CHUNK, NUM_CHUNKS)     \
-    for (uint32_t c = 0; c < (NUM_CHUNKS); ++c) {                                              \
-        const uint32_t kt0 = c * (SK_CHUNK);                                                   \
-        cb_reserve_back(CB_K, (SK_CHUNK) * DHt);                                               \
-        const uint32_t k_base = get_write_ptr(CB_K);                                           \
-        cb_reserve_back(CB_V, (SK_CHUNK) * DHt);                                               \
-        uint32_t lv = get_write_ptr(CB_V);                                                     \
-        for (uint32_t kt = 0; kt < (SK_CHUNK); ++kt) {                                         \
-            const uint32_t g = kt0 + kt;                                                       \
-            const uint32_t base = (kv_head * (SRC_KT) + g) * DHt;                              \
-            for (uint32_t d = 0; d < DHt; ++d) {                                               \
-                noc_async_read_tile(base + d, K_ACC, k_base + (d * (SK_CHUNK) + kt) * (K_TB)); \
-                noc_async_read_tile(base + d, V_ACC, lv + d * (V_TB));                         \
-            }                                                                                  \
-            lv += DHt * (V_TB);                                                                \
-        }                                                                                      \
-        noc_async_read_barrier();                                                              \
-        cb_push_back(CB_K, (SK_CHUNK) * DHt);                                                  \
-        cb_push_back(CB_V, (SK_CHUNK) * DHt);                                                  \
+#define READ_KV_SOURCE(CB_K, CB_V, K_ACC, V_ACC, K_TB, V_TB, SRC_KT, SK_CHUNK, NUM_CHUNKS, KT_START) \
+    for (uint32_t c = 0; c < (NUM_CHUNKS); ++c) {                                                    \
+        const uint32_t kt0 = (KT_START) + c * (SK_CHUNK);                                            \
+        cb_reserve_back(CB_K, (SK_CHUNK) * DHt);                                                     \
+        const uint32_t k_base = get_write_ptr(CB_K);                                                 \
+        cb_reserve_back(CB_V, (SK_CHUNK) * DHt);                                                     \
+        uint32_t lv = get_write_ptr(CB_V);                                                           \
+        for (uint32_t kt = 0; kt < (SK_CHUNK); ++kt) {                                               \
+            const uint32_t g = kt0 + kt;                                                             \
+            const uint32_t base = (kv_head * (SRC_KT) + g) * DHt;                                    \
+            for (uint32_t d = 0; d < DHt; ++d) {                                                     \
+                noc_async_read_tile(base + d, K_ACC, k_base + (d * (SK_CHUNK) + kt) * (K_TB));       \
+                noc_async_read_tile(base + d, V_ACC, lv + d * (V_TB));                               \
+            }                                                                                        \
+            lv += DHt * (V_TB);                                                                      \
+        }                                                                                            \
+        noc_async_read_barrier();                                                                    \
+        cb_push_back(CB_K, (SK_CHUNK) * DHt);                                                        \
+        cb_push_back(CB_V, (SK_CHUNK) * DHt);                                                        \
     }
 
     // Phase 1: resident prefix K/V (own tile geometry). Skipped when there is no past.
     if (has_past) {
         READ_KV_SOURCE(
-            cb_k_prefix, cb_v_prefix, pk_acc, pv_acc, kp_tb, vp_tb, prefix_Kt, prefix_Sk_chunk_t, prefix_num_chunks);
+            cb_k_prefix,
+            cb_v_prefix,
+            pk_acc,
+            pv_acc,
+            kp_tb,
+            vp_tb,
+            prefix_Kt,
+            prefix_Sk_chunk_t,
+            prefix_num_chunks,
+            prefix_tile_start);
     }
     // Phase 2: new suffix K/V (model tiny tile).
-    READ_KV_SOURCE(cb_k_in, cb_v_in, k_acc, v_acc, ks_tb, vs_tb, suffix_Kt, suffix_Sk_chunk_t, suffix_num_chunks);
+    READ_KV_SOURCE(cb_k_in, cb_v_in, k_acc, v_acc, ks_tb, vs_tb, suffix_Kt, suffix_Sk_chunk_t, suffix_num_chunks, 0);
 
     (void)NQH;
 }

@@ -124,12 +124,14 @@ ttnn::operations::kv_sdpa::KvSdpaDeviceOperation::tensor_return_value_t kv_sdpa(
     std::optional<Tensor> past_k,
     std::optional<Tensor> past_v,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    uint32_t max_kv_chunk_tiles) {
+    uint32_t max_kv_chunk_tiles,
+    uint32_t kv_splits) {
     using Op = ttnn::operations::kv_sdpa::KvSdpaDeviceOperation;
     auto attrs = Op::operation_attributes_t{
         .scale_bits = scale_bits,
         .compute_kernel_config = compute_kernel_config,
-        .max_kv_chunk_tiles = max_kv_chunk_tiles};
+        .max_kv_chunk_tiles = max_kv_chunk_tiles,
+        .kv_splits = kv_splits};
     auto args = Op::tensor_args_t{
         .q = q, .k = k, .v = v, .mask = std::move(mask), .past_k = std::move(past_k), .past_v = std::move(past_v)};
     return ttnn::device_operation::launch<Op>(attrs, args);

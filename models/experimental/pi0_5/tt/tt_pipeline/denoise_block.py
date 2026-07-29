@@ -14,6 +14,7 @@ ZERO tt_symbiote imports, no os.environ reads.
 """
 from __future__ import annotations
 
+import os
 from typing import Optional, Tuple
 
 import ttnn
@@ -129,6 +130,12 @@ _KV_FOLD = True
 # is tiny and gather/reduce overhead outweighs added parallelism -- the same reason _RESHARD_CORES=2
 # beats 4 and 8. Note K=4 raises PER-CORE weight L1 (shard goes (512,64) -> (256,160), ~35 -> ~43 KB)
 # on fewer cores, so it is gated on the 16-chip L1 budget as well as single-layer time.
+# A per-matmul K-split does NOT help, though the profile makes it look like it should. Diffing the
+# tuned tile-16 config against tile-32 shows exactly ONE op regressed -- GateUpMatmulDecode, +17%
+# (10.67 -> 12.49us) -- because K=4 caps the MLP at n_blocks=16 (down's N_tiles=32 has no divisor in
+# (16, 30]). Giving the MLP back its own K=2/n=32 (tile-32's layout) was swept and is 4% SLOWER at the
+# block level (0.121 vs 0.116), and K=1/n=32 fails PCC outright. So that +17% is the price of a config
+# that is globally better -- gate_up loses, QKV/O/kv_sdpa win more. Do not "fix" it in isolation.
 # TILE-HEIGHT DEPENDENT. K=4/16-16-16 is 3.3% faster at tile-16 but raises PER-CORE weight L1
 # (the _pws_B shard goes (kc=512,nc=64) -> (256,160), ~35 -> ~43 KB) on fewer cores, and at tile-32
 # that overflows the 16-chip L1 budget outright ("Statically allocated circular buffers ... clash
@@ -148,6 +155,10 @@ _RESHARD_CORES = 2
 # 64 captures essentially all of the gain; 128 buys a further ~0.001 ms (inside run-to-run noise) for
 # double the L1. Chosen for the best perf-per-byte that still fits the 16-chip L1 budget.
 _KV_SDPA_MAX_CHUNK_TILES = 64
+# Cores per Q head for the kv_sdpa prefix (flash-decode split-KV). kv_sdpa runs one core per Q head,
+# so at 8 MQA heads it uses 8 of ~120 cores and Sq is a single tile (no Q-parallelism to exploit).
+# Splitting the 32-tile prefix S ways uses 8*S cores. Env-tunable while it is being characterised.
+_KV_SPLITS = int(os.environ.get("PI05_KV_SPLITS", "1"))
 _QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = (16, 16, 16) if TILE_HEIGHT < 32 else (40, 32, 32)
 
 _LOFI = ttnn.WormholeComputeKernelConfig(
@@ -357,9 +368,7 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
             # partial_width_sharded matmul_decode reduces the K-partials onto _QKV_N_BLOCKS output
             # base cores; the WIDTH-SHARDED [padded_m, N/_QKV_N_BLOCKS] result is laid out exactly
             # like nlp_create_qkv_heads_rope expects to read it.
-            qkv = _matmul_decode_pws(
-                hidden_states, self.wqkv_b, _QKV_N_BLOCKS, self.device, out_dtype=ACT_DTYPE
-            )
+            qkv = _matmul_decode_pws(hidden_states, self.wqkv_b, _QKV_N_BLOCKS, self.device, out_dtype=ACT_DTYPE)
         else:
             qkv = self._proj(hidden_states, self.tt_wqkv, ACT_DTYPE, m_t, _g, _expert_ck)
         # Fused create-qkv-heads + q/k RoPE in ONE dispatch (custom op; byte-identical to
@@ -400,6 +409,7 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                 past_v=past_v,
                 compute_kernel_config=_KV_SDPA_HIFI2,
                 max_kv_chunk_tiles=_KV_SDPA_MAX_CHUNK_TILES,
+                kv_splits=_KV_SPLITS,
             )
             new_cache = None
         else:

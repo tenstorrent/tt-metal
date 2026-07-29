@@ -31,6 +31,11 @@ void bind_kv_sdpa_operation(nb::module_& mod) {
         means fewer chunks and less per-chunk overhead, but the double-buffered per-chunk K/V CBs grow
         linearly -- at DH=256 (DHt=8) the default yields 256-tile prefix CBs (~272 KB each). Lower it
         when the caller pins significant L1, or the CBs clash with those buffers.
+
+        kv_splits (default 1) splits the PREFIX K/V across this many cores per Q head (flash-decode
+        style), using NQH * kv_splits cores instead of NQH. Since Sq is a single tile there is no
+        Q-parallelism, so this is the only way to use more than NQH cores. Split 0 also takes the
+        suffix and reduces the partial (max, sum, out) states. Requires prefix_Kt % kv_splits == 0.
         )doc",
         &ttnn::kv_sdpa,
         nb::arg("q"),
@@ -42,7 +47,8 @@ void bind_kv_sdpa_operation(nb::module_& mod) {
         nb::arg("past_k") = nb::none(),
         nb::arg("past_v") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("max_kv_chunk_tiles") = 128);
+        nb::arg("max_kv_chunk_tiles") = 128,
+        nb::arg("kv_splits") = 1);
 }
 
 }  // namespace ttnn::operations::kv_sdpa

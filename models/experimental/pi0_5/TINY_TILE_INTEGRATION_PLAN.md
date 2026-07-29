@@ -372,3 +372,347 @@ All 18 resolved as follows.
   `test_tiny_tile_ttnn_bugs.py:97-98` (claims addcmul avoided; `_gated_residual` uses it),
   `test_tiny_tile_ttnn_bugs.py:10` vs `tile_config.py:13` (blocked dtypes at tiny tile).
 - Duplicated import at `modeling/common.py:19-20`.
+
+---
+
+# Post-integration optimization rounds (R6-R9)
+
+Baseline for this section: tile-16 single-layer denoise **0.116-0.117 ms** (K=4 / 16-16-16,
+`_KV_SDPA_MAX_CHUNK_TILES=64`, LoFi kv_sdpa, block-sharded adaRMS), i.e. -42% from the 0.201 ms the
+merge originally landed at. 16-chip e2e 24.25 ms @2 cams / 26.76 ms @3 cams.
+
+## R6 - config space converged (no change)
+
+`_KV_SDPA_MAX_CHUNK_TILES` re-swept at the K=4 operating point: bf8 prefix cap 64 -> 0.117,
+96 -> 0.120, 128 -> 0.118; bf4 prefix cap 64 -> 0.116, 128 -> 0.118, 256 -> 0.126. bf4's 0.116 vs
+bf8's 0.117 is inside the +-0.002-0.003 run-to-run band, so bf4 stays available but unused. Cap 64
+remains optimal. **The matmul_decode / kv_sdpa scalar config space is exhausted** -- further gains
+need structural change.
+
+## R7 - per-matmul K-split for the MLP: NEGATIVE, do not retry
+
+Profiling the tuned tile-16 config against tile-32 showed exactly ONE op regressed while every other
+improved: `GateUpMatmulDecode` **+17%** (10.67 -> 12.49 us). Cause is real: a global `_K_BLOCKS=4`
+caps the MLP at `n_blocks=16`, because `down`'s `N_tiles=32` has no divisor in (16, 30] and
+`k_blocks*n_blocks <= 120`. So the MLP loses half its output-block parallelism.
+
+Threaded a per-weight `k_blocks` through `_pws_B` and swept the MLP alone:
+
+| MLP (K, n) | PCC | single-layer |
+|---|---|---|
+| (4, 16) = current | 0.9999 | **0.116 ms** |
+| (2, 32) = tile-32's layout | 0.9999 | 0.121 ms (+4%) |
+| (1, 32) | **FAILS** | 0.118 ms |
+
+**Lesson: a per-op regression in a profile diff is not independently actionable when the config is
+globally coupled.** K=4 trades gate_up slower for QKV/O/kv_sdpa faster and nets -3.3% overall. The
+`k_blocks` plumbing was reverted (dead flexibility); the finding is recorded in `denoise_block.py`.
+
+## R8/R9 - kv_sdpa split-KV (flash decode): the real structural headroom
+
+`kv_sdpa` is **33% of denoise device time** (28.4 us/call) and its program factory assigns
+`num_cores_to_corerangeset(NQH)` = **one core per Q head = 8 of ~120 cores**. Because `Sq` is a
+single tile there is NO Q-parallelism to exploit, so the KV axis is the only one left. Per-core rate
+is ~0.59 TFLOP/s, a few percent of Blackhole bf8 peak.
+
+Sizing the prize from the existing cap sweep (which varied chunk count at constant work): 8 chunks
+0.131 vs 2 chunks 0.127 => ~0.7 us fixed cost per chunk, so at 4 chunks only ~2.8 of the 28.4 us is
+per-chunk overhead and **~88% is parallelizable work**.
+
+Implemented `kv_splits=S` (`PI05_KV_SPLITS` env knob): `NQH*S` cores, split `s` of head `h` takes
+prefix tiles `[s*prefix_Kt/S, (s+1)*prefix_Kt/S)`; split 0 also takes the (much shorter) suffix and
+acts as reducer, merging the S-1 partial `(max, sum, out)` states with the standard online-softmax
+correction. Reuses `correction_block()` from `compute_common.hpp`. **Flat** reduction, not the
+`sdpa_decode` tree: S is small and `Sq_chunk_t == 1`, so one semaphore + per-child slots replaces the
+nibble-encoded tree topology. Each core `matmul_reduce`s its partial sum to a true column vector
+before merging (the flash loop leaves it as a partial row-sum).
+
+Two costs found that are specific to this pipeline:
+
+1. **The reduction CBs are not free on the S=1 path.** Declaring them at full size unconditionally
+   added ~31 bf16 tiles (~62 KB) of L1 per core and moved S=1 from 0.116 to **0.129 ms**. They are
+   now a 1-tile placeholder when `num_children == 0`.
+2. **kv_sdpa's cores are the resident-weight cores.** Both use
+   `num_cores_to_corerangeset(n, grid, row_wise=true)`, so kv_sdpa's 8 cores are exactly the first 8
+   of the 64 `_pws_B` weight cores. Raising S spreads the prefix K/V CBs (~278 KB/core at cap 64)
+   across MORE weight-holding cores, so **S is gated on the 16-chip L1 budget, not just on speed** --
+   the same coupling that made K=4 unusable at tile-32. Expect to lower `max_kv_chunk_tiles` as S
+   rises (each split has fewer prefix tiles anyway).
+
+First measurements (tile-16, single-layer, machinery present at every S):
+
+| kv_splits | cores | single-layer |
+|---|---|---|
+| 1 | 8 | 0.129 ms |
+| 2 | 16 | 0.121 ms |
+
+The split itself works (-6% from S=1 to S=2); the CB overhead was masking it. See the R9 table below
+for numbers after the CB guard + NOC barrier batching.
+
+## Harness note: the standalone kv_sdpa microbenchmark is NOT a valid oracle
+
+`scratchpad/kvs_bench.py` compares the op against a torch SDPA reference at the pi0.5 shape. It
+reports PCC ~0.38 for **stock** kv_sdpa across all four dtype/tile combinations (bf8/bf16 x
+tile16/tile32), so the torch reference does not match the op's contract -- do not read correctness or
+timing from it. (Separately, bf8 + tile16 there produces `absmax 3.4e38` garbage, while bf16 + tile16
+is sane; the model uses bf8+tile16 successfully, so that is harness-specific and unexplained.)
+**Validate kv_sdpa changes in-situ** with `test_l1_single_layer_pcc` + `test_walltime_l1_single_layer`.
+
+## The governing structural fact: half the denoise runs on <10% of the cores
+
+Because the denoise Q is a **single tile** (16 rows), every per-head op degenerates to one core per
+head, and they are allocated by head count, not by work:
+
+| op | core count | how it is derived | share of device time |
+|---|---|---|---|
+| `kv_sdpa` | **8** | `num_cores_to_corerangeset(NQH)` | 33.2% |
+| `LayerNorm` (adaRMS) | **8** | `sharded_norm_pcfg(..., max_grid_y=min(8, m_tiles))`, `m_tiles == 1` | 9.4% |
+| `NlpCreateQkvHeadsRope` | **10** | `total = nq + 2*nkv` = 8+1+1 | 6.8% |
+| `matmul_decode` / `gate_up` | 64 | `_K_BLOCKS * n_blocks` | 43.2% |
+
+So **~49% of denoise device time runs on <= 10 of ~120 cores.** Only the projection matmuls are
+actually parallel. This is why the scalar config sweeps converged: they were tuning the 43% that is
+already spread over 64 cores, while the 49% on 10 cores was untouched.
+
+The remaining headroom is therefore all of one kind -- **find a second parallel axis for the
+single-Q-tile ops**:
+
+* `kv_sdpa` -> split the KV sequence (implemented as `kv_splits`, R8/R9 above). Only axis available.
+* `NlpCreateQkvHeadsRope` -> split along `head_dim` (256 = 8 tiles), giving 10*8 = 80 cores. RoPE is
+  a per-dim-pair rotation, so it partitions cleanly; the reader would need a dim-tile offset.
+* `LayerNorm` -> cannot split width without a cross-core RMS reduction (measured slower, see
+  `sharded_rms_norm`). The real win is fusing the reshard + norm into the consumer matmul's reader,
+  which would also remove the 2 `InterleavedToSharded` per layer (64 calls, 39.6 us, 1.4%) that come
+  from the norm's own `to_memory_config(x, memcfg)`.
+
+Note all three small ops use the SAME `num_cores_to_corerangeset(n, grid, row_wise=true)` allocator as
+the resident weights, so they always land on the first N weight-holding cores. Any core-count increase
+is therefore also an L1 decision, not just a scheduling one.
+
+### R9/R11 - the dominant cost was runtime args, not L1
+
+The first split-KV implementation regressed the **inert** `kv_splits == 1` path from 0.116 to
+0.129-0.131 ms (+12%), while PCC stayed 0.9999 at every S. Two hypotheses, tested in order:
+
+1. **Extra CBs (wrong).** The reduction CBs were declared full-size unconditionally (~31 bf16 tiles,
+   ~31 KB/core). Shrinking them to a 1-tile placeholder when `num_children == 0` changed nothing
+   (0.129 -> 0.131, inside noise). Not the cause -- but the guard is correct and was kept.
+2. **Runtime args (right).** Passing the per-core values (`suffix_num_chunks`, `is_reducer`,
+   `num_children`) as *runtime* args made the suffix flash loop runtime-bounded, so it lost
+   constexpr bounds and constant propagation into `flash_accumulate_chunk`. Fixed by emitting **two
+   kernel variants** on two core sets -- reducer cores (split 0) and worker cores -- so every
+   role-dependent value is a compile-time arg again. Only truly per-core values (prefix slice offset,
+   output row, reducer NOC coords, slot index) remain runtime args. At `kv_splits == 1` only the
+   reducer variant is emitted, with args identical to the pre-split program. This is the same
+   structure `nlp_create_qkv_heads_rope` uses for `qk_cores` / `v_cores`.
+
+**Lesson: on a kernel this small, moving a loop bound from compile-time to runtime cost more (12%)
+than anything else attempted in this round gained.** Prefer multiple kernel variants over runtime
+predication whenever the variants are known at program-build time.
+
+Also note the barrier batching (3 per-child NOC round trips -> 1) made **no measurable difference**
+(S=2 was 0.121 both before and after), so the cross-core hop is not the reduction's bottleneck; the
+serial merge chain is.
+
+Split gain, measured consistently across two rounds at equal handicap: **S=2 is 0.008-0.010 ms faster
+than S=1**, i.e. kv_sdpa ~28.4 -> ~20 us. S=4 and S=8 are progressively worse (0.127, 0.134), an
+interior optimum at S=2 -- consistent with the merge chain lengthening and the prefix CBs spreading
+onto more weight-holding cores.
+
+### VERDICT: split-KV does NOT pay at the pi0.5 denoise shape
+
+With the machinery implemented correctly (compile-time per-core role, two kernel variants), the
+single-layer denoise at tile-16, PCC 0.9999 at every S:
+
+| kv_splits | cores | single-layer | vs S=1 |
+|---|---|---|---|
+| 1 | 8 | **0.117 ms** | baseline (== the pre-split 0.116-0.117, so the machinery is FREE when off) |
+| 2 | 16 | 0.133 ms | +14% |
+| 4 | 32 | 0.125 ms | +7% |
+
+**The earlier "S=2 is 8-10 us faster" result was an artifact.** In the runtime-arg version BOTH arms
+paid a ~12% penalty that scaled with the reducer's own chunk count, so halving that work looked like a
+win. Once the penalty was removed the split is uniformly a loss. This is the second time this round
+that an A/B was invalidated by the two arms not being otherwise identical (the first was the tile-16
+vs tile-32 fusion-state mismatch) -- **when a change moves a shared cost, re-measure the baseline in
+the SAME build before believing a delta.**
+
+Why it loses: halving each core's prefix work should save ~12 us of the ~25 us of chunk work, but S=2
+is 16 us *slower*, implying the reduction costs ~28 us. The merge math is only ~5-6 us of tile ops
+(one `correction_block` on 1 tile, two 8-tile bcast-muls, an 8-tile add, ~11 tile copies), and the
+walltime harness is TRACED (`begin_trace_capture`/`execute_trace`), so this is real device time, not
+host dispatch. The remainder is the reducer *waiting* -- it cannot start merging until its slowest
+child has finished its whole flash loop, staged its partials, and completed a NOC hop plus a semaphore
+round trip. At this size the barrier costs more than the parallelism buys. (Batching the three
+per-child NOC reads behind one barrier changed nothing, confirming the hop itself is not the cost.)
+
+**Implication for the other single-Q-tile ops:** the "spread it over more cores" thesis is NOT
+automatically a win here. A split only pays if the per-core work saved exceeds a cross-core barrier,
+and at Sq == 1 tile the per-core work is already tiny. The rope split (10 -> 40 cores) needs no
+cross-core reduction at all (RoPE is elementwise per dim-pair, so each core just writes its own output
+slice) -- that is the one worth trying, precisely because it has no merge step. LayerNorm's width split
+DOES need a cross-core RMS reduction and was already measured slower, which is the same lesson.
+
+`kv_splits` is retained at its default of 1, where it is measurably free, so the capability is
+available for shapes with much longer prefixes (where the per-core saving would dominate the barrier).
+
+## THE KEY FINDING: the denoise block is DISPATCH-bound, not compute-bound
+
+Profiling `kv_splits=1` vs `2` (device kernel time, tile-16, same build) settles what the walltime
+number alone could not:
+
+| | S=1 | S=2 | delta |
+|---|---|---|---|
+| `KvSdpa` device kernel | 28.47 us/call | **20.75 us/call** | **-27.1%** |
+| total device kernel | 2741.5 us | **2456.5 us** | **-10.4%** |
+| traced wall-clock (single layer) | 0.117 ms | 0.133 ms | **+14%** |
+
+Every other op is unchanged (all within +-0.5%), so the split did exactly what it was designed to do.
+**Device kernel time went DOWN 10% while wall-clock went UP 14%**, which means the cost is not kernel
+execution.
+
+Do the arithmetic: 2741.5 us of kernel time over 31 block iterations = **88.4 us/iteration of kernel
+time against 117 us of measured traced wall-clock** -- so **~29 us (25%) per iteration is already
+non-kernel overhead**, roughly 2.6 us across the ~11 ops in the block. At S=2 that overhead grows to
+~54 us/iteration. Adding 8 cores to ONE op cost ~25 us of launch/sync, swamping the 7.7 us of kernel
+time it saved.
+
+**Do not over-model the overhead as "proportional to core count"** -- S=4 (32 cores, 0.125 ms) beats
+S=2 (16 cores, 0.133 ms). At S=4 each core gets exactly ONE prefix chunk, so `processed == 0` on its
+only chunk and the entire online-softmax rescale block is skipped, which is a real kernel-side saving
+pulling the other way. The robust claim is narrower and still decisive: **a 10% cut in device kernel
+time produced a 14% INCREASE in traced wall-clock, and ~25% of wall-clock is not kernel time at all.**
+
+This retroactively explains three earlier results that were recorded as bare facts with no mechanism:
+
+* "64 cores beats 80 (QKV=16 over QKV=20)" -- fewer cores, less launch overhead.
+* "`_RESHARD_CORES=2` beats 4 and 8" -- same reason.
+* Every scalar config sweep converging (R6) -- they were all tuning kernel time, which is only 75%
+  of the cost, and the knobs that mattered were the ones that quietly reduced core count.
+
+**Consequences for what to optimize next.** The lever is FEWER OPS AND FEWER CORES, not faster
+kernels:
+
+1. **Op fusion is now the top priority**, not parallelization. Each op removed is worth ~2.6 us of
+   pure overhead on top of whatever kernel time it held. The queued candidates are exactly right:
+   fuse the adaRMS norm + its reshard into the consumer matmul's reader (removes 2 `LayerNorm` +
+   2 `InterleavedToSharded` per layer = 4 of ~11 ops, ~10 us/iteration of overhead alone, plus the
+   258 us of LayerNorm kernel time).
+2. **The rope head_dim split (task 21) should NOT be pursued.** It would take 10 -> 40 cores on an op
+   whose kernel time is only 5.76 us. Even a perfect 4x kernel speedup saves ~4 us while adding ~30
+   cores of launch overhead. The barrier-free argument for it is irrelevant if the cost is launch,
+   not synchronization.
+3. `kv_splits` stays default 1. It is a real -27% on `kv_sdpa`'s kernel time and will pay on a
+   platform or pipeline where per-op launch overhead is amortized better (or at a much longer prefix,
+   where the kernel saving scales while the launch cost does not -- see the prefix crossover sweep).
+
+**Methodological note:** kernel-time profiling and traced wall-clock disagreed in SIGN here. Neither
+alone was sufficient: the walltime said "the split fails", the profile said "the split works". Both
+are true, and only together do they identify dispatch as the bottleneck. Always check both.
+
+## Next optimization, scoped: fuse the adaRMS norm into the consumer matmul_decode
+
+This is the right target *because* the block is dispatch-bound. It REMOVES ops instead of adding cores.
+
+**Why it is feasible (and why it does not hit the barrier that killed `kv_splits`):**
+`reader_partial_width_sharded.cpp` calls `gather_full_a()`, so the ENTIRE A row is already gathered
+onto every compute core. `sum(x^2)` over `hidden` is therefore computable **locally per core with no
+cross-core reduction** -- the exact cost that made split-KV lose does not exist here.
+
+**Insertion point** is unambiguous: in `compute_partial_width_sharded.cpp`, between
+`cb_wait_front(full_in0_cb_id, full_in0_num_tiles)` and `phase1_partial(...)`. The kernel already has a
+compile-time-gated epilogue framework (`fused_gelu`, `fused_residual`, `residual_cb_id`, `gate_cb_id`,
+`mmg_cb_id` at CTAs 6-12) to model a prologue on, and `phase1_partial` is shared with the gate_up
+compute so the prologue is written once.
+
+**No redundant normalization at the op level:** each norm feeds exactly ONE consumer -- attention's
+`normed` -> the wqkv `matmul_decode`, the MLP's `normed` -> `gate_up_matmul_decode`. So only two ops
+need the prologue (the o-proj and down-proj do not).
+
+**But note the per-core redundancy.** `full_in0_num_tiles = M_tiles * K_tiles` = 32 tiles, and all
+`K_blocks * n_blocks` = 64 cores hold the full A, so every core recomputes the same norm -- ~32 tile-ops
+each, which is MORE than the 16 tile-matmuls a core does for its own partial. That is acceptable only
+because the cores run in parallel: the op's *duration* grows by roughly one core's share (~1 us), not
+64x. This is the main thing to verify empirically rather than assume.
+
+**Sizing it from the per-op profile.** Per block iteration (31 iterations in the profile) the ops and
+their kernel time are:
+
+| op | calls/iter | us/call | us/iter |
+|---|---|---|---|
+| `KvSdpa` | 1 | 28.47 | 28.5 |
+| `MatmulDecode` | 3 | 8.31 | 24.9 |
+| `GateUpMatmulDecode` | 1 | 12.12 | 12.1 |
+| `LayerNorm` | 2 | 4.01 | 8.0 |
+| `NlpCreateQkvHeadsRope` | 1 | 5.76 | 5.8 |
+| `InterleavedToSharded` | 2 | ~0.62 | 1.2 |
+| **sum of kernel time** | **10** | | **~80.5** |
+| **measured traced wall-clock** | | | **117** |
+
+So **~36.5 us (31%) of wall-clock is inter-op overhead, ~3.7 us per op.** That is the real currency.
+
+**Expected for this fusion:** removing 4 of the 10 ops saves 4 x 3.7 = ~15 us of overhead plus 8.0 us
+(LayerNorm) + 1.2 us (i2s) of kernel time = **~24 us on a 117 us block, ~20%** -- against ~2 us of added
+prologue. That is the largest single win identified, and it is larger than everything this round
+achieved combined. Gate it on BOTH device kernel time and traced wall-clock.
+
+**Rejected as insufficient:** simply keeping the residual stream sharded to kill the 2 i2s (~8.6 us,
+7%) does not work on its own -- `matmul_decode`'s natural output is width-sharded across its `n_blocks`
+base cores while the norm wants an 8-core block-shard, so a reshard is required either way. The
+layouts only reconcile inside the fused op.
+
+### CAUTION on the fusion: the prologue is REDUNDANT across cores, and that may sink it
+
+Correcting the estimate above before anyone writes the kernel. Two things make the prologue more
+expensive than "one extra pass":
+
+1. `compute_kernel_lib::reduce<SUM, REDUCE_ROW, ...>` sums `x`, not `x^2`, so RMS needs a **square pass
+   into scratch** and then the reduce -- the production `layernorm_sharded.cpp` does exactly this.
+2. **It is recomputed on every core.** The standalone `LayerNorm` op normalizes the 32 A-tiles ONCE
+   spread over 8 cores (4 tiles/core). A fused prologue runs on all `K_blocks * n_blocks` = 64 cores,
+   and each must square-and-reduce all 32 *gathered* tiles to get `sum(x^2)` over the full hidden dim.
+   Each core then only needs to SCALE its own `Kc_tiles` = 8-tile slice (`phase1_partial` takes a
+   `k_offset` and matmuls only its slice), so it is ~32 square + ~32 reduce + ~24 scale/weight/bias
+   ~= 56 tile-ops per core versus the 4 tiles/core the standalone norm does.
+
+So the fused version does roughly **14x the per-core normalization work** of the op it replaces. Whether
+it still wins depends entirely on the marginal per-tile cost of eltwise/SFPU work inside
+`matmul_decode`, which is NOT known -- the honest range is "+2 us (fusion wins big)" to "+15 us per op
+(fusion loses)".
+
+**Do the cheap probe before building it.** Add a throwaway prologue to
+`compute_partial_width_sharded.cpp` that squares `full_in0` into scratch and reduces it (no
+correctness, no weight/bias, output discarded), then profile `MatmulDecodeDeviceOperation`'s
+device-kernel time against the 8.31 us baseline. ~30 lines and one profile run decides a multi-hour
+implementation:
+
+* delta < ~2 us/op -> build the real fusion; expected net ~ -16 to -24 us on a 117 us block.
+* delta > ~6 us/op -> abandon; removing 4 ops (~15 us of dispatch + 9 us of kernel) will not cover it.
+
+If it is abandoned, the fallback for the dispatch-bound problem is to look for op removals that add NO
+per-core work -- e.g. folding the two `InterleavedToSharded` into an existing reader, or reducing the
+op count in the adaRMS modulation path -- rather than moving compute into a 64-core op.
+
+#### Grounding the prologue cost from measured per-tile rates (before doing the probe)
+
+The profile already contains two clean anchors for per-tile cost on this device at this shape:
+
+* `InterleavedToSharded`: 0.62 us for ~32 tiles => **~0.02 us/tile** of pure data movement.
+* `BinaryNgDeviceOperation`: 1.43 us for ~32 tiles => **~0.045 us/tile** of eltwise compute.
+
+At ~56 tile-ops per core the prologue is therefore ~56 x 0.045 = **~2.5 us per fused op**, not the
+~15 us worst case feared above. Two fused ops (wqkv + gate_up) => **+5 us**.
+
+Against that, the removals are 8.0 us (`LayerNorm` kernel) + 1.2 us (`i2s` kernel) + 4 ops x 3.7 us
+(dispatch overhead) = **~24 us**. Net **~ -19 us on a 117 us block, ~ -16%**.
+
+So the fusion is very likely a win, and the probe is now optional rather than gating -- the residual
+uncertainty is only whether the `reduce` and the single `rsqrt` are materially pricier per tile than a
+plain binary eltwise. Recommend implementing it directly, in this order (each step independently
+verifiable with `test_l1_single_layer_pcc` + walltime):
+
+1. wqkv only (`matmul_decode`): removes 1 `LayerNorm` + 1 `i2s`, expect ~ -10 us / -8%.
+2. then the MLP (`gate_up_matmul_decode`), which shares `partial_phases.hpp`: the other ~ -10 us.
+
+Keep the fused-norm path behind a compile-time flag defaulting OFF so the existing path is byte
+-identical until the A/B passes -- and remember runtime args are NOT free here (R9/R11: they cost 12%).

@@ -35,6 +35,17 @@ struct KvSdpaDeviceOperation {
         // resident) must lower this or the CBs clash with those buffers. Default keeps the
         // fewest-chunks behaviour for callers with spare L1.
         uint32_t max_kv_chunk_tiles = 128;
+        // Number of cores the PREFIX K/V sequence is split across, per Q head (flash-decode style
+        // split-KV). The base layout is one core per Q head, which caps this op at NQH cores (8 for
+        // pi0.5 MQA) out of ~130 -- and since Sq is a single tile there is no Q-parallelism to
+        // exploit, so the KV axis is the only one left. With kv_splits = S the op uses NQH * S cores:
+        // split s of head h attends to prefix tiles [s*prefix_Kt/S, (s+1)*prefix_Kt/S) and produces a
+        // partial (max, sum, out) flash state; split 0 also takes the (much shorter) suffix and acts
+        // as the reducer, merging the S-1 partials via the standard online-softmax correction
+        // (m = max(m_i), o = sum(exp(m_i-m) o_i), l = sum(exp(m_i-m) l_i), out = o/l).
+        // Requires prefix_Kt % S == 0; validation clamps S when it does not divide.
+        // S == 1 reproduces the original single-core-per-head program exactly.
+        uint32_t kv_splits = 1;
     };
 
     struct tensor_args_t {
@@ -81,5 +92,6 @@ ttnn::operations::kv_sdpa::KvSdpaDeviceOperation::tensor_return_value_t kv_sdpa(
     std::optional<Tensor> past_k,
     std::optional<Tensor> past_v,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    uint32_t max_kv_chunk_tiles = 128);
+    uint32_t max_kv_chunk_tiles = 128,
+    uint32_t kv_splits = 1);
 }  // namespace ttnn::prim

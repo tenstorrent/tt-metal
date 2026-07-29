@@ -87,8 +87,19 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     };
     const uint32_t suffix_Sk_chunk_t = pick_chunk(suffix_Kt);
     const uint32_t suffix_num_chunks = suffix_Sk_chunk_t == 0 ? 0 : suffix_Kt / suffix_Sk_chunk_t;
-    const uint32_t prefix_Sk_chunk_t = has_past ? pick_chunk(prefix_Kt) : 1;
-    const uint32_t prefix_num_chunks = has_past ? prefix_Kt / prefix_Sk_chunk_t : 0;
+    // Split-KV (flash decode): S cores per Q head, each taking prefix_Kt/S of the prefix. Clamp to 1
+    // unless there is a prefix that divides evenly -- the suffix is not split (it is far shorter, and
+    // it stays on the reducer so no split has mixed geometry).
+    uint32_t kv_splits = std::max<uint32_t>(1u, attrs.kv_splits);
+    if (!has_past || prefix_Kt == 0 || prefix_Kt % kv_splits != 0) {
+        kv_splits = 1;
+    }
+    // Prefix chunk geometry is PER SPLIT, so every split has the same chunk count and the compute's
+    // per-phase block sizing stays a compile-time constant.
+    const uint32_t prefix_Kt_per_split = has_past ? prefix_Kt / kv_splits : 0;
+    const uint32_t prefix_Sk_chunk_t = has_past ? pick_chunk(prefix_Kt_per_split) : 1;
+    const uint32_t prefix_num_chunks = has_past ? prefix_Kt_per_split / prefix_Sk_chunk_t : 0;
+    const uint32_t num_children = kv_splits - 1;
 
     // Subblock widths must fit the DST register budget (get_dest_reg_count halves it for
     // fp32_dest_acc, and again without dst_full_sync). Derive them from dst_size like the production
@@ -111,9 +122,19 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     // BOTH phases' chunk sizes. Use their gcd when a prefix exists, else the suffix chunk.
     const uint32_t gran_base = prefix_num_chunks ? std::gcd(prefix_Sk_chunk_t, suffix_Sk_chunk_t) : suffix_Sk_chunk_t;
 
+    // Core layout: NQH * kv_splits cores, split s of head h at core_vec[h * kv_splits + s]. Split 0 of
+    // each head is that head's reducer (it owns the output row and merges the other splits' partials).
+    const uint32_t num_cores = NQH * kv_splits;
     const CoreRangeSet cores =
-        tt::tt_metal::num_cores_to_corerangeset(NQH, device->compute_with_storage_grid_size(), /*row_wise=*/true);
+        tt::tt_metal::num_cores_to_corerangeset(num_cores, device->compute_with_storage_grid_size(), /*row_wise=*/true);
     const auto core_vec = corerange_to_cores(cores, std::nullopt, true);
+    TT_FATAL(
+        core_vec.size() >= num_cores,
+        "kv_sdpa: kv_splits={} needs {} cores for {} Q heads, but only {} are available",
+        kv_splits,
+        num_cores,
+        NQH,
+        core_vec.size());
 
     ProgramDescriptor desc;
     auto add_cb = [&](uint32_t idx, uint32_t ntiles, tt::DataFormat df, uint32_t ts, const auto& tile) {
@@ -143,46 +164,105 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     add_cb(C::c_30, Sq_chunk_t, bf16, bf16_ts, qtile);               // cb_sum_B
     add_cb(C::c_31, Sq_chunk_t, bf16, bf16_ts, qtile);               // cb_exp_max_diff
     add_cb(C::c_16, out_tiles, odf, o_ts, otile);                    // cb_out (interleaved output)
+    // ---- Split-KV reduction CBs (declared on every core; untouched when kv_splits == 1) ----
+    // A child's partial state lands in the reducer's cb_intermed as a (l, m, o) block per child slot;
+    // the reducer's writer copies each slot into cb_l_in/cb_m_in/cb_out_o for the compute to merge.
+    const uint32_t partial_block_tiles = out_tiles + 2 * Sq_chunk_t;  // o, then l and m
+    // Sized only when a reduction actually happens. Declaring them at full size unconditionally cost
+    // ~31 bf16 tiles (~62 KB) of L1 per core on the kv_splits == 1 path that never touches them, and
+    // that alone moved the single-layer denoise 0.116 -> 0.129 ms. The indices must remain declared
+    // (the writer reads get_tile_size(cb_intermed) unconditionally), so keep a 1-tile placeholder.
+    const bool red = num_children > 0;
+    const uint32_t stat_cb = red ? Sq_chunk_t : 1;
+    const uint32_t out_cb = red ? out_tiles : 1;
+    add_cb(C::c_10, red ? num_children * partial_block_tiles : 1, bf16, bf16_ts, qtile);  // cb_intermed
+    add_cb(C::c_11, stat_cb, bf16, bf16_ts, qtile);                                       // cb_l_in  (child sum)
+    add_cb(C::c_12, stat_cb, bf16, bf16_ts, qtile);                                       // cb_m_in  (child max)
+    add_cb(C::c_13, out_cb, bf16, bf16_ts, qtile);                                        // cb_out_o (child out)
+    add_cb(C::c_14, stat_cb, bf16, bf16_ts, qtile);                                       // cb_prev_sum_2
+    add_cb(C::c_15, out_cb, bf16, bf16_ts, qtile);                                        // cb_out_accumulate_im_2
+    add_cb(C::c_17, stat_cb, bf16, bf16_ts, qtile);                                       // cb_exp_max_diff_2
+    // cb_partial_out: a worker's own (l, m, o) staged for its writer to push to the reducer.
+    add_cb(C::c_18, red ? partial_block_tiles : 1, bf16, bf16_ts, qtile);
+
+    // One semaphore per reducer, counting arrived children. Declared over all cores (workers never
+    // read theirs); the reducer waits for it to reach num_children.
+    constexpr uint32_t reducer_sem_id = 0;
+    if (num_children > 0) {
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = reducer_sem_id, .core_type = CoreType::WORKER, .core_ranges = cores, .initial_value = 0});
+    }
 
     // 1.0 packed as bf16 for the reduce/bcast scalars (identity_scalar_packed in prod writer).
     constexpr uint32_t identity_scalar_packed = 0x3F803F80u;
 
-    // ---- Reader ----
-    KernelDescriptor::CompileTimeArgs reader_cta = {
-        NQH,
-        DHt,
-        prefix_Kt,
-        prefix_Sk_chunk_t,
-        prefix_num_chunks,
-        suffix_Kt,
-        suffix_Sk_chunk_t,
-        suffix_num_chunks,
-        (uint32_t)has_past};
-    TensorAccessorArgs(*ta.q.buffer()).append_to(reader_cta);
-    TensorAccessorArgs(*ta.k.buffer()).append_to(reader_cta);
-    TensorAccessorArgs(*ta.v.buffer()).append_to(reader_cta);
-    // Always append the prefix accessors so the reader's compile-time offsets are valid; when there is
-    // no real past they alias k/v (placeholders) and the reader never reads them (has_past gates use).
+    // ---- Two kernel variants: [0] = reducer cores (split 0 of each head), [1] = worker cores ----
+    // Every split-KV per-core value (this core's suffix chunk count, whether it reduces, how many
+    // children it merges) is a COMPILE-TIME arg of its variant, not a runtime arg. That matters a lot:
+    // passing them as runtime args cost ~12% even at kv_splits == 1 (0.116 -> 0.131 ms) because the
+    // flash loops stopped being constexpr-bounded and lost constant propagation into
+    // flash_accumulate_chunk. Same shape as nlp_create_qkv_heads_rope's qk_cores / v_cores split.
+    // When kv_splits == 1 only variant [0] is emitted, with args identical to the pre-split program.
+    std::vector<CoreRange> red_ranges, wrk_ranges;
+    for (uint32_t h = 0; h < NQH; ++h) {
+        for (uint32_t s = 0; s < kv_splits; ++s) {
+            const CoreCoord c = core_vec[h * kv_splits + s];
+            (s == 0 ? red_ranges : wrk_ranges).emplace_back(c, c);
+        }
+    }
+    const CoreRangeSet role_cores[2] = {CoreRangeSet(red_ranges), CoreRangeSet(wrk_ranges)};
+    const uint32_t num_variants = num_children > 0 ? 2u : 1u;
+
     Buffer* pk_buf = has_past ? ta.past_k->buffer() : ta.k.buffer();
     Buffer* pv_buf = has_past ? ta.past_v->buffer() : ta.v.buffer();
-    TensorAccessorArgs(*pk_buf).append_to(reader_cta);
-    TensorAccessorArgs(*pv_buf).append_to(reader_cta);
-    KernelDescriptor reader{};
-    reader.kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/dataflow/reader_fused.cpp";
-    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader.core_ranges = cores;
-    reader.compile_time_args = reader_cta;
-    reader.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0};
+
+    // ---- Reader ----
+    auto reader_cta_for = [&](bool is_red) {
+        KernelDescriptor::CompileTimeArgs c = {
+            NQH,
+            DHt,
+            prefix_Kt,
+            prefix_Sk_chunk_t,
+            prefix_num_chunks,
+            suffix_Kt,
+            suffix_Sk_chunk_t,
+            is_red ? suffix_num_chunks : 0u,  // only the reducer reads the suffix
+            (uint32_t)has_past};
+        TensorAccessorArgs(*ta.q.buffer()).append_to(c);
+        TensorAccessorArgs(*ta.k.buffer()).append_to(c);
+        TensorAccessorArgs(*ta.v.buffer()).append_to(c);
+        // Always append the prefix accessors so the reader's compile-time offsets are valid; when
+        // there is no real past they alias k/v and the reader never reads them (has_past gates use).
+        TensorAccessorArgs(*pk_buf).append_to(c);
+        TensorAccessorArgs(*pv_buf).append_to(c);
+        return c;
+    };
+    KernelDescriptor readers[2];
+    for (uint32_t r = 0; r < num_variants; ++r) {
+        readers[r].kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/dataflow/reader_fused.cpp";
+        readers[r].source_type = KernelDescriptor::SourceType::FILE_PATH;
+        readers[r].core_ranges = role_cores[r];
+        readers[r].compile_time_args = reader_cta_for(r == 0);
+        readers[r].config =
+            DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0};
+    }
 
     // ---- Writer (generates the sdpa scalars + drains cb_out to this core's Q head of the output) ----
-    KernelDescriptor::CompileTimeArgs writer_cta = {DHt, identity_scalar_packed};
-    TensorAccessorArgs(*out.buffer()).append_to(writer_cta);
-    KernelDescriptor writer{};
-    writer.kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/dataflow/writer_fused.cpp";
-    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer.core_ranges = cores;
-    writer.compile_time_args = writer_cta;
-    writer.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1};
+    auto writer_cta_for = [&](bool is_red) {
+        KernelDescriptor::CompileTimeArgs c = {
+            DHt, identity_scalar_packed, reducer_sem_id, partial_block_tiles, (uint32_t)is_red, num_children};
+        TensorAccessorArgs(*out.buffer()).append_to(c);
+        return c;
+    };
+    KernelDescriptor writers[2];
+    for (uint32_t r = 0; r < num_variants; ++r) {
+        writers[r].kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/dataflow/writer_fused.cpp";
+        writers[r].source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writers[r].core_ranges = role_cores[r];
+        writers[r].compile_time_args = writer_cta_for(r == 0);
+        writers[r].config =
+            DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1};
+    }
 
     // ---- Compute ----
     KernelDescriptor compute{};
@@ -221,15 +301,42 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         .dst_full_sync_en = ckc.dst_full_sync_en,
         .math_approx_mode = ckc.math_approx_mode};
 
+    // Only truly per-CORE values stay runtime args: the prefix slice offset, this head's output row,
+    // and the reducer's NOC coords / slot index. Everything role-dependent is a compile-time arg of
+    // the variant assigned to that core set.
+    KernelDescriptor computes[2];
+    for (uint32_t r = 0; r < num_variants; ++r) {
+        computes[r] = compute;
+        computes[r].core_ranges = role_cores[r];
+        computes[r].compile_time_args[6] = (r == 0) ? suffix_num_chunks : 0u;  // per-core suffix chunks
+        computes[r].compile_time_args.push_back(r == 0 ? 1u : 0u);             // is_reducer
+        computes[r].compile_time_args.push_back(num_children);
+    }
+
     for (uint32_t h = 0; h < NQH; ++h) {
         const uint32_t kv_head = h / group;
-        reader.emplace_runtime_args(
-            core_vec[h], {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf});
-        writer.emplace_runtime_args(core_vec[h], {out.buffer(), h});
+        const CoreCoord reducer_phys = device->worker_core_from_logical_core(core_vec[h * kv_splits]);
+        for (uint32_t s = 0; s < kv_splits; ++s) {
+            const CoreCoord core = core_vec[h * kv_splits + s];
+            const uint32_t r = (s == 0) ? 0u : 1u;
+            const uint32_t prefix_tile_start = s * prefix_Kt_per_split;
+            readers[r].emplace_runtime_args(
+                core, {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf, prefix_tile_start});
+            writers[r].emplace_runtime_args(
+                core,
+                {out.buffer(),
+                 h,
+                 (uint32_t)reducer_phys.x,
+                 (uint32_t)reducer_phys.y,
+                 // Workers occupy slots 0..num_children-1 of the reducer's cb_intermed.
+                 s == 0 ? 0u : (s - 1)});
+        }
     }
-    desc.kernels.push_back(std::move(reader));
-    desc.kernels.push_back(std::move(writer));
-    desc.kernels.push_back(std::move(compute));
+    for (uint32_t r = 0; r < num_variants; ++r) {
+        desc.kernels.push_back(std::move(readers[r]));
+        desc.kernels.push_back(std::move(writers[r]));
+        desc.kernels.push_back(std::move(computes[r]));
+    }
     return desc;
 }
 
