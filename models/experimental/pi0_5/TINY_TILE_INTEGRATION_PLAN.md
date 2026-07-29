@@ -806,3 +806,57 @@ usable for LIBERO** until one of:
    (slower, but correct). This is one of the three bugs to report upstream to Sankar.
 
 Until then the honest status is: tile-16 is a perf result on an unmaskable configuration.
+
+## The cost of being LIBERO-capable, and how to enable tile-16
+
+Measured (`scratchpad/maskperf.sh`):
+
+| config | b2b | 16-chip 2CQ e2e | LIBERO-capable? |
+|---|---|---|---|
+| tile-32, mask off | 0.1109 | 28.15 ms | no |
+| tile-32, mask ON (general-SDPA fallback) | 0.1632 (**+47%**) | **32.32 ms (+14.8%)** | yes |
+| tile-16, mask off | **0.0972** | **26.74 ms** | no |
+| tile-16, mask ON | -- | -- | numerically broken |
+
+So the only currently-correct configuration costs **32.32 ms**, not the 26.74 ms this document has been
+optimizing. Fixing masks properly is worth up to **-23% e2e** -- larger than every other opportunity
+identified -- and it is simultaneously the correctness blocker.
+
+### Do NOT restore a dense mask. Add TILE SKIPPING.
+
+The mask is **tile-aligned for the case that matters**. `pipeline_16_decode` builds `pad_mask` as one
+`_NUM_PATCHES = 256`-element segment per camera followed by the language mask:
+
+```
+prefix = [img0 x 256][img1 x 256][img2 x 256][lang x 256] = 1024 elements = 32 K-tiles
+one absent camera     = 256 elements = 8 K-tiles,  256 % 32 == 0  -> TILE-ALIGNED
+LIBERO (slot 3 padded): img2 = elements 512..767  = K-tiles 16..23
+```
+
+and in the LIBERO path `lang_masks` is all-ones with `prefix_len` already 32-aligned, so
+`prefix_padded == prefix_len` and **there is no sub-tile masking at all**.
+
+Therefore pass **tile-granular validity** to kv_sdpa and skip invalid K-tiles, instead of adding an
+additive mask:
+
+* **Correct** -- no mask tensor exists, so the bf8 + dense-mask + 16-row-tile sign inversion is BYPASSED
+  rather than needing a fix. That retires the blocker without touching the LLK bug.
+* **Faster than the unmasked path** -- 24 of 32 prefix tiles for LIBERO, i.e. 25% less prefix work,
+  where the mask currently costs +47%.
+* **Small** -- `reader_fused.cpp` already derives a page index per tile
+  (`base = (kv_head * SRC_KT + g) * DHt`). Make `g` an indirection through a valid-tile-index list and
+  shorten `prefix_Kt`. **The compute kernel needs no changes**: it simply sees a dense, shorter prefix,
+  so all the chunking/subblock/granularity logic is untouched.
+
+Implementation sketch:
+1. Host (`pipeline_16_decode`): from `img_masks`/`lang_masks`, build the list of VALID prefix K-tile
+   indices. Assert every invalid region is tile-aligned; fall back to the existing guard if not.
+2. Pass it to `kv_sdpa` as a small uint32 tensor (or runtime args, since it is <= 32 entries), plus the
+   valid tile count as the effective `prefix_Kt`.
+3. Reader: `g = valid_tile_idx[kt0 + kt]` instead of `g = kt0 + kt`.
+4. Keep the dense-mask guard ONLY for the residual sub-tile case (partial language mask), which the
+   production configuration never hits.
+
+Residual sub-tile masking (partial `lang_masks`, or a non-32-aligned `prefix_len`) still needs either the
+fused mask path or the general-SDPA fallback -- but it is not on the LIBERO path, so the guard can stay
+for it.
