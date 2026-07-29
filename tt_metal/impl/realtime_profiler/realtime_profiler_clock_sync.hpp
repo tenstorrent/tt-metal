@@ -90,12 +90,14 @@ private:
         uint32_t ack_host_addr = 0;  // base of the [lo, hi] host ACK buffer address pair
     };
 
-    std::optional<ClockSyncSample> probe();
+    // `timeout` bounds the busy-poll only; a handshake slower than what the model would accept is wasted work, so
+    // bring-up and steady state pass different bounds.
+    std::optional<ClockSyncSample> probe(std::chrono::nanoseconds timeout);
     void write_token(uint32_t value);
     // Times the round trip to the device timestamp landing, then waits for the token. Empty when the device stopped
     // responding.
     std::optional<std::chrono::nanoseconds> measure_rtt(
-        std::chrono::steady_clock::time_point host_before, uint32_t token);
+        std::chrono::steady_clock::time_point host_before, uint32_t token, std::chrono::nanoseconds timeout);
     // No-op unless hugepage_fallback_; see the definition for why it sits inside the poll loop.
     void evict_ack_line() const;
     uint32_t read_ack() const;

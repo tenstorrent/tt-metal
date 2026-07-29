@@ -90,6 +90,13 @@ constexpr uint32_t kMaxSocketPagesPerRead = 1024;
 // Floor on how often a repeating fault is logged.
 constexpr auto kWarnInterval = std::chrono::seconds(30);
 
+// How often an idle device is re-sent the credits it should already hold. Cheap (one PCIe write) and only on a device
+// producing nothing, so it costs nothing in steady state.
+constexpr auto kIdleCreditRefreshInterval = std::chrono::milliseconds(100);
+// How long a device must produce nothing before that silence is treated as a stall worth dumping state for. Well past
+// any gap between workloads.
+constexpr auto kStallReportDelay = std::chrono::seconds(10);
+
 // How often every device is resynced. Cadence is the dominant term in real sync error -- 50ms against 500ms measured
 // ~40x on the residual -- so this is not a knob to relax for cost.
 constexpr auto kClockSyncInterval = std::chrono::milliseconds(50);
@@ -446,7 +453,6 @@ void RealtimeProfilerReceiver::run_sync(std::stop_token stop) {
 }
 
 void RealtimeProfilerReceiver::resync_all_devices(std::chrono::steady_clock::time_point now) {
-    TTZoneScopedDN(RT_PROFILER, "ResyncAll");
     uint64_t unanswered = 0;
     for (auto& dev_state : devices_) {
         if (!dev_state.clock_sync->resync()) {
@@ -781,8 +787,10 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
             available);
     }
     if (available == 0) {
+        service_idle_device(dev_state, now, page_buf);
         return 0;
     }
+    dev_state.last_pages_at = now;
     const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
     dev_state.socket->read(page_buf.data(), num_pages_to_read);
     publish_pages(
@@ -791,6 +799,64 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
         std::span(page_buf).first(num_pages_to_read * RealtimeProfilerRuntimeSizes::page_words),
         record_buf);
     return num_pages_to_read;
+}
+
+void RealtimeProfilerReceiver::service_idle_device(
+    DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf) {
+    if (now - dev_state.last_credit_refresh >= kIdleCreditRefreshInterval) {
+        dev_state.last_credit_refresh = now;
+        // A zero-page read moves nothing but still re-publishes bytes_acked, which is otherwise only sent from inside
+        // a real read. Without it, a sender blocked on credits and a host whose FIFO reads empty cannot break the tie:
+        // the host has nothing to read so it never notifies, and the sender never sends so the host never gets
+        // anything to read.
+        dev_state.socket->read(page_buf.data(), 0);
+    }
+
+    if (now - dev_state.last_pages_at < kStallReportDelay || now - dev_state.last_stall_report < kStallReportDelay) {
+        return;
+    }
+    dev_state.last_stall_report = now;
+
+    // Silence alone is not a fault -- an idle mesh produces nothing. What distinguishes a stall is entries sitting
+    // behind an unmoving read_index: the push kernel has data and is not sending it, which means it is parked in
+    // socket_reserve_pages waiting on credits while the host's FIFO reads empty. Only that case is worth reporting.
+    uint32_t read_index = 0;
+    uint32_t write_index = 0;
+    try {
+        std::vector<uint32_t> ring_header(2, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, write_index),
+            2 * sizeof(uint32_t),
+            ring_header,
+            CoreType::WORKER);
+        write_index = ring_header[0];
+        read_index = ring_header[1];
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] Device {} stalled and its ring state could not be read: {}",
+            dev_state.chip_id,
+            e.what());
+        return;
+    }
+
+    if (write_index == read_index) {
+        return;
+    }
+
+    log_warning(
+        tt::LogMetal,
+        "[Real-time profiler] Device {} has {} ring entries pending (write_index={} read_index={}) but has delivered "
+        "no pages for {} s, while the host FIFO reads empty and credits have been re-published {} times. The push "
+        "kernel has data, has room to send it, and is not sending it.",
+        dev_state.chip_id,
+        write_index - read_index,
+        write_index,
+        read_index,
+        std::chrono::duration_cast<std::chrono::seconds>(now - dev_state.last_pages_at).count(),
+        (now - dev_state.last_pages_at) / kIdleCreditRefreshInterval);
 }
 
 uint64_t RealtimeProfilerReceiver::run_loop(
@@ -878,6 +944,13 @@ void RealtimeProfilerReceiver::run() {
     ::prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
 #endif
     log_debug(tt::LogMetal, "[Real-time profiler] Receiver thread started for {} devices", devices_.size());
+
+    // Silence is measured from here, not from the epoch these default to.
+    const auto thread_start = std::chrono::steady_clock::now();
+    for (auto& dev_state : devices_) {
+        dev_state.last_pages_at = thread_start;
+        dev_state.last_stall_report = thread_start;
+    }
 
     // One buffer pair for the thread's whole life; the steady-state loop and the shutdown drain run in sequence.
     std::vector<uint32_t> page_buf(kMaxSocketPagesPerRead * RealtimeProfilerRuntimeSizes::page_words);

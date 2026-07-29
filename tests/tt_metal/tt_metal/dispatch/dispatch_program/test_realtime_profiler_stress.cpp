@@ -61,6 +61,8 @@ constexpr uint32_t kDefaultStressReplaySeconds = 60;
 
 constexpr uint32_t kDefaultDropAccountingSeconds = 60;
 
+constexpr uint32_t kDefaultClockDriftSeconds = 60;
+
 // Trace stores one EnqueueProgram dispatch packet per program. Blank-kernel
 // programs with no CBs / no runtime args are tiny (~hundreds of bytes), so
 // 64 MB is comfortably more than 4096 of them need; sized generously so a
@@ -207,6 +209,135 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
         kTraceRegionSize,
         1,
         DispatchCoreConfig{DispatchCoreType::WORKER});
+}
+
+// Rate at which each device clock walks away from the frequency fitted at bring-up. Since a published record states
+// device_ticks = frequency * host_ns + device_cycle_offset, an error in the fitted frequency shows up as the offset
+// moving linearly: device_cycle_offset(t) = (f_true - f_fitted) * host_ns + C. The slope of the published offset
+// against an independent host clock is therefore exactly the rate the servo has to keep correcting.
+//
+// That rate is what ClockModel's re-anchor gate budgets: it treats the standing anchor as having degraded by
+// budget * elapsed, and keeps a slow handshake out only while the standing anchor is still the better placement. A
+// device drifting faster than the budget would have the gate hold a stale anchor while the real error outran the
+// model -- sync_error_ns would keep reporting a small number that is no longer true. Measured under trace replay so
+// the chip is hot, which is when the rate is largest and the fit made at cold bring-up is furthest off.
+TEST(RealtimeProfilerStress, ClockDriftStaysWithinModelBudget) {
+    // Must track kClockDriftPpm in realtime_profiler_clock_model.cpp.
+    constexpr double kModelledDriftPpm = 10.0;
+    constexpr size_t kMinAnchorsPerChip = 100;
+
+    auto mesh_device = open_full_mesh();
+    ASSERT_NE(mesh_device, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    struct Anchor {
+        double host_ns;
+        double offset;
+    };
+    std::mutex mutex;
+    std::map<uint32_t, std::vector<Anchor>> anchors_by_chip;
+    std::map<uint32_t, double> frequency_by_chip;
+    std::map<uint32_t, int64_t> last_offset;
+    const auto epoch = std::chrono::steady_clock::now();
+
+    const auto handle = RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+        const auto now = std::chrono::steady_clock::now();
+        const std::lock_guard lock(mutex);
+        for (const auto& rec : batch.records) {
+            const int64_t offset = rec.clock_sync.device_cycle_offset;
+            const auto [it, inserted] = last_offset.try_emplace(rec.chip_id, offset);
+            if (!inserted) {
+                if (it->second == offset) {
+                    continue;
+                }
+                it->second = offset;
+            }
+            frequency_by_chip[rec.chip_id] = rec.frequency;
+            anchors_by_chip[rec.chip_id].push_back(
+                {static_cast<double>((now - epoch).count()), static_cast<double>(offset)});
+        }
+    });
+
+    distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
+    auto& cq = mesh_device->mesh_command_queue(0);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+    mesh_device->end_mesh_trace(cq.id(), trace_id);
+
+    const std::chrono::seconds window(
+        tt::parse_env<std::uint32_t>("TT_RT_PROFILER_CLOCK_DRIFT_SECONDS", kDefaultClockDriftSeconds));
+    const auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < window) {
+        mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
+    }
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(kPostQuiesceDrain);
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    double worst_ppm = 0.0;
+    uint32_t worst_chip = 0;
+    double min_ppm = 0.0;
+    double max_ppm = 0.0;
+    size_t chips_measured = 0;
+    for (const auto& [chip, anchors] : anchors_by_chip) {
+        if (anchors.size() < kMinAnchorsPerChip) {
+            continue;
+        }
+        double mean_x = 0.0;
+        double mean_y = 0.0;
+        for (const auto& a : anchors) {
+            mean_x += a.host_ns;
+            mean_y += a.offset;
+        }
+        mean_x /= static_cast<double>(anchors.size());
+        mean_y /= static_cast<double>(anchors.size());
+
+        double num = 0.0;
+        double den = 0.0;
+        for (const auto& a : anchors) {
+            const double dx = a.host_ns - mean_x;
+            num += dx * (a.offset - mean_y);
+            den += dx * dx;
+        }
+        // Slope is device ticks per host ns; as a fraction of the fitted frequency that is the frequency error.
+        const double ppm = (num / den) / frequency_by_chip[chip] * 1e6;
+        min_ppm = chips_measured == 0 ? ppm : std::min(min_ppm, ppm);
+        max_ppm = chips_measured == 0 ? ppm : std::max(max_ppm, ppm);
+        if (std::abs(ppm) > std::abs(worst_ppm)) {
+            worst_ppm = ppm;
+            worst_chip = chip;
+        }
+        ++chips_measured;
+    }
+
+    ASSERT_GT(chips_measured, 0u) << "no device produced " << kMinAnchorsPerChip
+                                  << " re-anchors; nothing to fit a drift rate from";
+    log_info(
+        tt::LogTest,
+        "[RT profiler stress] clock drift over {}s across {} chip(s): min={:+.3f} ppm max={:+.3f} ppm | worst "
+        "|drift|={:+.3f} ppm on chip {} (model budgets {:.1f} ppm)",
+        window.count(),
+        chips_measured,
+        min_ppm,
+        max_ppm,
+        worst_ppm,
+        worst_chip,
+        kModelledDriftPpm);
+
+    EXPECT_LT(std::abs(worst_ppm), kModelledDriftPpm)
+        << "chip " << worst_chip << " drifts at " << worst_ppm << " ppm, beyond the " << kModelledDriftPpm
+        << " ppm kClockDriftPpm budgets in realtime_profiler_clock_model.cpp. The re-anchor gate credits the standing "
+           "anchor with only that much degradation per interval, so past this it holds anchors whose real error has "
+           "outrun the model while sync_error_ns keeps reporting the old, smaller bound.";
+
+    mesh_device->release_mesh_trace(trace_id);
+    EXPECT_TRUE(mesh_device->close());
 }
 
 TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
@@ -628,11 +759,15 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
         const auto now = std::chrono::steady_clock::now();
         if (now - last_report >= kStressReportInterval) {
+            const uint64_t pub_batches = rt->num_published_batches();
+            const double mean_batch =
+                pub_batches ? static_cast<double>(rt->num_published_records()) / pub_batches : 0.0;
             const auto sync_us = stress_sync_percentiles_us(sync_errors);
             log_info(
                 tt::LogTest,
                 "[RT profiler stress] t={}s keeps_up: recv={} drop={} | borderline: recv={} drop={} | slow: recv={} "
-                "drop={} | peak_fifo={}/{} pages | sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
+                "drop={} | peak_fifo={}/{} pages mean_batch={:.1f} | sync error us: p50={:.2f} p90={:.2f} p99={:.2f} "
+                "max={:.2f}",
                 std::chrono::duration_cast<std::chrono::seconds>(now - run_start).count(),
                 keeps_up.received.load(),
                 keeps_up.dropped.load(),
@@ -642,6 +777,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
                 slow.dropped.load(),
                 rt->peak_fifo_pages(),
                 rt->host_fifo_capacity_pages(),
+                mean_batch,
                 sync_us.p50,
                 sync_us.p90,
                 sync_us.p99,

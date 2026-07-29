@@ -45,9 +45,20 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Round-trip busy-poll backstop. The first kRttProbeHealthyPolls reads skip the deadline check so a healthy handshake
-// never reads the clock inside the round trip it is timing; only a stalled device reaches the check.
-constexpr auto kRttProbeTimeout = std::chrono::microseconds(300);
+// Round-trip busy-poll backstop, not an accept threshold. The first kRttProbeHealthyPolls reads skip the deadline
+// check so a healthy handshake never reads the clock inside the round trip it is timing; only a stalled device
+// reaches the check.
+//
+// Steady state keeps a handshake only if it places the anchor better than the standing one has since degraded, so at
+// a ~1.3us round trip nothing above a few microseconds is ever taken. Polling far past that spends the sync thread on
+// a sample destined to be discarded, and the cost lands exactly when a device stops answering: every probe then runs
+// to full depth, and a pass over 32 devices has to fit inside kClockSyncInterval. The bound below still leaves room
+// for the drift term to justify a slower handshake after a couple of seconds of rejections, which is as long as this
+// is worth tolerating before the stall is the real problem.
+constexpr auto kResyncProbeTimeout = std::chrono::microseconds(50);
+// Bring-up has no standing anchor to beat, so its first handshake is accepted however slow. Worth waiting out a
+// loaded machine rather than giving up and running on the seeded AICLK.
+constexpr auto kCalibrateProbeTimeout = std::chrono::microseconds(300);
 constexpr uint32_t kRttProbeHealthyPolls = 128;
 
 // How long a cached calibration stays usable across a MeshDevice close/reopen.
@@ -98,6 +109,7 @@ RealtimeProfilerFrequencyCache& rt_profiler_frequency_cache() {
 }  // namespace
 
 void RealtimeProfilerClockSync::configure(const RealtimeProfilerClockSyncConfig& config) {
+    TTZoneScopedDN(RT_PROFILER, "ClockSyncConfigure");
     context_id_ = config.context_id;
     device_ = config.device;
     chip_id_ = config.device->id();
@@ -280,8 +292,8 @@ uint64_t RealtimeProfilerClockSync::read_device_time() const {
 }
 
 std::optional<std::chrono::nanoseconds> RealtimeProfilerClockSync::measure_rtt(
-    std::chrono::steady_clock::time_point host_before, uint32_t token) {
-    const auto deadline = host_before + kRttProbeTimeout;
+    std::chrono::steady_clock::time_point host_before, uint32_t token, std::chrono::nanoseconds timeout) {
+    const auto deadline = host_before + timeout;
     uint32_t polls = 0;
     // Stop timing the moment the timestamp lands. The device sampled its clock before issuing that write, so the
     // token write and both barriers that follow only widen the interval without adding uncertainty about when the
@@ -302,7 +314,7 @@ std::optional<std::chrono::nanoseconds> RealtimeProfilerClockSync::measure_rtt(
     return rtt;
 }
 
-std::optional<ClockSyncSample> RealtimeProfilerClockSync::probe() {
+std::optional<ClockSyncSample> RealtimeProfilerClockSync::probe(std::chrono::nanoseconds timeout) {
     // Opened before host_before is taken, so the zone's own cost stays outside the interval measure_rtt times.
     // Nothing between that read and the round trip's end may be instrumented for the same reason.
     TTZoneScopedDN(RT_PROFILER, "Probe");
@@ -311,7 +323,7 @@ std::optional<ClockSyncSample> RealtimeProfilerClockSync::probe() {
         sync_seq_ = 1;
     }
     write_token(sync_seq_);
-    const auto rtt = measure_rtt(host_before, sync_seq_);
+    const auto rtt = measure_rtt(host_before, sync_seq_, timeout);
     if (!rtt.has_value()) {
         return std::nullopt;
     }
@@ -343,7 +355,7 @@ bool RealtimeProfilerClockSync::calibrate() {
         for (uint32_t i = 0; i < kFitSamples + 1; i++) {
             std::this_thread::sleep_for(kRunSyncSampleInterval);
 
-            const auto p = probe();
+            const auto p = probe(kCalibrateProbeTimeout);
             if (!p.has_value()) {
                 if (++consecutive_timeouts >= kRunSyncMaxConsecutiveTimeouts) {
                     log_warning(
@@ -389,6 +401,9 @@ bool RealtimeProfilerClockSync::calibrate() {
 }
 
 bool RealtimeProfilerClockSync::try_restore_calibration(std::chrono::steady_clock::time_point now) {
+    // Present or absent, this zone says which bring-up path the device took: the cached-frequency restore or the
+    // full fit below it.
+    TTZoneScopedDN(RT_PROFILER, "RestoreCalibration");
     const auto frequency = rt_profiler_frequency_cache().try_get(chip_id_, now, kCalibrationCacheMaxAge);
     if (!frequency.has_value()) {
         return false;
@@ -423,7 +438,7 @@ bool RealtimeProfilerClockSync::resync() {
         constexpr int kMaxProbes = 10;
         std::optional<ClockSyncSample> best;
         for (int i = 0; i < kMaxProbes; i++) {
-            const auto sample = probe();
+            const auto sample = probe(kResyncProbeTimeout);
             if (sample.has_value() && (!best.has_value() || sample->rtt < best->rtt)) {
                 best = sample;
             }

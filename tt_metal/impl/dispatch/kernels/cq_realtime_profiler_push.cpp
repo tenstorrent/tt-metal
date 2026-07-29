@@ -63,7 +63,6 @@ __attribute__((noinline)) void push_entries_to_host(
     socket_reserve_pages(socket, num_pages);
     RT_PROF_NCRISC_DBG_INC(ring_buffer, socket_reserve_pages_exit_count);
 
-    noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
     constexpr uint32_t kMaxPagesPerWrite = NOC_MAX_BURST_SIZE / realtime_profiler_page_size;
     uint32_t remaining = num_pages;
     while (remaining > 0) {
@@ -91,9 +90,9 @@ __attribute__((noinline)) void push_entries_to_host(
         remaining -= run;
     }
 
+    noc_async_write_barrier();
     socket_push_pages(socket, num_pages);
     socket_notify_receiver(socket);
-    noc_async_write_barrier();
     RT_PROF_NCRISC_DBG_INC(ring_buffer, push_write_barrier_exit_count);
 }
 
@@ -187,6 +186,7 @@ void kernel_main() {
     RT_PROF_NCRISC_DBG_SET(ring_buffer, pcie_xy_enc, pcie_xy_enc);
     RT_PROF_NCRISC_DBG_SET(ring_buffer, fifo_addr_lo, data_addr_lo);
 
+    noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
     noc_write_init_state<write_reg_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
 
     RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_MAIN_LOOP);
@@ -206,6 +206,7 @@ void kernel_main() {
         const uint32_t write_index = ring_buffer->write_index;
         if (write_index == read_index) {
             if (ring_buffer->terminate) {
+                noc_async_write_barrier();
                 return;
             }
             continue;
