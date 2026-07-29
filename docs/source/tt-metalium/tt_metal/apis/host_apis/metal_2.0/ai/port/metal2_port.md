@@ -337,7 +337,7 @@ The host-side discipline divides cleanly along a line between *the program facto
 There are three *documented* exceptions to the off-limits rule — each a device-op-class edit the port forces, each recorded prominently in the port report. The full rationale and procedure for each live in the [TTNN integration doc — Device-operation-class edits the port forces](../shared/ttnn_factory.md#device-operation-class-edits-the-port-forces); in brief:
 
 1. **A custom `compute_program_hash`** — delete it, reverting to the default TTNN hash (when the audit flagged one). Don't patch it to add `TensorSpec`; delete it.
-2. **Pybind lines for a legacy factory entry point the port makes vanish** (`create_program_descriptor` is the canonical case) — deletion is mandatory to keep the build green, and it's a user-visible surface change worth a Handoff-points entry.
+2. **Pybind lines for a legacy factory entry point the port makes vanish** (`create_descriptor` is the canonical case) — deletion is mandatory to keep the build green, and it's a user-visible surface change worth a Handoff-points entry.
 3. **A factory parameter that exists only for a pybind hook** (e.g. layernorm's `create_descriptor` taking an extra `core_range_set` used only by its pybind hook) — drop the parameter, inline its production default in the factory body, and delete the pybind hook that passed it (mechanically exception 2 with an extra parameter to unwind).
 
 None of these extend to any other device-op-class edit. Everything else here stays exactly as it is, routed to the report.
@@ -651,7 +651,7 @@ Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *v
   | reader | `RISCV_1` | `NOC_0` | `DM_DEDICATED_NOC` |
   | writer | `RISCV_0` | `NOC_1` | `DM_DEDICATED_NOC` |
 
-  (The Metal 2.0 [migration guide](../shared/migration_guide.md) uses the Metal-layer `CreateReader1xxDataMovementConfig()` / `CreateWriter1xxDataMovementConfig()` for these same defaults — identical on Gen1. The TTNN helper here wraps those and adds generation selection; prefer it for a TTNN port, since it also supplies the Gen2 branch the Gen1-only Metal helpers lack.)
+  (The Metal 2.0 [migration guide](../shared/migration_guide.md) uses the Metal-layer `CreateReaderGen1DataMovementConfig()` / `CreateWriterGen1DataMovementConfig()` for these same defaults — identical on Gen1. The TTNN helper here wraps those and adds generation selection; prefer it for a TTNN port, since it also supplies the Gen2 branch the Gen1-only Metal helpers lack.)
 
 - **Custom** (any field differs from both defaults) → replicate it *exactly* with a Gen1 config, every field copied verbatim from the legacy config:
 
@@ -833,7 +833,7 @@ Includes (not exhaustive):
 - **Boundary-rule assumption violations.** A call site outside the op directory that required `sem::name` or `tensor::name` (per the [scope boundary](#read-this-first)). Cite the file:line, the callee, and the named handle that the call site demands. Tagged "API: requires implicit conversion / refactor."
 - **Kernel-lib gaps.** Cases where a shared kernel-lib helper or LLK is incompatible with Metal 2.0 binding semantics in a way the porter cannot work around. Cite the helper, the call site, the specific incompatibility.
 - **Framework gaps.** Audit-time entries that were flagged (e.g., an UNSUPPORTED feature) and that bit during the port. Cite the audit entry, what the port needed, and the workaround (if any) you adopted.
-- **Removed pybind surface.** Any pybind line(s) deleted because the port made a legacy factory entry point (e.g., `create_program_descriptor`) vanish. Cite the pybind file path, the function name(s) removed, and a one-line description of what the function was for. Tagged "API surface: removed entry point." This is a *user-visible* surface change — downstream Python consumers (tests, notebooks, internal tooling) need to find this entry to update their callers. See [Pattern: Removing pybound legacy factory entry points](../shared/port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points).
+- **Removed pybind surface.** Any pybind line(s) deleted because the port made a legacy factory entry point (e.g., `create_descriptor`) vanish. Cite the pybind file path, the function name(s) removed, and a one-line description of what the function was for. Tagged "API surface: removed entry point." This is a *user-visible* surface change — downstream Python consumers (tests, notebooks, internal tooling) need to find this entry to update their callers. See [Pattern: Removing pybound legacy factory entry points](../shared/port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points).
 
 Each handoff entry should be writable as a standalone ticket. The porter is the original reporter; the listed team is the owner.
 
