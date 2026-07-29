@@ -365,7 +365,17 @@ def run_sparse_mla_determinism_case(
 
 
 def run_sparse_mla_chunked_case(
-    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    variant,
+    config,
+    mesh_device,
+    seq_len,
+    chunk,
+    cache_format,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
+    hidden_states_mem_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     """Sparse chunked prefill: compare chunked ttMLA against MLACPU sparse chunked truth."""
     # Anchor mesh (TP>=2) and seq/SP validity are guaranteed by _sparse_cases (no runtime skips).
@@ -430,7 +440,7 @@ def run_sparse_mla_chunked_case(
             hidden[:, s : s + chunk].unsqueeze(0),
             device=mesh_device,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=hidden_states_mem_config,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         )
@@ -838,13 +848,22 @@ def test_sparse_mla_chunked(
     )
 
 
-# seq_len=1280 -> chunk=1280 (single chunk) at this box's anchor mesh (2,4) gives per-chip
-# seq_len_local=640 (chunk_local = chunk/sp = 1280/2) -- the exact shape
-# op_unit_tests/test_mla_matmuls_glm_chunked.py hand-tuned and mla_config.py/indexer.py now wire in
-# for GLM at seq_len_local=640 (see GLM52_MLA_MATMUL_TUNING.md). Nothing else in this file hits that
-# per-chip shape (SPARSE_ANCHOR_CASES / test_sparse_mla_chunked run seq=5120/chunk=1024 -> local=512),
-# so this is the only end-to-end exercise of the wired program_configs against a CPU reference.
-SPARSE_MM_TUNED_CASES = _sparse_cases([1280], anchor_only=True)
+# seq_len=5120 ("5k", matching the production 8x4 chunk size) -> chunk=1280 at this box's anchor mesh
+# (2,4) gives per-chip seq_len_local=640 (chunk_local = chunk/sp = 1280/2) every chunk -- the exact
+# shape op_unit_tests/test_mla_matmuls_glm_chunked.py hand-tuned and mla_config.py/indexer.py wire in
+# for GLM at seq_len_local=640 (see GLM52_MLA_MATMUL_TUNING.md), run over 4 chunks (5120/1280) to
+# reproduce the production 8x4/chunk-5120/sp8/local-640 scenario scaled onto this 2x4 (sp2) loudbox.
+# Nothing else in this file hits that per-chip shape (SPARSE_ANCHOR_CASES / test_sparse_mla_chunked
+# run seq=5120/chunk=1024 -> local=512), so this is the only end-to-end exercise of the wired
+# program_configs against a CPU reference.
+#
+# hidden_states_mem_config=L1: measured (2026-07-29, tracy) that forcing L1 here is a clean win across
+# ALL FOUR consumers that share this tensor -- q_a_proj 22.95->22.20us, indexer.wk 13.88->10.84us
+# (both tuned assuming DRAM, yet still got faster, not slower), kv_a_proj_with_mqa 14.39->11.19us and
+# indexer.weights_proj 10.49->6.18us (both tuned assuming L1, now actually realizing that tuning).
+# Total per-chunk device time (incl. the wkv_b2 reshard-output fix in mla.py): ~403us -> ~385.5us,
+# even below the isolated single-matmul-unit-test sum of ~389us. See GLM52_MLA_MATMUL_TUNING.md.
+SPARSE_MM_TUNED_CASES = _sparse_cases([5120], anchor_only=True)
 
 
 @pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_MM_TUNED_CASES, indirect=["variant", "mesh_device"])
@@ -867,7 +886,17 @@ def test_sparse_mla_chunked_mm_tuned_shape(
     ds_input,
 ):
     run_sparse_mla_chunked_case(
-        variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+        variant,
+        config_only,
+        mesh_device,
+        seq_len,
+        chunk,
+        cache_format,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+        ds_input,
+        hidden_states_mem_config=ttnn.L1_MEMORY_CONFIG,
     )
 
 

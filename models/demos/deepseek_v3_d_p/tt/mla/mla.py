@@ -1423,13 +1423,16 @@ class ttMLA:
 
         if transpose_head_to_seq:
             # Invert the redistribution so the result matches the head-sharded
-            # [1, H/tp, S/sp, v_dim] consumed by the epilogue.
+            # [1, H/tp, S/sp, v_dim] consumed by the epilogue. This is wkv_b2's actual act input (its
+            # sole consumer, no cross-op residency conflict) when the TP head shard is too thin (GLM's
+            # 64 heads at tp=4 -> 16 < 32) -- the un-reshaped sparse_sdpa output above is not what
+            # wkv_b2 sees in that case, so its tuned act_mem_config belongs on THIS op's output.
             head_sharded = ttnn.experimental.all_to_all_async_generic(
                 ret,
                 in_dim=2,
                 out_dim=1,
                 num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self._get_act_mem_config("wkv_b2", seq_len_local),
                 cluster_axis=self.tp_axis,
             )
             ttnn.deallocate(ret)

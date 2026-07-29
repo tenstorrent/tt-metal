@@ -143,6 +143,7 @@ class TtDistributedRmsNorm(LightweightModule):
         input_memcfg: ttnn.MemoryConfig = None,
         sharded_progcfg: ttnn.LayerNormShardedMultiCoreProgramConfig = None,
         stats_memcfg: ttnn.MemoryConfig = None,
+        output_memcfg: ttnn.MemoryConfig = None,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
     ):
@@ -157,6 +158,9 @@ class TtDistributedRmsNorm(LightweightModule):
             cluster_axis: Mesh dimension to gather along (default: 1 for columns)
             num_links: Number of ethernet links for CCL (default: 1)
             topology: CCL topology - Linear or Ring (default: Linear)
+            output_memcfg: Optional memory config for the final normalized output (e.g. L1, to match
+                a downstream consumer's tuned act_mem_config). None (default) keeps the op's own
+                default (matches the input tensor's memory_config) -- unchanged behavior.
             input_memcfg: Optional memory config for input (e.g., L1 sharded)
             sharded_progcfg: Optional sharded program config for layernorm
             stats_memcfg: Optional memory config for gathered stats (e.g., L1 sharded)
@@ -174,6 +178,7 @@ class TtDistributedRmsNorm(LightweightModule):
         self.input_memcfg = input_memcfg
         self.sharded_progcfg = sharded_progcfg
         self.stats_memcfg = stats_memcfg
+        self.output_memcfg = output_memcfg
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
 
@@ -283,6 +288,7 @@ class TtDistributedRmsNorm(LightweightModule):
             weight=self.weight,
             dtype=ttnn.bfloat16,
             program_config=self.sharded_progcfg,
+            memory_config=self.output_memcfg,
         )
         ttnn.deallocate(tt_gathered_stats)
         logger.debug(f"Output shape: {tt_output.shape}")

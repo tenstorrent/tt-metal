@@ -107,7 +107,7 @@ util% = tiles*32 / CORE_COUNT / 1.35 / measured_ns * 100.
 - Batched matmuls MUST use `MatmulMultiCoreReuseProgramConfig` (non-mcast). The 1D-mcast path
   serializes to 5 cores (258/330 us).
 
-## Wiring status (task 5 — DONE, program_configs; act/out L1 placement is next)
+## Wiring status (task 5 — DONE: program_configs + measured/wired act L1 placement)
 
 **Config plumbing:** `mla_config.py MLA_MATMUL_CONFIG`'s `640:` slot for the 6 base weights is now a
 **list** `[<kimi dict>, <glm dict>]`; the GLM dict is tagged `num_heads=64, q_lora_rank=2048,
@@ -131,27 +131,46 @@ Fixed with a separate `_GLM_INDEXER_TAGS` (no `chunked_only`). Caught by calling
 `resolve_gated_matmul_config` directly in a throwaway script and asserting the expected candidate
 came back for each (weight, num_heads, q_lora_rank, is_chunked) combination — before any device run.
 
-**act/out L1 placement — NOT done, and needs a decision, not a mechanical wire-up:** program_config +
-out_mem_config are fully local per matmul (safe to set unconditionally). ACT (input) residency is
-different: `hidden_states` (post-attn_norm) is a **shared** input to 4 of these matmuls —
-q_a_proj (DRAM-tuned) and indexer.wk (DRAM-tuned) want DRAM; kv_a_proj_with_mqa and
-indexer.weights_proj (both L1-tuned) want L1 — and its residency is set by the CALLER
-(`TtPrefillBlock`'s attn_norm output config), not by mla.py/indexer.py (see the existing "hidden
-states memory config is set outside the module" comments at `mla.py` `_q_a_latent`/`_kv_stem`).
-Forcing it either way helps two consumers and hurts the other two; q_a_proj is by far the biggest of
-the four (22.8us vs 11.2/13.8/6.2us) so DRAM (today's default) is likely still the right overall
-choice, but that's a measured trade-off to make, not a default to flip. The **qr** latent (feeding
-q_b_proj + indexer.wq_b) has NO such conflict — both want L1 and qr's residency is already
-auto-wired via the existing `_get_act_mem_config("q_b_proj", ...)` -> `norm_memory_config` mechanism,
-so it needs no further work once the q_b_proj GLM config entry exists (it now does).
+**act L1 placement for `hidden_states` — resolved by measurement, not assumption (2026-07-29).**
+`hidden_states` (post-attn_norm) is a **shared** input to 4 matmuls: q_a_proj + indexer.wk are tuned
+assuming DRAM; kv_a_proj_with_mqa + indexer.weights_proj are tuned assuming L1. Its residency is set
+by the CALLER (`TtPrefillBlock`'s attn_norm output), not by mla.py/indexer.py, so the two DRAM-tuned
+consumers looked like a real risk before touching anything. Measured it directly instead of guessing
+(temporarily forcing `hidden_states` to L1 in `run_sparse_mla_chunked_case`'s test-owned
+`ttnn.from_torch` call, profiled with tracy): **L1 was a clean win for all four consumers**, not just
+the two tuned for it — q_a_proj 22.95->22.20us, indexer.wk 13.88->10.84us (both *faster* despite being
+DRAM-tuned), kv_a_proj_with_mqa 14.39->11.19us, indexer.weights_proj 10.49->6.18us (both now actually
+realizing their L1 tuning, which they weren't before). No PCC change (residency is a performance knob,
+not a correctness one) — 0.9943-0.9999 both ways. Also found and fixed a second gap while tracing
+producers: **wkv_b2**'s real input (for GLM's `tp_factor=4` -> `heads_local=16 < 32`, which takes the
+`transpose_head_to_seq` branch in `_sparse_mla`) comes from a *second* `all_to_all_async_generic`
+reshard op, not directly from `sparse_sdpa` — that op was hardcoded to DRAM regardless of tuning; now
+uses `_get_act_mem_config("wkv_b2", ...)` (wkv_b2's sole consumer, so no residency conflict there).
+That alone recovered wkv_b2 from 57.96us back to 51.50us (matching its isolated-tuning number).
+Combined: **total measured per-chunk device time ~403us -> ~385.5us**, even below the isolated
+single-matmul-unit-test sum of ~389us.
+
+**Wired, not just measured:** `run_sparse_mla_chunked_case` (test_sparse_mla.py) takes a new
+`hidden_states_mem_config` kwarg (default `DRAM_MEMORY_CONFIG`, unchanged for every other caller);
+only `test_sparse_mla_chunked_mm_tuned_shape` passes `L1_MEMORY_CONFIG`. For production reachability,
+`TtDistributedRmsNorm` gained an `output_memcfg` param (default `None` = its prior behavior, matching
+the input's memory_config) threaded through `TtPrefillBlock`/`TtPrefillTransformer` as
+`attn_norm_output_memcfg` (default `None` everywhere, so every existing caller is unaffected) — a
+future caller building the GLM chunked-640 case can now pass `ttnn.L1_MEMORY_CONFIG` to realize this.
+Not auto-gated (unlike the matmul program_configs): whether L1 is *also* a win at other shapes/models
+hasn't been measured, so this stays an explicit opt-in rather than a conditional default. The **qr**
+latent (feeding q_b_proj + indexer.wq_b) had NO such conflict to begin with — both already want L1
+and qr's residency was already auto-wired via `_get_act_mem_config("q_b_proj", ...)` ->
+`norm_memory_config`, so it needed no new work once the q_b_proj GLM config entry existed.
 
 **Validated on the 2x4 Blackhole loudbox** (new test `test_sparse_mla_chunked_mm_tuned_shape` in
-test_sparse_mla.py, seq_len=1280/chunk=1280 -> per-chip seq_len_local=640, the exact tuned shape —
-nothing else in this file hits it, SPARSE_ANCHOR_CASES runs seq=5120/chunk=1024 -> local=512):
-glm_5_1 + glm_5_2 (now resolving the wired GLM configs) and deepseek_v32 (correctly falls through to
-`None` / defaults — num_heads=128/q_lora=1536 matches neither Kimi nor GLM tags) all pass against the
-CPU reference. Full `test_sparse_mla.py` regression: 35 passed, 0 failed. Full Galaxy 8x4 validation
-is out of reach here (per memory, needs the 32-chip machine).
+test_sparse_mla.py, seq_len=5120 ("5k", the production chunk size)/chunk=1280 -> per-chip
+seq_len_local=640 every chunk (4 chunks), the exact tuned shape scaled onto this sp=2 box — nothing
+else in this file hits it, SPARSE_ANCHOR_CASES runs seq=5120/chunk=1024 -> local=512): glm_5_1 +
+glm_5_2 (now resolving the wired GLM configs) and deepseek_v32 (correctly falls through to `None` /
+defaults — num_heads=128/q_lora=1536 matches neither Kimi nor GLM tags) all pass against the CPU
+reference. Full `test_sparse_mla.py` regression: 35 passed, 0 failed. Full Galaxy 8x4 validation is
+out of reach here (per memory, needs the 32-chip machine).
 
 **Gotcha hit along the way:** switching branches (from the KV-TP-sharding branch, rebased onto much
 newer `main`, to this one, based on older `d4e579756ad`) without rebuilding caused the FIRST test
@@ -162,8 +181,11 @@ config changes don't even touch, so it was clearly a build/branch mismatch, not 
 `./build_metal.sh` on this branch before retrying. Matmul-only tests (`test_glm_mla_mm`) never
 touched this kernel so didn't surface it earlier.
 
-**Still open:** the act/out L1 placement decision above; production adapter/runtime-config wiring
-(same scope note as the KV-TP-sharding workstream — out of scope here too); Galaxy 8x4 validation.
+**Still open:** whether `attn_norm_output_memcfg=L1` is *also* a win for dense/Kimi/DeepSeek shapes
+(unmeasured, so not auto-enabled); actually passing `attn_norm_output_memcfg`/`hidden_states_mem_config`
+from a real GLM demo/adapter entrypoint (added the plumbing, not the call site); production
+adapter/runtime-config wiring (same scope note as the KV-TP-sharding workstream — out of scope here
+too); Galaxy 8x4 validation.
 
 ## Scratch / artifacts
 - Shape+theoretical scratch: (session scratchpad) `glm52_mla_mm_shapes.md`

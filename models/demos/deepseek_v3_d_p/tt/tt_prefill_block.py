@@ -227,6 +227,7 @@ class TtPrefillBlock(LightweightModule):
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
+        attn_norm_output_memcfg: Optional[ttnn.MemoryConfig] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -258,6 +259,11 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- Attention norm ---
+        # attn_norm_output_memcfg (e.g. L1) matches its output -- ttMLA's hidden_states, shared by
+        # q_a_proj/kv_a_proj_with_mqa/indexer.wk/indexer.weights_proj -- to those matmuls' tuned
+        # act_mem_config. Measured (GLM-5.2, chunked, seq_len_local=640): L1 there is a clean win for
+        # ALL FOUR consumers, not just the ones tuned assuming L1 -- see GLM52_MLA_MATMUL_TUNING.md.
+        # None (default) preserves the prior DRAM-matching behavior for every other caller/shape.
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
@@ -268,6 +274,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            output_memcfg=attn_norm_output_memcfg,
         )
 
         # --- MLA ---
