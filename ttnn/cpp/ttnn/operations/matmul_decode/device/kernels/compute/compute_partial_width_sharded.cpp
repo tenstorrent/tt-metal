@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/gelu.h"
 #include "partial_phases.hpp"  // phase1_partial (shared with the gate_up compute)
+#include "fused_rms_norm.hpp"  // optional adaRMS-norm prologue over in0
 
 using std::uint32_t;
 
@@ -63,6 +64,19 @@ void kernel_main() {
     constexpr uint32_t gate_cb_id = get_compile_time_arg_val(10);
     constexpr uint32_t mm_cb_id = get_compile_time_arg_val(11);
     constexpr uint32_t mmg_cb_id = get_compile_time_arg_val(12);  // scratch for gate * mm
+    // Fused adaRMS-norm prologue: normalize the gathered A in place of a separate rms_norm op (+ the
+    // InterleavedToSharded that fed it). See fused_rms_norm.hpp for why this is cheap here.
+    constexpr uint32_t fused_rms_norm = get_compile_time_arg_val(13);
+    constexpr uint32_t norm_has_bias = get_compile_time_arg_val(14);
+    constexpr uint32_t norm_eps_bits = get_compile_time_arg_val(15);
+    constexpr uint32_t nsq_cb_id = get_compile_time_arg_val(16);
+    constexpr uint32_t nscaler_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t nstat_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t nw_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t nb_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t nt1_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t nt2_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t normed_cb_id = get_compile_time_arg_val(23);
 
     const uint32_t k_idx = get_arg_val<uint32_t>(0);
     const uint32_t is_base = get_arg_val<uint32_t>(1);
@@ -89,6 +103,31 @@ void kernel_main() {
     cb_wait_front(full_in0_cb_id, full_in0_num_tiles);
     cb_wait_front(in1_cb_id, in1_num_tiles);
     const uint32_t k_offset = k_idx * Kc_tiles;  // this core's K-slice start (global K-tile)
+    // Optional adaRMS-norm prologue. It writes only THIS core's K-slice, into a CB with full_in0's
+    // geometry and at the same tile indices phase1_partial computes, so phase1 is handed normed_cb and
+    // needs no change. full_in0 itself is still popped below (the prologue only reads it).
+    uint32_t a_cb_id = full_in0_cb_id;
+    if constexpr (fused_rms_norm) {
+        fused_rms_norm_prologue<
+            M_tiles,
+            K_tiles,
+            Kc_tiles,
+            inA_K_tiles_per_core,
+            sender_slice_tiles,
+            (bool)norm_has_bias,
+            norm_eps_bits,
+            full_in0_cb_id,
+            nsq_cb_id,
+            nscaler_cb_id,
+            nstat_cb_id,
+            nw_cb_id,
+            nb_cb_id,
+            nt1_cb_id,
+            nt2_cb_id,
+            normed_cb_id>(k_offset);
+        a_cb_id = normed_cb_id;
+        cb_wait_front(normed_cb_id, full_in0_num_tiles);
+    }
     phase1_partial<
         M_tiles,
         Kc_tiles,
@@ -98,7 +137,10 @@ void kernel_main() {
         out_block_h,
         in0_block_w,
         block_num_tiles,
-        sender_slice_tiles>(full_in0_cb_id, in1_cb_id, partial_cb_id, k_offset);
+        sender_slice_tiles>(a_cb_id, in1_cb_id, partial_cb_id, k_offset);
+    if constexpr (fused_rms_norm) {
+        cb_pop_front(normed_cb_id, full_in0_num_tiles);
+    }
     cb_pop_front(full_in0_cb_id, full_in0_num_tiles);
 
     if (is_base == 0) {

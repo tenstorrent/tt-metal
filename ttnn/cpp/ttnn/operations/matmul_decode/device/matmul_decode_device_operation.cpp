@@ -4,6 +4,8 @@
 
 #include "matmul_decode_device_operation.hpp"
 
+#include <cstring>
+
 #include "tt-metalium/math.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -278,7 +280,10 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     bool reshard_input,
     uint32_t reshard_cores,
     std::optional<const Tensor> residual,
-    std::optional<const Tensor> gate) {
+    std::optional<const Tensor> gate,
+    std::optional<const Tensor> norm_weight,
+    std::optional<const Tensor> norm_bias,
+    float norm_eps) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -301,6 +306,9 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         K = input_tensor_a.logical_shape()[-1];
     }
     const bool fused_residual = residual.has_value() && gate.has_value();
+    const bool fused_rms_norm = norm_weight.has_value();
+    uint32_t norm_eps_bits = 0;
+    std::memcpy(&norm_eps_bits, &norm_eps, sizeof(float));
     log_info(tt::LogOp, "matmul_decode partial_width_sharded={} with M={}, N={}, K={}", partial_width_sharded, M, N, K);
     auto operation_attributes = OperationType::operation_attributes_t{
         M,
@@ -316,12 +324,16 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         reshard_input,
         reshard_cores,
         fused_residual,
+        fused_rms_norm,
+        norm_eps_bits,
     };
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor_a,
         input_tensor_b,
         fused_residual ? std::optional<Tensor>(*residual) : std::nullopt,
         fused_residual ? std::optional<Tensor>(*gate) : std::nullopt,
+        fused_rms_norm ? std::optional<Tensor>(*norm_weight) : std::nullopt,
+        (fused_rms_norm && norm_bias.has_value()) ? std::optional<Tensor>(*norm_bias) : std::nullopt,
     };
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

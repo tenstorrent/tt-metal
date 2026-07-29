@@ -31,7 +31,13 @@ Tensor matmul_decode(
     bool reshard_input = false,
     uint32_t reshard_cores = 2,
     std::optional<const Tensor> residual = std::nullopt,
-    std::optional<const Tensor> gate = std::nullopt);
+    std::optional<const Tensor> gate = std::nullopt,
+    // Fused adaRMS-norm prologue over in0: A_normed = (A*rsqrt(mean(A^2)+eps))*norm_weight [+ norm_bias].
+    // Removes a standalone rms_norm AND its InterleavedToSharded from the caller's op stream.
+    // norm_weight/norm_bias are per-channel over K, [1,1,1,K]; NOT pre-replicated down rows.
+    std::optional<const Tensor> norm_weight = std::nullopt,
+    std::optional<const Tensor> norm_bias = std::nullopt,
+    float norm_eps = 1e-6f);
 
 // gate_up_matmul_decode: fused GeGLU gate+up projection. ONE gather of the activation A, TWO
 // partial-width-sharded resident-L1 weights (gate_b, up_b on the SAME core grid), ONE output:

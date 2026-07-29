@@ -70,6 +70,22 @@ struct MatmulDecodeDeviceOperation {
         // replicated down the TILE_H rows so a plain mul_tiles works -- no broadcast). True iff both
         // optional tensors are provided. Composes with interleaved_output.
         bool fused_residual = false;
+        // When true, fuse an adaRMS NORM PROLOGUE over in0 into the partial width-sharded compute:
+        //   A_normed = (A * rsqrt(mean(A^2) + eps)) * norm_weight [+ norm_bias]
+        // and matmul against A_normed instead of A. This removes TWO ops per call site: the standalone
+        // ttnn.rms_norm AND the InterleavedToSharded that fed it (the norm wants a block-sharded input
+        // while the residual stream is interleaved). That matters because the pi0.5 denoise block is
+        // DISPATCH-bound -- ~31% of its traced wall-clock is inter-op overhead, ~3.7 us per op.
+        //
+        // It is only possible because the reader already gather_full_a()s the WHOLE A row onto every
+        // compute core, so sum(A^2) over K needs no cross-core reduction. norm_weight/norm_bias are
+        // per-CHANNEL over K and are broadcast down the tile rows in the kernel, so the caller does NOT
+        // pre-replicate them (they are recomputed every denoise step, so a host-side replicate would
+        // add back an op). True iff norm_weight is provided.
+        bool fused_rms_norm = false;
+        // fp32 bit pattern of the norm epsilon (added before the rsqrt). Only read when
+        // fused_rms_norm is set.
+        uint32_t norm_eps_bits = 0;
     };
 
     // Tensors passed in/out of the operation.
@@ -82,6 +98,12 @@ struct MatmulDecodeDeviceOperation {
         //             (gate replicated down the rows so the kernel uses a plain mul_tiles)
         std::optional<Tensor> residual = std::nullopt;
         std::optional<Tensor> gate = std::nullopt;
+        // Optional fused adaRMS-norm prologue inputs (used iff operation_attributes.fused_rms_norm):
+        //   norm_weight: per-channel over K, [1, 1, 1, K] -- the Gemma (1 + scale) adaRMS weight
+        //   norm_bias:   per-channel over K, [1, 1, 1, K] -- the adaRMS shift; optional on its own
+        // Both are broadcast down the tile rows inside the kernel, so they are NOT pre-replicated.
+        std::optional<Tensor> norm_weight = std::nullopt;
+        std::optional<Tensor> norm_bias = std::nullopt;
     };
 
     // Output spec / tensor types. A single matmul output here.
@@ -151,5 +173,8 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     bool reshard_input = false,
     uint32_t reshard_cores = 2,
     std::optional<const Tensor> residual = std::nullopt,
-    std::optional<const Tensor> gate = std::nullopt);
+    std::optional<const Tensor> gate = std::nullopt,
+    std::optional<const Tensor> norm_weight = std::nullopt,
+    std::optional<const Tensor> norm_bias = std::nullopt,
+    float norm_eps = 1e-6f);
 }  // namespace ttnn::prim

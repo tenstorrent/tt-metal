@@ -247,6 +247,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     constexpr uint32_t gate_cb_index = CBIndex::c_7;      // resident per-channel gate [TILE_H x Nc] (buffer-backed)
     constexpr uint32_t mm_cb_index = CBIndex::c_8;        // scratch for the reduced matmul result before the epilogue
     constexpr uint32_t mmg_cb_index = CBIndex::c_9;       // scratch for gate * mm
+    // ---- Fused adaRMS-norm prologue CBs (all compute cores) ----
+    constexpr uint32_t nsq_cb_index = CBIndex::c_10;      // A^2 scratch, consumed by the row reduce
+    constexpr uint32_t nscaler_cb_index = CBIndex::c_11;  // 1/(K*TILE_W) reduce scaler (reader-generated)
+    constexpr uint32_t nstat_cb_index = CBIndex::c_12;    // rsqrt(mean(A^2)+eps), per row
+    constexpr uint32_t nw_cb_index = CBIndex::c_13;       // this core's K-slice of the per-channel weight
+    constexpr uint32_t nb_cb_index = CBIndex::c_14;       // this core's K-slice of the per-channel bias
+    constexpr uint32_t nt1_cb_index = CBIndex::c_15;      // staging: A * stat
+    constexpr uint32_t nt2_cb_index = CBIndex::c_16;      // staging: t1 * weight
+    constexpr uint32_t normed_cb_index = CBIndex::c_17;   // normalized A, passed to phase1 in place of full_in0
 
     const bool fused_residual = operation_attributes.fused_residual;
 
@@ -393,6 +402,48 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         });
     }
 
+    // ---- Fused adaRMS-norm prologue CBs (every compute core) ----
+    // Sized for THIS CORE's K-slice, not the whole row: only sum(A^2) spans all K_tiles, while the
+    // scale/weight/bias passes touch just the Kc_tiles that phase1_partial will read. All bf16, matching
+    // the intermediate format the norm math runs in.
+    const bool fused_rms_norm = operation_attributes.fused_rms_norm;
+    if (fused_rms_norm) {
+        constexpr auto bf16 = tt::DataFormat::Float16_b;
+        const uint32_t bf16_tile_size = inputA_tile.get_tile_size(bf16);
+        const TileDescriptor n_tile_desc{inputA_tile};
+        auto norm_cb = [&](uint32_t idx, uint32_t ntiles) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = ntiles * bf16_tile_size,
+                .core_ranges = all_compute_cores_with_bbox,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = idx,
+                    .data_format = bf16,
+                    .page_size = bf16_tile_size,
+                    .tile = n_tile_desc,
+                }}},
+            });
+        };
+        norm_cb(nsq_cb_index, M_tiles * K_tiles);   // A^2 over the full row
+        norm_cb(nscaler_cb_index, 1);               // 1/N reduce scaler
+        norm_cb(nstat_cb_index, M_tiles);           // per-row rsqrt(mean+eps)
+        norm_cb(nw_cb_index, Kc_tiles);             // this core's weight slice
+        norm_cb(nb_cb_index, Kc_tiles);             // this core's bias slice
+        norm_cb(nt1_cb_index, M_tiles * Kc_tiles);  // staging A*stat
+        norm_cb(nt2_cb_index, M_tiles * Kc_tiles);  // staging t1*weight
+        // normed A keeps full_in0's geometry so phase1_partial's tile indexing is unchanged; it must
+        // carry the ACTIVATION format, not bf16, since it feeds the matmul as in0.
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = M_tiles * K_tiles * in0_tile_size,
+            .core_ranges = all_compute_cores_with_bbox,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = normed_cb_index,
+                .data_format = in0_data_format,
+                .page_size = in0_tile_size,
+                .tile = in0_tile_desc,
+            }}},
+        });
+    }
+
     // ---- Semaphores ----
     const uint32_t num_senders = inputA_core_range_set.num_cores();
     constexpr uint32_t gather_sem_id = 0;  // senders -> coordinator (A gather)
@@ -452,6 +503,32 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     tt::tt_metal::TensorAccessorArgs(*input_tensor_a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*(fused_residual ? tensor_args.residual->buffer() : input_tensor_a.buffer()))
         .append_to(reader_compile_time_args);
+    // Then the fused-norm weight/bias accessors, then the norm scalar args. They go AFTER the
+    // accessors because accessor arg blocks are variable-length: the kernel derives their slot from
+    // next_compile_time_args_offset(), and gather_full_a<27> pins in0 to slot 27, so nothing may be
+    // inserted before it. Both fall back to the in0 buffer when unused so they stay well-formed.
+    const bool has_norm_bias = fused_rms_norm && tensor_args.norm_bias.has_value();
+    tt::tt_metal::TensorAccessorArgs(*(fused_rms_norm ? tensor_args.norm_weight->buffer() : input_tensor_a.buffer()))
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*(has_norm_bias ? tensor_args.norm_bias->buffer() : input_tensor_a.buffer()))
+        .append_to(reader_compile_time_args);
+    {
+        const uint32_t norm_tile_size = fused_rms_norm
+                                            ? tensor_args.norm_weight->tensor_spec().tile().get_tile_size(
+                                                  datatype_to_dataformat_converter(tensor_args.norm_weight->dtype()))
+                                            : in0_tile_size;
+        for (uint32_t v :
+             {static_cast<uint32_t>(fused_rms_norm),
+              static_cast<uint32_t>(has_norm_bias),
+              nw_cb_index,
+              nb_cb_index,
+              nscaler_cb_index,
+              Kc_tiles,
+              norm_tile_size,
+              K_tiles * tt::constants::TILE_WIDTH}) {  // N for the 1/N reduce scaler
+            reader_compile_time_args.push_back(v);
+        }
+    }
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
     std::map<CoreCoord, uint32_t> sender_id_by_core;
@@ -464,6 +541,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     std::map<CoreCoord, uint32_t> base_n_idx_by_core;
     for (uint32_t i = 0; i < N_blocks; ++i) {
         base_n_idx_by_core[b_cores[i]] = i;
+    }
+    // Core -> its first global K-tile (k_idx * Kc_tiles), the same k_offset the compute passes to
+    // phase1_partial. The fused-norm reader uses it to fetch only THIS core's slice of the
+    // per-channel norm weight/bias. Mapping matches the writer: b_cores index idx -> k_idx = idx/N_blocks.
+    std::map<CoreCoord, uint32_t> k_offset_by_core;
+    for (uint32_t idx = 0; idx < b_cores.size(); ++idx) {
+        k_offset_by_core[b_cores[idx]] = (idx / N_blocks) * Kc_tiles;
     }
     const std::vector<CoreCoord> all_reader_cores = corerange_to_cores(all_compute_cores_with_bbox, std::nullopt, true);
 
@@ -501,7 +585,12 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
                  static_cast<uint32_t>(is_base),  // 4: this core owns an output N-slice (fused_residual)
                  n_idx,                           // 5: its N-slice index
                  fused_residual ? tensor_args.residual->buffer()
-                                : input_tensor_a.buffer()});  // 6: interleaved residual base addr (patched)
+                                : input_tensor_a.buffer(),  // 6: interleaved residual base addr (patched)
+                 fused_rms_norm ? tensor_args.norm_weight->buffer()
+                                : input_tensor_a.buffer(),  // 7: norm weight base addr (patched)
+                 has_norm_bias ? tensor_args.norm_bias->buffer()
+                               : input_tensor_a.buffer(),                          // 8: norm bias base addr (patched)
+                 k_offset_by_core.count(core) ? k_offset_by_core.at(core) : 0u});  // 9: this core's K-tile start
         }
         return reader_kernel_desc;
     };
@@ -614,6 +703,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         gate_cb_index,                                                  // 10
         mm_cb_index,                                                    // 11
         mmg_cb_index,                                                   // 12
+        // ---- fused adaRMS-norm prologue ----
+        static_cast<uint32_t>(fused_rms_norm),  // 13: normalize in0 before the matmul
+        static_cast<uint32_t>(has_norm_bias),   // 14
+        operation_attributes.norm_eps_bits,     // 15: fp32 bits of the norm epsilon
+        nsq_cb_index,                           // 16
+        nscaler_cb_index,                       // 17
+        nstat_cb_index,                         // 18
+        nw_cb_index,                            // 19
+        nb_cb_index,                            // 20
+        nt1_cb_index,                           // 21
+        nt2_cb_index,                           // 22
+        normed_cb_index,                        // 23
     };
     log_debug(
         tt::LogOp,

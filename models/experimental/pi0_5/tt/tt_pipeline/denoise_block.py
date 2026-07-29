@@ -159,6 +159,11 @@ _KV_SDPA_MAX_CHUNK_TILES = 64
 # so at 8 MQA heads it uses 8 of ~120 cores and Sq is a single tile (no Q-parallelism to exploit).
 # Splitting the 32-tile prefix S ways uses 8*S cores. Env-tunable while it is being characterised.
 _KV_SPLITS = int(os.environ.get("PI05_KV_SPLITS", "1"))
+# Fold the attention adaRMS norm INTO the QKV matmul_decode (norm_weight/norm_bias prologue), removing
+# both the rms_norm op and the InterleavedToSharded that feeds it. The block is DISPATCH-bound
+# (~31% of traced wall-clock is inter-op overhead, ~3.7us/op), so removing 2 of ~10 ops is the lever.
+# Off by default until the A/B lands; see TINY_TILE_INTEGRATION_PLAN.md.
+_FUSE_NORM = int(os.environ.get("PI05_FUSE_NORM", "0")) == 1
 _QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = (16, 16, 16) if TILE_HEIGHT < 32 else (40, 32, 32)
 
 _LOFI = ttnn.WormholeComputeKernelConfig(
@@ -224,7 +229,17 @@ _FUSED_MD = hasattr(ttnn, "matmul_decode") and hasattr(ttnn, "gate_up_matmul_dec
 
 
 def _matmul_decode_pws(
-    a, b_pws, n_blocks, device, out_dtype=ttnn.bfloat16, interleaved_output=False, residual=None, gate=None
+    a,
+    b_pws,
+    n_blocks,
+    device,
+    out_dtype=ttnn.bfloat16,
+    interleaved_output=False,
+    residual=None,
+    gate=None,
+    norm_weight=None,
+    norm_bias=None,
+    norm_eps=None,
 ):
     """partial-width-sharded matmul_decode against a ``_pws_B`` weight.
 
@@ -245,7 +260,13 @@ def _matmul_decode_pws(
             interleaved_output=interleaved_output,
             residual=residual,
             gate=gate,
+            **(
+                {"norm_weight": norm_weight, "norm_bias": norm_bias, "norm_eps": norm_eps}
+                if norm_weight is not None
+                else {}
+            ),
         )
+    assert norm_weight is None, "the experimental matmul_decode has no fused-norm prologue"
     assert residual is None and gate is None, "the experimental matmul_decode has no residual/gate epilogue"
     m, k = a.shape[-2], a.shape[-1]
     a_ws = ttnn.to_memory_config(a, width_sharded_l1_config(m, k, device, _RESHARD_CORES))
@@ -339,6 +360,9 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         use_cache: bool = False,
         residual: Optional[ttnn.Tensor] = None,
         gate_ws: Optional[ttnn.Tensor] = None,
+        norm_weight: Optional[ttnn.Tensor] = None,
+        norm_bias: Optional[ttnn.Tensor] = None,
+        norm_eps: Optional[float] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         if len(hidden_states.shape) == 3:
             b, s, _ = hidden_states.shape
@@ -368,7 +392,16 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
             # partial_width_sharded matmul_decode reduces the K-partials onto _QKV_N_BLOCKS output
             # base cores; the WIDTH-SHARDED [padded_m, N/_QKV_N_BLOCKS] result is laid out exactly
             # like nlp_create_qkv_heads_rope expects to read it.
-            qkv = _matmul_decode_pws(hidden_states, self.wqkv_b, _QKV_N_BLOCKS, self.device, out_dtype=ACT_DTYPE)
+            qkv = _matmul_decode_pws(
+                hidden_states,
+                self.wqkv_b,
+                _QKV_N_BLOCKS,
+                self.device,
+                out_dtype=ACT_DTYPE,
+                norm_weight=norm_weight,
+                norm_bias=norm_bias,
+                norm_eps=norm_eps,
+            )
         else:
             qkv = self._proj(hidden_states, self.tt_wqkv, ACT_DTYPE, m_t, _g, _expert_ck)
         # Fused create-qkv-heads + q/k RoPE in ONE dispatch (custom op; byte-identical to
@@ -640,7 +673,11 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
         _i += 1 if fuse_attn else 0
         mlp_gate_ws = mods[_i] if fuse_mlp else None
 
-        normed = self._apply_ada(hidden_states, sa1, sha, self._eps)
+        # When the norm is fused into the QKV matmul, feed the attention the RAW hidden state and hand
+        # it (sa1, sha) instead -- no rms_norm op and no InterleavedToSharded.
+        _fuse_n = _FUSE_NORM and _FUSED_MD
+        _nkw = {"norm_weight": sa1, "norm_bias": sha, "norm_eps": self._eps} if _fuse_n else {}
+        normed = hidden_states if _fuse_n else self._apply_ada(hidden_states, sa1, sha, self._eps)
         if fuse_attn:
             # Fold the attention gated residual (hidden + ga*attn_out) INTO the o-proj
             # concat_heads_matmul_decode epilogue: out = hidden + ga * (attn @ Wo). The o-proj reads
@@ -657,11 +694,14 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
                 use_cache,
                 residual=hidden_states,
                 gate_ws=attn_gate_ws,
+                **_nkw,
             )
-            ttnn.deallocate(normed)
+            if not _fuse_n:
+                ttnn.deallocate(normed)
         else:
-            attn_out, new_cache = self.attention(normed, cos, sin, attention_mask, past_key_value, use_cache)
-            ttnn.deallocate(normed)
+            attn_out, new_cache = self.attention(normed, cos, sin, attention_mask, past_key_value, use_cache, **_nkw)
+            if not _fuse_n:
+                ttnn.deallocate(normed)
             hidden_states = _gated_residual(hidden_states, ga, attn_out)
             ttnn.deallocate(attn_out)
 

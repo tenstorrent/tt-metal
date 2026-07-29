@@ -21,7 +21,10 @@ Tensor matmul_decode(
     bool reshard_input,
     uint32_t reshard_cores,
     std::optional<const Tensor> residual,
-    std::optional<const Tensor> gate) {
+    std::optional<const Tensor> gate,
+    std::optional<const Tensor> norm_weight,
+    std::optional<const Tensor> norm_bias,
+    float norm_eps) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
         input_tensor_b,
@@ -34,7 +37,10 @@ Tensor matmul_decode(
         reshard_input,
         reshard_cores,
         residual,
-        gate);
+        gate,
+        norm_weight,
+        norm_bias,
+        norm_eps);
 }
 
 Tensor gate_up_matmul_decode(

@@ -50,7 +50,10 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("reshard_input") = false,
         nb::arg("reshard_cores") = 2,
         nb::arg("residual") = nb::none(),
-        nb::arg("gate") = nb::none());
+        nb::arg("gate") = nb::none(),
+        nb::arg("norm_weight") = nb::none(),
+        nb::arg("norm_bias") = nb::none(),
+        nb::arg("norm_eps") = 1e-6f);
 
     ttnn::bind_function<"gate_up_matmul_decode">(
         mod,
