@@ -56,8 +56,8 @@ bool tensorspecs_match_with_relaxation(
     // equality: a hash collision would otherwise report a false match -- the very failure the
     // exact-comparison key machinery exists to prevent.
     //
-    // NOTE: this holds the same comparison ValidateTensorArgs (program_run_args.cpp) applies inline
-    // today. Until that validation is refactored to delegate here, keep the two in lockstep.
+    // NOTE: ValidateTensorArgs (program_run_args.cpp) delegates its run-time accept/reject to this,
+    // so validation and the program-cache hash share one definition of equivalence.
     switch (relaxation_mode(relaxation)) {
         case RelaxationMode::DynamicRank:
             return a.tensor_layout() == b.tensor_layout() && a.logical_shape().rank() == b.logical_shape().rank();
