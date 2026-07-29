@@ -44,4 +44,24 @@ inline const TensorParamName SIN_PARAM{"sin"};
 inline const TensorParamName TRANS_MAT_PARAM{"trans_mat"};
 inline const TensorParamName OUTPUT_PARAM{"output"};
 
+// Kernel source paths. Defined once here (uniquely named, inline) rather than in each factory's
+// anonymous namespace: under unity builds the factory .cpp files can share a translation unit, where
+// duplicate anon-namespace names collide. The writer and prefill compute source are shared by
+// factories 1 & 2.
+inline const std::filesystem::path kReaderInterleavedSource{
+    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
+    "reader_rotary_embedding_llama_interleaved_start_id.cpp"};
+inline const std::filesystem::path kReaderPrefillShardedSource{
+    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
+    "reader_rotary_embedding_llama_prefill_sharded.cpp"};
+inline const std::filesystem::path kWriterSource{
+    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
+    "writer_rotary_embedding_llama_interleaved_start_id.cpp"};
+inline const std::filesystem::path kComputeSource{
+    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
+    "rotary_embedding_llama.cpp"};
+inline const std::filesystem::path kComputeShardedSource{
+    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
+    "rotary_embedding_llama_sharded.cpp"};
+
 }  // namespace ttnn::experimental::prim::rope_metal2

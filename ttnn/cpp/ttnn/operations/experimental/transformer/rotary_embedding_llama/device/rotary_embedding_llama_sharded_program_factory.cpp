@@ -9,8 +9,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
-#include <filesystem>
-
 namespace ttnn::experimental::prim {
 
 using namespace tt;
@@ -18,12 +16,6 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 using namespace ttnn::experimental::prim::rope_metal2;
-
-namespace {
-const std::filesystem::path kShardedComputeSource{
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
-    "rotary_embedding_llama_sharded.cpp"};
-}  // namespace
 
 ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::create_program_artifacts(
     const RotaryEmbeddingLlamaParams& operation_attributes,
@@ -168,7 +160,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::c
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = kShardedComputeSource,
+        .source = kComputeShardedSource,
         .dfb_bindings = compute_bindings,
         .compile_time_args = {{"Wt", head_dim_t}, {"Ht", n_heads_t}},
         .hw_config = compute_hw_config};

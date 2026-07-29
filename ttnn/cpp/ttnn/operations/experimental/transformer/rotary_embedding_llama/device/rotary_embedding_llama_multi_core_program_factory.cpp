@@ -10,8 +10,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <filesystem>
-
 namespace ttnn::experimental::prim {
 
 using namespace tt;
@@ -19,18 +17,6 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 using namespace ttnn::experimental::prim::rope_metal2;
-
-namespace {
-const std::filesystem::path kReaderSource{
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-    "reader_rotary_embedding_llama_interleaved_start_id.cpp"};
-const std::filesystem::path kWriterSource{
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-    "writer_rotary_embedding_llama_interleaved_start_id.cpp"};
-const std::filesystem::path kComputeSource{
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
-    "rotary_embedding_llama.cpp"};
-}  // namespace
 
 ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_program_artifacts(
     const RotaryEmbeddingLlamaParams& operation_attributes,
@@ -196,7 +182,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     // ------------------------------------------------------------------
     KernelSpec reader_spec{
         .unique_id = READER,
-        .source = kReaderSource,
+        .source = kReaderInterleavedSource,
         .compiler_options = {.defines = reload_define},
         .dfb_bindings =
             {DFBBinding{
