@@ -145,4 +145,4 @@ than host fallback; the absolute no-conversion claim was removed.
 - [x] Collected Tracy and advice-enabled `tt-perf-report` evidence.
 - [x] Added repeated-run and watcher-clean coverage.
 - [x] Independent stage review clean-pass (no required work after two remediation rounds).
-- [ ] Local stage-only commit recorded.
+- [x] Local stage-only implementation/evidence commit: `a3bb40325b3`.
