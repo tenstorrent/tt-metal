@@ -7,7 +7,6 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation_types.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -30,8 +29,9 @@ struct RotaryEmbeddingDeviceOperation {
     // them into static reader/writer runtime args, while token_idx is deliberately excluded from
     // compute_program_hash so successive decode positions cache-hit the same program.  Those two
     // scalars must therefore be re-applied on every cache hit -- otherwise the cached program keeps
-    // the first token's offsets and every later token reads the wrong cos/sin rows.  override_runtime_arguments
-    // re-derives the descriptor and re-applies them (prefill derives offsets from hashed shapes -- a no-op there).
+    // the first token's offsets and every later token reads the wrong cos/sin rows.  Declaring this
+    // hook also supersedes resolve_bindings, so it owns buffer-address re-application (runtime args and
+    // sharded CBs) too.  It patches those slots in place; it never rebuilds the descriptor.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,

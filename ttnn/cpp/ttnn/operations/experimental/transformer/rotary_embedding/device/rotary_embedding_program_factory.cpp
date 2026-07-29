@@ -9,8 +9,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
@@ -21,7 +22,7 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Work distribution shared between create_descriptor (cache miss) and get_dynamic_runtime_args
+// Work distribution shared between create_descriptor (cache miss) and override_runtime_arguments
 // (cache hit).  Keeping this in one place guarantees the cache-hit path targets exactly the same
 // cores/kernel arg slots the miss path built, so the re-applied decode offsets can't drift from the
 // program layout.  `Wt` is the per-row tile count (1 on the single-tile path).
@@ -905,10 +906,89 @@ void RotaryEmbeddingDeviceOperation::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive all per-dispatch state from the single source of truth (create_descriptor) for the
-    // current tensors and re-apply to the cached program -- no rebuild, still a cache hit.
-    auto desc = RotaryEmbeddingProgramFactory::create_descriptor(operation_attributes, tensor_args, output);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+    // Patch the cached program in place: only buffer addresses (never hashed) and the token_idx-derived
+    // decode scalars (deliberately hash-excluded) can change across a cache hit.  Everything else is a
+    // function of the shapes / memory configs / seq_len that compute_program_hash keys on, so it is
+    // identical by construction.  Rebuilding the descriptor here would pay the whole cache-miss host
+    // cost (work split, CoreRangeSet, arch queries, TensorAccessorArgs, per-core arg vectors) on every
+    // dispatch.
+    //
+    // Kernel push order in create_*_descriptor: reader(0), writer(1), compute g1(2)[, compute g2(3)].
+    // Compute kernels carry compile-time args only.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    // Writer runtime args (both descriptor variants): {dst, num_rows*Wt, num_tiles_written,
+    // cos_sin_offset, Wt, Wbytes}.
+    constexpr uint32_t kWriterDstArgIdx = 0;
+    constexpr uint32_t kWriterCosSinOffsetArgIdx = 3;
+
+    const auto& input = tensor_args.input;
+    // Wt == 1 on the single-tile path (X == TILE_WIDTH); this expression yields 1 there too.  Both
+    // descriptor variants share the reader/writer runtime-arg layouts below.
+    const uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
+    const auto work = compute_rotary_work_split(input, output, Wt);
+    const auto cores = grid_to_cores(work.num_cores, work.num_cores_x, work.num_cores_y, work.row_major);
+
+    // Interleaved reader args: {src, cos, sin, num_rows, num_tiles_written, start_row_id,
+    // cos_sin_start_id}.  The sharded reader drops src -- it arrives on CB c_0 -- so every later index
+    // shifts down by one: {cos, sin, num_rows, start_row_id, cos_sin_start_id}.
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
+    const auto src_addr = static_cast<uint32_t>(src_buffer->address());
+    const auto cos_addr = static_cast<uint32_t>(tensor_args.cos.buffer()->address());
+    const auto sin_addr = static_cast<uint32_t>(tensor_args.sin.buffer()->address());
+    const auto dst_addr = static_cast<uint32_t>(dst_buffer->address());
+    const uint32_t reader_cos_sin_start_id_arg_idx = work.in_sharded ? 4 : 6;
+
+    // Decode mode (token_idx set) derives cos_sin_start_id / cos_sin_offset from token_idx, which
+    // compute_program_hash deliberately excludes so successive decode positions cache-hit the same
+    // program.  Without re-applying them the cached program keeps the first token's offsets and every
+    // later token reads the wrong cos/sin rows.  Both are core-invariant.  Prefill instead derives
+    // cos_sin_start_id from the hashed work split (num_tiles_written % HtWt) and leaves cos_sin_offset
+    // at 0, so neither slot is touched there.
+    const auto& token_idx = operation_attributes.token_idx;
+    uint32_t cos_sin_offset = 0;
+    uint32_t cos_sin_start_id = 0;
+    if (token_idx.has_value()) {
+        const uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
+        cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
+        cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
+    }
+
+    for (const auto& core : cores) {
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
+        if (work.in_sharded) {
+            reader_args[0] = cos_addr;
+            reader_args[1] = sin_addr;
+        } else {
+            reader_args[0] = src_addr;
+            reader_args[1] = cos_addr;
+            reader_args[2] = sin_addr;
+        }
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+        writer_args[kWriterDstArgIdx] = dst_addr;
+        if (token_idx.has_value()) {
+            reader_args[reader_cos_sin_start_id_arg_idx] = cos_sin_start_id;
+            writer_args[kWriterCosSinOffsetArgIdx] = cos_sin_offset;
+        }
+    }
+
+    // A sharded input/output carries its address on a globally-allocated CB (c_0 / c_16) instead of a
+    // runtime arg, so re-point those at the current buffers as well.  Matching by CBIndex rather than
+    // by position in desc.cbs keeps this correct for both descriptor variants, whose output CB sits at
+    // a different index.
+    if (work.in_sharded || work.out_sharded) {
+        for (const auto& cb : program.circular_buffers()) {
+            if (!cb->globally_allocated()) {
+                continue;
+            }
+            if (cb->buffer_indices().contains(static_cast<uint8_t>(tt::CBIndex::c_0))) {
+                tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *src_buffer);
+            } else if (cb->buffer_indices().contains(static_cast<uint8_t>(tt::CBIndex::c_16))) {
+                tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *dst_buffer);
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::experimental::prim
