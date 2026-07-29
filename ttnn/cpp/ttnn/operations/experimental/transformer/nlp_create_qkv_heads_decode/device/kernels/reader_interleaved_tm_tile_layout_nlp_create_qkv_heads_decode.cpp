@@ -5,48 +5,44 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     Noc noc;
 
-    uint32_t in_tile_offset_by_batch = get_arg_val<uint32_t>(0);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(1);
+    uint32_t in_tile_offset_by_batch = get_arg(args::in_tile_offset_by_batch);
 
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(0);
-    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_id_k_out = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_id_v_out = get_compile_time_arg_val(4);
-    constexpr uint32_t head_size = get_compile_time_arg_val(5);
-    constexpr uint32_t num_q_heads = get_compile_time_arg_val(6);
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(7);
-    constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t PHASES_TO_READ =
-        get_compile_time_arg_val(9);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
-    // USE_ALIGNED_PATH is set when the input lives in DRAM and the per-face-row read size
-    // (SUBTILE_LINE_BYTES) is below the device DRAM read alignment. In that regime the direct
-    // noc_async_read path violates the NOC alignment rule
+    constexpr auto ELEMENT_SIZE = get_arg(args::element_size);
+    constexpr auto SUBTILE_LINE_BYTES = get_arg(args::sub_tile_line_bytes);
+    // Output DFB handles (dfb::q_out / dfb::k_out / dfb::v_out) replace the legacy q/k/v CB indices.
+    constexpr auto head_size = get_arg(args::head_size);
+    constexpr auto num_q_heads = get_arg(args::num_q_heads);
+    constexpr auto num_kv_heads = get_arg(args::num_kv_heads);
+    constexpr auto head_size_num_tiles = get_arg(args::head_size_num_tiles);
+    constexpr auto PHASES_TO_READ =
+        get_arg(args::phases_to_read);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
+    // USE_ALIGNED_PATH is defined (by the host) when the input lives in DRAM and the per-face-row
+    // read size (SUBTILE_LINE_BYTES) is below the device DRAM read alignment. In that regime the
+    // direct noc_async_read path violates the NOC alignment rule
     // ((src & (alignment-1)) == (dst & (alignment-1))) for half the (batch, head) parities, and
     // silently returns wrong data on Blackhole. The aligned path stages each read through an L1
-    // scratch CB sized to a DRAM-aligned chunk per tile, then copies the desired sub-tile-line
-    // into the output CB. The copy uses tt_memmove, which routes through the NOC datamover for
+    // scratch DFB sized to a DRAM-aligned chunk per tile, then copies the desired sub-tile-line
+    // into the output DFB. The copy uses tt_memmove, which routes through the NOC datamover for
     // L1→L1 transfers when the source/destination 16B parities match (the common case here:
     // SUBTILE_LINE_BYTES is a multiple of 16, write_addr is multi-of-16-tiled, and scratch_base
     // is DRAM-aligned). When parities don't match it falls back to baby-RISC memmove. The
     // datamover path is dramatically faster than std::memcpy on Blackhole. See issue #43270 for
-    // the original symptom.
-    constexpr uint32_t USE_ALIGNED_PATH = get_compile_time_arg_val(10);
+    // the original symptom. (USE_ALIGNED_PATH is a preprocessor gate so the conditionally-bound
+    // scratch DFB handle dfb::scratch is only referenced when the host actually binds it.)
     // Named DRAM_ALIGN_BYTES rather than DRAM_ALIGNMENT to avoid collision with the
     // DRAM_ALIGNMENT macro in tt_metal/hw/inc/internal/tt-1xx/*/noc/noc_parameters.h.
-    constexpr uint32_t DRAM_ALIGN_BYTES = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_id_aligned_scratch = get_compile_time_arg_val(12);
-    constexpr auto qkv_args = TensorAccessorArgs<13>();
+    constexpr auto DRAM_ALIGN_BYTES = get_arg(args::dram_align_bytes);
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
 
     constexpr uint32_t HALF_TILE_ELEMENTS = tt::constants::FACE_HEIGHT * tt::constants::TILE_WIDTH;
@@ -56,16 +52,17 @@ void kernel_main() {
     // half-a-tile's worth.
     constexpr uint32_t PHASE_OFFSET_BYTES = tt::constants::FACE_HEIGHT * tt::constants::FACE_WIDTH * ELEMENT_SIZE;
 
-    const auto qkv_reader = TensorAccessor(qkv_args, q_start_addr);
+    const auto qkv_reader = TensorAccessor(tensor::input);
 
-    CircularBuffer cb_q_out(cb_id_q_out);
-    CircularBuffer cb_k_out(cb_id_k_out);
-    CircularBuffer cb_v_out(cb_id_v_out);
-    CircularBuffer cb_aligned_scratch(cb_id_aligned_scratch);
+    DataflowBuffer cb_q_out(dfb::q_out);
+    DataflowBuffer cb_k_out(dfb::k_out);
+    DataflowBuffer cb_v_out(dfb::v_out);
 
     uint32_t qkv_tile_id = 0;
 
-    if constexpr (USE_ALIGNED_PATH) {
+#ifdef USE_ALIGNED_PATH
+    DataflowBuffer cb_aligned_scratch(dfb::scratch);
+    {
         constexpr bool read_phase_1 = (PHASES_TO_READ == 0 || PHASES_TO_READ == 1);
         constexpr bool read_phase_2 = (PHASES_TO_READ == 0 || PHASES_TO_READ == 2);
         // The NOC alignment rule requires (src & (alignment-1)) == (dst & (alignment-1)).
@@ -181,6 +178,7 @@ void kernel_main() {
         noc.async_read_barrier();
         return;
     }
+#endif
 
     // Direct-read fast path: source/destination NOC alignment is naturally satisfied for this
     // (arch, dtype, buffer-type) combination. Unchanged from the original kernel.
