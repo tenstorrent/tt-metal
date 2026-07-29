@@ -31,9 +31,12 @@ so ``--votes N`` gets its spread from ordinary sampling non-determinism, not a k
 
 Concurrency is per ITEM (128 by default, and the httpx pool is sized to match, since httpx's own
 default of 100 would otherwise cap it silently). Votes within one item run in sequence, so the calls in
-flight top out at the item count -- irrelevant at 198 questions, worth knowing if you ever run
-``--votes 5`` over a handful of responses. Measured with a 0.25 s stub: 180 calls in 0.78 s against
-45 s serial.
+flight top out at the item count.
+
+Measured against the real API at ``--effort low``: 60 questions in **7.0 s (8.6 call/s)**, where one at
+a time would be about five minutes. The vote caveat is visible in the same numbers -- 5 items at
+``--votes 3`` is 12 calls but only 4 in flight, so it takes 20 s. That is fine at 198 questions and
+worth knowing if you ever run many votes over a handful of responses.
 """
 
 from __future__ import annotations
@@ -43,6 +46,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -73,7 +78,10 @@ SCHEMA = {
             "failure_mode": {"type": "string", "enum": list(MODES)},
             "language": {"type": "string", "description": "ISO 639-1 code of the bulk of it, or 'mixed'"},
             "answered": {"type": "boolean", "description": "did it explicitly state a final answer?"},
-            "selected_letter": {"type": ["string", "null"], "enum": [*LETTERS, None]},
+            # A nullable enum has to be an anyOf: `{"type": ["string","null"], "enum": [...]}` is
+            # rejected with "Enum value 'A' does not match declared type" -- the enum values are
+            # checked against the declared type union rather than either arm of it.
+            "selected_letter": {"anyOf": [{"type": "string", "enum": list(LETTERS)}, {"type": "null"}]},
             "selected_answer_text": {"type": ["string", "null"], "description": "what it said the answer is"},
             "notes": {"type": "string", "description": "one short sentence naming the evidence"},
         },
@@ -112,7 +120,31 @@ def prompt_for(item: dict, budget: int) -> str:
     return "\n\n".join(parts)
 
 
-def judge_one(client, item: dict, cfg: dict) -> dict:
+class Tally:
+    """Token counter. Locked because the calls run from many threads at once."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.calls = self.input = self.output = self.cache_read = 0
+
+    def add(self, usage) -> None:
+        with self.lock:
+            self.calls += 1
+            self.input += int(getattr(usage, "input_tokens", 0) or 0)
+            self.output += int(getattr(usage, "output_tokens", 0) or 0)
+            # Every call repeats the same system prompt, so a lot of the input is served from cache and
+            # billed at ~0.1x. Counting it separately keeps `input` from reading as the whole bill.
+            self.cache_read += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+
+    def line(self) -> str:
+        return (
+            f"tokens: {self.input:,} input + {self.output:,} output"
+            + (f"  ({self.cache_read:,} of the input served from cache)" if self.cache_read else "")
+            + f"   over {self.calls} call(s)"
+        )
+
+
+def judge_one(client, item: dict, cfg: dict, tally: Tally | None = None) -> dict:
     """One call. A refusal is HTTP 200 with stop_reason 'refusal', and with thinking on the verdict is
     not content[0] -- so neither is assumed here."""
     resp = client.beta.messages.create(
@@ -125,6 +157,9 @@ def judge_one(client, item: dict, cfg: dict) -> dict:
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
     )
+    # Count before the refusal check: a mid-stream decline still bills what it produced.
+    if tally is not None:
+        tally.add(getattr(resp, "usage", None))
     if resp.stop_reason == "refusal":
         raise RuntimeError(f"judge declined ({getattr(getattr(resp, 'stop_details', None), 'category', None)})")
     text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
@@ -133,7 +168,7 @@ def judge_one(client, item: dict, cfg: dict) -> dict:
     return got
 
 
-def judge_item(client, item: dict, cfg: dict) -> dict:
+def judge_item(client, item: dict, cfg: dict, tally: Tally | None = None) -> dict:
     """An item's verdict: empty text is settled locally, otherwise N votes majority-voted."""
     if not (item.get("text") or "").strip():
         return {
@@ -148,7 +183,7 @@ def judge_item(client, item: dict, cfg: dict) -> dict:
     votes = []
     for _ in range(cfg["votes"]):
         try:
-            votes.append(judge_one(client, item, cfg))
+            votes.append(judge_one(client, item, cfg, tally))
         except Exception as exc:  # noqa: BLE001 - one bad item must not lose the run
             return {"error": f"{type(exc).__name__}: {exc}"[:300]}
     return majority(votes)
@@ -230,7 +265,14 @@ def load(target: Path, stage: str) -> tuple[str, list[dict]]:
     return f"{target} (single response)", [{"id": 0, "text": raw}]
 
 
-def report(source: str, items: list[dict], verdicts: list[dict], cfg: dict) -> None:
+def report(
+    source: str,
+    items: list[dict],
+    verdicts: list[dict],
+    cfg: dict,
+    tally: Tally | None = None,
+    elapsed: float | None = None,
+) -> None:
     ok = [(i, v) for i, v in zip(items, verdicts) if not v.get("error")]
     errors = [v for v in verdicts if v.get("error")]
     n = len(ok)
@@ -275,6 +317,11 @@ def report(source: str, items: list[dict], verdicts: list[dict], cfg: dict) -> N
     if errors:
         print(f"\n!! {len(errors)} item(s) failed; first: {errors[0]['error']}")
         print("   Excluded from every rate above, so the denominators are short.")
+    if tally is not None and tally.calls:
+        print()
+        print(tally.line())
+        if elapsed:
+            print(f"wall clock: {elapsed:.1f}s   ({tally.calls / elapsed:.1f} call/s)")
 
 
 def main() -> int:
@@ -316,8 +363,10 @@ def main() -> int:
             limits=httpx.Limits(max_connections=workers + 8, max_keepalive_connections=workers + 8)
         )
     )
+    tally, started = Tally(), time.monotonic()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        verdicts = list(pool.map(lambda it: judge_item(client, it, cfg), items))
+        verdicts = list(pool.map(lambda it: judge_item(client, it, cfg, tally), items))
+    elapsed = time.monotonic() - started
 
     if args.out:
         with args.out.open("w") as fh:
@@ -335,7 +384,7 @@ def main() -> int:
                     + "\n"
                 )
 
-    report(source, items, verdicts, cfg)
+    report(source, items, verdicts, cfg, tally, elapsed)
     if args.out:
         print(f"\nper-item verdicts: {args.out}")
     return 0
