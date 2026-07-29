@@ -28,7 +28,8 @@ vibevoice/
 ├── reference/               # vendored 1.5B-only torch model (from VibeVoice repo)
 │   ├── modular/             # config + modeling (imported as `modular.*`)
 │   ├── processor/           # tokenizer/audio processor (`processor.*`)
-│   └── schedule/            # DPM solver (`schedule.*`)
+│   ├── schedule/            # DPM solver (`schedule.*`)
+│   └── lm_runner.py         # NOT vendored (ours): CPU fp32 LM swap-in for PCC tests
 ├── resources/               # auto-downloaded demo assets (gitignored content)
 │   ├── voices/              # from github .../demo/voices
 │   └── text/                # from github .../demo/text_examples
@@ -241,7 +242,7 @@ python models/experimental/vibevoice/tests/perf/test_device_perf_single_step_pre
 
 CSV=$(ls -td generated/profiler/vibevoice_lm_single_step_prefill/reports/*/ops_perf_results_*.csv | head -1)
 tt-perf-report "$CSV" --start-signpost start --end-signpost stop
-# optional: > models/experimental/vibevoice/lm/prefill_expN.txt
+# optional: > prefill_expN.txt
 ```
 
 ### 3. Single-step decode dump
@@ -254,7 +255,7 @@ python models/experimental/vibevoice/tests/perf/test_device_perf_single_step_dec
 
 CSV=$(ls -td generated/profiler/vibevoice_lm_single_step_decode/reports/*/ops_perf_results_*.csv | head -1)
 tt-perf-report "$CSV" --start-signpost start --end-signpost stop
-# optional: > models/experimental/vibevoice/lm/decode_expN.txt
+# optional: > decode_expN.txt
 ```
 
 | Test | Inner workload | Profiler subdir |
