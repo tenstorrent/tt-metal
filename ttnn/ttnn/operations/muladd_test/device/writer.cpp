@@ -4,9 +4,9 @@
 
 void kernel_main() {
     uint32_t addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(3)
+    uint32_t num_tiles = get_arg_val<uint32_t>(1);
 
-        constexpr auto args = TensorAccessorArgs<0>();
+    constexpr auto args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb = 16;
 
@@ -17,6 +17,6 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(cb);
         noc_async_write_tile(t, accessor, l1_read_addr);
         noc_async_write_barrier();
-        cb_pop_back(cb, 1);
+        cb_pop_front(cb, 1);
     }
 }
