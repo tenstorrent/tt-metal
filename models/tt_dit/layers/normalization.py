@@ -344,12 +344,18 @@ class DistributedRMSNorm(Module):
                 mesh_axis=self.mesh_axis,
             )
 
+        # post_allgather requires a 2D weight; the AdaLN modulation arrives as
+        # [1, 1, 1, H] from the chunked scale/shift table.
+        composite_weight = weight
+        if composite_weight is not None and len(composite_weight.shape) != 2:
+            composite_weight = ttnn.reshape(composite_weight, (1, composite_weight.shape[-1]))
+
         x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
             x,
             stats,
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
-            weight=weight,
+            weight=composite_weight,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             transformation_mat=trans_mat,
             rope_cos=rope_cos,
