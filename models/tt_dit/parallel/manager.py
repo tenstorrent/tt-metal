@@ -146,17 +146,20 @@ class CCLManager:
             intermediate_buffer_shape = list(shape)
             intermediate_buffer_shape = [2] + intermediate_buffer_shape
             for _ in range(2):
-                # Device-native allocation: scratch ping-pong buffers are overwritten
-                # by the CCL op, so allocate on device (no host->device upload of a
-                # large buffer, which is slow and can hang for big shapes).
-                intermediate_buffer = ttnn.zeros(
+                # Device-native, uninitialized allocation: these scratch ping-pong
+                # buffers are fully overwritten by the reduce-scatter op, so no
+                # zero-init is needed. ttnn.empty is a pure allocator (create_device_tensor)
+                # — unlike ttnn.zeros, which builds the buffer on host (std::fill) and
+                # uploads it over PCIe (replicated to every device), which is very slow
+                # for large buffers.
+                intermediate_buffer = ttnn.empty(
                     intermediate_buffer_shape,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     device=self.mesh_device,
                 )
-                output_buffer = ttnn.zeros(
+                output_buffer = ttnn.empty(
                     output_buffer_shape,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
@@ -202,9 +205,11 @@ class CCLManager:
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
-                # Device-native allocation: the all-gather overwrites this buffer,
-                # so allocate on device rather than uploading a large host tensor.
-                output_buffer = ttnn.zeros(
+                # Device-native, uninitialized allocation: the all-gather fully
+                # overwrites this buffer, so no zero-init is needed. ttnn.empty is a
+                # pure allocator; ttnn.zeros would build on host + upload over PCIe
+                # (replicated per device), which is very slow for large buffers.
+                output_buffer = ttnn.empty(
                     output_buffer_shape,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=dtype,
@@ -374,15 +379,18 @@ class CCLManager:
                 ttnn.synchronize_device(self.mesh_device)
             buffers = []
             for _ in range(2):
-                # Device-native allocation: keeps the zero-init (neighbor_pad relies
-                # on zero boundary-pad regions) but builds it on device instead of
-                # uploading a large host tensor (slow / can hang for big shapes).
-                output_buffer = ttnn.zeros(
-                    output_shape,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                # neighbor_pad relies on zeroed boundary-pad regions, so this buffer
+                # must be zero-initialized. Use moreh_full (device-native fill at DRAM
+                # bandwidth) rather than ttnn.zeros: ttnn.zeros builds the buffer on host
+                # (single-threaded std::fill) and uploads it over PCIe (replicated to
+                # every device), which is very slow for large buffers.
+                output_buffer = ttnn.moreh_full(
+                    list(output_shape),
+                    0.0,
+                    self.mesh_device,
                     dtype=dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    device=self.mesh_device,
                 )
                 buffers.append(output_buffer)
 
