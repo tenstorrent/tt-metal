@@ -122,6 +122,82 @@ def preprocess_rtdetr_self_attention(torch_module, *_):
     }
 
 
+def preprocess_rtdetr_multiscale_deformable_attention(torch_module, *_):
+    return {
+        projection_name: {
+            "weight": getattr(torch_module, projection_name).weight,
+            "bias": getattr(torch_module, projection_name).bias,
+        }
+        for projection_name in (
+            "sampling_offsets",
+            "attention_weights",
+            "value_proj",
+            "output_proj",
+        )
+    }
+
+
+def preprocess_rtdetr_mlp_prediction_head(torch_module, *_):
+    return {
+        "layers": ParameterList(
+            [
+                make_parameter_dict(
+                    {
+                        "weight": layer.weight,
+                        "bias": layer.bias,
+                    }
+                )
+                for layer in torch_module.layers
+            ]
+        ),
+    }
+
+
+def preprocess_rtdetr_decoder_layer(torch_module, *_):
+    return {
+        "self_attn": make_parameter_dict(preprocess_rtdetr_self_attention(torch_module.self_attn)),
+        "self_attn_layer_norm": {
+            "weight": torch_module.self_attn_layer_norm.weight,
+            "bias": torch_module.self_attn_layer_norm.bias,
+        },
+        "encoder_attn": make_parameter_dict(
+            preprocess_rtdetr_multiscale_deformable_attention(torch_module.encoder_attn)
+        ),
+        "encoder_attn_layer_norm": {
+            "weight": torch_module.encoder_attn_layer_norm.weight,
+            "bias": torch_module.encoder_attn_layer_norm.bias,
+        },
+        "mlp": make_parameter_dict(preprocess_rtdetr_mlp(torch_module.mlp)),
+        "final_layer_norm": {
+            "weight": torch_module.final_layer_norm.weight,
+            "bias": torch_module.final_layer_norm.bias,
+        },
+    }
+
+
+def preprocess_rtdetr_decoder(torch_module, *_):
+    return {
+        "layers": ParameterList(
+            [make_parameter_dict(preprocess_rtdetr_decoder_layer(layer)) for layer in torch_module.layers]
+        ),
+        "query_pos_head": make_parameter_dict(preprocess_rtdetr_mlp_prediction_head(torch_module.query_pos_head)),
+        "bbox_embed": ParameterList(
+            [make_parameter_dict(preprocess_rtdetr_mlp_prediction_head(head)) for head in torch_module.bbox_embed]
+        ),
+        "class_embed": ParameterList(
+            [
+                make_parameter_dict(
+                    {
+                        "weight": head.weight,
+                        "bias": head.bias,
+                    }
+                )
+                for head in torch_module.class_embed
+            ]
+        ),
+    }
+
+
 def preprocess_rtdetr_encoder_layer(torch_module, *_):
     return {
         "self_attn": make_parameter_dict(preprocess_rtdetr_self_attention(torch_module.self_attn)),
@@ -229,6 +305,9 @@ def custom_preprocessor(torch_module, name):
 
     if torch_module.__class__.__name__ == "RTDetrConvNormLayer":
         return preprocess_rtdetr_conv_norm_layer(torch_module)
+
+    if name == "decoder":
+        return preprocess_rtdetr_decoder(torch_module)
 
     if name == "backbone":
         return preprocess_conv_encoder(torch_module)

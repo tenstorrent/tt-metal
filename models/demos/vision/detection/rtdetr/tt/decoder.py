@@ -116,19 +116,216 @@ class TtRTDetrDecoderSelfAttention(TtRTDetrSelfAttention):
 
 class TtRTDetrMultiscaleDeformableAttention:
     def __init__(self, config, parameters, device, dtype):
-        self.num_heads = config.deoder_attention_heads
+        self.num_heads = config.decoder_attention_heads
         self.n_points = config.decoder_n_points
+        self.d_model = config.d_model
+        self.n_levels = config.num_feature_levels
+
+        self.im2col_step = 64
+
+        self.sampling_offsets_weight = ttnn.from_torch(
+            parameters.sampling_offsets.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        self.sampling_offsets_bias = ttnn.from_torch(
+            parameters.sampling_offsets.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        self.attention_weights_weight = ttnn.from_torch(
+            parameters.attention_weights.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        self.attention_weights_bias = ttnn.from_torch(
+            parameters.attention_weights.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        self.value_proj_weight = ttnn.from_torch(
+            parameters.value_proj.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        self.value_proj_bias = ttnn.from_torch(
+            parameters.value_proj.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        self.output_proj_weight = ttnn.from_torch(
+            parameters.output_proj.weight.T,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        self.output_proj_bias = ttnn.from_torch(
+            parameters.output_proj.bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+    @staticmethod
+    def _deformable_attention(
+        value: ttnn.Tensor,
+        value_spatial_shapes: ttnn.Tensor,
+        value_spatial_shapes_list: tuple[tuple[int, int], ...],
+        level_start_index: ttnn.Tensor,
+        sampling_locations: ttnn.Tensor,
+        attention_weights: ttnn.Tensor,
+        im2col_step: int,
+    ):
+        batch_size, _, num_heads, hidden_dim = value.shape
+        _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
+
+        level_sizes = [height * width for height, width in value_spatial_shapes_list]
+        value_list = ttnn.split(value, level_sizes, dim=1)
+
+        sampling_grids = sampling_locations * 2.0 - 1.0
+        sampling_grid_list = ttnn.split(sampling_grids, 1, dim=3)
+
+        attention_weights_list = ttnn.split(attention_weights, 1, dim=3)
+
+        level_outputs = []
+        for level_id, (height, width) in enumerate(value_spatial_shapes_list):
+            value_l = value_list[level_id]
+            value_l = ttnn.permute(value_l, (0, 2, 1, 3))
+            value_l = ttnn.reshape(value_l, (batch_size * num_heads, height, width, hidden_dim))
+            value_l = ttnn.to_layout(
+                value_l,
+                ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            sampling_grid_l = ttnn.permute(sampling_grid_list[level_id], (0, 2, 1, 4, 3, 5))
+            sampling_grid_l = ttnn.reshape(sampling_grid_l, (batch_size * num_heads, num_queries * num_points, 1, 2))
+            sampling_grid_l = ttnn.to_layout(
+                sampling_grid_l,
+                ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            attention_weights_l = ttnn.permute(attention_weights_list[level_id], (0, 2, 1, 4, 3))
+            attention_weights_l = ttnn.reshape(attention_weights_l, (batch_size * num_heads, num_queries, num_points))
+            attention_weights_l = ttnn.to_layout(
+                attention_weights_l,
+                ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            level_output = ttnn.experimental.multi_scale_deformable_attn(
+                value_l,
+                sampling_grid_l,
+                attention_weights_l,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                align_corners=False,
+            )
+            level_outputs.append(level_output)
+
+        output = level_outputs[0]
+        for level_output in level_outputs[1:]:
+            output = output + level_output
+
+        output = ttnn.reshape(output, (batch_size, num_heads, num_queries, hidden_dim))
+        output = ttnn.permute(output, (0, 2, 1, 3))
+        output = ttnn.reshape(output, (batch_size, num_queries, num_heads * hidden_dim))
+        output = ttnn.to_layout(
+            output,
+            ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return output
 
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
         encoder_hidden_states: ttnn.Tensor,
+        position_embeddings: ttnn.Tensor,
         reference_points: ttnn.Tensor,
         spatial_shapes: ttnn.Tensor,
         spatial_shapes_list: tuple[tuple[int, int], ...],
         level_start_index: ttnn.Tensor,
-    ) -> ttnn.Tensor:
-        raise NotImplementedError
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        # add position embeddings to the hidden states before projecting to queries and keys
+        if position_embeddings is not None:
+            hidden_states = ttnn.add(hidden_states, position_embeddings)
+
+        batch_size, num_queries, _ = hidden_states.shape
+        batch_size, sequence_length, _ = encoder_hidden_states.shape
+
+        value = ttnn.linear(encoder_hidden_states, self.value_proj_weight, bias=self.value_proj_bias)
+        value = ttnn.reshape(value, (batch_size, sequence_length, self.num_heads, self.d_model // self.num_heads))
+
+        sampling_offsets = ttnn.linear(hidden_states, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
+        sampling_offsets = ttnn.reshape(
+            sampling_offsets, (batch_size, num_queries, self.num_heads, self.n_levels, self.n_points, 2)
+        )
+
+        attention_weights = ttnn.linear(hidden_states, self.attention_weights_weight, bias=self.attention_weights_bias)
+        attention_weights = ttnn.reshape(
+            attention_weights, (batch_size, num_queries, self.num_heads, self.n_levels * self.n_points)
+        )
+        attention_weights = ttnn.softmax(attention_weights, dim=-1)
+        attention_weights = ttnn.reshape(
+            attention_weights, (batch_size, num_queries, self.num_heads, self.n_levels, self.n_points)
+        )
+
+        # batch_size, num_queries, n_heads, n_levels, n_points, 2
+        num_coordinates = reference_points.shape[-1]
+        num_reference_levels = reference_points.shape[-2]
+        if num_coordinates == 2:
+            offset_normalizer = ttnn.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
+            offset_normalizer = ttnn.reshape(offset_normalizer, (1, 1, 1, self.n_levels, 1, 2))
+            reference_points = ttnn.reshape(reference_points, (batch_size, num_queries, 1, num_reference_levels, 1, 2))
+            sampling_locations = reference_points + sampling_offsets / offset_normalizer
+        elif num_coordinates == 4:
+            reference_points_xy = reference_points[..., :2]
+            reference_points_wh = reference_points[..., 2:]
+            reference_points_xy = ttnn.reshape(
+                reference_points_xy, (batch_size, num_queries, 1, num_reference_levels, 1, 2)
+            )
+            reference_points_wh = ttnn.reshape(
+                reference_points_wh, (batch_size, num_queries, 1, num_reference_levels, 1, 2)
+            )
+            sampling_locations = reference_points_xy + sampling_offsets / self.n_points * reference_points_wh * 0.5
+        else:
+            raise ValueError(f"Last dim of reference_points must be 2 or 4, but got {reference_points.shape[-1]}")
+
+        output = self._deformable_attention(
+            value,
+            spatial_shapes,
+            spatial_shapes_list,
+            level_start_index,
+            sampling_locations,
+            attention_weights,
+            self.im2col_step,
+        )
+
+        output = ttnn.linear(
+            output,
+            self.output_proj_weight,
+            bias=self.output_proj_bias,
+        )
+
+        return output, attention_weights
 
 
 class TtRTDetrDecoderLayer:
@@ -175,7 +372,7 @@ class TtRTDetrDecoderLayer:
         )
 
         # MLP and layer norm
-        self.mlp = TtRTDetrDecoderMLP(config, parameters=parameters.encoder_attn, device=device, dtype=dtype)
+        self.mlp = TtRTDetrDecoderMLP(config, parameters=parameters.mlp, device=device, dtype=dtype)
 
         self.final_layer_norm_weight = ttnn.from_torch(
             parameters.final_layer_norm.weight,
@@ -201,13 +398,54 @@ class TtRTDetrDecoderLayer:
         level_start_index: ttnn.Tensor,
         encoder_hidden_states: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        raise NotImplementedError
+        residual = hidden_states
+        hidden_states = self.self_attn(
+            hidden_states,
+            position_embeddings=object_queries_position_embeddings,
+        )
+        hidden_states = ttnn.layer_norm(
+            hidden_states,
+            epsilon=self.layer_norm_eps,
+            weight=self.self_attn_layer_norm_weight,
+            bias=self.self_attn_layer_norm_bias,
+            residual_input_tensor=residual,
+        )
+
+        residual = hidden_states
+        hidden_states, _ = self.encoder_attn(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            position_embeddings=object_queries_position_embeddings,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            spatial_shapes_list=spatial_shapes_list,
+            level_start_index=level_start_index,
+        )
+        hidden_states = ttnn.layer_norm(
+            hidden_states,
+            epsilon=self.layer_norm_eps,
+            weight=self.encoder_attn_layer_norm_weight,
+            bias=self.encoder_attn_layer_norm_bias,
+            residual_input_tensor=residual,
+        )
+
+        residual = hidden_states
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = ttnn.layer_norm(
+            hidden_states,
+            epsilon=self.layer_norm_eps,
+            weight=self.final_layer_norm_weight,
+            bias=self.final_layer_norm_bias,
+            residual_input_tensor=residual,
+        )
+
+        return hidden_states
 
 
 class TtRTDetrDecoder:
     def __init__(self, config, parameters, device, dtype):
         self.layers = [
-            TtRTDetrDecoderLayer(config, paraameters=parameters.layers[layer], device=device, dtype=dtype)
+            TtRTDetrDecoderLayer(config, parameters=parameters.layers[layer], device=device, dtype=dtype)
             for layer in range(config.decoder_layers)
         ]
 
@@ -219,8 +457,42 @@ class TtRTDetrDecoder:
             input_dim=4,
             hidden_dim=2 * config.d_model,
             output_dim=config.d_model,
-            num_layers=2.0,
+            num_layers=2,
         )
+
+        self.bbox_embed = [
+            TtRTDetrMLPPredictionHead(
+                config,
+                parameters=parameters.bbox_embed[index],
+                device=device,
+                dtype=dtype,
+                input_dim=config.d_model,
+                hidden_dim=config.d_model,
+                output_dim=4,
+                num_layers=3,
+            )
+            for index in range(config.decoder_layers)
+        ]
+
+        self.class_embed_weights = [
+            ttnn.from_torch(
+                parameters.class_embed[index].weight.T,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            for index in range(config.decoder_layers)
+        ]
+
+        self.class_embed_biases = [
+            ttnn.from_torch(
+                parameters.class_embed[index].bias,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            for index in range(config.decoder_layers)
+        ]
 
     def __call__(
         self,
@@ -230,5 +502,50 @@ class TtRTDetrDecoder:
         spatial_shapes: ttnn.Tensor,
         spatial_shapes_list: tuple[tuple[int, int], ...],
         level_start_index: ttnn.Tensor,
-    ):
-        raise NotImplementedError
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        hidden_states = inputs_embeds
+        intermediate_hidden_states = []
+        intermediate_logits = []
+        intermediate_reference_points = []
+
+        reference_points_logits = reference_points
+        reference_points = ttnn.sigmoid(reference_points_logits)
+
+        for index, decoder_layer in enumerate(self.layers):
+            reference_points_input = ttnn.unsqueeze(reference_points, dim=2)
+            object_queries_position_embeddings = self.query_pos_head(reference_points)
+
+            hidden_states = decoder_layer(
+                hidden_states=hidden_states,
+                object_queries_position_embeddings=object_queries_position_embeddings,
+                reference_points=reference_points_input,
+                spatial_shapes=spatial_shapes,
+                spatial_shapes_list=spatial_shapes_list,
+                level_start_index=level_start_index,
+                encoder_hidden_states=encoder_hidden_states,
+            )
+
+            predicted_corners = self.bbox_embed[index](hidden_states)
+            reference_points_logits = ttnn.add(predicted_corners, reference_points_logits)
+            reference_points = ttnn.sigmoid(reference_points_logits)
+
+            logits = ttnn.linear(
+                hidden_states,
+                self.class_embed_weights[index],
+                bias=self.class_embed_biases[index],
+            )
+
+            intermediate_hidden_states.append(hidden_states)
+            intermediate_logits.append(logits)
+            intermediate_reference_points.append(reference_points)
+
+        intermediate_hidden_states = ttnn.stack(intermediate_hidden_states, dim=1)
+        intermediate_logits = ttnn.stack(intermediate_logits, dim=1)
+        intermediate_reference_points = ttnn.stack(intermediate_reference_points, dim=1)
+
+        return (
+            hidden_states,
+            intermediate_hidden_states,
+            intermediate_logits,
+            intermediate_reference_points,
+        )

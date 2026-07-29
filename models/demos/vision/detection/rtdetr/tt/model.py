@@ -36,7 +36,7 @@ class TtRTDetrModel:
             for level, in_channels in enumerate(self.encoder_in_channels)
         ]
 
-        self.encoder = TtRTDetrHybridEncoder(config=config, parameters=parameters.encoder, device=device, dtype=dtype)
+        self.encoder = TtRTDetrHybridEncoder(config, parameters=parameters.encoder, device=device, dtype=dtype)
 
         self.decoder_input_proj = [
             TtRTDetrResNetConvLayer(
@@ -54,7 +54,7 @@ class TtRTDetrModel:
             for level, in_channels in enumerate(self.decoder_in_channels)
         ]
 
-        self.decoder = TtRTDetrDecoder(config=config, parameters=parameters.decoder, device=device, dtype=dtype)
+        self.decoder = TtRTDetrDecoder(config, parameters=parameters.decoder, device=device, dtype=dtype)
 
         self.spatial_shapes_list = tuple(
             (input_height // stride, input_width // stride) for stride in config.feat_strides
@@ -217,7 +217,15 @@ class TtRTDetrModel:
         # Get features from backbone
         features = self.backbone(pixel_values)
 
-        # Project features for the encoder
+        dram_features = []
+        for feature, height, width in features:
+            dram_feature = ttnn.to_memory_config(feature, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(feature)
+            dram_features.append((dram_feature, height, width))
+
+        features = dram_features
+
+        # Project features for the encoder, move each projection to DRAM
         projected_features = []
         for (feature, height, width), projection in zip(features, self.encoder_input_proj):
             feature, height, width = projection(
@@ -226,47 +234,49 @@ class TtRTDetrModel:
                 input_height=height,
                 input_width=width,
             )
-            projected_features.append((feature, height, width))
+            dram_feature = ttnn.to_memory_config(feature, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(feature)
+            projected_features.append((dram_feature, height, width))
 
         # Encoder
         encoder_outputs = self.encoder(inputs_embeds=projected_features, batch_size=batch_size)
 
-        # Project encoder outputs for decoder
+        # Move encoder outputs to DRAM
+        dram_encoder_outputs = []
+        for source, height, width in encoder_outputs:
+            dram_source = ttnn.to_memory_config(source, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(source)
+            dram_encoder_outputs.append((dram_source, height, width))
+        encoder_outputs = dram_encoder_outputs
+
+        # Project encoder outputs for decoder, move each projection to DRAM
         sources = []
         for (source, height, width), projection in zip(encoder_outputs, self.decoder_input_proj):
-            source, height, width = projection(
-                x=source,
-                batch_size=batch_size,
-                input_height=height,
-                input_width=width,
-            )
-            sources.append((source, height, width))
+            source, height, width = projection(x=source, batch_size=batch_size, input_height=height, input_width=width)
+            dram_source = ttnn.to_memory_config(source, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(source)
+            sources.append((dram_source, height, width))
 
         source_flatten = []
         for source, height, width in sources:
-            source = ttnn.to_memory_config(source, ttnn.DRAM_MEMORY_CONFIG)
-            source = ttnn.reshape(
-                source,
-                (batch_size, height * width, self.decoder_hidden_dim),
-            )
+            source = ttnn.reshape(source, (batch_size, height * width, self.decoder_hidden_dim))
             source_flatten.append(source)
-
-        source_flatten = ttnn.concat(source_flatten, dim=1)
+        source_flatten = ttnn.concat(source_flatten, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         source_flatten = ttnn.to_layout(source_flatten, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # use the valid_mask to selectively retain values in the feature map where the mask is `True`
-        memory = ttnn.multiply(self.valid_mask, source_flatten)
+        output_memory = ttnn.linear(self.valid_mask * source_flatten, self.enc_output_weight, bias=self.enc_output_bias)
 
         # enc_output
         output_memory = ttnn.layer_norm(
-            input_tensor=ttnn.linear(memory, self.enc_output_weight, self.enc_output_bias),
+            input_tensor=output_memory,
             epsilon=self.layer_norm_eps,
             weight=self.enc_output_norm_weight,
             bias=self.enc_output_norm_bias,
         )
 
         # enc_score_head
-        enc_outputs_class = ttnn.linear(output_memory, self.enc_score_head_weight, self.enc_score_head_bias)
+        enc_outputs_class = ttnn.linear(output_memory, self.enc_score_head_weight, bias=self.enc_score_head_bias)
 
         # enc_bbox_head
         enc_outputs_coord_logits = ttnn.linear(
@@ -284,7 +294,12 @@ class TtRTDetrModel:
         enc_outputs_coord_logits = ttnn.add(enc_outputs_coord_logits, self.anchors)
 
         enc_outputs_class_max = ttnn.max(enc_outputs_class, dim=-1, keepdim=False)
-        _, topk_ind = ttnn.topk(enc_outputs_class_max, self.num_queries, dim=1)
+        self.enc_outputs_class_max = enc_outputs_class_max
+
+        topk_values, topk_ind = ttnn.topk(enc_outputs_class_max, self.num_queries, dim=1)
+        self.topk_values = topk_values
+        topk_ind = ttnn.typecast(topk_ind, ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self.topk_ind = topk_ind
 
         reference_points_unact = ttnn.gather(
             enc_outputs_coord_logits,
@@ -292,16 +307,10 @@ class TtRTDetrModel:
             index=ttnn.repeat(ttnn.unsqueeze(topk_ind, dim=-1), (1, 1, enc_outputs_coord_logits.shape[-1])),
         )
 
-        enc_topk_bboxes = ttnn.sigmoid(reference_points_unact)
-
-        enc_topk_logits = ttnn.gather(
-            enc_outputs_class,
-            dim=1,
-            index=ttnn.repeat(ttnn.unsqueeze(topk_ind, dim=-1), (1, 1, enc_outputs_class.shape[-1])),
-        )
-
         target = ttnn.gather(
-            output_memory, dim=1, index=ttnn.repeat(ttnn.unsqueeze(topk_ind, dim=-1), (1, 1, output_memory.shape[-1]))
+            output_memory,
+            dim=1,
+            index=ttnn.repeat(ttnn.unsqueeze(topk_ind, dim=-1), (1, 1, output_memory.shape[-1])),
         )
 
         decoder_outputs = self.decoder(

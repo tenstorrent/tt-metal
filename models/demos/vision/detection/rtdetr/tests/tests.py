@@ -8,6 +8,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.vision.detection.rtdetr.common.preprocessing import (
+    custom_preprocessor,
     preprocess_conv_encoder,
     preprocess_resnet_backbone,
     preprocess_resnet_bottleneck,
@@ -18,9 +19,13 @@ from models.demos.vision.detection.rtdetr.common.preprocessing import (
     preprocess_rtdetr_aifi_layer,
     preprocess_rtdetr_conv_norm_layer,
     preprocess_rtdetr_csp_rep_layer,
+    preprocess_rtdetr_decoder,
+    preprocess_rtdetr_decoder_layer,
     preprocess_rtdetr_encoder_layer,
     preprocess_rtdetr_hybrid_encoder,
     preprocess_rtdetr_mlp,
+    preprocess_rtdetr_mlp_prediction_head,
+    preprocess_rtdetr_multiscale_deformable_attention,
     preprocess_rtdetr_rep_vgg_block,
     preprocess_rtdetr_self_attention,
 )
@@ -34,6 +39,13 @@ from models.demos.vision.detection.rtdetr.tt.backbone import (
     TtRTDetrResNetShortcut,
     TtRTDetrResNetStage,
 )
+from models.demos.vision.detection.rtdetr.tt.decoder import (
+    TtRTDetrDecoder,
+    TtRTDetrDecoderLayer,
+    TtRTDetrDecoderMLP,
+    TtRTDetrMLPPredictionHead,
+    TtRTDetrMultiscaleDeformableAttention,
+)
 from models.demos.vision.detection.rtdetr.tt.encoder import (
     TtRTDetrAIFILayer,
     TtRTDetrConvNormLayer,
@@ -44,6 +56,7 @@ from models.demos.vision.detection.rtdetr.tt.encoder import (
     TtRTDetrRepVggBlock,
     TtRTDetrSelfAttention,
 )
+from models.demos.vision.detection.rtdetr.tt.model import TtRTDetrModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 MODEL_NAME = "PekingU/rtdetr_r50vd"
@@ -200,6 +213,525 @@ def test_rtdetr_self_attention(device):
 
     _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
     logger.info(pcc_message)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_rtdetr_decoder_mlp(device):
+    torch.manual_seed(0)
+
+    torch_rtdetr = RTDetrForObjectDetection.from_pretrained(MODEL_NAME).eval()
+    torch_module = torch_rtdetr.model.decoder.layers[0].mlp
+    torch_input = torch.randn(1, torch_rtdetr.config.num_queries, torch_rtdetr.config.d_model)
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: torch_module,
+        custom_preprocessor=preprocess_rtdetr_mlp,
+    )
+
+    with torch.no_grad():
+        torch_output = torch_module(torch_input)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_module = TtRTDetrDecoderMLP(
+        config=torch_rtdetr.config,
+        parameters=parameters,
+        device=device,
+        dtype=ttnn.bfloat16,
+    )
+    tt_output = ttnn.to_torch(tt_module(tt_input))
+
+    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
+    logger.info(pcc_message)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_rtdetr_mlp_prediction_head(device):
+    torch.manual_seed(0)
+
+    torch_rtdetr = RTDetrForObjectDetection.from_pretrained(MODEL_NAME).eval()
+    torch_module = torch_rtdetr.model.decoder.query_pos_head
+    torch_input = torch.rand(1, torch_rtdetr.config.num_queries, 4)
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: torch_module,
+        custom_preprocessor=preprocess_rtdetr_mlp_prediction_head,
+    )
+
+    with torch.no_grad():
+        torch_output = torch_module(torch_input)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_module = TtRTDetrMLPPredictionHead(
+        config=torch_rtdetr.config,
+        parameters=parameters,
+        device=device,
+        dtype=ttnn.bfloat16,
+        input_dim=4,
+        hidden_dim=2 * torch_rtdetr.config.d_model,
+        output_dim=torch_rtdetr.config.d_model,
+        num_layers=2,
+    )
+    tt_output = ttnn.to_torch(tt_module(tt_input))
+
+    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
+    logger.info(pcc_message)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_rtdetr_multiscale_deformable_attention(device):
+    torch.manual_seed(0)
+
+    batch_size = 1
+    num_queries = 300
+    hidden_size = 256
+    spatial_shapes_list = ((80, 80), (40, 40), (20, 20))
+    sequence_length = sum(height * width for height, width in spatial_shapes_list)
+
+    torch_rtdetr = RTDetrForObjectDetection.from_pretrained(MODEL_NAME).eval()
+    torch_module = torch_rtdetr.model.decoder.layers[0].encoder_attn
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: torch_module,
+        custom_preprocessor=preprocess_rtdetr_multiscale_deformable_attention,
+    )
+
+    hidden_states = torch.randn(batch_size, num_queries, hidden_size)
+    encoder_hidden_states = torch.randn(batch_size, sequence_length, hidden_size)
+    position_embeddings = torch.randn(batch_size, num_queries, hidden_size)
+    reference_points = torch.rand(batch_size, num_queries, 1, 4)
+    reference_points[..., 2:] = reference_points[..., 2:] * 0.5 + 0.05
+    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
+    level_start_index = torch.tensor([0, 6400, 8000], dtype=torch.long)
+
+    with torch.no_grad():
+        torch_output, torch_attention_weights = torch_module(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            position_embeddings=position_embeddings,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            spatial_shapes_list=spatial_shapes_list,
+            level_start_index=level_start_index,
+        )
+
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_encoder_hidden_states = ttnn.from_torch(
+        encoder_hidden_states,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_position_embeddings = ttnn.from_torch(
+        position_embeddings,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_reference_points = ttnn.from_torch(
+        reference_points,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_spatial_shapes = ttnn.from_torch(
+        spatial_shapes,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_level_start_index = ttnn.from_torch(
+        level_start_index,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    tt_module = TtRTDetrMultiscaleDeformableAttention(
+        config=torch_rtdetr.config,
+        parameters=parameters,
+        device=device,
+        dtype=ttnn.bfloat16,
+    )
+    tt_output, tt_attention_weights = tt_module(
+        hidden_states=tt_hidden_states,
+        encoder_hidden_states=tt_encoder_hidden_states,
+        position_embeddings=tt_position_embeddings,
+        reference_points=tt_reference_points,
+        spatial_shapes=tt_spatial_shapes,
+        spatial_shapes_list=spatial_shapes_list,
+        level_start_index=tt_level_start_index,
+    )
+
+    tt_output = ttnn.to_torch(tt_output)
+    tt_attention_weights = ttnn.to_torch(tt_attention_weights)
+
+    _, output_pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.99)
+    logger.info(f"Output: {output_pcc_message}")
+
+    _, weights_pcc_message = assert_with_pcc(torch_attention_weights, tt_attention_weights, pcc=0.99)
+    logger.info(f"Attention weights: {weights_pcc_message}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_rtdetr_decoder_layer(device):
+    torch.manual_seed(0)
+
+    batch_size = 1
+    num_queries = 300
+    hidden_size = 256
+    spatial_shapes_list = ((80, 80), (40, 40), (20, 20))
+    sequence_length = sum(height * width for height, width in spatial_shapes_list)
+
+    torch_rtdetr = RTDetrForObjectDetection.from_pretrained(MODEL_NAME).eval()
+    torch_module = torch_rtdetr.model.decoder.layers[0]
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: torch_module,
+        custom_preprocessor=preprocess_rtdetr_decoder_layer,
+    )
+
+    hidden_states = torch.randn(batch_size, num_queries, hidden_size)
+    encoder_hidden_states = torch.randn(batch_size, sequence_length, hidden_size)
+    object_queries_position_embeddings = torch.randn(batch_size, num_queries, hidden_size)
+    reference_points = torch.rand(batch_size, num_queries, 1, 4)
+    reference_points[..., 2:] = reference_points[..., 2:] * 0.5 + 0.05
+    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
+    level_start_index = torch.tensor([0, 6400, 8000], dtype=torch.long)
+
+    with torch.no_grad():
+        torch_output = torch_module(
+            hidden_states=hidden_states,
+            object_queries_position_embeddings=object_queries_position_embeddings,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            spatial_shapes_list=spatial_shapes_list,
+            level_start_index=level_start_index,
+            encoder_hidden_states=encoder_hidden_states,
+        )
+
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_encoder_hidden_states = ttnn.from_torch(
+        encoder_hidden_states,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_object_queries_position_embeddings = ttnn.from_torch(
+        object_queries_position_embeddings,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_reference_points = ttnn.from_torch(
+        reference_points,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_spatial_shapes = ttnn.from_torch(
+        spatial_shapes,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_level_start_index = ttnn.from_torch(
+        level_start_index,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    tt_module = TtRTDetrDecoderLayer(
+        config=torch_rtdetr.config,
+        parameters=parameters,
+        device=device,
+        dtype=ttnn.bfloat16,
+    )
+    tt_output = tt_module(
+        hidden_states=tt_hidden_states,
+        object_queries_position_embeddings=tt_object_queries_position_embeddings,
+        reference_points=tt_reference_points,
+        spatial_shapes=tt_spatial_shapes,
+        spatial_shapes_list=spatial_shapes_list,
+        level_start_index=tt_level_start_index,
+        encoder_hidden_states=tt_encoder_hidden_states,
+    )
+    tt_output = ttnn.to_torch(tt_output)
+
+    _, pcc_message = assert_with_pcc(torch_output, tt_output, pcc=0.98)
+    logger.info(pcc_message)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_rtdetr_decoder(device):
+    torch_rtdetr = RTDetrForObjectDetection.from_pretrained(MODEL_NAME).eval()
+    torch_module = torch_rtdetr.model.decoder
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: torch_module,
+        custom_preprocessor=preprocess_rtdetr_decoder,
+    )
+
+    captured_decoder_inputs = {}
+
+    def capture_decoder_inputs(_, __, kwargs):
+        for name in (
+            "inputs_embeds",
+            "encoder_hidden_states",
+            "reference_points",
+            "spatial_shapes",
+            "spatial_shapes_list",
+            "level_start_index",
+        ):
+            value = kwargs[name]
+            captured_decoder_inputs[name] = value.detach().clone() if isinstance(value, torch.Tensor) else value
+
+    hook = torch_module.register_forward_pre_hook(capture_decoder_inputs, with_kwargs=True)
+    image_processor = RTDetrImageProcessor.from_pretrained(MODEL_NAME)
+    image = load_coco_image()
+    pixel_values = image_processor(images=image, return_tensors="pt").pixel_values
+
+    try:
+        with torch.no_grad():
+            torch_outputs = torch_rtdetr(pixel_values=pixel_values)
+    finally:
+        hook.remove()
+
+    inputs_embeds = captured_decoder_inputs["inputs_embeds"]
+    encoder_hidden_states = captured_decoder_inputs["encoder_hidden_states"]
+    reference_points = captured_decoder_inputs["reference_points"]
+    spatial_shapes = captured_decoder_inputs["spatial_shapes"]
+    spatial_shapes_list = tuple(captured_decoder_inputs["spatial_shapes_list"])
+    level_start_index = captured_decoder_inputs["level_start_index"]
+
+    tt_inputs_embeds = ttnn.from_torch(
+        inputs_embeds,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_encoder_hidden_states = ttnn.from_torch(
+        encoder_hidden_states,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_reference_points = ttnn.from_torch(
+        reference_points,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_spatial_shapes = ttnn.from_torch(
+        spatial_shapes,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_level_start_index = ttnn.from_torch(
+        level_start_index,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    tt_module = TtRTDetrDecoder(
+        config=torch_rtdetr.config,
+        parameters=parameters,
+        device=device,
+        dtype=ttnn.bfloat16,
+    )
+    (
+        tt_last_hidden_state,
+        tt_intermediate_hidden_states,
+        tt_intermediate_logits,
+        tt_intermediate_reference_points,
+    ) = tt_module(
+        inputs_embeds=tt_inputs_embeds,
+        encoder_hidden_states=tt_encoder_hidden_states,
+        reference_points=tt_reference_points,
+        spatial_shapes=tt_spatial_shapes,
+        spatial_shapes_list=spatial_shapes_list,
+        level_start_index=tt_level_start_index,
+    )
+
+    tt_last_hidden_state = ttnn.to_torch(tt_last_hidden_state)
+    tt_intermediate_hidden_states = ttnn.to_torch(tt_intermediate_hidden_states)
+    tt_intermediate_logits = ttnn.to_torch(tt_intermediate_logits)
+    tt_intermediate_reference_points = ttnn.to_torch(tt_intermediate_reference_points)
+
+    for layer_index in range(torch_rtdetr.config.decoder_layers):
+        _, hidden_state_pcc = assert_with_pcc(
+            torch_outputs.intermediate_hidden_states[:, layer_index],
+            tt_intermediate_hidden_states[:, layer_index],
+            pcc=0.0,
+        )
+        logger.info(f"Layer {layer_index} hidden state: {hidden_state_pcc}")
+
+        _, layer_logits_pcc = assert_with_pcc(
+            torch_outputs.intermediate_logits[:, layer_index],
+            tt_intermediate_logits[:, layer_index],
+            pcc=0.0,
+        )
+        logger.info(f"Layer {layer_index} logits: {layer_logits_pcc}")
+
+        _, layer_reference_points_pcc = assert_with_pcc(
+            torch_outputs.intermediate_reference_points[:, layer_index],
+            tt_intermediate_reference_points[:, layer_index],
+            pcc=0.0,
+        )
+        logger.info(f"Layer {layer_index} reference points: {layer_reference_points_pcc}")
+
+    _, last_hidden_state_pcc = assert_with_pcc(
+        torch_outputs.last_hidden_state,
+        tt_last_hidden_state,
+        pcc=0.95,
+    )
+    logger.info(f"Last hidden state: {last_hidden_state_pcc}")
+
+    _, hidden_states_pcc = assert_with_pcc(
+        torch_outputs.intermediate_hidden_states,
+        tt_intermediate_hidden_states,
+        pcc=0.95,
+    )
+    logger.info(f"Intermediate hidden states: {hidden_states_pcc}")
+
+    _, logits_pcc = assert_with_pcc(
+        torch_outputs.intermediate_logits,
+        tt_intermediate_logits,
+        pcc=0.95,
+    )
+    logger.info(f"Intermediate logits: {logits_pcc}")
+
+    _, reference_points_pcc = assert_with_pcc(
+        torch_outputs.intermediate_reference_points,
+        tt_intermediate_reference_points,
+        pcc=0.95,
+    )
+    logger.info(f"Intermediate reference points: {reference_points_pcc}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_rtdetr_model(device):
+    torch_rtdetr = RTDetrForObjectDetection.from_pretrained(MODEL_NAME).eval()
+    torch_module = torch_rtdetr.model
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: torch_module,
+        custom_preprocessor=custom_preprocessor,
+    )
+
+    image_processor = RTDetrImageProcessor.from_pretrained(MODEL_NAME)
+    image = load_coco_image()
+    pixel_values = image_processor(images=image, return_tensors="pt").pixel_values
+    _, _, input_height, input_width = pixel_values.shape
+
+    with torch.no_grad():
+        torch_outputs = torch_module(pixel_values=pixel_values)
+
+    tt_pixel_values = ttnn.from_torch(
+        pixel_values,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_module = TtRTDetrModel(
+        config=torch_rtdetr.config,
+        parameters=parameters,
+        device=device,
+        dtype=ttnn.bfloat16,
+        input_height=input_height,
+        input_width=input_width,
+    )
+    (
+        tt_last_hidden_state,
+        tt_intermediate_hidden_states,
+        tt_intermediate_logits,
+        tt_intermediate_reference_points,
+    ) = tt_module(tt_pixel_values)
+
+    torch_scores = torch_outputs.enc_outputs_class.max(dim=-1).values
+    torch_topk_ind = torch.topk(torch_scores, torch_rtdetr.config.num_queries, dim=1).indices
+    tt_scores = ttnn.to_torch(tt_module.enc_outputs_class_max).float()
+    tt_topk_values = ttnn.to_torch(tt_module.topk_values).float().reshape(torch_topk_ind.shape)
+    tt_topk_ind = ttnn.to_torch(tt_module.topk_ind).long().reshape(torch_topk_ind.shape)
+
+    exact_match = (torch_topk_ind == tt_topk_ind).float().mean().item()
+    overlap = torch.isin(tt_topk_ind, torch_topk_ind).float().mean().item()
+    logger.info(f"Top-k exact positional match: {exact_match:.4f}")
+    logger.info(f"Top-k set overlap: {overlap:.4f}")
+
+    for k in (10, 50, 100, torch_rtdetr.config.num_queries):
+        overlap = torch.isin(tt_topk_ind[:, :k], torch_topk_ind[:, :k]).float().mean().item()
+        logger.info(f"Top-{k} overlap: {overlap:.4f}")
+
+    _, cpu_topk_from_tt_scores = torch.topk(tt_scores, torch_rtdetr.config.num_queries, dim=1)
+    device_topk_match = (cpu_topk_from_tt_scores == tt_topk_ind).float().mean().item()
+    device_topk_overlap = torch.isin(tt_topk_ind, cpu_topk_from_tt_scores).float().mean().item()
+    values_sorted = (tt_topk_values[:, :-1] >= tt_topk_values[:, 1:]).float().mean().item()
+    adjacent_ties = (tt_topk_values[:, :-1] == tt_topk_values[:, 1:]).float().mean().item()
+    gathered_tt_scores = torch.gather(tt_scores, dim=1, index=tt_topk_ind)
+    topk_value_error = torch.max(torch.abs(tt_topk_values - gathered_tt_scores)).item()
+
+    logger.info(f"TT top-k vs Torch top-k on TT scores: {device_topk_match:.4f}")
+    logger.info(f"TT top-k set overlap on TT scores: {device_topk_overlap:.4f}")
+    logger.info(f"TT top-k values sorted descending: {values_sorted:.4f}")
+    logger.info(f"TT top-k adjacent ties: {adjacent_ties:.4f}")
+    logger.info(f"Unique TT selected scores: {torch.unique(tt_topk_values).numel()}")
+    logger.info(f"TT top-k value/index max error: {topk_value_error}")
+
+    tt_last_hidden_state = ttnn.to_torch(tt_last_hidden_state)
+    tt_intermediate_hidden_states = ttnn.to_torch(tt_intermediate_hidden_states)
+    tt_intermediate_logits = ttnn.to_torch(tt_intermediate_logits)
+    tt_intermediate_reference_points = ttnn.to_torch(tt_intermediate_reference_points)
+
+    _, last_hidden_state_pcc = assert_with_pcc(
+        torch_outputs.last_hidden_state,
+        tt_last_hidden_state,
+        pcc=0.90,
+    )
+    logger.info(f"Last hidden state: {last_hidden_state_pcc}")
+
+    _, hidden_states_pcc = assert_with_pcc(
+        torch_outputs.intermediate_hidden_states,
+        tt_intermediate_hidden_states,
+        pcc=0.90,
+    )
+    logger.info(f"Intermediate hidden states: {hidden_states_pcc}")
+
+    _, logits_pcc = assert_with_pcc(
+        torch_outputs.intermediate_logits,
+        tt_intermediate_logits,
+        pcc=0.90,
+    )
+    logger.info(f"Intermediate logits: {logits_pcc}")
+
+    _, reference_points_pcc = assert_with_pcc(
+        torch_outputs.intermediate_reference_points,
+        tt_intermediate_reference_points,
+        pcc=0.90,
+    )
+    logger.info(f"Intermediate reference points: {reference_points_pcc}")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
