@@ -55,6 +55,15 @@ class TT_CCL:
         # The no-prefetcher (Blackhole) buffer-sizing and stable-CCL fallbacks below are gated on
         # this so the prefetcher (Wormhole) path stays byte-for-byte identical to main.
         self.use_prefetcher = getattr(model_args, "use_prefetcher", True)
+        # BH prefetcher bring-up: keep the prefetcher-fed ring matmuls but route every galaxy collective
+        # through the stable/standard op (worker-pinned) instead of the fused galaxy CCLs, whose
+        # 1D-multicast writers no-op on the BH 2D-torus fabric. Gated the same way as the model/attention.
+        self.use_unfused_ccl = getattr(model_args, "use_unfused_ccl", False)
+        # Blackhole galaxy exposes only 2 ethernet links between column neighbours (Wormhole has 4). The
+        # prefill ring CCLs below historically forced 4 links whenever use_prefetcher was set (previously
+        # WH-only); with the prefetcher now enabled on BH that request goes out of bounds, so cap to the
+        # mesh's real link budget on Blackhole.
+        self.is_blackhole = getattr(model_args, "is_blackhole", False)
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
 
         self.mesh_device = mesh_device
@@ -132,6 +141,20 @@ class TT_CCL:
                             ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
                         )
 
+        # BH prefetcher unfused-CCL decode: the stable reduce_scatter_minimal_async needs 3 within-op
+        # global semaphores per invocation. Pre-create a double-buffered pool on the full worker grid
+        # (cols 1-10; the op enumerates the whole worker sub-device, wider than sub_core_grids) so the
+        # collective is trace-safe (no per-step allocation) and every worker core can see the semaphore.
+        self.rs_min_semaphore_handles = None
+        if mode == "decode" and self.use_unfused_ccl:
+            rs_worker_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(10, 9))])
+            self.rs_min_semaphore_handles = [[], []]
+            for i in range(2):
+                for _ in range(self.num_cbs):
+                    self.rs_min_semaphore_handles[i].append(
+                        [ttnn.create_global_semaphore(self.mesh_device, rs_worker_crs, 0) for _ in range(3)]
+                    )
+
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
@@ -182,6 +205,7 @@ class TT_CCL:
             getattr(self, "from_semaphore_handles", None),
             getattr(self, "to_semaphore_handles", None),
             getattr(self, "reduce_semaphore_handles", None),
+            getattr(self, "rs_min_semaphore_handles", None),
         ):
             _reset(container)
         self.reset_gather_and_buffer_idx()
@@ -835,6 +859,21 @@ class TT_CCL:
                     else persistent_buffer.memory_config()
                 )
                 input_tensor_mesh = ttnn.to_memory_config(input_tensor_mesh, target_mem_cfg)
+            if os.environ.get("QWEN_BH_PROBE", "0") == "1":
+                try:
+                    _pb_grid = persistent_buffer.memory_config().shard_spec.grid
+                    _out_grid = (
+                        memory_config.shard_spec.grid
+                        if (memory_config is not None and memory_config.is_sharded())
+                        else None
+                    )
+                    logger.info(
+                        f"QWEN_BH_AR_PROBE lm_head={lm_head} cluster_axis={cluster_axis} "
+                        f"in_grid={input_tensor_mesh.memory_config().shard_spec.grid if input_tensor_mesh.memory_config().is_sharded() else None} "
+                        f"buffer_grid={_pb_grid} out_grid={_out_grid}"
+                    )
+                except Exception as _e:
+                    logger.info(f"QWEN_BH_AR_PROBE failed: {_e}")
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,
@@ -896,6 +935,42 @@ class TT_CCL:
             # ttnn.synchronize_device(self.mesh_device)
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return output_tensor_mesh
+
+    def line_all_reduce_gather_reduce(self, input_tensor_mesh, cluster_axis, num_links, memory_config):
+        # Stable all-reduce used for the wide Blackhole lm_head logits in decode. all_reduce_async's
+        # reduction scratch CB scales as (total output pages / num_links); with only 2 fabric links on
+        # BH (vs 4 on WH) that CB grows large enough to collide with the full-worker-grid resident
+        # decode L1 on every worker column, so the async op cannot allocate. Instead gather the four
+        # per-device partials along a new leading dim and sum them locally (same pattern as the prefill
+        # lm_head path). The gather output lives in DRAM so fast_reduce_nc only needs small per-tile CBs
+        # and never touches the crowded worker-core L1.
+        gathered = ttnn.all_gather(
+            input_tensor_mesh,
+            dim=0,
+            cluster_axis=cluster_axis,
+            topology=self.model_config["CCL_TOPOLOGY"],
+            num_links=num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            subdevice_id=self.worker_sub_device_id,
+        )
+        # Confine the reduce to the worker sub-core grid. Without sub_core_grids fast_reduce_nc
+        # auto-grids across the full 12-column device and hits the uncovered dispatch column (col 11)
+        # under the split senders/worker sub-device manager -> "kernel group cores do not match sub
+        # device cores". sub_core_grids is only honored for an interleaved output (a sharded output
+        # takes the divide-by-shards path and ignores it), so reduce into DRAM then reshard to the
+        # sharded lm_head output layout (its target grid is inside the worker sub-device).
+        reduced = ttnn.experimental.fast_reduce_nc(
+            gathered,
+            dims=[0],
+            output=None,
+            compute_kernel_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sub_core_grids=self.sub_device_crs,
+        )
+        ttnn.deallocate(gathered)
+        output_tensor_mesh = ttnn.to_memory_config(reduced, memory_config)
+        ttnn.deallocate(reduced)
         return output_tensor_mesh
 
     def line_all_reduce_create_heads(
@@ -1146,10 +1221,35 @@ class TT_CCL:
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
         else:
-            if not self.use_prefetcher:
+            if self.use_prefetcher and self.use_unfused_ccl:
+                # BH prefetcher unfused-CCL bring-up. The public ttnn.reduce_scatter passes the worker
+                # sub-device's bounding-box start (here (1,0), since col 0 is the prefetcher sender column)
+                # as choose_worker_cores' core_grid_offset, which is then *added* to the already-absolute
+                # worker coords -> the reduction kernels shift onto col 11, the tensix dispatch column
+                # ("Illegal kernel placement for ring_reduction"). Call the experimental
+                # reduce_scatter_minimal_async directly instead: it fixes core_grid_offset to (0,0), so the
+                # kernels stay on the real worker cores (cols 1-10). Semaphores come from the pre-created
+                # worker-grid pool. Everything is pinned to the worker sub-device so it coexists with the
+                # resident prefetcher senders.
+                idx = self.gather_idx[cluster_axis]
+                ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
+                    input_tensor_mesh,
+                    dim=dim,
+                    multi_device_global_semaphore=self.rs_min_semaphore_handles[cluster_axis][idx],
+                    barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                    num_links=num_links,
+                    memory_config=memory_config,
+                    topology=self.model_config["CCL_TOPOLOGY"],
+                    subdevice_id=self.worker_sub_device_id,
+                    cluster_axis=cluster_axis,
+                )
+                self.gather_idx[cluster_axis] = (idx + 1) % self.num_cbs
+            elif not self.use_prefetcher:
                 # BH no-prefetch (Qwen and Llama): use the stable ttnn.reduce_scatter with the
-                # configured Ring topology instead of llama_reduce_scatter, which deadlocks on the
-                # 2D-torus fabric column reduction.
+                # configured Ring topology instead of llama_reduce_scatter, whose 1D-multicast writer
+                # deadlocks on the 2D-torus fabric column reduction. With the default (SubDeviceId(0))
+                # sub-device the bounding box starts at (0,0), so the core_grid_offset double-shift above
+                # does not occur.
                 ttnn_tensor_out = ttnn.reduce_scatter(
                     input_tensor_mesh,
                     dim,
@@ -1213,7 +1313,9 @@ class TT_CCL:
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         # Wormhole / prefetcher path keeps main's fixed link count (4); Blackhole caps to the links
         # physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
-        num_links = 4 if self.use_prefetcher else min(4, self.model_config["GALAXY_NUM_LINKS"])
+        num_links = (
+            4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self.model_config["GALAXY_NUM_LINKS"])
+        )
         # Seeing better performance for longer sequence lengths with num_workers_per_link = 4
         if seqlen > 128:
             num_workers_per_link = 4
@@ -1249,6 +1351,7 @@ class TT_CCL:
         use_optimal_ccl_for_llama=False,
         use_subdevice=True,
         use_experimental_all_gather=False,
+        force_stable=False,
     ):
         topology = ttnn.Topology.Linear
 
@@ -1288,7 +1391,12 @@ class TT_CCL:
             topology = self.model_config["CCL_TOPOLOGY"]
             assert buffer_key is not None, "buffer_key is None"
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
-        if use_experimental_all_gather or self.use_prefetcher:
+        # force_stable routes through the stable public all_gather even when use_prefetcher=True.
+        # The experimental all_gather_async is not needed here and the persistent buffer (sized for the
+        # fused path) must be dropped so the stable op allocates its own output.
+        if force_stable:
+            persistent_buffer = None
+        if (use_experimental_all_gather or self.use_prefetcher) and not force_stable:
             # Wormhole / prefetcher path uses the experimental async all-gather (identical to main).
             # The Blackhole no-prefetcher bring-up uses the stable public all_gather below.
             barrier_semaphore = None
@@ -1387,7 +1495,9 @@ class TT_CCL:
 
         # Wormhole / prefetcher path keeps main's fixed link count (4); Blackhole caps to the links
         # physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
-        num_links = 4 if self.use_prefetcher else min(4, self.model_config["GALAXY_NUM_LINKS"])
+        num_links = (
+            4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self.model_config["GALAXY_NUM_LINKS"])
+        )
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
@@ -1445,7 +1555,7 @@ class TT_CCL:
 
         div_axis = core_grid.x if force_transpose else core_grid.y
         # Wormhole / prefetcher path is unconstrained (matches main); Blackhole caps to GALAXY_NUM_LINKS.
-        max_links = 4 if self.use_prefetcher else self.model_config["GALAXY_NUM_LINKS"]
+        max_links = 4 if (self.use_prefetcher and not self.is_blackhole) else self.model_config["GALAXY_NUM_LINKS"]
         num_links = 1
         for nl in [4, 3, 2, 1]:
             if nl <= max_links and div_axis % nl == 0:
@@ -1635,6 +1745,19 @@ class TT_CCL:
         self.mesh_device.reset_sub_device_stall_group()
 
 
+def _norm_probe(mesh_device, tag):
+    # Env-gated device sync used to bracket the distributed-norm sub-ops so a hang can be attributed
+    # to the exact step (pre / all_gather / post). No-op unless QWEN_BH_PROBE=1.
+    if os.environ.get("QWEN_BH_PROBE", "0") == "1":
+        logger.info(f"[norm-probe] before sync: {tag}")
+        try:
+            ttnn.synchronize_device(mesh_device)
+        except Exception as e:
+            logger.info(f"[norm-probe] sync skipped ({tag}): {str(e)[:80]}")
+            return
+        logger.info(f"[norm-probe] after  sync: {tag}")
+
+
 def tt_distributed_rmsnorm(
     inp,
     epsilon,
@@ -1643,17 +1766,46 @@ def tt_distributed_rmsnorm(
     compute_kernel_config,
     tt_ccl=None,
     output_dtype=None,
+    force_stable_ag=False,
+    input_memcfg=None,
+    program_config=None,
+    stats_memcfg=None,
 ):
-    use_2d_grid = False
+    # When program_config is provided (BH prefetcher path), the pre/post rms ops run on the sharded
+    # LayerNorm program's core grid, which is confined to the worker sub-device (excludes the prefetcher
+    # sender column). This mirrors the proven tt_transformers sharded distributed-norm and is what keeps
+    # the local norm compute from deadlocking against the resident dram_prefetcher. use_2d_core_grid must
+    # be left unset in that case (the program config picks the grid).
+    use_2d_grid = None if program_config is not None else False
+
+    # Reshard onto the worker-safe grid before computing stats (only on the confined path).
+    if input_memcfg is not None:
+        inp = ttnn.to_memory_config(inp, memory_config=input_memcfg)
+        _norm_probe(mesh_device, "reshard inp -> worker grid")
 
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(
-        inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
+        inp,
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.bfloat16,
+        use_2d_core_grid=use_2d_grid,
+        program_config=program_config,
     )
+    _norm_probe(mesh_device, "rms_norm_pre_all_gather")
 
+    # On the confined path the gathered stats must be sharded (rms_norm_post_all_gather with a sharded
+    # program config asserts stats.is_sharded()); everywhere else keep the DRAM interleaved gather.
+    stats_ag_memcfg = stats_memcfg if stats_memcfg is not None else ttnn.DRAM_MEMORY_CONFIG
     tt_stats_gathered = tt_ccl.line_all_gather(
-        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
+        tt_stats,
+        dim=3,
+        cluster_axis=1,
+        num_links=1,
+        memory_config=stats_ag_memcfg,
+        buffer_key="LAYERNORM",
+        force_stable=force_stable_ag,
     )
+    _norm_probe(mesh_device, "line_all_gather (LAYERNORM stats)")
     tt_stats.deallocate(True)
 
     # Run distributed rmsnorm part 2. output_dtype lets the caller keep the norm output bf8 even when
@@ -1665,8 +1817,10 @@ def tt_distributed_rmsnorm(
         weight=gamma,
         compute_kernel_config=compute_kernel_config,
         use_2d_core_grid=use_2d_grid,
+        program_config=program_config,
         dtype=output_dtype,
     )
+    _norm_probe(mesh_device, "rms_norm_post_all_gather")
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)
 

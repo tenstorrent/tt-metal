@@ -146,6 +146,13 @@ class TTSampling(LightweightModule):
             if self.sub_core_grids is not None
             else None
         )
+        # Blackhole galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
+        # loaded during prefill sampling (prefill samples in decode mode). Auto-multicore ops grab the
+        # full 12-wide compute grid, which includes the dispatch column that no loaded sub-device covers
+        # ("kernel group cores do not match sub device cores"). Pin the force-argmax untilize/argmax to
+        # the worker sub-core grids so they stay inside the worker sub-device. Left None elsewhere so no
+        # other arch's behaviour changes.
+        self._force_argmax_sub_core_grids = self.sub_core_grids if getattr(args, "use_unfused_ccl", False) else None
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -596,8 +603,17 @@ class TTSampling(LightweightModule):
         )
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
-            slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()
-            if not slice_valid_vocab:
+            # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
+            # loaded during decode. The vocab-trim ttnn.slice and the tail-mask slices auto-grid a
+            # 32-core block from origin (0,0) (they don't honor sub_core_grids on the DRAM-interleaved
+            # path), which spills into the uncovered senders-column tail -> "kernel group cores do not
+            # match sub device cores" fatal. Skip the vocab trim on this path: the padded-vocab logits
+            # are exactly 0 (the lm_head weight is zero-padded), so argmax over the full padded width
+            # still selects the top valid token, and the following untilize/argmax are pinned to the
+            # worker sub-core grid via _force_argmax_sub_core_grids.
+            force_argmax_skip_vocab_trim = self._force_argmax_sub_core_grids is not None
+            slice_valid_vocab = self._can_slice_valid_vocab_for_argmax() and not force_argmax_skip_vocab_trim
+            if not slice_valid_vocab and not force_argmax_skip_vocab_trim:
                 x = self._mask_invalid_vocab_logits(x)
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
@@ -624,12 +640,13 @@ class TTSampling(LightweightModule):
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
-            x_untilized = ttnn.untilize(x, use_multicore=True)
+            x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,
                 output_tensor=tt_out_tok,
                 keepdim=False,
+                sub_core_grids=self._force_argmax_sub_core_grids,
             )
             # Argmax path: logprobs not supported (force-argmax is disabled
             # when logprobs are enabled via format_sampling_params guard).
