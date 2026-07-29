@@ -95,6 +95,18 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     return mesh_shapes;
 }
 
+std::vector<FabricType> get_all_mgd_fabric_types() {
+    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& mgd = mesh_graph.get_mesh_graph_descriptor();
+    std::vector<FabricType> fabric_types;
+    for (const auto mesh : mgd.all_meshes()) {
+        const auto& instance = mgd.get_instance(mesh);
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        fabric_types.push_back(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc));
+    }
+    return fabric_types;
+}
+
 #if defined(TT_METAL_USE_EMULE)
 // emule has no fabric router, so the device-L1 connection table is never populated. Record the
 // fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
@@ -649,18 +661,6 @@ namespace tt::tt_metal::internal {
 
 std::vector<tt::tt_fabric::MeshId> get_all_fabric_mesh_ids() {
     return tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph().get_mesh_ids();
-}
-
-std::vector<tt::tt_fabric::FabricType> get_all_mgd_fabric_types() {
-    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
-    const auto& mgd = mesh_graph.get_mesh_graph_descriptor();
-    std::vector<tt::tt_fabric::FabricType> fabric_types;
-    for (const auto mesh : mgd.all_meshes()) {
-        const auto& instance = mgd.get_instance(mesh);
-        const auto* mesh_desc = std::get<const tt::tt_fabric::proto::MeshDescriptor*>(instance.desc);
-        fabric_types.push_back(tt::tt_fabric::MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc));
-    }
-    return fabric_types;
 }
 
 // Query the kernel defines required by the current fabric configuration.

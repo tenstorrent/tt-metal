@@ -389,7 +389,7 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_all_mgd_fabric_types",
-        &tt::tt_metal::internal::get_all_mgd_fabric_types,
+        &tt::tt_fabric::get_all_mgd_fabric_types,
         R"(
             Returns the FabricType each compute mesh's dim_types imply, one entry per mesh in
             the active mesh graph descriptor. Callers can map these to a FabricConfig to match

@@ -67,6 +67,4 @@ void append_routing_plane_connection_rt_args_no_defines(
 // returns the local rank's meshes). Intended for inter-mesh topology discovery.
 std::vector<tt::tt_fabric::MeshId> get_all_fabric_mesh_ids();
 
-std::vector<tt::tt_fabric::FabricType> get_all_mgd_fabric_types();
-
 }  // namespace tt::tt_metal::internal
