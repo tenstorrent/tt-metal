@@ -726,260 +726,33 @@ Keep the fused-norm path behind a compile-time flag defaulting OFF so the existi
 
 ---
 
-# RETRACTION: the "dispatch-bound, ~3.7 us per op" conclusion is FALSIFIED
+# Fusion re-measured with the accurate metric: CONFIRMED NEGATIVE
 
-The section above concluded, from the `kv_splits` experiment, that this block is dispatch-bound at
-~3.7 us per op and therefore that **removing** an op should be worth ~3.7 us on top of its kernel time.
-That prediction was tested directly by implementing the norm fusion it recommended, and it **failed**.
+Re-ran the adaRMS-norm fusion against the back-to-back (trace-replay, sync-amortised) metric, which is
+what trace+2CQ actually delivers in production -- the old per-sample metric paid a host round-trip on
+every sample and hid a 17% overhead inside its own number.
 
-The fusion (branch `pi05_fuse_norm_matmul`, commit `b3999234ea0`, `PI05_FUSE_NORM=1`) is correct --
-`test_l1_single_layer_pcc` passes at PCC 0.9999 -- and it removes exactly the ops it was designed to
-remove, confirmed by profile op counts per block iteration:
-
-| | ops/iter | LayerNorm calls | InterleavedToSharded calls |
+| | b2b, 3 runs (ms) | median | 16-chip 2CQ e2e @3 cams |
 |---|---|---|---|
-| fusion off | 322 | 64 | 66 |
-| fusion on | 258 | 32 | 34 |
+| fusion OFF | 0.0972 / 0.0971 / 0.0974 | **0.0972** | 26.75-26.81 (median 26.78) |
+| fusion ON | 0.1028 / 0.1025 / 0.1025 | **0.1026** (+5.6%) | 27.03 (+0.93%) |
 
-Two ops per iteration gone. And yet:
+Ranges do not overlap on either metric. **The fusion is genuinely a loss** -- it was not a measurement
+artifact, and the earlier verdict stands. Keep `PI05_FUSE_NORM` default off.
 
-| per iteration | kernel time | traced wall-clock | non-kernel |
+**Useful calibration from this:** the prologue costs ~7.5 us and removing 2 ops bought back only ~2 us,
+so **removing an op from the dependency chain is worth ~1 us, not the ~3.7 us** originally hypothesised.
+That also means the ~14 us of device-side inter-op gaps is mostly dependency latency, NOT per-op launch
+cost, and cannot be reclaimed just by fusing ops together.
+
+## Measurement methodology (both metrics now precise -- use both, for different things)
+
+| metric | noise | per-layer sensitivity | use for |
 |---|---|---|---|
-| fusion off | 88.2 us | 116.5 us | 28.3 us |
-| fusion on | 91.3 us | 123.0 us | **31.7 us** |
+| single-layer b2b (`PI05_B2B=1`, default) | **+-0.3%** | amplifies (the block IS the measurement) | per-layer optimization decisions |
+| 16-chip 2CQ e2e | **+-0.11%** (26.75-26.81 over 4 runs) | dilutes ~6x (denoise is ~33% of e2e, and 2CQ hides part of it) | final validation, anything touching L1 or global structure |
 
-Non-kernel time went **UP** 28.3 -> 31.7 us despite two fewer dispatches. The predicted ~7.4 us saving
-did not appear at all. (The prologue itself costs ~7.5 us on the wqkv call; batching it over DST -- one
-`tile_regs` cycle per 8 tiles instead of per tile -- changed nothing, so that part is real work: the
-full-row square+reduce on every core plus the per-core weight/bias fetch.)
-
-**So both levers have now failed to move wall-clock:** kv_sdpa's kernel time fell 27% and wall rose;
-op count fell by 2/iteration and wall rose. What is actually established is only this:
-
-* ~24% of traced single-layer wall-clock (28.3 of 116.5 us) is NOT accounted for by summed device
-  kernel durations.
-* That gap responds to neither less kernel time nor fewer ops.
-
-Its true nature is **unknown**. Candidates worth testing before any further optimization:
-1. The profiler's `DEVICE KERNEL DURATION` excludes per-op device-side cost (program setup, CB drain,
-   semaphore waits), so "kernel time" is simply not the right denominator.
-2. A critical-path / serialization effect: total kernel time is a SUM, but wall-clock follows the
-   longest dependency chain, so shrinking a non-critical op changes nothing.
-3. Fixed per-program cost in trace replay that scales with something other than op count.
-
-Hypothesis 2 deserves the first look: it would explain BOTH failures at once, and would mean the whole
-"sum the kernel times" framing was wrong -- one should instead find which ops are on the critical path
-(e.g. from per-op start/end timestamps in `profile_log_device.csv`, which the current tooling
-aggregates away).
-
-**Do not treat "fewer ops" or "less kernel time" as a proxy for this pipeline's wall-clock.** The one
-result that has held up across every experiment is the opposite direction: adding CORES to an op
-reliably hurts (kv_splits S=2/4/8, "64 cores beats 80", `_RESHARD_CORES=2` beats 4 and 8).
-
----
-
-# The perf sheet: where the time actually goes, and what is left
-
-Built from the profiler's per-op columns (`DEVICE KERNEL DURATION`, `DEVICE FW DURATION`,
-`PER CORE MIN/MAX`, `CORE COUNT`), 31 block iterations, tile-16. Script: `scratchpad/perfsheet.py`.
-
-## e2e confirms the single-layer metric (so it was not lying after all)
-
-16-chip e2e @3 cams: `kv_splits=1` **26.70 ms**, `=2` 28.23, `=4` 27.31. Same shape and sign as the
-single-layer walltime, including the non-monotonicity (S=2 worse than S=4). So `kv_splits` is a genuine
-end-to-end loss and the negative result stands at the level that matters. The metric is trustworthy;
-what was wrong was my *model* of why it moved.
-
-## `DEVICE FW DURATION` is NOT usable as a per-op cost
-
-For the baseline it looks perfect -- per-iteration `fw` sums to 115.6 us against 116.5 us measured
-wall-clock -- which is why it is tempting. But it does not survive validation: between the S=1 and S=2
-runs, `MatmulDecode`'s `fw - kernel` fell 24.38 -> 4.11 us even though nothing about that op changed.
-`fw - kernel` is therefore mostly **stall time waiting on inputs** (kv_sdpa got faster, so the downstream
-matmul waited less), not fixed setup. Do not read it as overhead.
-
-## What IS solid: large, reproducible CORE IMBALANCE
-
-Per-core min/max is measured *within* one op invocation, so it is immune to the cross-run instability
-above -- and it reproduces to two decimals across three independent runs:
-
-| op | cores | kernel | slowest core | fastest core | idle | idle % |
-|---|---|---|---|---|---|---|
-| `GateUpMatmulDecode` | 70 | 12.03 | 11.95 | 3.36 | **8.58** | **72%** |
-| `MatmulDecode` (x3) | 70 | 8.24 | 8.13 | 4.99 | 3.14 | 39% |
-| `NlpCreateQkvHeadsRope` | 10 | 5.77 | 5.52 | 3.04 | 2.48 | 45% |
-| `LayerNorm` (x2) | 8 | 4.01 | 4.00 | 3.77 | 0.23 | 6% |
-| `KvSdpa` | 8 | 28.47 | 28.16 | 28.02 | 0.14 | 0% |
-
-**~21 us per iteration (18% of 116 us) is cores idling on their slowest peer.**
-
-Root cause is structural and the ratio confirms it: the **base cores** (`k_idx == 0`, `N_blocks` = 16 of
-70) run phase-2's K-reduction *and* the epilogue on top of their own phase-1 partial, while the other 54
-cores do phase 1 only. Base/non-base = 11.95/3.36 = **3.56x**. For `gate_up` the epilogue is ~80 tile-ops
-(4 K-slabs x 8 `Nc_tiles` x 2 weights, + gelu + GeGLU multiply) concentrated on 16 cores.
-
-Note this cannot be fixed by giving base cores a smaller K-slice: even at `Kc_base = 0` they would still
-owe the ~8.6 us epilogue while non-base cores finish in ~4.5 us. **The epilogue placement is the problem,
-not the K balance.**
-
-## Recommended next work, in order
-
-1. **Distribute the K-reduction + epilogue across the `K_blocks` cores of each N-slice.** Today the
-   reduce for output slice `n` happens entirely on base core `(k=0, n)`. Instead let each of the 4 cores
-   holding slice `n` reduce a quarter of that slice's `Nc_tiles` and write its piece into the base core's
-   output CB. Same core count, same total work, but the epilogue's critical path shrinks ~4x. Estimated
-   `gate_up` 12.03 -> ~5.5 us and each `MatmulDecode` 8.24 -> ~5.8 us, i.e. **~13 us/iteration (~12%)**.
-   This is the only large reproducible inefficiency left that does NOT require adding cores or ops --
-   the two things that have failed every time.
-2. **Rope imbalance (45% on 10 cores).** The `v` cores skip the rotation that the `q`/`k` cores perform,
-   so they finish early. Cheap to rebalance; worth ~2 us.
-3. **`kv_sdpa` remains the largest single kernel (28.5 us) and is perfectly balanced (0% skew).** Its
-   8-core cap is real but splitting it is closed (negative at single-layer AND e2e). Any further gain
-   has to come from the flash inner loop itself, not parallelization.
-
-**Validate every one of these at 16-chip e2e, not at single-layer only.** Kernel-time reductions have
-now twice failed to translate (kv_splits -27% kernel -> +5.7% e2e; the norm fusion removed 2 ops/iter ->
-+5% wall). Treat a kernel-time win as a hypothesis until e2e agrees.
-
----
-
-# CORRECTION: there is no large core imbalance. `PER CORE MIN` counts NON-PARTICIPATING cores.
-
-The section above recommended spreading the K-reduction across each N-slice's `K_blocks` cores, on the
-strength of `PER CORE MAX - PER CORE MIN` = 8.58 us on a 12.03 us `gate_up` ("72% idle"). That was a
-**misreading of the metric**, and the implementation proved it.
-
-The change was built and is correct (`test_l1_single_layer_pcc` passes, PCC(active) 0.999872): every core
-of a slice reduces one `Nc` sub-range, senders scatter `K_blocks` sub-range pieces instead of one whole
-block, and the base core pulls the finished pieces into its output shard. Result:
-
-| | kernel | max-min |
-|---|---|---|
-| base | 12.03 us | 8.58 |
-| spread across K_blocks cores | 11.91 us | 8.39 |
-
-**No effect.** Because the gap was never load imbalance. Adding the `PER CORE AVG` column settles it:
-
-| op | CORE COUNT | min | **avg** | max | real spread (max-avg) |
-|---|---|---|---|---|---|
-| `GateUpMatmulDecode` | 70 | 3.44 | **10.26** | 11.83 | **~1.6 us** (not 8.4) |
-| `MatmulDecode` | 70 | 5.04 | 6.99 | 8.06 | ~1.1 us (not 3.1) |
-| `NlpCreateQkvHeadsRope` | 10 | 3.04 | 5.21 | 5.50 | ~0.3 us (not 2.5) |
-
-`gate_up` has `K_blocks * N_blocks` = 4*16 = **64** working B-cores but `CORE COUNT` reports **70**: the
-core range is `all_compute_cores.bounding_box()`, so ~6 cores are bounding-box PADDING that run the
-reader/writer and do no matmul. `PER CORE MIN` reports those. **`max - min` over a bounding box is not a
-load-imbalance measure.** Use `max - avg`, and check `CORE COUNT` against the op's real participant count
-first.
-
-Conclusion: the denoise block is already well balanced (~13% spread, not 72%), so there is no imbalance
-left to reclaim. The spread-reduce implementation was reverted -- correct, but pure added complexity for
-zero measurable gain.
-
-## Scoreboard: four structural hypotheses, four negatives
-
-| hypothesis | outcome |
-|---|---|
-| `kv_sdpa` is core-starved (8 of 120) -> split the KV | kernel -27%, wall +14%, e2e +5.7% |
-| block is dispatch-bound -> remove ops (norm fusion) | 2 ops/iter removed, wall +5% |
-| MLP wants its own K-split | 4% slower at the block level |
-| base cores are 72% idle -> spread the reduction | no change; the metric was an artifact |
-
-Everything measurable has been tuned; every structural change tried has been neutral or negative. The
-~30 us/iteration between summed kernel time (83 us) and traced wall-clock (116.5 us) remains
-**unexplained**, and four different guesses at it have now been wrong.
-
-**Stop guessing from aggregate profiler columns.** The next step needs a different instrument: the tracy
-timeline (`tracy_profile_log_host.tracy`) or raw per-op device timestamps in `profile_log_device.csv`,
-which show when each op actually starts and ends on device rather than summing durations. Until something
-in that view explains the 30 us, further optimization is unguided -- as the four attempts above
-demonstrate empirically.
-
----
-
-# BREAKTHROUGH (methodological): 17% of the single-layer metric was HOST round-trip
-
-The device timeline finally explains the gap, and it is not a device effect at all.
-
-## The device timeline
-
-Built from `DEVICE FW START/END CYCLE` (1350 cycles/us on BH), rebased and converted, two iterations:
-
-```
-  op                                      start     end     dur   gap_before
-  MatmulDecodeDeviceOperation             133.94  148.90   14.97      -2.63
-  InterleavedToShardedDeviceOperation     170.63  171.67    1.05     +21.72   <-- DEAD
-  LayerNormDeviceOperation                174.91  179.94    5.03      +3.23
-  MatmulDecodeDeviceOperation             182.61  189.63    7.02      +2.67
-  NlpCreateQkvHeadsRopeDeviceOperation    190.40  196.81    6.41      +0.77
-  KvSdpaDeviceOperation                   197.48  227.63   30.16      +0.67
-  MatmulDecodeDeviceOperation             207.17  237.33   30.16     -20.46
-```
-
-Iteration period ~121.5 us. There is ONE contiguous window per iteration -- 17.4 / 21.7 / 21.5 us across
-three iterations -- with **no op active at all**. Other inter-op gaps sum ~10 us. Note also that FW
-windows OVERLAP (negative gaps), which is the direct confirmation that `fw - kernel` is stall time.
-
-## The dead window is the timing harness, not the model
-
-`_time_replay` did `execute_trace` + `synchronize_device` **per sample**, so every sample paid a host
-round-trip. Replaying back-to-back with ONE sync at the end:
-
-| metric | value | spread over 3 runs |
-|---|---|---|
-| per-sample median (used for every decision this session) | 0.1167 / 0.1213 / 0.1188 ms | **+-4%** |
-| back-to-back, sync amortised | **0.0969 / 0.0972 / 0.0972 ms** | **+-0.3%** |
-
-So **~20 us (17%) of the old number was host round-trip**, matching the dead window exactly. Real
-steady-state device time is **97 us**, not 116.5. `_time_replay` now reports the b2b figure (`PI05_B2B`,
-default on) and prints both.
-
-**The bigger deal is precision: ~15x better.** Every tuning decision in this pipeline is a 1-4% effect,
-and they were all being made against +-4% noise. That is the single most useful outcome of the session.
-
-## Re-sweeping the tuned constants at +-0.3%: the existing config IS optimal
-
-| config | cores | b2b (ms) |
-|---|---|---|
-| **K=4, n=16/16/16 (current)** | 64 | **0.0975** |
-| K=4, n=20/16/16 | 80 | 0.0978 |
-| K=4, n=8/8/8 | 32 | 0.1005 |
-| K=2, n=40/32/32 | 80 | 0.1012 |
-| K=8, n=10/8/8 | 80 | 0.1153 |
-| `_RESHARD_CORES` = 2 / 4 / 8 | | **0.0974** / 0.0998 / 0.1105 |
-
-Confirmed, not noise-luck. The scalar config space is genuinely exhausted.
-
-## Where the 97 us actually goes
-
-| | us | share |
-|---|---|---|
-| `KvSdpa` (8 cores) | 28.5 | **29%** |
-| `MatmulDecode` x3 (64+bbox cores) | 24.7 | 25% |
-| `GateUpMatmulDecode` | 12.0 | 12% |
-| `LayerNorm` x2 (8 cores) | 8.0 | 8% |
-| `NlpCreateQkvHeadsRope` (10 cores) | 5.8 | 6% |
-| `InterleavedToSharded` x2 | 1.3 | 1% |
-| sum of kernel time | 82.9 | 85% |
-| inter-op gaps (device-side, dependent ops) | ~14 | 14% |
-
-## Remaining candidates, and one dead end closed
-
-**Closed:** shrinking the ~6 bounding-box padding cores per matmul op. `all_compute_cores.bounding_box()`
-is load-bearing -- the A-gather multicast needs a RECTANGULAR core range (`mcast_bbox` at
-partial_width_sharded_program_factory.cpp:409), so the padding cores must exist to receive the mcast.
-
-**Best remaining:**
-1. **`kv_sdpa`, 29% of device time on 8 cores.** Splitting is closed (negative at single-layer AND e2e).
-   The only lever left is the flash inner loop itself. Note bf4 prefix changed nothing, so it is
-   compute-bound, not bandwidth-bound; and the chunk-count sweep is flat, so per-chunk overhead is
-   already small. This needs LLK-level attention (the QK^T and QK@V matmuls have M = 1 tile of 16 rows,
-   so a 32-row DEST may be half-idle), not op-level restructuring.
-2. **Re-measure the norm fusion with the b2b metric.** It was judged at +-4% noise. Its profile showed
-   ~7.5 us of prologue against ~4.6 us of kernel removed, but the value of removing 2 ops from the
-   inter-op gap chain (~14 us total) was never cleanly measured. If op-removal is worth ~2-3 us/op, the
-   fusion is close to break-even, and making the prologue cheaper (compute the row statistic ONCE and
-   multicast it, instead of all 64 cores squaring+reducing the full row) could push it positive.
-3. **The ~14 us of device-side inter-op gaps** (notably 3.2 us i2s->LayerNorm, 2.7 us LayerNorm->matmul).
-   Now that the metric is precise, this is worth attacking directly -- it is 14% and is pure latency
-   between dependent ops.
+Always use trace + 2CQ for the e2e number: it overlaps H2D on CQ1 with compute on CQ0, so host cost is
+hidden rather than measured, which is why it is both the ground truth and remarkably repeatable.
+Never judge a per-layer change on the old per-sample single-layer median: at +-4% it cannot see the
+1-4% effects that all of this pipeline's tuning decisions turn on.
