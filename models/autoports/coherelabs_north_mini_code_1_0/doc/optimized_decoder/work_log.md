@@ -274,3 +274,68 @@ findings are preserved in `STAGE_REVIEW_1.md`. All four P1 findings and the
 three hard-check gaps have now been addressed with the evidence above. A fresh
 stage review is required before the stage can close. No push will be
 performed.
+
+Stage implementation/evidence checkpoint: `03b1b0078f1` (`Add optimized North
+Mini decoder`).
+
+## Second-review AutoFix closure
+
+The second independent review is preserved in `STAGE_REVIEW_2.md`. Its two
+findings reopened AutoFix and produced the following additional evidence and
+repairs:
+
+16. Expanded real-weight expert validation to layers 1 and 4, batch 1 and 32,
+    non-aligned sequence-33 prefill, and cache-consuming traced decode at
+    position 33. Selected BFP8 passes all eight rows at PCC
+    0.999103–0.999989. Dense BFP4 also passes those natural-activation rows at
+    0.997234–0.999941, but remains rejected because the representative
+    synthetic active-expert matrix fails the same dense serving family at
+    b32/s1 PCC 0.981633 and b2/s33 PCC 0.981610. The final selected policy
+    therefore aliases dense and sparse BFP8 expert weights rather than
+    allocating duplicate tensors.
+17. Authentic b32/s33 exposed non-finite values in token-packed attention
+    before MoE. Attention-only isolation proved the >=1024-row 10x10 QKV/O
+    program was the source; reducing expert chunks did not help. The
+    non-aligned compatibility branch now uses internal 512-row QKV/O chunks
+    and preserves arbitrary public logical lengths. Layer-1/layer-4 b32/s33
+    prefill now passes at PCC 0.999509/0.999989.
+18. Cache-consuming layer-1 b32 decode then isolated a separate RoPE layout
+    defect. All prefetched cache blocks were identical across repeated users
+    and unrotated Q/K were correct, while the inherited 8x4 rectangular
+    sharding corrupted RoPE lanes 8–31. Matching the exact row-wise sub-core
+    ordering used by `nlp_create_qkv_heads_decode` restores all lanes and
+    traced decode PCC 0.999150.
+19. Adapted the batched DRAM-sharded expert kernel through its full contract
+    ladder. Blackhole reports eight DRAM banks. An all-128-expert
+    Tile(32,32) launch is physically L1-infeasible before firmware/CB
+    reservation; the legal eight-expert group was run in BFP8 and BFP4.
+    Projection PCC is 0.99986/0.99384. Measured projection, SiLU, multiply,
+    mandatory interleave, expert reduction, and group accumulation establish
+    an unrouted lower bound of 5.185/4.170 ms, already slower than the selected
+    complete b32 layer at 3.400 ms, so the grouped candidate is rejected with
+    hardware evidence.
+20. Re-ran the twelve final warmed rows after both layout repairs with three
+    warmups and ten samples. Mean prefill/decode milliseconds are:
+    layer 0 b1 0.513/0.187, b32 4.683/0.252; layer 1 b1 4.696/0.791,
+    b32 140.932/3.401; layer 4 b1 4.892/0.794, b32 140.915/3.384.
+    Batch-1 decode remains faster than the best correct baseline and batch 32
+    remains non-regressed. Exact samples are in
+    `artifacts/final_after_review2_*.json`.
+
+Primary closure artifacts are
+`artifacts/authentic_bfp8_matrix_clean.xml`,
+`artifacts/authentic_bfp4_matrix_clean.xml`,
+`artifacts/synthetic_bfp4_dense_expert_rejection.xml`, and
+`artifacts/dram_sharded_expert_candidate_full_lower_bound.xml`.
+
+21. Ran the expanded final suite normally and under watcher after the two
+    hardware-discovered layout repairs. Both runs exercised the optimized
+    implementation directly and passed all 30 tests: `175.26s` normally and
+    `205.13s` with watcher. The final 1,092-line watcher log has no
+    fatal/assert/invalid-NoC/CB-bounds/overflow/sanitizer/timeout/hang/tripped
+    or kernel-error signature. Post-run `tt-smi -s` reported four healthy
+    p300c boards, DRAM status true, ASIC temperatures 48.7–54.9 C, live
+    heartbeats, and zero corrected/uncorrected GDDR errors. Final JUnit
+    evidence is in `artifacts/final_after_review2_full.xml` and
+    `artifacts/final_after_review2_watcher.xml`; the device log is
+    `watcher/final_after_review2/generated/watcher/watcher.log`.

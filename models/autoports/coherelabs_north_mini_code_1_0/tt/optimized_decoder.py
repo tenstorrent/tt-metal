@@ -37,6 +37,8 @@ class OptimizationConfig:
     prefill_dense_down_dtype: object = ttnn.bfloat8_b
     expert_gate_up_dtype: object = ttnn.bfloat8_b
     expert_down_dtype: object = ttnn.bfloat8_b
+    dense_expert_gate_up_dtype: object = ttnn.bfloat8_b
+    dense_expert_down_dtype: object = ttnn.bfloat8_b
     expert_activation_dtype: object = ttnn.bfloat16
     router_dtype: object = ttnn.bfloat16
     router_fidelity: object = ttnn.MathFidelity.HiFi2
@@ -241,6 +243,24 @@ class OptimizedDecoder(FunctionalDecoder):
         self.optimization_config = optimization_config
         cfg = optimization_config
         padded_rows = ttnn.TILE_SIZE
+        storage = self.mesh_device.compute_with_storage_grid_size()
+
+        # ``nlp_create_qkv_heads_decode`` and decode RoPE assign one batch lane
+        # to each core in row-wise sub-core order.  A mathematically equivalent
+        # rectangular 32-core set changes that ordering on Blackhole and
+        # corrupts lanes >= 8, so preserve the producer's exact core sequence.
+        decode_rope_grid = ttnn.num_cores_to_corerangeset(
+            min(self.batch, storage.x * storage.y),
+            storage,
+            row_wise=True,
+        )
+        self.decode_rope_memory_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=decode_rope_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
         residual_grid = (
             ttnn.CoreGrid(x=cfg.decode_residual_cores, y=1)
@@ -269,7 +289,6 @@ class OptimizedDecoder(FunctionalDecoder):
             q_chunk_size=0,
             k_chunk_size=0,
         )
-        storage = self.mesh_device.compute_with_storage_grid_size()
         all_workers = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -422,11 +441,21 @@ class OptimizedDecoder(FunctionalDecoder):
             weights["expert_gate"] = _to_device(gate, mesh_device, dtype=cfg.expert_gate_up_dtype)
             weights["expert_up"] = _to_device(up, mesh_device, dtype=cfg.expert_gate_up_dtype)
             weights["expert_down"] = _to_device(down, mesh_device, dtype=cfg.expert_down_dtype)
+            if cfg.dense_expert_gate_up_dtype == cfg.expert_gate_up_dtype:
+                weights["dense_expert_gate"] = weights["expert_gate"]
+                weights["dense_expert_up"] = weights["expert_up"]
+            else:
+                weights["dense_expert_gate"] = _to_device(gate, mesh_device, dtype=cfg.dense_expert_gate_up_dtype)
+                weights["dense_expert_up"] = _to_device(up, mesh_device, dtype=cfg.dense_expert_gate_up_dtype)
+            if cfg.dense_expert_down_dtype == cfg.expert_down_dtype:
+                weights["dense_expert_down"] = weights["expert_down"]
+            else:
+                weights["dense_expert_down"] = _to_device(down, mesh_device, dtype=cfg.dense_expert_down_dtype)
             if cfg.packed_dense_experts:
-                weights["expert_gate_up"] = _to_device(
+                weights["dense_expert_gate_up"] = _to_device(
                     torch.cat((gate, up), dim=-1),
                     mesh_device,
-                    dtype=cfg.expert_gate_up_dtype,
+                    dtype=cfg.dense_expert_gate_up_dtype,
                 )
         else:
             raise ValueError(f"unsupported North-Mini MLP layer kind {mlp_type!r}")
@@ -584,13 +613,25 @@ class OptimizedDecoder(FunctionalDecoder):
         packed = ttnn.to_layout(normalized, ttnn.ROW_MAJOR_LAYOUT)
         packed = ttnn.reshape(packed, (1, 1, total_tokens, self.hidden_size))
         packed = ttnn.to_layout(packed, ttnn.TILE_LAYOUT)
-        query, key, value = self._qkv_prefill(
-            packed,
-            total_tokens,
-            None,
-            None,
-            batch_size=1,
-            apply_rope=False,
+        # The large-prefill 10x10 program produces non-finite values for this
+        # packed non-aligned shape at serving batch. Keep the public logical
+        # sequence unrestricted and use the already-correct <=512-row program.
+        qkv_chunks = []
+        for start in range(0, total_tokens, 512):
+            end = min(start + 512, total_tokens)
+            chunk = ttnn.slice(packed, (0, 0, start, 0), (1, 1, end, self.hidden_size))
+            qkv_chunks.append(
+                self._qkv_prefill(
+                    chunk,
+                    end - start,
+                    None,
+                    None,
+                    batch_size=1,
+                    apply_rope=False,
+                )
+            )
+        query, key, value = tuple(
+            chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=2) for chunks in zip(*qkv_chunks)
         )
 
         def tokens_to_users(tensor, heads):
@@ -656,18 +697,29 @@ class OptimizedDecoder(FunctionalDecoder):
         attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
         attended = ttnn.reshape(attended, (1, 1, total_tokens, self.num_heads * self.head_dim))
         attended = ttnn.to_layout(attended, ttnn.TILE_LAYOUT)
-        projected = ttnn.linear(
-            attended,
-            self.weights["o"],
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=_prefill_program(
-                total_tokens,
-                self.num_heads * self.head_dim,
-                self.hidden_size,
-            ),
-            compute_kernel_config=self.attention_compute,
-        )
+        projected_chunks = []
+        for start in range(0, total_tokens, 512):
+            end = min(start + 512, total_tokens)
+            chunk = ttnn.slice(
+                attended,
+                (0, 0, start, 0),
+                (1, 1, end, self.num_heads * self.head_dim),
+            )
+            projected_chunks.append(
+                ttnn.linear(
+                    chunk,
+                    self.weights["o"],
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=_prefill_program(
+                        end - start,
+                        self.num_heads * self.head_dim,
+                        self.hidden_size,
+                    ),
+                    compute_kernel_config=self.attention_compute,
+                )
+            )
+        projected = projected_chunks[0] if len(projected_chunks) == 1 else ttnn.concat(projected_chunks, dim=2)
         projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
         projected = ttnn.reshape(projected, (1, self.batch, seq_len, self.hidden_size))
         return ttnn.to_layout(projected, ttnn.TILE_LAYOUT)
@@ -986,22 +1038,22 @@ class OptimizedDecoder(FunctionalDecoder):
         expert_input = ttnn.reshape(flat, (1, token_count, self.hidden_size))
         expert_input = ttnn.repeat(expert_input, ttnn.Shape((self.num_experts, 1, 1)))
         expert_gate = ttnn.reshape(
-            self.weights["expert_gate"],
+            self.weights["dense_expert_gate"],
             (self.num_experts, self.hidden_size, self.intermediate_size),
         )
         expert_up = ttnn.reshape(
-            self.weights["expert_up"],
+            self.weights["dense_expert_up"],
             (self.num_experts, self.hidden_size, self.intermediate_size),
         )
         expert_down = ttnn.reshape(
-            self.weights["expert_down"],
+            self.weights["dense_expert_down"],
             (self.num_experts, self.intermediate_size, self.hidden_size),
         )
         if cfg.packed_dense_experts:
             packed = ttnn.matmul(
                 expert_input,
                 ttnn.reshape(
-                    self.weights["expert_gate_up"],
+                    self.weights["dense_expert_gate_up"],
                     (self.num_experts, self.hidden_size, 2 * self.intermediate_size),
                 ),
                 dtype=cfg.expert_activation_dtype,

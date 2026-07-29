@@ -44,6 +44,8 @@ def _policy(args):
         ("dense_down_dtype", args.down_dtype),
         ("expert_gate_up_dtype", args.expert_gate_up_dtype),
         ("expert_down_dtype", args.expert_down_dtype),
+        ("dense_expert_gate_up_dtype", args.dense_expert_gate_up_dtype),
+        ("dense_expert_down_dtype", args.dense_expert_down_dtype),
         ("kv_cache_dtype", args.kv_dtype),
     ):
         if value is not None:
@@ -154,6 +156,8 @@ def main():
         "down-dtype",
         "expert-gate-up-dtype",
         "expert-down-dtype",
+        "dense-expert-gate-up-dtype",
+        "dense-expert-down-dtype",
         "kv-dtype",
     ):
         parser.add_argument(f"--{name}", choices=tuple(DTYPES))
