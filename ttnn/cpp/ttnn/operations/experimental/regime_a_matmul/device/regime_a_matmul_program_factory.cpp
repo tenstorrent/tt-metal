@@ -1282,50 +1282,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t rs_max_chunk_gate = (rs_T + Pk - 1u) / Pk;
     const bool rs_deep_ok = (Pk <= 6u) && (rs_max_chunk_gate >= 2u);
     const bool rs_gate = rs_feasible && (Pk >= 4u) && (geo.N_sub >= 2u) && ((Kt_r <= 64u) || rs_deep_ok);
-    // bit26: DIRECT-EXCHANGE reduce-scatter instead of the ring. The ring takes Pk-1 SEQUENTIAL rounds, each
-    // paying a semaphore round-trip and its own add_tiles_init/reconfig -- measured at 0.22-0.30 us per round,
-    // which is what makes Pk=12 lose (198 rounds -> +60 us on 512x6144x4608). Direct exchange issues all Pk
-    // partial-writes back to back and waits ONCE for all arrivals, so the Pk-1 sequential sync steps collapse
-    // to 1, and the reduce accumulates every incoming partial in DST (one pack per output tile instead of
-    // Pk-1). Same total bytes and same total adds as the ring -- this only removes serialization.
-    // Requires max_chunk <= 4: the reduce holds a whole chunk in fp32 DST at once (4-tile limit).
-    const bool diag_rs_direct = (diag_mask & 0x4000000u) != 0u;
-    TT_FATAL(
-        !diag_rs_direct || (rs_feasible && rs_max_chunk_gate <= 4u),
-        "regime_a_matmul diag bit26 (RS_DIRECT) needs a reduce-scatter-feasible shape with max_chunk <= 4 "
-        "(have max_chunk={}, Pk={}, sub-block {} tiles)",
-        rs_max_chunk_gate,
-        Pk,
-        rs_T);
-    const bool rs_direct = diag_rs_direct;
-    // bits 27-28: S-WAY STRIPED OWNER-GATHER (code 1/2/3 -> S = 2/3/4). Instead of all Pk cores owning 1/Pk of
-    // the output (full direct exchange, Pk(Pk-1) messages per group), only S cores own a stripe, so the group
-    // sends S(Pk-1) messages -- Pk/S fewer -- while moving the SAME total bytes. The trade is reduction load:
-    // each owner sums Pk-1 partials of rs_T/S tiles, i.e. (Pk-1)*rs_T/S tile-adds against a chain core's rs_T,
-    // a Pk/S imbalance. Zones measure which side wins.
-    const uint32_t rs_stripe_code = (diag_mask >> 27u) & 0x3u;
-    // Cap S so every owner gets a NON-EMPTY stripe. With rs_T=6 and S=4 the split is 2,2,2,0: the fourth owner
-    // owns nothing yet still runs the whole protocol (arrival waits, credits, and zero-byte NoC writes from
-    // every sender). Measured +26.6% on 256x2048x512 before this cap. ceil(rs_T/S) >= 1 is not enough -- the
-    // requirement is S <= rs_T so that j*ceil(rs_T/S) < rs_T for every j.
-    uint32_t rs_S = rs_stripe_code ? (rs_stripe_code + 1u) : 0u;
-    if (rs_S) {
-        const uint32_t rs_T_pre = geo.M_block_capacity * geo.N_sub;
-        while (rs_S > 1u && (rs_S - 1u) * ((rs_T_pre + rs_S - 1u) / rs_S) >= rs_T_pre) {
-            --rs_S;  // last stripe would be empty
-        }
-        if (rs_S > Pk) {
-            rs_S = Pk;
-        }
-    }
-    const bool rs_striped = (rs_S != 0u);
-    TT_FATAL(
-        !rs_striped || (rs_feasible && !rs_direct && rs_S <= Pk),
-        "regime_a_matmul striped owner-gather (S={}) needs a reduce-scatter-feasible shape, S <= Pk={}, and is "
-        "mutually exclusive with bit26 (RS_DIRECT)",
-        rs_S,
-        Pk);
-    const uint32_t rs_stripe_tiles = rs_striped ? ((rs_T + rs_S - 1u) / rs_S) : 0u;
     const bool diag_force_chain = (diag_mask & 0x400000u) != 0u;     // bit22
     const bool diag_force_rscatter = (diag_mask & 0x800000u) != 0u;  // bit23
     TT_FATAL(
@@ -1338,22 +1294,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     if (rscatter) {
         wdefs["RSCATTER"] = "1";
         ddefs_compute["RSCATTER"] = "1";
-        if (rs_direct) {
-            wdefs["RS_DIRECT"] = "1";
-            ddefs_compute["RS_DIRECT"] = "1";
-        }
-        if (rs_striped) {
-            wdefs["RS_STRIPED"] = "1";
-            ddefs_compute["RS_STRIPED"] = "1";
-            // Zones and DPRINT markers are OPT-IN: leaving zones always on would bias every striped perf
-            // measurement against the chain/ring baselines, which carry no instrumentation.
-            if (std::getenv("TT_REGIME_A_RS_ZONES") != nullptr) {
-                wdefs["RA_PROFILE_ZONES"] = "1";  // payload / arrival / credit / reduce-wait / output-write
-            }
-            if (std::getenv("TT_REGIME_A_RS_DBG") != nullptr) {
-                wdefs["RA_DBG"] = "1";  // hang-diagnosis markers
-            }
-        }
     }
 
     // ---- M-split worker PLACEMENT (Sm>1): IN1_NEAR. Overrides only P.cores[i].coord; MUST run BEFORE the ring
@@ -1416,59 +1356,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // SENDER's writer NoC (writer runs opposite the core's in1-reader NoC), which is asymmetric on the torus
     // and therefore cannot be approximated by a coordinate distance. Pk==4 searches all 3! orders exactly;
     // larger Pk uses greedy nearest-neighbour (P! is infeasible). Mutates only the rs_* fields. ----
-    // OWNER SELECTION for striped owner-gather. Every group member writes to every owner, so total hop cost is
-    // separable: sum over owners of (sum over senders of dist(sender -> owner)). Ranking each candidate by its
-    // INBOUND cost and taking the S cheapest is therefore exactly optimal - no subset search needed. Distance is
-    // on the SENDER's writer NoC (asymmetric on the torus), the same objective the in0 ring order uses.
-    std::vector<uint32_t> rs_owner_of;   // [(bank*mfac + sub)*S + j] -> group position owning stripe j
-    std::vector<uint32_t> rs_stripe_of;  // [core index] -> owned stripe, or S if this core owns none
-    if (rscatter && rs_striped) {
-        namespace expdev = tt::tt_metal::experimental::Device;
-        rs_owner_of.assign(8u * geo.mfac * rs_S, 0u);
-        rs_stripe_of.assign(geo.num_cores, rs_S);
-        for (uint32_t b = 0; b < 8u; ++b) {
-            for (uint32_t sub = 0; sub < geo.mfac; ++sub) {
-                std::vector<uint32_t> idx(Pk);
-                for (uint32_t kk = 0; kk < Pk; ++kk) {
-                    idx[kk] = b * geo.preaders + kk * geo.mfac + sub;
-                }
-                auto lc = [&](uint32_t i) { return CoreCoord{P.cores[i].coord.x, P.cores[i].coord.y}; };
-                std::vector<std::pair<uint32_t, uint32_t>> cost(Pk);  // (inbound hop cost, position)
-                for (uint32_t c = 0; c < Pk; ++c) {
-                    uint32_t tot = 0;
-                    for (uint32_t sdr = 0; sdr < Pk; ++sdr) {
-                        if (sdr == c) {
-                            continue;
-                        }
-                        const NOC wnoc = (P.cores[idx[sdr]].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
-                        tot += expdev::get_worker_noc_hop_distance(device, lc(idx[sdr]), lc(idx[c]), wnoc);
-                    }
-                    cost[c] = {tot, c};
-                }
-                std::sort(cost.begin(), cost.end());
-                const uint32_t gkey = (b * geo.mfac + sub) * rs_S;
-                for (uint32_t j = 0; j < rs_S; ++j) {
-                    rs_owner_of[gkey + j] = cost[j].second;
-                    rs_stripe_of[idx[cost[j].second]] = j;
-                }
-                for (uint32_t kk = 0; kk < Pk; ++kk) {
-                    P.cores[idx[kk]].rs_pos = kk;
-                }
-            }
-        }
-    } else if (rscatter && rs_direct) {
-        // DIRECT exchange: no ring, so no ordering to optimize. Position == k-slice index, and the core at
-        // position p owns chunk p and writes its partial for chunk q straight to the core at position q.
-        for (uint32_t b = 0; b < 8u; ++b) {
-            for (uint32_t sub = 0; sub < geo.mfac; ++sub) {
-                for (uint32_t kk = 0; kk < Pk; ++kk) {
-                    auto& cp = P.cores[b * geo.preaders + kk * geo.mfac + sub];
-                    cp.rs_pos = kk;
-                    cp.rs_own_chunk = kk;
-                }
-            }
-        }
-    } else if (rscatter) {
+    if (rscatter) {
         namespace expdev = tt::tt_metal::experimental::Device;
         for (uint32_t b = 0; b < 8u; ++b) {
             for (uint32_t sub = 0; sub < geo.mfac; ++sub) {
@@ -1589,8 +1477,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     mkcb(program, all_cores, 1, cb.cb1_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1 (depth 4)
     mkcb(program, all_cores, 2, cb.cb2_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // out
     mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
-    if (cb.cb7_tiles > 0u && !rscatter) {
-        // cb7 is the CHAIN's running-sum buffer; reduce-scatter never touches it, so don't spend the L1.
+    if (cb.cb7_tiles > 0u) {
         mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1)
     }
     // Fused-epilogue operand CBs (only when the matching fusion is active). c_4 bias [1,N_sub], c_5 residual
@@ -1613,29 +1500,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // global epoch mod 2 and every CB operation moves a whole max-size slot, so the FIFO period and the remote
     // write stride are the same value by construction.
     const uint32_t rs_max_chunk = rscatter ? ((out_blk_tiles + Pk - 1u) / Pk) : 0u;
-    if (rscatter && rs_striped) {
-        // c_4 = bf16 image of this core's whole sub-block partial (the writer sends stripe j of it to owner j).
-        // c_5 = DOUBLE-BUFFERED receive: 2 generations x Pk sender slots x stripe_tiles, so a sender can fill
-        //       generation nb while the owner is still reducing generation nb-1.
-        mkcb(program, all_cores, 4, 2u * out_blk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
-        mkcb(program, all_cores, 5, 2u * Pk * rs_stripe_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
-        // c_6 = bf16 copy of an owner's OWN stripe, so its reduction has a single input format (a mixed
-        // fp32-seed / bf16-add reduce measured PCC 0.26). Spare CB when unfused.
-        mkcb(program, all_cores, 6, rs_stripe_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
-    } else if (rscatter && rs_direct) {
-        // c_4 = bf16 image of this core's WHOLE sub-block partial (2 deep, so compute can build the next one
-        //       while the writer is still scattering the current one); the writer sends slice q of it to peer q.
-        // c_5 = Pk receive slots, one per source position (including a loopback slot for this core itself, so
-        //       every slot is a uniform partial and the reduce has no special case).
-        mkcb(program, all_cores, 4, 2u * out_blk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
-        mkcb(program, all_cores, 5, Pk * rs_max_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
-    } else if (rscatter && rs_striped) {
-        // c_4 = bf16 image of this core's whole sub-block partial (the writer sends stripe j of it to owner j).
-        // c_5 = DOUBLE-BUFFERED receive: 2 generations x Pk sender slots x stripe_tiles, so a sender can fill
-        //       generation nb while the owner is still reducing generation nb-1.
-        mkcb(program, all_cores, 4, 2u * out_blk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
-        mkcb(program, all_cores, 5, 2u * Pk * rs_stripe_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
-    } else if (rscatter) {
+    if (rscatter) {
         mkcb(program, all_cores, 4, 2u * rs_max_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
         mkcb(program, all_cores, 5, 2u * rs_max_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
     }
@@ -1644,21 +1509,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t fwd_sem = CreateSemaphore(program, all_cores, 0u);      // in0 ring recv
     const uint32_t red_sem = CreateSemaphore(program, all_cores, 0u);      // reduction recv (shared counter)
     const uint32_t redfree_sem = CreateSemaphore(program, all_cores, 0u);  // cb_reduce reverse credit
-    // Striped owner-gather splits arrivals across TWO counters (by sender position) so an owner can start
-    // reducing the first half of its partials while the second half is still in flight.
-    uint32_t rs_b_sem = 0u;
-    // PER-OWNER credit counters. One shared counter is WRONG: an owner that runs ahead accumulates credits that
-    // satisfy a sender's threshold even when a DIFFERENT owner has not yet freed its receive buffer, so the
-    // sender overwrites live data (measured: PCC 0.996 / nan once N_bpc > 1). Each owner therefore gets its own
-    // counter and a sender must see nb-1 on EVERY owner it writes to. redfree_sem serves as owner 0's counter.
-    std::vector<uint32_t> rs_cred_sem;
-    if (rscatter && rs_striped) {
-        rs_b_sem = CreateSemaphore(program, all_cores, 0u);
-        rs_cred_sem.push_back(redfree_sem);
-        for (uint32_t j = 1; j < rs_S; ++j) {
-            rs_cred_sem.push_back(CreateSemaphore(program, all_cores, 0u));
-        }
-    }
     uint32_t in1valid_sem = 0u, in1ready_sem = 0u;                         // M-split reader<->slaves
     if (Sm > 1u) {
         in1valid_sem = CreateSemaphore(program, all_cores, 0u);
@@ -1953,41 +1803,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             wa.push_back(cp.rs_own_chunk);  // 21 tile-chunk index this core owns + writes
             wa.push_back(Pk);               // 22 cycle size
             wa.push_back(rs_T);             // 23 sub-block tiles (kernel derives the chunk sizes)
-            if (rs_striped) {
-                // 24+: S, my group position, my owned stripe (== S when this core owns none), the A/B sender
-                // split point, the B-arrival semaphore id, then the S owner POSITIONS, then all Pk group-member
-                // coords in position order. Senders index members by position; there is no loopback write.
-                const uint32_t bnk = i / geo.preaders;
-                const uint32_t sub = (i % geo.preaders) % geo.mfac;
-                const uint32_t gkey = (bnk * geo.mfac + sub) * rs_S;
-                wa.push_back(rs_S);             // 24
-                wa.push_back(cp.rs_pos);        // 25
-                wa.push_back(rs_stripe_of[i]);  // 26
-                wa.push_back(Pk / 2u);          // 27
-                wa.push_back(rs_b_sem);         // 28
-                for (uint32_t j = 0; j < rs_S; ++j) {
-                    wa.push_back(rs_owner_of[gkey + j]);
-                }
-                for (uint32_t j = 0; j < rs_S; ++j) {
-                    wa.push_back(rs_cred_sem[j]);  // per-owner credit counter ids
-                }
-                for (uint32_t kk = 0; kk < Pk; ++kk) {
-                    const auto pc = phys(bnk * geo.preaders + kk * geo.mfac + sub);
-                    wa.push_back(pc.x);
-                    wa.push_back(pc.y);
-                }
-            } else if (rs_direct) {
-                // 24+: coords of ALL Pk group members in position order, INCLUDING this core itself. The
-                // writer loops over every position and writes slice q to member q, so the loopback write
-                // fills its own receive slot and every slot the reduce reads is a uniform partial.
-                const uint32_t bnk = i / geo.preaders;
-                const uint32_t sub = (i % geo.preaders) % geo.mfac;
-                for (uint32_t kk = 0; kk < Pk; ++kk) {
-                    const auto pc = phys(bnk * geo.preaders + kk * geo.mfac + sub);
-                    wa.push_back(pc.x);
-                    wa.push_back(pc.y);
-                }
-            }
         }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
@@ -2002,11 +1817,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             ca.push_back(cp.rs_pos);       // my position in the Pk cycle
             ca.push_back(Pk);              // cycle size
             ca.push_back(rs_T);            // sub-block tiles (kernel derives the chunk sizes)
-            if (rs_striped) {
-                ca.push_back(rs_S);             // stripe count
-                ca.push_back(rs_stripe_of[i]);  // my owned stripe (rs_S => non-owner: no reduce, no output)
-                ca.push_back(Pk / 2u);          // A/B split point for the incremental reduce
-            }
         }
         if (has_bias || has_ternary || has_activation) {
             ca.push_back(cp.is_top ? 1u : 0u);
