@@ -165,6 +165,7 @@ class OptimizedDecoder(LightweightModule):
         rope_tables: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]],
         decode_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
         decode_core_count: int = 16,
+        decode_max_in0_block_w: int = 16,
         split_qkv_weights: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None,
         split_gate_up_weights: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> None:
@@ -231,36 +232,42 @@ class OptimizedDecoder(LightweightModule):
             k=config.hidden_size,
             n=QKV_SIZE,
             num_cores=decode_core_count,
+            max_in0_block_w=decode_max_in0_block_w,
         )
         self.decode_o_program_config = _dram_matmul_config(
             m=TILE_SIZE,
             k=config.hidden_size,
             n=config.hidden_size,
             num_cores=decode_core_count,
+            max_in0_block_w=decode_max_in0_block_w,
         )
         self.decode_gate_up_program_config = _dram_matmul_config(
             m=TILE_SIZE,
             k=config.hidden_size,
             n=2 * config.intermediate_size,
             num_cores=decode_core_count,
+            max_in0_block_w=decode_max_in0_block_w,
         )
         self.decode_down_program_config = _dram_matmul_config(
             m=TILE_SIZE,
             k=config.intermediate_size,
             n=config.hidden_size,
             num_cores=decode_core_count,
+            max_in0_block_w=decode_max_in0_block_w,
         )
         self.decode_split_hidden_program_config = _dram_matmul_config(
             m=TILE_SIZE,
             k=config.hidden_size,
             n=config.hidden_size,
             num_cores=decode_core_count,
+            max_in0_block_w=decode_max_in0_block_w,
         )
         self.decode_split_intermediate_program_config = _dram_matmul_config(
             m=TILE_SIZE,
             k=config.hidden_size,
             n=config.intermediate_size,
             num_cores=decode_core_count,
+            max_in0_block_w=decode_max_in0_block_w,
         )
 
     @classmethod
@@ -278,6 +285,7 @@ class OptimizedDecoder(LightweightModule):
         mlp_weight_dtype: ttnn.DataType | None = None,
         decode_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
         decode_core_count: int = 16,
+        decode_max_in0_block_w: int = 16,
         split_qkv: bool = False,
         split_gate_up: bool = True,
         **_: object,
@@ -393,6 +401,7 @@ class OptimizedDecoder(LightweightModule):
             rope_tables=rope_tables,
             decode_math_fidelity=decode_math_fidelity,
             decode_core_count=decode_core_count,
+            decode_max_in0_block_w=decode_max_in0_block_w,
             split_qkv_weights=split_qkv_weights,
             split_gate_up_weights=split_gate_up_weights,
         )
@@ -861,7 +870,7 @@ class OptimizedDecoder(LightweightModule):
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=cfg.dtype,
-            memory_config=gate.memory_config(),
+            memory_config=self.decode_mlp_intermediate_mem_config if is_decode else ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
@@ -1077,10 +1086,10 @@ def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
 
 
 def _dram_matmul_config(
-    *, m: int, k: int, n: int, num_cores: int
+    *, m: int, k: int, n: int, num_cores: int, max_in0_block_w: int
 ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
     return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=_find_largest_divisor(k // (TILE_SIZE * num_cores), max_divisor=16),
+        in0_block_w=_find_largest_divisor(k // (TILE_SIZE * num_cores), max_divisor=max_in0_block_w),
         per_core_M=math.ceil(m / TILE_SIZE),
         per_core_N=math.ceil(n / (TILE_SIZE * num_cores)),
         fused_activation=None,

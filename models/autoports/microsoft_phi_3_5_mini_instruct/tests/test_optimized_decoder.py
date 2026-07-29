@@ -175,6 +175,7 @@ def _decode_candidate_kwargs():
         "mlp_weight_dtype": dtype,
         "decode_math_fidelity": fidelity,
         "decode_core_count": int(os.getenv("PHI35_DECODE_CORE_COUNT", "16")),
+        "decode_max_in0_block_w": int(os.getenv("PHI35_DECODE_MAX_IN0_BLOCK_W", "16")),
         "split_qkv": os.getenv("PHI35_SPLIT_QKV") == "1",
         "split_gate_up": os.getenv("PHI35_SPLIT_GATE_UP", "1") == "1",
     }
