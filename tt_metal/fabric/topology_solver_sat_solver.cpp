@@ -26,6 +26,10 @@ struct TopologySatSolver::Impl {
 
     void assume(int lit) { solver.assume(lit); }
 
+    void phase(int lit) { solver.phase(lit); }
+
+    void unphase(int lit) { solver.unphase(lit); }
+
     int solve() { return solver.solve(); }
 
     int solve_limited(int max_conflicts) {
@@ -56,6 +60,8 @@ void TopologySatSolver::configure_for_blocking_clause_enumeration() {
     (void)impl_->solver.set("ilb", 2);
 }
 
+bool TopologySatSolver::set_option(const std::string& name, int value) { return impl_->solver.set(name.c_str(), value); }
+
 TopologySatSolver::~TopologySatSolver() = default;
 
 TopologySatSolver::TopologySatSolver(TopologySatSolver&&) noexcept = default;
@@ -78,6 +84,10 @@ void TopologySatSolver::add(int lit) {
 }
 
 void TopologySatSolver::assume(int lit) { impl_->assume(lit); }
+
+void TopologySatSolver::phase(int lit) { impl_->phase(lit); }
+
+void TopologySatSolver::unphase(int lit) { impl_->unphase(lit); }
 
 int TopologySatSolver::solve() { return impl_->solve(); }
 

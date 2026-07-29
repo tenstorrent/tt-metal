@@ -38,6 +38,11 @@ struct TopologySatSolver {
     // Assume a literal for the next solve() only (retracted afterwards). Lets callers add a symmetry-breaking hint
     // that is sound for any instance: if the assumption makes it UNSAT, re-solve() without it.
     void assume(int lit);
+    // Force the preferred decision phase of variable |lit| to the sign of lit (sticky across solves until unphase).
+    // Used to warm-start a harder incremental solve from an earlier feasible model, so CDCL branches toward that
+    // model first and only "repairs" the newly added constraints instead of re-searching from scratch.
+    void phase(int lit);
+    void unphase(int lit);
     int solve();
     // Solve capped at `max_conflicts` conflicts. Returns kSat / kUnsat, or 0 (IPASIR "unknown") when the budget
     // is exhausted before a verdict. Lets a caller try an optional/expensive constraint (a tight host-budget
@@ -51,6 +56,10 @@ struct TopologySatSolver {
      * Tunes CaDiCaL for AllSAT-style enumeration: repeated solve() after permanent blocking clauses.
      */
     void configure_for_blocking_clause_enumeration();
+
+    // Set a CaDiCaL option (e.g. "seed", "target"). Returns false if the option/value is rejected. Used by the
+    // Goal-1 base-embedding speedup experiments (TT_TOPO_SAT_SEED / TT_TOPO_SAT_FASTSAT). No-op-safe.
+    bool set_option(const std::string& name, int value);
 
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;
