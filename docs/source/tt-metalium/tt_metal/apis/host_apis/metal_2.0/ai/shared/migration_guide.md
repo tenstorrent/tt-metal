@@ -168,7 +168,7 @@ Two structural additions vs. `ProgramDescriptor`:
 `KernelSpec` replaces `KernelDescriptor`. Notes:
 
 1. **Placement.** The kernel's effective node set is derived from the `WorkUnitSpec`(s) that include it.
-2. **Runtime arguments.** The `KernelSpec` declares a runtime arguments _schema_; runtime-arg _values_ are supplied per execution through `ProgramRunArgs` or `ProgramRunArgsView`.
+2. **Runtime arguments.** The `KernelSpec` declares a runtime arguments _schema_; runtime-arg _values_ are supplied per execution through `ProgramRunArgs`.
 3. **Resource bindings.** New syntax to bind DFB endpoints, semaphores, and tensors to the kernel, and retrieve them by name in device code. (See [TensorParameter](#tensorparameter) for the tensor case.)
 4. **Multiple `KernelSpec`s per source.** A single kernel source file may be represented by multiple `KernelSpec`s if structural specialization is needed (different CTA bindings, different DFB or semaphore bindings, etc.). Each `KernelSpec` is compiled and placed independently.
 
@@ -211,7 +211,7 @@ KernelSpec reader{
     // variant over a Gen1 (WH/BH) and a Gen2 config; the reader/writer helpers
     // build the Gen1 alternative for you. Reach for a raw DataMovementGen1Config
     // only when the kernel's (processor, NOC) matches neither default.
-    .hw_config = CreateReader1xxDataMovementConfig(),
+    .hw_config = CreateReaderGen1DataMovementConfig(),
 };
 
 // ----- WorkUnitSpec: kernel placement and worker assignments -----
@@ -1025,7 +1025,7 @@ KernelSpec reader{
     }},
     .compile_time_args = {{"page_size", page_size}},
     .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
-    .hw_config = CreateReader1xxDataMovementConfig(),
+    .hw_config = CreateReaderGen1DataMovementConfig(),
 };
 
 KernelSpec writer{
@@ -1042,7 +1042,7 @@ KernelSpec writer{
     }},
     .compile_time_args = {{"page_size", page_size}},
     .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
-    .hw_config = CreateWriter1xxDataMovementConfig(),
+    .hw_config = CreateWriterGen1DataMovementConfig(),
 };
 
 DataflowBufferSpec dfb{
@@ -1205,7 +1205,7 @@ Common pitfalls when migrating from `ProgramDescriptor`:
 - **Local DFB invariant.** A local DFB's producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
 - **Compile-time arguments are named only.** Positional CTAs are not part of the Metal 2.0 API; use named CTAs throughout.
 - **Runtime varargs are for indexed-collection elements.** `num_runtime_varargs` / `num_common_runtime_varargs` fit an argument reached **by index** — a variable-count loop, or a data-selected index. A **distinct field read a fixed number of times** is a named RTA (see the [patterns caution](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary) for the `arg_index++` / separate-section subtleties).
-- **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunArgs` to error. The same applies to varargs. (Note: There is also a power-user `ProgramRunArgsView` API that provides a stateful view into the dispatch buffers; it is not yet supported.)
+- **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunArgs` to error. The same applies to varargs.
 
 ### Cryptic error → likely cause
 
