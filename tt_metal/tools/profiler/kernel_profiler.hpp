@@ -139,8 +139,10 @@ constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 
 // SPSC ring geometry for this RISC.
 constexpr uint32_t RING_CAPACITY = PROFILER_L1_VECTOR_SIZE;                // words (= data[] length)
-constexpr uint32_t TAIL_INDEX = DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID;  // producer (this RISC)
-constexpr uint32_t HEAD_INDEX = HOST_BUFFER_END_INDEX_BR_ER + myRiscID;    // consumer (X280)
+// SPSC layout, NOT the DRAM profiler's HOST_/DEVICE_BUFFER_END_INDEX_* slots -- see SpscControlBuffer.
+constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;  // producer (this RISC)
+constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;  // consumer (X280)
+static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
 constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
     return n == 0 ? basis : Hash32_CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));

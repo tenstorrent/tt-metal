@@ -105,19 +105,6 @@ enum ControlBuffer {
     HOST_BUFFER_END_INDEX_T1,
     HOST_BUFFER_END_INDEX_T2,
     // slots [5, PROFILER_MAX_RISC_COUNT) reserved for additional processors (e.g. Quasar DM/Neo)
-    //
-    // Host->kernel terminate signal (SPSC/X280 backend): set at teardown when the X280 consumer is
-    // stopping. While clear, a producing RISC BLOCKS on a full ring (lossless). While set, the producer
-    // stops blocking and proceeds, so a dispatch core cannot get stuck in ring_ensure_room and wedge
-    // wait_until_cores_done() during device close.
-    //
-    // It borrows the TOP of that reserved band instead of being appended to the end of this enum,
-    // because the control vector has NO room to grow: on Wormhole sizeof(mailboxes_t) is EXACTLY
-    // MEM_MAILBOX_SIZE (13296 bytes, measured), so appending even one slot trips wh_hal_tensix's
-    // static_assert (and 8-byte padding makes the true cost of +1 word 16 bytes). The band is reserved
-    // for processors 5..23, which exist only on Quasar -- and the SPSC backend is never compiled there
-    // (see the arch dispatch at the top of kernel_profiler.hpp), so on tt-1xx these slots are dead space.
-    PROFILER_TERMINATE = PROFILER_MAX_RISC_COUNT - 1,
     DEVICE_BUFFER_END_INDEX_BR_ER = PROFILER_MAX_RISC_COUNT,
     DEVICE_BUFFER_END_INDEX_NC,
     DEVICE_BUFFER_END_INDEX_T0,
@@ -145,6 +132,39 @@ enum ControlBuffer {
     DRAM_PROFILER_ADDRESS_T0_0,
     DRAM_PROFILER_ADDRESS_T1_0,
     DRAM_PROFILER_ADDRESS_T2_0,
+};
+
+// ---- SPSC / X280 backend control-word layout ------------------------------------------------------
+// The X280 backend overlays its OWN layout on the same profiler control vector. It deliberately does not
+// reuse ControlBuffer's HOST_/DEVICE_BUFFER_END_INDEX_* slots, and deliberately derives nothing from
+// PROFILER_MAX_RISC_COUNT: those are the DRAM profiler's DRAM-readout bookkeeping and its processor count,
+// and this backend has no stake in either.
+//
+// That coupling was not hypothetical. Upstream raised PROFILER_MAX_RISC_COUNT from 5 to 24 for Quasar,
+// which silently relocated this backend's ring tails from words 5..9 to 24..28 while the X280 firmware
+// still read 5..9. Those became dead reserved slots reading 0, so tail always equalled head: nothing ever
+// drained, the worker L1 rings filled, and every producing RISC blocked forever. A constant belonging to
+// the other backend moved this one's flow-control words.
+//
+// Overlaying the same physical words is safe because the two backends are mutually exclusive: perf_debug
+// stands the DRAM profiler down (profiler.cpp getDeviceProfilerState()) and the SPSC producer replaces the
+// DRAM producer outright on every arch it compiles for.
+//
+// Sized for the widest processor count -- including Quasar's 24 -- so the layout is arch-uniform and the
+// host indexes it identically everywhere, whatever the DRAM side later does with its own count.
+static constexpr std::uint32_t PROFILER_SPSC_MAX_RISC = 24;
+
+enum SpscControlBuffer {
+    // [0, PROFILER_SPSC_MAX_RISC): ring HEAD per RISC -- consumer-written (X280), monotonic word count.
+    SPSC_RING_HEAD_0 = 0,
+    // [PROFILER_SPSC_MAX_RISC, 2*): ring TAIL per RISC -- producer-written, monotonic word count.
+    SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC,
+    // Host->kernel terminate signal: set at teardown when the X280 consumer is stopping. While clear, a
+    // producing RISC BLOCKS on a full ring (lossless). While set, the producer stops blocking and
+    // proceeds, so a dispatch core cannot get stuck in ring_ensure_room and wedge wait_until_cores_done()
+    // during device close.
+    PROFILER_TERMINATE = 2 * PROFILER_SPSC_MAX_RISC,
+    SPSC_CONTROL_END,  // first unused word; grow the layout here
 };
 
 // STICKY_META (SPSC/X280 backend): an 8B context packet emitted once per RISC per launch at the main
@@ -187,13 +207,12 @@ struct TimestampedDataSize<TS_DATA_16B> {
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 64;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
 
-// Guards this backend's own slot. Deliberately not asserted on DRAM_PROFILER_ADDRESS_T2_0: that entry is
-// already out of bounds upstream (see above), so asserting it would fail the build on a defect this
-// branch neither introduced nor can fix here.
+// Bounds the SPSC backend's whole control block. Deliberately not asserted on
+// DRAM_PROFILER_ADDRESS_T2_0: that entry is already out of bounds upstream (see above), so asserting it
+// would fail the build on a defect this branch neither introduced nor can fix here.
 static_assert(
-    PROFILER_TERMINATE < PROFILER_L1_CONTROL_VECTOR_SIZE &&
-        PROFILER_TERMINATE >= 5,  // inside the [5, PROFILER_MAX_RISC_COUNT) reserved band, not a real RISC slot
-    "PROFILER_TERMINATE must live in the reserved processor band and inside the L1 control vector");
+    SPSC_CONTROL_END <= PROFILER_L1_CONTROL_VECTOR_SIZE,
+    "SPSC/X280 control layout overflows the profiler L1 control vector");
 // Governs the L1 buffer SIZING (part of mailboxes_t, which is L1-size-bounded) and the DRAM path.
 // The X280 SPSC markers are 4 words (see SPSC_MARKER_WORDS in kernel_profiler.hpp) but this stays 2
 // so the L1 profiler ring keeps its size (holding 128 4-word markers instead of 256 2-word ones).
