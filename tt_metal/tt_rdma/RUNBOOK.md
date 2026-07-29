@@ -97,8 +97,25 @@ no send errors. So SG zero-copy is **not** the line-rate lever; kept gated OFF f
 line-rate path = contiguous single-buf with NO per-send memcpy** (doca_ttblast hits 143–198G that way): land
 the RoCE payload directly into a TX-ready frame slot (reserve 46B header space in the responder MR; unify the
 RX landing ring with the TX frame ring), then TX single-buf. Bigger restructure — deferred. **Production
-egress = B3.1a batched-copy (~39–56G).** **Next:** B2 (MR federation via RISC1 doorbell 3.1e); land-into-frame
-contiguous egress if egress BW must exceed ~56G.
+egress = B3.1a batched-copy (~39–56G).**
+
+### DPA egress — full Arm offload (Phase A1, ✅ ~178G, 2026-07-28)
+Move the re-head EGRESS onto the BF3 **DPA** (FlexIO) so the Arm does ZERO per-frame work. Prototype =
+`gw/dpa_ttblast/dpa_ttblast.patch` over the stock FlexIO `packet_processor` sample: the DPA kernel gains
+`tt_blast()` (build one 0x1AF6 WRITE frame + CRC, post `count` sends on its ETH SQ, SQ-CQ paced) invoked
+host→DPA via `flexio_process_call` (a `__dpa_rpc__` entry). Deploy (provisions meson/ninja wheels to the
+offline DPU, applies the patch, builds via dpacc+meson):
+```
+bash tt_metal/tt_rdma/gw/deploy_dpa_ttblast.sh            # build -> ~/flexio_samples/build/.../flexio_packet_processor
+bash tt_metal/tt_rdma/gw/deploy_dpa_ttblast.sh --run      # blast 500k x 4080B jumbo on mlx5_0
+```
+**Measured ~178 Gbps jumbo (5.38 Mpps), Arm-free** (vs B3.1a copy ~56G, raw ~13G) → full offload is line-rate.
+BH lands it exactly-once, drop=0. **Gotchas:** (1) it's `flexio_process_call`, NOT an event handler (which
+only fires on an RX CQE). (2) the stock TX→vport rule matches **dst MAC == SMAC**, so A1 sends with dst=SMAC
+(02:42:7e:7f:eb:02); the BH still routes unicast-"other" → RXQ2. Phase C changes the rule to keep dst=BH.
+(3) DPA runs on the PF (mlx5_0), not the SF. **Next (DPA):** A2 (per-frame read landed payload) → A3 (trigger
+off the RoCE RQ completion; SF-RoCE vs PF-DPA cross-device) → A4 full re-head → A5 perf.
+**Next (egress overall):** B2 (MR federation via RISC1 doorbell 3.1e).
 
 ## 4. Regression / perf gates (run every phase change)
 ```

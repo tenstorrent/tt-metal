@@ -1,0 +1,262 @@
+--- a/packet_processor/flexio_packet_processor_com.h
++++ b/packet_processor/flexio_packet_processor_com.h
+@@ -44,8 +44,8 @@
+ /* Depth of SQ is (1 << LOG_SQ_DEPTH) */
+ #define LOG_SQ_DEPTH 7
+ 
+-/* Size of WQD is (1 << LOG_WQD_CHUNK_BSIZE) */
+-#define LOG_WQD_CHUNK_BSIZE 11
++/* Size of WQD is (1 << LOG_WQD_CHUNK_BSIZE). 13 -> 8192B fits jumbo (4126B); must match host LOG_Q_DATA_ENTRY_BSIZE. */
++#define LOG_WQD_CHUNK_BSIZE 13
+ 
+ /* Structure for transfer CQ data */
+ struct app_transfer_cq {
+@@ -83,6 +83,12 @@
+ 	struct app_transfer_cq sq_cq_transf;
+ 	/* SQ transfer information. */
+ 	struct app_transfer_wq sq_transf;
++	/* ---- TT-RDMA A1 blast params (host -> DPA) ---- */
++	uint8_t tt_dmac[6];    /* BH RXQ2 dest MAC (02:..:02) */
++	uint8_t tt_smac[6];    /* uplink src MAC (== SMAC, matches the TX steering rule) */
++	uint32_t tt_count;     /* number of TT-RDMA frames to blast (0 => original RX-reflect demo) */
++	uint32_t tt_plen;      /* TT-RDMA payload bytes per frame */
++	uint32_t tt_rkey;      /* TT-RDMA rkey -> BH MR slot (0x00CAFE42) */
+ 	uint8_t not_first_run;
+ } __attribute__((__packed__, aligned(8)));
+ 
+--- a/packet_processor/dev/flexio_packet_processor_dev.c
++++ b/packet_processor/dev/flexio_packet_processor_dev.c
+@@ -178,6 +178,104 @@
+ 	flexio_dev_dbr_rq_inc_pi(app_ctx.rq_ctx.rq_dbr);
+ }
+ 
++/* ---- TT-RDMA A1: DPA-originated TT-RDMA WRITE blast (the doca_ttblast-on-DPA equivalent) ---- */
++
++/* CRC-32 (reflected 0xEDB88320) over header bytes [0..27] -- matches tt_crc32 / the BH RX cksum. */
++static uint32_t tt_crc32(const uint8_t *p, uint32_t n)
++{
++	uint32_t crc = 0xFFFFFFFFu;
++	for (uint32_t i = 0; i < n; i++) {
++		crc ^= p[i];
++		for (int b = 0; b < 8; b++) {
++			uint32_t m = (uint32_t)(-(int32_t)(crc & 1u));
++			crc = (crc >> 1) ^ (0xEDB88320u & m);
++		}
++	}
++	return crc ^ 0xFFFFFFFFu;
++}
++static void tt_put32(uint8_t *p, uint32_t v)
++{
++	p[0] = v & 0xff;
++	p[1] = (v >> 8) & 0xff;
++	p[2] = (v >> 16) & 0xff;
++	p[3] = (v >> 24) & 0xff;
++}
++
++/* Build one TT-RDMA WRITE frame into a data buffer, then post `tt_count` sends on the SQ. Paced by the SQ CQ:
++ * the last send of each batch is signaled (CQE_ALWAYS) and we wait for that CQE before posting the next batch,
++ * so the SQ (128 WQEBBs / 4 = 32 sends) never overruns. The same read-only frame buffer is reused for every
++ * send (constant content), so there is no per-frame memcpy on the DPA. */
++static void tt_blast(struct host2dev_packet_processor_data *d)
++{
++	const uint32_t plen = d->tt_plen;
++	const uint32_t flen = 14u + 32u + plen;
++	const uint32_t BATCH = 16u; /* <= SQ send capacity */
++
++	/* Prefill the frame once. */
++	uint8_t *f = (uint8_t *)get_next_dte(&app_ctx.dt_ctx, DATA_IDX_MASK, LOG_WQD_CHUNK_BSIZE);
++	for (int i = 0; i < 6; i++)
++		f[i] = d->tt_dmac[i];
++	for (int i = 0; i < 6; i++)
++		f[6 + i] = d->tt_smac[i];
++	f[12] = 0x1a;
++	f[13] = 0xf6;
++	uint8_t *h = f + 14;
++	h[0] = 0x10; /* WRITE opcode */
++	h[1] = 0x01; /* ver=1 */
++	h[2] = 0;
++	h[3] = 0;
++	tt_put32(h + 4, plen);        /* length */
++	tt_put32(h + 8, 1);           /* seq */
++	tt_put32(h + 12, d->tt_rkey); /* rkey -> MR slot */
++	tt_put32(h + 16, 0);          /* remote_offset lo */
++	tt_put32(h + 20, 0);          /* remote_offset hi */
++	tt_put32(h + 24, 0);          /* imm */
++	tt_put32(h + 28, tt_crc32(h, 28));
++	for (uint32_t i = 0; i < plen; i++)
++		h[32 + i] = (uint8_t)i;
++
++	uint32_t sent = 0;
++	while (sent < d->tt_count) {
++		uint32_t b = d->tt_count - sent;
++		if (b > BATCH)
++			b = BATCH;
++		for (uint32_t j = 0; j < b; j++) {
++			union flexio_dev_sqe_seg *swqe = get_next_sqe(&app_ctx.sq_ctx, SQ_IDX_MASK);
++			flexio_dev_swqe_seg_ctrl_set(swqe, app_ctx.sq_ctx.sq_pi, app_ctx.sq_ctx.sq_number,
++						     (j == b - 1) ? FLEXIO_CTRL_SEG_CE_CQE_ALWAYS
++								  : FLEXIO_CTRL_SEG_CE_CQE_ON_CQE_ERROR,
++						     FLEXIO_CTRL_SEG_TYPE_SEND_EN);
++			swqe = get_next_sqe(&app_ctx.sq_ctx, SQ_IDX_MASK);
++			flexio_dev_swqe_seg_eth_set(swqe, 0, 0, 0, NULL);
++			swqe = get_next_sqe(&app_ctx.sq_ctx, SQ_IDX_MASK);
++			flexio_dev_swqe_seg_mem_ptr_data_set(swqe, flen, app_ctx.lkey, (uint64_t)f);
++			swqe = get_next_sqe(&app_ctx.sq_ctx, SQ_IDX_MASK); /* 4th WQEBB (skip) */
++			app_ctx.sq_ctx.sq_pi++;
++		}
++		__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
++		flexio_dev_qp_sq_ring_db(app_ctx.sq_ctx.sq_pi, app_ctx.sq_ctx.sq_number);
++		__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
++		/* Wait for the batch's signaled completion. */
++		while (flexio_dev_cqe_get_owner(app_ctx.sq_cq_ctx.cqe) != app_ctx.sq_cq_ctx.cq_hw_owner_bit)
++			;
++		com_step_cq(&app_ctx.sq_cq_ctx);
++		sent += b;
++	}
++	flexio_dev_print("TT-RDMA blast done: %u frames x %uB\n", sent, flen);
++}
++
++/* Host-invokable RPC entry (flexio_process_call): runs the blast synchronously. `arg` is the DPA-heap address
++ * of the host2dev_packet_processor_data struct (== app_data_daddr on the host). */
++uint64_t tt_blast_rpc(uint64_t arg);
++__dpa_rpc__ uint64_t tt_blast_rpc(uint64_t arg)
++{
++	struct host2dev_packet_processor_data *d = (void *)arg;
++
++	app_ctx_init(d);
++	tt_blast(d);
++	return d->tt_count;
++}
++
+ /* Entry point function that host side call for the execute.
+  *  thread_arg - pointer to the host2dev_packet_processor_data structure
+  *     to transfer data from the host side.
+@@ -194,6 +292,12 @@
+ 		data_from_host->not_first_run = 1;
+ 	}
+ 
++	/* TT-RDMA A1: if a blast count was requested, originate TT-RDMA WRITE frames and finish (no RX). */
++	if (data_from_host->tt_count) {
++		tt_blast(data_from_host);
++		return;
++	}
++
+ 	/* Poll CQ until the package is received.
+ 	 */
+ 	while (flexio_dev_cqe_get_owner(app_ctx.rq_cq_ctx.cqe) !=
+--- a/packet_processor/host/flexio_packet_processor_host.c
++++ b/packet_processor/host/flexio_packet_processor_host.c
+@@ -36,6 +36,9 @@
+ /* Used for geteuid function. */
+ #include <unistd.h>
+ 
++/* TT-RDMA A1: blast timing. */
++#include <time.h>
++
+ /* Used for host (x86/DPU) memory allocations. */
+ #include <malloc.h>
+ 
+@@ -59,6 +62,8 @@
+ 
+ /* Flex IO packet processor device (DPA) side function stub. */
+ extern flexio_func_t flexio_pp_dev;
++/* TT-RDMA A1: DPA-side RPC blast entry, invoked synchronously via flexio_process_call. */
++extern flexio_func_t tt_blast_rpc;
+ 
+ /* Application context struct holding necessary host side variables. */
+ struct app_context {
+@@ -178,8 +183,8 @@
+ /* Number of entries in each RQ/SQ/CQ is 2^LOG_Q_DEPTH. */
+ #define LOG_Q_DEPTH 7
+ #define Q_DEPTH L2V(LOG_Q_DEPTH)
+-/* SQ/RQ data entry byte size is 512B (enough for packet data in this case). */
+-#define LOG_Q_DATA_ENTRY_BSIZE 11
++/* SQ/RQ data entry byte size. 13 -> 8192B fits jumbo TT-RDMA frames; must match com LOG_WQD_CHUNK_BSIZE. */
++#define LOG_Q_DATA_ENTRY_BSIZE 13
+ /* SQ/RQ data entry byte size log to value. */
+ #define Q_DATA_ENTRY_BSIZE L2V(LOG_Q_DATA_ENTRY_BSIZE)
+ /* SQ/RQ DATA byte size is queue depth times entry byte size. */
+@@ -716,6 +721,31 @@
+ 	h2d_data->rq_cq_transf = app_ctx->rq_cq_transf;
+ 	/* Set RQ's information. */
+ 	h2d_data->rq_transf = app_ctx->rq_transf;
++
++	/* ---- TT-RDMA A1 blast params (env-driven; TTDPA_COUNT>0 turns the DPA into a TT-RDMA blaster) ---- */
++	{
++		const char *c = getenv("TTDPA_COUNT");
++		const char *p = getenv("TTDPA_PLEN");
++		const char *r = getenv("TTDPA_RKEY");
++		const char *dm = getenv("TTDPA_DMAC");
++		unsigned m[6] = {0x02, 0, 0, 0, 0, 0x02};
++		uint64_t smac = SMAC; /* src MAC must match the TX steering rule (create_rule_tx_fwd_to_vport(SMAC)) */
++		int i;
++		if (dm)
++			sscanf(dm, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]);
++		for (i = 0; i < 6; i++) {
++			h2d_data->tt_dmac[i] = (uint8_t)m[i];
++			h2d_data->tt_smac[i] = (uint8_t)(smac >> (8 * (5 - i))); /* SMAC is big-endian 48-bit */
++		}
++		h2d_data->tt_count = c ? (uint32_t)strtoul(c, NULL, 0) : 0;
++		h2d_data->tt_plen = p ? (uint32_t)strtoul(p, NULL, 0) : 256;
++		h2d_data->tt_rkey = r ? (uint32_t)strtoul(r, NULL, 0) : 0x00CAFE42u;
++		if (h2d_data->tt_count)
++			printf("TT-RDMA blast: count=%u plen=%u rkey=0x%08x dmac=%02x:%02x:%02x:%02x:%02x:%02x\n",
++			       h2d_data->tt_count, h2d_data->tt_plen, h2d_data->tt_rkey, m[0], m[1], m[2], m[3], m[4],
++			       m[5]);
++	}
++
+ 	/* Set APP data info for first run. */
+ 	h2d_data->not_first_run = 0;
+ 
+@@ -1068,20 +1098,37 @@
+ 
+ 	printf("Ready to receive messages\n");
+ 
+-	/* Start event handler - move from the init state to the running state.
+-	 * Event handlers in the running state may be invoked by an incoming CQE.
+-	 * On other states, the invocation is blocked and lost.
+-	 * Pass the address of common information as a user argument to be used on the DPA side.
+-	 */
+-	if (flexio_event_handler_run(app_ctx.pp_eh, app_ctx.app_data_daddr)) {
+-		fprintf(stderr, "Failed to run event handler.\n");
+-		err = -1;
+-		goto cleanup;
+-	}
+-
+-	/* Wait for Enter - the DPA sample is running in the meanwhile */
+-	if (!fread(buf, 1, 1, stdin)) {
+-		fprintf(stderr, "Failed in fread\n");
++	/* TT-RDMA A1: if a blast count was requested, drive the DPA blast SYNCHRONOUSLY via flexio_process_call
++	 * (an event handler only fires on an RX CQE, which a pure TX blast never gets). Otherwise fall back to the
++	 * original event-handler RX-reflect demo. */
++	if (getenv("TTDPA_COUNT") && strtoul(getenv("TTDPA_COUNT"), NULL, 0) > 0) {
++		uint64_t func_ret = 0;
++		struct timespec t0, t1;
++
++		printf("TT-RDMA DPA blast: invoking flexio_process_call...\n");
++		clock_gettime(CLOCK_MONOTONIC, &t0);
++		if (flexio_process_call(app_fp, &tt_blast_rpc, &func_ret, app_ctx.app_data_daddr)) {
++			fprintf(stderr, "flexio_process_call(tt_blast_rpc) failed.\n");
++			err = -1;
++			goto cleanup;
++		}
++		clock_gettime(CLOCK_MONOTONIC, &t1);
++		{
++			double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
++			printf("TT-RDMA DPA blast returned: %lu frames in %.4fs = %.2f Mpps\n", func_ret, dt,
++			       dt > 0 ? func_ret / dt / 1e6 : 0.0);
++		}
++	} else {
++		/* Start event handler - invoked by an incoming CQE. */
++		if (flexio_event_handler_run(app_ctx.pp_eh, app_ctx.app_data_daddr)) {
++			fprintf(stderr, "Failed to run event handler.\n");
++			err = -1;
++			goto cleanup;
++		}
++		/* Wait for Enter - the DPA sample is running in the meanwhile */
++		if (!fread(buf, 1, 1, stdin)) {
++			fprintf(stderr, "Failed in fread\n");
++		}
+ 	}
+ 
+ cleanup:
