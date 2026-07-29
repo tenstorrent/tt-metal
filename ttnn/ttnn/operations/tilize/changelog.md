@@ -1073,3 +1073,354 @@ Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **153 passed** (120 p
 3. **File upstream: `noc_async_read_one_packet_with_state` + watcher = guaranteed hang** (issue 1).
    Any op adopting the one-packet stateful read will hit it, and the failure mode is a hang with no
    sanitizer message.
+
+---
+
+## Refinement 2 — Close the read-path transaction-overhead gap on the DM-bound interleaved regimes
+
+- **Date**: 2026-07-29
+- **Outcome**: **full (`[x]`)** via the entry's second gate clause. All three levers in this entry's
+  re-scoped set were implemented and measured **individually**; **B8 landed and pays 10–19 %** on four
+  bench regimes, and **B10 and A3 each carry a recorded measured-no-payoff verdict with its
+  counterfactual number** (B10 is a *regression* of up to 2.1×, A3 is neutral). The `b_wide_short`
+  ≥ 1.2× clause is **not** met and is now shown to be **unreachable by any per-transaction lever**:
+  tt-npe pins that regime at **103 % DRAM bandwidth utilisation with a 0.4 % congestion term**, i.e. it
+  is already at its achievable DRAM bound and the two congestion levers had ≤ 0.4 % available *a
+  priori*. The residual is decomposed and handed to **Refinement 2b**.
+
+### What was done
+
+**1. B8 — trid double-issue on the read path. LANDED, gated to two measured clauses.**
+
+The reader tags each chunk-block's 32 stick reads with one of two NoC transaction ids
+(`noc_async_read_set_trid`, which writes the sticky `NOC_PACKET_TAG` on NCRISC's read command buffer)
+and barriers with `noc_async_read_barrier_with_trid` on the **previous** id — so block *i+1*'s reads
+are already in flight while block *i* drains, instead of the NoC request queue emptying once per
+block. The pipeline is flattened over the whole `(chunk, block)` sequence, preserving the
+chunk-outer / tile-row-inner order the writer and compute both assume.
+
+This is the **read-side analogue of Phase-0 verification fix #1**, which replaced the writer's
+per-block `noc_async_write_barrier()` with `noc_async_writes_flushed()`. The writer can already keep
+writes in flight across a block boundary because it only needs them to have *departed*; the reader
+needs the bytes *present* before it pushes, and the second trid is what buys the same overlap.
+
+It needs a **third CB window**, and the reason is a real API limitation worth recording:
+`cb_reserve_back` does **not** move the FIFO write pointer, so `get_write_ptr` keeps returning the
+*current* block's window until `cb_push_back` — the reader cannot ask the CB for the next block's
+address before publishing the current one. The next window is therefore computed from the CB base
+(`cb_base + (block % depth) * chunk_bytes`, which is exactly where the FIFO's own pointer lands after
+`depth` pushes) and its freedom is guaranteed by reserving **two** windows. At depth 2 that reserve
+would demand a fully drained CB and serialise compute behind the reader, hence `depth == 3`.
+
+`chunk_wt` is **pinned** (Refinement 1's rule: a lever may not move the transaction shape behind the
+caller's back), so the third window costs 1.5× the CB L1 and the counterfactual differs in exactly one
+thing. B8 also only fires on the **delegated** default: `use_double_buffer=True/False` keep their
+documented "depth-2, +L1" / "depth-1, minimal L1" meanings exactly.
+
+**2. B10 — per-reader / per-writer static unicast VC. IMPLEMENTED, MEASURED, REFUTED.**
+
+Two mechanism findings came out of implementing it, both worth carrying:
+
+- **`noc_async_read`'s `read_req_vc` argument is dead code in `DM_DEDICATED_NOC`** — the mode
+  `ReaderConfigDescriptor` selects. `ncrisc_noc_fast_read` only writes `NOC_CTRL` under
+  `DM_DYNAMIC_NOC` (`noc_nonblocking_api.h:415-437`); in dedicated mode `NOC_CTRL` is programmed once
+  by `noc_init` to static VC 1 and is **sticky**. So a read-side VC has to be programmed with
+  `noc_async_read_one_packet_set_state<use_vc=true>` and **restored** before the kernel exits, or the
+  next program on that core inherits it (the same hazard the dram-sharded matmul reader documents).
+- **The write side is different**: `ncrisc_noc_fast_write` writes `NOC_CTRL` on *every* call, so
+  `noc_async_write`'s `vc` argument is live and needs no restore.
+
+Because the two halves are programmed by different mechanisms, `vc_spread` is a **bitmask** and each
+half was measured separately. That is what located the cost.
+
+**3. A3 — bank-adjacent work-unit → core assignment. IMPLEMENTED, MEASURED, no payoff.**
+
+`get_optimal_dram_bank_to_logical_worker_assignment(NOC_0)` (nanobind-bound on this build) gives DRAM
+bank *i*'s NoC-optimal worker; those cores are taken first, in bank order, and the rest fill in A1's
+row-major order. On a full grid the core **set** and the `CoreRangeSet` are byte-identical to the
+default, so only the work→core *mapping* moves and the bench row measures the permutation alone.
+
+### Accuracy achieved
+
+Unchanged and **bit-exact** — this refinement moves no arithmetic, only the order and command
+programming of the reads. `torch.equal` (PCC = 1.0, rtol = atol = 0, 0 mismatching elements) on
+`[1,1,512,512]`, `[1,1,128,1024]`, `[1,1,8192,32]`, `[1,1,4096,64]`, `[1,1,4096,32]`, `[1,1,192,96]`,
+`[2,3,128,64]`, `[1,1,32,16384]`, `[1,1,128,256]`, `[1,1,96,96]` — at the gated default, at both forced
+depths, for **all five lever combinations** (including all-forced), single- and multi-core, DRAM- and
+L1-interleaved, and over 10 repeated launches. Inputs are `arange`, not `randn`: every element is
+unique, so a block written into the wrong prefetch window cannot cancel out. bf8b / narrowing-cast
+tolerances untouched (Phase-0 precision baseline still 20/20).
+
+### Golden test progress
+
+**126 / 126** registry cells (90 INVALID-skipped) — unchanged, 0 xfail / xpass / drift. Whole golden
+dir **run to completion with no `-k` filter**: `PASSED=515 FAILED=1 ERRORS=2 SKIPPED=118 HANGS=0
+TOTAL=636`; the non-`test_translated.py` subset is **240 passed, 0 failed**, byte-identical to the
+Phase-0 / R1 / R1b / R1c baselines. `eval.verify_supported`: `supported_pass=126, supported_fail=0,
+xfail_expected=0, xpass_drift=0, xfail_wrong_mode=0, invalid_unexpected=0`. `SUPPORTED` is unchanged
+(this is a perf refinement; it unlocks no cell and declares no axis value). The 1 failure and 2 errors
+are the pre-existing reference-file issues (Phase-0 issues 6 and its `use_module_device` sibling).
+**No hangs** in either mode.
+
+### Perf gate
+
+#### 1. Bound classification — tt-npe pins, and they overturn the entry's premise
+
+`tools/tracy/profile_this.py --collect-noc-traces` was unusable on this box (`tracy/serve_wasm.py`
+needs `websockets`), so the trace was captured directly with
+`TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1` + `..._RPT_PATH`, then pinned with tt-npe:
+
+| regime | est cycles | golden cycles | pred err | **DRAM BW util** | **congestion impact** | avg / max link util | max link demand |
+|---|---|---|---|---|---|---|---|
+| `b_wide_short` `[1,1,32,16384]`, 64 c | 13 910 | 14 352 | −3.1 % | **103.2 %** | **0.4 %** | 30.4 % / 58.4 % | 185.9 % |
+| `c_single_core` `[1,1,512,512]`, 1 c | 58 354 | 58 704 | −0.6 % | **12.6 %** | **0.2 %** | 2.9 % / 7.9 % | 9.5 % |
+
+Congestion isolated by re-running with `--cong none`: 13 855 vs 13 910 cycles (**55 cycles = 0.4 %**)
+and 58 232 vs 58 354 (**122 cycles = 0.2 %**).
+
+Two conclusions, both decisive for this entry:
+
+- **`b_wide_short` is at its achievable DRAM bound, not launch/transaction-rate bound.** The entry's
+  premise ("0.54 of its 7 300 ns DRAM floor") divided by 288 GB/s *spec* peak; tt-npe's model says the
+  DRAM endpoint is already ≥ 100 % utilised for this access pattern (512 B **partial-page** reads out
+  of 32 768 B source pages). There is no DM headroom for a per-transaction lever to recover.
+- **B10 and A3 are pure congestion levers and congestion is 0.4 % of this regime.** Their refutation
+  below is not bad luck — it was 0.4 % of upside against a much larger downside, and tt-npe says so
+  *before* the device numbers do.
+- **`c_single_core` is per-core NoC-issue bound** (DRAM util 12.6 %, congestion 0.2 %) — which is
+  exactly the regime B8's mechanism targets, and exactly where it paid.
+
+Caveat recorded honestly: the NoC-event instrumentation is itself expensive on a 1-core kernel with
+768 transactions, so `c_single_core`'s absolute 58 704 cycles is ~2.2× its uninstrumented 27 343 ns.
+The *utilisations and ratios* are what the pin is used for; even scaled to the real duration its DRAM
+util is ~28 %, nowhere near saturation, so the conclusion is unaffected.
+
+#### 2. The B8 gate — two device sweeps, one mechanism
+
+B8's payoff is governed by a single thing: **it pays while the plan is below DRAM saturation**, i.e.
+while the binding resource is the core's own read issue/drain rather than the DRAM aggregate. Both
+clauses are sweeps of that boundary from different directions (7 rounds × 10 launches, in-run A/B
+pairs, CV ≤ 1.1 %).
+
+**Clause 1 — core count at a fixed 1024 B read** (`[1,1,4096,512]`, chunk 16, `core_cap` forcing the
+count so only `ncores` moves):
+
+| cores | blk/core | no lever ns | B8 ns | B8/none | achieved GB/s |
+|---|---|---|---|---|---|
+| 1 | 128 | 218 946 | 190 302 | **0.869** | 38.3 |
+| 2 | 64 | 112 612 | 98 316 | **0.873** | 74.5 |
+| 4 | 32 | 61 084 | 52 915 | **0.866** | 137.3 |
+| 8 | 16 | 45 479 | 45 484 | 1.000 | 184.5 ← DRAM saturates |
+| 16 | 8 | 45 193 | 43 649 | 0.966 | 185.6 |
+| 32 | 4 | 44 768 | 43 746 | 0.977 | 187.4 |
+| 64 | 2 | 44 433 | 44 107 | 0.993 | 188.8 |
+
+1–4 cores is a flat, reproducible **−13 %**; from 8 cores the wall clock stops moving with the core
+count at all (~45 µs / ~186 GB/s), which is the saturation the mechanism predicts. The residual ~−3 %
+at 16/32 cores is **not** monotone with +0.0 % at 8 and −0.7 % at 64, so it is scatter, not an effect
+— excluded, and the numbers are kept as bench rows so a future phase can re-open it.
+
+**Clause 2 — read transaction size at a fixed 64 cores × 2 blocks/core** (`[1,1,4096,W]`,
+W = 64/128/256/512 ⇒ chunk 2/4/8/16 ⇒ 128/256/512/1024 B), plus the 64 B / 4-block row:
+
+| read bytes | no lever ns | B8 ns | B8/none | achieved GB/s |
+|---|---|---|---|---|
+| 64 B | 13 967 | 11 258 | **0.806** | 75.1 |
+| 128 B | 9 572 | 7 861 | **0.821** | 109.5 |
+| 256 B | 13 536 | 13 709 | 1.013 | 154.9 |
+| 512 B | 23 391 | 22 753 | 0.972 | 179.3 |
+| 1024 B | 44 433 | 44 107 | 0.993 | 188.8 |
+
+The same boundary from the other side: at ≤ 128 B even the full grid is transaction-rate bound
+(75–110 GB/s, far under the ~190 GB/s achievable copy), so the per-block drain is still on the critical
+path. 256 B is measured *negative*, so the threshold cannot be pushed to 512 B on the strength of its
+0.972 alone.
+
+⇒ `trid_prefetch_pays = blocks ≥ 2 and (ncores ≤ 4 or read_bytes ≤ 128) and depth-3 fits L1`.
+
+**The isolation row is the important part of the attribution.** `TILIZE_LEVER_B8=3` gives the third CB
+window *without* the trid pipeline: `x_single_core_b8_window_only` **30 324 ns** vs
+`x_single_core_b8_off` **30 332 ns** (1.000), and `x_wide_short_1core_b8_window_only` **57 646** vs
+`x_wide_short_1core_b8_off` **57 731** (0.999). So **the entire win is the reads staying in flight, not
+the deeper CB** — which is what makes the 1.5× L1 cost attributable to the lever rather than to a
+lucky buffer size.
+
+B8 also **beats B13** where both could fire (64 B, 4 blk, 64 cores): no lever 13 967 →
+B13 13 219 (0.946) → **B8 11 258 (0.806)**. Both own the read command programming, so the planner
+ships the measured winner and B13 yields.
+
+#### 3. Cumulative bench set — non-regression (median of 7 × 10 launches, WH B0 8×8, AICLK ≈ 985 MHz)
+
+Whole set re-measured, not a subset. Noise floor ±2 %; all CVs ≤ 1.2 % except the B10 write-half rows
+(3.7–4.7 %, itself a symptom — a saturated write VC is unstable).
+
+| regime | cores | chk | d | blk | B13 | C7 | **B8** | R1c ns | **now ns** | Δ |
+|---|---|---|---|---|---|---|---|---|---|---|
+| a_square | 64 | 16 | 1 | 4 | 0 | 0 | 0 | 85 775 | **85 960** | +0.2 % |
+| b_wide_short | 64 | 8 | 1 | 1 | 0 | 0 | 0 | 13 423 | **13 367** | −0.4 % |
+| **c_single_core** | 1 | 16 | **3** | 16 | 0 | 0 | **1** | 30 359 | **27 343** | **−9.9 %** |
+| d_tall_narrow | 64 | 1 | 1 | 1 | 0 | 1 | 0 | 3 431 | **3 472** | +1.2 % |
+| e_square_fp32 | 64 | 8 | 2 | 8 | 0 | 0 | 0 | 182 008 | **182 733** | +0.4 % |
+| e_square_bf8b_out | 64 | 16 | 1 | 4 | 0 | 0 | 0 | 64 628 | **64 662** | +0.1 % |
+| e_square_fp32_to_bf16 | 64 | 8 | 2 | 8 | 0 | 0 | 0 | 121 126 | **121 078** | −0.0 % |
+| f_sharded_small | 4 | 2 | 1 | 4 | — | — | — | 1 363 | **1 372** | +0.7 % |
+| f_sharded_large | 64 | 2 | 1 | 8 | — | — | — | 2 071 | **2 070** | −0.0 % |
+| g_dram_to_sharded | 64 | 16 | 1 | 1 | 0 | 0 | 0 | 18 964 | **18 988** | +0.1 % |
+| g_sharded_to_dram | 64 | 2 | 2 | 8 | 0 | 0 | 0 | 19 841 | **19 753** | −0.4 % |
+| x_square_depth1 | 64 | 16 | 1 | 4 | 0 | 0 | 0 | 85 618 | **85 795** | +0.2 % |
+| x_square_depth2 | 64 | 16 | 2 | 4 | 0 | 0 | 0 | 85 610 | **85 445** | −0.2 % |
+| x_tall_narrow_depth2 | 64 | 1 | 2 | 1 | 1 | 0 | 0 | 3 553 | **3 558** | +0.1 % |
+| x_single_core_depth1 | 1 | 16 | 1 | 16 | 0 | 0 | 0 | 40 076 | **40 066** | −0.0 % |
+| x_square_fp32_depth2 | 64 | 8 | 2 | 8 | 0 | 0 | 0 | 182 074 | **181 602** | −0.3 % |
+| x_fp32_to_bf16_depth2 | 64 | 8 | 2 | 8 | 0 | 0 | 0 | 121 161 | **121 162** | 0.0 % |
+| x_sharded_to_dram_depth2 | 64 | 2 | 2 | 8 | 0 | 0 | 0 | 19 546 | **19 815** | +1.4 % |
+| x_square_bf8b_depth2 | 64 | 16 | 2 | 4 | 0 | 0 | 0 | 64 309 | **64 205** | −0.2 % |
+| **x_tall_narrow_16c** | 16 | 1 | **3** | 4 | 0 | 0 | **1** | 8 126 | **7 550** | **−7.1 %** |
+| **x_wide_short_1core** | 1 | 16 | **3** | 32 | 0 | 0 | **1** | 57 401 | **50 892** | **−11.3 %** |
+| x_tall_narrow_no_levers | 64 | 1 | 1 | 1 | 0 | 0 | 0 | 3 609 | **3 620** | +0.3 % |
+| x_tall_narrow_b13_only | 64 | 1 | 1 | 1 | 1 | 0 | 0 | 3 506 | **3 530** | +0.7 % |
+| x_tall_narrow_c7_only | 64 | 1 | 1 | 1 | 0 | 1 | 0 | 3 431 | **3 448** | +0.5 % |
+| **n_tall_narrow_4blk** | 64 | 1 | **3** | 4 | 0 | 0 | **1** | 13 228 | **11 199** | **−15.3 %** |
+| x_tall_narrow_4blk_no_levers | 64 | 1 | 1 | 4 | 0 | 0 | 0 | 13 901 | **13 967** | +0.5 % |
+| x_tall_narrow_4blk_c7_forced | 64 | 1 | 1 | 4 | 0 | 1 | 0 | 15 767 | **15 884** | +0.7 % |
+| m_wide_short_4k | 64 | 2 | 1 | 1 | 1 | 0 | 0 | 4 719 | **4 769** | +1.1 % |
+| x_wide_short_4k_no_levers | 64 | 2 | 1 | 1 | 0 | 0 | 0 | 5 032 | **5 006** | −0.5 % |
+| x_wide_short_4k_c7_forced | 64 | 2 | 1 | 1 | 0 | 1 | 0 | 5 101 | **5 077** | −0.5 % |
+| m_wide_short_8k | 64 | 4 | 1 | 1 | 0 | 0 | 0 | 8 067 | **8 124** | +0.7 % |
+| x_wide_short_8k_b13_forced | 64 | 4 | 1 | 1 | 1 | 0 | 0 | 8 311 | **8 300** | −0.1 % |
+| x_wide_short_8k_c7_forced | 64 | 4 | 1 | 1 | 0 | 1 | 0 | 8 571 | **8 572** | 0.0 % |
+| x_wide_short_b13_forced | 64 | 8 | 1 | 1 | 1 | 0 | 0 | 15 981 | **15 978** | −0.0 % |
+| x_wide_short_c7_forced | 64 | 8 | 1 | 1 | 0 | 1 | 0 | 15 265 | **15 270** | +0.0 % |
+| x_square_b13_forced | 64 | 16 | 1 | 4 | 1 | 0 | 0 | 86 810 | **86 857** | +0.1 % |
+| x_g_to_sharded_b13_forced | 64 | 16 | 1 | 1 | 1 | 0 | 0 | 20 107 | **20 085** | −0.1 % |
+| x_g_to_sharded_c7_forced | 64 | 16 | 1 | 1 | 0 | 1 | 0 | 19 902 | **19 831** | −0.4 % |
+| x_sharded_small_depth1 | 4 | 2 | 1 | 4 | — | — | — | 1 362 | **1 361** | −0.1 % |
+
+**Zero regressions** — max deviation **+1.4 %**, inside the ±2 % noise floor, direction is scatter (16
+of 39 carried regimes are faster). **Four real improvements**, all from B8: `c_single_core` −9.9 %,
+`x_wide_short_1core` −11.3 %, `n_tall_narrow_4blk` −15.3 %, `x_tall_narrow_16c` −7.1 %. The
+`x_tall_narrow_16c` gain is worth noting: it is the *A0-refutation* counterfactual row, and B8 fires on
+it (64 B, 4 blk) — the A0 verdict is unchanged (7 550 ns at 16 cores vs 3 472 ns at 64).
+
+Per-core CB L1 cost of B8, recorded: `c_single_core` / `x_wide_short_1core` 131 072 → **196 608 B**
+(+65 536); `n_tall_narrow_4blk` / `x_tall_narrow_16c` 4 096 → **12 288 B** (+8 192);
+`m_2blk_128B` 8 192 → **24 576 B** (+16 384). Still a constant in `W`
+(`PROPERTIES["bounded_cb"]` re-checked at W = 32 / 256 / 2048 / 16384 by
+`test_per_core_cb_bytes_stay_bounded_by_a_constant_in_w`).
+
+New rows added to the cumulative set for future phases: `m_2blk_128B` 7 865 · `p_2blk_128B` 9 572 ·
+`x_2blk_128B_b8` 7 861 · `p_2blk_256B` 13 536 · `x_2blk_256B_b8` 13 709 · `p_2blk_512B` 23 391 ·
+`x_2blk_512B_b8` 22 753 · `p_2blk_1024B` 44 433 · `x_2blk_1024B_b8` 44 107 ·
+`p_1024B_{1,2,4,8,16,32}c` + `x_1024B_*c_b8` (12 rows) · `x_single_core_b8_off` 30 332 ·
+`x_single_core_b8_window_only` 30 324 · `x_wide_short_1core_b8_off` 57 731 ·
+`x_wide_short_1core_b8_window_only` 57 646 · `x_square_b8_forced` 86 252 ·
+`x_tall_narrow_4blk_b8_forced` 11 258 · `x_tall_narrow_4blk_b13_only` 13 219 · `x_fp32_b8_forced`
+179 993 · `x_wide_short_b10_{forced,read_only,write_only}` 26 610 / 14 764 / 23 793 ·
+`x_square_b10_{forced,read_only,write_only}` 184 129 / 93 033 / 162 675 · `x_tall_narrow_b10_forced`
+3 451 · `x_single_core_b10_forced` 27 652 · `x_g_to_sharded_b10_forced` 20 007 ·
+`x_wide_short_a3_forced` 13 596 · `x_square_a3_forced` 86 224 · `x_tall_narrow_a3_forced` 3 456 ·
+`x_wide_short_b10_a3_forced` 34 552.
+
+#### 4. Mode-C used-optimization ledger
+
+| lever | id | predicted Δ | **measured Δ (lever/none)** | verdict |
+|---|---|---|---|---|
+| trid double-issue on the read path | **B8** | NPE read-group counterfactual: 0.861 at 1 core, 1.004 at 64 cores (32 → 64 outstanding reads) | **0.869 / 0.873 / 0.866** (1/2/4 cores) · 1.000 / 0.966 / 0.977 / 0.993 (8/16/32/64) · **0.806 / 0.821** (64 B / 128 B at 64 c) · 1.013 / 0.972 / 0.993 (256/512/1024 B) | **KEEP, gated** to `blocks ≥ 2 ∧ (ncores ≤ 4 ∨ read ≤ 128 B)`. The prediction was right about both the sign and the mechanism. −9.9 % to −15.3 % on four shipped regimes at +8 192…+65 536 B/core. |
+| — sub-lever: the third CB window **alone** (no trid pipeline) | C16-ish | "the deeper CB is what pays" | **1.000** (30 324 vs 30 332) and **0.999** (57 646 vs 57 731) | **DROP as an independent lever** — it buys nothing on its own; the whole B8 win is attributable to the reads staying in flight. |
+| — sub-lever: B8 **and** B13 together | B8+B13 | additive | B13 alone 0.946 vs **B8 alone 0.806** on the same row; both own the read command programming | **B8 wins, B13 yields** (mutually exclusive in the planner, `static_assert`-guarded in the reader for the C7 pair). |
+| per-reader / per-writer static unicast VC | **B10** | "break first-come-first-serve serialization when readers share a route" | reads-only **1.083 / 1.105**; writes-only **1.780 / 1.893**; both **1.991 / 2.142** (a_square / b_wide_short). Inert at 1 core (1.011) and at 1 tile/core (1.006) | **DROP — refuted.** The firmware picks one static VC deliberately (VC 1); rotating over VCs 0/2/3 *splits* the DRAM-endpoint queue depth per stream instead of pooling it. tt-npe: congestion is only **0.4 %** of the target regime, so there was ≤ 0.4 % to win. |
+| reader adjacent to its DRAM bank / one reader ↔ one bank | **A3** | `get_optimal_dram_bank_to_logical_worker_assignment` "one NoC hop, disjoint routes" | **1.017 / 1.003 / 1.002** (b_wide_short / a_square / d_tall_narrow) — at or inside the noise floor | **DROP — no payoff, and structurally inapplicable.** A tilize block needs 32 **consecutive** source pages and page `p` lives in bank `p % 12`, so **every** core necessarily touches all 12 banks. There is no core↔bank affinity to exploit; the permutation can only move average hop count on a grid A0 already fills. |
+| — bundle: B10 + A3 (both congestion levers at once) | — | "each alone may be too small to see" | **2.585** (34 552 vs 13 367) | **DROP** — the bundle is the sum of two costs, not a hidden win. Confirms the 0.4 % congestion ceiling rather than contradicting it. |
+| — writer keeps a **compile-time** VC when B10 is off | — | a refuted lever must cost nothing when unused | passing a runtime `vc` unconditionally stopped the compiler folding `NOC_CMD_STATIC_VC(vc)` into the constant `NOC_CTRL` word; `m_wide_short_4k` +2.8 % → **+1.1 %** after splitting the call on `if constexpr` | **KEEP the split** — this is the "keep the code for re-measurability" invariant made real. |
+
+#### 5. DM lever checklist review (`master.md` Part 2)
+
+Applied this pass: **B8** (gated). Re-confirmed still applied: B7 one barrier per block, B5/B6 width
+coalescing, A0 2D height-first split, A1 `row_wise`, B9 reads NoC0 / writes NoC1, B13 (gated ≤ 128 B,
+1 block), C7 (gated 64 B, 1 block), C14 alias, C16 gated depth, D18/D19 program-cache args.
+**Measured-no-payoff this pass: B10, A3** (rows above). Deliberately **not** applied and left to their
+owners: C14 one-sided aliasing (R3), B5/B6 on the sharded read (R3), C7 on DRAM→sharded (R3),
+kernel-count reduction on Path B (R4). **Not applicable, and now measured rather than argued:** bigger
+read transactions on `b_wide_short` — see the finding below.
+
+### Issues encountered
+
+1. **The entry's headline premise was wrong, and tt-npe is what showed it.** "`b_wide_short` … 0.54 of
+   its 7 300 ns DRAM floor — it is launch/transaction-rate bound, not bandwidth bound" divides by
+   288 GB/s *spec* peak. tt-npe says the DRAM endpoint is at **103 %** utilisation for this access
+   pattern and congestion is **0.4 %**: the regime is bandwidth-bound after all, at the bandwidth a
+   **512 B partial-page** read stream can actually get. That single number explains why all three of
+   this entry's levers had to fail there, and it is why the ≥ 1.2× clause is unreachable rather than
+   merely unmet.
+2. **The residual on `b_wide_short` is the 64-way partial-page fan-in, and the bench already prices
+   it.** Compare two rows with **identical traffic (2.10 MB) and identical core count (64) and
+   identical 512 B reads**: `b_wide_short` 13 367 ns @ 156.9 GB/s, where all 64 cores read slices of
+   the **same 32** source pages; `p_2blk_512B` 23 391 ns for 4.19 MB @ **179.3 GB/s**, where each core
+   reads its **own** 64 consecutive pages. Same transaction size, +14 % bandwidth — the difference is
+   *which* pages the 64 readers hit. And splitting `b_wide_short` finer does not help either:
+   `p_2blk_256B` moves the same 2.10 MB in **13 536 ns** (2 blocks × 256 B) vs 13 367 ns (1 block ×
+   512 B), i.e. **1.3 % slower**, so the "give it 2 blocks so depth-2 and B8 can apply" idea is refuted
+   without writing it. The lever that remains is a *different algorithm* — read whole 32 KB source
+   pages on a subset of cores and redistribute the slices through L1 — which is Refinement 2b, not a
+   per-transaction knob.
+3. **`noc_async_read`'s `read_req_vc` argument is dead in `DM_DEDICATED_NOC`.** Implementing B10 the
+   obvious way (pass the VC per call, as the write side allows) compiles, runs, and does **nothing** —
+   `ncrisc_noc_fast_read` only writes `NOC_CTRL` under `DM_DYNAMIC_NOC`. The read VC has to go through
+   the sticky register and be restored. Anyone reaching for a per-reader VC on a
+   `ReaderConfigDescriptor` kernel will hit this; the API's signature actively misleads.
+4. **Four Refinement-1/1c gate tests failed the moment B8 landed — as designed.** B8 supersedes B13 at
+   64 B / 4 blocks and takes the single-core depth to 3, so `test_plan_lever_selection_per_read_size`,
+   `test_stateful_read_offered_to_every_interleaved_generic_plan`,
+   `test_bit_exact_with_l1_interleaved_input` and `test_gated_default_keeps_depth2_when_latency_bound`
+   all tripped. That is the pins doing their job; each was updated to the **new measured** selection
+   with the reason inline, and the depth one was rewritten to assert the *property* (the C16 gate must
+   not pick depth-1 here) rather than the literal `depth == 2`, so the next deeper-window lever does
+   not break it again.
+5. **`tools/tracy/profile_this.py --collect-noc-traces` cannot run on this box** —
+   `tools/tracy/serve_wasm.py` imports `websockets`, which is not installed, and the wrapper resolves
+   `tools/tracy` from a *different* checkout. Setting
+   `TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1` + `TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH=<dir>/.logs`
+   around a plain `tt-probe.sh` run produces the same `noc_trace_dev0_ID*.json` files that tt-npe
+   consumes. Worth knowing — the documented path is a dead end here.
+
+### Tests added
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement2.py` — **40 cells**: both B8 gate
+  clauses pinned to the sweep that set them (with the tables in the docstrings, so raising a threshold
+  fails here with the numbers attached); the structural min-blocks clause; the L1-budget refusal
+  (declining rather than shrinking `chunk_wt`); trid values distinct and non-zero; plan selection on 6
+  regimes; B8 supersedes B13; B8 never fires when the caller pinned the depth; B8 ⊕ C7; off on the
+  alias path and on a multi-page-row sharded input; **bit-exactness** on 7 shapes (including the
+  chunk × block flatten, the minimum 2-block pipeline, awkward `Wt = 3`, and a rank-4 fold), over 10
+  repeated launches, on L1-interleaved, and for all 5 lever combinations; program-cache hit preserved.
+  For the **refuted** levers: gates asserted identity-false with the measured regression in the
+  docstring, the B10 bitmask halves independently addressable, the VC rotation inside the 0-3 unicast
+  range with read ≠ write per core, and A3 verified to be a genuine **permutation** (same core set,
+  same `CoreRangeSet`, exact tensor cover) rather than a work-dropping reorder.
+- `_bench_tilize.py` — a `b8`/`b10`/`a3` lever key (`0` off, `1` gated, `2` force past the gate, and
+  for B8 `3` = the third window **without** the trid pipeline, the isolation row the ledger rests on),
+  `B8`/`VC`/`A3` report columns, the depth-3 CB-budget assert, a B8 structural assert, and **29 new
+  regimes**: the two gate sweeps (7 core counts × 2, 4 read sizes × 2), the 3-way isolation on both
+  1-core regimes, the B10 read/write half-splits, and forced-lever counterfactuals for B10 and A3 on
+  every regime with real traffic.
+- `probes/probe_014.py` — the first-light 6 shapes × 5 lever combinations bit-exactness probe.
+
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **193 passed** (153 prior + 40 new) in
+**both** default and `--dev` mode.
+
+### Ranked follow-ups
+
+1. **Refinement 2b (filed)** — `b_wide_short`'s residual, priced: it is at 156.9 GB/s while the same
+   512 B transaction reaching *private* source pages gets 179.3 GB/s (`p_2blk_512B`) and a 1024 B
+   transaction gets 188.8 (`p_2blk_1024B`). The gap is the 64-way partial-page fan-in on 32 source
+   pages, and closing it needs a different algorithm (whole-page reads on a subset of cores +
+   L1 redistribution), not a per-transaction lever. Every per-transaction lever is now measured on this
+   regime: B13 +19.5 %, C7 +14.2 %, B10 +99 %, A3 +1.7 %, B8 structurally inapplicable, finer chunking
+   +1.3 %.
+2. **B8's 16/32-core rows are an unresolved ~3 %** (0.966 / 0.977, non-monotone with 8 c and 64 c).
+   Worth 4 bench points if a future phase wants it; the rows already exist.
+3. **`TRID_PREFETCH_MAX_ROW_BYTES = 128` sits below a measured 0.972 at 512 B.** 256 B is 1.013, so the
+   sequence is not monotone and the conservative threshold is right today — but a phase that
+   understands the 256 B dip could reclaim ~3 % on the 512 B / multi-block family.
+4. Refinements 3–5 unchanged. Refinement 4's `InitUninitMode` clause still has zero headroom
+   (Refinement 1 finding 3).

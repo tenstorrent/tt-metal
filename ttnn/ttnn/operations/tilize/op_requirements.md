@@ -219,7 +219,23 @@ both default and `--dev` mode.
 
 ---
 
-### [ ] Refinement 2 — Close the read-path transaction-overhead gap on the DM-bound interleaved regimes
+### [x] Refinement 2 — Close the read-path transaction-overhead gap on the DM-bound interleaved regimes
+
+> **Outcome (2026-07-29): COMPLETE via the second gate clause.** All three levers in the re-scoped set
+> were implemented and measured **individually**. **B8 (trid double-issue) landed and pays**: gated to
+> `blocks ≥ 2 ∧ (ncores ≤ 4 ∨ read ≤ 128 B)` from two device sweeps (7 core counts at 1024 B; 5 read
+> sizes at 64 cores × 2 blocks), it takes `c_single_core` **30 359 → 27 343 ns (−9.9 %)**,
+> `x_wide_short_1core` **−11.3 %**, `n_tall_narrow_4blk` **−15.3 %** and `x_tall_narrow_16c` **−7.1 %**,
+> with an isolation row (`b8=3`: third CB window, no trid pipeline) measuring **1.000** — so the whole
+> win is attributable to the reads staying in flight, not to the deeper CB. **B10 and A3 each carry a
+> measured-no-payoff verdict with its counterfactual**: B10 is a **regression** (reads 1.083/1.105,
+> writes 1.780/1.893, both 1.991/2.142) and A3 is neutral (1.002–1.017). The `b_wide_short` ≥ 1.2 %
+> clause is **not met and is shown unreachable by any per-transaction lever**: tt-npe pins that regime
+> at **103.2 % DRAM BW utilisation with a 0.4 % congestion term**, which overturns this entry's own
+> "launch/transaction-rate bound, 0.54 of its 7 300 ns DRAM floor" premise (that floor divided by
+> 288 GB/s *spec* peak, unattainable for 512 B **partial-page** reads). Zero regressions across all 39
+> carried bench regimes (max +1.4 %); golden 126/126; unit suite 193/193 in both modes. Residual
+> decomposed and handed to **Refinement 2b**. Full ledger: `changelog.md` § "Refinement 2".
 
 > **Re-scope before running (Refinement 1c finding, measured on this exact regime): B13 and C7 are
 > REFUTED on `b_wide_short`, do not re-try them.** Refinement 1c implemented both, and forced each
@@ -267,6 +283,57 @@ which the design measured at +52 % composed).
 recorded measured-no-payoff verdict with its counterfactual number; tt-npe re-pinned (cycles + DRAM
 util + congestion %) for `b_wide_short` and `c_single_core`; no regression beyond noise on any prior
 bench regime; golden suite still 126/126.
+
+---
+
+### [ ] Refinement 2b — `b_wide_short`'s 64-way partial-page fan-in: whole-page reads + L1 redistribution
+
+**Goal**: `b_wide_short` `[1,1,32,16384]` from **13 367 ns / 156.9 GB/s** toward the **179.3 GB/s** the
+same 512 B transaction already achieves when it reaches *private* source pages, i.e. ≥ 1.14× (≤ 11 700
+ns). Refinement 2 measured **every** per-transaction lever on this regime and all of them are refuted,
+so this entry is deliberately an **algorithm** change, not a knob:
+
+| lever tried on `b_wide_short` | measured | owner |
+|---|---|---|
+| B13 stateful bank-major reads | +19.5 % | R1c |
+| C7 split reader | +14.2 % | R1c |
+| B10 per-core static unicast VC | +99 % (writes +78 %, reads +8.4 %) | R2 |
+| A3 bank-adjacent core order | +1.7 % | R2 |
+| B8 trid double-issue | structurally inapplicable (1 chunk-block/core) | R2 |
+| finer chunking to 2 blocks × 256 B | +1.3 % (`p_2blk_256B` 13 536 vs 13 367) | R2 |
+
+**The residual, priced by two bench rows with identical transaction size and core count:**
+`b_wide_short` gets **156.9 GB/s** where all 64 cores read 512 B slices of the **same 32** source pages
+(a `W=16384` bf16 RM row *is* one 32 768 B DRAM page, and `nt_h == 1`), while `p_2blk_512B`
+`[1,1,4096,256]` gets **179.3 GB/s** at the same 512 B read because each core owns its **own** 64
+consecutive pages. `p_2blk_1024B` gets **188.8**. So the binding term is *which* pages the 64 readers
+hit — a 64-way partial-page fan-in — and tt-npe agrees it is the DRAM endpoint (**103.2 % DRAM BW util,
+0.4 % congestion, max link demand 185.9 %**), not the NoC and not congestion.
+
+**Concrete lever to try**: read **whole source pages** instead of 512 B slices. A subset of cores
+(≥ 32, one per source row) each issues **one 32 768 B** `noc_async_read` of its whole row into L1, then
+the row is redistributed to the 64 tile-column owners over **L1-to-L1** transfers (or the tile-column
+owners read their slices from that core's L1 instead of from DRAM). DRAM then sees **32 whole-page
+reads** rather than 2 048 partial-page reads for the same bytes. Cost to weigh: one extra L1 hop for
+every byte, and 32 768 B/core of staging L1 (which is inside the existing `L1_CB_BUDGET_PREFETCH_BYTES`
+headroom only for a *chunked* variant — stage one 8 KB quarter-row at a time).
+
+**Implementation skill**: /perf-ceiling-dm, /perf-measure
+
+**Verifier notes**: this is the first entry in the queue that changes the *transfer algorithm* rather
+than its parameters, so run `/perf-ceiling-dm` **Mode A** first and rank at least two candidates
+(whole-page + mcast to the column owners vs. whole-page + each owner pulling from the reader's L1)
+before writing a kernel — the L1 hop is real and could easily eat the 14 %. Two hard constraints:
+(a) the prompt forbids extra full-tensor **DRAM** passes, so the redistribution must stay in L1;
+(b) `d_tall_narrow`/`a_square` must not be touched — this pattern only exists when `nt_h == 1`, so gate
+it on that (a `distribution_gate`, not a wholesale switch), and keep the `x_wide_short_*` counterfactual
+rows so the R1c/R2 refutations stay re-measurable.
+
+**Done when**: `b_wide_short` ≥ 1.14× faster than 13 367 ns **or** the whole-page+redistribute
+algorithm has a recorded measured-no-payoff verdict with its counterfactual number and a re-pinned
+tt-npe DRAM-util figure showing why; no regression beyond noise on any regime in the cumulative bench
+set; golden suite still 126/126; `tests/ttnn/unit_tests/operations/tilize/` still green in both default
+and `--dev` mode.
 
 ---
 
