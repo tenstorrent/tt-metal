@@ -249,3 +249,53 @@ DRAM healthy, live heartbeats, zero GDDR errors, and zero thermal trips.
 - `SPARSE_SUBBLOCK_HYPOTHESIS.md`: legal role-specific output-subblock matrix.
 - `ROUTED_MOE_HYPOTHESIS.md`: exhaustive model-local batch-32 routed-MoE
   blocker analysis.
+
+## Phase-specific sparse remediation
+
+The independent authentic sparse sweep required by rereview is complete. All
+15 isolated rows and all four cumulative rows used checkpoint layer-1 weights
+and recorded checkpoint activations, three warmups, twenty traced replays, and
+preserved PCC `0.9993107116`.
+
+| result | traced b1 decode |
+|---|---:|
+| explicit all-role 1x1 control | 0.781748 ms |
+| prior cumulative 2/2 | 0.717877 ms |
+| selected gate 2/2 + up 2/1 + down 4/4 | **0.704813 ms** |
+| final default reproduction | 0.705102 ms |
+
+The selected policy is 9.84% faster than the authentic 1x1 control and 1.82%
+faster than the best prior correct cumulative policy. It is decode-only:
+directly applying it to prefill regressed both sequence 33
+(`4.099386 -> 4.443987 ms`) and sequence 128
+(`13.598431 -> 14.495682 ms`). Grouped prefill therefore retains 2/2, with
+final minima `4.077707 ms` and `13.491884 ms`. This phase split does not
+change allocations, KV dtype, cache layout, or the advertised 500,000-token
+context capacity, so `context_contract.json` is unchanged.
+
+Real-weight layer-1/layer-4 decode PCC is `0.99931071/0.99974180`.
+Non-aligned sequence-33/128 active-expert prefill remains
+`0.99867303–0.99884130`, and ten traced replays are bitwise identical.
+Batch-32 dispatch and geometry are unchanged, so the previously measured
+serving batch does not regress.
+
+Fresh advice-enabled profiles under `tracy/review7_phase_specific/` prove
+BFP8/LoFi sparse rows with BF16 activation/output and exact final programs:
+decode uses 1x2/1x1/1x4 gate/up/down subblocks; both sequence-33 and
+sequence-128 prefill profiles use 1x2 for all three roles. DRAM roofline is
+16.2% for decode, 5.1% for seq33 prefill, and 3.9% for seq128 prefill. No
+Torch conversion or host operation appears in the measured windows.
+
+Final gates:
+
+- normal: `41 passed, 17 skipped in 383.22s`;
+- watcher: `41 passed, 17 skipped in 416.48s`;
+- watcher log: 3,247 lines with no error, assert, fatal, deadlock, hang, NoC,
+  CB, sanitizer, overflow, trip, or kernel-fault signature.
+
+Artifacts are under `candidates/sparse_subblocks/`,
+`tracy/review7_phase_specific/`, `artifacts/review7_phase_specific_*.xml`,
+and `watcher/review7_phase_specific/`. The only unresolved optimize gate is
+the batch-32 routed-output capability documented in
+`ROUTED_MOE_HYPOTHESIS.md`: its required shared-TTNN local combine is outside
+the explicitly model-local write scope.

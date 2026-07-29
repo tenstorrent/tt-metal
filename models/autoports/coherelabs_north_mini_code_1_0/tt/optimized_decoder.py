@@ -75,16 +75,28 @@ class OptimizationConfig:
     direct_down_input: bool = False
     sparse_gate_grid: tuple[int, int] = (6, 2)
     sparse_up_grid: tuple[int, int] = (6, 2)
-    sparse_down_grid: tuple[int, int] = (8, 4)
+    sparse_down_grid: tuple[int, int] = (8, 2)
     sparse_gate_in0_block_w: int = 16
     sparse_up_in0_block_w: int = 16
     sparse_down_in0_block_w: int = 12
     sparse_gate_out_block_w: int = 2
     sparse_gate_out_subblock_w: int = 2
     sparse_up_out_block_w: int = 2
-    sparse_up_out_subblock_w: int = 2
-    sparse_down_out_block_w: int = 2
-    sparse_down_out_subblock_w: int = 2
+    sparse_up_out_subblock_w: int = 1
+    sparse_down_out_block_w: int = 4
+    sparse_down_out_subblock_w: int = 4
+    prefill_sparse_gate_grid: tuple[int, int] = (6, 2)
+    prefill_sparse_up_grid: tuple[int, int] = (6, 2)
+    prefill_sparse_down_grid: tuple[int, int] = (8, 4)
+    prefill_sparse_gate_in0_block_w: int = 16
+    prefill_sparse_up_in0_block_w: int = 16
+    prefill_sparse_down_in0_block_w: int = 12
+    prefill_sparse_gate_out_block_w: int = 2
+    prefill_sparse_gate_out_subblock_w: int = 2
+    prefill_sparse_up_out_block_w: int = 2
+    prefill_sparse_up_out_subblock_w: int = 2
+    prefill_sparse_down_out_block_w: int = 2
+    prefill_sparse_down_out_subblock_w: int = 2
     moe_chunk_size: int = 4
     sparse_intermediate_dram: bool = False
     batch1_prefill_active_experts: bool = True
@@ -1196,11 +1208,11 @@ class OptimizedDecoder(FunctionalDecoder):
             nnz=None,
             memory_config=projection_memory,
             program_config=_sparse_program(
-                cfg.sparse_gate_grid,
+                cfg.prefill_sparse_gate_grid,
                 self.intermediate_size,
-                cfg.sparse_gate_in0_block_w,
-                out_block_w=cfg.sparse_gate_out_block_w,
-                out_subblock_w=cfg.sparse_gate_out_subblock_w,
+                cfg.prefill_sparse_gate_in0_block_w,
+                out_block_w=cfg.prefill_sparse_gate_out_block_w,
+                out_subblock_w=cfg.prefill_sparse_gate_out_subblock_w,
             ),
             compute_kernel_config=self.expert_gate_up_compute,
             dtype=cfg.expert_activation_dtype,
@@ -1212,11 +1224,11 @@ class OptimizedDecoder(FunctionalDecoder):
             nnz=None,
             memory_config=projection_memory,
             program_config=_sparse_program(
-                cfg.sparse_up_grid,
+                cfg.prefill_sparse_up_grid,
                 self.intermediate_size,
-                cfg.sparse_up_in0_block_w,
-                out_block_w=cfg.sparse_up_out_block_w,
-                out_subblock_w=cfg.sparse_up_out_subblock_w,
+                cfg.prefill_sparse_up_in0_block_w,
+                out_block_w=cfg.prefill_sparse_up_out_block_w,
+                out_subblock_w=cfg.prefill_sparse_up_out_subblock_w,
             ),
             compute_kernel_config=self.expert_gate_up_compute,
             dtype=cfg.expert_activation_dtype,
@@ -1247,11 +1259,11 @@ class OptimizedDecoder(FunctionalDecoder):
             is_input_b_sparse=False,
             memory_config=projection_memory,
             program_config=_sparse_program(
-                cfg.sparse_down_grid,
+                cfg.prefill_sparse_down_grid,
                 self.hidden_size,
-                cfg.sparse_down_in0_block_w,
-                out_block_w=cfg.sparse_down_out_block_w,
-                out_subblock_w=cfg.sparse_down_out_subblock_w,
+                cfg.prefill_sparse_down_in0_block_w,
+                out_block_w=cfg.prefill_sparse_down_out_block_w,
+                out_subblock_w=cfg.prefill_sparse_down_out_subblock_w,
             ),
             compute_kernel_config=self.expert_down_compute,
             dtype=cfg.expert_activation_dtype,

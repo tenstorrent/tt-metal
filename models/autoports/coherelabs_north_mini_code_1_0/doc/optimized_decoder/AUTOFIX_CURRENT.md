@@ -40,3 +40,25 @@ AutoFix closed both model-local findings and failed on this third finding
 after exhausting the legal model-local families. The stage cannot claim the
 current optimize checklist or a clean review while that scope conflict
 remains.
+
+## Rereview sparse remediation
+
+The first sparse remediation was superseded after rereview found that its
+named isolated policies inherited cumulative defaults. The test now starts
+every isolated row from an explicit all-role 1x1 control and retains the full
+legal gate/up/down 1x1–1x4 matrix.
+
+Authentic checkpoint evidence selected a phase-specific policy:
+
+- decode: gate 2/2, up 2/1, down 4/4, `0.704813 ms`;
+- grouped prefill: retain gate/up/down 2/2 because the decode winner regressed
+  both sequence 33 and 128;
+- correctness: PCC `0.99931071` layer 1 and `0.99974180` layer 4;
+- final focused tests: seven passed, including ten bitwise-identical trace
+  replays and non-aligned sequence 33/128 prefill;
+- final normal and watcher suites: 41 passed, 17 intentional opt-in skips;
+  the 3,247-line watcher log is fault-signature clean.
+
+Full rows and profiler evidence are recorded in
+`SPARSE_SUBBLOCK_HYPOTHESIS.md`. This closes the sparse rereview finding.
+Batch-32 routed MoE remains the same exhausted shared-TTNN capability blocker.

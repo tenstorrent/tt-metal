@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Static contracts for batch-32 dense-expert prefill sweep plumbing."""
+"""Static contracts for phase-specific optimized decoder geometry."""
 
 import math
 from dataclasses import replace
@@ -57,6 +57,26 @@ def test_dense_expert_prefill_defaults_select_packed_80_w8_6_only_for_prefill():
     assert _needs_packed_dense_expert_weights(policy)
     assert _dense_expert_program(policy, down=False) is None
     assert _dense_expert_program(policy, down=True) is None
+
+
+def test_sparse_defaults_are_phase_specific():
+    policy = OptimizationConfig()
+
+    assert policy.sparse_gate_grid == (6, 2)
+    assert (policy.sparse_gate_out_block_w, policy.sparse_gate_out_subblock_w) == (2, 2)
+    assert policy.sparse_up_grid == (6, 2)
+    assert (policy.sparse_up_out_block_w, policy.sparse_up_out_subblock_w) == (2, 1)
+    assert policy.sparse_down_grid == (8, 2)
+    assert (policy.sparse_down_out_block_w, policy.sparse_down_out_subblock_w) == (4, 4)
+
+    # The decode winner regressed both representative prefill lengths, so
+    # prefill retains the independently measured cumulative 1x2 geometry.
+    assert policy.prefill_sparse_gate_grid == (6, 2)
+    assert policy.prefill_sparse_up_grid == (6, 2)
+    assert policy.prefill_sparse_down_grid == (8, 4)
+    assert (policy.prefill_sparse_gate_out_block_w, policy.prefill_sparse_gate_out_subblock_w) == (2, 2)
+    assert (policy.prefill_sparse_up_out_block_w, policy.prefill_sparse_up_out_subblock_w) == (2, 2)
+    assert (policy.prefill_sparse_down_out_block_w, policy.prefill_sparse_down_out_subblock_w) == (2, 2)
 
 
 def test_dense_expert_prefill_without_override_preserves_legacy_opt_in_program():

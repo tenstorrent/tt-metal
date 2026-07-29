@@ -1,0 +1,458 @@
+{
+  "batch": 1,
+  "iterations": 20,
+  "layer": 1,
+  "records": [
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "baseline",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.78174835,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "gate_g12_b1_s1",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        6,
+        2
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.81870415,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "gate_g12_b2_s1",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        6,
+        2
+      ],
+      "gate_out_block_w": 2,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.77206155,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "gate_g12_b2_s2",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        6,
+        2
+      ],
+      "gate_out_block_w": 2,
+      "gate_out_subblock_w": 2,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.7717174,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "gate_g8_b3_s3",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        4,
+        2
+      ],
+      "gate_out_block_w": 3,
+      "gate_out_subblock_w": 3,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.7792537,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "gate_g6_b4_s4",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        3,
+        2
+      ],
+      "gate_out_block_w": 4,
+      "gate_out_subblock_w": 4,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.7943334,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "up_g12_b1_s1",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.8191050499999999,
+      "up_grid": [
+        6,
+        2
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "up_g12_b2_s1",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.7708022,
+      "up_grid": [
+        6,
+        2
+      ],
+      "up_out_block_w": 2,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "up_g12_b2_s2",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.7750177,
+      "up_grid": [
+        6,
+        2
+      ],
+      "up_out_block_w": 2,
+      "up_out_subblock_w": 2,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "up_g8_b3_s3",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.7780114499999999,
+      "up_grid": [
+        4,
+        2
+      ],
+      "up_out_block_w": 3,
+      "up_out_subblock_w": 3,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "up_g6_b4_s4",
+      "down_grid": [
+        8,
+        8
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.79334615,
+      "up_grid": [
+        3,
+        2
+      ],
+      "up_out_block_w": 4,
+      "up_out_subblock_w": 4,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "down_g32_b1_s1",
+      "down_grid": [
+        8,
+        4
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 1,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.76647855,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "down_g32_b2_s1",
+      "down_grid": [
+        8,
+        4
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 2,
+      "down_out_subblock_w": 1,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.73986295,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "down_g32_b2_s2",
+      "down_grid": [
+        8,
+        4
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 2,
+      "down_out_subblock_w": 2,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.7396746000000001,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    },
+    {
+      "activations_source": "checkpoint_layer_input",
+      "candidate": "down_g16_b4_s4",
+      "down_grid": [
+        8,
+        2
+      ],
+      "down_in0_block_w": 12,
+      "down_out_block_w": 4,
+      "down_out_subblock_w": 4,
+      "expert_fidelity": "MathFidelity.LoFi",
+      "expert_weight_dtype": "DataType.BFLOAT8_B",
+      "gate_grid": [
+        8,
+        3
+      ],
+      "gate_out_block_w": 1,
+      "gate_out_subblock_w": 1,
+      "gate_up_in0_block_w": 16,
+      "pcc": 0.9993107115873155,
+      "status": "correct",
+      "traced_decode_ms": 0.7313287500000001,
+      "up_grid": [
+        8,
+        3
+      ],
+      "up_out_block_w": 1,
+      "up_out_subblock_w": 1,
+      "weights_source": "checkpoint"
+    }
+  ],
+  "warmups": 3
+}

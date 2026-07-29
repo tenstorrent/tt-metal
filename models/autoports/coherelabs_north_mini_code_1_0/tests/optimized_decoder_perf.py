@@ -86,6 +86,15 @@ def _policy(args):
         "sparse_up_out_subblock_w",
         "sparse_down_out_block_w",
         "sparse_down_out_subblock_w",
+        "prefill_sparse_gate_in0_block_w",
+        "prefill_sparse_up_in0_block_w",
+        "prefill_sparse_down_in0_block_w",
+        "prefill_sparse_gate_out_block_w",
+        "prefill_sparse_gate_out_subblock_w",
+        "prefill_sparse_up_out_block_w",
+        "prefill_sparse_up_out_subblock_w",
+        "prefill_sparse_down_out_block_w",
+        "prefill_sparse_down_out_subblock_w",
         "moe_chunk_size",
         "prefill_moe_chunk_size",
         "serving_decode_qkv_cores",
@@ -173,17 +182,29 @@ def _policy(args):
     if args.dense_expert_prefill_down_transpose_mcast:
         overrides["dense_expert_prefill_down_transpose_mcast"] = True
     if args.sparse_gate_grid_x is not None or args.sparse_gate_grid_y is not None:
-        grid = (
+        overrides["sparse_gate_grid"] = (
             args.sparse_gate_grid_x or cfg.sparse_gate_grid[0],
             args.sparse_gate_grid_y or cfg.sparse_gate_grid[1],
         )
-        overrides["sparse_gate_grid"] = grid
-        overrides["sparse_up_grid"] = grid
+    if args.sparse_up_grid_x is not None or args.sparse_up_grid_y is not None:
+        overrides["sparse_up_grid"] = (
+            args.sparse_up_grid_x or cfg.sparse_up_grid[0],
+            args.sparse_up_grid_y or cfg.sparse_up_grid[1],
+        )
     if args.sparse_down_grid_x is not None or args.sparse_down_grid_y is not None:
         overrides["sparse_down_grid"] = (
             args.sparse_down_grid_x or cfg.sparse_down_grid[0],
             args.sparse_down_grid_y or cfg.sparse_down_grid[1],
         )
+    for role in ("gate", "up", "down"):
+        grid_x = getattr(args, f"prefill_sparse_{role}_grid_x")
+        grid_y = getattr(args, f"prefill_sparse_{role}_grid_y")
+        if grid_x is not None or grid_y is not None:
+            default_grid = getattr(cfg, f"prefill_sparse_{role}_grid")
+            overrides[f"prefill_sparse_{role}_grid"] = (
+                grid_x or default_grid[0],
+                grid_y or default_grid[1],
+            )
     return replace(cfg, **overrides)
 
 
@@ -250,6 +271,15 @@ def main():
         "sparse-up-out-subblock-w",
         "sparse-down-out-block-w",
         "sparse-down-out-subblock-w",
+        "prefill-sparse-gate-in0-block-w",
+        "prefill-sparse-up-in0-block-w",
+        "prefill-sparse-down-in0-block-w",
+        "prefill-sparse-gate-out-block-w",
+        "prefill-sparse-gate-out-subblock-w",
+        "prefill-sparse-up-out-block-w",
+        "prefill-sparse-up-out-subblock-w",
+        "prefill-sparse-down-out-block-w",
+        "prefill-sparse-down-out-subblock-w",
         "moe-chunk-size",
         "prefill-moe-chunk-size",
         "serving-decode-qkv-cores",
@@ -315,8 +345,16 @@ def main():
     parser.add_argument("--dense-expert-prefill-down-transpose-mcast", action="store_true")
     parser.add_argument("--sparse-gate-grid-x", type=int)
     parser.add_argument("--sparse-gate-grid-y", type=int)
+    parser.add_argument("--sparse-up-grid-x", type=int)
+    parser.add_argument("--sparse-up-grid-y", type=int)
     parser.add_argument("--sparse-down-grid-x", type=int)
     parser.add_argument("--sparse-down-grid-y", type=int)
+    parser.add_argument("--prefill-sparse-gate-grid-x", type=int)
+    parser.add_argument("--prefill-sparse-gate-grid-y", type=int)
+    parser.add_argument("--prefill-sparse-up-grid-x", type=int)
+    parser.add_argument("--prefill-sparse-up-grid-y", type=int)
+    parser.add_argument("--prefill-sparse-down-grid-x", type=int)
+    parser.add_argument("--prefill-sparse-down-grid-y", type=int)
     args = parser.parse_args()
 
     config = AutoConfig.from_pretrained(MODEL_ID, revision=REAL_REVISION, local_files_only=True)

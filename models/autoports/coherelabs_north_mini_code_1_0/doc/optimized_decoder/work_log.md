@@ -656,3 +656,85 @@ run approximately 419 s. The final watcher log has 3,247 lines and no fatal,
 invalid-NoC, CB-bounds/overflow, sanitizer, timeout, hang, trip, kernel-error,
 watcher-error, or assert signature. Post-run device telemetry again showed
 four live p300c boards, healthy DRAM, zero GDDR errors, and zero thermal trips.
+
+## Rereview closure: independent sparse roles and final profiles
+
+The rereview correctly found that the original named isolated candidates
+inherited cumulative 2/2 defaults. `_SPARSE_SUBBLOCK_CONTROL` now explicitly
+sets gate/up/down to 1x1, and every role candidate merges into that control.
+The opt-in sweep constructs real checkpoint layer-1 weights and checkpoint
+layer input once, captures each candidate, performs three warmups and twenty
+trace replays, checks PCC, and writes the complete policy and source
+provenance.
+
+Authentic isolated results (all PCC `0.9993107116`):
+
+| candidate | ms | candidate | ms |
+|---|---:|---|---:|
+| all-role 1x1 control | 0.781748 | gate G12 1/1 | 0.818704 |
+| gate G12 2/1 | 0.772062 | gate G12 2/2 | 0.771717 |
+| gate G8 3/3 | 0.779254 | gate G6 4/4 | 0.794333 |
+| up G12 1/1 | 0.819105 | up G12 2/1 | 0.770802 |
+| up G12 2/2 | 0.775018 | up G8 3/3 | 0.778011 |
+| up G6 4/4 | 0.793346 | down G32 1/1 | 0.766479 |
+| down G32 2/1 | 0.739863 | down G32 2/2 | 0.739675 |
+| down G16 4/4 | 0.731329 | | |
+
+Cumulative results were 0.717877 ms (all 2/2), 0.704813 ms
+(gate 2/2, up 2/1, down 4/4), 0.709911 ms
+(gate/up 2/2, down 4/4), and 0.711213 ms
+(gate/up 2/1, down 4/4). The 0.704813-ms winner improved the explicit control
+9.84% and the prior correct all-2/2 policy 1.82%. A separate final reproduction
+was 0.705102 ms.
+
+Cross-workload testing rejected a global promotion. At sequence 33 the old
+2/2 prefill policy measured 4.099386/4.078837 ms mean/min and the decode
+winner 4.443987/4.252177 ms. At sequence 128 the comparison was
+13.598431/13.472163 versus 14.495682/14.213173 ms. The implementation now
+uses separate prefill sparse fields: decode gets the cumulative winner and
+grouped prefill retains 2/2. Final default prefill minima were 4.077707 and
+13.491884 ms.
+
+Key commands:
+
+```text
+NORTH_MINI_SPARSE_SUBBLOCK_SWEEP=1 \
+NORTH_MINI_SPARSE_SUBBLOCK_CANDIDATES=all \
+NORTH_MINI_SPARSE_SUBBLOCK_WARMUPS=3 \
+NORTH_MINI_SPARSE_SUBBLOCK_ITERATIONS=20 \
+pytest -q .../tests/test_optimized_decoder.py -k sparse_subblock_sweep
+
+python .../tests/optimized_decoder_perf.py \
+  --mode prefill --batch 1 --layer 1 --sequence <33|128> \
+  --warmups 3 --iterations 20 --json-out <artifact>
+
+python -m tracy -p -r --check-exit-code -o <profile-dir> \
+  .../tests/optimized_decoder_perf.py \
+  --mode <decode|prefill> --batch 1 --layer 1 \
+  --sequence <128|33> --warmups 1 --iterations 1
+
+tt-perf-report <ops.csv> --start-signpost <phase> \
+  --end-signpost <phase-end> --no-color --no-host-ops \
+  --active-experts 8 --csv filtered.csv --summary-file summary
+```
+
+Advice-enabled rows in `tracy/review7_phase_specific/` prove decode
+gate/up/down subblocks 1x2/1x1/1x4 and prefill 1x2/1x2/1x2, all BFP8/LoFi
+with BF16 activations/output and `in0_block_w=16/16/12`. The report marks
+decode gate/down and every prefill sparse subblock good. Authentic timing,
+not advice alone, selects decode up 1x1. No host or Torch conversion operation
+appears in the signposted windows.
+
+Final correctness command covered the main optimized test plus static geometry
+contracts. It passed 41 with 17 expected default-off sweep skips in 383.22 s.
+The same command under separate `TT_METAL_WATCHER=10` passed 41/17 in
+416.48 s. The 3,247-line watcher log has no error/assert/fatal/deadlock/hang
+signature. No capacity-affecting policy changed, so the context contract did
+not require an update.
+
+The sparse rereview finding is fixed. The remaining batch-32 routed-output
+finding is unchanged and exhausted by AutoFix: model-local full-surface sparse
+matmul is much slower, the fast primitive exposes a rolling output, and the
+complete consumer requires fabric. A compact persistent routed output or
+fabric-free local combine must be added in shared TTNN, which the user's
+model-only write scope explicitly excludes.

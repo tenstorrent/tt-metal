@@ -138,3 +138,62 @@ advice-enabled layer-1 and layer-4 b1 decode plus sequence-33/128 prefill
 reports. The final report must show the three sparse roles separately and
 reproduce the selected whole-layer timing; otherwise retain `1x1` with the
 exact per-role failure/blocker.
+
+## Resolution
+
+The rereview matrix was implemented with an explicit all-role 1x1 control, so
+every isolated candidate genuinely changed one role. One device session used
+checkpoint layer-1 weights and the recorded checkpoint layer input, with three
+warmups and twenty traced replays per candidate. Every row preserved PCC
+`0.9993107116`.
+
+| isolated role | candidate | traced decoder (ms) |
+|---|---|---:|
+| control | all-role 1x1 | 0.781748 |
+| gate | G12 block/subblock 1/1 | 0.818704 |
+| gate | G12 2/1 | 0.772062 |
+| gate | G12 2/2 | **0.771717** |
+| gate | G8 3/3 | 0.779254 |
+| gate | G6 4/4 | 0.794333 |
+| up | G12 1/1 | 0.819105 |
+| up | G12 2/1 | **0.770802** |
+| up | G12 2/2 | 0.775018 |
+| up | G8 3/3 | 0.778011 |
+| up | G6 4/4 | 0.793346 |
+| down | G32 1/1 | 0.766479 |
+| down | G32 2/1 | 0.739863 |
+| down | G32 2/2 | 0.739675 |
+| down | G16 4/4 | **0.731329** |
+
+The cumulative matrix also used three warmups and twenty authentic traced
+replays:
+
+| cumulative candidate | traced decoder (ms) |
+|---|---:|
+| all-role 2/2 | 0.717877 |
+| gate 2/2 + up 2/1 + down 4/4 | **0.704813** |
+| gate 2/2 + up 2/2 + down 4/4 | 0.709911 |
+| gate 2/1 + up 2/1 + down 4/4 | 0.711213 |
+
+The winner is 9.84% faster than the authentic 1x1 control and 1.82% faster
+than the best previously correct cumulative 2/2 policy. A final independent
+reproduction measured `0.705102 ms` at the same PCC.
+
+The decode winner regressed prefill: sequence 33 moved from
+`4.099386/4.078837 ms` mean/min to `4.443987/4.252177 ms`, and sequence 128
+from `13.598431/13.472163 ms` to `14.495682/14.213173 ms`. Therefore the
+runtime now has phase-specific sparse programs. Decode selects gate G12 2/2,
+up G12 2/1, and down G16 4/4; grouped prefill retains the prior 2/2 programs.
+Final default prefill reproduced minima `4.077707 ms` (seq33) and
+`13.491884 ms` (seq128).
+
+Advice-enabled profiles under `tracy/review7_phase_specific/` prove the final
+runtime rows: BFP8/LoFi, BF16 activation/output, `in0_block_w=16/16/12`,
+decode subblocks 1x2/1x1/1x4, and prefill 1x2/1x2/1x2. The report calls the
+decode gate/down and all prefill sparse subblocks good; the up 1x1 choice is
+retained because its authentic isolated and cumulative measurements beat
+legal 1x2, 1x3, and 1x4 alternatives.
+
+Machine-readable evidence is in
+`candidates/sparse_subblocks/{authentic_decode,authentic_cumulative_decode,final_default_decode}.json`
+and the corresponding XML files.

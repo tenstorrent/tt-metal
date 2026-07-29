@@ -36,6 +36,7 @@ from models.autoports.coherelabs_north_mini_code_1_0.tests.test_functional_decod
 )
 from models.autoports.coherelabs_north_mini_code_1_0.tt.functional_decoder import FunctionalDecoder
 from models.autoports.coherelabs_north_mini_code_1_0.tt.optimized_decoder import OptimizationConfig, OptimizedDecoder
+from models.common.utility_functions import comp_pcc
 
 
 def _position_zero_reference(hidden, state, config, layer_idx):
@@ -72,6 +73,88 @@ def _decode_once(decoder, hidden, config, mesh_device):
     )
 
 
+_SPARSE_SUBBLOCK_CONTROL = dict(
+    sparse_gate_grid=(8, 3),
+    sparse_up_grid=(8, 3),
+    sparse_down_grid=(8, 8),
+    sparse_gate_out_block_w=1,
+    sparse_gate_out_subblock_w=1,
+    sparse_up_out_block_w=1,
+    sparse_up_out_subblock_w=1,
+    sparse_down_out_block_w=1,
+    sparse_down_out_subblock_w=1,
+)
+
+_SPARSE_SUBBLOCK_CANDIDATES = {
+    "baseline": {},
+    "gate_g12_b1_s1": dict(sparse_gate_grid=(6, 2)),
+    "gate_g12_b2_s1": dict(sparse_gate_grid=(6, 2), sparse_gate_out_block_w=2),
+    "gate_g12_b2_s2": dict(sparse_gate_grid=(6, 2), sparse_gate_out_block_w=2, sparse_gate_out_subblock_w=2),
+    "gate_g8_b3_s3": dict(sparse_gate_grid=(4, 2), sparse_gate_out_block_w=3, sparse_gate_out_subblock_w=3),
+    "gate_g6_b4_s4": dict(sparse_gate_grid=(3, 2), sparse_gate_out_block_w=4, sparse_gate_out_subblock_w=4),
+    "up_g12_b1_s1": dict(sparse_up_grid=(6, 2)),
+    "up_g12_b2_s1": dict(sparse_up_grid=(6, 2), sparse_up_out_block_w=2),
+    "up_g12_b2_s2": dict(sparse_up_grid=(6, 2), sparse_up_out_block_w=2, sparse_up_out_subblock_w=2),
+    "up_g8_b3_s3": dict(sparse_up_grid=(4, 2), sparse_up_out_block_w=3, sparse_up_out_subblock_w=3),
+    "up_g6_b4_s4": dict(sparse_up_grid=(3, 2), sparse_up_out_block_w=4, sparse_up_out_subblock_w=4),
+    "down_g32_b1_s1": dict(sparse_down_grid=(8, 4)),
+    "down_g32_b2_s1": dict(sparse_down_grid=(8, 4), sparse_down_out_block_w=2),
+    "down_g32_b2_s2": dict(sparse_down_grid=(8, 4), sparse_down_out_block_w=2, sparse_down_out_subblock_w=2),
+    "down_g16_b4_s4": dict(sparse_down_grid=(8, 2), sparse_down_out_block_w=4, sparse_down_out_subblock_w=4),
+    "cumulative_s2": dict(
+        sparse_gate_grid=(6, 2),
+        sparse_gate_out_block_w=2,
+        sparse_gate_out_subblock_w=2,
+        sparse_up_grid=(6, 2),
+        sparse_up_out_block_w=2,
+        sparse_up_out_subblock_w=2,
+        sparse_down_grid=(8, 4),
+        sparse_down_out_block_w=2,
+        sparse_down_out_subblock_w=2,
+    ),
+    "cumulative_gs2_ub2s1_ds4": dict(
+        sparse_gate_grid=(6, 2),
+        sparse_gate_out_block_w=2,
+        sparse_gate_out_subblock_w=2,
+        sparse_up_grid=(6, 2),
+        sparse_up_out_block_w=2,
+        sparse_up_out_subblock_w=1,
+        sparse_down_grid=(8, 2),
+        sparse_down_out_block_w=4,
+        sparse_down_out_subblock_w=4,
+    ),
+    "cumulative_gs2_us2_ds4": dict(
+        sparse_gate_grid=(6, 2),
+        sparse_gate_out_block_w=2,
+        sparse_gate_out_subblock_w=2,
+        sparse_up_grid=(6, 2),
+        sparse_up_out_block_w=2,
+        sparse_up_out_subblock_w=2,
+        sparse_down_grid=(8, 2),
+        sparse_down_out_block_w=4,
+        sparse_down_out_subblock_w=4,
+    ),
+    "cumulative_gb2s1_ub2s1_ds4": dict(
+        sparse_gate_grid=(6, 2),
+        sparse_gate_out_block_w=2,
+        sparse_gate_out_subblock_w=1,
+        sparse_up_grid=(6, 2),
+        sparse_up_out_block_w=2,
+        sparse_up_out_subblock_w=1,
+        sparse_down_grid=(8, 2),
+        sparse_down_out_block_w=4,
+        sparse_down_out_subblock_w=4,
+    ),
+}
+
+
+def _sparse_subblock_policy(name):
+    if name not in _SPARSE_SUBBLOCK_CANDIDATES:
+        raise ValueError(f"unknown sparse subblock candidate {name!r}")
+    overrides = _SPARSE_SUBBLOCK_CONTROL | _SPARSE_SUBBLOCK_CANDIDATES[name]
+    return replace(OptimizationConfig(), **overrides)
+
+
 def _expert_sweep_policy():
     name = os.environ.get("NORTH_MINI_EXPERT_POLICY", "selected")
     if name == "selected":
@@ -93,7 +176,7 @@ def _expert_sweep_policy():
         ),
     }
     if name in sparse_candidates:
-        return replace(OptimizationConfig(), **sparse_candidates[name])
+        return replace(OptimizationConfig(), **(_SPARSE_SUBBLOCK_CONTROL | sparse_candidates[name]))
     if name == "bfp8_lofi":
         return OptimizationConfig(
             expert_gate_up_dtype=ttnn.bfloat8_b,
@@ -438,6 +521,137 @@ def test_optimized_real_weight_moe_decode(mesh_device, layer_idx):
         reference,
         ttnn.to_torch(actual).squeeze(0),
     )
+
+
+@pytest.mark.skipif(
+    os.environ.get("NORTH_MINI_SPARSE_SUBBLOCK_SWEEP") != "1",
+    reason="set NORTH_MINI_SPARSE_SUBBLOCK_SWEEP=1 for the authentic role-isolated sweep",
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_optimized_real_weight_sparse_subblock_sweep(mesh_device):
+    """Measure every legal role-isolated output-subblock candidate in one device session."""
+    config = _config()
+    layer_idx = 1
+    state = _real_layer_state(layer_idx)
+    hidden = _real_hidden_at_layer(layer_idx, config)
+    reference = _real_moe_reference(hidden, state, config, layer_idx)
+    requested = os.environ.get("NORTH_MINI_SPARSE_SUBBLOCK_CANDIDATES", "all")
+    names = list(_SPARSE_SUBBLOCK_CANDIDATES) if requested == "all" else requested.split(",")
+    unknown = set(names) - set(_SPARSE_SUBBLOCK_CANDIDATES)
+    if unknown:
+        raise ValueError(f"unknown sparse subblock candidates: {sorted(unknown)}")
+    warmups = int(os.environ.get("NORTH_MINI_SPARSE_SUBBLOCK_WARMUPS", "3"))
+    iterations = int(os.environ.get("NORTH_MINI_SPARSE_SUBBLOCK_ITERATIONS", "20"))
+    if warmups < 1 or iterations < 1:
+        raise ValueError("sparse subblock warmups and iterations must be positive")
+
+    records = []
+    for name in names:
+        policy = _sparse_subblock_policy(name)
+        decoder = None
+        trace_id = None
+        tensors_to_deallocate = []
+        try:
+            decoder = OptimizedDecoder.from_state_dict(
+                state,
+                hf_config=config,
+                layer_idx=layer_idx,
+                mesh_device=mesh_device,
+                batch=1,
+                max_cache_len=32,
+                optimization_config=policy,
+            )
+            key_cache, value_cache = decoder.create_paged_kv_cache()
+            page_table = _to_tt(_page_table(1, 1), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            current, cos, sin = _decode_inputs(decoder, config, mesh_device, [0])
+            hidden_tt = _to_tt(hidden.unsqueeze(0), mesh_device)
+            tensors_to_deallocate.extend((key_cache, value_cache, page_table, current, cos, sin, hidden_tt))
+            kwargs = dict(
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+                current_positions=current,
+                position_cos=cos,
+                position_sin=sin,
+            )
+            decoder.decode_forward(hidden_tt, **kwargs)
+            ttnn.synchronize_device(mesh_device)
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            actual = decoder.decode_forward(hidden_tt, **kwargs)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            tensors_to_deallocate.append(actual)
+            for _ in range(warmups):
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            start = time.perf_counter_ns()
+            for _ in range(iterations):
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            latency_ms = (time.perf_counter_ns() - start) / 1_000_000 / iterations
+            actual_host = ttnn.to_torch(actual).squeeze(0)
+            passed, pcc_message = comp_pcc(reference.float(), actual_host.float(), pcc=0.995)
+            records.append(
+                {
+                    "candidate": name,
+                    "status": "correct" if passed else "pcc_rejected",
+                    "pcc": pcc_message,
+                    "traced_decode_ms": latency_ms,
+                    "weights_source": "checkpoint",
+                    "activations_source": "checkpoint_layer_input",
+                    "expert_weight_dtype": str(policy.expert_gate_up_dtype),
+                    "expert_fidelity": str(policy.expert_gate_up_fidelity),
+                    "gate_grid": policy.sparse_gate_grid,
+                    "gate_out_block_w": policy.sparse_gate_out_block_w,
+                    "gate_out_subblock_w": policy.sparse_gate_out_subblock_w,
+                    "up_grid": policy.sparse_up_grid,
+                    "up_out_block_w": policy.sparse_up_out_block_w,
+                    "up_out_subblock_w": policy.sparse_up_out_subblock_w,
+                    "down_grid": policy.sparse_down_grid,
+                    "down_out_block_w": policy.sparse_down_out_block_w,
+                    "down_out_subblock_w": policy.sparse_down_out_subblock_w,
+                    "gate_up_in0_block_w": policy.sparse_gate_in0_block_w,
+                    "down_in0_block_w": policy.sparse_down_in0_block_w,
+                }
+            )
+        except Exception as error:
+            records.append({"candidate": name, "status": "runtime_rejected", "error": repr(error)})
+        finally:
+            if trace_id is not None:
+                ttnn.release_trace(mesh_device, trace_id)
+            for tensor in tensors_to_deallocate:
+                tensor.deallocate(True)
+            if decoder is not None:
+                for tensor in decoder.weights.values():
+                    if isinstance(tensor, ttnn.Tensor):
+                        tensor.deallocate(True)
+            del decoder
+            gc.collect()
+
+    output = Path(
+        os.environ.get(
+            "NORTH_MINI_SPARSE_SUBBLOCK_OUTPUT",
+            "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/"
+            "candidates/sparse_subblocks/authentic_decode.json",
+        )
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(
+            {
+                "layer": layer_idx,
+                "batch": 1,
+                "warmups": warmups,
+                "iterations": iterations,
+                "records": records,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    print("NORTH_MINI_SPARSE_SUBBLOCK_RESULTS=" + json.dumps(records, sort_keys=True))
+    failures = [record for record in records if record["status"] != "correct"]
+    assert not failures, failures
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
