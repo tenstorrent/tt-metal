@@ -4,21 +4,25 @@
 #include "ema_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
 
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <bit>
+#include <utility>
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 constexpr auto ema_buffer_depth = 2;
 
-tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::create_program_artifacts(
     const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
@@ -69,130 +73,185 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     auto alpha_bits = std::bit_cast<uint32_t>(operation_attributes.alpha);
     auto beta_bits = std::bit_cast<uint32_t>(1.0f - operation_attributes.alpha);
 
-    // Create program descriptor
-    // -------------------------
-    ProgramDescriptor desc;
+    // Program-scope resource names
+    // ----------------------------
+    // Each resource is declared once here and bound by name on the kernels that use it; the kernel
+    // sees a generated handle (dfb::<accessor_name>, tensor::<accessor_name>) rather than an index or
+    // an address. The program-scope id keeps the host's word for the resource and the accessor name
+    // keeps the kernel's, which for the transpose staging buffer are different words: the host calls
+    // it "prev", the kernel "trp".
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName SRC{"src"};
+    const DFBSpecName DST{"dst"};
+    const DFBSpecName PREV{"prev"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
 
-    // Circular buffer config
+    ProgramSpec spec;
+    spec.name = "ema";
+
+    // Dataflow buffer config
     // ----------------------
-    constexpr auto src_cb_index = tt::CBIndex::c_0;
-    constexpr auto dst_cb_index = tt::CBIndex::c_1;
-    constexpr auto prev_cb_index = tt::CBIndex::c_2;
-
+    // Placement is derived from the kernel bindings below, so no node range is declared here.
     auto src_data_format = datatype_to_dataformat_converter(input.dtype());
     auto dst_data_format = datatype_to_dataformat_converter(output.dtype());
 
     auto src_tile_size = input.tensor_spec().tile().get_tile_size(src_data_format);
     auto dst_tile_size = output.tensor_spec().tile().get_tile_size(dst_data_format);
 
-    auto src_cb_size = src_tile_size * ema_buffer_depth;
-    auto dst_cb_size = dst_tile_size * ema_buffer_depth;
-    auto prev_cb_size = src_tile_size;
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = src_cb_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src_cb_index),
-            .data_format = src_data_format,
-            .page_size = src_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = SRC,
+        .entry_size = src_tile_size,
+        .num_entries = ema_buffer_depth,
+        .data_format_metadata = src_data_format,
     });
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = dst_cb_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(dst_cb_index),
-            .data_format = dst_data_format,
-            .page_size = dst_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = DST,
+        .entry_size = dst_tile_size,
+        .num_entries = ema_buffer_depth,
+        .data_format_metadata = dst_data_format,
     });
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = prev_cb_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(prev_cb_index),
-            .data_format = src_data_format,
-            .page_size = src_tile_size,
-        }}},
+    // The compute kernel round-trips one tile through this buffer to transpose it back, so it holds a
+    // single tile rather than a double-buffered pair.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = PREV,
+        .entry_size = src_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = src_data_format,
     });
 
-    // Compile time args for the kernels
-    // ---------------------------------
-    std::vector<uint32_t> reader_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(input).append_to(reader_compile_args);
+    // Tensor parameters
+    // -----------------
+    // The kernels reach the input and output through these; no buffer address travels as an argument.
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
 
-    std::vector<uint32_t> writer_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(output).append_to(writer_compile_args);
-
-    std::vector<uint32_t> compute_compile_args = {
-        total_batch_channel_tiles_per_core,
-        tiles_per_channel,
-        alpha_bits,
-        beta_bits,
-    };
-
-    // Create kernel descriptors
-    // -------------------------
+    // Create kernel specs
+    // -------------------
+    // This op inverts the conventional RISC assignment (the reader runs on RISCV_0 and the writer on
+    // RISCV_1) while keeping the conventional NOC assignment, so neither DM kernel matches a
+    // reader/writer default and both configs are spelled out field by field.
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_reader.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_args);
-    reader_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = reader_noc,
-    };
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_reader.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC,
+            .accessor_name = "src",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = INPUT,
+            .accessor_name = "src",
+        }},
+        .compile_time_args = {{"total_tiles_per_core", total_tiles_per_core}},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_start_tile"}},
+        .hw_config =
+            DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = reader_noc,
+                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+            },
+    });
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_writer.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_args);
-    writer_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_1,
-        .noc = writer_noc,
-    };
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_writer.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = DST,
+            .accessor_name = "dst",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = OUTPUT,
+            .accessor_name = "dst",
+        }},
+        .compile_time_args = {{"total_tiles_per_core", total_tiles_per_core}},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_start_tile"}},
+        .hw_config =
+            DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = writer_noc,
+                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+            },
+    });
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    // PREV is bound twice on the compute kernel, as both endpoints: the compute kernel is the buffer's
+    // only toucher and drives both FIFO ends itself, packing a tile in and unpacking it back out to
+    // transpose it. Both bindings share one accessor name, so the kernel drives them through a single
+    // DataflowBuffer object.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/compute/ema_compute.cpp",
+        // Compute kernels build at O3; the KernelSpec default is O2, so it is stated here.
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = SRC,
+                 .accessor_name = "src",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = DST,
+                 .accessor_name = "dst",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = PREV,
+                 .accessor_name = "trp",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = PREV,
+                 .accessor_name = "trp",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             }},
+        .compile_time_args =
+            {{"total_batches_per_core", total_batch_channel_tiles_per_core},
+             {"tiles_per_channel", tiles_per_channel},
+             {"alpha_bits", alpha_bits},
+             {"beta_bits", beta_bits}},
+        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+    });
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/compute/ema_compute.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = std::move(compute_compile_args);
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
-    };
+    // Kernel placement
+    // ----------------
+    // All three kernels run on every node, which also satisfies the local dataflow buffer rule that a
+    // buffer's producer and consumer share work-unit membership.
+    spec.work_units.push_back(
+        WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores});
 
     // Set runtime args
     // ---------------
+    // The compute kernel reads no runtime args, so it gets no entry here.
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     uint32_t src_start_tile = 0;
     uint32_t dst_start_tile = 0;
     for (const auto& range : all_cores.ranges()) {
         for (const auto& core : range) {
-            reader_desc.emplace_runtime_args(core, {input, src_start_tile});
-            writer_desc.emplace_runtime_args(core, {output, dst_start_tile});
+            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"src_start_tile", src_start_tile}});
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"dst_start_tile", dst_start_tile}});
             src_start_tile += total_tiles_per_core;
             dst_start_tile += total_tiles_per_core;
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
 
-    return desc;
+    run_args.tensor_args.emplace(INPUT, input);
+    run_args.tensor_args.emplace(OUTPUT, output);
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim
