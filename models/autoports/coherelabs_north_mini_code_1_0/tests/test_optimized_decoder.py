@@ -8,6 +8,7 @@ import inspect
 import json
 import math
 import os
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -79,11 +80,15 @@ def _expert_sweep_policy():
         return OptimizationConfig(
             expert_gate_up_dtype=ttnn.bfloat8_b,
             expert_down_dtype=ttnn.bfloat8_b,
+            dense_expert_gate_up_dtype=ttnn.bfloat8_b,
+            dense_expert_down_dtype=ttnn.bfloat8_b,
         )
     if name == "bfp4_lofi":
         return OptimizationConfig(
             expert_gate_up_dtype=ttnn.bfloat4_b,
             expert_down_dtype=ttnn.bfloat4_b,
+            dense_expert_gate_up_dtype=ttnn.bfloat4_b,
+            dense_expert_down_dtype=ttnn.bfloat4_b,
             expert_gate_up_fidelity=ttnn.MathFidelity.LoFi,
             expert_down_fidelity=ttnn.MathFidelity.LoFi,
         )
@@ -95,9 +100,15 @@ def _expert_sweep_policy():
             expert_down_fidelity=ttnn.MathFidelity.HiFi2,
         )
     if name == "bfp4_gate":
-        return OptimizationConfig(expert_gate_up_dtype=ttnn.bfloat4_b)
+        return OptimizationConfig(
+            expert_gate_up_dtype=ttnn.bfloat4_b,
+            dense_expert_gate_up_dtype=ttnn.bfloat4_b,
+        )
     if name == "bfp4_down":
-        return OptimizationConfig(expert_down_dtype=ttnn.bfloat4_b)
+        return OptimizationConfig(
+            expert_down_dtype=ttnn.bfloat4_b,
+            dense_expert_down_dtype=ttnn.bfloat4_b,
+        )
     if name == "bfp8_hifi2":
         return OptimizationConfig(
             expert_gate_up_dtype=ttnn.bfloat8_b,
@@ -166,28 +177,32 @@ def _real_embedding_hidden(token_id=123, sequence=1):
         return handle.get_slice("model.embed_tokens.weight")[token_id : token_id + sequence].reshape(1, sequence, -1)
 
 
-def _real_moe_reference(hidden, state, config, layer_idx):
+def _real_moe_reference(hidden, state, config, layer_idx, *, positions=None, cache=None, return_cache=False):
     prefix = f"model.layers.{layer_idx}."
-    attention_residual, _ = _attention_reference(
+    if positions is None:
+        positions = torch.arange(hidden.shape[1]).reshape(1, -1).expand(hidden.shape[0], -1)
+    attention_residual, updated_cache = _attention_reference(
         hidden,
-        torch.zeros(hidden.shape[0], 1, dtype=torch.long),
+        positions,
         state,
         config,
         layer_idx,
+        cache=cache,
     )
     normalized = _normalized(hidden, state, config, layer_idx)
-    logits = F.linear(normalized.reshape(-1, config.hidden_size), state[prefix + "mlp.gate.weight"])
+    flat = normalized.reshape(-1, config.hidden_size)
+    logits = F.linear(flat, state[prefix + "mlp.gate.weight"])
     scores, experts = torch.topk(logits, config.num_experts_per_tok, dim=-1)
     scores = torch.sigmoid(scores)
-    moe = torch.zeros_like(normalized.reshape(-1, config.hidden_size))
-    for token in range(hidden.shape[0]):
+    moe = torch.zeros_like(flat)
+    for token in range(flat.shape[0]):
         for topk_index, expert in enumerate(experts[token].tolist()):
             gate = F.linear(
-                normalized[token],
+                flat[token],
                 state[f"{prefix}mlp.experts.{expert}.gate_proj.weight"],
             )
             up = F.linear(
-                normalized[token],
+                flat[token],
                 state[f"{prefix}mlp.experts.{expert}.up_proj.weight"],
             )
             contribution = F.linear(
@@ -195,12 +210,13 @@ def _real_moe_reference(hidden, state, config, layer_idx):
                 state[f"{prefix}mlp.experts.{expert}.down_proj.weight"],
             )
             moe[token] += contribution.reshape_as(moe[token]) * scores[token, topk_index]
-    return attention_residual + moe.reshape_as(hidden)
+    output = attention_residual + moe.reshape_as(hidden)
+    return (output, updated_cache) if return_cache else output
 
 
-def _real_hidden_at_layer(layer_idx, config):
-    hidden = _real_embedding_hidden()
-    positions = torch.zeros(1, 1, dtype=torch.long)
+def _real_hidden_at_layer(layer_idx, config, *, sequence=1, token_id=123):
+    hidden = _real_embedding_hidden(token_id=token_id, sequence=sequence)
+    positions = torch.arange(sequence).reshape(1, -1)
     for previous_layer in range(layer_idx):
         state = _real_layer_state(previous_layer)
         if config.mlp_layer_types[previous_layer] == "dense":
@@ -396,6 +412,235 @@ def test_optimized_real_weight_moe_decode(mesh_device, layer_idx):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "layer_idx,batch,mode",
+    [(layer, batch, mode) for layer in (1, 4) for batch in (1, 32) for mode in ("prefill", "decode")],
+)
+def test_optimized_real_weight_moe_precision_matrix(mesh_device, layer_idx, batch, mode):
+    """Exercise selected BFP8 or explicitly requested BFP4 experts on authentic activations."""
+    config = _config()
+    sequence = 33 if mode == "prefill" else 34
+    hidden = _real_hidden_at_layer(layer_idx, config, sequence=sequence, token_id=321)
+    state = _real_layer_state(layer_idx)
+    expert_dtype_name = os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_DTYPE", "bfp8")
+    expert_dtype = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[expert_dtype_name]
+    expert_fidelity_name = os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_FIDELITY", "lofi")
+    expert_fidelity = {
+        "lofi": ttnn.MathFidelity.LoFi,
+        "hifi2": ttnn.MathFidelity.HiFi2,
+    }[expert_fidelity_name]
+    policy = replace(
+        OptimizationConfig(),
+        dense_expert_gate_up_dtype=expert_dtype,
+        dense_expert_down_dtype=expert_dtype,
+        expert_gate_up_fidelity=expert_fidelity,
+        expert_down_fidelity=expert_fidelity,
+        dense_expert_batch_threshold=1,
+        dense_expert_chunk_size=int(os.environ.get("NORTH_MINI_AUTHENTIC_EXPERT_CHUNK", "1024")),
+        serving_fused_kv_update=os.environ.get("NORTH_MINI_AUTHENTIC_FUSED_KV", "0") == "1",
+    )
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=layer_idx,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=64,
+        optimization_config=policy,
+    )
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    if mode == "prefill":
+        reference = _real_moe_reference(hidden, state, config, layer_idx).repeat(batch, 1, 1)
+        hidden = hidden.repeat(batch, 1, 1)
+        cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
+        actual = decoder.prefill_forward(
+            _to_tt(hidden.unsqueeze(0), mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            position_cos=_to_tt(cos, mesh_device) if decoder.use_rope else None,
+            position_sin=_to_tt(sin, mesh_device) if decoder.use_rope else None,
+        )
+    else:
+        prefix = hidden[:, :-1]
+        decode_hidden = hidden[:, -1:]
+        prefix_positions = torch.arange(sequence - 1).reshape(1, -1)
+        _, reference_cache = _real_moe_reference(
+            prefix,
+            state,
+            config,
+            layer_idx,
+            positions=prefix_positions,
+            return_cache=True,
+        )
+        decode_positions = torch.full((1, 1), sequence - 1, dtype=torch.long)
+        reference = _real_moe_reference(
+            decode_hidden,
+            state,
+            config,
+            layer_idx,
+            positions=decode_positions,
+            cache=reference_cache,
+        ).repeat(batch, 1, 1)
+        prefix = prefix.repeat(batch, 1, 1)
+        decode_hidden = decode_hidden.repeat(batch, 1, 1)
+        cos, sin = decoder.build_rope_rows(torch.arange(sequence - 1), hf_config=config)
+        decoder.prefill_forward(
+            _to_tt(prefix.unsqueeze(0), mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            position_cos=_to_tt(cos, mesh_device) if decoder.use_rope else None,
+            position_sin=_to_tt(sin, mesh_device) if decoder.use_rope else None,
+        )
+        hidden_tt = _to_tt(decode_hidden.unsqueeze(0), mesh_device)
+        current, cos_tt, sin_tt = _decode_inputs(decoder, config, mesh_device, [sequence - 1] * batch)
+        kwargs = dict(
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            current_positions=current,
+            position_cos=cos_tt if decoder.use_rope else None,
+            position_sin=sin_tt if decoder.use_rope else None,
+        )
+        decoder.decode_forward(hidden_tt, **kwargs)
+        ttnn.synchronize_device(mesh_device)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        actual = decoder.decode_forward(hidden_tt, **kwargs)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        try:
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            actual_host = ttnn.to_torch(actual).squeeze(0)
+        finally:
+            ttnn.release_trace(mesh_device, trace_id)
+    if mode == "prefill":
+        actual_host = ttnn.to_torch(actual).squeeze(0)
+
+    _assert_pcc(
+        f"optimized-real-{expert_dtype_name}-layer{layer_idx}-{mode}-b{batch}",
+        reference,
+        actual_host,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
+def test_dram_sharded_expert_projection_candidate(mesh_device, weight_dtype):
+    """Adapt the batched DRAM-sharded kernel to one hardware-bank expert group."""
+    workers = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_banks = len(workers)
+    worker_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(core.x, core.y), ttnn.CoreCoord(core.x, core.y)) for core in workers]
+    )
+    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    compute = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    generator = torch.Generator().manual_seed(29000)
+
+    def run_projection(k, n, in0_block_w):
+        activation = _randn(generator, 1, num_banks, 32, k, scale=0.02)
+        weight = _randn(generator, 1, num_banks, k, n, scale=0.02)
+        in0_memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(worker_grid, [32, k], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        weight_memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_grid, [k, n], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        output_memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(worker_grid, [32, n], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        activation_interleaved = ttnn.from_torch(
+            activation,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        activation_tt = ttnn.to_memory_config(activation_interleaved, in0_memory)
+        weight_tt = ttnn.from_torch(
+            weight,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=weight_memory,
+            mesh_mapper=mapper,
+        )
+        program = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+            in0_block_w=in0_block_w,
+            per_core_M=1,
+            per_core_N=n // ttnn.TILE_SIZE,
+            fused_activation=None,
+        )
+        kwargs = dict(
+            program_config=program,
+            memory_config=output_memory,
+            compute_kernel_config=compute,
+            dtype=ttnn.bfloat16,
+        )
+        output = ttnn.matmul(activation_tt, weight_tt, **kwargs)
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter()
+        for _ in range(10):
+            output = ttnn.matmul(activation_tt, weight_tt, **kwargs)
+        ttnn.synchronize_device(mesh_device)
+        latency_ms = (time.perf_counter() - start) * 100
+        actual = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        reference = torch.matmul(activation.float(), weight.float())
+        _assert_pcc(f"dram-expert-{weight_dtype}-{k}x{n}", reference, actual.float(), threshold=0.99)
+        return latency_ms, output
+
+    gate_ms, gate_output = run_projection(2048, 768, 4)
+    down_ms, down_output = run_projection(768, 2048, 2)
+
+    def measure(operation):
+        result = operation()
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter()
+        for _ in range(10):
+            result = operation()
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - start) * 100, result
+
+    silu_ms, activated_gate = measure(lambda: ttnn.silu(gate_output, memory_config=gate_output.memory_config()))
+    multiply_ms, _ = measure(
+        lambda: ttnn.multiply(
+            activated_gate,
+            gate_output,
+            dtype=ttnn.bfloat16,
+            memory_config=gate_output.memory_config(),
+        )
+    )
+    interleave_ms, down_interleaved = measure(
+        lambda: ttnn.sharded_to_interleaved(down_output, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16)
+    )
+    reduce_ms, reduced = measure(lambda: ttnn.sum(down_interleaved, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+    add_ms, _ = measure(lambda: ttnn.add(reduced, reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+    groups = math.ceil(128 / num_banks)
+    lower_bound_ms = groups * (2 * gate_ms + down_ms + silu_ms + multiply_ms + interleave_ms + reduce_ms + add_ms)
+    print(
+        f"dram-expert-{weight_dtype}: banks={num_banks}, gate_ms={gate_ms:.6f}, "
+        f"down_ms={down_ms:.6f}, silu_ms={silu_ms:.6f}, multiply_ms={multiply_ms:.6f}, "
+        f"interleave_ms={interleave_ms:.6f}, reduce_ms={reduce_ms:.6f}, add_ms={add_ms:.6f}, "
+        f"unrouted_lower_bound_ms={lower_bound_ms:.6f}"
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("layer_idx,batch,sequence", [(1, 1, 33), (4, 1, 33)])
 def test_optimized_non_aligned_sparse_prefill_exercises_active_experts(
     mesh_device, monkeypatch, layer_idx, batch, sequence
@@ -494,6 +739,7 @@ def test_optimized_serving_prefill_exercises_selected_dense_experts(mesh_device,
         mesh_device=mesh_device,
         batch=batch,
         max_cache_len=64,
+        optimization_config=_expert_sweep_policy(),
     )
     dense_calls = []
     original_dense = decoder._dense_expert_moe_chunk

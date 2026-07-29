@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="28.722" timestamp="2026-07-29T02:24:12.322352+00:00" hostname="853faf68e2b0"><testcase classname="models.autoports.coherelabs_north_mini_code_1_0.tests.test_optimized_decoder" name="test_optimized_serving_prefill_exercises_selected_dense_experts[blackhole-mesh_device0-32-1]" time="14.581"><properties><property name="start_timestamp" value="2026-07-29T02:24:12" /><property name="end_timestamp" value="2026-07-29T02:24:27" /></properties><failure message="AssertionError: optimized-serving-prefill-dense-experts-b32-s1: 0.9816329839056954&#10;assert False">mesh_device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x754d6ee30c50&gt;
+batch = 32, sequence = 1
+
+    @pytest.mark.parametrize("batch,sequence", [(32, 1), (2, 33)])
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    def test_optimized_serving_prefill_exercises_selected_dense_experts(mesh_device, monkeypatch, batch, sequence):
+        config = _config()
+        layer_idx = 1
+        state = _synthetic_state(config, layer_idx, sparse_weights=True)
+        prefix = f"model.layers.{layer_idx}."
+        for projection in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            state[prefix + f"self_attn.{projection}.weight"].zero_()
+        router = state[prefix + "mlp.gate.weight"]
+        router.fill_(-1.0)
+        for expert in range(config.num_experts_per_tok):
+            router[expert].fill_(1.0 - 0.05 * expert)
+        generator = torch.Generator().manual_seed(27001)
+        hidden = _randn(generator, batch, sequence, config.hidden_size, scale=0.02).abs() + 0.01
+        normalized = _normalized(hidden, state, config, layer_idx)
+        reference_moe, _ = _sparse_moe_reference(normalized, state, config, layer_idx)
+        reference = hidden + reference_moe.reshape_as(hidden)
+        decoder = OptimizedDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=layer_idx,
+            mesh_device=mesh_device,
+            batch=batch,
+            max_cache_len=64,
+            optimization_config=_expert_sweep_policy(),
+        )
+        dense_calls = []
+        original_dense = decoder._dense_expert_moe_chunk
+
+        def counted_dense(value, token_count):
+            dense_calls.append(token_count)
+            return original_dense(value, token_count)
+
+        def forbidden_sparse(*_args, **_kwargs):
+            pytest.fail("selected serving prefill entered sparse expert execution")
+
+        monkeypatch.setattr(decoder, "_dense_expert_moe_chunk", counted_dense)
+        monkeypatch.setattr(decoder, "_sparse_moe_chunk", forbidden_sparse)
+        key_cache, value_cache = decoder.create_paged_kv_cache()
+        page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
+        actual = decoder.prefill_forward(
+            _to_tt(hidden.unsqueeze(0), mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            position_cos=_to_tt(cos, mesh_device),
+            position_sin=_to_tt(sin, mesh_device),
+        )
+        assert dense_calls == [batch * sequence]
+&gt;       _assert_pcc(
+            f"optimized-serving-prefill-dense-experts-b{batch}-s{sequence}",
+            reference,
+            ttnn.to_torch(actual).squeeze(0),
+        )
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py:768:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-serving-prefill-dense-experts-b32-s1'
+reference = tensor([[[ 0.0559,  0.0840, -0.0059,  ...,  0.1055,  0.0854, -0.0159]],
+
+        [[ 0.0537,  0.0684, -0.0459,  ...,  0...0898, -0.0498]],
+
+        [[-0.0122,  0.0239, -0.0559,  ...,  0.1162,  0.0796, -0.0664]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 0.0425,  0.0781,  0.0085,  ...,  0.1128,  0.0801, -0.0085]],
+
+        [[ 0.0488,  0.0608, -0.0339,  ...,  0...0757, -0.0432]],
+
+        [[-0.0143,  0.0231, -0.0344,  ...,  0.1235,  0.0703, -0.0625]]],
+       dtype=torch.bfloat16)
+threshold = 0.995
+
+    def _assert_pcc(name, reference, actual, threshold=0.995):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{name}: {message}")
+&gt;       assert passed, f"{name}: {message}"
+E       AssertionError: optimized-serving-prefill-dense-experts-b32-s1: 0.9816329839056954
+E       assert False
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_functional_decoder.py:320: AssertionError</failure></testcase><testcase classname="models.autoports.coherelabs_north_mini_code_1_0.tests.test_optimized_decoder" name="test_optimized_serving_prefill_exercises_selected_dense_experts[blackhole-mesh_device0-2-33]" time="13.565"><properties><property name="start_timestamp" value="2026-07-29T02:24:27" /><property name="end_timestamp" value="2026-07-29T02:24:41" /></properties><failure message="AssertionError: optimized-serving-prefill-dense-experts-b2-s33: 0.981610108571765&#10;assert False">mesh_device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x752bfae85f40&gt;
+batch = 2, sequence = 33
+
+    @pytest.mark.parametrize("batch,sequence", [(32, 1), (2, 33)])
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    def test_optimized_serving_prefill_exercises_selected_dense_experts(mesh_device, monkeypatch, batch, sequence):
+        config = _config()
+        layer_idx = 1
+        state = _synthetic_state(config, layer_idx, sparse_weights=True)
+        prefix = f"model.layers.{layer_idx}."
+        for projection in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            state[prefix + f"self_attn.{projection}.weight"].zero_()
+        router = state[prefix + "mlp.gate.weight"]
+        router.fill_(-1.0)
+        for expert in range(config.num_experts_per_tok):
+            router[expert].fill_(1.0 - 0.05 * expert)
+        generator = torch.Generator().manual_seed(27001)
+        hidden = _randn(generator, batch, sequence, config.hidden_size, scale=0.02).abs() + 0.01
+        normalized = _normalized(hidden, state, config, layer_idx)
+        reference_moe, _ = _sparse_moe_reference(normalized, state, config, layer_idx)
+        reference = hidden + reference_moe.reshape_as(hidden)
+        decoder = OptimizedDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=layer_idx,
+            mesh_device=mesh_device,
+            batch=batch,
+            max_cache_len=64,
+            optimization_config=_expert_sweep_policy(),
+        )
+        dense_calls = []
+        original_dense = decoder._dense_expert_moe_chunk
+
+        def counted_dense(value, token_count):
+            dense_calls.append(token_count)
+            return original_dense(value, token_count)
+
+        def forbidden_sparse(*_args, **_kwargs):
+            pytest.fail("selected serving prefill entered sparse expert execution")
+
+        monkeypatch.setattr(decoder, "_dense_expert_moe_chunk", counted_dense)
+        monkeypatch.setattr(decoder, "_sparse_moe_chunk", forbidden_sparse)
+        key_cache, value_cache = decoder.create_paged_kv_cache()
+        page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
+        actual = decoder.prefill_forward(
+            _to_tt(hidden.unsqueeze(0), mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            position_cos=_to_tt(cos, mesh_device),
+            position_sin=_to_tt(sin, mesh_device),
+        )
+        assert dense_calls == [batch * sequence]
+&gt;       _assert_pcc(
+            f"optimized-serving-prefill-dense-experts-b{batch}-s{sequence}",
+            reference,
+            ttnn.to_torch(actual).squeeze(0),
+        )
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py:768:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-serving-prefill-dense-experts-b2-s33'
+reference = tensor([[[ 0.0559,  0.0840, -0.0059,  ...,  0.1055,  0.0854, -0.0159],
+         [ 0.0537,  0.0684, -0.0459,  ...,  0.0...0.0601,  0.0991],
+         [ 0.0815,  0.0508, -0.0337,  ...,  0.1367,  0.0938,  0.0281]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 0.0425,  0.0781,  0.0085,  ...,  0.1128,  0.0801, -0.0085],
+         [ 0.0488,  0.0608, -0.0339,  ...,  0.0...0.0356,  0.0996],
+         [ 0.0669,  0.0386, -0.0244,  ...,  0.1387,  0.0728,  0.0352]]],
+       dtype=torch.bfloat16)
+threshold = 0.995
+
+    def _assert_pcc(name, reference, actual, threshold=0.995):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{name}: {message}")
+&gt;       assert passed, f"{name}: {message}"
+E       AssertionError: optimized-serving-prefill-dense-experts-b2-s33: 0.981610108571765
+E       assert False
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_functional_decoder.py:320: AssertionError</failure></testcase></testsuite></testsuites>

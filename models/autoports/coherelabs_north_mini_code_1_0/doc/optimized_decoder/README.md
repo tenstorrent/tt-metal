@@ -94,12 +94,12 @@ primary batch 1 and serving batch 32.
 
 | Layer kind | Phase | Functional b1 | Optimized b1 | Functional b32 | Optimized b32 |
 |---|---|---:|---:|---:|---:|
-| dense/full/forced-RoPE | prefill | 0.636 ms | 0.508 ms | 13.758 ms | 4.724 ms |
+| dense/full/forced-RoPE | prefill | 0.636 ms | 0.513 ms | 13.758 ms | 4.683 ms |
 | dense/full/forced-RoPE | decode | 0.356 ms | 0.187 ms | 6.652 ms | 0.252 ms |
-| sliding/RoPE/MoE | prefill | 14.908 ms | 4.979 ms | 147.182 ms | 141.145 ms |
-| sliding/RoPE/MoE | decode | 9.528 ms | 0.791 ms | 11.122 ms | 3.400 ms |
-| full/no-RoPE/MoE | prefill | 14.655 ms | 4.668 ms | 146.699 ms | 140.767 ms |
-| full/no-RoPE/MoE | decode | 9.524 ms | 0.795 ms | 11.129 ms | 3.400 ms |
+| sliding/RoPE/MoE | prefill | 14.908 ms | 4.696 ms | 147.182 ms | 140.932 ms |
+| sliding/RoPE/MoE | decode | 9.528 ms | 0.791 ms | 11.122 ms | 3.401 ms |
+| full/no-RoPE/MoE | prefill | 14.655 ms | 4.892 ms | 146.699 ms | 140.915 ms |
+| full/no-RoPE/MoE | decode | 9.524 ms | 0.794 ms | 11.129 ms | 3.384 ms |
 
 The final rerun reproduces primary batch-1 decode improvements of 1.90x for
 dense and about 12x for both MoE kinds. Batch 32 improves by 26.37x for dense
@@ -125,9 +125,11 @@ single-device output limitation, not a functional fallback.
 | dense MLP precision | BF16/BFP8 family | BFP4/LoFi gate/up/down crossed with final geometry | selected for decode after authentic layer-0 PCC 0.998001; all-BFP4 authentic decode/prefill fails at 0.990750/0.991947 |
 | attention precision | BF16/BFP8/BFP4 and LoFi/HiFi2 | all-attention BFP4/LoFi | BFP8/LoFi retained; authentic all-BFP4 layer-0 decode PCC 0.990750 fails |
 | dense prefill precision | reused BFP4 decode weights | phase-specific BFP8/HiFi2 weights | selected; BFP4 failed seq 31/33/65 PCC, BFP8 passes all |
-| prefill programs | default/small fixed grid | 8x8 and 10x10 2-D programs; special fused b32/s1; per-user and token-packed non-aligned paths | 10x10 for M>=1024; token-packed non-aligned multi-user path selected. The special fused path watcher-asserted and the per-user one-row tilize stalled; both were adapted rather than rejected on their first error. |
+| prefill programs | default/small fixed grid | 8x8 and 10x10 2-D programs; special fused b32/s1; per-user and token-packed non-aligned paths | 10x10 for aligned large prefill; token-packed non-aligned multi-user path selected. Authentic b32/s33 exposed non-finite packed QKV/O results with the 10x10 family, so that compatibility branch internally chunks projection rows to 512 and passes PCC 0.999509/0.999989 at layers 1/4. The special fused path watcher-asserted and the per-user one-row tilize stalled; all were adapted rather than rejected on their first error. |
+| decode RoPE layout | inherited rectangular core set | rectangular and exact row-wise sub-core order | exact row-wise order selected. Authentic cache-consuming b32 decode proved the 8x4 rectangle remapped lanes 8–31; the corrected grid passes layer-1 traced decode at PCC 0.999150. |
 | MoE router | reduced fidelity router | BF16/HiFi2 with BF16 or FP32 destination accumulation | BF16/HiFi2 with FP32 destination accumulation; the default accumulator changed authentic layer-4 top-k routing and failed active-expert correctness |
-| MoE experts | BFP4 and BFP8, LoFi/HiFi2 | sparse gate/up/down grid and block sweeps, then authentic layers 1/4 | BFP8/LoFi retained. BFP4 is faster (b32 decode 2.214 vs 3.391 ms; prefill 139.965 vs 141.142 ms) and authentic PCC is 0.998206/0.999607, but the required layer-4 stress route fails at 0.982697; gate-only, down-only, and HiFi2 adaptations also fail the complete gate. |
+| MoE experts | BFP4 and BFP8, LoFi/HiFi2 | sparse gate/up/down grid and block sweeps, authentic layers 1/4 at b1/b32 with non-aligned prefill and cache-consuming traced decode | BFP8/LoFi retained. Both policies pass all eight authentic full-output rows: BFP8 0.999103–0.999989 and BFP4 0.997234–0.999941. BFP4 is faster, but the representative dense-expert stress still fails both b32/s1 and b2/s33 at PCC 0.981633/0.981610; gate-only, down-only, and HiFi2 adaptations also fail the complete gate. |
+| DRAM-sharded expert matmul | all 128 experts in the existing dense batched family | all-expert and hardware-bank-grouped BFP8/BFP4 batched DRAM-sharded programs | all-expert Tile(32,32) is a hard L1-capacity miss. The adapted legal 8-bank group passes projection PCC 0.99986 BFP8 / 0.99384 BFP4, but its measured unrouted lower bound is already 5.185/4.170 ms before router/top-k/routing, versus 3.400 ms for the selected complete b32 layer; rejected. |
 | sparse grids | common grid for all expert projections | gate 8x3/6x4; down 8x8 and larger adapted grids | gate 8x3, down 8x8, blocks 16/12; 0.7966 vs 0.8557 ms b1 |
 | MoE routing composites | top-k, sigmoid, scatter, row-major sparsity | scatter/sparse and dense expert families | all device-resident; intrinsic scatter tilize/untilize costs are recorded below |
 | collectives | none; single-device stage | CCL/fused CCL candidates | not applicable in this stage |
@@ -186,26 +188,28 @@ The final watcher-only run used:
 
 ```bash
 TT_METAL_WATCHER=10 \
-TT_METAL_LOGS_PATH=models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/watcher/final_rereview \
-pytest -q -s \
+TT_METAL_LOGS_PATH=models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/watcher/final_after_review2 \
+pytest -q -s --timeout=600 \
+  --junitxml=models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/final_after_review2_watcher.xml \
   models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py
 ```
 
-Result: `20 passed in 134.01s`. The 2,170-line watcher log has no
-fatal/assert/invalid-NOC/CB-bounds/overflow/sanitizer/timeout/hang/error
-signature. All four p300c boards were healthy afterward, with DRAM status
-true, temperatures 48.2–54.4 C, advancing heartbeats, and zero corrected or
+Result: `30 passed in 205.13s`. The 1,092-line watcher log has no
+fatal/assert/invalid-NOC/CB-bounds/overflow/sanitizer/timeout/hang/tripped or
+kernel-error signature. The matching non-watcher suite passed all 30 tests in
+175.26s. All four p300c boards were healthy afterward, with DRAM status true,
+ASIC temperatures 48.7–54.9 C, live heartbeats, and zero corrected or
 uncorrected GDDR errors.
 
 - `candidates/`: cumulative b1/b32 policy, layout, precision, and program
   sweeps.
 - `tracy/selected/`: final raw ops CSV, advice-enabled filtered CSV, and
   summary CSV/PNG for representative prefill/decode paths.
-- `watcher/final_rereview/generated/watcher/watcher.log`: final watcher
+- `watcher/final_after_review2/generated/watcher/watcher.log`: final watcher
   evidence.
-- `artifacts/optimized_correctness.{log,xml}` and
-  `artifacts/optimized_watcher.{log,xml}`: machine-readable and full-text test
-  evidence.
+- `artifacts/final_after_review2_full.xml` and
+  `artifacts/final_after_review2_watcher.xml`: final machine-readable test
+  evidence; matching ignored `.log` files retain full transcripts.
 - `triage/` and `AUTOTRIAGE.md`: failed-candidate hang capture, root-cause
   ledger, reset evidence, and the token-packed model-side fix.
 - `context500000_decode_b32.json`: optimized advertised-context evidence.
