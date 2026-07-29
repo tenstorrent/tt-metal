@@ -617,6 +617,12 @@ bool DPrintServer::Impl::poll_print_buffer(
             from_dev = cluster.read_core(device_id, virtual_core, read_write_pointer_address, eightbytes);
             wpos = from_dev[0];
             rpos = from_dev[1];
+
+            // Device should be much faster than host, but in case we are running simulation,
+            // we should check if device has reset buffer and we have caught up to it.
+            if (rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                return false;
+            }
             continue;
         }
 
