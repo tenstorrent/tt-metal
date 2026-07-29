@@ -87,10 +87,18 @@ sudo env TTBRIDGE_EGRESS=doca TTBRIDGE_TXDEV=mlx5_0 TTBRIDGE_PLEN=4080 TTBRIDGE_
 Correctness identical to B1 (byte-exact land, exactly-once, drop=0). `TTBRIDGE_TXBATCH=N` (default 64; 1 =
 unbatched) sets frames per HW-TX `doca_task_batch`. **Perf (jumbo 4080B): batch=64 ~56 Gbps / 1.7 Mpps vs
 unbatched ~47 G vs raw ~13 G.** **B3.1a (batching) done** — modest ~20% win; the wall is the **per-frame
-memcpy** (4080B × 1.7 Mpps ≈ 6.5 GB/s, one Arm core saturated). **B3.1b (zero-copy scatter-gather** —
-payload buf pointing into the RDMA responder mmap registered on the TX dev + an RX landing ring, no memcpy)
-**is the real line-rate lever** (should ~2×). **Next:** B2 (MR federation via RISC1 doorbell 3.1e); B3.1b
-(zero-copy line-rate egress).
+memcpy** (4080B × 1.7 Mpps ≈ 6.5 GB/s, one Arm core saturated).
+
+**B3.1b (zero-copy scatter-gather) DONE — NEGATIVE RESULT.** `TTBRIDGE_TXZC=1` chains a 46B header buf to a
+payload buf pointing into a TX-side view of the RDMA responder mmap (`set_max_send_buf_list_len(2)`), so no
+per-frame memcpy. **Correct (byte-exact land, drop=0) but ~20× SLOWER: ~1.8 Gbps vs batched-copy ~39 Gbps**
+(500k jumbo took 9.1 s vs 0.42 s) — the DOCA **CPU-datapath 2-buf gather doesn't pipeline** (~18 µs/frame),
+no send errors. So SG zero-copy is **not** the line-rate lever; kept gated OFF for reference. **The real
+line-rate path = contiguous single-buf with NO per-send memcpy** (doca_ttblast hits 143–198G that way): land
+the RoCE payload directly into a TX-ready frame slot (reserve 46B header space in the responder MR; unify the
+RX landing ring with the TX frame ring), then TX single-buf. Bigger restructure — deferred. **Production
+egress = B3.1a batched-copy (~39–56G).** **Next:** B2 (MR federation via RISC1 doorbell 3.1e); land-into-frame
+contiguous egress if egress BW must exceed ~56G.
 
 ## 4. Regression / perf gates (run every phase change)
 ```

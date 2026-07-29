@@ -23,6 +23,9 @@
  *   TTBRIDGE_PLEN    bytes to forward per WRITE    (default 256)
  *   TTBRIDGE_MAX     stop after N forwards         (default 1)
  *   TTBRIDGE_TXBATCH frames per HW-TX task_batch   (default 64; 1 = unbatched, for A/B)
+ *   TTBRIDGE_TXZC    HW-TX zero-copy scatter-gather (default 0; B3.1b experiment -- correct but MUCH
+ *                    SLOWER: ~1.8G vs batched-copy ~39G, the CPU-datapath 2-buf gather can't pipeline.
+ *                    Kept for reference; do NOT enable for throughput. See RUNBOOK.)
  *   TTBRIDGE_BURST   re-emit each payload N times  (default 1; validation knob for a dense pool stream)
  * Build/run: deploy_rdma_bridge.sh (vendors this + builds against the stock DOCA rdma + eth sample sources).
  */
@@ -105,10 +108,18 @@ struct tt_doca_tx {
     uint32_t pend_slots[TT_TX_BATCH]; /* slots staged into the batch currently being filled */
     uint32_t pend_count;              /* frames staged in the current (unsubmitted) batch */
     uint32_t inflight_batches;        /* submitted-but-not-completed task_batches */
-    uint32_t frame_size;              /* 14 (L2) + 32 (TT hdr) + g_plen */
+    uint32_t frame_size;              /* 14 (L2) + 32 (TT hdr) + g_plen (per-slot mmap stride) */
     uint32_t batch;                   /* runtime frames-per-batch (TTBRIDGE_TXBATCH, 1..TT_TX_BATCH) */
     uint8_t smac[6];                  /* uplink device MAC */
     int started;                      /* ctx started (for cleanup gating) */
+    /* B3.1b zero-copy scatter-gather (TTBRIDGE_TXZC=1): the payload is NOT memcpy'd. Each slot's pkt is a
+     * 2-buf list [header buf (46B, TX mmap)] -> [payload buf into a TX-side VIEW of the RDMA responder
+     * memrange]; per send we patch the 46B header + doca_buf_set_data the payload buf. Kills the per-frame
+     * memcpy (the ~56G batched-copy wall). */
+    int zc;                            /* zero-copy scatter-gather egress (TTBRIDGE_TXZC) */
+    struct doca_mmap* pay_mmap;        /* TX-dev view over the RDMA responder memrange (zc) */
+    void* pay_base;                    /* base of the responder memrange (== resources->mmap_memrange) */
+    struct doca_buf* pbuf[TT_TX_POOL]; /* per-slot payload bufs into pay_mmap (zc), chained to bufs[] */
 };
 static struct tt_doca_tx g_tx;
 #define TT_TX_SLEEP_NANOS (10 * 1000)
@@ -279,7 +290,8 @@ static int egress_doca_init(const char* txdev) {
     g_tx.frame_size = 14u + 32u + g_plen;
     struct eth_core_config cfg = {
         .mmap_size = g_tx.frame_size * TT_TX_POOL,
-        .inventory_num_elements = TT_TX_POOL,
+        /* zc needs 2 bufs per slot (header + payload); copy mode needs 1. */
+        .inventory_num_elements = (g_tx.zc ? 2u : 1u) * TT_TX_POOL,
         .check_device = tt_tx_check_device,
         .ibdev_name = txdev,
     };
@@ -309,6 +321,12 @@ static int egress_doca_init(const char* txdev) {
         g_tx.txq, DOCA_TASK_BATCH_MAX_TASKS_NUMBER_64, TT_TX_INFLIGHT_BATCHES, tt_tx_batch_cb, tt_tx_batch_err_cb);
     if (st != DOCA_SUCCESS) {
         DOCA_LOG_ERR("HW-TX: task_batch_send_set_conf: %s", doca_error_get_name(st));
+        return -1;
+    }
+    /* zc: allow a 2-buf send list ([header] -> [payload]); default 1 (single contiguous frame). */
+    st = doca_eth_txq_set_max_send_buf_list_len(g_tx.txq, g_tx.zc ? 2u : 1u);
+    if (st != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("HW-TX: set_max_send_buf_list_len: %s", doca_error_get_name(st));
         return -1;
     }
     g_tx.core.core_objs.ctx = doca_eth_txq_as_doca_ctx(g_tx.txq);
@@ -347,33 +365,108 @@ static int egress_doca_init(const char* txdev) {
         return -1;
     }
 
-    /* Build the TX buf pool: one persistent doca_buf per fixed-size slot, L2 + static TT hdr pre-filled. */
-    for (uint32_t i = 0; i < TT_TX_POOL; i++) {
-        uint8_t* base = (uint8_t*)g_tx.core.mmap_addr + (size_t)i * g_tx.frame_size;
-        st = doca_buf_inventory_buf_get_by_data(
-            g_tx.core.core_objs.buf_inv, g_tx.core.core_objs.src_mmap, base, g_tx.frame_size, &g_tx.bufs[i]);
-        if (st != DOCA_SUCCESS) {
-            DOCA_LOG_ERR("HW-TX: buf_get[%u]: %s", i, doca_error_get_name(st));
-            return -1;
+    /* Build the copy-mode TX buf pool: one persistent full-frame doca_buf per slot, L2 + static TT hdr
+     * pre-filled. (zc mode builds a header+payload chained pool later in egress_doca_bind, once the RDMA
+     * responder memrange exists.) */
+    if (!g_tx.zc) {
+        for (uint32_t i = 0; i < TT_TX_POOL; i++) {
+            uint8_t* base = (uint8_t*)g_tx.core.mmap_addr + (size_t)i * g_tx.frame_size;
+            st = doca_buf_inventory_buf_get_by_data(
+                g_tx.core.core_objs.buf_inv, g_tx.core.core_objs.src_mmap, base, g_tx.frame_size, &g_tx.bufs[i]);
+            if (st != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("HW-TX: buf_get[%u]: %s", i, doca_error_get_name(st));
+                return -1;
+            }
+            struct ether_hdr* eh = (struct ether_hdr*)base;
+            memcpy(eh->dst_addr, g_dmac, 6);
+            memcpy(eh->src_addr, g_tx.smac, 6);
+            eh->ether_type = htobe16(0x1AF6);
+            g_tx.free_stack[i] = i;
         }
-        struct ether_hdr* eh = (struct ether_hdr*)base;
-        memcpy(eh->dst_addr, g_dmac, 6);
-        memcpy(eh->src_addr, g_tx.smac, 6);
-        eh->ether_type = htobe16(0x1AF6);
-        g_tx.free_stack[i] = i;
+        g_tx.free_top = TT_TX_POOL;
     }
-    g_tx.free_top = TT_TX_POOL;
     DOCA_LOG_INFO(
-        "TT-RDMA egress ready (DOCA HW-TX): dev=%s pool=%u batch=%u frame=%uB rkey=0x%08x plen=%u max=%lu "
-        "burst=%lu",
+        "TT-RDMA egress ready (DOCA HW-TX): dev=%s pool=%u batch=%u frame=%uB zc=%d rkey=0x%08x plen=%u "
+        "max=%lu burst=%lu",
         txdev,
         TT_TX_POOL,
         g_tx.batch,
         g_tx.frame_size,
+        g_tx.zc,
         g_rkey,
         g_plen,
         g_max_fwd,
         g_burst);
+    return 0;
+}
+
+/* zc late-bind: create a TX-device VIEW mmap over the RDMA responder memrange, then build the per-slot
+ * [header buf (46B in the TX mmap)] -> [payload buf (into the view)] chains. Called after the RDMA responder
+ * mmap exists (its memrange is a plain host buffer; we register a 2nd doca_mmap over it on the TX dev so the
+ * eth TX DMA can gather-read the RoCE-landed payload with no copy). Returns 0 on success. */
+static int egress_doca_bind(void* memrange, size_t len) {
+    doca_error_t st;
+
+    if (!g_tx.zc) {
+        return 0; /* copy mode: pool already built in egress_doca_init */
+    }
+    g_tx.pay_base = memrange;
+
+    st = doca_mmap_create(&g_tx.pay_mmap);
+    if (st != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("HW-TX zc: mmap_create: %s", doca_error_get_name(st));
+        return -1;
+    }
+    st = doca_mmap_set_memrange(g_tx.pay_mmap, memrange, len);
+    if (st != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("HW-TX zc: set_memrange: %s", doca_error_get_name(st));
+        return -1;
+    }
+    st = doca_mmap_set_permissions(g_tx.pay_mmap, DOCA_ACCESS_FLAG_LOCAL_READ_ONLY);
+    if (st != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("HW-TX zc: set_permissions: %s", doca_error_get_name(st));
+        return -1;
+    }
+    st = doca_mmap_add_dev(g_tx.pay_mmap, g_tx.core.core_objs.dev);
+    if (st != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("HW-TX zc: add_dev(TX): %s", doca_error_get_name(st));
+        return -1;
+    }
+    st = doca_mmap_start(g_tx.pay_mmap);
+    if (st != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("HW-TX zc: mmap_start: %s", doca_error_get_name(st));
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < TT_TX_POOL; i++) {
+        uint8_t* hbase = (uint8_t*)g_tx.core.mmap_addr + (size_t)i * g_tx.frame_size;
+        /* header buf = 46B (L2 + 32B TT hdr) in the TX mmap */
+        st = doca_buf_inventory_buf_get_by_data(
+            g_tx.core.core_objs.buf_inv, g_tx.core.core_objs.src_mmap, hbase, 46u, &g_tx.bufs[i]);
+        if (st != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("HW-TX zc: hbuf_get[%u]: %s", i, doca_error_get_name(st));
+            return -1;
+        }
+        struct ether_hdr* eh = (struct ether_hdr*)hbase;
+        memcpy(eh->dst_addr, g_dmac, 6);
+        memcpy(eh->src_addr, g_tx.smac, 6);
+        eh->ether_type = htobe16(0x1AF6);
+        /* payload buf into the view; initial data = [memrange, memrange+g_plen), re-pointed per send. */
+        st = doca_buf_inventory_buf_get_by_data(
+            g_tx.core.core_objs.buf_inv, g_tx.pay_mmap, memrange, g_plen, &g_tx.pbuf[i]);
+        if (st != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("HW-TX zc: pbuf_get[%u]: %s", i, doca_error_get_name(st));
+            return -1;
+        }
+        st = doca_buf_chain_list(g_tx.bufs[i], g_tx.pbuf[i]); /* pkt = [header] -> [payload] */
+        if (st != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("HW-TX zc: chain[%u]: %s", i, doca_error_get_name(st));
+            return -1;
+        }
+        g_tx.free_stack[i] = i;
+    }
+    g_tx.free_top = TT_TX_POOL;
+    DOCA_LOG_INFO("HW-TX zc: bound payload view (%zuB) on TX dev + %u header->payload chains ready", len, TT_TX_POOL);
     return 0;
 }
 
@@ -438,8 +531,14 @@ static void egress_doca_send(const unsigned char* payload, unsigned plen, uint32
 
     slot = g_tx.free_stack[--g_tx.free_top];
     base = (uint8_t*)g_tx.core.mmap_addr + (size_t)slot * g_tx.frame_size;
-    tt_build_hdr(base + 14, plen, roff, imm); /* L2 + static hdr already built at init */
-    memcpy(base + 14 + 32, payload, plen);
+    tt_build_hdr(base + 14, plen, roff, imm); /* L2 + static hdr prebuilt at init/bind */
+    if (g_tx.zc) {
+        /* Zero-copy: re-point this slot's payload buf at the landed bytes; the send gathers
+         * [header buf] -> [payload buf] with no memcpy. `payload` == g_tx.pay_base + roff already. */
+        (void)doca_buf_set_data(g_tx.pbuf[slot], (uint8_t*)g_tx.pay_base + roff, plen);
+    } else {
+        memcpy(base + 14 + 32, payload, plen);
+    }
 
     g_tx.pend_slots[g_tx.pend_count++] = slot;
     if (g_tx.pend_count >= g_tx.batch) {
@@ -458,7 +557,9 @@ static int egress_init(void) {
     const char* max_s = getenv("TTBRIDGE_MAX");
     const char* burst_s = getenv("TTBRIDGE_BURST");
     const char* egr_s = getenv("TTBRIDGE_EGRESS");
+    const char* zc_s = getenv("TTBRIDGE_TXZC");
 
+    g_tx.zc = (zc_s && strtoul(zc_s, NULL, 0) != 0) ? 1 : 0;
     if (!iface) {
         iface = "p0";
     }
@@ -499,6 +600,15 @@ static int egress_init(void) {
     }
 
     return g_egress_doca ? egress_doca_init(txdev) : egress_raw_init(iface);
+}
+
+/* Late-bind the egress to the RDMA responder memrange (zc needs a TX-side view of it). No-op unless DOCA zc.
+ * Called after allocate_rdma_resources. Returns 0 on success. */
+static int egress_bind(void* memrange, size_t len) {
+    if (g_egress_doca && g_tx.zc) {
+        return egress_doca_bind(memrange, len);
+    }
+    return 0;
 }
 
 /* Build + send one TT-RDMA WRITE frame from `payload` (plen bytes) at remote offset `roff`. */
@@ -549,10 +659,17 @@ static void egress_cleanup(void) {
         return;
     }
     egress_drain();
+    /* dec_refcount only the chain HEAD (bufs[i]); DOCA frees the whole list, so the zc payload tail
+     * (pbuf[i]) must NOT be dec'd separately -- doing so errors "must be head of buffer list". */
     for (uint32_t i = 0; i < TT_TX_POOL; i++) {
         if (g_tx.bufs[i] != NULL) {
             (void)doca_buf_dec_refcount(g_tx.bufs[i], NULL);
         }
+    }
+    if (g_tx.pay_mmap != NULL) {
+        (void)doca_mmap_stop(g_tx.pay_mmap);
+        (void)doca_mmap_destroy(g_tx.pay_mmap);
+        g_tx.pay_mmap = NULL;
     }
     if (g_tx.flow.df_port != NULL) {
         (void)eth_flow_common_destroy_flow_port(&g_tx.flow);
@@ -804,6 +921,11 @@ doca_error_t rdma_write_immediate_responder(struct rdma_config* cfg) {
     if (result != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Failed to allocate RDMA Resources: %s", doca_error_get_descr(result));
         return result;
+    }
+    /* zc egress needs a TX-side view of the RDMA responder memrange (now that it exists). */
+    if (egress_bind(resources.mmap_memrange, MAX_BUFF_SIZE) != 0) {
+        result = DOCA_ERROR_INITIALIZATION;
+        goto destroy_resources;
     }
     result = doca_rdma_task_receive_set_conf(
         resources.rdma, rdma_receive_completed_callback, rdma_receive_error_callback, NUM_RDMA_TASKS);
