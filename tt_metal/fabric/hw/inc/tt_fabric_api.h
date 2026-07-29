@@ -316,6 +316,170 @@ bool fabric_set_unicast_route(
     return ok;
 }
 
+// ============================================================================
+// Indexed 2D route codec (destination-indexed ABI) — worker/edge producers
+// ============================================================================
+// Target encode for 2D mesh routing: the packet carries widened action-byte maps,
+// route_buffer[0..Y) = route_buffer_y then route_buffer[Y..Y+X) = route_buffer_x (contiguous
+// layout), instead of a hop program + branch offsets.
+
+// Widen core shared by the worker unicast producer and the intermesh landing encoder: install
+// destination dst_dev_id's action maps from the given vector table — the Y row
+// widened one-hot into route_buffer[0..Y), the X row into route_buffer[Y..Y+X), LOCAL_DELIVER OR-ed
+// onto the destination's X slot. The installed maps are a pure function of the destination
+// (destination-indexed, suffix-consistent tables), so the landing encoder reuses this verbatim with
+// no notion of encode_root.
+inline void widen_indexed_route_to_chip(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    const std::uint8_t* vectors,
+    uint16_t dst_dev_id,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size) {
+    ASSERT(dst_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
+    ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
+
+    const uint32_t dst_y = dst_dev_id / mesh_x_size;
+    const uint32_t dst_x = dst_dev_id % mesh_x_size;
+
+    const std::uint8_t* y_vec = IndexedMeshRoutingFields::y_row(vectors, mesh_y_size, dst_y);
+    for (uint32_t i = 0; i < mesh_y_size; ++i) {
+        packet_header->route_buffer[i] =
+            IndexedMeshRoutingFields::widen_y(IndexedMeshRoutingFields::get_action_2bit(y_vec, i));
+    }
+    const std::uint8_t* x_vec = IndexedMeshRoutingFields::x_row(vectors, mesh_y_size, mesh_x_size, dst_x);
+    for (uint32_t i = 0; i < mesh_x_size; ++i) {
+        packet_header->route_buffer[mesh_y_size + i] =
+            IndexedMeshRoutingFields::widen_x(IndexedMeshRoutingFields::get_action_2bit(x_vec, i));
+    }
+    // Full-widen delivery marker lives only on the X slot: at dst_y the Y row widens to STOP (0),
+    // and decode falls through to route_buffer_x.
+    packet_header->route_buffer[mesh_y_size + dst_x] |= IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+}
+
+// Full unicast widen. mesh_{y,x}_size are the local mesh shape; callers supply them from
+// their own compile-time context (device-side id->coord math mirrors MeshGraph::chip_to_coordinate:
+// coord = (id / x_size, id % x_size)). Always returns true; the widen is total and violations fail
+// ASSERTs instead.
+inline bool fabric_set_indexed_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size) {
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    // Final destination is retained up front and never overwritten by the exit swap below.
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->mcast_params_64 = 0;
+    packet_header->is_mcast_active = 0;
+    packet_header->routing_fields.value = 0;
+
+    if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
+        // Remote final mesh: widen unicast-style maps to the temporary exit chip so the maps decode
+        // to exactly LOCAL_DELIVER at the exit chip.
+        auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
+        dst_dev_id = exit_node_table[dst_mesh_id];
+    }
+
+    widen_indexed_route_to_chip(
+        packet_header, routing_table->indexed_route_vectors.data, dst_dev_id, mesh_y_size, mesh_x_size);
+    return true;
+}
+
+// Intermesh landing encode. Runs on the boundary-facing router BEFORE ordinary decode: the packet
+// still carries source-mesh maps, so they are re-installed from THIS mesh's own vector table.
+// Intermediate landing widens unicast-style maps toward this mesh's next exit for the final mesh
+// (exit_node_table); destination landing widens to the retained final chip. dst_start_node_id and
+// mcast_params_64 are always preserved — temporary exits live only in the installed maps and must
+// never overwrite the final destination.
+inline void fabric_set_indexed_intermesh_landing_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    const routing_l1_info_t& routing_table,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size) {
+    const uint16_t final_mesh_id = packet_header->dst_start_mesh_id;
+    // Bounds before exit_node_table indexing.
+    ASSERT(final_mesh_id < MAX_NUM_MESHES);
+    uint16_t target_dev_id;
+    if (final_mesh_id != routing_table.my_mesh_id) {
+        // Intermediate landing: this mesh's next exit toward the final mesh. Multicast-safe as-is:
+        // anchor/extents stay retained and no target-range fanout begins at an intermediate mesh.
+        target_dev_id = routing_table.exit_node_table[final_mesh_id];
+        ASSERT(target_dev_id != (uint16_t)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+    } else {
+        // Destination landing: widen to the final destination. Destination-landing multicast is not
+        // implemented; producers emit unicast only, so a multicast carrier here fail-stops.
+        ASSERT(packet_header->mcast_params_64 == 0);
+        target_dev_id = packet_header->dst_start_chip_id;
+    }
+    widen_indexed_route_to_chip(
+        packet_header, routing_table.indexed_route_vectors.data, target_dev_id, mesh_y_size, mesh_x_size);
+}
+
+// Single-hop poke. Same client contract as the legacy single-hop helpers (dest is exactly
+// one fabric hop away) but destination-indexed: writes real direction bits at this chip's own map
+// slot and LOCAL_DELIVER at the destination slot. Z is allowed when the express topology provides
+// it (the legacy helper ASSERTs against Z because hop programs had no Z command).
+inline void fabric_set_indexed_single_hop_unicast_route_from_direction(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    eth_chan_directions next_hop_direction,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size) {
+    ASSERT(next_hop_direction < eth_chan_directions::COUNT);
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    ASSERT(dst_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
+    ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
+
+    const uint16_t my_dev = routing_table->my_device_id;
+    const uint32_t my_y = my_dev / mesh_x_size;
+    const uint32_t my_x = my_dev % mesh_x_size;
+    const uint32_t dst_y = dst_dev_id / mesh_x_size;
+    const uint32_t dst_x = dst_dev_id % mesh_x_size;
+
+    // Clear both axis maps: pool headers are reused, and transit chips read their own slot, so any
+    // stale bit outside the two poked slots would be decoded as a real action (zeroing only the
+    // touched slots is only safe when the maps are known-zero, which callers cannot promise).
+    for (uint32_t i = 0; i < (uint32_t)mesh_y_size + mesh_x_size; ++i) {
+        packet_header->route_buffer[i] = 0;
+    }
+
+    switch (next_hop_direction) {
+        case eth_chan_directions::NORTH:
+        case eth_chan_directions::SOUTH:
+        case eth_chan_directions::Z:
+            packet_header->route_buffer[my_y] = IndexedMeshRoutingFields::action_bit(next_hop_direction);
+            packet_header->route_buffer[dst_y] = IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+            break;
+        case eth_chan_directions::EAST:
+        case eth_chan_directions::WEST:
+            packet_header->route_buffer[mesh_y_size + my_x] = IndexedMeshRoutingFields::action_bit(next_hop_direction);
+            packet_header->route_buffer[mesh_y_size + dst_x] = IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+            break;
+        default: ASSERT(false); break;
+    }
+
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->mcast_params_64 = 0;
+    packet_header->is_mcast_active = 0;
+    packet_header->routing_fields.value = 0;
+}
+
+inline void fabric_set_indexed_single_hop_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size) {
+    fabric_set_indexed_single_hop_unicast_route_from_direction(
+        packet_header,
+        get_next_hop_router_direction(dst_mesh_id, dst_dev_id),
+        dst_dev_id,
+        dst_mesh_id,
+        mesh_y_size,
+        mesh_x_size);
+}
+
 // Overload: For 1D LowLatencyPacketHeader
 // 1D need to choose between target_as_dev true/false and compressed true/false
 // TODO: compare performance of compressed true/false
