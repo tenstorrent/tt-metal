@@ -26,34 +26,55 @@ from models.common.sampling.tt_sampling import TTSampling
 
 NUM_USERS = 32
 NUM_CANDIDATES = 64
-MAX_VALUE = 1.0  # exactly representable in bf16
-FILLER_VALUE = 0.25  # strictly below MAX_VALUE, exactly representable in bf16
+# Global vocabulary indices are in the 100k range, like a real gathered candidate set. Deliberately
+# above 2**8: these values are NOT representable in bfloat16, so the test fails if any step of the
+# index comparison silently lands in bf16 instead of float32.
+INDEX_BASE = 100_000
+
+# (tied maximum, filler). All exactly representable in bf16, filler strictly below the maximum.
+# The magnitudes matter: the boost has to be at least one bf16 ULP of the tied maximum, and bf16
+# spacing is 2.0 at 256 and 8.0 at 1024, so a fixed +1.0 boost would round away and leave the tie
+# in place for the large-magnitude rows. Negative and zero maxima are covered for the same reason.
+MAGNITUDES = [
+    (1.0, 0.25),
+    (256.0, 128.0),
+    (1024.0, 512.0),
+    (-256.0, -512.0),
+    (0.0, -1.0),
+]
+MAGNITUDE_IDS = ["max_1", "max_256", "max_1024", "max_neg256", "max_0"]
+
+DEFAULT_MAX_VALUE, DEFAULT_FILLER_VALUE = MAGNITUDES[0]
 
 # Restricted grid that does not start at (0, 0): the compact "full grid" placement
 # would not exercise the sub-device path the model runs on.
 SUB_CORE_GRIDS = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 3))})
 
 
-def _build_inputs(device, greedy_users):
+def _build_inputs(device, greedy_users, max_value=DEFAULT_MAX_VALUE, filler_value=DEFAULT_FILLER_VALUE):
     """Return (values_tt, global_indices_tt, greedy_col_tt, values_torch, indices_torch, tie_positions).
 
-    Every user row gets three exact ties at MAX_VALUE. The global indices are a
+    Every user row gets three exact ties at max_value. The global indices are a
     reversed permutation, so the lowest global index among the tied maxima is NOT
     the first tied array position -- a position-based tie-break picks a different
     element than an index-based one, which is exactly what we need to distinguish.
     """
     shape = (1, 1, NUM_USERS, NUM_CANDIDATES)
-    values = torch.full(shape, FILLER_VALUE, dtype=torch.float32)
+    values = torch.full(shape, filler_value, dtype=torch.float32)
 
     # Global indices descend across the row, so array position 0 holds the HIGHEST
     # global index and the last tied position holds the lowest.
-    indices = torch.arange(NUM_CANDIDATES - 1, -1, -1, dtype=torch.int32).expand(shape).contiguous()
+    indices = (
+        torch.arange(INDEX_BASE + NUM_CANDIDATES - 1, INDEX_BASE - 1, -1, dtype=torch.int32)
+        .expand(shape)
+        .contiguous()
+    )
 
     tie_positions = {}
     for user in range(NUM_USERS):
         # Vary the tie positions per user so a single hardcoded winner cannot pass.
         positions = [(user + offset) % NUM_CANDIDATES for offset in (0, 7, 23)]
-        values[0, 0, user, positions] = MAX_VALUE
+        values[0, 0, user, positions] = max_value
         tie_positions[user] = positions
 
     greedy_col = torch.zeros((1, 1, NUM_USERS, 1), dtype=torch.float32)
@@ -77,11 +98,18 @@ def _expected_winner_position(indices_row, tie_positions):
     return min(tie_positions, key=lambda pos: int(indices_row[pos]))
 
 
+@pytest.mark.parametrize("max_value, filler_value", MAGNITUDES, ids=MAGNITUDE_IDS)
 @pytest.mark.parametrize("sub_core_grids", [SUB_CORE_GRIDS, None], ids=["sub_core_grid", "full_grid"])
-def test_tiebreak_boosts_lowest_global_index_for_greedy_users(device, sub_core_grids):
-    """Greedy (k == 1) rows: exactly the lowest-global-index tied max becomes the strict argmax."""
+def test_tiebreak_boosts_lowest_global_index_for_greedy_users(device, sub_core_grids, max_value, filler_value):
+    """Greedy (k == 1) rows: exactly the lowest-global-index tied max becomes the strict argmax.
+
+    Parametrised over the tied maximum's magnitude because the boost must exceed one bf16 ULP at
+    that magnitude: a fixed +1.0 boost is silently lost at 256 and above, leaving the tie in place.
+    """
     greedy_users = list(range(0, NUM_USERS, 2))  # even users are greedy
-    values_tt, indices_tt, greedy_col_tt, values, indices, tie_positions = _build_inputs(device, greedy_users)
+    values_tt, indices_tt, greedy_col_tt, values, indices, tie_positions = _build_inputs(
+        device, greedy_users, max_value, filler_value
+    )
 
     adjusted = ttnn.to_torch(_adjust(values_tt, indices_tt, greedy_col_tt, sub_core_grids)).float()
     original = values.to(torch.bfloat16).float()
@@ -126,14 +154,17 @@ def test_tiebreak_is_repeatable(device):
     assert torch.equal(first, second), "tie-break adjustment is not repeatable"
 
 
-def test_sampling_picks_lowest_global_index_after_adjust(device):
+@pytest.mark.parametrize("max_value, filler_value", MAGNITUDES, ids=MAGNITUDE_IDS)
+def test_sampling_picks_lowest_global_index_after_adjust(device, max_value, filler_value):
     """End-to-end: ttnn.sampling with k == 1 selects the lowest-global-index tied maximum.
 
     Without the adjustment the pick is whichever tied maximum happens to sit first in
     the array, which is placement-dependent; with it, the pick is the lowest global index.
     """
     greedy_users = list(range(NUM_USERS))
-    values_tt, indices_tt, greedy_col_tt, _, indices, tie_positions = _build_inputs(device, greedy_users)
+    values_tt, indices_tt, greedy_col_tt, _, indices, tie_positions = _build_inputs(
+        device, greedy_users, max_value, filler_value
+    )
 
     adjusted_tt = _adjust(values_tt, indices_tt, greedy_col_tt, SUB_CORE_GRIDS)
 

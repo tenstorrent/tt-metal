@@ -18,6 +18,18 @@ from models.common.sampling.vocab_padding import (
     get_vocab_shard_dims,
 )
 
+# Greedy tie-break boost (see TTSampling._adjust_values_for_tiebreak).
+# bfloat16 keeps an 8-bit mantissa, so the gap to the next representable value at magnitude |x| is
+# between |x| * 2^-8 and |x| * 2^-7. Scaling the tied maximum by 2^-6 is therefore at least 2 ULP at
+# every magnitude, whereas a fixed constant is not: 1.0 is below one ULP once |logit| >= 256 (bf16
+# spacing there is 2.0), so 256 + 1 rounds straight back to 256 and the tie survives. Multiplying by
+# a power of two is exact in bf16, so the boost is reproducible.
+TIEBREAK_DELTA_SCALE = 2**-6
+# Floor so the boost stays strictly positive when the tied maximum is exactly 0.0. Still a normal
+# bf16 number (smallest normal ~1.18e-38) and orders of magnitude below one ULP of any real logit,
+# so it never perturbs a non-zero maximum.
+TIEBREAK_DELTA_FLOOR = 1e-30
+
 
 class TTSampling(LightweightModule):
     """
@@ -603,13 +615,19 @@ class TTSampling(LightweightModule):
 
     def _adjust_values_for_tiebreak(self, gathered_values, gathered_global_indices):
         """Return gathered_values with, for ARGMAX users (k==1) ONLY, the single lowest-GLOBAL-INDEX
-        candidate among the tied maxima boosted by DELTA, so ttnn.sampling's argmax selects it
-        deterministically. This fixes ttnn.sampling's array-position tie-break (it breaks exact value
-        ties by all_gather/device order, which varies run-to-run/slot-to-slot and flips the greedy
-        token) by correcting the sampling INPUT in the TILE domain -- avoiding an in-place write into
-        the ROW_MAJOR output buffer, which NO ttnn op supports on a restricted sub-device. Random
-        users (k>1) get boost==0 => their values are bit-identical => their sampling is byte-for-byte
-        unchanged. All ops honor self.sub_core_grids.
+        candidate among the tied maxima boosted just past the tie, so ttnn.sampling's argmax selects
+        it deterministically. This fixes ttnn.sampling's array-position tie-break (it breaks exact
+        value ties by all_gather/device order, which varies run-to-run/slot-to-slot and flips the
+        greedy token) by correcting the sampling INPUT in the TILE domain -- avoiding an in-place
+        write into the ROW_MAJOR output buffer, which NO ttnn op supports on a restricted
+        sub-device. Random users (k>1) get boost==0 => their values are bit-identical => their
+        sampling is byte-for-byte unchanged. All ops honor self.sub_core_grids.
+
+        This is the guarantee, not the stable top-k kernels: `stable=True` makes the kernels break a
+        tie by the lowest candidate POSITION, which only coincides with the lowest token id because
+        of how the gathered candidates happen to be laid out, and the stable bitonic network itself
+        is still an open LLK issue (tenstorrent/tt-metal#33492). This pass works purely on values,
+        so it holds regardless.
 
         is_winner = (value == rowmax) AND (global_index == lowest_index_among_maxima)  # exactly one candidate
             lowest_index_among_maxima = min(global_index + (rowmax - value)*LARGE)     # == idx at maxima, huge else
@@ -618,14 +636,20 @@ class TTSampling(LightweightModule):
         """
         scg = self.sub_core_grids
         BIG = 1.0e9  # >> max vocab index; EXACT binary offset (no bf16 (maxv-value) magnitude dependence)
-        DELTA = 1.0  # >> bf16 tie granularity => the chosen tied-max becomes the strict argmax
         # Every intermediate is deallocated as soon as its last reader is issued: this runs once per
         # decode step, so leaving them to Python refcounting would hold ~9 extra buffers per step.
         maxv = ttnn.max(gathered_values, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] bf16
         idx_f = ttnn.typecast(gathered_global_indices, ttnn.float32, sub_core_grids=scg)
         is_max = ttnn.eq(gathered_values, maxv, sub_core_grids=scg)  # 1.0 at the (tied) maxima, exact
         not_max = ttnn.lt(gathered_values, maxv, sub_core_grids=scg)  # 1.0 strictly below max
+
+        # Per-row boost, >= 2 bf16 ULP of that row's maximum whatever its magnitude or sign.
+        abs_max = ttnn.abs(maxv, sub_core_grids=scg)
         ttnn.deallocate(maxv)
+        delta_scaled = ttnn.multiply(abs_max, TIEBREAK_DELTA_SCALE, sub_core_grids=scg)
+        ttnn.deallocate(abs_max)
+        delta = ttnn.add(delta_scaled, TIEBREAK_DELTA_FLOOR, sub_core_grids=scg)  # [1,1,B,1] bf16
+        ttnn.deallocate(delta_scaled)
 
         # lowest global index among the maxima: push non-maxima up by BIG (exact, robust), then min.
         not_max_scaled = ttnn.multiply(not_max, BIG, sub_core_grids=scg)
@@ -645,13 +669,14 @@ class TTSampling(LightweightModule):
         # gate by k==1 (self._greedy_col [1,1,B,1]); random users get boost 0 => values unchanged
         winner_gated = ttnn.multiply(is_winner, self._greedy_col, sub_core_grids=scg)
         ttnn.deallocate(is_winner)
-        boost = ttnn.multiply(winner_gated, DELTA, sub_core_grids=scg)
+        winner_bf16 = ttnn.typecast(winner_gated, ttnn.bfloat16, sub_core_grids=scg)
         ttnn.deallocate(winner_gated)
-        boost_bf16 = ttnn.typecast(boost, ttnn.bfloat16, sub_core_grids=scg)
-        ttnn.deallocate(boost)
+        boost = ttnn.multiply(winner_bf16, delta, sub_core_grids=scg)  # delta broadcasts over W
+        ttnn.deallocate(winner_bf16)
+        ttnn.deallocate(delta)
 
-        adjusted = ttnn.add(gathered_values, boost_bf16, sub_core_grids=scg)
-        ttnn.deallocate(boost_bf16)
+        adjusted = ttnn.add(gathered_values, boost, sub_core_grids=scg)
+        ttnn.deallocate(boost)
         return adjusted
 
     def forward(
@@ -732,8 +757,11 @@ class TTSampling(LightweightModule):
                     dim=-1,
                     sub_core_grids=self.sub_core_grid_topk,
                     indices_tensor=indices_tensor_list[i],
-                    # Break exact-value ties by lowest index instead of array position, so the
-                    # candidate set handed to ttnn.sampling does not depend on placement.
+                    # Break exact-value ties by lowest index instead of array position, so which
+                    # of a set of tied candidates enters the top-k does not depend on placement.
+                    # Best effort only -- the stable bitonic network is still an open LLK issue
+                    # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
+                    # guarantees the greedy pick.
                     stable=True,
                 )
                 topk_values_list.append(topk_values)
@@ -768,8 +796,11 @@ class TTSampling(LightweightModule):
                 dim=-1,
                 sub_core_grids=self.sub_core_grid_topk,
                 indices_tensor=self.tt_indices_tensor,
-                # Break exact-value ties by lowest index instead of array position, so the
-                # candidate set handed to ttnn.sampling does not depend on placement.
+                # Break exact-value ties by lowest index instead of array position, so which
+                # of a set of tied candidates enters the top-k does not depend on placement.
+                # Best effort only -- the stable bitonic network is still an open LLK issue
+                # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
+                # guarantees the greedy pick.
                 stable=True,
             )
 
