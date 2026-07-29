@@ -263,7 +263,7 @@ RegimeAMatmulDeviceOperation::invoke(
     uint32_t diag_mask = 0;
     if (const char* e = std::getenv("TT_REGIME_A_DIAG_MASK")) {
         const long v = std::strtol(e, nullptr, 10);
-        if (v > 0 && v <= 0xFFFF) {
+        if (v > 0 && v <= 0x1FFFF) {
             diag_mask = static_cast<uint32_t>(v);
         }
     }
