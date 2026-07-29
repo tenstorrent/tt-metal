@@ -24,6 +24,7 @@ import torch
 from models.experimental.diffusion_gemma.reference.attention_mask import (
     build_canvas_denoise_mask,
     build_canvas_reveal_denoise_mask,
+    build_canvas_reveal_denoise_window_mask,
 )
 
 NEG = float("-inf")
@@ -184,3 +185,79 @@ def test_hidden_span_composes_with_the_retention_window():
     assert (windowed[:, lo:hi] == 0).all(), "precondition: those keys are retained without the span"
     assert (both[:, lo:hi] == NEG).all(), "pads must be hidden even inside the retained window"
     assert torch.equal(both[:, :lo], windowed[:, :lo]), "keys outside the span must be unchanged"
+
+
+# ---------------------------------------------------------------------------------------------
+# Bounded sliding span + hidden pads. This combination used to raise NotImplementedError; the
+# bounded builder now takes the same ABSOLUTE-position span, because its key axis already carries
+# absolute positions (prefix column r -> lo + r) and needs no column arithmetic.
+# ---------------------------------------------------------------------------------------------
+
+SPAN = 1024  # tile-aligned read span for a sliding layer, sliding_read_span(1024, p_max)
+
+
+def test_window_hidden_span_hides_exactly_the_pad_columns():
+    """Pads at absolute 270..287 with the window still anchored at lo=0."""
+    prompt_len, lo = 288, 0
+    plain = build_canvas_reveal_denoise_window_mask(prompt_len, CANVAS, SPAN, lo, sliding_window=PAD_W)
+    fixed = build_canvas_reveal_denoise_window_mask(
+        prompt_len, CANVAS, SPAN, lo, sliding_window=PAD_W, hidden_prefix_span=(270, 288)
+    )
+    assert (plain[:, 270:288] == 0).all(), "precondition: those columns are attended without the span"
+    assert (fixed[:, 270:288] == NEG).all(), "pad columns must be hidden"
+    assert torch.equal(fixed[:, :270], plain[:, :270]), "real prompt keys must be unchanged"
+    assert torch.equal(fixed[:, 288:], plain[:, 288:]), "everything past the pads must be unchanged"
+
+
+def test_window_hidden_span_is_a_noop_once_the_window_scrolls_past_the_pads():
+    """The self-retiring property: pads sit at the START, so a scrolled window cannot see them.
+
+    This is what keeps the steady-state mask prompt_len-independent — the reason the bounded read
+    is worth having in the first place.
+    """
+    pads = (270, 288)
+    prompt_len = 8192
+    lo = prompt_len - SPAN  # 7168, far past the pads
+    assert lo > pads[1], "precondition: the window starts after the pad span"
+    assert torch.equal(
+        build_canvas_reveal_denoise_window_mask(prompt_len, CANVAS, SPAN, lo, sliding_window=PAD_W),
+        build_canvas_reveal_denoise_window_mask(
+            prompt_len, CANVAS, SPAN, lo, sliding_window=PAD_W, hidden_prefix_span=pads
+        ),
+    )
+
+
+def test_window_hidden_span_is_inert_when_absent_or_empty():
+    for pads in (None, (288, 288)):
+        assert torch.equal(
+            build_canvas_reveal_denoise_window_mask(288, CANVAS, SPAN, 0, sliding_window=PAD_W),
+            build_canvas_reveal_denoise_window_mask(288, CANVAS, SPAN, 0, sliding_window=PAD_W, hidden_prefix_span=pads),
+        ), f"pads={pads}"
+
+
+def test_window_hidden_span_partially_overlapping_the_window_hides_only_the_overlap():
+    """A window that has scrolled INTO the pad span must hide the part it can see, and only that."""
+    pads = (270, 288)
+    lo = 280  # window covers 280.. ; pads 280..287 are visible, 270..279 are not in this window
+    prompt_len = lo + SPAN
+    plain = build_canvas_reveal_denoise_window_mask(prompt_len, CANVAS, SPAN, lo, sliding_window=PAD_W)
+    fixed = build_canvas_reveal_denoise_window_mask(
+        prompt_len, CANVAS, SPAN, lo, sliding_window=PAD_W, hidden_prefix_span=pads
+    )
+    hidden_cols = slice(0, 288 - lo)  # absolute 280..287 -> columns 0..7
+    assert (fixed[:, hidden_cols] == NEG).all(), "the visible part of the pad span must be hidden"
+    assert torch.equal(fixed[:, 288 - lo :], plain[:, 288 - lo :]), "nothing past the pads may change"
+
+
+def test_window_hidden_span_is_not_bounded_to_the_window():
+    """lo <= hi is the only requirement; a span outside [lo, lo+span) is a no-op, not an error.
+
+    Bounding it to the window would reject the normal scrolled case above.
+    """
+    build_canvas_reveal_denoise_window_mask(8192, CANVAS, SPAN, 7168, sliding_window=PAD_W, hidden_prefix_span=(0, 32))
+
+
+@pytest.mark.parametrize("pads", [(-1, 8), (8, 4)])
+def test_window_hidden_span_bounds_are_validated(pads, expect_error):
+    with expect_error(ValueError, match="hidden_prefix_span"):
+        build_canvas_reveal_denoise_window_mask(288, CANVAS, SPAN, 0, sliding_window=PAD_W, hidden_prefix_span=pads)

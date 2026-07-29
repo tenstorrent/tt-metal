@@ -325,3 +325,45 @@ def test_workspace_layers_cover_every_layer_with_its_own_span():
     assert len(window_layers) == 30
     assert sum(1 for v in window_layers.values() if v == sliding_span) == 25
     assert sum(1 for v in window_layers.values() if v == p_max) == 5
+
+
+def test_bounded_span_and_hidden_pads_compose_in_the_mask_selector(monkeypatch):
+    """The flag combination that used to raise NotImplementedError must now build a mask.
+
+    This calls the REAL ``_build_reveal_mask_device``. Every other test in this file monkeypatches
+    it, which is exactly how a NotImplementedError on a live flag pair survived unnoticed: nothing
+    ever executed the selector. Asserts the pad span reaches the bounded builder, since the bounded
+    key axis carries absolute positions and needs no remapping.
+    """
+    adapter = _adapter(DG_LAYER_TYPES, enforce=True)
+    adapter._reveal_sliding_span = P_MAX  # lo == 0, i.e. tile-aligned for this toy geometry
+    adapter._reveal_pad_span = (P_MAX - 6, P_MAX)
+
+    seen = {}
+
+    def fake_window(mesh_device, **kw):
+        seen.update(kw)
+        return "window-mask"
+
+    monkeypatch.setattr(DF, "build_device_canvas_reveal_window_mask", fake_window)
+
+    out = adapter._build_reveal_mask_device(P_MAX, layer_type="sliding_attention")
+
+    assert out == "window-mask", "the bounded branch must be taken, not the full-span one"
+    assert seen["span"] == P_MAX
+    assert seen["hidden_prefix_span"] == (P_MAX - 6, P_MAX), "the pad span must reach the bounded builder"
+
+
+def test_full_attention_layers_still_get_the_absolute_pad_span(monkeypatch):
+    """The 5 full-attention layers read the whole p_max prefix, so they need the pads hidden forever
+    -- the bounded span's self-retiring behaviour must not leak into them."""
+    adapter = _adapter(DG_LAYER_TYPES, enforce=True)
+    adapter._reveal_sliding_span = P_MAX
+    adapter._reveal_pad_span = (P_MAX - 6, P_MAX)
+
+    seen = {}
+    monkeypatch.setattr(DF, "build_device_canvas_reveal_mask", lambda mesh_device, **kw: seen.update(kw) or "full-mask")
+
+    assert adapter._build_reveal_mask_device(P_MAX, layer_type="full_attention") == "full-mask"
+    assert seen["hidden_prefix_span"] == (P_MAX - 6, P_MAX)
+    assert "span" not in seen, "a full-attention layer must not take the bounded read"

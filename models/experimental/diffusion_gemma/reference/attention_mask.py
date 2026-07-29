@@ -130,6 +130,7 @@ def build_canvas_reveal_denoise_window_mask(
     lo: int,
     *,
     sliding_window: int,
+    hidden_prefix_span: tuple[int, int] | None = None,
     neg_inf: float = float("-inf"),
     dtype: torch.dtype = torch.float32,
     device=None,
@@ -154,6 +155,15 @@ def build_canvas_reveal_denoise_window_mask(
     * ``prompt_len > span``   -> ``lo == prompt_len - span``, the commit predicate is vacuous and
       the retention predicate reduces to ``r >= span - (sliding_window - 1)``, which is
       ``prompt_len``-INDEPENDENT. So in steady state the mask stops changing between blocks.
+
+    ``hidden_prefix_span=(lo_pad, hi_pad)`` hides the prefill pad slots, the same absolute-position
+    span :func:`build_canvas_reveal_denoise_mask` takes. No column arithmetic is needed because
+    ``prefix_abs`` already carries absolute positions; a pad slot outside ``[lo, lo + span)`` simply
+    does not appear in this window and the predicate is a no-op there. That is the normal case once
+    the window has scrolled: the pads sit at the START of the prompt, so as ``lo`` grows past
+    ``hi_pad`` a sliding layer stops seeing them on its own and the mask returns to the
+    ``prompt_len``-independent steady-state form above. Only the full-attention layers, which read
+    the whole ``p_max`` prefix through the other builder, need the pads hidden forever.
     """
     if span <= 0:
         raise ValueError(f"span must be positive, got {span}")
@@ -167,6 +177,13 @@ def build_canvas_reveal_denoise_window_mask(
 
     allowed = torch.zeros(canvas_len, total_k, dtype=torch.bool, device=device)
     allowed[:, :span] = ((prefix_abs < prompt_len) & (prefix_abs >= keep_from)).unsqueeze(0)
+    if hidden_prefix_span is not None:
+        lo_pad, hi_pad = (int(v) for v in hidden_prefix_span)
+        # Only lo <= hi is required. Deliberately NOT bounded to this window: the pads routinely sit
+        # outside [lo, lo + span) once it has scrolled, and that is a no-op, not an error.
+        if not 0 <= lo_pad <= hi_pad:
+            raise ValueError(f"hidden_prefix_span {(lo_pad, hi_pad)} must satisfy 0 <= lo <= hi")
+        allowed[:, :span] &= ~((prefix_abs >= lo_pad) & (prefix_abs < hi_pad)).unsqueeze(0)
     allowed[:, span:] = True
     return torch.where(
         allowed, torch.zeros((), dtype=dtype, device=device), torch.full((), neg_inf, dtype=dtype, device=device)

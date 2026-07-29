@@ -131,6 +131,7 @@ def build_device_canvas_reveal_window_mask(
     span: int,
     lo: int,
     sliding_window: int,
+    hidden_prefix_span: tuple[int, int] | None = None,
     dtype=ttnn.bfloat16,
 ):
     """Device ``[1, 1, C, span + C]`` mask for a bounded sliding-layer read (see the reference)."""
@@ -140,6 +141,7 @@ def build_device_canvas_reveal_window_mask(
         span,
         lo,
         sliding_window=sliding_window,
+        hidden_prefix_span=hidden_prefix_span,
         neg_inf=NEG,
         dtype=torch.float32,
     ).view(1, 1, canvas_len, span + canvas_len)
@@ -251,11 +253,13 @@ def hide_prefill_pads_enabled() -> bool:
     have no pad slots, so the mask is unchanged there (verified: doc 47 is byte-identical across both
     arms). Set DG_DENOISE_HIDE_PREFILL_PADS=0 for the old maskless behaviour.
 
-    NOTE now that it is on by default: combining this with a BOUNDED sliding span
-    (DG_DENOISE_SLIDING_SPAN=1, still default off) raises NotImplementedError in
-    _build_reveal_mask_device -- the bounded read is built for (span, lo), so pad slots would have
-    to be mapped into that window rather than hidden by absolute position. Enabling the span needs
-    that mask first.
+    Composes with a BOUNDED sliding span (DG_DENOISE_SLIDING_SPAN=1). That combination used to raise
+    NotImplementedError; the bounded builder now takes the same absolute-position span, because its
+    key axis already carries absolute positions and needs no column arithmetic. In a sliding layer
+    the predicate is self-retiring: the pads sit at the start of the prompt, so once the window has
+    scrolled past them it is a no-op and the mask returns to its prompt_len-independent steady state.
+    The 5 full-attention layers read the whole p_max prefix and keep hiding the pads for the whole
+    run.
     """
     return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "1").lower() in ("1", "true", "yes", "on")
 
@@ -1484,12 +1488,6 @@ class DenoiseLogitsAdapter:
         if layer_type == "sliding_attention":
             sliding_window = _sliding_window_for_denoise(self.tt_model, self._sliding_reference_layer_idx())
             span = self._sliding_span()
-            if span is not None and getattr(self, "_reveal_pad_span", None) is not None:
-                raise NotImplementedError(
-                    "DG_DENOISE_HIDE_PREFILL_PADS with a bounded sliding span needs its own mask: the "
-                    "bounded read is built for (span, lo), so pad slots would have to be mapped into "
-                    "that window rather than hidden by absolute position"
-                )
             if span is not None:
                 # Bounded read: prefix column r maps to absolute lo + r, so the mask must be
                 # built for (span, lo) rather than the full p_max. lo is recomputed here from the
@@ -1502,6 +1500,8 @@ class DenoiseLogitsAdapter:
                     span=span,
                     lo=lo,
                     sliding_window=sliding_window,
+                    # Absolute-position span; a no-op once the window has scrolled past the pads.
+                    hidden_prefix_span=getattr(self, "_reveal_pad_span", None),
                 )
         return build_device_canvas_reveal_mask(
             self.tt_model.mesh_device,
