@@ -44,13 +44,13 @@ inline void calculate_sfpu_isclose(
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        // Cache integer views of a, b and their abs bits up front. These feed
-        // both the |b| computation for the tolerance and the merged Inf/NaN
-        // fix-up branch below, so computing them once avoids any duplicated
-        // bit-mask work.
+        // Integer views of a, b and their abs bit patterns. The abs bits must stay
+        // vInt: comparing a vFloat against inf_bits would bind to the float overload
+        // and convert the bit pattern to the finite value 2139095040.0f.
         sfpi::vInt a_bits = sfpi::as<sfpi::vInt>(a);
         sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
-        sfpi::vFloat a_abs = sfpi::abs(a);
+        sfpi::vInt a_abs_bits = a_bits & 0x7FFFFFFF;
+        sfpi::vInt b_abs_bits = b_bits & 0x7FFFFFFF;
         sfpi::vFloat b_abs = sfpi::abs(b);
 
         // abs(a - b) via sign-bit clear.
@@ -72,18 +72,18 @@ inline void calculate_sfpu_isclose(
         // Single fix-up branch covering every "special" lane (Inf or NaN).
         // Detected by `abs_bits >= inf_bits` which holds iff exp == 0xFF.
         // Inside, we discard the tolerance result and rebuild from scratch:
-        //   * matching-sign Inf  -> 1     (a_abs == inf AND a_bits == b_bits)
-        //   * both NaN, EQUAL_NAN -> 1    (a_abs >  inf AND b_abs >  inf)
+        //   * matching-sign Inf  -> 1     (a_abs_bits == inf AND a_bits == b_bits)
+        //   * both NaN, EQUAL_NAN -> 1    (a_abs_bits >  inf AND b_abs_bits >  inf)
         //   * everything else (mismatched Inf, one-sided NaN, EQUAL_NAN=false
         //     NaN) stays at 0.
         // Folding both old fix-ups into one v_if removes two predicate-stack
         // push/pop pairs from the hot loop.
-        v_if(a_abs >= inf_bits || b_abs >= inf_bits) {
+        v_if(a_abs_bits >= inf_bits || b_abs_bits >= inf_bits) {
             result = 0.0f;
-            v_if(a_abs == inf_bits && a_bits == b_bits) { result = 1.0f; }
+            v_if(a_abs_bits == inf_bits && a_bits == b_bits) { result = 1.0f; }
             v_endif;
             if constexpr (EQUAL_NAN) {
-                v_if(a_abs > inf_bits && b_abs > inf_bits) { result = 1.0f; }
+                v_if(a_abs_bits > inf_bits && b_abs_bits > inf_bits) { result = 1.0f; }
                 v_endif;
             }
         }
