@@ -68,8 +68,11 @@ struct NlpCreateHeadsBoltzDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Re-derive ALL per-dispatch state (the Sharded factory's baked base/start addresses included) from
-    // create_descriptor() and re-apply it to the cached program on every hit. Supersedes get_dynamic.
+    // Patch ALL per-dispatch state — buffer-address runtime args (the Sharded factory's baked q/k/v
+    // base and per-core start addresses included) and tensor-pinned CB addresses — into the cached
+    // program on every hit, in place: no descriptor rebuild.  Supersedes get_dynamic/resolve_bindings.
+    // Defined in nlp_create_qkv_heads_boltz_program_factory.cpp so it can reuse the same per-core
+    // builders create_descriptor() uses (both factory variants).
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
