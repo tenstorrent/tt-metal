@@ -199,6 +199,26 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
+        // TODO: BUG - the writer writes to output_tensors[ring_index] but gets its shard args, and
+        // therefore its core mapping table, from input_tensor. When the output shard spec differs
+        // from the input's, every write lands on the wrong core. Confirmed broken: PCC ~0 for both
+        // ROW_MAJOR and TILE. See the xfail param "same shard shape, output on a different set of
+        // cores" in tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_sharded.
+        //
+        // Pre-existing; not caused by the padded-row-major fixes around it. Every other param in
+        // that suite passes output_shard_shape=None, so input and output specs always matched and
+        // this path had never been exercised.
+        //
+        // The fix is to pass output_tensors[ring_index] here and at the run-time-args call below
+        // (the equivalent change was already made for the interleaved branch, which now uses
+        // TensorAccessorArgs(output_tensors[ring_index].buffer()) for the writer). Two things to
+        // check while doing it, because they are also input-derived and feed the same kernel:
+        //   1. buffer_page_size / cb_page_size come from the input's shard width
+        //      (memory_config().shard_spec()->shape[1]) - the writer needs the output's.
+        //   2. num_width_shards is computed from the input's padded shape and shard width, and is
+        //      used to scale the writer's tile_id_start/tile_id_end runtime args.
+        // The unconditional aligned_page_size TT_FATAL above already rejects the subset of cases
+        // where the two shard shapes differ in size, so what remains is same-size/different-grid.
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
@@ -304,6 +324,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
         writer_rt_args.push_back(num_connections);
         if (sharded) {
+            // TODO: BUG - input-derived shard args on the writer. Second half of the same defect
+            // described at the extend_sharding_compile_time_args call above; both call sites must
+            // change together, since the compile-time args declare the shard geometry that these
+            // run-time args populate the mapping table for.
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 

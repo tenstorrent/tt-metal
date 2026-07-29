@@ -538,8 +538,19 @@ def test_concat_int32_2d_dim1_regression(device):
     [
         (48, 64),
         (40, 64),
+        (96, 128),
+        (16, 24),
     ],
-    ids=["stick_32b_aligned", "stick_32b_unaligned"],
+    ids=[
+        "stick_32b_aligned",
+        "stick_32b_unaligned",
+        # 192 B divides both the 32 B Wormhole and 64 B Blackhole DRAM read alignment,
+        # so the fast path runs on either arch instead of diverting to the transpose.
+        "stick_aligned_all_arches",
+        # logical stick aligned (32 B) but padded stick not (48 B): the fast-path check
+        # and the massaging predicate must agree on which width they measure.
+        "logical_aligned_padded_unaligned",
+    ],
 )
 def test_concat_rm_padded_last_dim(device, logical_width, shard_width):
     shape = [1, 1, 32, logical_width]
@@ -569,4 +580,27 @@ def test_concat_rm_padded_last_dim(device, logical_width, shard_width):
     tt_output = ttnn.concat([tt_input, tt_input], dim=-1)
 
     assert list(tt_output.shape) == shape[:-1] + [2 * logical_width]
+    assert torch.equal(ttnn.to_torch(tt_output), torch.cat([torch_input, torch_input], dim=-1))
+
+
+def test_concat_rm_padded_last_dim_via_untilize(device):
+    # Same padded row-major tensor with no sharding involved: the tile pads W 48 -> 64 and
+    # untilize keeps that padding for L1 inputs (untilize.cpp only unpads non-sharded DRAM).
+    shape = [1, 1, 32, 48]
+    torch_input = torch.rand(shape).bfloat16()
+    tiled = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_input = ttnn.untilize(tiled)
+
+    assert tt_input.padded_shape[-1] == 64
+    assert torch.equal(ttnn.to_torch(tt_input), torch_input)
+
+    tt_output = ttnn.concat([tt_input, tt_input], dim=-1)
+
+    assert list(tt_output.shape) == shape[:-1] + [96]
     assert torch.equal(ttnn.to_torch(tt_output), torch.cat([torch_input, torch_input], dim=-1))

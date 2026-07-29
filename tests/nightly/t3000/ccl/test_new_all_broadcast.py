@@ -431,6 +431,26 @@ def test_all_broadcast_trace(
             None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
+        # Same shard shape, output on a different set of cores. The only case in this suite where
+        # the output shard spec differs from the input's at all -- every other param passes
+        # output_shard_shape=None, which makes the output spec identical to the input's.
+        pytest.param(
+            4,
+            [2, 32, 256],
+            (64, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            (64, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(3, 3))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            marks=pytest.mark.xfail(
+                reason="the writer takes its shard args, and so its core mapping, from the input "
+                "tensor, so it writes every shard to the input's cores instead of the output's. "
+                "PCC ~0 for ROW_MAJOR and TILE alike. Pre-existing: this is the first param to give "
+                "the output a different shard spec. See the TODO at the "
+                "extend_sharding_compile_time_args call in all_broadcast_program_factory.cpp",
+                strict=True,
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])

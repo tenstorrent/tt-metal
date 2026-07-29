@@ -34,6 +34,14 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
+
+    // The factory picks sharded vs interleaved addressing from the input alone, so an output that
+    // disagrees would be addressed the wrong way.
+    TT_FATAL(
+        operation_attributes.output_mem_config.is_sharded() == input_tensor.memory_config().is_sharded(),
+        "all_broadcast needs the output to be sharded iff the input is: input {}, output {}.",
+        input_tensor.memory_config().memory_layout(),
+        operation_attributes.output_mem_config.memory_layout());
 }
 
 std::vector<tt::tt_metal::TensorSpec> AllBroadcastDeviceOperation::compute_output_specs(
