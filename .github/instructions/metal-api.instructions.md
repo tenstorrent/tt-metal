@@ -1,79 +1,61 @@
 ---
-description: 'PR review for tt-metalium public API headers — API stability, API ergonomics, deprecation policy, and include hygiene'
+description: 'PR review for tt-metalium API headers — stability tiers, experimental segregation, and deprecation policy'
 applyTo: 'tt_metal/api/**'
 excludeAgent: "cloud-agent"
 ---
 
-# Metal Public API Review
+# Metal Public API Stability Review
 
-The public API surface lives in `tt_metal/api/tt-metalium/`. Everything here is consumed by downstream users (ttnn, tt-train, external customers). Changes require extreme care.
+The public API surface lives in `tt_metal/api/tt-metalium/`. Everything here is consumed by downstream users (ttnn, tt-train, external customers). Changes require extreme care. This review also covers placement into `tt-metalium/experimental/` and `api/internal/`.
 
 ## 🔴 CRITICAL
 
-- **API (source-level) breakage**: we promise API stability, not ABI stability. The release blocker is breaking source compatibility for downstream code, not binary layout. Any of the following in a public header is a release blocker:
-  - Symbol removed or renamed without a deprecation cycle
-  - Public function signature changed (parameters added/removed/retyped) so existing call sites no longer compile
-  - Default argument changed such that existing call sites silently change behavior
-  - Public type or member removed/renamed so existing references no longer compile
+### Experimental / FAFO Segregation
 
-  Note: binary-level (ABI) changes — struct/class field layout, `sizeof()` of a type, or virtual function order/`vtable` layout — are NOT release blockers on their own. We do not promise ABI stability; downstream consumers recompile against the headers.
-- **`impl/` leak into `api/`**: a public header must never `#include` anything from `tt_metal/impl/`. Flag any such include — it exposes unstable internals to customers.
-- **`experimental/` stability boundary**: headers in `tt_metal/api/tt-metalium/experimental/` carry no API-stability guarantee — they may freely change struct internals and layout, retype members, or reorganize as needed — but they must NOT be included by stable (non-experimental) headers. If a stable header pulls in an experimental one, that experimental API becomes a de facto stable commitment.
+All new experimental ("FAFO") work must reside in the `tt::tt_metal::experimental` namespace, with headers in `tt_metal/api/tt-metalium/experimental/`.
 
-## 🟡 IMPORTANT
+- **Experimental methods on stable classes**: do not add experimental methods directly to an existing stable class. Implement them as free functions in the `tt::tt_metal::experimental::<stable_class_name>` namespace, with headers under `experimental/`.
+- **Friend access**: `friend` functions that access private members of stable classes are permitted solely for this segregation purpose.
+- **Clarity**: the file must include comments explicitly stating that it is experimental and subject to change. Individual functions do not need their own experimental warning.
+- **Stability boundary**: `experimental/` headers carry no API-stability guarantee, but must NOT be included by stable (non-experimental) headers. If a stable header pulls in an experimental one, that experimental API becomes a de facto stable commitment.
 
-- **Deprecation process (mandatory for stable APIs)**: modifying or removing any function in `tt_metal/api/tt-metalium/` (outside `experimental/`) requires a two-step process:
-  1. Add the replacement function, update all internal callers, and annotate the old function with `[[deprecated("message")]]`. The message must include an expiration notice and a refactor instruction (e.g., `"Deprecated — will be removed. Replace with newFunction()."`).
+### Modifying or Deleting Stable APIs
+
+- **Design alignment**: significant changes to existing stable APIs require an associated design document and documented pre-alignment before the PR is submitted.
+- **Deprecation process**: for minor changes or deletions of stable APIs (outside `experimental/`), enforce the two-step deprecation process:
+  1. Add the replacement, update internal callers, and annotate the old function with `[[deprecated("<message>")]]`.
   2. Remove the old function in a **separate PR** only after the deprecation has been on `main` for at least 4 weeks.
+- **Required deprecation message details**: the `[[deprecated]]` message must explicitly include:
+  - An expiration notice (e.g., "This is deprecated and will be removed.").
+  - Specific instructions for the end user on how to refactor (e.g., "Replace with...").
+- Flag any PR that removes a stable API symbol without a prior deprecation commit on `main` that is at least 4 weeks old.
 
-  Steps 1–3 may be in a single PR, but removal must always be separate. Flag any PR that removes a stable API symbol without a prior deprecation commit on `main`.
-- **Parameter order convention**: new functions should follow the established pattern — device/mesh first, then buffers/tensors, then config structs, then optional parameters last.
-- **Out-parameters**: prefer return values over output-parameter pointers. If an out-param is unavoidable, it must be the last parameter and clearly documented.
-- **`const`-correctness**: public API functions that don't mutate their arguments must take them by `const&` or `const*`. Mutable references in a public API are a red flag unless the mutation is the function's primary purpose.
-- **Header weight**: public headers are transitively included by many TUs. Avoid including heavy implementation headers — prefer forward declarations and keep includes minimal. Flag new includes of STL containers or fmt in public headers.
-- **Metal 2.0 API (`experimental/metal2_host_api/`)**: this is the next-generation programming model. Changes here should maintain consistency with the existing Metal 2.0 conventions (`ProgramSpec`, `KernelSpec`, `NodeCoord`, etc.) and not introduce patterns that conflict with the stable API.
-- **Naming must reflect semantics**: API names are permanent. A function named `CompileProgramSpec` that actually precompiles kernel binaries is misleading. Flag names that describe a different abstraction than what the implementation does. This applies especially to Metal 2.0 factory concepts where naming conventions (`create_program_spec`, `create_run_args`, `create_invariant_run_args`) carry semantic weight.
-- **Prefer strong types over primitives**: use `enum class`, strongly-typed identifiers, or `std::chrono::duration` over raw `uint32_t`/`int`/`bool` for parameters that have domain meaning. Bare numeric types in public APIs are ambiguous at the call site.
+### Graduation to Stable
 
-## Three-Tier API Boundary
+Promoting experimental functionality to the stable API requires consultation with the Runtime team and a formal design review. Flag any PR that:
 
-The API has three tiers with distinct stability guarantees:
+- Adds brand-new public functionality directly to the stable `tt_metal/api/tt-metalium/` surface without going through `experimental/`
+- Graduates experimental APIs to stable without Runtime team consultation and design review
 
-| Directory | Audience | Stability |
-|-----------|----------|-----------|
-| `tt_metal/api/tt-metalium/` | External customers, ttnn, tt-train | Stable — breaking changes require 4-week deprecation cycle |
-| `tt_metal/api/tt-metalium/experimental/` | Power users willing to accept churn | Unstable — no stability guarantee, path to promotion |
-| `tt_metal/api/internal/` | Tenstorrent teams only | None — may change silently, never promoted |
+### Internal API Placement
 
-Flag any code that:
-- Imports from `internal/` outside of `tt_metal/impl/`
-- Imports from `experimental/` in a stable header
-- Places a new API in the wrong tier for its maturity level
+`tt_metal/api/internal/` (`tt::tt_metal::internal`) is strictly for Tenstorrent-internal functionality that is **not meant to be productized**. It is not part of the public contract — no stability guarantee, and it may never be promoted.
 
-## New Functionality Must Start in Experimental
-
-All new API functionality enters through `experimental/` first. It graduates to the stable API only after it is battle-tested and reviewed by the Runtime team. Flag any PR that adds a brand-new public function or class directly to the stable `tt_metal/api/tt-metalium/` surface without going through `experimental/`.
-
-To add an experimental method affiliated with an existing stable class:
-- Create a free function in `tt::tt_metal::experimental::<stable_class_name>` namespace
-- Place the header in `experimental/`
-- If private member access is needed, `friend` the free function in the stable class (this is the accepted exception to the general "no friends" rule)
-
-## 🟢 SUGGESTION
-
-- Doxygen `@brief`, `@param`, `@return` on every new public function.
-- `[[nodiscard]]` on functions whose return value is always meaningful (allocations, status codes).
-- Group overloads together in headers for readability.
-- Prefer `enum class` over `bool` parameters in public APIs for call-site clarity.
-- Avoid `std::optional` when both `nullopt` and an empty value (e.g., empty vector) are semantically identical — it adds confusion without information. Use optional only when absence carries distinct meaning from "empty".
+- **Correct path**: new internal APIs must go in `tt_metal/api/internal/`, not `tt_metal/api/tt-metalium/internal/`. Flag additions under `tt-metalium/internal/`.
+- **Intent check**: if the feature is on a path to productization into the stable API, it belongs in `tt-metalium/experimental/`, not `api/internal/`. Flag PRs that place productizable / eventually-stable work in `internal/`.
+- **Audience**: `internal/` is for Tenstorrent teams only. Flag PRs that treat `internal/` headers or symbols as a public or downstream-facing contract.
+- **No promotion path**: unlike `experimental/`, `internal/` has no commitment to stabilization. Do not graduate `internal/` APIs into the stable surface.
 
 ## Review Checklist
 
-- [ ] No source-breaking changes to public symbols (removed/renamed/retyped) without a deprecation cycle
-- [ ] No `#include` of `impl/` from `api/` headers
-- [ ] Stable API removals have a prior `[[deprecated]]` commit on `main` (≥4 weeks old)
+- [ ] New experimental work lives in `tt::tt_metal::experimental` with headers under `experimental/`
+- [ ] Experimental methods on stable classes are free functions in `experimental::<stable_class_name>`, not members of the stable class
+- [ ] Experimental files include a comment stating they are experimental and subject to change (per-function warnings not required)
+- [ ] `experimental/` headers are not included from stable headers
+- [ ] Significant stable API changes have a design doc and documented pre-alignment
+- [ ] Stable API removals/changes follow the two-step deprecation process
 - [ ] Deprecation messages include expiration notice + refactor instruction
-- [ ] `experimental/` headers not included from stable headers
-- [ ] New public functionality enters via `experimental/` (not directly into stable)
-- [ ] New functions follow parameter order convention (device → buffers → config → optional)
-- [ ] Public headers remain lightweight (no heavy includes added)
+- [ ] Deprecated code has been on `main` ≥4 weeks before removal
+- [ ] Graduation from experimental to stable has Runtime team consultation and formal design review
+- [ ] New internal APIs go in `api/internal/`, not `api/tt-metalium/internal/`
+- [ ] `api/internal/` contains only non-productizable, Tenstorrent-internal functionality (productizable work goes in `experimental/`)
