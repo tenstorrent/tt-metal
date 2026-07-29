@@ -148,7 +148,10 @@ float sfpu_function(const std::string& op_name, float input) {
         return input * 0.5 * (1.0 + tanhf(alpha * (input + 0.044715 * x3)));
     }
     if (op_name == "gelu_accurate") {
-        return 0.5f * input * (1.0f + erff(input * static_cast<float>(M_SQRT1_2)));
+        // In double: erf(x/sqrt(2)) tends to -1 in the negative tail, so 1 + erf cancels. Computed
+        // in float the golden is already 1.8% off at x = -4.84, past this op's 1% rtol.
+        const double x = input;
+        return static_cast<float>(0.5 * x * (1.0 + erf(x * M_SQRT1_2)));
     }
     if (op_name == "sqrt") {
         return sqrtf(input);
