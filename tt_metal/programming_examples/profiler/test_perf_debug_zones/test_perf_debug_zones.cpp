@@ -89,13 +89,16 @@ int main(int argc, char** argv) {
         lanes,
         (unsigned long long)markers,
         zone_cyc,
-        zone_cyc ? "uniform: knee mode" : "graduated ~1..100us");
+        zone_cyc ? "uniform nop-spin: knee mode" : "graduated ~1..100us wall-clock");
     if (zone_cyc) {
-        const double per_lane = 2.0 * 1.35e9 / (double)zone_cyc;  // 2 markers per zone of zone_cyc ticks
+        // No tick-derived rate here on purpose: --delay is nop LOOP ITERATIONS over a volatile counter
+        // (same unit as test_x280_realprof --proddelay), and one iteration is several cycles, so markers/s
+        // cannot be derived from it without measuring cycles-per-iteration. Printing a tick-derived rate is
+        // what previously made this knee look ~30x worse than the harness's.
         printf(
-            "[perf-debug zones]   offered rate: %.2f M markers/s per lane, %.1f M markers/s aggregate\n",
-            per_lane / 1e6,
-            per_lane * lanes / 1e6);
+            "[perf-debug zones]   --delay=%u nop-iterations/zone (same unit as test_x280_realprof "
+            "--proddelay)\n",
+            zone_cyc);
     }
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
