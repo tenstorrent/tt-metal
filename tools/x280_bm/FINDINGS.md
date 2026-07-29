@@ -1409,6 +1409,124 @@ and a 10-bucket time histogram (flat for every hart).
 Final clean UFLD-v2 capture: **0 stalls, 0 drops, 99,187,072 markers, all four hart lanes with every wait
 category at zero** — `tracy_captures/bh07_ufld_v2_x280_lossless_hartzones.tracy` (489 MB).
 
+
+## §27 — The knee, measured on the PRODUCTION path (bh-07, 2026-07-29)
+
+Everything before this measured the knee with `test_x280_realprof`, which drives its own synthetic producer
+through its own drain. This section measures it through **PerfDebugProfiler** — MeshDevice bring-up, the env
+switches, the production drain, the real teardown — using `test_perf_debug_zones --delay`. The rate control
+lives in the workload's kernels, not in the profiler: `perf_debug_profiler.{cpp,hpp}` gained diagnostics only.
+
+### ★★★ The units were not the same, and it looked like a 30x regression
+
+`test_perf_debug_zones` originally spun on the WALL CLOCK (`ZONE_CYC` = ticks) while
+`test_x280_realprof`'s producer spins a **nop loop over a `volatile` counter** (`WORK_SIZE` = iterations).
+A `volatile` counter forces load/increment/store/compare per iteration, so **one iteration is ~9 cycles**,
+not one. Same number, wildly different zone length:
+
+| | unit | delay 950 | delay 30000 |
+|---|---|---|---|
+| wall-clock spin (old) | ticks | 0.70 us | **22.2 us** |
+| nop loop (harness, now both) | iterations | **6.38 us** | — |
+
+So the wall-clock knee read 8000–30000 where the harness reads 950, and the two were never comparable.
+**Fixed by making knee mode use the harness's loop verbatim.** The `volatile` is load-bearing: remove it and
+the compiler collapses the loop. Measured after alignment: zone duration at `--delay 950` = **6,380 ns**
+(min 6,378, max 6,413, sigma 1.65 ns over 55,000 instances) against the harness's ~5–6 us.
+
+**Never quote a knee as a bare knob value.** Quote the achieved zone duration or marker rate, or state the
+producer and its unit.
+
+### ★★ A page cap does not bound per-pass TIME — the read-batching latency bug
+
+At `--delay 950`, uncapped reads gave **557 stalls** (exactly 1 per lane, 550 lanes) with only **3 reads per
+socket** for 2.75 M markers. Per-pass cost was ~10 ms:
+
+| zone | uncapped mean | capped (1024) mean |
+|---|---|---|
+| `decode` | 6,048 us | **17.1 us** |
+| `publish` | 1,699 us | 6.4 us |
+| `buf-resize` | 1,433 us | 0.3 us |
+| `sock-read` | 991 us | 6.2 us |
+| relay HOST-WAIT | 1x/50 ms | **0** |
+
+During those ~10 ms the D2H FIFO is never polled, so the relay fills 12 MiB, blocks, and back-pressures
+reader -> worker rings -> every producer stalls once. Capping restores ~30 us passes and 0 stalls.
+
+This was a REGRESSION from removing the 1024-page cap (that removal fixed UFLD throttling — 24,669 stalls —
+but created a latency problem). The cap is worth **~75 delay units of margin at the knee and nothing below
+it**: caps of 64 / 256 / 1024 / 4096 are indistinguishable at delay 800 and below (~16,400 and ~21,100
+stalls respectively). So bound reads for MARGIN, not throughput — and the real fix is to bound per-pass
+**time**, not pages, since a page cap stops binding as soon as data is plentiful.
+
+### The knee, and what perturbs it
+
+Full grid (110 cores, 550 lanes), 500 iters, cap 1024, ring 32 M records. Sharp: one point wide.
+
+| condition | knee (consistent 0 stalls) | at knee−25 |
+|---|---|---|
+| no hart zones, no capture | **875** | 850 → 983 stalls |
+| no hart zones, capture attached | **900** | 875 → 39 stalls |
+| hart zones, no capture | **900** | — |
+| hart zones + capture attached | **925** | 900 → 1 stall |
+
+**The diagnostics cost ~25 delay units each, and they are additive** (~3% each, ~6% together), by two
+different mechanisms:
+- **Hart zones cost BANDWIDTH.** They ride in-band as 3-word `PP_X280_ZONE` packets (~30,000 spans per run),
+  competing for the very drain capacity being measured.
+- **The capture attach costs HOST CPU.** Away from the knee the sink is provably free — 12,587 vs 12,586
+  stalls with and without capture, because the BroadcastRing makes a lagging consumer drop its own records
+  instead of back-pressuring. But `tracy-emit` (~1.5 s) plus `ctx-create` (~680 ms) compete with the writer
+  thread for cores, and at the boundary that converts 0 stalls into 39.
+
+So quote the knee WITH its measurement conditions. **875 is the true drain limit; 900 is what any real
+capture sees; 925 if you also want hart diagnostics.**
+
+### ★ The knee IS the 2-reader bandwidth ceiling — and it cannot be tuned lower
+
+At delay 875 the zone is ~5,877 ns, so 2 markers / 5.877 us = 340 K markers/s per lane x 550 lanes =
+**187 M markers/s = 1.50 GB/s** at 8 B/marker.
+
+That is the same number `test_x280_gridilp` measured for the real scatter drain (**1.5 GB/s @ 2 harts
+ILP4**), reached by a completely different route. An end-to-end production knee landing on the synthetic
+microbenchmark's ceiling is a strong cross-check that this is a hardware wall, not a software one — and it
+is consistent with the rest of §-history: 3 reader harts CRATER 7.7x worse than 2, NoC0/NoC1 splitting is a
+no-op, ILP 1→16 is a no-op, all because the path is bandwidth-bound.
+
+**The only lever remains bytes/marker** (currently 8, i.e. 2 words). Host-side tuning is exhausted.
+
+Confirmed comfortable at the knee: readers busy ~31 ms DRAIN+BULK of a 5,388 ms span (~0.6%), every wait
+category (HOST-WAIT, SPSC-WAIT) at zero, readers balanced to <1%.
+
+### Diagnostics added to the writer thread
+
+Writer-side zones summed to **79 ms of a 5,433 ms span** — the writer was effectively invisible. Now
+instrumented: `sock-poll` (the per-pass device query), `buf-resize`, `writer-startup-idle` (distinct from
+steady-state `sock-idle`, because only pre-first-data idling can leave the FIFO unserviced), and a log of how
+long after thread start the writer first moves data.
+
+**`sock-poll` was the prime suspect and is innocent: 560 calls, 0.03 ms total, 0.1 us mean.** Recorded so
+nobody re-suspects it. Likewise "writer: first data 70 ms after thread start" is mostly the workload taking
+that long to start producing — benign, not a stall window.
+
+### Known divergence still open
+
+`--delay 0` means "graduated ~1..100 us durations" here, but `--proddelay 0` means **max rate** in
+`test_x280_realprof`. Do not read a 0 row in a sweep as the fast end.
+
+`ctx-create` costs **6.1 ms per Tracy context x 111 = 680 ms**. Off the critical path (consumer side), so it
+causes no stalls, but it is a large unexplained per-context cost worth its own investigation.
+
+### Captures (Mac, `~/Downloads/perf/x280/`)
+
+| file | what |
+|---|---|
+| `bh07_knee_d900_nohart_capture.tracy` | the knee as a real capture sees it (110 ctx, 0 stalls) |
+| `bh07_knee_d925_cap1024_hartzones.tracy` | knee with hart diagnostics (111 ctx incl. X280 lane, 0 stalls) |
+| `bh07_over-knee_d875_cap1024_hartzones.tracy` | deliberately OVER the knee (7,699 stalls) for contrast |
+| `bh07_knee_d950_nopspin_hartzones.tracy` | the read-batching pathology (557 stalls, 3 reads/socket) |
+| `bh07_knee_d950_maxpages4096_hartzones.tracy` | same delay, capped — the fix (0 stalls, 684 reads/socket) |
+
 ## Gotchas (saved time → don't relearn)
 
 - **★ KEEP `perf_debug` AND `test_x280_realprof` STRUCTURALLY IDENTICAL.** They drifted once (the harness got
