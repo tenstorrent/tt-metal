@@ -18,15 +18,18 @@ Per-chip after SP/TP=4 (M=640, M_t=20 for all):
 | 3 | kv_a_proj_with_mqa | 1 | 640 | 1536 | 576 | 17k | BF16 | BF8 | BF16 |
 | 4 | wkv_b2 (batched) | 16 | 640 | 512 | 256 | 41k | BF16 | BF8 | **BF8** |
 | 5 | o_proj | 1 | 640 | 4096 | 6144 | 492k | **BF8** | BF8 | BF16 |
-| 6 | indexer.wq_b | 1 | 640 | 2048 | 4096 | 164k | BF16 | BF8* | BF16 |
-| 7 | indexer.wk | 1 | 640 | 1536 | 128 | 3.8k | BF16 | BF8* | BF16 |
-| 8 | indexer.weights_proj | 1 | 640 | 1536 | 32 | 960 | BF16 | BF8* | BF16 |
+| 6 | indexer.wq_b | 1 | 640 | 2048 | 4096 | 164k | BF16 | BF8 | BF16 |
+| 7 | indexer.wk | 1 | 640 | 1536 | 128 | 3.8k | BF16 | BF8 | BF16 |
+| 8 | indexer.weights_proj | 1 | 640 | 1536 | 32 | 960 | BF16 | **BF16** | BF16 |
 
-**\* indexer weight dtype decision:** `indexer.py:148-170` currently hardcodes `dtype=ttnn.bfloat16`
-for wq_b/wk/weights_proj. Iva decided to **switch these to BF8** (bfloat8_b) to match the base MLA
-weights → the tuning targets BF8. **The indexer.py load must change `ttnn.bfloat16` → `bfloat8_b`
-for the 3 indexer weights** (still TODO, see Wiring below). Once BF8, **indexer.wq_b == q_b_proj**
-(same shape + dtypes) → one config serves both.
+**Indexer weight dtype — resolved by #51005 (merged to main):** wq_b and wk switched
+`ttnn.bfloat16` → `bfloat8_b` in `indexer.py`, as anticipated here. `weights_proj` did **NOT** —
+it stays BF16: the per-head gate it feeds is precision-sensitive, unlike wq_b (drives top-k
+selection only, tolerates rounding) and wk (immediately LayerNorm'd, which cancels the BF8
+magnitude error). Since wq_b is now BF8, **indexer.wq_b == q_b_proj** (same shape + dtypes) → one
+config serves both. `weights_proj`'s BF16 weight means it does NOT share q_b_proj's tuning and
+needs its own re-check (see Tuning results below — its BEST config was previously validated only
+at BF8 weight).
 
 ### Validated against the real Galaxy run
 `ops_perf_results_2026_07_23_11_18_12.csv` (repo root; recorded on 8x4 Galaxy, glm52). It has
@@ -110,8 +113,8 @@ Backward-compatible (dict entries still work).
 2. Indexer linears (`indexer.py` forward: wq_b L570, wk L480, weights_proj L584): they currently pass
    NO program_config (DRAM + auto). Wire the tuned configs. Need a config source (e.g. add a small
    `DSA_INDEXER_MM_CONFIG` in mla_config.py keyed by seq_len, or read MLA_MATMUL_CONFIG). wq_b config
-   == q_b_proj. **Also switch the 3 indexer weight loads `ttnn.bfloat16` → `bfloat8_b`** (indexer.py
-   ~L150-153, L163-166) per the dtype decision — must land WITH the tuned configs.
+   == q_b_proj. The dtype switch itself already landed via #51005 (wq_b/wk → bfloat8_b; weights_proj
+   stays bfloat16) — no dtype changes left to make here, only program_config wiring.
 3. Gating check: ensure Kimi (q_lora 1536) + DeepSeek (128 heads) still resolve their own/no config
    after the list change (the tag match handles it, but run test_mla / test_sparse_mla to confirm).
 4. Validate on device: `test_mla.py` chunked GLM path (or test_sparse_mla) — but note per memory,

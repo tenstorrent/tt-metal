@@ -98,10 +98,13 @@ def _mc1d(in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N):
 
 
 # Per-matmul activation (in0) dtype — matches the GLM-5.2 Galaxy run (ops_perf_results). All are
-# BF16 except o_proj, which consumes the BF8 SDPA/concat-heads output. Weights (in1) are BF8 for all
-# 9 (the 3 indexer weights are loaded BF16 in indexer.py today but tuned/targeted at BF8 to match
-# the base MLA weights — the indexer.py load switches to bfloat8_b alongside this).
+# BF16 except o_proj, which consumes the BF8 SDPA/concat-heads output.
 IN0_DTYPE = {"o_proj": BF8}  # default BF16
+
+# Per-matmul weight (in1) dtype. Default BF8. #51005 (merged to main) switched indexer.wq_b/wk to
+# BF8 as anticipated here, but landed indexer.weights_proj at BF16 — the per-head gate it feeds is
+# precision-sensitive (unlike wq_b/wk, which only drive top-k selection / are normalized right after).
+IN1_DTYPE = {"indexer.weights_proj": BF16}  # default BF8
 
 # name -> (in0_shape(global), in0_tp_sharded, in0_tp_dim, in1_shape, in1_tp_sharded, in1_tp_dim,
 #          default_out_dtype, tp_out_mode). in0 is ALWAYS sp-sharded on dim2 (seq).
@@ -182,7 +185,7 @@ BEST = {
     "o_proj": (_mc2d(16, 1, 6, 2, 18), DRAM, L1, BF16),  # 110c, 135.4us, 78%
     "indexer.wq_b": (_mc2d(8, 1, 6, 2, 12), L1, L1, BF16),  # == q_b_proj (BF16 act/BF8 wt), 49.1us, 72%
     "indexer.wk": (_mc2d(8, 1, 1, 2, 1), DRAM, DRAM, BF16),  # 40c (N_t=4), 13.9us, tiny
-    "indexer.weights_proj": (_mc2d(8, 1, 1, 2, 1), DRAM, DRAM, BF16),  # 10c (N_t=1), 10.2us, tiny
+    "indexer.weights_proj": (_mc2d(8, 1, 1, 2, 1), DRAM, DRAM, BF16),  # 10c (N_t=1), BF16 wt (#51005), re-tune below
 }
 
 # Sweep variants for a single tracy pass: (variant_id, base_shape_name, prog, act, out, out_dtype).
@@ -248,7 +251,12 @@ def _run(mesh_device, name, prog_config, act_mem_config, out_mem_config, out_dty
     else:
         in1_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     tt_weight = ttnn.from_torch(
-        weight, device=mesh_device, dtype=BF8, layout=ttnn.TILE_LAYOUT, memory_config=DRAM, mesh_mapper=in1_mapper
+        weight,
+        device=mesh_device,
+        dtype=IN1_DTYPE.get(name, BF8),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=DRAM,
+        mesh_mapper=in1_mapper,
     )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
