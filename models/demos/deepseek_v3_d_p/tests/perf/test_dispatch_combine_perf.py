@@ -3,70 +3,52 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device performance tests for DeepSeek V3 MoE dispatch and combine operations.
+Device performance tests for DeepSeek/Kimi MoE dispatch and combine operations.
 
-Replays the 4 hottest (layer, col) pairs from the real longbook_qa_eng_25600
-prefill capture on LB 8x1 — one worker spawn per (layer, col, topology) runs
-TtDispatchModule → production layout transform (squeeze → TILE+bfp8 → unsqueeze)
-→ TtCombineModule(init_zeros=True) end-to-end on device. Tracy captures
-DispatchDeviceOperation, the layout op(s), and CombineDeviceOperation in one CSV;
-the perf wrapper asserts dispatch and combine independently so a regression
-localizes to the responsible kernel.
+Replays the hottest (layer, col) pairs of a real prefill capture on LB 8x1 — one
+worker spawn per (layer, col, topology) runs TtDispatchModule → production layout
+transform (squeeze → TILE+bfp8 → unsqueeze) → TtCombineModule(init_zeros=True)
+end-to-end on device. Tracy captures DispatchDeviceOperation, the layout op(s),
+and CombineDeviceOperation in one CSV; the perf wrapper asserts dispatch and
+combine independently so a regression localizes to the responsible kernel.
 
-The 256-experts indexing space, top-k=8, experts_per_chip=8 explicit override are
-needed because the captures are Galaxy-global IDs in [0, 256); the loader
-(`load_captured_routing`) remaps them to [0, 64) ∪ {255} so the LB single-col
-combine kernel (first_expert_id=0) interprets them correctly, then slices the
-gate outputs to [0:1] for LB's single dispatch group.
+The captures hold Galaxy-global expert IDs; the loader (`load_captured_routing`)
+shifts a column's own experts down to [0, experts_per_col) and sends the rest to
+sentinel 255, so the LB single-col combine kernel (first_expert_id=0) interprets
+them correctly, then slices the gate outputs to [0:1] for LB's single dispatch
+group. The per-model kernel config lives in the worker's parametrize entries.
 """
 
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_per_op
 
-# Top 4 absolute hottest (layer, col) pairs from LONGBOOK_QA_ENG_25600.
-# Each token picks 8 of 256 experts; "in-col share" = fraction of those picks
-# landing in the column's 64 experts (uniform random would be 25%).
-_REAL_INDICES_PICKS: list[tuple[int, int]] = [
-    # (layer, col)
-    (27, 2),  # 43.2% in-col share — hottest in the corpus
-    (38, 0),  # 41.2%
-    (50, 0),  # 39.9%
-    (28, 1),  # 39.5%
-]
 _REAL_INDICES_TOPOS = [("linear", 2), ("ring", 2)]
 
-# Per-(topo, nlinks, layer, col) baselines in nanoseconds. Dispatch and combine
-# are developed separately, so each is asserted against its own baseline —
-# a regression localizes to the responsible kernel.
-_DISPATCH_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    # (topo, nlinks, layer, col): expected_ns. Re-centered to the midpoint of the observed
-    # min/max across 16 main-branch CI runs (2026-06-13..18) spanning 5 LB runners
-    # (f01cs01/02/08, f04cs03/04), against LONGBOOK_QA_ENG_25600/expert_routing.safetensors.
-    # Percent comment = dispatch-group in-col share for that layer/col.
-    ("linear", 2, 27, 2): 12_129_621,  # 43.2%
-    ("linear", 2, 38, 0): 7_158_222,  # 41.2%
-    ("linear", 2, 50, 0): 8_484_394,  # 39.9%
-    ("linear", 2, 28, 1): 11_039_234,  # 39.5%
-    ("ring", 2, 27, 2): 7_216_744,
-    ("ring", 2, 38, 0): 5_130_980,
-    ("ring", 2, 50, 0): 4_848_732,
-    ("ring", 2, 28, 1): 5_595_338,
-}
-_COMBINE_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    # Re-baselined to the 2026-06-24 measurement after a combine-kernel speedup.
-    # 2026-06-25: the two linear-8-2link entries below were set from a single optimistic
-    # 06-24 run; real CI measures higher (l27-col2 8.49 ms, l28-col1 9.75 ms), so they are
-    # bumped to the observed values (margin 0.03). Unrelated to the routed-expert FFN change
-    # (it does not touch combine); recheck if a real combine regression is suspected.
-    ("linear", 2, 27, 2): 8_490_000,
-    ("linear", 2, 38, 0): 7_139_837,
-    ("linear", 2, 50, 0): 7_341_465,
-    ("linear", 2, 28, 1): 9_750_000,
-    ("ring", 2, 27, 2): 8_294_634,
-    ("ring", 2, 38, 0): 5_308_695,
-    ("ring", 2, 50, 0): 5_711_088,
-    ("ring", 2, 28, 1): 7_746_036,
+# Picks come from the production 11x5120 chunked-prefill run (code_debug), for both models we ship.
+# One chunk per case: 5120 tokens over the 8-chip dispatch group => seq_len_per_chip 640, hence the
+# worker's perf_captured_*_chunk entries.
+#
+# TT_DS_USE_CAPTURED_INDICES (read by the worker, inherited from the environment) is the
+# expert_routing.safetensors holding BOTH models' cases, keyed by model. The test is parametrized
+# per model and the worker slices that model's tensors out of the file.
+#
+# A pick contributes a test only once its baselines are filled in, so this is inert by default: the
+# 75W box the captures came from cannot produce valid perf numbers, and nothing is asserted against
+# a guessed baseline.
+
+_DS_CHUNK_PICKS = [(19, 2), (29, 0), (42, 3), (24, 1)]  # 37.2 / 37.0 / 36.9 / 36.7 % in-col share
+_KIMI_CHUNK_PICKS = [(45, 2), (48, 0), (44, 1), (50, 1)]  # 38.6 / 38.1 / 37.4 / 37.1 %
+_DISPATCH_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {}
+_COMBINE_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {}
+_DISPATCH_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {}
+_COMBINE_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {}
+
+# model -> (picks, dispatch baselines, combine baselines). The model name is also the worker's
+# parametrize id (perf_captured_<model>_chunk) and its namespace in the capture file.
+_MODELS = {
+    "dsv3": (_DS_CHUNK_PICKS, _DISPATCH_DS_CHUNK_EXPECTED_NS, _COMBINE_DS_CHUNK_EXPECTED_NS),
+    "kimi26": (_KIMI_CHUNK_PICKS, _DISPATCH_KIMI_CHUNK_EXPECTED_NS, _COMBINE_KIMI_CHUNK_EXPECTED_NS),
 }
 
 
@@ -80,6 +62,7 @@ def _perf_param_per_op(
     margin: float = 0.03,
     captured_layer: int | None = None,
     captured_col: int | None = None,
+    model: str = "",
     worker_filter_extras: str | None = "",
     worker_dir: str = "models/demos/deepseek_v3_d_p/tests/perf",
 ):
@@ -97,12 +80,13 @@ def _perf_param_per_op(
     worker_id = f"{topo}-8-{nlinks}link"
     model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link"
     use_captured = captured_layer is not None and captured_col is not None
-    parametrize_id = "perf_real_indices" if use_captured else "perf_no_pcc"
+    parametrize_id = f"perf_captured_{model}_chunk" if use_captured else "perf_no_pcc"
     k_filter = f"{parametrize_id} and {worker_id}"
     if worker_filter_extras:
         k_filter += f" and {worker_filter_extras}"
     if use_captured:
-        model_name += f"_real_l{captured_layer:02d}_col{captured_col}"
+        model_name += f"_{model}_l{captured_layer:02d}_col{captured_col}"
+        # TT_DS_USE_CAPTURED_INDICES is not forwarded: the worker reads the same var and inherits it.
         extra_env = {"TT_DS_CAPTURED_LAYER": str(captured_layer), "TT_DS_CAPTURED_COL": str(captured_col)}
     else:
         extra_env = {}
@@ -126,16 +110,19 @@ _DISPATCH_COMBINE_PERF_PARAMS = [
         topo,
         nlinks,
         expected_per_op={
-            "DispatchDeviceOperation": _DISPATCH_REAL_INDICES_EXPECTED_NS[(topo, nlinks, layer, col)],
-            "CombineDeviceOperation": _COMBINE_REAL_INDICES_EXPECTED_NS[(topo, nlinks, layer, col)],
+            "DispatchDeviceOperation": dispatch_ns[(topo, nlinks, layer, col)],
+            "CombineDeviceOperation": combine_ns[(topo, nlinks, layer, col)],
         },
         margin=0.045 if topo == "ring" else 0.03,
         captured_layer=layer,
         captured_col=col,
+        model=model,
         worker_dir="models/demos/deepseek_v3_d_p/tests/perf",
     )
+    for model, (picks, dispatch_ns, combine_ns) in _MODELS.items()
     for topo, nlinks in _REAL_INDICES_TOPOS
-    for layer, col in _REAL_INDICES_PICKS
+    for layer, col in picks
+    if (topo, nlinks, layer, col) in dispatch_ns and (topo, nlinks, layer, col) in combine_ns
 ]
 
 
@@ -165,7 +152,11 @@ def test_device_perf_dispatch_combine(
     margin,
     comments,
     extra_env,
+    is_ci_env,
 ):
+    # Skip the Kimi perf test in CI; only DSv3 is gated for now.
+    if is_ci_env and "kimi26" in model_name:
+        pytest.skip("Only perf test for DeepSeek V3 in CI")
     run_model_device_perf_test_per_op(
         command=command,
         expected_per_op=expected_per_op,

@@ -13,7 +13,8 @@ one CSV; the perf wrapper asserts each independently.
 Required env vars (set by the parent perf test via extra_env):
     TT_DS_CAPTURED_LAYER          int, MoE layer index
     TT_DS_CAPTURED_COL            int, Galaxy column [0, 4)
-    TT_DS_USE_CAPTURED_INDICES    optional path override (defaults to LONGBOOK_QA_ENG_25600)
+    TT_DS_USE_CAPTURED_INDICES    expert_routing.safetensors holding the chunked-prefill capture
+                                  for every model (falls back to LONGBOOK_QA_ENG_25600)
 """
 
 import os
@@ -24,6 +25,8 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
@@ -36,11 +39,50 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 
+# Geometry of the replay, not of any model: LB 8x1 stands in for ONE column of the Galaxy the
+# capture was taken on, which has 4 columns of 8 chips.
+GALAXY_NUM_DISPATCH_GROUPS = 4
+LB_DISPATCH_GROUP_SIZE = 8
+CHUNK = 5 * 1024  # tokens per chunk in the chunked-prefill run the captures come from
+DISPATCH_BUFFER_CAPACITY_FACTOR = 8
+
+
+def _chunk_case(model, model_config):
+    """Worker config for replaying one chunk of `model`'s chunked-prefill capture on LB 8x1.
+
+    Everything model-specific is read off the reference config, so a model's expert count or
+    embedding size is stated in exactly one place. Derived here:
+
+        seq_len_per_chip        one chunk spread over the dispatch group   (5120/8 = 640)
+        experts_per_chip        the column's experts split across 8 chips
+                                (dsv3 256/4/8 = 8, kimi26 384/4/8 = 12)
+        capture_key_prefix      the model's namespace in the shared capture  ("dsv3_")
+        parametrize id          what test_dispatch_combine_perf selects with -k
+
+    `model` is the one name for all three, so the perf test can build the id itself. No id may be a
+    prefix of another: the perf test filters workers with `-k "<id> and ..."` and -k matches
+    substrings, so an overlapping id would silently pull in the wrong entry too.
+    """
+    experts_per_col = model_config.NUM_ROUTED_EXPERTS // GALAXY_NUM_DISPATCH_GROUPS
+    return pytest.param(
+        CHUNK // LB_DISPATCH_GROUP_SIZE,
+        model_config.EMB_SIZE,
+        model_config.NUM_ROUTED_EXPERTS,
+        model_config.NUM_EXPERTS_PER_TOKEN,
+        DISPATCH_BUFFER_CAPACITY_FACTOR,
+        experts_per_col // LB_DISPATCH_GROUP_SIZE,
+        f"{model}_",
+        id=f"perf_captured_{model}_chunk",
+    )
+
 
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, "
-    "dispatch_buffer_capacity_factor, experts_per_chip_override",
-    [pytest.param(3200, 7168, 256, 8, 8, 8, id="perf_real_indices")],
+    "dispatch_buffer_capacity_factor, experts_per_chip_override, capture_key_prefix",
+    [
+        _chunk_case("dsv3", DeepSeekV3Config),
+        _chunk_case("kimi26", KimiK26Config),
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -58,6 +100,7 @@ def test_ttnn_dispatch_combine(
     num_links,
     topology,
     experts_per_chip_override,
+    capture_key_prefix,
 ):
     layer_str = os.getenv("TT_DS_CAPTURED_LAYER")
     col_str = os.getenv("TT_DS_CAPTURED_COL")
@@ -98,7 +141,8 @@ def test_ttnn_dispatch_combine(
         f"num_dispatch_groups(mesh)={num_dispatch_groups}"
     )
 
-    # Load captured routing (indices remapped to [0, 64) ∪ {255}, col-0 dispatch table).
+    # Load captured routing (in-col indices shifted to [0, experts_per_col), rest -> sentinel 255,
+    # col-0 dispatch table).
     indices, expert_dispatch_table = load_captured_routing(
         dispatch_group_size=dispatch_group_size,
         seq_len_per_chip=seq_len_per_chip,
@@ -107,6 +151,7 @@ def test_ttnn_dispatch_combine(
         layer=int(layer_str),
         col=int(col_str),
         captured_indices_path=os.getenv("TT_DS_USE_CAPTURED_INDICES"),
+        key_prefix=capture_key_prefix,
     )
 
     # get_gate_outputs produces 4-row outputs (Galaxy-global); slice to [0:1] for LB's single dispatch group.

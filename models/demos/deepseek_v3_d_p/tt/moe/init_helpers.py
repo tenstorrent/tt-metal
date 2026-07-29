@@ -648,6 +648,7 @@ def load_captured_routing(
     layer: int,
     col: int,
     captured_indices_path: str = None,
+    key_prefix: str = "",
 ):
     """Load real captured Galaxy gate indices, remapped to run one Galaxy column on LB 8x1.
 
@@ -734,10 +735,13 @@ def load_captured_routing(
 
     if not 0 <= col < GALAXY_NUM_DISPATCH_GROUPS:
         raise ValueError(f"col must be in [0, {GALAXY_NUM_DISPATCH_GROUPS}), got {col}")
-    if num_routed_experts != 256:
+    # Per-model routed-expert count: DeepSeek V3/V3.2 = 256 (64 per col, 8 per LB chip),
+    # Kimi K2.6 / V4-pro = 384 (96 per col, 12 per LB chip). The remap below only needs the
+    # groups to tile the id space and the sentinel to sit outside a column's local range.
+    if num_routed_experts % GALAXY_NUM_DISPATCH_GROUPS != 0:
         raise ValueError(
-            f"Captured indices require num_routed_experts=256, got {num_routed_experts}. "
-            "Use a parametrize entry with the matching kernel config (perf_real_indices)."
+            f"num_routed_experts={num_routed_experts} does not divide into "
+            f"{GALAXY_NUM_DISPATCH_GROUPS} dispatch groups"
         )
 
     if captured_indices_path:
@@ -755,7 +759,10 @@ def load_captured_routing(
 
     from safetensors import safe_open
 
-    key = f"expert_ids_layer_{layer}"
+    # One capture file can hold several models' cases side by side (DeepSeek and Kimi have
+    # overlapping layer numbers but different expert counts), namespaced by key_prefix. Empty
+    # prefix = the single-model layout the longbook capture uses.
+    key = f"{key_prefix}expert_ids_layer_{layer}"
     with safe_open(str(path), framework="pt") as f:
         available = list(f.keys())
         if key not in available:
