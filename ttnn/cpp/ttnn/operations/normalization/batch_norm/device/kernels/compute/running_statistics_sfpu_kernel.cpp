@@ -94,6 +94,20 @@ void kernel_main() {
         dfb_batch_mean_obj.wait_front(onetile);
         dfb_out0_obj.reserve_back(1);
 
+        if constexpr (!old_running_mean_has_value && !old_running_var_has_value) {
+            // Neither stat present: copy batch_mean to the output rather than leaving
+            // the reserved tile uninitialised. The return value of running_statistics is
+            // discarded by batch_norm.cpp, but the writer kernel still consumes it.
+            tile_regs_acquire();
+            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_batch_mean);
+            last_srca_dfb = dfb_batch_mean;
+            copy_tile(dfb_batch_mean, tile_index, tile_index * 2);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, dfb_out0);
+            tile_regs_release();
+        }
+
         if constexpr (old_running_mean_has_value) {
             // 1 - momentum
             dfb_tmp1_obj.reserve_back(onetile);

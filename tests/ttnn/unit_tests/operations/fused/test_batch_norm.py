@@ -1015,3 +1015,112 @@ def test_batch_norm_fp32_acc_output_typecast(
         assert_numeric_metrics(
             torch_result, tt_output, pcc_threshold=0.999, rtol=1e-2, atol=0.5, frobenius_threshold=0.05
         )
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
+    ],
+)
+@pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize(
+    "check_mean, check_var",
+    [
+        (True, True),
+        (True, False),
+        (False, True),
+        (False, False),
+    ],
+)
+def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mean, check_var, device):
+    """Regression test for three latent defects in running_statistics_kernel.cpp (FPU path).
+
+    The FPU running-statistics compute kernel is selected when fp32_dest_acc_en=False and
+    all tensors are bfloat16.  It contained:
+      1. push_back without reserve_back on the output DFB,
+      2. a nested tile_regs_acquire wrapping helpers that run their own tile_regs cycle
+         (pack_tile reads stale/undefined DST),
+      3. undefined DST packed to output when both running stats are absent.
+
+    This test forces the FPU path via fp32_dest_acc_en=False with all-bf16 tensors in
+    training mode and validates both the main output and the updated running stats.
+    """
+    in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if check_mean else (None, None)
+    var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device) if check_var else (None, None)
+    weight_data, weight_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if weight else (None, None)
+    bias_data, bias_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if bias else (None, None)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+    )
+
+    tt_mean = ttnn.clone(mean_tensor) if check_mean else None
+    tt_var = ttnn.clone(var_tensor) if check_var else None
+
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=tt_mean,
+        running_var=tt_var,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        training=True,
+        momentum=0.1,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor)
+
+    channels = input_shapes[1]
+    torch_mean_ref = mean_data.clone() if mean_data is not None else None
+    torch_var_ref = var_data.clone() if var_data is not None else None
+    ref_mean = (
+        torch_mean_ref
+        if torch_mean_ref is not None
+        else (torch.zeros(channels, dtype=in_data.dtype) if torch_var_ref is not None else None)
+    )
+    ref_var = (
+        torch_var_ref
+        if torch_var_ref is not None
+        else (torch.ones(channels, dtype=in_data.dtype) if torch_mean_ref is not None else None)
+    )
+
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_data,
+        running_mean=ref_mean,
+        running_var=ref_var,
+        weight=weight_data,
+        bias=bias_data,
+        training=True,
+        momentum=0.1,
+    )
+    # LoFi + fp32_dest_acc_en=False is inherently lower precision than the default
+    # SFPU path; widen the Frobenius threshold accordingly.
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.25)
+
+    if check_mean:
+        tt_updated_mean = ttnn.to_torch(tt_mean)
+        assert_numeric_metrics(
+            ref_mean.view(1, channels, 1, 1),
+            tt_updated_mean,
+            rtol=0.1,
+            atol=4.0,
+            frobenius_threshold=0.25,
+            check_pcc=False,
+        )
+    if check_var:
+        tt_updated_var = ttnn.to_torch(tt_var)
+        assert_numeric_metrics(
+            ref_var.view(1, channels, 1, 1),
+            tt_updated_var,
+            rtol=0.1,
+            atol=4.0,
+            frobenius_threshold=0.25,
+            check_pcc=False,
+        )
