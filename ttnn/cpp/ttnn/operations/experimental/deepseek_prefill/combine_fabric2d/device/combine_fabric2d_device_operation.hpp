@@ -29,13 +29,15 @@ struct CombineFabric2dDeviceOperation {
 namespace ttnn::prim {
 ttnn::Tensor combine_fabric2d(
     ttnn::MeshDevice* device,
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& output,
+    const std::vector<ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dMovement>&
+        movements,
     uint32_t num_links,
-    uint32_t num_tokens,
-    uint32_t chunk_size_bytes,
-    uint32_t num_slots,
+    uint32_t input_tokens_per_movement,
+    uint32_t output_tokens_per_movement,
+    uint32_t token_size_bytes,
     uint32_t axis,
     uint32_t stall_telemetry,
-    uint32_t variant,
-    tt::tt_fabric::Topology topology,
-    const std::optional<ttnn::Tensor>& input = std::nullopt);
+    tt::tt_fabric::Topology topology);
 }  // namespace ttnn::prim

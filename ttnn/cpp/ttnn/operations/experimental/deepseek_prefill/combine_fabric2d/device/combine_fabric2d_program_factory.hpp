@@ -7,8 +7,6 @@
 #include "combine_fabric2d_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <ttnn/global_semaphore.hpp>
-#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
@@ -45,34 +43,23 @@ struct CombineFabric2dWorkerTelemetry {
     // died before completing its record).
     bool valid = false;
     uint32_t tokens_sent = 0;
-    uint32_t credits_forwarded = 0;
-    uint32_t chunk_size_bytes = 0;
-    uint32_t num_slots = 0;
-    uint32_t write_up_to_final = 0;
-    uint64_t t_first_send = 0;   // wall clock when the first token was handed to the fabric
-    uint64_t t_last_send = 0;    // ... the last token
-    uint64_t t_last_credit = 0;  // ... when the credit for the last token came back. In the receiverless
-                                 // modes there are no app-level credits, so this is instead the moment
-                                 // the EDM drain proved every payload packet reached the far chip
-                                 // (Phase 4 Goal 1) — an upper bound where t_last_send is the lower one.
+    uint32_t token_size_bytes = 0;
+    uint32_t num_in_tokens = 0;
+    uint64_t t_first_send = 0;  // wall clock when the first token was handed to the fabric
+    uint64_t t_last_send = 0;   // ... the last token
+    uint64_t t_drained = 0;     // ... when the EDM drain proved every payload packet reached the far chip.
+                                // An upper bound on the transfer where t_last_send is the lower one.
 
-    // Phase 4. `drain_packets` is how many header-only fillers the drain needed (edm_slots - 1, or 0 in
-    // the modes that have real end-to-end credits). The base pages say what this producer read and where
-    // it wrote, which is what lets a caller check content without re-deriving the cable mapping.
+    // How many header-only fillers the drain needed (= edm_slots - 1), and where this producer wrote.
     uint32_t drain_packets = 0;
-    uint32_t in_base_page = 0xFFFFFFFFu;  // 0xFFFFFFFF => this run had no precooked input
-    uint32_t out_base_page = 0;           // first page written in the PEER chip's output buffer
+    uint32_t out_base_page = 0;  // first page written in the PEER chip's output region
 
-    // Stall attribution over the send window. The four cycle buckets are disjoint and together with the
+    // Stall attribution over the send window. The two cycle buckets are disjoint and together with the
     // loop's own overhead account for t_last_send - t_first_send, which is what makes them useful for
-    // deciding whether the ceiling is the eth side, the credit round-trip, or our own issue cost.
+    // deciding whether the ceiling is the eth side or our own issue cost.
     uint32_t edm_slots = 0;         // EDM sender-channel depth (packets in flight it can absorb)
-    uint32_t credit_packets = 0;    // credit packets sent (they batch, so <= credits_forwarded)
-    uint32_t loop_iters = 0;        // producer loop trips
     uint64_t wait_slot_cycles = 0;  // waiting for an EDM slot => eth/eRISC-limited
     uint64_t issue_cycles = 0;      // building + issuing a payload packet
-    uint64_t starve_cycles = 0;     // credit-starved => credit-round-trip-limited
-    uint64_t credit_cycles = 0;     // forwarding credit packets
 };
 
 struct CombineFabric2dTelemetry {
@@ -85,11 +72,10 @@ struct CombineFabric2dTelemetry {
 CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t num_links, uint32_t axis);
 
 struct CombineFabric2dProgramFactory {
-    // Contract-2 declarative WorkloadDescriptor entry point. Allocates workload-scope
-    // GlobalSemaphores (the receiver data-ready semaphore, and in later phases the producer
-    // credit semaphore) once per cache miss so their device-side addresses are uniform across
-    // the mesh, then builds one ProgramDescriptor per mesh coordinate (each chip sends to its
-    // own neighbor, so compile-time args are coord-dependent and cannot be replicated).
+    // Contract-2 declarative WorkloadDescriptor entry point. Builds one ProgramDescriptor per mesh
+    // coordinate: each chip sends to its own neighbor, so the compile-time args are coord-dependent and
+    // cannot be replicated. No workload-scope semaphores are needed — the op has no application-level
+    // credit loop, only the EDM's own sender-slot backpressure.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const CombineFabric2dParams& operation_attributes,
         const CombineFabric2dInputs& tensor_args,
