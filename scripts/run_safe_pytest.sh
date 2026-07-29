@@ -280,7 +280,8 @@ precompile_warm() {
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
     echo "PRECOMPILE: ===== warmup (collect + precompile, real device) =====" >&2
     # Real-device collect over the SAME selection -> warms the shared cache. We open the same device the
-    # real run uses, so the build_key matches by construction (no mock / fingerprint / pre-flight needed).
+    # real run uses, so the DEVICE half of the build_key matches by construction (no mock / fingerprint /
+    # pre-flight needed). The RUNTIME-OPTIONS half still has to be matched by hand -- see PROF_ENV below.
     # SINGLE-PROCESS by design: the heavy kernel COMPILE is parallelized by the plugin's in-process C++
     # thread pool via ttnn.graph.up_front_compile(device, UP_FRONT_COLLECT_WORKERS=N). xdist (-n) would
     # only parallelize the cheap COLLECT body-run and, measured, LOSES ~half the cache (concurrent writers
@@ -292,9 +293,20 @@ precompile_warm() {
     local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
     echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
     t0=$(date +%s)
+    # Under --profile the real run executes inside `python -m tracy`, which sets
+    # TT_METAL_DEVICE_PROFILER=1 in the child env. That flag moves the kernel build_key, so a warm pass
+    # WITHOUT it lands in a different cache tree and the profiled run reuses nothing at all (measured:
+    # 0/16 hits, i.e. the whole warm pass wasted). Set it here so both passes share one build_key.
+    # Only this one var is needed: TT_METAL_DEVICE_PROFILER=1 alone reproduces the tracy run's key
+    # exactly, and the profiler DUMP vars have no build-key effect. eval_test_runner.sh keeps the same
+    # var set across its warm pass for this exact reason.
+    local -a PROF_ENV=()
+    if [[ "$PROFILE_MODE" == true ]]; then
+        PROF_ENV=(TT_METAL_DEVICE_PROFILER=1)
+    fi
     # SRV_ENV (server-enable + preprocess + keepalive) is scoped to THIS subprocess only — it is the
     # sole place the server is ever enabled, so the real run / inline path can never hit it.
-    env "${SRV_ENV[@]}" \
+    env "${SRV_ENV[@]}" "${PROF_ENV[@]}" \
         UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
         LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
         pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
