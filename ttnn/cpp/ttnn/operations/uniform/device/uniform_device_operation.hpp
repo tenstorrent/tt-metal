@@ -46,8 +46,8 @@ struct UniformDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Re-derives ALL per-dispatch state (seed/from/to, excluded from the hash) via create_descriptor
-    // and re-applies it to the cached program on every hit. Supersedes get_dynamic_runtime_args.
+    // Writes every per-dispatch arg (seed/from/to, hash-excluded) and the output address in place on
+    // each cache hit. Supersedes get_dynamic_runtime_args and resolve_bindings; no descriptor rebuild.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
