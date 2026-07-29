@@ -1,0 +1,53 @@
+{
+  "decode_current_pos": 32,
+  "decode_pcc": 0.9998358873796445,
+  "decode_threshold": 0.995,
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "optimized_stage_provenance": {
+    "checkout_git_sha": "ed9dff651d7096c1c80f52b8505471925d735d72",
+    "exact_command": "routed-active prefill first correctness A/B sliding+full real weights",
+    "hardware": {
+      "arch": "Blackhole P300C",
+      "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+    },
+    "optimized_decoder_sha256": "34ad27e43e02925f0ab8ccdb85052eb88eea9eccea0e49c1b4e2f744b5b1eab9",
+    "optimized_test_sha256": "82b0beabf0a32eb16dd97033e1293aa0052140f4c64417b6d581dd31b39b6d62",
+    "resolved_policy": {
+      "constructor_defaults": {
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi4",
+        "attention_weight_dtype": "DataType.BFLOAT16",
+        "dense_decode_dram_sharded": "False",
+        "dram_in0_block_w": "None",
+        "expert_down_in0_block_w": "11",
+        "expert_gate_in0_block_w": "11",
+        "expert_gate_math_fidelity": "MathFidelity.LoFi",
+        "expert_math_fidelity": "MathFidelity.LoFi",
+        "expert_weight_dtype": "DataType.BFLOAT8_B",
+        "full_attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_weight_dtype": "DataType.BFLOAT8_B",
+        "packed_dense_gate_up": "False",
+        "prefill_expert_chunk_size": "32",
+        "prefill_expert_down_in0_block_w": "11",
+        "prefill_expert_gate_in0_block_w": "44",
+        "prefill_expert_per_core_n": "2",
+        "prefill_expert_tail_in0_block_w": "1",
+        "prefill_expert_tail_per_core_n": "11",
+        "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+        "prefill_routed_active": "True",
+        "tensor_cache_path": "None",
+        "weight_dtype": "DataType.BFLOAT16"
+      },
+      "environment_overrides": {
+        "GEMMA4_OPT_EXACT_COMMAND": "routed-active prefill first correctness A/B sliding+full real weights"
+      }
+    }
+  },
+  "prefill_pcc": 0.9976863624634249,
+  "prefill_threshold": 0.995,
+  "sequence_length": 32,
+  "shared_physical_cache": true
+}

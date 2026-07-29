@@ -1,0 +1,184 @@
+{
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "optimized_stage_provenance": {
+    "checkout_git_sha": "ed9dff651d7096c1c80f52b8505471925d735d72",
+    "exact_command": "final default optimized decoder suite after grouped-prefill AutoFix",
+    "hardware": {
+      "arch": "Blackhole P300C",
+      "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+    },
+    "optimized_decoder_sha256": "803f0e19451926ce7f5529a05498aeadee5cc186c4e0cb408d53e0de8cef9e7e",
+    "optimized_test_sha256": "829da22cc60600f8bbe2a17064c2b96cb19e74342b4e5e15b8d45dd4184d3b41",
+    "resolved_policy": {
+      "constructor_defaults": {
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi4",
+        "attention_weight_dtype": "DataType.BFLOAT16",
+        "dense_decode_dram_sharded": "False",
+        "dram_in0_block_w": "None",
+        "expert_down_in0_block_w": "11",
+        "expert_gate_in0_block_w": "11",
+        "expert_gate_math_fidelity": "MathFidelity.LoFi",
+        "expert_math_fidelity": "MathFidelity.LoFi",
+        "expert_weight_dtype": "DataType.BFLOAT8_B",
+        "full_attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_weight_dtype": "DataType.BFLOAT8_B",
+        "packed_dense_gate_up": "False",
+        "prefill_expert_chunk_size": "32",
+        "prefill_expert_down_in0_block_w": "11",
+        "prefill_expert_gate_in0_block_w": "44",
+        "prefill_expert_per_core_n": "2",
+        "prefill_expert_tail_in0_block_w": "1",
+        "prefill_expert_tail_per_core_n": "11",
+        "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+        "tensor_cache_path": "None",
+        "weight_dtype": "DataType.BFLOAT16"
+      },
+      "environment_overrides": {
+        "GEMMA4_OPT_EXACT_COMMAND": "final default optimized decoder suite after grouped-prefill AutoFix"
+      }
+    }
+  },
+  "results": [
+    {
+      "logical_sequence_length": 1,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9972770888961681,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 31,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9967973580879734,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 32,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9973525162013008,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 33,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9980447642802434,
+      "physical_sequence_length": 64,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 63,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9983732775827692,
+      "physical_sequence_length": 64,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 64,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9984786569598308,
+      "physical_sequence_length": 64,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 65,
+      "page_table": [
+        1,
+        0
+      ],
+      "pcc": 0.9982368813672866,
+      "physical_sequence_length": 96,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1023,
+      "page_table": [
+        15,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
+      "pcc": 0.9953398666779975,
+      "physical_sequence_length": 1024,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1024,
+      "page_table": [
+        15,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
+      "pcc": 0.996678093850567,
+      "physical_sequence_length": 1024,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1025,
+      "page_table": [
+        16,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "pcc": 0.9963082043252935,
+      "physical_sequence_length": 1056,
+      "threshold": 0.995
+    }
+  ]
+}
