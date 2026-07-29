@@ -154,7 +154,7 @@ For direct silicon, define the runner once and use it for both trees:
 run_perf_local() {  # $1=tt-llk root, $2=log directory
   local tree="$1" run_log="$2"
   local args=(run --worktree "$tree" --arch "$TARGET_ARCH" \
-    --test "$PERF_TEST" --stall 1800 --maxfail 0 --log-dir "$run_log")
+    --test "$PERF_TEST" --maxfail 0 --log-dir "$run_log")
   [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
   bash "$RUNNER" "${args[@]}"
 }

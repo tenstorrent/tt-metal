@@ -55,7 +55,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LLK_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 REAP="$LLK_ROOT/codegen/scripts/reap_stale_emu.sh"
 LOCKFILE="${QSR_AETHER_LOCK:-/tmp/tt-llk-test.lock}"
-EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-04}}}"
+EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
 
 mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null ||
   { echo "ERROR: cannot create lock directory for $LOCKFILE" >&2; exit 3; }
