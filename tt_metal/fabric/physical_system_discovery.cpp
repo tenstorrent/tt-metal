@@ -138,10 +138,6 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
     if (cluster_desc.get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc.get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
-        constexpr std::string_view ubb_mobo_name = "S7T-MB";
-
-        TT_FATAL(
-            using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(cluster_desc, chip_id);
         auto pcie_id = cluster_desc.get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);

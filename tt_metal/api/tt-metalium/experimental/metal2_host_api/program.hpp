@@ -73,24 +73,20 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpec(
 // If stateful behavior of parameters is required, use the power user APIs.
 void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
-// Fast-path partial update: refresh ONLY a subset of arguments for an existing Program.
-// All other arguments exhibit STATEFUL behavior: they retain their values from whatever they
-// were most recently set to.
+// Fast-path partial update: refresh an ARBITRARY subset of arguments for an existing Program.
+// Any argument not supplied exhibits STATEFUL behavior: it retains the value it was most recently
+// set to.
 //
 // PRE-CONDITION: SetProgramRunArgs must have been called previously.
 //
-// CAUTION: It is the caller's responsibility to ensure that the stateful, enqueue-invariant
-// tensor and runtime arguments being retained are still valid in the new execution context.
+// CAUTION: It is the caller's responsibility to ensure that the stateful arguments being retained
+// are still valid in the new execution context. This is especially important for retained tensor
+// arguments: if the previously-bound MeshTensor has gone out of scope (and its device memory has
+// been deallocated), re-enqueuing with the now-stale binding is undefined behavior.
 //
-// COMPLETENESS: Only those tensor and runtime arguments that have been specified in the
-// ProgramSpec as enqueue-loop invariant (via the AdvancedOptions fields) may be omitted
-// when calling UpdateProgramRunArgs. All regular arguments must be specified. This is enforced
-// by runtime validation checks.
-//
-// USE CASE: Program re-enqueue loops where only a subset of ProgramRunArgs need to be mutated
-// per iteration. This saves the host overhead of re-computing, re-specifying and re-validating
-// the full ProgramRunArgs if only a few arguments change per iteration. The onus is on the
-// programmer to ensure that the retained arguments remain valid across iterations.
+// USE CASE: Program re-enqueue loops where only a subset of ProgramRunArgs change per iteration.
+// This saves the host overhead of re-computing, re-specifying and re-validating the full
+// ProgramRunArgs when only a few arguments change per iteration.
 //
 // NOTE: DFB size overrides follow the same stateful rule — a DFB whose size is not overridden here
 //       retains its current size (as last set), rather than reverting to the ProgramSpec default.

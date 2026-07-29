@@ -98,6 +98,7 @@ class BinarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
+        dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1
@@ -105,9 +106,8 @@ class BinarySfpu(Sfpu):
 
         return (
             f"    test_utils::call_binary_sfpu_operation_quasar<"
-            f"{op}, {en_32bit_dest}, {self.iterations}"
-            f">({self.dst_index_in0} /* base_dst_index */, "
-            f"{src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, "
+            f"{op}, {dest_sync}, {en_32bit_dest}, {self.iterations}"
+            f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, "
             f"{config.sentinel.math_format});\n"
         )
 

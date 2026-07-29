@@ -35,6 +35,8 @@
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
+#include "host_api/temp_quasar_api.hpp"
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 
@@ -957,7 +959,86 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
+inline CoreCoord sd_prefetch_core(const tt_metal::IDevice* device) {
+    return tt::tt_metal::detail::sd_cq_prefetch_core(device);
+}
+
+inline CoreCoord sd_spoof_prefetch_core(const tt_metal::IDevice* device) { return sd_prefetch_core(device); }
+
+inline CoreCoord sd_dispatch_core(const tt_metal::IDevice* device) {
+    return tt::tt_metal::detail::sd_cq_dispatch_core(device);
+}
+
+inline CoreCoord dispatch_core(const tt_metal::IDevice* device) { return sd_dispatch_core(device); }
+
+inline CoreCoord sd_virtual_core(const tt_metal::IDevice* device, const CoreCoord& logical_core) {
+    return tt::tt_metal::detail::sd_cq_virtual_core(device, logical_core);
+}
+
+inline tt::CoreType sd_cq_kernel_core_type(const tt_metal::IDevice* device) {
+    return tt::tt_metal::detail::resolve_sd_cq_kernel_core_type(device);
+}
+
+inline tt_metal::DataMovementProcessor prefetch_dm() {
+    return tt::tt_metal::detail::prefetch_dm_processor();
+}
+
+inline tt_metal::DataMovementProcessor dispatch_dm() {
+    return tt::tt_metal::detail::dispatch_dm_processor();
+}
+
+inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map(const tt_metal::IDevice* device) {
+    return tt_metal::MetalContext::instance().dispatch_mem_map(sd_cq_kernel_core_type(device));
+}
+
+inline tt_metal::KernelHandle create_sd_cq_kernel(
+    tt_metal::Program& program,
+    tt_metal::IDevice* device,
+    const std::string& kernel_path,
+    const CoreCoord& logical_core,
+    [[maybe_unused]] tt_metal::DataMovementProcessor dm_processor,
+    const std::map<std::string, std::string>& defines,
+    const std::vector<uint32_t>& compile_args = {}) {
+    const tt::CoreType core_type = sd_cq_kernel_core_type(device);
+    if (core_type == tt::CoreType::DISPATCH) {
+        // Auto-assign free DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching
+        // the Quasar Tensix interim path. dm_processor is not used here.
+        return tt::tt_metal::detail::CreateDispatchEngineKernel(
+            program,
+            kernel_path,
+            logical_core,
+            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = compile_args,
+                .defines = defines,
+                .is_legacy_kernel = true});
+    }
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): the experimental API
+        // auto-assigns DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching the
+        // legacy behavior. dm_processor is not used here.
+        return tt::tt_metal::experimental::quasar::CreateKernel(
+            program,
+            kernel_path,
+            logical_core,
+            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = compile_args,
+                .defines = defines,
+                .is_legacy_kernel = true});
+    }
+    // WH/BH: the legacy SD path placed every cq kernel on RISCV_0 / NOC_0 (prefetch and dispatch
+    // live on separate cores, so there is no contention). dm_processor is ignored here.
+    return tt_metal::CreateKernel(
+        program,
+        kernel_path,
+        {logical_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = compile_args,
+            .defines = defines});
+}
 
 // Quasar simulator exposes only 64 MB as physical DRAM memory; addresses above this alias back into the same physical
 // space even though the bank is configured as 1 GB. Code that places data in DRAM on Quasar must keep it within this 64
@@ -980,6 +1061,16 @@ inline bool is_quasar_sim() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     return rtoptions.get_simulator_enabled() &&
            tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
+}
+
+// Honour an explicit TT_METAL_DRAM_BACKED_CQ value, otherwise retain the DRAM-backed default required by the Quasar
+// simulator.
+inline bool is_quasar_cq_dram_backed() {
+    if (!is_quasar_sim()) {
+        return false;
+    }
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    return !rtoptions.is_dram_backed_cq_specified() || rtoptions.get_dram_backed_cq();
 }
 
 // Wrapper template that marks any base fixture as the Quasar-simulator-only variant; the constructor
@@ -1053,9 +1144,17 @@ protected:
         // Initialize common pointers
         auto& mcq = mesh_device_->mesh_command_queue();
         fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
-        // mgr_ = &FDMeshCQTestAccessor::sysmem(*fdcq_);
         device_ = mesh_device_->get_devices()[0];
         mgr_ = &device_->sysmem_manager();  // Use Chip 0's SystemMemoryManager
+
+        if (Common::is_quasar_sim()) {
+            TT_FATAL(
+                mgr_->is_dram_backed() == Common::is_quasar_cq_dram_backed(),
+                "Quasar CQ backing configuration mismatch: SystemMemoryManager reports DRAM-backed={}, "
+                "but the test policy expects DRAM-backed={}",
+                mgr_->is_dram_backed(),
+                Common::is_quasar_cq_dram_backed());
+        }
 
         // Initialize common HW properties
         host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
@@ -1094,18 +1193,16 @@ protected:
     }
 
     // SD (slow dispatch) issue + completion queue sizes. Must fit in one device's hugepage slot
-    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. On Quasar simulation host
-    // hugepages are not available, so command queues must be stored in DRAM, and only 64 MB of physical DRAM space
-    // (QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) is available even though the bank size is 1 GB. The remaining addresses
-    // alias this physical space. The SD command queue must therefore fit in a single 64-MB window, so each half is
-    // capped at 8 MB on the Quasar simulator.
+    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. Quasar's default
+    // DRAM-backed policy uses fixed 8 MB queues in its 64 MB physical-DRAM window. An explicit
+    // TT_METAL_DRAM_BACKED_CQ=0 uses the same mapped-host split as WH/BH.
     uint32_t sd_issue_queue_size() const {
-        return Common::is_quasar_sim() ? QUASAR_SIMULATION_ISSUE_QUEUE_SIZE
-                                       : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+        return Common::is_quasar_cq_dram_backed() ? QUASAR_SIMULATION_ISSUE_QUEUE_SIZE
+                                                  : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
     }
     uint32_t sd_completion_queue_size() const {
-        return Common::is_quasar_sim() ? QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE
-                                       : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+        return Common::is_quasar_cq_dram_backed() ? QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE
+                                                  : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
     }
 
     // Helper function that polls completion queue until expected data is written into by dispatcher
@@ -1272,7 +1369,7 @@ protected:
         const std::chrono::duration<double> elapsed = end - start;
         log_info(tt::LogTest, "Ran in {:f} ms (for {} iterations)", elapsed.count() * 1000.0, num_iterations);
 
-        // On the Quasar simulator the completion queue is DRAM-backed; sync the host staging mirror before validating.
+        // DRAM-backed Quasar CQs require a host staging-buffer refresh before validation.
         this->refresh_completion_data();
 
         // Validate results
@@ -1285,13 +1382,6 @@ protected:
         }
     }
 };
-
-// Fixed core layout used by the SD spoof-prefetch execution path
-inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
-
-inline CoreCoord dispatch_core(const tt_metal::IDevice* device) {
-    return (device->arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
-}
 
 // Builds the compile-time defines required by cq_dispatch.cpp for the SD (spoof-prefetch) path.
 // SD drives only the core dispatch fields; all fabric-mux, multi-CQ, go-signal, and downstream
@@ -1324,8 +1414,11 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const auto upstream_virtual = device_->virtual_noc0_coordinate(upstream_noc, phys_spoof);
     const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
 
+    const bool cq_dram_backed = Common::is_quasar_cq_dram_backed();
+    const std::string is_cq_dram_backed = cq_dram_backed ? "1" : "0";
+
     return {
-        {"IS_CQ_DRAM_BACKED", Common::is_quasar_sim() ? "1" : "0"},
+        {"IS_CQ_DRAM_BACKED", is_cq_dram_backed},
         {"DRAM_BACKED_CQ_BANK_ID", "0"},
         {"DISPATCH_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
@@ -1417,7 +1510,6 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
-        {"FD_CORE_TYPE", "0"},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
     };
@@ -1452,6 +1544,10 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     const CoreCoord& phys_dispatch) {
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
+
+    const bool cq_dram_backed = Common::is_quasar_cq_dram_backed();
+    const std::string is_cq_dram_backed = cq_dram_backed ? "1" : "0";
+
     return {
         {"MY_NOC_X", std::to_string(my_virtual.x)},
         {"MY_NOC_Y", std::to_string(my_virtual.y)},
@@ -1470,7 +1566,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         // these share a slot id; on Quasar (prefetch+dispatch same core) they are distinct slots.
         {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
         {"DOWNSTREAM_CB_SEM_ID", std::to_string(downstream_cb_sem_id)},
-        {"IS_CQ_DRAM_BACKED", Common::is_quasar_sim() ? "1" : "0"},
+        {"IS_CQ_DRAM_BACKED", is_cq_dram_backed},
         {"DRAM_BACKED_CQ_BANK_ID", "0"},
         {"PCIE_BASE", std::to_string(pcie_base)},
         {"PCIE_SIZE", std::to_string(pcie_size)},
@@ -1523,7 +1619,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_MY_DEV_ID", "0"},
         {"OFFSETOF_TO_DEV_ID", "1"},
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
-        {"FD_CORE_TYPE", "0"},
+        {"DISPATCH_KERNEL", "1"},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };

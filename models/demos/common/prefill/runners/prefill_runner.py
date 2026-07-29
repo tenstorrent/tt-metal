@@ -139,15 +139,20 @@ SHUTDOWN_METADATA_WORD = -1
 # tensor; the producer packs the PrefillMetadata alongside each push.
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
-# D2D socket transport (>1 rank): one persistent sender/receiver pair per rank boundary carries the
-# sharded hidden state over inter-galaxy fabric. The activation is sharded [seq across SP rows, emb
-# across TP cols] — the same layout the embedding output uses — so the receiver backing feeds the
-# downstream model with no reshard.
-D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(2), ttnn.PlacementShard(3)])
 D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 64 * 1024))
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 MODEL_CFG = ADAPTER.model_config
+
+# D2D socket transport (>1 rank): one sender/receiver pair per rank boundary carries the hidden state
+# over inter-galaxy fabric, sharded seq across SP rows. The emb (TP) axis follows the adapter's residual
+# layout (see pipeline_activation_emb_tp_sharded) so the receiver backing needs no reshard.
+D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
+    placements=[
+        ttnn.PlacementShard(2),
+        ttnn.PlacementShard(3) if ADAPTER.pipeline_activation_emb_tp_sharded else ttnn.PlacementReplicate(),
+    ]
+)
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
@@ -819,6 +824,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
+        # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
+        # a rank can reach the loop's first fabric-link lease while an upstream/downstream rank is still
+        # in rendezvous, deadlocking the lease handshake before any chunk flows.
+        ttnn.distributed_context_barrier()
 
     # Migration KV-chunk-table + LayerAck: single-rank only (disabled for the pipeline for now).
     ack_channel = None
