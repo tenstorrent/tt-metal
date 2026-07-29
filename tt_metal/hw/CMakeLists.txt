@@ -170,6 +170,72 @@ if(NOT TT_USE_SYSTEM_SFPI)
     endif()
 endif()
 
+# --- X280 (SiFive L2CPU, rv64gcv) bare-metal toolchain ---
+# Same idea as SFPI above: a pinned, hash-verified release tarball downloaded into runtime/.
+# Used only to build the bare-metal X280 profiler-drainer firmware (tools/x280_bm), so the fetch
+# is best-effort: a failure just leaves it absent, and BuildEnvManager only errors if an X280
+# firmware build is actually needed (profiler on, Blackhole, L2CPU present).
+# Opt out with -DTT_FETCH_X280_TOOLCHAIN=OFF.
+option(TT_FETCH_X280_TOOLCHAIN "Download the pruned X280 rv64gcv toolchain for building X280 firmware" ON)
+if(TT_FETCH_X280_TOOLCHAIN)
+    set(X280_TC_BASE "${PROJECT_SOURCE_DIR}/runtime")
+    # Pinned pruned X280 (rv64gcv) toolchain release — bump tag + sha256 together. A pruned/
+    # stripped repackage of tenstorrent-riscv-software/riscv-gnu-toolchain (parent upstream
+    # riscv-collab/riscv-gnu-toolchain); ~159 MB vs ~2.4 GB full. Build recipe + release tooling
+    # live in that repo's scripts/ (prune-x280-toolchain.sh, release-x280-pruned.sh).
+    set(X280_TOOLCHAIN_TAG "2025.09.16-pruned")
+    set(X280_TOOLCHAIN_FILENAME "riscv64-unknown-elf-x280-min_15.2.0_x86_64_linux.tar.xz")
+    set(X280_TOOLCHAIN_SHA256 "bf1b56bd980dbcf0e02005d8c0c65307fef070e9b35a03ed29c3bd68e1ab4afa")
+    set(X280_TOOLCHAIN_TARDIR "riscv64-unknown-elf-x280-min")
+    set(X280_TOOLCHAIN_URL
+        "https://github.com/mo-tenstorrent/riscv-gnu-toolchain/releases/download/${X280_TOOLCHAIN_TAG}/${X280_TOOLCHAIN_FILENAME}"
+    )
+    set(X280_TC_DIR "${X280_TC_BASE}/x280-toolchain")
+    if(NOT EXISTS "${X280_TC_DIR}/bin/riscv64-unknown-elf-gcc")
+        set(_x280_tar "${X280_TC_BASE}/${X280_TOOLCHAIN_FILENAME}")
+        message(STATUS "Fetching X280 toolchain ${X280_TOOLCHAIN_TAG} (${X280_TOOLCHAIN_FILENAME}) ...")
+        file(
+            DOWNLOAD
+                "${X280_TOOLCHAIN_URL}"
+                "${_x280_tar}"
+            EXPECTED_HASH SHA256=${X280_TOOLCHAIN_SHA256}
+            STATUS _x280_dl
+        )
+        list(GET _x280_dl 0 _x280_rc)
+        if(_x280_rc EQUAL 0)
+            file(
+                REMOVE_RECURSE
+                "${X280_TC_BASE}/${X280_TOOLCHAIN_TARDIR}"
+                "${X280_TC_DIR}"
+            )
+            execute_process(
+                COMMAND
+                    tar xJf "${_x280_tar}"
+                WORKING_DIRECTORY "${X280_TC_BASE}"
+                RESULT_VARIABLE _x280_untar
+            )
+            if(_x280_untar EQUAL 0 AND EXISTS "${X280_TC_BASE}/${X280_TOOLCHAIN_TARDIR}/bin/riscv64-unknown-elf-gcc")
+                file(RENAME "${X280_TC_BASE}/${X280_TOOLCHAIN_TARDIR}" "${X280_TC_DIR}")
+                message(STATUS "X280 toolchain ready at ${X280_TC_DIR}")
+            else()
+                message(
+                    WARNING
+                    "X280 toolchain extract failed; X280 firmware builds will fail until a reconfigure succeeds"
+                )
+            endif()
+            file(REMOVE "${_x280_tar}")
+        else()
+            list(GET _x280_dl 1 _x280_err)
+            message(
+                WARNING
+                "X280 toolchain download failed (${_x280_err}); X280 firmware builds will fail until a reconfigure succeeds"
+            )
+        endif()
+    else()
+        message(STATUS "X280 toolchain present at ${X280_TC_DIR}")
+    endif()
+endif()
+
 # old-style
 foreach(ARCH IN LISTS ARCHS)
     set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}")

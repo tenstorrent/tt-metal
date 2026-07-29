@@ -47,6 +47,11 @@ struct pair_hash {
 
 class FabricRoutingLookup;
 
+// Zone srcloc-hash -> {name, file, line}, read from the profiler zone-source-location logs written at
+// kernel compile time. Exposed so the perf-debug (X280) profiler can decipher zone names on the host
+// (the standard DeviceProfiler uses it internally at init).
+std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHashes();
+
 struct SyncInfo {
     double cpu_time = 0.0;
     double device_time = 0.0;
