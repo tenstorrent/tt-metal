@@ -574,7 +574,8 @@ bool DPrintServer::Impl::poll_print_buffer(
     auto from_dev = cluster.read_core(device_id, virtual_core, read_write_pointer_address, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
 
-    if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC || wpos == rpos) {
+    if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC ||
+        rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC || wpos == rpos) {
         return false;
     }
 
