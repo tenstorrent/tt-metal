@@ -337,7 +337,7 @@ static void RunTest(
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else if (assert_type == dev_msgs::DebugAssertHwFault) {
         // Build regex pattern from string expected, replacing PC 0x0 with PC 0x[\da-fA-F]+
-        // or instruction: 0x00000000 with instruction: 0x[\da-fA-F]+
+        // or the trailing ERR_DATA value 0x00000000 with 0x[\da-fA-F]+
         std::string pattern = regex_escape(expected);
         if (processor.processor_class == HalProcessorClassType::DM) {
             const std::string pc_placeholder = "PC 0x0";
@@ -346,11 +346,14 @@ static void RunTest(
                 << "Expected placeholder '" << pc_placeholder << "' not found in escaped pattern: " << pattern;
             pattern.replace(pos, pc_placeholder.length(), "PC 0x[\\da-fA-F]+");
         } else if (processor.processor_class == HalProcessorClassType::COMPUTE) {
-            const std::string instruction_placeholder = "instruction: 0x00000000";
-            size_t pos = pattern.find(instruction_placeholder);
+            // Where ERR_DATA appears and what it's called both depend on the error block: a
+            // leading PC for per-TRISC errors, otherwise a trailing semaphore index, counter
+            // index or instruction. Match on the value, which is the only 8-digit field.
+            const std::string data_placeholder = "0x00000000";
+            size_t pos = pattern.rfind(data_placeholder);
             ASSERT_NE(pos, std::string::npos)
-                << "Expected placeholder '" << instruction_placeholder << "' not found in escaped pattern: " << pattern;
-            pattern.replace(pos, instruction_placeholder.length(), "instruction: 0x[\\da-fA-F]+");
+                << "Expected placeholder '" << data_placeholder << "' not found in escaped pattern: " << pattern;
+            pattern.replace(pos, data_placeholder.length(), "0x[\\da-fA-F]+");
         }
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;

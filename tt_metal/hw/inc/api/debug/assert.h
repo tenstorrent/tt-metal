@@ -41,17 +41,26 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             v->line_num = mepc;  // mepc is the instruction address that caused the fault
             v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);  // mtval is the faulting address or instruction
 #elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
-            uint32_t error_code =
-                RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
+            // error_code[15:14] = Neo ID, [13:8] = block ID, [7:0] = error index.
+            // See TriscErrors in internal/tt-2xx/quasar/error_handling.h.
+            //
+            // Read the register once. It's volatile, so re-reading per field costs extra
+            // MMIO and can mix fields from different samples if a new error arrives.
+            uint32_t error_reg = RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX];
+            uint32_t neo_id = (error_reg >> 14) & 0x3;
+            uint32_t error_code = (error_reg >> 8) & 0x3f;
             v->hw_fault_info =
-                (static_cast<uint64_t>(RISCV_DEBUG_REGS->ERR_DATA) << 32) |
-                static_cast<uint64_t>(RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX]);
-            // use error code to get the TRISC ID for errors 0-3 and 32-35.
-            // NOTE: for errors 32-35, the TRISC order is reversed, so we need to subtract the error code from 35.
-            uint32_t trisc_id = error_code < 4 ? error_code : error_code > 32 ? 35 - error_code : 0;
-            v->which = (RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX] >> 30) *
-                           NUM_TRISC_CORES +
-                       trisc_id + NUM_DM_CORES;
+                (static_cast<uint64_t>(RISCV_DEBUG_REGS->ERR_DATA) << 32) | static_cast<uint64_t>(error_reg);
+            // Get the TRISC ID from the block ID for errors 0-3 and 32-35. For 32-35 the
+            // TRISC order is reversed, so subtract from 35. Other blocks are Neo-level and
+            // are attributed to TRISC 0.
+            uint32_t trisc_id = 0;
+            if (error_code <= 3) {
+                trisc_id = error_code;
+            } else if (error_code >= 32 && error_code <= 35) {
+                trisc_id = 35 - error_code;
+            }
+            v->which = neo_id * NUM_TRISC_CORES + trisc_id + NUM_DM_CORES;
 #endif
         }
         v->tripped = assert_type;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <optional>
 #include <set>
 #include <vector>
 #include <cctype>
@@ -112,6 +113,122 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
+// Quasar error_code layout (see TriscErrors in error_handling.h):
+//   [15:14] compute core (Neo) ID
+//   [13:8]  block ID, decoded by TriscErrors
+//   [7:0]   error index within that block, decoded by the per-block enums
+inline constexpr uint32_t kQuasarErrNeoShift = 14;
+inline constexpr uint32_t kQuasarErrNeoMask = 0x3;
+inline constexpr uint32_t kQuasarErrBlockShift = 8;
+inline constexpr uint32_t kQuasarErrBlockMask = 0x3f;
+inline constexpr uint32_t kQuasarErrIndexMask = 0xff;
+
+// enchantum::to_string returns an empty view for unnamed values, which would show up as a
+// blank field in the watcher log.
+template <typename E>
+inline std::string quasar_enum_name_or_hex(uint32_t raw) {
+    const auto name = enchantum::to_string(static_cast<E>(raw));
+    return name.empty() ? fmt::format("unknown code 0x{:02x}", raw) : std::string{name};
+}
+
+// ERR_DATA is a PC only for the per-TRISC blocks, where it gets reported up front like the DM
+// faults do. Everything else reports it as a trailing field named by
+// get_quasar_error_data_name().
+inline bool quasar_error_data_is_pc(TriscErrors block) {
+    switch (block) {
+        case TriscErrors::ERROR_TRISC0:
+        case TriscErrors::ERROR_TRISC1:
+        case TriscErrors::ERROR_TRISC2:
+        case TriscErrors::ERROR_TRISC3: return true;
+        default: return false;
+    }
+}
+
+// What ERR_DATA holds, which varies by block. For the per-TRISC errors it's a PC: the last
+// instruction that committed, which for a hang is where the thread stopped rather than the
+// exact culprit. Disassemble there to find the real cause, e.g. whether a MEM_ACCESS_HANG was
+// a blocked instruction buffer push or a load/store that never returned.
+inline std::string_view get_quasar_error_data_name(TriscErrors block) {
+    switch (block) {
+        case TriscErrors::ERROR_TRISC0:
+        case TriscErrors::ERROR_TRISC1:
+        case TriscErrors::ERROR_TRISC2:
+        case TriscErrors::ERROR_TRISC3: return "PC";
+        case TriscErrors::NEO_SEMAPHORES:
+        case TriscErrors::GLOBAL_SEMAPHORES: return "semaphore index";
+        case TriscErrors::TILE_COUNTERS: return "tile counter index";
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC0:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC1:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC2:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC3: return "offending instruction";
+        default: return "faulting address or instruction";
+    }
+}
+
+// Reporting TRISC, or nullopt for the Neo-level blocks (TDMA, EDC, semaphores, SFPU, tile
+// counters) which aren't tied to one thread.
+//
+// The illegal-instruction blocks number threads in reverse (32 = TRISC3 ... 35 = TRISC0),
+// opposite to ERROR_TRISC0..3. Keep that mapping here only; don't open-code it.
+inline std::optional<uint32_t> get_quasar_error_trisc_id(TriscErrors block) {
+    const auto raw = static_cast<uint32_t>(block);
+    if (raw <= static_cast<uint32_t>(TriscErrors::ERROR_TRISC3)) {
+        return raw;
+    }
+    if (raw >= static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC3) &&
+        raw <= static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC0)) {
+        return static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC0) - raw;
+    }
+    return std::nullopt;
+}
+
+// Decodes error_code[7:0]. Needs the block too, since the index means nothing on its own.
+// Returns empty for blocks that carry no index (EDC, unallocated IDs).
+inline std::string get_quasar_error_index_description(TriscErrors block, uint32_t index) {
+    switch (block) {
+        case TriscErrors::ERROR_TRISC0:
+        case TriscErrors::ERROR_TRISC1:
+        case TriscErrors::ERROR_TRISC2:
+        case TriscErrors::ERROR_TRISC3: return quasar_enum_name_or_hex<TriscRiscErrors>(index);
+
+        case TriscErrors::UNPACKER_0:
+        case TriscErrors::UNPACKER_1:
+        case TriscErrors::UNPACKER_2:
+        case TriscErrors::PACKER_0:
+        case TriscErrors::PACKER_1: return quasar_enum_name_or_hex<TdmaErrors>(index);
+
+        case TriscErrors::NEO_SEMAPHORES:
+        case TriscErrors::GLOBAL_SEMAPHORES: return quasar_enum_name_or_hex<SemaphoreErrors>(index & 0x7);
+
+        // Sticky bitmask, not an enumerated value, so both bits may be set.
+        case TriscErrors::SFPU: {
+            std::vector<std::string_view> flags;
+            if (index & static_cast<uint32_t>(SfpuErrors::CC_STACK_OVERFLOW)) {
+                flags.emplace_back("CC_STACK_OVERFLOW");
+            }
+            if (index & static_cast<uint32_t>(SfpuErrors::CC_STACK_UNDERFLOW)) {
+                flags.emplace_back("CC_STACK_UNDERFLOW");
+            }
+            return flags.empty() ? fmt::format("unknown code 0x{:02x}", index)
+                                 : fmt::format("{}", fmt::join(flags, " + "));
+        }
+
+        // Counter number that saw an invalid event, not a cause code.
+        case TriscErrors::TILE_COUNTERS: return fmt::format("counter {}", index);
+
+        case TriscErrors::EDC_FATAL_ERROR:
+        case TriscErrors::EDC_CORRECTABLE_ERROR: return {};
+
+        // Just the opcode; the caller prints the full instruction from ERR_DATA.
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC0:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC1:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC2:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC3: return fmt::format("opcode 0x{:02x}", index);
+
+        default: return {};
+    }
+}
+
 // Returns the assert message portion for a given assert type
 // Returns empty string for unknown types (callers must handle this)
 // For DebugAssertTripped, line_num is used in the message
@@ -149,12 +266,40 @@ inline std::string get_debug_assert_message(
                     enchantum::to_string(static_cast<DmErrors>(hw_fault_info & 0xffffffff)),
                     (hw_fault_info >> 32) & 0xffffffff);
             } else {
+                const uint32_t error_code = hw_fault_info & 0xffffffff;
+                const uint32_t neo = (error_code >> kQuasarErrNeoShift) & kQuasarErrNeoMask;
+                const auto block =
+                    static_cast<TriscErrors>((error_code >> kQuasarErrBlockShift) & kQuasarErrBlockMask);
+                const uint32_t index = error_code & kQuasarErrIndexMask;
+
+                const std::string block_name =
+                    quasar_enum_name_or_hex<TriscErrors>((error_code >> kQuasarErrBlockShift) & kQuasarErrBlockMask);
+                const std::string detail = get_quasar_error_index_description(block, index);
+
+                // Omitted for Neo-level blocks rather than defaulted to 0, so "no thread" and
+                // "thread 0" stay distinguishable.
+                const auto trisc = get_quasar_error_trisc_id(block);
+                const std::string where = fmt::format(
+                    "Neo {}{}", neo, trisc.has_value() ? fmt::format(" TRISC{}", *trisc) : std::string{});
+                const std::string cause = fmt::format(
+                    "{}{}", block_name, detail.empty() ? std::string{} : fmt::format(" ({})", detail));
+                const uint32_t err_data = (hw_fault_info >> 32) & 0xffffffff;
+
+                if (quasar_error_data_is_pc(block)) {
+                    return fmt::format(
+                        "hardware fault occurred at PC 0x{:08x} on {} with cause: {}, error_code 0x{:04x}",
+                        err_data,
+                        where,
+                        cause,
+                        error_code & 0xffff);
+                }
                 return fmt::format(
-                    "hardware fault occurred with cause: {}, additional code: 0x{:08x}, faulting address or "
-                    "instruction: 0x{:08x}",
-                    enchantum::to_string(static_cast<TriscErrors>((hw_fault_info >> 8) & 0x3f)),
-                    hw_fault_info & 0xff,
-                    (hw_fault_info >> 32) & 0xffffffff);
+                    "hardware fault occurred on {} with cause: {}, error_code 0x{:04x}, {}: 0x{:08x}",
+                    where,
+                    cause,
+                    error_code & 0xffff,
+                    get_quasar_error_data_name(block),
+                    err_data);
             }
         default: return "";
     }
