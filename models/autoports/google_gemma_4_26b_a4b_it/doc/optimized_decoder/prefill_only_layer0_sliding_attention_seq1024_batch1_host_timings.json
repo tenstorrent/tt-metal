@@ -1,0 +1,42 @@
+{
+  "cache_shape": [
+    17,
+    8,
+    64,
+    256
+  ],
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "prefill_batch": 1,
+  "prefill_host_ms": 670.6303227692842,
+  "provenance": {
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_PREFILL_PROFILE=1 python -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_prefill_only_profile",
+    "optimized_decoder_sha256": "c350c41c801c01117e76859065096317c48277c202c5785bc2689d76dd2cd787",
+    "optimized_policy": {
+      "advisor_roles": [
+        "qkv_local_w1",
+        "persistent_o_proj",
+        "packed_dense",
+        "dense_down_w3",
+        "expert_gate_grid_w11",
+        "expert_up_w11",
+        "expert_up_b32_w88",
+        "expert_up_grid_x11",
+        "fused_router_scale"
+      ],
+      "attention_fidelity": "functional",
+      "attention_weight_dtype": "bf16",
+      "decode_layout": "advisor_selected_l1_width_sharded",
+      "dense_mlp_fidelity": "functional",
+      "dense_mlp_weight_dtype": "bf16",
+      "expert_fidelity": "functional",
+      "expert_weight_dtype": "bfp8",
+      "name": "shard_advisor_selected_batch1",
+      "prefill_layout": "dram_interleaved",
+      "shard_advisor_seeded": true
+    },
+    "optimized_test_sha256": "3f0a223ab6e1ffaef50f21d9512e04165b359eabe8397668c3e45c5aeae6e228"
+  },
+  "sequence_length": 1024
+}

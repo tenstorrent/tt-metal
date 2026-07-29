@@ -1,0 +1,84 @@
+{
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "regime": {
+    "arch": "BLACKHOLE",
+    "batch": 1,
+    "decode_current_position": 1024,
+    "expert_weight_dtype": "BFP8",
+    "dense_weight_dtype": "BF16"
+  },
+  "sweeps": {
+    "expert_up_in0_block_w": [
+      {"value": 1, "host_ms": 1.885219, "decision": "baseline"},
+      {"value": 2, "host_ms": 1.817909, "decision": "reject"},
+      {"value": 4, "host_ms": 1.743627, "decision": "reject"},
+      {"value": 8, "host_ms": 1.722457, "decision": "reject"},
+      {"value": 11, "host_ms": 1.713520, "decision": "apply"},
+      {"value": 22, "host_ms": 1.723689, "decision": "reject"},
+      {"value": 44, "host_ms": 1.750971, "decision": "reject"}
+    ],
+    "expert_down_in0_block_w": [
+      {"value": 1, "host_ms": 1.885219, "decision": "apply"},
+      {"value": 2, "host_ms": 1.914434, "decision": "reject"},
+      {"value": 11, "host_ms": 1.887392, "decision": "reject"},
+      {"value": 22, "host_ms": 1.897711, "decision": "reject"}
+    ],
+    "expert_output_placement": [
+      {"role": "up", "placement": "L1", "host_ms": 1.713520, "decision": "apply"},
+      {"role": "up", "placement": "DRAM", "host_ms": 1.973847, "decision": "reject"},
+      {"role": "down", "placement": "L1", "host_ms": 1.885219, "decision": "apply"},
+      {"role": "down", "placement": "DRAM", "host_ms": 2.072294, "decision": "reject"}
+    ],
+    "dense_down_in0_block_w": [
+      {"value": 2, "host_ms": 1.646468, "decision": "baseline"},
+      {"value": 3, "host_ms": 1.634145, "decision": "apply"},
+      {"value": 6, "host_ms": 1.637442, "decision": "reject"},
+      {"value": 11, "host_ms": 1.640248, "decision": "reject"},
+      {"value": 22, "host_ms": 1.642002, "decision": "reject"},
+      {"value": 33, "host_ms": 1.652250, "decision": "reject"}
+    ],
+    "qkv_in0_block_w": [
+      {"value": 1, "host_ms": 1.621994, "decode_pcc": 0.999526, "decision": "apply_sliding"},
+      {"value": 2, "decode_pcc": 0.993473, "decision": "reject"},
+      {"value": 4, "host_ms": 1.628759, "decision": "reject"},
+      {"value": 8, "host_ms": 1.626403, "decision": "reject"},
+      {"value": 11, "host_ms": 1.628968, "decision": "reject"}
+    ],
+    "topology": [
+      {"name": "advisor_separate_dense", "host_ms": 1.885219, "decision": "reject"},
+      {"name": "load_time_packed_gate_up", "host_ms": 1.653410, "decode_pcc": 0.999605, "decision": "apply"},
+      {"name": "persistent_o_l1_width", "result": "rms_norm_contract_error", "decision": "adapt"},
+      {"name": "persistent_o_l1_interleaved", "host_ms": 1.646468, "decision": "apply"},
+      {"name": "fused_router_static_scales", "host_ms": 1.617621, "decode_pcc": 0.999521, "decision": "apply"}
+    ],
+    "expert_up_core_grid_batch1": [
+      {"grid": "portable_2_core", "in0_block_w": 11, "host_ms": 1.621431, "decision": "reject"},
+      {"grid": "4x6", "result": "num_cores_with_work_22_ne_receivers_24", "decision": "adapt"},
+      {"grid": "8x3", "result": "same_non_rectangular_22_vs_24_blocker", "decision": "reject_with_exact_blocker"},
+      {"grid": "11x2", "in0_block_w": 11, "host_ms": 1.391426, "decode_pcc": 0.999521, "decision": "apply"}
+    ],
+    "expert_precision_on_selected_grid_batch1": [
+      {"dtype": "BFP8", "fidelity": "LoFi", "host_ms": 1.393212, "prefill_pcc": 0.998634, "decode_pcc": 0.999521, "decision": "apply"},
+      {"dtype": "BFP4", "fidelity": "LoFi", "host_ms": 1.391919, "prefill_pcc": 0.996457, "decode_pcc": 0.997280, "decision": "reject_accuracy_margin"}
+    ],
+    "expert_up_batch32": [
+      {"grid": "portable", "in0_block_w": 1, "host_ms": 26.837312, "decision": "baseline"},
+      {"grid": "11x2", "in0_block_w": 1, "host_ms": 34.495252, "decision": "reject"},
+      {"grid": "11x2", "in0_block_w": 11, "host_ms": 19.597913, "decision": "reject"},
+      {"grid": "11x2", "in0_block_w": 22, "host_ms": 18.989085, "decision": "reject"},
+      {"grid": "11x2", "in0_block_w": 44, "host_ms": 18.533903, "decision": "reject"},
+      {"grid": "11x2", "in0_block_w": 88, "host_ms": 18.470751, "decision": "apply"}
+    ],
+    "dense_layout_batch32": [
+      {"name": "TTNN_auto_separate_dense", "host_ms": 19.579731, "decision": "apply"},
+      {"name": "packed_11x6", "in0_block_w": 8, "host_ms": 19.561017, "decision": "reject_within_noise"},
+      {"name": "packed_11x6_plus_down_11x8", "in0_block_w": 11, "down_in0_block_w": 3, "host_ms": 19.560304, "decision": "reject_within_noise"}
+    ],
+    "large_prefill_packed_dense_seq256": [
+      {"program": "TTNN_auto", "host_ms": 168.636244, "decision": "apply"},
+      {"program": "11x8_2D", "in0_block_w": 8, "host_ms": 171.481235, "decision": "reject"},
+      {"program": "11x8_2D", "in0_block_w": 11, "host_ms": 171.703078, "decision": "reject"}
+    ]
+  },
+  "exact_subblock_blocker": "All canonical sparse up/down output geometries have per_core_N=11. TTNN output subblocks are limited to area <=4 and must divide per_core_N, so output_subblock_w=1 is the only legal value."
+}
