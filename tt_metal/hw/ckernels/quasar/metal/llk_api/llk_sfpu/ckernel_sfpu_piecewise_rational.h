@@ -5,23 +5,20 @@
 #pragma once
 
 /**
- * Shared rational P(x)/Q(x) evaluator for SFPU activations, ported from the Blackhole
- * header of the same name (only the pieces Quasar kernels use are carried over).
+ * Rational P(x)/Q(x) evaluator for SFPU activations. Carries over the parity evaluator from the
+ * Blackhole header of the same name; the other variants there have no Quasar users yet.
  *
- * Parity x²-Horner: for an odd numerator / even denominator (erf, atanh, erfinv, ...) both
- * polynomials are evaluated in the x² basis, which halves the multiply-add count. The two
- * Horner chains are independent, so their SFPMADs interleave and hide pipeline latency.
+ * For an odd numerator and even denominator (erf, atanh, erfinv) both polynomials are evaluated in
+ * the x^2 basis, halving the multiply-add count. The two Horner chains are independent, so their
+ * SFPMADs interleave and hide pipeline latency.
  */
 
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
-// ============================================================================
-// Parity x²-Horner: odd num / even den → evaluate in x² basis
-// Coefficient arrays are indexed by power, so the unused parity's entries are zero
-// and simply skipped (NUM_TOP / DEN_TOP below).
-// ============================================================================
+// Coefficient arrays are indexed by power, so the unused parity's entries are zero and get skipped
+// via NUM_TOP / DEN_TOP below.
 
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
 sfpi_inline void piecewise_rational_eval_parity_numer_denom(

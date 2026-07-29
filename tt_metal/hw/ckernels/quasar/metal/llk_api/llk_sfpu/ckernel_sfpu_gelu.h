@@ -22,34 +22,25 @@ namespace ckernel::sfpu {
 // =============================================================================
 // Approximate GELU - 6-segment piecewise-linear LUT
 // =============================================================================
-// GELU(x) ~= 0.5 * x + f(|x|), with f evaluated by the SFPU's LUT unit.
+// GELU(x) ~= 0.5 * x + f(|x|), with f evaluated by the SFPU LUT unit. Same table and same math as
+// Blackhole's calculate_gelu_appx (gelu_init has the segment breakdown); only the table location
+// differs. Quasar's SFPLUTFP32 reads the table from the constant LRegs 9-14 and the looked-up value
+// from LReg3, where WH/BH read the table from LReg0-2/LReg4-6.
 //
-// Same table, same packing and same math as Blackhole's calculate_gelu_appx (see gelu_init for the
-// segment breakdown); what differs is where the table lives. On Quasar SFPLUTFP32 reads its table from
-// the LUT/programmable constant LRegs 9-14 ("LUT constant lreg[9]" onwards in the SFPCONFIG config_dest
-// table of tt_llk_quasar/instructions/assembly.yaml) and its input from LReg3, where Wormhole/Blackhole
-// read the table from LReg0-2/LReg4-6. Two consequences:
+// So gelu_init loads the table with _sfpu_load_config32_ rather than sfpi: vCReg assignment reaches
+// SFPCONFIG, but the assembler rejects dests 9 and 10 ("permitted mask is 0xf9ff"), which is two of
+// the six table words. See tt-metal issue #51346.
 //
-//   * The table load (gelu_init) has to stay raw TTI. vCReg assignment does reach SFPCONFIG
-//     (__builtin_rvtt_sfpwriteconfig_v) and config dests 11-14 assemble, but 9 and 10 are rejected --
-//     "unsupported value '9' for mod operand (permitted mask is 0xf9ff)" -- so sfpi cannot write two of
-//     the six table words. _sfpu_load_config32_ is the only route.
+// The loop below is still plain sfpi. lut2_sign() wants six LReg operands because that is where WH/BH
+// keep the table, and it pins the looked-up value to LReg3, which is what this hardware wants anyway.
+// The LUT ignores those six registers here, so reading them back through l_reg[] (no instructions
+// emitted) is enough to satisfy the intrinsic. Loading the table into them, the way Blackhole's init
+// does, is what miscompares.
 //
-//   * This loop, however, is plain sfpi. lut2_sign() insists on six LReg operands because that is
-//     where WH/BH keep the table, and it pins the looked-up value to LReg3. That pinning is exactly
-//     what Quasar's hardware wants, and the six operand registers are ignored by the LUT here, so
-//     reading them back through l_reg[] -- which emits no instructions -- is enough to satisfy the
-//     intrinsic. Loading the table into them, as the Blackhole init does, is what miscompared on
-//     emu-quasar; leaving them alone is fine.
-//
-// Do not use vConstFloatPrgm0 for the 0.5 as Blackhole does: on Quasar that is LReg12, one of the
-// table's intercept words. An immediate (SFPMULI) costs nothing extra.
-//
-// NB: because the table covers every constant LReg, the approximate path overwrites the SFPU
-// constants 0.0/1.0/-1.0 (LReg9/10/11) that sfpi materializes and compares against. Every SFPU op's
-// init restores them (llk_math_eltwise_unary_sfpu_init -> _llk_math_sfpu_init_ ->
-// _init_sfpu_config_reg_) before programming its own constants, so a following op is unaffected —
-// but sfpi-generated code reached without an intervening init would be.
+// Two things to avoid: vConstFloatPrgm0 for the 0.5 (that is LReg12, a table intercept word; an
+// SFPMULI immediate is free), and any sfpi code between this init and the loop, since the table
+// overwrites the SFPU constants 0.0/1.0/-1.0 in LReg9/10/11. Each op's init restores them via
+// _init_sfpu_config_reg_, so a following op is unaffected.
 // =============================================================================
 
 template <int ITERATIONS = SFPU_ITERATIONS>
@@ -150,11 +141,9 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         result = x * Hs;
 
         // Core CDF region (-3.125, 2.78125]: GELU = x · Phi_core(x).
-        // Blackhole narrows with x >= -3.125f / x >= 2.78125f. Quasar uses the strict form because a
-        // float >= is only as good as the sign of the SFPMAD difference at the boundary itself, where
-        // that difference can be -0.0 and read as negative (the equality half of sfpi issue #50208).
-        // The boundaries just move to the neighbouring region, which is where each fit is closed
-        // anyway: the H-form covers (-5.54259443, -3.125] and the core polynomial [-3.125, 2.78125].
+        // Blackhole narrows with >=. Strict > here because a float >= is unreliable at the boundary
+        // itself on Quasar (issue #50208), and each fit is closed at its own end anyway: the H-form
+        // covers (-5.54259443, -3.125] and the core polynomial [-3.125, 2.78125].
         v_and(x > -3.125f);
         sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
             x2,
@@ -183,9 +172,8 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
  * @tparam APPROXIMATION_MODE: Select the LUT path (loads the 6-segment table), values = <true/false>
  * @tparam is_fp32_dest_acc_en: For the non-approximate path, select the fp32 rational-erf variant,
  *         which needs the Newton-Raphson constant its reciprocal refines with.
- * @note Counters are reset by the surrounding @ref llk_math_eltwise_unary_sfpu_init, so unlike the
- *       Blackhole kernel this init only programs constants. Nothing may clobber LReg0-2/LReg4-6
- *       between this call and @ref calculate_gelu_appx, which reads the table back from them.
+ * @note The surrounding @ref llk_math_eltwise_unary_sfpu_init resets the counters, so unlike the
+ *       Blackhole kernel this init only programs constants.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void gelu_init() {
@@ -296,21 +284,18 @@ inline void calculate_gelu() {
                 piecewise_rational_eval_parity_numer_denom<16, 16>(
                     GELU_ERF_NUM, GELU_ERF_DEN, scaled, x2, erf_n, erf_d);
                 sfpi::vFloat erf_val = erf_n * _sfpu_reciprocal_<2>(erf_d);
-                // Blackhole writes this as clamp(erf_val, -1, 1) followed by the stuck-erff guard
+                // Blackhole clamps erf_val to [-1, 1] and then guards the stuck-erff level with
                 //   v_if (erf_val == -1.0f) { result = x * 2^-25; }
-                // (where the rational rounds erf to -1.0 inside the computation zone, glibc/torch
-                // overestimate erfc, and the first stuck level is x * 2^-25). Both fold into min/max
-                // on phi = 0.5 + 0.5*erf_val: the same clamp expressed on [0, 1], with the 2^-25
-                // floor standing in for the guard.
+                // (where the rational rounds erf to -1.0, glibc/torch overestimate erfc, and the first
+                // stuck level is x * 2^-25). Both fold into min/max on phi = 0.5 + 0.5*erf_val: the
+                // same clamp on [0, 1], with the 2^-25 floor standing in for the guard.
                 //
-                // Reason for the rewrite is the clamp, not the guard: sfpi emits SFPSWAP with
-                // imm12 = 0, and on Quasar imm12[0] selects that instruction's compare format
-                // (tt_sfpu.sv: swap_res_srcc_is_smaller_s3 = imm12[0] ? fp_compare : int_compare).
-                // The int path is a plain two's-complement subtract of the raw words, which reverses
-                // the ordering of two negative floats — so clamp(erf_val, -1, 1) returned -1.0 for
-                // every erf_val in (-1, 0), and every negative-input lane collapsed to +-0. Bounding
-                // phi instead keeps both operands of each min/max non-negative, where the
-                // two's-complement order agrees with the float order.
+                // The clamp is what forced this, not the guard. sfpi's min/max/clamp lower to SFPSWAP
+                // without the bit that selects a float compare, so Quasar compares the raw words as
+                // two's complement. That is correct unless both operands are negative, which is
+                // exactly the erf_val vs -1.0 case: it returned -1.0 for every erf_val in (-1, 0) and
+                // collapsed every negative-input lane to +-0. Bounding phi keeps both operands of each
+                // min/max non-negative.
                 constexpr float HALF_ULP_AT_1 = 2.9802322387695313e-08f;  // 2^-25
                 sfpi::vFloat phi = 0.5f + 0.5f * erf_val;
                 phi = sfpi::max(phi, HALF_ULP_AT_1);  // erf_val <= -1, incl. the stuck level

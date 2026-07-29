@@ -29,16 +29,12 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 }
 
 /*
- * Branch-free float->int32 conversion for the 21f exp construction, ported from the Blackhole
- * kernel of the same name (its home there is also ckernel_sfpu_exp.h).
+ * Branch-free float->int32 conversion for the 21f exp construction, taken from the Blackhole kernel of
+ * the same name. Requires 0 <= val < 128.0f and assumes val was already divided by 2^23, so the result
+ * is scaled by 2^23 (otherwise the shift would have to be exp - 23).
  *
- * The constraint on `val` is: 0 <= val < 128.0f
- * Note: the value is assumed to have been divided by 2^23, so the output is scaled by 2^23
- * compared to `val`. If that were not the case we would have to shift by `exp - 23` instead of
- * `exp`, costing one extra SFPADDI.
- *
- * Portable to Quasar: the exponent is non-negative over the supported range, so the shift amount
- * has the same encoding in sign-magnitude and two's complement.
+ * Safe on Quasar: the exponent is non-negative over that range, so the shift amount reads the same in
+ * sign-magnitude and two's complement.
  */
 sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
     sfpi::vInt exp = sfpi::exexp(val);
