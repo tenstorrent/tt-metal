@@ -59,6 +59,10 @@ N_WARMUP = 3
 N_TRIALS = int(os.environ.get("TILIZE_BENCH_TRIALS", "10"))  # launches per round
 N_ROUNDS = int(os.environ.get("TILIZE_BENCH_ROUNDS", "5"))  # rounds -> median + CV
 ABLATE = os.environ.get("TILIZE_BENCH_ABLATE", "0") == "1"
+# One-sided DM ablation: decompose a serialized regime into its read and write legs.
+# TILIZE_SKIP_DM=2 drops the read payload only, =3 the write payload only, so
+# `full - no_read` prices the read leg and `full - no_write` the write leg.
+SPLIT_DM = os.environ.get("TILIZE_BENCH_SPLIT_DM", "0") == "1"
 
 _L1 = ttnn.BufferType.L1
 _ROW = ttnn.ShardOrientation.ROW_MAJOR
@@ -287,6 +291,24 @@ REGIMES = {
     # B10 + A3 together: both attack route congestion, so the bundle is the row
     # that answers "did we only fail to see it because each alone is too small?"
     "x_wide_short_b10_a3_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(b10=2, a3=2)),
+    # --- Refinement 2b: the wide-short 64-way partial-page fan-in --------------
+    # `levers=dict(r2b=N)`: 0 = off, 1 = gated, 2 = FORCE the full whole-page-read +
+    # L1-redistribution algorithm past its payoff gate, 3 = the MEASUREMENT PROBE
+    # (phase 1 only -- one whole-piece read per core, no exchange). The probe prices
+    # the read-side ceiling on its own: it moves the same bytes with the same cores
+    # in 1 transaction instead of 32, so `probe/off` is the most this algorithm can
+    # ever buy and `forced/probe` is what the extra L1 hop + barrier costs.
+    "p_wide_short_r2b_off": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=0)),
+    "x_wide_short_r2b_probe": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=3)),
+    "x_wide_short_r2b_forced": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, levers=dict(r2b=2)),
+    # ... and on the two narrower members of the same family, where the fan-in slice
+    # is 256 B / 128 B so the staged read is 8192 B / 4096 B instead of 16384 B.
+    "p_wide_short_8k_r2b_off": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0)),
+    "x_wide_short_8k_r2b_probe": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=3, b13=0)),
+    "x_wide_short_8k_r2b_forced": dict(shape=(1, 1, 32, 8192), dtype=ttnn.bfloat16, levers=dict(r2b=2, b13=0)),
+    "p_wide_short_4k_r2b_off": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=0, b13=0)),
+    "x_wide_short_4k_r2b_probe": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=3, b13=0)),
+    "x_wide_short_4k_r2b_forced": dict(shape=(1, 1, 32, 4096), dtype=ttnn.bfloat16, levers=dict(r2b=2, b13=0)),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
@@ -384,11 +406,12 @@ def _plan_for(device, tt_input, spec, out_cfg):
     )
 
 
-_VARIANTS = (
-    [("full", "0", "0"), ("no_compute", "0", "1"), ("no_dm", "1", "0"), ("sync_only", "1", "1")]
-    if ABLATE
-    else [("full", "0", "0")]
-)
+if ABLATE:
+    _VARIANTS = [("full", "0", "0"), ("no_compute", "0", "1"), ("no_dm", "1", "0"), ("sync_only", "1", "1")]
+elif SPLIT_DM:
+    _VARIANTS = [("full", "0", "0"), ("no_read", "2", "0"), ("no_write", "3", "0"), ("no_dm", "1", "0")]
+else:
+    _VARIANTS = [("full", "0", "0")]
 
 
 def _assert_structural_gates(name, spec, plan, grid_cores):
@@ -470,7 +493,7 @@ def test_bench_tilize(device):
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
         levers = spec.get("levers") or {}
-        for key in ("b13", "c7", "b8", "b10", "a3"):
+        for key in ("b13", "c7", "b8", "b10", "a3", "r2b"):
             os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, 1))
         tt_input, out_cfg = _build(device, spec)
         plan = _plan_for(device, tt_input, spec, out_cfg)
@@ -508,6 +531,7 @@ def test_bench_tilize(device):
                     b8=plan["prefetch_blocks"],
                     b10=plan["vc_spread"],
                     a3=plan["bank_placement"],
+                    r2b=plan["fanin_mode"],
                     cb_bytes=plan["cb_bytes_per_core"],
                     ns=ns,
                     cv=(std / ns * 100.0) if ns else 0.0,
@@ -517,7 +541,7 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
-        for key in ("B13", "C7", "B8", "B10", "A3"):
+        for key in ("B13", "C7", "B8", "B10", "A3", "R2B"):
             os.environ[f"TILIZE_LEVER_{key}"] = "1"
         tpd.CORE_CAP_OVERRIDE = None
 
@@ -531,7 +555,7 @@ def test_bench_tilize(device):
         f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
         f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
         f"    {'regime':<34} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
-        f"{'blk':>4} {'B13':>4} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'cbB/core':>9} "
+        f"{'blk':>4} {'B13':>4} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'cbB/core':>9} "
         f"{'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
@@ -539,7 +563,7 @@ def test_bench_tilize(device):
         lines.append(
             f"    {r['regime']:<34} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
             f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['c7']:>3} "
-            f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} "
+            f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} "
             f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )
     print("\n".join(lines))

@@ -116,6 +116,9 @@ DEPTH1_MAX_BLOCKS_PER_CORE = 4
 CORE_CAP_OVERRIDE = None
 
 CB_RM_INPUT = 0
+# Refinement 2b staging buffer -- one `piece_bytes` window, allocated ONLY on the
+# fan-in redistribution path (dead L1 otherwise).
+CB_STAGE = 1
 CB_TILED_OUTPUT = 16
 
 # --- Refinement 1c: the two sub-one-packet read-path levers -------------------
@@ -251,6 +254,45 @@ VC_SPREAD_READ = 1
 VC_SPREAD_WRITE = 2
 
 
+# --- Refinement 2b: the wide-short 64-way partial-page fan-in -------------------
+#
+# `b_wide_short` [1,1,32,16384] has `nt_h == 1`, so all 64 cores own tile-COLUMNS of
+# the same single tile-row and every core reads a `chunk_row_bytes` slice of each of
+# the SAME 32 source pages (a bf16 W=16384 ROW_MAJOR row IS one 32 768 B DRAM page).
+# That is a 64-way partial-page fan-in, and Refinement 2 priced its cost with two
+# bench rows that differ in nothing but WHICH pages the readers hit:
+#
+#   regime         | shape           | cores | read | GB/s  | source pages
+#   ---------------|-----------------|-------|------|-------|-------------------------
+#   b_wide_short   | [1,1,32,16384]  |    64 | 512B | 156.9 | the SAME 32, 64-way split
+#   p_2blk_512B    | [1,1,4096,256]  |    64 | 512B | 179.3 | 64 PRIVATE pages per core
+#   p_2blk_1024B   | [1,1,4096,512]  |    64 |1024B | 188.8 | private, bigger transaction
+#
+# Every per-transaction lever is already refuted on this regime (B13 +19.5 %, C7
+# +14.2 %, B10 +99 %, A3 +1.7 %, B8 structurally inapplicable, finer chunking
+# +1.3 %), so what is left is an ALGORITHM change: decouple "which bytes a core
+# reads" from "which tiles a core owns".
+#
+#   phase 1  each core reads ONE contiguous `piece_bytes = TILE_HW * chunk_row_bytes`
+#            slice of ONE source page -- 32x fewer and 32x bigger DRAM transactions
+#            for exactly the same bytes. Cores form groups of `TILE_HW` (one per
+#            source row of the tile-row); group g stages source piece g.
+#   phase 2  all-to-all ready handshake inside the group (one posted atomic inc per
+#            group-mate).
+#   phase 3  each core PULLS its own slice out of every group-mate's staging buffer
+#            into its own cb_rm_input window, producing byte-identical sticks.
+#
+# The trade the gate has to be measured against: the DRAM read gets much bigger
+# transactions, but every byte pays ONE extra L1->L1 hop plus a 32-core barrier.
+FANIN_GROUP_ROWS = TILE_HW  # one staging core per source row of a tile-row block
+SEM_FANIN_READY = 0
+# The staging buffer is on top of the two data CBs, so the fan-in path has its own
+# budget. `piece_bytes` is bounded by a constant in W
+# (TILE_HW * WT_CHUNK_MAX * TILE_HW * 4 = 65 536 B worst case, fp32 chunk 16), which
+# is what keeps `PROPERTIES["bounded_cb"]` true on this path too.
+L1_CB_BUDGET_FANIN_BYTES = 196608
+
+
 def _lever_flags():
     """Env counterfactual switches for the read-path levers (Mode-C ledger).
 
@@ -258,6 +300,10 @@ def _lever_flags():
     payoff gate (structural preconditions still apply). `_bench_tilize.py` flips
     one at a time so each lever has a re-measurable counterfactual row instead of
     a changelog claim. Never set in production.
+
+    ``r2b`` additionally accepts 3 == the *measurement probe*: phase 1 only (the
+    whole-piece staged read straight into the CB, no exchange), which prices the
+    read-side ceiling on its own. Output is garbage, so it is bench-only.
     """
     return dict(
         b13=int(os.environ.get("TILIZE_LEVER_B13", "1")),
@@ -265,6 +311,7 @@ def _lever_flags():
         b8=int(os.environ.get("TILIZE_LEVER_B8", "1")),
         b10=int(os.environ.get("TILIZE_LEVER_B10", "1")),
         a3=int(os.environ.get("TILIZE_LEVER_A3", "1")),
+        r2b=int(os.environ.get("TILIZE_LEVER_R2B", "1")),
     )
 
 
@@ -404,6 +451,22 @@ def vc_spread_pays(ncores: int) -> bool:
     above ``VC_SPREAD_MIN_CORES``), so this is identity-false on any current grid.
     """
     return ncores >= VC_SPREAD_MIN_CORES
+
+
+#
+# Refinement 2b payoff gate. Set by measurement -- see the sweep in the docstring.
+FANIN_MIN_READ_BYTES = 1
+FANIN_MIN_GROUPS = 1
+
+
+def fanin_pays(chunk_row_bytes: int, fanin_groups: int) -> bool:
+    """Refinement 2b gate: is one extra L1 hop worth a 32x bigger DRAM read?
+
+    Structural preconditions are checked by the caller (this is only the payoff
+    question). The clauses are set by the device sweep recorded in
+    ``changelog.md`` § "Refinement 2b".
+    """
+    return chunk_row_bytes >= FANIN_MIN_READ_BYTES and fanin_groups >= FANIN_MIN_GROUPS
 
 
 def bank_placement_pays(ncores: int) -> bool:
@@ -727,6 +790,12 @@ def _plan_alias(plan, geo):
             "bank_placement": 0,
             "read_vcs": None,
             "write_vcs": None,
+            "fanin_mode": 0,
+            "fanin_groups": 0,
+            "fanin_group_rows": 0,
+            "fanin_grid_x": 1,
+            "fanin_group_axes": None,
+            "piece_bytes": 0,
             "ncores": len(cores),
             "cb_bytes_per_core": shard_tiles * (plan["tile_in"] + plan["tile_out"]),
         }
@@ -912,6 +981,70 @@ def _plan_generic(
             f"{L1_CB_BUDGET_PREFETCH_BYTES} B (chunk_wt={chunk_wt})"
         )
 
+    # --- Refinement 2b: whole-page staged read + L1 redistribution -------------
+    # Structural preconditions (never overridden by the force flag):
+    #   * one source page per logical row, and one chunk-block per core -- the
+    #     scheme has a single un-flow-controlled staging window per core, so a
+    #     second block would need a "window free" round trip per block.
+    #   * the whole tile-row is split by COLUMN only (`n_h == 1`, `n_w == ncores`):
+    #     that is the fan-in this addresses, and it makes the piece exactly
+    #     FANIN_GROUP_ROWS chunks wide on every core.
+    #   * `ncores` a whole number of groups of FANIN_GROUP_ROWS, and a group has to
+    #     be a core RECTANGLE so the kernel can address mate `r` from the group's
+    #     two physical coordinate axes (grid.x words + group_rows/grid.x words)
+    #     instead of 2 * group_size runtime args.
+    #   * row-major core order (lever A3's permutation would break the rectangle).
+    #   * the staging buffer must fit on top of both data CBs.
+    r2b = levers["r2b"]
+    fanin_groups = ncores // FANIN_GROUP_ROWS
+    piece_bytes = FANIN_GROUP_ROWS * chunk_row_bytes
+    fanin_cb_bytes = depth * chunk_wt * bytes_per_chunk_tile + piece_bytes
+    fanin_ok = (
+        row_page_stride == 1
+        and n_h == 1
+        and n_w == ncores
+        and blocks_per_core == 1
+        and ncores % FANIN_GROUP_ROWS == 0
+        and fanin_groups >= 1
+        and FANIN_GROUP_ROWS % grid.x == 0
+        and not bank_placement
+        and not split_read
+        and prefetch_blocks == 1
+        and fanin_cb_bytes <= L1_CB_BUDGET_FANIN_BYTES
+    )
+    if r2b == 3 and fanin_ok:
+        fanin_mode = 2  # measurement probe: phase 1 only, output is garbage
+    elif fanin_ok and (r2b == 2 or (r2b == 1 and fanin_pays(chunk_row_bytes, fanin_groups))):
+        fanin_mode = 1
+    else:
+        fanin_mode = 0
+
+    fanin_group_axes = None
+    if fanin_mode:
+        # B13 reshapes the same stick reads this path replaces, so it yields.
+        stateful_read = 0
+        if fanin_mode == 1:
+            # Group g == work units [g*rows, (g+1)*rows) == a logical rectangle
+            # `grid.x` wide (guaranteed by `FANIN_GROUP_ROWS % grid.x == 0`).
+            group_h = FANIN_GROUP_ROWS // grid.x
+            fanin_group_axes = []
+            for g in range(fanin_groups):
+                y0 = g * group_h
+                xs = [int(device.worker_core_from_logical_core(ttnn.CoreCoord(x, y0)).x) for x in range(grid.x)]
+                ys = [int(device.worker_core_from_logical_core(ttnn.CoreCoord(0, y0 + dy)).y) for dy in range(group_h)]
+                fanin_group_axes.append((xs, ys))
+            # The kernel derives mate r as (xs[r % grid.x], ys[r // grid.x]); assert
+            # the host's work->core order agrees, so a future change to
+            # `grid_to_cores` cannot silently transpose the exchange.
+            for g in range(fanin_groups):
+                for r in range(FANIN_GROUP_ROWS):
+                    core = cores[g * FANIN_GROUP_ROWS + r]
+                    want = ttnn.CoreCoord(r % grid.x, g * group_h + r // grid.x)
+                    assert (int(core.x), int(core.y)) == (int(want.x), int(want.y)), (
+                        f"fan-in group {g} mate {r}: core order is ({core.x},{core.y}) but the "
+                        f"kernel's rectangle indexing gives ({want.x},{want.y})"
+                    )
+
     # --- lever B10: per-reader / per-writer static unicast VC -----------------
     # `vc_spread` is a BITMASK -- bit 0 = spread the reads, bit 1 = spread the
     # writes. Read and write live on different NoCs (B9) and are programmed by
@@ -957,6 +1090,14 @@ def _plan_generic(
             "bank_placement": bank_placement,
             "read_vcs": read_vcs,
             "write_vcs": write_vcs,
+            "fanin_mode": fanin_mode,
+            "fanin_groups": fanin_groups if fanin_mode else 0,
+            "fanin_group_rows": FANIN_GROUP_ROWS if fanin_mode else 0,
+            # The kernel divides by this to index the group rectangle, so it must be
+            # non-zero even when the path is off (`grp_h = group_rows / grp_w`).
+            "fanin_grid_x": grid.x if fanin_mode else 1,
+            "fanin_group_axes": fanin_group_axes,
+            "piece_bytes": piece_bytes if fanin_mode else 0,
             "depth": depth,
             "n_h": n_h,
             "n_w": n_w,
@@ -965,7 +1106,7 @@ def _plan_generic(
             # anything to pipeline?" input, and the per-block sync cost's
             # multiplier (measured ~612 ns/block, see A0_KNEE_CORES).
             "blocks_per_core": blocks_per_core,
-            "cb_bytes_per_core": depth * chunk_wt * bytes_per_chunk_tile,
+            "cb_bytes_per_core": (fanin_cb_bytes if fanin_mode == 1 else depth * chunk_wt * bytes_per_chunk_tile),
         }
     )
     return plan
@@ -1032,9 +1173,21 @@ def _ablation_flags():
     drops the tilize LLK; both keep every CB op, barrier and loop trip count so the
     synchronization structure — and therefore the timing structure — is unchanged.
     Output is garbage by design; only ``_bench_tilize.py`` sets these.
+
+    ``TILIZE_SKIP_DM`` also has two ONE-SIDED values, which is what decomposes a
+    serialized (depth-1, one-block) regime into its read and write legs — the
+    measurement Refinement 2b needs to know how much of `b_wide_short` is the read:
+
+    ==== ==================================================================
+    1    drop both legs (the classic `no_dm` ablation)
+    2    drop the READ leg only  -> the remaining time is write + compute + sync
+    3    drop the WRITE leg only -> the remaining time is read + compute + sync
+    ==== ==================================================================
     """
+    skip_dm = int(os.environ.get("TILIZE_SKIP_DM", "0"))
     return (
-        int(os.environ.get("TILIZE_SKIP_DM", "0")),
+        1 if skip_dm in (1, 2) else 0,  # reader
+        1 if skip_dm in (1, 3) else 0,  # writer
         int(os.environ.get("TILIZE_SKIP_COMPUTE", "0")),
     )
 
@@ -1043,7 +1196,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     alias = plan["path"] == "alias"
     core_ranges = plan["core_ranges"]
     chunk_wt = plan["chunk_wt"]
-    skip_dm, skip_compute = _ablation_flags()
+    reader_skip_dm, writer_skip_dm, skip_compute = _ablation_flags()
 
     # ---------------- circular buffers ----------------
     if alias:
@@ -1054,6 +1207,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         pages = plan["depth"] * chunk_wt
         cb_rm_input = _plain_cb(CB_RM_INPUT, input_tensor.dtype, plan["tile_in"], pages, core_ranges)
         cb_tiled_output = _plain_cb(CB_TILED_OUTPUT, output_tensor.dtype, plan["tile_out"], pages, core_ranges)
+
+    # Refinement 2b staging buffer. One page of `piece_bytes`, never reserved or
+    # pushed -- the reader owns it as scratch (`get_write_ptr` is the base address
+    # every launch, because the firmware re-inits the CB interfaces per launch), and
+    # group-mates read it at the SAME L1 offset on their own cores.
+    cb_stage = None
+    if plan["fanin_mode"] == 1:
+        cb_stage = _plain_cb(CB_STAGE, input_tensor.dtype, plan["piece_bytes"], 1, core_ranges)
 
     alias_flag = 1 if alias else 0
 
@@ -1070,7 +1231,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["row_page_stride"],
         plan["source_page_bytes"],
         plan["shard_tiles"],
-        skip_dm,
+        reader_skip_dm,
         stateful_read,
         split_read,
         SEM_SPLIT_RESERVE,
@@ -1081,6 +1242,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         PREFETCH_TRIDS[0],
         PREFETCH_TRIDS[1],
         DEFAULT_UNICAST_VC,
+        plan["fanin_mode"],  # Refinement 2b: 0 off, 1 redistribute, 2 read-probe
+        plan["piece_bytes"],
+        plan["fanin_group_rows"],
+        plan["fanin_grid_x"],
+        SEM_FANIN_READY,
+        CB_STAGE,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1095,7 +1262,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["tile_out"],
         plan["wt"],
         plan["shard_tiles"],
-        skip_dm,
+        writer_skip_dm,
         split_read,
         plan["chunk_row_bytes"],
         stateful_read,
@@ -1124,6 +1291,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     else:
         read_vcs = plan["read_vcs"]
         write_vcs = plan["write_vcs"]
+        fanin_mode = plan["fanin_mode"]
+        group_rows = plan["fanin_group_rows"]
+        group_axes = plan["fanin_group_axes"]
         for index, unit in enumerate(plan["work"]):
             core = unit["core"]
             row_start = unit["row_start"]
@@ -1140,6 +1310,22 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 # depend on the lever; only read when `vc_spread`.
                 read_vcs[index] if read_vcs is not None else DEFAULT_UNICAST_VC,
             ]
+            if fanin_mode:
+                # Refinement 2b. Work unit `index` lives in group `g` at slot `slot`;
+                # it STAGES source row `slot` of piece `g` and OWNS column slice
+                # `slot` of that piece, so one number does both jobs.
+                g, slot = divmod(index, group_rows)
+                reader_rt[core.x][core.y].extend(
+                    [
+                        row_start * TILE_HW + slot,  # source page (row) to stage
+                        g * plan["piece_bytes"],  # byte offset of this piece
+                        slot,  # this core's slice inside the piece
+                    ]
+                )
+                if fanin_mode == 1:
+                    xs, ys = group_axes[g]
+                    reader_rt[core.x][core.y].extend(xs)
+                    reader_rt[core.x][core.y].extend(ys)
             # src_addr is appended after the existing indices; the writer only
             # reads it on the split-read path. Then the B10 write VC (arg 6).
             writer_rt[core.x][core.y] = [
@@ -1185,9 +1371,18 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             ttnn.SemaphoreDescriptor(id=SEM_SPLIT_RESERVE, core_ranges=core_ranges, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_SPLIT_DONE, core_ranges=core_ranges, initial_value=0),
         ]
+    elif plan["fanin_mode"] == 1:
+        # Refinement 2b's group-ready counter. The dispatcher re-writes the initial
+        # value on every launch, which is what makes a monotonic counter safe across
+        # launches of a cached program.
+        semaphores = [ttnn.SemaphoreDescriptor(id=SEM_FANIN_READY, core_ranges=core_ranges, initial_value=0)]
+
+    cbs = [cb_rm_input, cb_tiled_output]
+    if cb_stage is not None:
+        cbs.append(cb_stage)
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
         semaphores=semaphores,
-        cbs=[cb_rm_input, cb_tiled_output],
+        cbs=cbs,
     )

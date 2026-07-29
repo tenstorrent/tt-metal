@@ -73,6 +73,37 @@
 //       or the next program on this core inherits the custom VC and loses DRAM
 //       bandwidth (same hazard the dram-sharded matmul reader documents).
 //
+//   fanin_mode != 0  (Refinement 2b — whole-page staged read + L1 redistribution)
+//       Only fires on the wide-short fan-in regime (`nt_h == 1`, one chunk-block per
+//       core), where all `ncores` cores read disjoint `chunk_row_bytes` slices of the
+//       SAME 32 source pages. That is a 64-way partial-page fan-in: measured
+//       156.9 GB/s where the identical 512 B transaction reaching *private* pages
+//       gets 179.3. This path breaks the coupling between "which bytes a core reads"
+//       and "which tiles a core owns":
+//
+//         phase 1  each core reads ONE contiguous `piece_bytes` slice of ONE source
+//                  page into cb_stage -- 32x fewer, 32x bigger DRAM transactions for
+//                  exactly the same bytes. Cores are grouped `group_size == 32` (one
+//                  per source row); group g stages source piece g.
+//         phase 2  all-to-all ready handshake inside the group (one posted atomic
+//                  inc per group-mate, including self -- a local `+=` would race with
+//                  the remote atomics).
+//         phase 3  each core PULLS its own `chunk_row_bytes` slice out of each
+//                  group-mate's cb_stage into its own cb_rm_input window, stick r at
+//                  offset r * chunk_row_bytes -- byte-identical to what the strided
+//                  DRAM reader would have produced. Pull (not push) keeps every core
+//                  the sole writer of its own CB memory.
+//
+//       Group-mate `r` is logical core (grp_x[r % grp_w], grp_y[r / grp_w]); the host
+//       passes the group's PHYSICAL coordinate axes (compact: grp_w + grp_h words
+//       instead of 2 * group_size). cb_stage's L1 address is the same on every core
+//       in the range, so the remote source address is this core's own
+//       `get_write_ptr(cb_stage)`.
+//
+//       `fanin_mode == 2` is a MEASUREMENT PROBE (bench only): phase 1 straight into
+//       cb_rm_input with no exchange, so `/perf-ceiling-dm` can price the read-side
+//       ceiling on its own. Output is garbage by design.
+//
 //       When the source is ROW_MAJOR-*sharded* with more than one page per
 //       logical row (`row_page_stride > 1`) neither helper path can be used:
 //       their page index advances by exactly 1 per row, hard-coding "one page ==
@@ -109,7 +140,14 @@ void kernel_main() {
     constexpr uint32_t trid_a = get_compile_time_arg_val(14);
     constexpr uint32_t trid_b = get_compile_time_arg_val(15);
     constexpr uint32_t default_read_vc = get_compile_time_arg_val(16);
-    constexpr auto src_args = TensorAccessorArgs<17>();
+    // --- Refinement 2b: whole-page staged read + L1 redistribution ---------------
+    constexpr uint32_t fanin_mode = get_compile_time_arg_val(17);  // 0 off, 1 full, 2 read-probe
+    constexpr uint32_t piece_bytes = get_compile_time_arg_val(18);
+    constexpr uint32_t group_size = get_compile_time_arg_val(19);
+    constexpr uint32_t grp_w = get_compile_time_arg_val(20);
+    constexpr uint32_t sem_fanin_id = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_stage = get_compile_time_arg_val(22);
+    constexpr auto src_args = TensorAccessorArgs<23>();
 
     using dataflow_kernel_lib::StickReadMode;
     constexpr StickReadMode read_mode = stateful_read ? StickReadMode::Stateful : StickReadMode::Generic;
@@ -124,6 +162,12 @@ void kernel_main() {
     // The host would otherwise size the CB to 3 windows and then silently get the
     // raw strided fallback (correct output, lever quietly lost, no diagnostic).
     static_assert(prefetch_blocks == 1 || row_page_stride == 1, "B8 needs one source page per logical row");
+    // Refinement 2b owns the whole read path for its regime, so it is exclusive with
+    // every other read-path lever (each of which reshapes the same 32 stick reads).
+    static_assert(
+        !fanin_mode || (row_page_stride == 1 && !split_read && prefetch_blocks == 1 && !stateful_read),
+        "the fan-in redistribution replaces the stick reads; B13/C7/B8 cannot also own them");
+    static_assert(fanin_mode != 1 || group_size % grp_w == 0, "the fan-in group must be a core rectangle");
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -145,6 +189,66 @@ void kernel_main() {
         if constexpr (read_vc_spread) {
             const uint32_t read_vc = get_arg_val<uint32_t>(5);
             noc_async_read_one_packet_set_state<true>(accessor.get_noc_addr(start_row), chunk_row_bytes, read_vc);
+        }
+
+        if constexpr (fanin_mode != 0) {
+            // --- Refinement 2b: whole-page staged read (+ L1 redistribution) ------
+            const uint32_t stage_page = get_arg_val<uint32_t>(6);
+            const uint32_t stage_offset = get_arg_val<uint32_t>(7);
+
+            if constexpr (fanin_mode == 2) {
+                // Measurement probe: the staged read alone, straight into the CB
+                // window (piece_bytes == chunk_wt * tile_bytes, so it fills exactly
+                // one window). No exchange => the tile layout is garbage; this row
+                // exists only to price the read-side ceiling.
+                cb_reserve_back(cb_rm_input, chunk_wt);
+                if constexpr (!skip_dm) {
+                    noc_async_read(
+                        accessor.get_noc_addr(stage_page, stage_offset), get_write_ptr(cb_rm_input), piece_bytes);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_rm_input, chunk_wt);
+                return;
+            }
+
+            constexpr uint32_t grp_h = group_size / grp_w;
+            const uint32_t my_slot = get_arg_val<uint32_t>(8);
+            tt_l1_ptr uint32_t* grp_x = (tt_l1_ptr uint32_t*)get_arg_addr(9);
+            tt_l1_ptr uint32_t* grp_y = (tt_l1_ptr uint32_t*)get_arg_addr(9 + grp_w);
+
+            // Phase 1 -- ONE contiguous read of this core's piece of one source page.
+            const uint32_t stage_addr = get_write_ptr(cb_stage);
+            if constexpr (!skip_dm) {
+                noc_async_read(accessor.get_noc_addr(stage_page, stage_offset), stage_addr, piece_bytes);
+            }
+            noc_async_read_barrier();
+
+            // Phase 2 -- ready handshake. Posted atomics: nothing has to be acked
+            // back, and the payload they announce is this core's OWN L1, so there is
+            // no write/atomic ordering hazard to close. Self is included through the
+            // NoC (a local `*sem += 1` is not atomic against the 31 remote incs).
+            const uint32_t sem_addr = get_semaphore(sem_fanin_id);
+            volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+            for (uint32_t r = 0; r < group_size; ++r) {
+                noc_semaphore_inc<true>(get_noc_addr(grp_x[r % grp_w], grp_y[r / grp_w], sem_addr), 1);
+            }
+            noc_semaphore_wait_min(sem, group_size);
+
+            // Phase 3 -- pull stick r out of group-mate r's staging buffer. `my_slot`
+            // is this core's column slice inside the piece, identical on every mate.
+            cb_reserve_back(cb_rm_input, chunk_wt);
+            uint32_t l1_addr = get_write_ptr(cb_rm_input);
+            const uint32_t mate_offset = stage_addr + my_slot * chunk_row_bytes;
+            for (uint32_t r = 0; r < group_size; ++r) {
+                if constexpr (!skip_dm) {
+                    noc_async_read(
+                        get_noc_addr(grp_x[r % grp_w], grp_y[r / grp_w], mate_offset), l1_addr, chunk_row_bytes);
+                }
+                l1_addr += chunk_row_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_rm_input, chunk_wt);
+            return;
         }
 
         if constexpr (row_page_stride == 1 && prefetch_blocks == 2) {
