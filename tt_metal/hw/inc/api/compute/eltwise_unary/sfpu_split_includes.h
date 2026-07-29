@@ -215,3 +215,7 @@
 #if SFPU_OP_BINARY_MAX_MIN_INCLUDE
 #include "api/compute/binary_max_min.h"
 #endif
+
+#if SFPU_OP_BINARY_QUANT_INCLUDE
+#include "api/compute/quantization.h"
+#endif

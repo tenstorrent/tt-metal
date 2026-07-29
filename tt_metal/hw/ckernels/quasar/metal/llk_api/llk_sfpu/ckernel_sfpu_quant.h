@@ -185,4 +185,46 @@ inline void quant_family(
     }
 }
 
+template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
+inline void calculate_quant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    quant_family<QuantVariant::Quant, ITERATIONS, SIGN_MAGNITUDE_FORMAT>(dst_index_in0, dst_index_in1, dst_index_out);
+}
+
+template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
+inline void calculate_requant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    quant_family<QuantVariant::Requant, ITERATIONS, SIGN_MAGNITUDE_FORMAT>(dst_index_in0, dst_index_in1, dst_index_out);
+}
+
+template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
+inline void calculate_dequant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    quant_family<QuantVariant::Dequant, ITERATIONS, SIGN_MAGNITUDE_FORMAT>(dst_index_in0, dst_index_in1, dst_index_out);
+}
+
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
+inline void quant_init(const std::uint32_t zero_point) {
+    static_assert(OUTPUT_FORMAT == DataFormat::Int32, "Quasar quant_init supports Int32 output only");
+    quant_family_init<QuantVariant::Quant, SIGN_MAGNITUDE_FORMAT>(zero_point);
+}
+
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
+inline void requant_init(const std::uint32_t zero_point) {
+    static_assert(OUTPUT_FORMAT == DataFormat::Int32, "Quasar requant_init supports Int32 output only");
+    quant_family_init<QuantVariant::Requant, SIGN_MAGNITUDE_FORMAT>(zero_point);
+}
+
+template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false>
+inline void dequant_init(const std::uint32_t zero_point) {
+    // Caller passes bits of -zero_point (same convention as Blackhole).
+    quant_family_init<QuantVariant::Dequant, SIGN_MAGNITUDE_FORMAT>(zero_point);
+}
+
 }  // namespace ckernel::sfpu

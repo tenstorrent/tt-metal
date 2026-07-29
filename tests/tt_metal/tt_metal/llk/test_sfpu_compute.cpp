@@ -122,9 +122,137 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_INIT_0", "binary_min_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_min_int32_tile(0, 1, 0);"}}},
 };
 
+// Quant-family binary SFPU ops driven by `run_sfpu_quant_two_input_buffer`.
+// Zero-point is baked into SFPU_OP_INIT_0 (3.0f / -3.0f for dequant) — same
+// contract as tt-llk's quant suite. Operand B is always an fp32 scale tile.
+const map<std::string, std::map<std::string, std::string>> sfpu_quant_op_to_op_name = {
+    // 0x40400000u = 3.0f
+    {"quant", {{"SFPU_OP_INIT_0", "quant_tile_init(0x40400000u);"}, {"SFPU_OP_CHAIN_0", "quant_tile(0, 1, 0);"}}},
+    {"requant", {{"SFPU_OP_INIT_0", "requant_tile_init(0x40400000u);"}, {"SFPU_OP_CHAIN_0", "requant_tile(0, 1, 0);"}}},
+    // 0xC0400000u = -3.0f (dequant init expects bits of -zero_point)
+    {"dequant", {{"SFPU_OP_INIT_0", "dequant_tile_init(0xC0400000u);"}, {"SFPU_OP_CHAIN_0", "dequant_tile(0, 1, 0);"}}},
+};
+
 bool is_int8_binary_sfpu_op(const std::string& op_name) {
     return (op_name == "add_int") or (op_name == "mul_int") or (op_name == "gt_int") or
            (op_name == "binary_max_int32") or (op_name == "binary_min_int32");
+}
+
+bool is_quant_sfpu_op(const std::string& op_name) {
+    return (op_name == "quant") or (op_name == "requant") or (op_name == "dequant");
+}
+
+// Per-operand / result L1 formats for the quant family. Scale (in1) is always Float32.
+struct QuantL1Formats {
+    tt::DataFormat in0;
+    tt::DataFormat in1;
+    tt::DataFormat out;
+};
+
+QuantL1Formats quant_l1_formats(const std::string& op_name) {
+    if (op_name == "quant") {
+        return {tt::DataFormat::Float32, tt::DataFormat::Float32, tt::DataFormat::Int32};
+    }
+    if (op_name == "requant") {
+        return {tt::DataFormat::Int32, tt::DataFormat::Float32, tt::DataFormat::Int32};
+    }
+    if (op_name == "dequant") {
+        return {tt::DataFormat::Int32, tt::DataFormat::Float32, tt::DataFormat::Float32};
+    }
+    TT_THROW("Unsupported quant op_name in test: {}", op_name);
+}
+
+// Host golden matching tt-llk's Quasar quant suite (round-half-to-even, clamp to
+// [-127, 127], 2's-complement path maps STOCH_RND negative-zero to -1). Int32
+// results are packed as Quasar L1 sign-magnitude words.
+inline constexpr float k_quant_zero_point = 3.0f;
+inline constexpr int32_t k_quant_int8_min = -127;
+inline constexpr int32_t k_quant_int8_max = 127;
+
+std::vector<uint32_t> compute_packed_quant_golden(
+    const std::vector<float>& a_vals, const std::vector<float>& scale_vals, const std::string& op_name) {
+    TT_FATAL(a_vals.size() == scale_vals.size(), "quant golden: a/scale size mismatch");
+    std::vector<uint32_t> packed(a_vals.size());
+    const bool is_dequant = (op_name == "dequant");
+    for (size_t i = 0; i < a_vals.size(); ++i) {
+        if (is_dequant) {
+            const float result = (a_vals[i] - k_quant_zero_point) * scale_vals[i];
+            packed[i] = float32(result).to_packed();
+        } else {
+            const float prod = a_vals[i] * scale_vals[i] + k_quant_zero_point;
+            const float rounded = std::nearbyintf(prod);
+            const float clamped_f =
+                std::clamp(rounded, static_cast<float>(k_quant_int8_min), static_cast<float>(k_quant_int8_max));
+            int32_t q = static_cast<int32_t>(clamped_f);
+            // 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to -1.
+            if (q == 0 && prod < 0.0f) {
+                q = -1;
+            }
+            packed[i] = int32_to_sign_mag_word(q);
+        }
+    }
+    return packed;
+}
+
+// Stimuli: A in a modest range, scale in [0.01, 0.05) so A*scale+zp stays in int8.
+// Returns packed L1 words plus the float views used for the host golden.
+struct QuantStimuli {
+    std::vector<uint32_t> packed_a;
+    std::vector<uint32_t> packed_scale;
+    std::vector<float> a_vals;
+    std::vector<float> scale_vals;
+};
+
+QuantStimuli generate_quant_stimuli(const unsigned int numel, const std::string& op_name, const int seed) {
+    std::mt19937 gen(seed);
+    std::uniform_real_distribution<float> scale_dist(0.01f, 0.05f);
+    std::uniform_real_distribution<float> a_float_dist(-2000.0f, 2000.0f);
+    std::uniform_int_distribution<int32_t> a_int_dist(-2000, 2000);
+
+    QuantStimuli out;
+    out.packed_a.resize(numel);
+    out.packed_scale.resize(numel);
+    out.a_vals.resize(numel);
+    out.scale_vals.resize(numel);
+
+    const bool a_is_int = (op_name == "requant") || (op_name == "dequant");
+    for (unsigned int i = 0; i < numel; ++i) {
+        out.scale_vals[i] = scale_dist(gen);
+        out.packed_scale[i] = float32(out.scale_vals[i]).to_packed();
+        if (a_is_int) {
+            const int32_t a_i = a_int_dist(gen);
+            out.a_vals[i] = static_cast<float>(a_i);
+            // Quasar Int32 L1 is sign-magnitude; unpack yields 2's-comp in dest for the
+            // SIGN_MAGNITUDE_FORMAT=false path used by quantization.h.
+            out.packed_a[i] = int32_to_sign_mag_word(a_i);
+        } else {
+            out.a_vals[i] = a_float_dist(gen);
+            out.packed_a[i] = float32(out.a_vals[i]).to_packed();
+        }
+    }
+    return out;
+}
+
+bool is_close_packed_quant_output(
+    const std::vector<uint32_t>& dest, const std::vector<uint32_t>& golden, const std::string& op_name) {
+    if (dest.size() != golden.size()) {
+        return false;
+    }
+    if (op_name == "dequant") {
+        // Float32 result: modest tol for SFPU fp32 mul/add vs host.
+        constexpr float rtol = 1e-5f;
+        constexpr float atol = 1e-5f;
+        for (size_t i = 0; i < dest.size(); ++i) {
+            const float a = std::bit_cast<float>(dest[i]);
+            const float b = std::bit_cast<float>(golden[i]);
+            if (!is_close(a, b, rtol, atol)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // quant / requant: exact Int32 (sign-magnitude) match.
+    return dest == golden;
 }
 
 // Scalar golden for the unary SFPU ops, computed in float. Both the bf16 and
@@ -1154,6 +1282,156 @@ bool run_sfpu_binary_two_input_buffer(
     return sfpu_util::is_close_packed_sfpu_output(dest, packed_golden, test_config.sfpu_op);
 }
 
+/// Dedicated quant/requant/dequant runner. Unlike `run_sfpu_binary_two_input_buffer`,
+/// in0 / in1 / out may each use a different L1 format (float A + float scale → int32,
+/// or int32 A + float scale → int32/fp32). Uses the same eltwise_sfpu_2_0.cpp binary
+/// kernel with SFPU_OP_BINARY_QUANT_INCLUDE.
+bool run_sfpu_quant_two_input_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
+    TT_FATAL(sfpu_util::is_quant_sfpu_op(test_config.sfpu_op), "run_sfpu_quant_two_input_buffer: not a quant op");
+
+    auto* device = mesh_device->get_devices()[0];
+    const auto formats = sfpu_util::quant_l1_formats(test_config.sfpu_op);
+    const size_t in0_bytes = test_config.num_tiles * tt::tile_size(formats.in0);
+    const size_t in1_bytes = test_config.num_tiles * tt::tile_size(formats.in1);
+    const size_t out_bytes = test_config.num_tiles * tt::tile_size(formats.out);
+
+    tt::tt_metal::InterleavedBufferConfig dram_in0{
+        .device = device, .size = in0_bytes, .page_size = in0_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    tt::tt_metal::InterleavedBufferConfig dram_in1{
+        .device = device, .size = in1_bytes, .page_size = in1_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    tt::tt_metal::InterleavedBufferConfig dram_out{
+        .device = device, .size = out_bytes, .page_size = out_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM};
+
+    auto input0_dram_buffer = CreateBuffer(dram_in0);
+    auto input1_dram_buffer = CreateBuffer(dram_in1);
+    auto output_dram_buffer = CreateBuffer(dram_out);
+
+    // Float32 and Int32 both store one 32-bit datum per element.
+    const uint32_t numel = static_cast<uint32_t>(in0_bytes / sizeof(uint32_t));
+    const int seed = std::chrono::system_clock::now().time_since_epoch().count();
+    auto stimuli = sfpu_util::generate_quant_stimuli(numel, test_config.sfpu_op, seed);
+    const auto packed_golden =
+        sfpu_util::compute_packed_quant_golden(stimuli.a_vals, stimuli.scale_vals, test_config.sfpu_op);
+
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_quant_op_to_op_name.at(test_config.sfpu_op);
+    sfpu_defines["SFPU_BINARY_OP"] = "1";
+    sfpu_defines["SFPU_OP_BINARY_QUANT_INCLUDE"] = "1";
+
+    const auto node = extract_single_core_node(test_config, "Metal 2.0 quant SFPU path");
+    const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
+    const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = IN0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = IN1_DFB,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
+    };
+
+    // Both operands are 32-bit and consumed by SFPU — unpack straight to dest.
+    experimental::ComputeUnpackModes unpack_modes{
+        {IN0_DFB, tt::tt_metal::UnpackMode::UnpackToDest},
+        {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToDest},
+    };
+    experimental::ComputeHardwareConfig compute_hw_config = experimental::ComputeGen2Config{
+        .sfpu_precision_mode =
+            test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+        .enable_32_bit_dest = true,
+        .unpack_modes = unpack_modes,
+        .unpack_to_dest_en = true,
+    };
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = to_kernel_defines(sfpu_defines)},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = IN0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = IN1_DFB,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args =
+            {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
+        .hw_config = compute_hw_config,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "sfpu_quant_compute",
+        .kernels = {reader_spec, make_writer_unary_quasar_spec(WRITER, OUT_DFB), compute_spec},
+        .dataflow_buffers =
+            {make_dfb_spec(IN0_DFB, test_config, formats.in0),
+             make_dfb_spec(IN1_DFB, test_config, formats.in1),
+             make_dfb_spec(OUT_DFB, test_config, formats.out)},
+        .work_units = {experimental::WorkUnitSpec{
+            .name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
+    };
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", input0_dram_buffer->address()},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", input1_dram_buffer->address()},
+                 {"src1_bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}})},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", output_dram_buffer->address()},
+                 {"bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+
+    const auto dest = sfpu_quasar_run(
+        mesh_device,
+        spec,
+        params,
+        {{input0_dram_buffer, &stimuli.packed_a}, {input1_dram_buffer, &stimuli.packed_scale}},
+        output_dram_buffer);
+    return sfpu_util::is_close_packed_quant_output(dest, packed_golden, test_config.sfpu_op);
+}
+
 /// High-level flow:
 ///
 ///   DRAM(in0) ─┐
@@ -1859,6 +2137,46 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "binary_min"),
         std::make_tuple(1, "binary_max_int32"),
         std::make_tuple(1, "binary_min_int32")),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
+
+// Quant-family SFPU tests (quant / requant / dequant) via the dedicated
+// run_sfpu_quant_two_input_buffer path. Quasar-only: WH/BH already have coverage
+// elsewhere, and this runner uses Gen2 unpack_to_dest + per-operand formats.
+class SingleCoreSingleMeshDeviceSfpuQuantParameterizedFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuQuantParameterizedFixture, TensixSfpuQuantCompute) {
+    size_t num_tiles = std::get<0>(GetParam());
+    std::string sfpu_op = std::get<1>(GetParam());
+
+    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Quant SFPU compute-API test is currently Quasar-only";
+    }
+
+    const auto formats = unit_tests::sfpu_util::quant_l1_formats(sfpu_op);
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = tt::tile_size(formats.in0),
+        .l1_input_data_format = formats.in0,
+        .l1_output_data_format = formats.out,
+        .cores = core_range_set,
+        .sfpu_op = sfpu_op,
+        .approx_mode = false};
+    log_info(tt::LogTest, "Testing quant SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_quant_two_input_buffer(devices_.at(id), test_config));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuQuantCompute,
+    SingleCoreSingleMeshDeviceSfpuQuantParameterizedFixture,
+    ::testing::Values(std::make_tuple(1, "quant"), std::make_tuple(1, "requant"), std::make_tuple(1, "dequant")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });

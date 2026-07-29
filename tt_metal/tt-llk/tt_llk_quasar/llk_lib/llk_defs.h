@@ -120,6 +120,9 @@ enum class SfpuType : std::uint32_t
     greater_than_zero,
     less_than_equal_zero,
     greater_than_equal_zero,
+    quant_int32,
+    requant_int32,
+    dequant_int32,
 };
 
 enum class DstSync : std::uint8_t
