@@ -122,3 +122,5 @@ Final independent verdict: **clean-pass**. Earlier findings drove the
 official-weight Q/gate loader repair, final-policy advisor reruns, DS gate/up
 and L1-chain work, compact runner evidence, and same-harness prefill controls.
 No required work remains. The local checkpoint SHA is recorded below.
+
+- Optimized-decoder checkpoint: `bb3a32d5c3c`
