@@ -85,6 +85,7 @@ safe-outputs:
     max: 10
     target: "*"
     hide-older-comments: true
+    github-token: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
   create-pull-request:
     # Ready-for-review PRs are required so that tt-metal's pr-gate.yaml runs
     # build-artifact.yaml automatically. Draft PRs do not trigger pr-gate by design.
