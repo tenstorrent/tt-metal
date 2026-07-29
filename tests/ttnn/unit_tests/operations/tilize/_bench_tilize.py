@@ -871,6 +871,31 @@ REGIMES = {
     # "no cost" or just "hidden by a huge shape".
     "n_imbal_mid_65row": dict(shape=(1, 1, 2080, 1024), dtype=ttnn.bfloat16),
     "p_imbal_mid_even": dict(shape=(1, 1, 2048, 1024), dtype=ttnn.bfloat16),
+    # master.md's A0 names five discriminating regimes; four had a bench row before
+    # this pass and **tiny** (`total_tiles < grid`) did not, so its measured core count
+    # was never asserted here. 4 tiles => A0 wants exactly 4 cores, not 64 (launching
+    # 64 would put 60 empty kernels on the critical path) and not 1.
+    "n_tiny_interleaved": dict(shape=(1, 1, 64, 64), dtype=ttnn.bfloat16),
+    # Lever A1's own counterfactual, which no prior phase measured on this op: Phase 0
+    # recorded `row_wise=True` as KEEP from `noc_placement`'s 2.9x design reference,
+    # never from a device A/B here. `core_order=0` lays the SAME core count out
+    # COLUMN-major (`split_work_to_cores`' default) -- the placement `noc_placement`
+    # measures as the slow one. Swept across all five A0 regimes because a placement
+    # lever's payoff depends on how much of the grid is active: a partial LINE of cores
+    # is where the effect lives, and 64 cores is a full rectangle either way.
+    # `core_order=1` is the FRAGMENTATION CONTROL: A1's placement kept, only the range
+    # set hand-built. `(colwise - control)` is placement; `(control - shipped)` is the
+    # dispatch cost of a non-rectangular core set. Without it the 64-core rows would
+    # credit placement with a dispatch term.
+    "x_tiny_colwise": dict(shape=(1, 1, 64, 64), dtype=ttnn.bfloat16, core_order=0),
+    "x_tiny_frag_ctl": dict(shape=(1, 1, 64, 64), dtype=ttnn.bfloat16, core_order=1),
+    "x_square_colwise": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, core_order=0),
+    "x_wide_short_colwise": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, core_order=0),
+    "x_tall_narrow_colwise": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, core_order=0),
+    "x_tall_narrow_frag_ctl": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, core_order=1),
+    "n_eighth_grid": dict(shape=(1, 1, 256, 32), dtype=ttnn.bfloat16),
+    "x_eighth_grid_colwise": dict(shape=(1, 1, 256, 32), dtype=ttnn.bfloat16, core_order=0),
+    "x_eighth_grid_frag_ctl": dict(shape=(1, 1, 256, 32), dtype=ttnn.bfloat16, core_order=1),
 }
 
 _SELECTED = os.environ.get("TILIZE_BENCH_REGIMES", "")
@@ -1174,6 +1199,8 @@ def test_bench_tilize(device):
         tpd.CHUNK_CAP_OVERRIDE = spec.get("chunk_cap")
         tpd.STAGGER_MOD_OVERRIDE = spec.get("stagger_mod")
         tpd.READ_GROUP_OVERRIDE = spec.get("read_group")
+        # Refinement 5: lever A1's counterfactual (column-major core order).
+        tpd.CORE_ORDER_OVERRIDE = spec.get("core_order")
         # Refinement-1c lever counterfactual rows (B13 stateful reads, C7 split
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
@@ -1260,6 +1287,7 @@ def test_bench_tilize(device):
         tpd.CHUNK_CAP_OVERRIDE = None
         tpd.STAGGER_MOD_OVERRIDE = None
         tpd.READ_GROUP_OVERRIDE = None
+        tpd.CORE_ORDER_OVERRIDE = None
 
     arch = os.environ.get("ARCH_NAME", "unknown")
     lines = [

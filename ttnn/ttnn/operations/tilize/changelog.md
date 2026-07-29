@@ -3393,3 +3393,435 @@ new) in **both** default and `--dev` mode.
    queue's five numeric gates were set from residual-defined decompositions that cannot
    prove exposure. The cheap up-front check is to remove the suspected term from the real
    kernel once, before writing the gate.
+
+---
+
+## Refinement 5 — Perf retrospective: completeness audit (run-closing, LAST)
+
+- **Date**: 2026-07-29
+- **Outcome**: **COMPLETE.** The `/perf-ceiling-dm` **Mode-D** ledger below covers **all 24**
+  `master.md` Part-2 levers and **all 19** Part-1 examples with a four-way status and a delta for
+  every entry that is not clearly not-applicable, A0–A2 graded **per regime against measured core
+  counts**, and a ranked remaining-opportunity list. It changes no `SUPPORTED` value and unlocks no
+  cell, as the entry requires.
+- **The audit was not a formality — it found two things and refuted one intuition.**
+  (a) **A0's *balance* half had never been measured**: every bench shape in the file divides evenly,
+  so the instrument read "perfect" for five refinements. It is not: the row split gives one core up to
+  **2× the blocks** at `nt_h = 64k+1`. Measured, it costs **0 ns** — and the reason generalises
+  (below), so the "flatten the work list" lever is refuted rather than filed.
+  (b) **Lever A1 — `master.md`'s "biggest single lever" — was carried as KEEP for the whole run from
+  a design reference, never a device A/B on this op.** Now measured, with a fragmentation control that
+  separates placement from dispatch: **1.115 at 8 cores**, 1.021 at 4, 1.039 on tall-narrow at 64, and
+  **0.993–0.996 on the DRAM-saturated 64-core regimes** — i.e. it pays exactly where the active core
+  set is a partial line, and is inert where the grid is full.
+  (c) One catalog lever is a genuine **missed**: **B8 trid double-issue on the WRITE path**. Priced
+  ≤ 3.6 % on the ≤ 4-core regimes and ≈ 0 at 64. It is the only unexplored catalog lever left with a
+  positive delta, and it is small.
+- Zero regressions across all **201** bench rows (186 carried + 15 new; whole-set mean **1.0020**, sd
+  **0.0078**); golden **126/126** (240 passed / 0 failed); unit suite **479/479** in both modes; no
+  hangs. Production code is provably untouched: the only edit outside tests is a `None`-guarded
+  `elif` (35 additive lines) that A1's counterfactual needs.
+
+### 1. A0–A2 graded per regime, against the measured core count
+
+Never holistically (`master.md` Mode-D's own instruction). Cores are the **device-launched** count
+read back from the plan and asserted by `_bench_tilize._assert_structural_gates` plus
+`test_tilize_refinement5.py::test_a0_active_cores_per_regime`. `imb` / `rec` are the two balance
+ratios (§6).
+
+| regime (`master.md` A0's list) | shape | total_tiles | A0 criterion | **measured cores** | imb / rec | ns | grade |
+|---|---|---|---|---|---|---|---|
+| **square** | `[1,1,2048,2048]` | 4096 | `min(64, 4096)` = 64 | **64** | 1.00 / 1.00 | 85 530 | ✓ |
+| **wide-short** (`nt_h == 1`) | `[1,1,32,16384]` | 512 | 64 | **64** | 1.00 / 1.00 | 12 592 | ✓ — the load-bearing one |
+| **tall-narrow** | `[1,1,2048,32]` | 64 | 64 | **64** | 1.00 / 1.00 | 3 424 | ✓ |
+| **tiny** (`total_tiles < grid`) | `[1,1,64,64]` | 4 | `min(64, 4)` = 4 | **4** | 1.00 / 1.00 | 2 297 | ✓ — **new this pass** |
+| eighth-grid (partial line) | `[1,1,256,32]` | 8 | 8 | **8** | 1.00 / 1.00 | 2 366 | ✓ — **new this pass** |
+| **sharded-in** (Path B) | `[1,1,512,64]` H-shard | — | the shard's own cores | **4** | 1.00 / 1.00 | 1 250 | ✓ (A2) |
+| sharded-in, large | `[1,1,2048,512]` B-shard | — | the shard's own cores | **64** | 1.00 / 1.00 | 1 957 | ✓ (A2) |
+| crossover out (`alias_out`) | `[1,1,2048,512]` → B-shard | — | the shard's 64 | **64** | 1.00 / 1.00 | 16 532 | ✓ (A2) |
+| crossover in (`alias_in`) | B-shard → DRAM | — | the shard's 64 | **64** | 1.00 / 1.00 | 15 055 | ✓ (A2) |
+| single-core (forced) | `[1,1,512,512]` | 256 | exactly 1 | **1** | 1.00 / 1.00 | 27 341 | ✓ |
+| **indivisible height** | `[1,1,2080,2048]` | 4160 | 64 | **64** | **1.97 / 1.60** | 86 656 | ✓ count; imbalance costs **0** (§6) |
+| indivisible, mid-size | `[1,1,2080,1024]` | 2080 | 64 | **64** | **1.97 / 1.33** | 44 790 | ✓ count; imbalance costs **0** |
+| indivisible tall-narrow | `[1,1,2080,32]` | 65 | 64 | **64** | **1.97 / 1.00** | 4 156 | ✓ count; +21 % ns but **irreducible** |
+
+A2's second clause (`get_optimal_worker_cores_for_sharded_tensor()`) is satisfied by construction
+rather than by calling the API: the planner derives the work grid from the shard spec and
+`test_a0_sharded_in_regime_uses_the_shards_own_cores` asserts the **exact cover**
+(`shard_tiles × ncores == total_tiles`), which is the property the API exists to provide. Its
+NoC-optimal *bank → worker* half is lever A3, refuted (1.017 / 1.003 / 1.002, R2).
+
+### 2. Bound classification per regime — re-ablated this pass, and it re-classifies two regimes
+
+| regime | full | no_compute | **no_dm** | sync_only | read leg (marg.) | write leg (marg.) | class |
+|---|---|---|---|---|---|---|---|
+| a_square | 86 201 | — | 6 579 (7.6 %) | — | 24 274 | **42 173** | DM-bound, **write-dominated** |
+| b_wide_short | 12 526 | — | 2 255 (18 %) | — | 2 959 | **5 332** | DM-bound, write-dominated |
+| d_tall_narrow | 3 446 | — | 978 (28 %) | — | **10 (0.3 %)** | 1 256 (36 %) | DM + launch; **the read payload is 100 % hidden** |
+| c_single_core | 27 368 | 21 930 | **17 516 (64 %)** | 10 560 (39 %) | 2 594 | 3 254 | **sync/dispatch-dominated** — 39 % floor, DM 36 %, LLK 20 % |
+| x_wide_short_1core | 50 801 | 42 851 | **33 314 (66 %)** | 21 062 (41 %) | 3 794 | 5 841 | same shape of result |
+| n_imbal_tall_narrow_65 | 4 142 | 3 408 | 1 524 (37 %) | 1 198 (29 %) | — | — | DM 63 %, LLK 18 % |
+| Path B (`f_*`, `n_sharded_*`) | — | 438–547 | **== full** | flat in blocks | 0 | 0 | compute + dispatch, **0 % DM** (R4b) |
+
+**Two re-classifications the ledger has to carry.**
+
+1. **`c_single_core` is not "DM-bound with a sync floor" (Phase 0) — it is sync/dispatch-dominated.**
+   Removing *all* data movement saves 36 %; the residual 64 % is the CB/loop/dispatch floor plus the
+   LLK. R2 chased it as a transaction-overhead target and got its 9.9 % from B8; the remaining
+   transaction levers are dividing into a 36 % term, which is why they keep coming back neutral.
+2. **On `d_tall_narrow` the exposed DM term is the WRITE, not the 32 reads.** Dropping the read
+   payload changes the runtime by **10 ns of 3 446**; dropping the write saves 1 256. R1c's
+   decomposition lumped them ("32 × 64 B read issue + DRAM service + barrier + 1 × 2048 B write =
+   1 504 ns"), which is why both of its levers (B13, C7) act on the *issue* cost — the only part of
+   the read that is exposed at all. Correct in retrospect, but by luck of framing rather than
+   by measurement, and worth stating plainly for the next run.
+
+**Achieved vs ceiling, recomputed on this pass's numbers** (DRAM spec 288 GB/s; the operationally
+meaningful reference for the 64-core interleaved regimes is the in-tree measured 64-core DRAM→DRAM
+copy, 193.8 GB/s):
+
+| regime | binding reference | achieved | reading |
+|---|---|---|---|
+| a_square | in-tree 64-core copy 193.8 GB/s | **196.2 GB/s = 1.01×** | **at the ceiling** |
+| a_square, per direction | — | read 190.6, write **135.5**, aggregate 196.2 | the interface is saturated; the write direction is the slower one and the two legs overlap to within 0.8 % of the read-only rate |
+| e_* (fp32 / bf8b / narrowing) | DRAM floor | 0.64 / 0.70 / 0.72 | identical DM-bound ratio ⇒ the format path costs nothing |
+| b_wide_short | tt-npe **116.5 % DRAM util** (R2b) | — | past its own DRAM endpoint; no per-transaction lever left (6 refuted) |
+| c_single_core | 1-core tt-npe pin 25 200 ns | 0.92 | 64 % of what remains is not DM (§2) |
+| d_tall_narrow | per-core NoC bracket [2 892 … 4 461] | inside it | read payload hidden; write page + launch floor + LLK |
+| g_dram_to_sharded / g_sharded_to_dram | tt-npe 98.1 % DRAM util, −1.6 % pred. error (R3) | at the DRAM write/read bound | reader kernel alone > the 1.4× bar (R3b) |
+| Path B | launch floor 438 + 155 ns/block LLK | 1.02× of the 1 063 ns bar | `sync_only` slope in blocks = **0** |
+
+**The single most useful negative statement in this audit**: on `a_square` the write direction runs
+at **135.5 GB/s** against the read's **190.6**, which looks like 1.4× of headroom and is not — the two
+directions share one DRAM interface, the aggregate is **196.2 GB/s**, and that is 1.01× the best
+measured 64-core DRAM→DRAM copy on this box. There is no write-bandwidth lever to find. A future run
+that re-derives "the writes are slow" from a one-sided ablation should stop here.
+
+### 3. Completeness ledger — `master.md` **Part 2**, all 24 levers
+
+| lever | id | status | Δ if applied (or measured Δ) | reason / evidence |
+|---|---|---|---|---|
+| active-core count per regime | **A0** | **applied** (count) + **measured-no-payoff** (balance) | count: exact in all 13 regimes of §1; balance: **0 ns** for rec 1.60 / 1.33 | §1 asserts the count per regime; §6 measures the balance term and shows the regime where it exists is the regime that absorbs it |
+| spread across the DRAM-facing axis | **A1** | **applied** — and counterfactualed on device for the first time this pass | **1.115** (8 c) · 1.021 (4 c) · 1.039 (64 c tall-narrow) · 0.993 / 0.996 (64 c square / wide-short) | §5. Placement isolated from dispatch by a fragmentation control arm; the value lives where the active set is a partial LINE, which is why the 64-core DRAM-saturated rows see nothing |
+| launch only on cores that hold data | **A2** | **applied** | 0 by construction (same core set as the API would return) | Exact-cover assert `shard_tiles × ncores == total_tiles` on Path B + both crossovers; §1 |
+| reader adjacent to its DRAM bank | **A3** | **measured-no-payoff** | 1.017 / 1.003 / 1.002 (R2), bundled with B10: 2.585 | Structurally inapplicable too: a block needs 32 **consecutive** source pages and page *p* lives in bank *p* % 12, so every core touches all 12 banks — there is no affinity to exploit |
+| cliff-core specialization | **A4** | **not-applicable** | 0 — there is no cliff kernel to skip | One `KernelDescriptor` per role over all cores; the remainder rides in per-core runtime args. Asserted on an indivisible shape (`test_a4_no_cliff_kernel_exists_to_specialize`), i.e. exactly the case A4 exists for |
+| per-core-overhead gating | **B0** | **applied** — the run's governing discipline | — | Seven shipped levers are gated on work-per-core: C16 depth, B8, B13, C7, the R2b stagger, R4b's resident CBs, R4's drop-dataflow. Five levers were refuted *because* they were counterfactualed on the smallest regime they run in |
+| coalesce whole pages | **B5** | **applied** | **2.00×** measured (chunk 1 → 8: 25 111 → 12 561 ns) | The chunk-width sweep IS B5's counterfactual; Phase 0 had only a model number |
+| one-packet ≤ 512 B | **B6** | **measured-no-payoff as stated** | staying ≤ 512 B costs **5.4 %** | 178.8 GB/s at 512 B vs 189.0 at 1024 B (`p_2blk_512B` / `p_2blk_1024B`). The op deliberately exceeds the one-packet threshold: the latency path is worth less than the bandwidth |
+| one barrier per block | **B7** | **applied**; the more-aggressive form **measured-no-payoff** | per-block barrier → `writes_flushed`: −3.2 % / −6.6 % (1-core regimes). Grouping *further* (B7'): 1.020 / 1.116 / 1.245 at G = 2 / 4 / 8 | Phase-0 verification fix #1 + R3. Monotone worse past one block: there is no drain to hide, and grouping serializes the LLK behind the reads |
+| trid double-issue, READ path | **B8** | **applied (gated** `blocks ≥ 2 ∧ (ncores ≤ 4 ∨ read ≤ 128 B)`**)** | −9.9 % … −15.3 % on four regimes | R2, with an isolation arm proving the third CB window alone buys 1.000 |
+| trid double-issue, **WRITE path** | **B8** | **missed** | **≤ 3.6 %** on the ≤ 4-core regimes, ≈ 0 at 64 | Never tried in the whole run. NPE puts write-group barrier batching at 13.6 % (1 core) / 2.7 % (64 c); against the measured write leg (11.9 % of `c_single_core`) that is ≤ 3.6 % of the regime. Ranked #1 below |
+| reader NoC0 / writer NoC1 | **B9** | **applied** | — | Reader/Writer config descriptors; confirmed in tt-npe's per-NoC demand (R3) |
+| per-reader VC assignment | **B10** | **measured-no-payoff** | reads 1.083 / 1.105 · writes 1.780 / 1.893 · both 1.991 / 2.142 | R2. The firmware picks one static VC deliberately; rotating splits the DRAM-endpoint queue depth per stream instead of pooling it. tt-npe: congestion is 0.4 % of the target regime, so ≤ 0.4 % was ever available |
+| alignment | **B11** | **applied (automatic)** — asserted this pass | 0 (it is already satisfied) | Every read is `chunk_wt · 32 · elem` (min 64 B) at a multiple-of-32 offset; every write is a whole tile page (2048 / 4096 / 1088 B, all ≡ 0 mod 16). Asserted over 5 dtype × shape combinations |
+| multicast instead of N unicasts | **B12** | **not-applicable** | 0 — and the nearest applicable variant measured **1.377×** | Sharper disqualifier than the design's "no shared input": there IS a shared read (`nt_h == 1` ⇒ 64 cores over the same 32 pages), but each core needs a **disjoint slice** and mcast delivers identical bytes — broadcasting whole rows would move `Wt/chunk_wt` = 64× the L1 bytes. R2b built the pull-based equivalent and it is 1.377× slower with a 5.9 % ceiling |
+| `set_state` / `with_state` | **B13** | **applied (gated ≤ 128 B)** | 0.950 … 0.978 at ≤ 128 B; **+19.9 %** at 512 B | R1c. `set_state` pins the NoC coordinate ⇒ bank-major issue only, which costs more DRAM-endpoint serialization than the saved command programming buys once the read is ≥ 256 B |
+| zero-copy CB aliasing | **C14** | **applied** on all three sharded paths | Path B: DM → **0** (`no_dm == full`, ±0.4 %). Crossover: 1.197× / 1.300× | Phase 0 (same-spec) + R3 (both one-sided directions), each with tt-npe per-NoC demand 0.0 on the sharded side |
+| prefer sharded over interleaved | **C15** | **not-applicable to the op** (quantified anyway) | up to **~11×** for the caller | The memory config is the caller's; the op honours it. Same shape `[1,1,2048,512]`: 1 957 ns L1→L1 vs 16 532 DRAM→L1-shard vs ~21 000 DRAM→DRAM |
+| depth-2 CBs, but only when they pay | **C16** | **applied (gated)** | 1.019–1.028 at ≥ 8 blk · 1.321 / 1.360 at 1 core · 0.995–1.010 at 1 blk | R1. Pre-classified "applied/pays"; measurement says **neutral on the DM-bound regimes at 65 536 B/core**, so the default is gated and the L1 given back |
+| in-place / no-copy | **C17** | **not-applicable** | 0 | RM→TILE relocates every byte; there is no non-overlapping-regions case to detect. The compute helper `static_assert`s the two CB formats differ; asserted host-side as distinct buffer addresses |
+| CT `TensorAccessorArgs` | **D18** | **applied** | — | Phase 0; program-cache hit is an acceptance criterion |
+| base-address-only RT args | **D19** | **applied** | — | Program-cache hit asserted, including re-binding on the aliased path with two shard addresses |
+| layout / special-case factory selection | **D20** | **applied** | — | Five plan paths selected by memory-config match: generic / `alias` (compute-only) / `alias_out` / `alias_in` / single-core |
+| host-precomputed indexing, pow2 fast addr-gen | **D21** | **applied (partly)**, remainder **measured-no-payoff** | in-kernel incremental bank table: **1.016** | All per-core indexing is host-computed and `InterleavedAddrGenFast` is subsumed by `TensorAccessor`. R3b built D21's in-kernel half (`InterleavedStickBands`, 84 of 96 accessor calls removed) and it buys nothing: the arithmetic is hidden behind DRAM service |
+| Metal Trace + multiple CQs | **E22** | **not-applicable** (op scope) | the caller's whole-model lever | The op is trace-*compatible* by construction (program cache + base-address-only RT args); the reference suite's `test_deepseek_v3_mla_tilize_trace_mode` exercises exactly that |
+
+### 4. Completeness ledger — `master.md` **Part 1**, all 19 runnable examples
+
+| example | status | Δ if applied (or measured Δ) | reason / evidence |
+|---|---|---|---|
+| **`noc_placement`** | **applied** (A1 + B9) | **1.115** at 8 cores; ~1.00 at full grid | §5 is this example's counterfactual, re-measured on tilize's own transfer shapes. The example's 2.9× is for a *line* of 8 cores with a much larger per-core payload |
+| **`width_split`** | **applied** | **4.59×** (b_wide_short 13.4 µs on 64 c vs 61.5 µs on 1 c) | The single biggest lever in the run, and the prompt's hard requirement |
+| **`distribution_gate`** | **applied** | gated ⇒ 0 regression on the regimes the default already saturated | Height-first with width fill behind a utilization predicate; every later lever is gated the same way (B0) |
+| **`dram_saturation`** | **measured-no-payoff** | knee cap = **0.42×** on its own target regime | R1: capping at the 16-core knee is 2.4× SLOWER. tilize is read-transaction-rate bound at 64 B/page and cannot reach the knee's bandwidth at any core count, so its knee is the full grid |
+| **`double_buffer`** | **applied (gated)** | see C16 / B7 / B5 rows | All three of the example's levers are present: outstanding reads per barrier, depth-2 CBs, transaction size |
+| **`tile_reorder`** | **applied** | whole-page writes; the sub-page alternative is never issued | Every write is a whole 2048/4096/1088 B tile page, `chunk_wt` per barrier. NB: the NPE bracket *disagrees* with the example here (it prices 512 B faces 7 % cheaper at full contention) — a model-coverage artifact, see issue 2; the verdict rests on the example's device number and on B5's own 2.00× chunk sweep |
+| **`split_reader`** | **applied (gated 64 B, 1 blk)** | −165 ns where gated; **+11.6 %** on the alias path, +13.7 % at 512 B | R1c + R3. Two independent turnover axes: lost read/write overlap across a block boundary, and doubling issuers into a shared DRAM hot spot |
+| **`zero_copy_fold`** | **measured-no-payoff** as a fold; its inverse **applied** | fold: 1.016 / 0.999 / 1.002. Kernel-count reduction: 1.171× / 1.074× / 1.044× | R4. The fold arm is retained permanently because it is the *mechanism proof*: what pays is the absent handshake, not the kernel count |
+| **`matmul_output_subblock`** | **not-applicable** | — | No matmul; there is no output subblock to size |
+| **`tensix_all_reduce_compute`** | **not-applicable** | — | No reduction: tilize's compute stage is a pure relayout with no accumulator |
+| **`eltwise_l1_vs_dest_accumulate`** | **not-applicable** | — | No running accumulator to keep out of L1 |
+| **`compute_fusion`** | **not-applicable** as stated; its principle **applied** | a separate cast pass would add a full tensor read+write ⇒ **~2×** on every casting regime | One compute step, so nothing to fuse — but the `dtype=` cast is a pack-time reconfig rather than a second CB round-trip, which is the example's lesson in the only form this op offers |
+| **`compute_block_size`** | **applied**, both levers | block size: **2.00×** (chunk 1 → 8). Reconfig drop: the ~150 ns `NoReconfigure` rule + a 70 ns/pair init burst issued once per kernel | Init/uninit sit outside the `num_blocks` loop (R1 static analysis), the no-cast path selects `NoReconfigure` (prompt rule), and `chunk_wt` is maximized against the L1 budget |
+| **`row_reduce_accumulate`** | **not-applicable** | — | No row reduction |
+| **`reduce_accumulate`** | **not-applicable** | — | No reduction |
+| **`reduce_block`** | **not-applicable** | — | No reduction |
+| **`shared_input_reuse`** | **measured-no-payoff** | **1.377×** (its ceiling is 5.9 %) | R2b implemented exactly this idea for the one regime with a shared re-read (`nt_h == 1`), as a pull rather than an mcast because the receivers need disjoint slices (B12). Its read-side probe is the decisive number: a 32× bigger transaction moves the same bytes in the same time |
+| **`tensix_all_reduce_ring_transport`** | **not-applicable** | — | No collective: every core's output tiles are private |
+| **`tensix_all_reduce`** | **not-applicable** | — | No collective |
+
+### 5. Lever A1 — the run's last unverified applied lever, now measured
+
+Phase 0's ledger recorded A1 (`row_wise=True`) as **KEEP** with "not re-measured (design reference)",
+and no later refinement touched it. Since `master.md` calls core placement "the biggest single lever",
+closing the run without a device counterfactual would have left the largest claim in the ledger
+resting on another op's number. Measured with a new sweep hook (`CORE_ORDER_OVERRIDE`, `None` in
+production, 35 additive lines) and — importantly — a **fragmentation control**, because the naive A/B
+confounds placement with the dispatch cost of a non-rectangular `CoreRangeSet`:
+
+| regime | cores | **shipped** (A1 row-major) | frag control (same order, hand-built set) | column-major (A1 off) | **placement alone** |
+|---|---|---|---|---|---|
+| tiny `[1,1,64,64]` | 4 | **2 278.2** | 2 308.6 (1.013) | 2 357.6 | **1.021** |
+| eighth-grid `[1,1,256,32]` | 8 | **2 375.0** | 2 278.5 (0.959) | 2 540.2 | **1.115** |
+| tall-narrow `[1,1,2048,32]` | 64 | **3 440.0** | 3 440.4 (**1.000**) | 3 573.6 | **1.039** |
+| wide-short `[1,1,32,16384]` | 64 | **12 575** | — | 12 487 | 0.993 |
+| square `[1,1,2048,2048]` | 64 | **86 302** | — | 85 935 | 0.996 |
+
+Readings, all three of them worth carrying:
+
+1. **A1 pays where the active core set is a partial line** (+2.1 % at 4 cores, **+11.5 % at 8**), which
+   is precisely the regime `noc_placement` measures — and it is **inert on the DRAM-saturated 64-core
+   regimes** (0.993 / 0.996, i.e. column-major is a hair *faster*, inside noise). Same story as C16:
+   once the binding resource is the DRAM interface, a NoC-side lever cannot move it. **KEEP** — but
+   the honest scope is the small/partial-grid regimes, not "the biggest single lever" for this op.
+2. At 64 cores both orders cover the same core set, so the +3.9 % on tall-narrow is a pure **work → core
+   mapping** effect, and the control confirms it: 3 440.4 vs 3 440.0 = **1.000**, so no part of it is
+   the range set. (`test_a1_counterfactual_changes_only_the_placement` asserts the two arms differ from
+   the shipped plan in the core list alone — the Refinement-1 discipline of never measuring two things
+   at once.)
+3. **An unexplained, reproduced side-finding**: at 8 cores the *hand-built* `8 × (1×1)` range set is
+   **3.5–4.3 % faster** than the compact `1 × 8` rectangle with identical cores, mapping and kernels
+   (2 278.0 / 2 272.9 vs 2 381.5 / 2 344.6 — four measurements, two sessions, CV ≤ 1.5 %), while at 4
+   cores the compact form wins by 1.3 %. Sign-unstable across core counts and ~100 ns in size, so it
+   ships nothing; recorded as opportunity #3.
+
+### 6. The A0 balance term — a regime nobody benched, measured, and refuted as headroom
+
+The work split is `_split_contiguous(nt_h, n_h)` for tile-rows × `_split_contiguous(n_chunks, n_w)`
+for tile-columns, and a core's work is `row_count × chunk_count`. So when `nt_h % n_h != 0` the first
+`nt_h % n_h` cores get an extra **row**, which multiplies their block count. At `nt_h = 64k+1` that is
+**2× the blocks on the critical core for 1.6 % more bytes**. Every shape in the 186-row bench set
+divides evenly, so this had read as "perfect" for five refinements.
+
+Two ratios, because only one of them is a lever — `raw = max/mean` (vs a fractional ideal) and
+`rec = max/ceil(total/ncores)` (vs the best any whole-block assignment could do):
+
+| shape | raw | **rec** | ns | even reference | ns ratio | **GB/s vs reference** |
+|---|---|---|---|---|---|---|
+| `[1,1,2080,2048]` (65 rows) | 1.97 | **1.60** | 86 479 | 85 732 | 1.009 | **197.0 vs 195.7** |
+| `[1,1,3072,2048]` (96 rows) | 1.33 | **1.33** | 127 751 | (85 732 for 1.6× the bytes) | — | **197.0 vs 195.7** |
+| `[1,1,2080,1024]` (mid, 8.5 MB) | 1.97 | **1.33** | 44 576 | 44 313 | 1.006 | **191.1 vs 189.3** |
+| `[1,1,2080,32]` (tall-narrow) | 1.97 | **1.00** | 4 161 | 3 441 | **1.209** | 64.0 vs 76.2 |
+
+**The verdict is refuted-as-headroom, and the reason generalises:**
+
+- On every shape with a *recoverable* imbalance the **achieved bandwidth is unchanged or better** than
+  its even reference (197.0 vs 195.7; 191.1 vs 189.3). The tail core is not slow — once the other 63
+  finish, it has the whole DRAM interface, so the imbalance is absorbed at zero cost. A "flatten the
+  work list to blocks" lever (max 8 → 5 on the 65-row square) would buy **nothing**.
+- The one shape where imbalance *does* cost time (+20.9 % of ns for +1.6 % of bytes) has
+  **rec = 1.00**: 65 indivisible blocks over 64 cores forces `max = 2` under any assignment. It is
+  arithmetic, not a lever.
+- And the two facts are not a coincidence. A recoverable imbalance requires the *assignment unit* to
+  exceed one block, i.e. `n_w == 1` **and** `chunk_count > 1`, which together force
+  `nt_h ≥ ncores ∧ Wt > chunk_wt` — a tensor large enough to be DRAM-bandwidth-bound. So the lever's
+  availability and its exposure are **mutually exclusive by construction**, which
+  `test_recoverable_imbalance_only_exists_on_dram_bound_shapes` asserts rather than argues.
+
+The mid-size row exists precisely to close the "hidden by a huge shape" objection: 8.5 MB is the
+smallest tensor that can carry a recoverable imbalance at all, and it behaves the same way.
+
+### 7. Ranked remaining opportunities
+
+Everything below is either small or outside the op. That is the audit's headline finding: after five
+refinements the interleaved DM regimes sit at **1.01× the achievable 64-core DRAM copy**, Path B is at
+`launch floor + LLK`, and both crossovers are at their DRAM bound with tt-npe agreeing to within
+1.6 %.
+
+1. **B8 trid double-issue on the WRITE path** — *missed*, ≤ **3.6 %** on `c_single_core` /
+   `x_wide_short_1core`, ≈ 0 at 64 cores. The only unexplored catalog lever with a positive delta.
+   Gate it exactly like the read-side one (`ncores ≤ 4`), and note the writer already uses
+   `noc_async_writes_flushed` rather than a draining barrier, so the NPE figure is an upper bound.
+2. **Stop forcing `fp32_dest_acc_en = True` for every fp32 input / bf8b output** — *not a catalog
+   lever*; ≤ ~4 % on the compute-bound Path-B fp32 cells. Evidence is R4b's unexplained asymmetry
+   (its resident-CB lever is worth 9–20 ns/block on fp32-input cells vs 3–5 on bf16, on **both** LLK
+   paths), which points at DEST capacity halving the dest-chunk count per block. Third independent
+   reason to ask the question (R4 follow-up #3, R4b follow-up #2).
+3. **The `CoreRangeSet` *representation*** — *missed*, ±3.5 % on the partial-grid regimes and
+   sign-unstable (§5.3). ~100 ns, dispatch-side, not in the catalog. Worth one probe by someone who
+   knows the dispatcher's mcast-vs-unicast launch heuristic; not worth a refinement on its own.
+4. **`DEPTH1_MAX_BLOCKS_PER_CORE = 4` sits at the conservative end of an unmeasured gap** (4 free, 8
+   costs ~2 %, 5–7 never measured) — *deferred*. Pays in **L1**, not ns: −65 536 B/core on any shape
+   with 5–7 blocks per core.
+5. **The `Resident` CB lifecycle for `untilize_helpers`** — *deferred*, cross-op. Identical per-block
+   CB structure and zero-copy use case; the contract, static_asserts and arch caveats already exist.
+6. **C15 for the caller** — up to **~11×** if the tensor can stay L1-sharded end to end. Model-level,
+   not the op's.
+
+**Explicitly NOT opportunities** (each measured, so the next run does not re-derive them): the
+write-vs-read bandwidth asymmetry on `a_square` (§2 — the aggregate is at the ceiling); a bigger read
+transaction on `b_wide_short` or the sharded read (6 refuted levers); any core-count cap
+(`dram_saturation`'s knee is 0.42× here); flattening the work distribution (§6); B10, A3, B7', the
+hoisted bank table, the arm/drain fold, `InitUninitMode`, and the whole-page + L1 redistribution
+algorithm.
+
+### 8. What the pre-classification got wrong
+
+`op_design.md`'s Mode-D table pre-classified all 24 levers before any measurement. Six entries are
+overturned by the run's numbers, and the pattern is consistent enough to be worth naming.
+
+| lever | pre-classified | measured verdict |
+|---|---|---|
+| C16 depth-2 | **applied / pays** | **neutral** on the DM-bound regimes at a 65 536 B/core L1 cost; pays only at ≥ 8 blocks or < 16 cores ⇒ gated |
+| B7 one barrier per block | applied, "+52 % composed" (model) | the *barrier→flush* change is worth −3.2 % / −6.6 % **only on the low-core regimes**; grouping further is monotone worse |
+| B6 one-packet ≤ 512 B | "measured-tradeoff, resolve by sweep" | resolved **against** the one-packet path: exceeding 512 B is +5.4 % |
+| A3 / B10 | deferred, "predicted small / estimate on (a)" | both refuted on device (1.017 / 2.585), and A3 is structurally inapplicable |
+| B8 / B13 / C7 | deferred, "estimate on (a)" | all three ship **only behind narrow gates**; each one *regresses* (a) or a neighbour when applied globally |
+| A0 | applied (count only) | count exact in 13 regimes; the **balance** half was unstated and unmeasured until this pass |
+
+**The generalisation**: five of the six are the same error — a lever whose value was estimated on the
+grid-filling square and whose real sign depends on work-per-core. `master.md` B0 says exactly this,
+and the run confirmed it five independent times. The corollary for the *next* run is the cheap one:
+**counterfactual a per-core-overhead lever on the smallest regime it will run in before writing the
+gate**, not after.
+
+**A second process finding, extending R4b's.** R4b showed that defining a term as the residual of
+another (`LLK := full − no_compute`) makes the decomposition tautological, so it can price a term but
+never prove it is on the critical path. This pass hits the same class again from the other side:
+`sync_only` reports a **39 % "sync floor"** on `c_single_core`, and by R4b's argument that number
+cannot be assumed exposed either — on Path B the identical instrument over-reported by **7×**. Both
+findings have the same cheap remedy: **remove the suspected term from the real kernel once before
+setting a numeric gate on it.** Four of this queue's five numeric gates were set from residual-defined
+decompositions, and none of the four was met.
+
+### Accuracy achieved
+
+Unchanged and **bit-exact** — this refinement moves no arithmetic and, at the shipped default,
+generates a byte-identical program (the only production edit is a `None`-guarded `elif`). Verified
+`torch.equal` on the identity oracle in `test_c17_in_place_is_structurally_impossible` and across the
+479-test suite; the Phase-0 precision baseline (20/20: PCC 1.0 / rtol 0 / atol 0 for bf16→bf16,
+fp32→fp32, bf16→fp32 and integer passthrough; 1-ULP fp32→bf16; PCC ≥ 0.99 bf8b) is untouched.
+
+### Golden test progress
+
+**126 / 126** registry cells (90 INVALID-skipped) — unchanged, 0 xfail / xpass / drift. Whole golden
+dir minus `test_translated.py`: **240 passed, 118 skipped, 0 failed** (`test_golden` 126 +
+`test_regression` 9 + `test_golden_main_tests` 105), byte-identical to every prior phase. The 2
+collection ERRORs are the pre-existing `use_module_device` × `device_params` conflict inside the
+reference file (Phase-0 issue 6's sibling). **No hangs** in either mode.
+
+### Perf gate — cumulative bench set, non-regression
+
+**201 rows** (186 carried + 15 new), median of 5 × 10 launches, WH B0 8×8, AICLK ≈ 985 MHz.
+
+| regime | cores | chk | d | blk | **ns** | cv % | GB/s | vs R4b | Δ |
+|---|---|---|---|---|---|---|---|---|---|
+| a_square | 64 | 16 | 1 | 4 | **85 530** | 0.6 | 196.2 | 85 811 | −0.3 % |
+| b_wide_short | 64 | 8 | 1 | 1 | **12 592** | 0.6 | 166.5 | 12 483 | +0.9 % |
+| c_single_core | 1 | 16 | 3 | 16 | **27 341** | 0.1 | 38.4 | 27 338 | +0.0 % |
+| d_tall_narrow | 64 | 1 | 1 | 1 | **3 424** | 0.8 | 76.6 | 3 453 | −0.8 % |
+| e_square_fp32 | 64 | 8 | 2 | 8 | **182 820** | 0.5 | 183.5 | 182 072 | +0.4 % |
+| e_square_bf8b_out | 64 | 16 | 1 | 4 | **64 698** | 0.1 | 198.5 | 64 616 | +0.1 % |
+| e_square_fp32_to_bf16 | 64 | 8 | 2 | 8 | **120 892** | 0.1 | 208.2 | 120 723 | +0.1 % |
+| f_sharded_small | 4 | 2 | 1 | 4 | **1 250** | 0.7 | 0 DRAM | 1 267 | −1.3 % |
+| f_sharded_large | 64 | 2 | 1 | 8 | **1 957** | 0.2 | 0 DRAM | 1 953 | +0.2 % |
+| g_dram_to_sharded | 64 | 2 | 2 | 8 | **16 532** | 1.0 | 253.7 | 16 311 | +1.4 % |
+| g_sharded_to_dram | 64 | 2 | 2 | 8 | **15 055** | 1.1 | 278.6 | 15 163 | −0.7 % |
+| m_wide_short_8k | 64 | 4 | 1 | 1 | **7 053** | 2.3 | 148.7 | 7 257 | −2.8 % |
+| n_tall_narrow_4blk | 64 | 1 | 3 | 4 | **11 277** | 0.7 | 93.0 | 11 216 | +0.5 % |
+| x_wide_short_1core | 1 | 16 | 3 | 32 | **50 785** | 0.0 | 41.3 | 50 764 | +0.0 % |
+| x_sharded_small_depth1 | 4 | 2 | 1 | 4 | **1 267** | 1.0 | 0 DRAM | 1 259 | +0.6 % |
+| n_sharded_fp32_to_bf16 | 4 | 2 | 1 | 4 | **1 449** | 0.9 | 0 DRAM | 1 450 | −0.1 % |
+| n_sharded_fp32_to_bf8b | 4 | 2 | 1 | 4 | **1 231** | 0.7 | 0 DRAM | 1 220 | +0.9 % |
+| n_sharded_deep (32 blk) | 4 | 2 | 1 | 32 | **5 583** | 0.3 | 0 DRAM | 5 554 | +0.5 % |
+| n_sharded_wide (chunk 64) | 4 | 64 | 1 | 1 | **4 706** | 0.2 | 0 DRAM | 4 700 | +0.1 % |
+| **n_tiny_interleaved** | 4 | 1 | 1 | 1 | **2 297** | 0.9 | 7.1 | — | *new* |
+| **n_eighth_grid** | 8 | 1 | 1 | 1 | **2 366** | 1.9 | 13.9 | — | *new* |
+| **n_imbal_square_65row** | 64 | 16 | 2 | 8 | **86 656** | 0.4 | 196.6 | — | *new* |
+| **n_imbal_square_96row** | 64 | 16 | 2 | 8 | **127 902** | 0.4 | 196.8 | — | *new* |
+| **n_imbal_mid_65row** | 64 | 16 | 1 | 4 | **44 790** | 0.3 | 190.2 | — | *new* |
+| **p_imbal_mid_even** | 64 | 16 | 1 | 2 | **44 270** | 0.3 | 189.5 | — | *new* |
+| **n_imbal_tall_narrow_65** | 64 | 1 | 3 | 2 | **4 156** | 0.5 | 64.1 | — | *new* |
+
+**Whole-set statistic over the 186 carried rows: mean 1.0020, sd 0.0078, max 1.0401, min 0.9867.**
+Six rows exceed +2 %, none of them a regression:
+
+- `x_wide_short_b10_write_only` (+4.0 %) is one of the two known-noisiest rows in the set (CV 4.6 /
+  4.1 %; R4b re-measured it twice for the same reason) and is a refuted-B10 arm.
+- Four are `g_*` `alias_out` rows (+2.2 … +3.6 %) and they move **as a regime**: re-measured at 15
+  rounds in a third session, all eight `g_*` rows land in a 16 430–16 600 ns band regardless of their
+  chunk / depth / B13 arm — consistent with R3b's finding that the regime is read-bound and
+  insensitive to those knobs, and with a session-level shift larger than the 0.85 % cross-session
+  scatter R4b measured on a stable row.
+- `x_wide_short_4k_stg` (+2.3 %) re-measures at 4 969 ns (+0.9 %) at 15 rounds.
+
+**The decisive non-regression argument here is structural, not statistical**: the entire production
+diff is 35 additive lines whose only executable part is `elif CORE_ORDER_OVERRIDE is not None`, with
+`CORE_ORDER_OVERRIDE = None` in production and asserted so by
+`test_a1_hook_is_off_in_production_and_the_shipped_order_is_row_major`. At the shipped default the
+plan, the CBs, the kernels and the runtime args are byte-identical to R4b's, so no measured band can
+be attributed to this refinement.
+
+Per-core CB L1 is unchanged on every carried row (0 B added anywhere).
+
+### Issues encountered
+
+1. **The naive A1 A/B was confounded, and the control is what caught it.** A column-major core set of
+   4 or 8 cores is not a rectangle, so its `CoreRangeSet` must be hand-built — and a hand-built set
+   dispatches differently. My first version of the hook therefore measured "placement + range-set
+   representation" and would have credited A1 with up to 11 % at 8 cores on partly the wrong grounds.
+   Adding arm 1 (same placement, hand-built set) priced the representation separately, and it turned
+   out to be **−4 % at 8 cores** — i.e. it was *masking* part of A1's win, not inflating it. The
+   64-core control (1.000) is what licenses reading the tall-narrow +3.9 % as a pure mapping effect.
+   **Generalisable rule: when a counterfactual has to change the core SET, it also changes the launch
+   descriptor — price that separately or the lever gets the credit.**
+2. **The NPE model disagrees with a Part-1 example, and the example wins.** For the B5 counterfactual
+   (whole 2048 B tile writes vs 512 B faces) the full-contention key prices the *smaller* transaction
+   7 % cheaper (50 871 vs 54 595 ns), which contradicts `tile_reorder`'s device result and the
+   monotone `p_2blk_*` size sweep on this very op (109.1 → 189.0 GB/s as the read grows 128 B →
+   1024 B). The `ALL_TO_ALL` / `ALL_FROM_ALL` keys are a coarse contention bracket, not a size model,
+   so a size question should be answered by the device sweep. Recorded so a future run does not take
+   the model's side; the ledger's B5 row cites the sweep.
+3. **This audit's own first hypothesis was wrong, which is why the balance row is a refutation and
+   not a follow-up.** A 1.97× work imbalance on a shape 1.6 % larger looked like the biggest miss in
+   the run. Measuring it — and then building the `rec` metric to separate what an assignment could
+   recover from what arithmetic forbids — turned it into a proof that the lever has no regime where
+   it is both available and exposed. The intermediate mid-size row (`n_imbal_mid_65row`) exists only
+   because "your huge shape hides it" was the obvious objection to the first two rows.
+4. **The stale gate wording**: this entry's `Done when` asks for
+   `tests/ttnn/unit_tests/operations/tilize/` "still 93/93", which was the Phase-0 count; the suite is
+   **479** now (450 at R4b + 29 this pass). Read as "still fully green", which it is in both modes.
+
+### Tests added
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement5.py` — **29 cells**, each pinning a
+  claim the ledger makes so the retrospective cannot rot:
+  - **Ledger completeness is machine-checked against `master.md` itself**: the Part-1 example names
+    and Part-2 lever IDs are *parsed* out of the catalog (19 and 24, asserted) and each must appear in
+    the Refinement-5 section, with every classified row carrying one of the four Mode-D statuses. A
+    future `B14` in the catalog fails here instead of leaving a confidently incomplete audit.
+  - **A0 per regime** (§1) as a property of the planner: the five discriminating regimes, the sharded
+    exact-cover clause, both crossover directions, and `use_multicore=False` ⇒ exactly 1.
+  - **The A0 balance term** (§6): balance 1.000 on every pre-R5 bench shape; the four measured
+    (raw, rec) pairs pinned to the shapes and ns they were measured against; the structural
+    implication `rec > 1 ⇒ n_w == 1 ∧ chunk_count > 1 ∧ nt_h ≥ ncores` (why the lever cannot be
+    exposed); and the irreducibility of the tall-narrow case (`max == ceil(total/ncores)`).
+  - **The four structural `not-applicable` verdicts**, each as its disqualifier rather than as an
+    absence: A4 (one kernel per role over all cores, on an indivisible shape, remainder in RT args),
+    B11 (every read offset/size ≡ 0 mod 32 and ≥ 64 B, writes ≡ 0 mod 16, over 5 dtype × shape
+    combinations), B12 (the shared-read regime's chunk ranges are pairwise **disjoint**, plus the 64×
+    L1-bytes counterfactual), C17 (distinct buffers + the identity oracle).
+  - **Lever A1's hook**: `CORE_ORDER_OVERRIDE is None` in production, the shipped order *is*
+    `grid_to_cores(..., row_wise=True)` on four regimes, and each counterfactual arm differs from the
+    shipped plan in the core list alone — never in `chunk_wt`, depth, blocks or the work
+    decomposition.
+  - **Bench coverage**: the eight regimes the audit grades must keep their rows, and the balance
+    metric must survive.
+- `_bench_tilize.py` — the `imb` / `rec` columns (`work_imbalance()`) reported on **every** row, so a
+  future distribution change that introduces imbalance on a shape that used to divide evenly shows up
+  in the same table as the ns it costs; **15 new regimes**: the indivisible-height family
+  (65row / 96row / mid-65row + its even reference / tall-narrow-65), the missing **tiny** and
+  **eighth-grid** A0 regimes, and A1's counterfactual set (column-major on five regimes + two
+  fragmentation controls).
+- `tilize_program_descriptor.py` — `CORE_ORDER_OVERRIDE` + `_order_counterfactual_cores()`: A1's sweep
+  hook, `None` in production, kept permanently so the verdict stays re-measurable (the same policy the
+  run applies to `x_tall_narrow_16c`, `p_*_r2b_off`, `p_*_rcb_off` and the rest of the counterfactual
+  arms).
+
+### Ranked follow-ups
+
+See §7. In one line: **the op is at its measured ceilings and the catalog is walked** — one small
+missed lever (write-side trid, ≤ 3.6 % on ≤ 4 cores), one non-catalog compute-side question
+(`fp32_dest_acc_en`), one ~100 ns dispatch curiosity, and everything else is either refuted with a
+number or outside a single op's scope.

@@ -122,6 +122,14 @@ CHUNK_CAP_OVERRIDE = None
 # period). The alternative worth sweeping is NUM_DRAM_BANKS, which makes the per-core
 # STARTING bank perfectly uniform instead of uniform-mod-32. Never set in production.
 STAGGER_MOD_OVERRIDE = None
+# Sweep hook (Refinement 5, the Mode-D audit): force lever A1's counterfactual, i.e.
+# lay the active cores out COLUMN-major (`row_wise=False`, which is
+# `split_work_to_cores`' own default) instead of the row-major line the op ships.
+# A1 is master.md's "biggest single lever" and Phase 0 recorded it as KEEP from the
+# `noc_placement` design reference WITHOUT a device counterfactual on this op; this
+# hook is what turns that into a measured verdict. None => A1's row-major order.
+# Never set in production.
+CORE_ORDER_OVERRIDE = None
 
 CB_RM_INPUT = 0
 # Refinement 2b staging buffer -- one `piece_bytes` window, allocated ONLY on the
@@ -1221,6 +1229,31 @@ def depth2_pays(ncores: int, blocks_per_core: int) -> bool:
     return blocks_per_core > DEPTH1_MAX_BLOCKS_PER_CORE
 
 
+def _order_counterfactual_cores(grid, ncores: int, mode: int):
+    """Lever A1's counterfactual arms (Refinement 5's Mode-D audit). Sweep only.
+
+    ``mode == 0`` — **column-major** placement (``row_wise=False``, which is
+    ``split_work_to_cores``' own default and the placement ``noc_placement`` measures
+    as the slow one). ``mode == 1`` — the **fragmentation control**: A1's row-major
+    order kept exactly, but the ``CoreRangeSet`` built as ``ncores`` individual 1x1
+    ranges instead of one rectangle.
+
+    The control exists because the naive A/B confounds two things: at 64 cores both
+    orders cover the *same* core set, so any difference must come from the work->core
+    mapping — but a hand-built range set is also more expensive to dispatch. Arm 1
+    prices that dispatch term alone, so ``(arm0 - arm1)`` isolates placement.
+    Whenever the resulting core *set* equals A1's row-major prefix the compact range
+    set is reused (the same trick ``_bank_ordered_cores`` uses), so arm 0 at full grid
+    is a pure mapping change.
+    """
+    row_major = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
+    cores = row_major if mode == 1 else ttnn.grid_to_cores(ncores, grid.x, grid.y, False)
+    same_set = {(int(c.x), int(c.y)) for c in cores} == {(int(c.x), int(c.y)) for c in row_major}
+    if same_set and mode == 0:
+        return cores, ttnn.num_cores_to_corerangeset(ncores, grid, True)
+    return cores, ttnn.CoreRangeSet({ttnn.CoreRange(c, c) for c in cores})
+
+
 def _bank_ordered_cores(device, grid, ncores: int):
     """Lever A3: ``ncores`` cores ordered bank-adjacent-first, plus their range set.
 
@@ -1843,6 +1876,8 @@ def _plan_generic(
         )
         if bank_placement:
             cores, core_ranges = _bank_ordered_cores(device, grid, ncores)
+        elif CORE_ORDER_OVERRIDE is not None:  # A1 counterfactual (sweep hook, never production)
+            cores, core_ranges = _order_counterfactual_cores(grid, ncores, CORE_ORDER_OVERRIDE)
         else:
             cores = ttnn.grid_to_cores(ncores, grid.x, grid.y, True)
             core_ranges = ttnn.num_cores_to_corerangeset(ncores, grid, True)

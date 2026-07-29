@@ -712,7 +712,42 @@ it a helper change rather than a second one-off.
 
 ---
 
-### [ ] Refinement 5 — Perf retrospective: completeness audit (run-closing, LAST)
+### [x] Refinement 5 — Perf retrospective: completeness audit (run-closing, LAST)
+
+> **Outcome (2026-07-29): COMPLETE.** The Mode-D ledger covers **all 24** Part-2 levers and **all 19**
+> Part-1 examples with a four-way status and a delta for every non-not-applicable entry, A0–A2 graded
+> **per regime against measured core counts** (13 regimes), and a ranked remaining-opportunity list.
+> Ledger completeness is **machine-checked against `master.md` itself** — the example names and lever
+> IDs are parsed out of the catalog and asserted present in the changelog section, so a lever added to
+> the catalog later fails a test rather than leaving a silently incomplete audit.
+>
+> **The audit produced three findings rather than a formality.** (1) **A0's *balance* half had never
+> been measured** — every bench shape divides evenly, so the instrument read "perfect" for five
+> refinements, while the row split actually gives one core **2× the blocks** at `nt_h = 64k+1`. It
+> costs **0 ns**, and the reason generalises: a *recoverable* imbalance requires `n_w == 1 ∧
+> chunk_count > 1`, which forces a DRAM-bandwidth-bound shape, which absorbs the tail for free
+> (197.0 vs 195.7 GB/s). The one regime where imbalance costs ns (+20.9 %) is **arithmetically
+> irreducible** (65 blocks / 64 cores). Refuted as headroom, not filed as a follow-up.
+> (2) **Lever A1 — `master.md`'s "biggest single lever" — was carried as KEEP for the entire run from
+> another op's number.** Measured now, with a *fragmentation control* separating placement from the
+> launch-descriptor cost: **1.115 at 8 cores**, 1.021 at 4, 1.039 on tall-narrow at 64, and
+> **0.993–0.996 on the DRAM-saturated 64-core regimes** — it pays where the active set is a partial
+> line and is inert where the grid is full. (3) Exactly one catalog lever is a genuine **missed**:
+> **B8 trid double-issue on the WRITE path**, priced ≤ **3.6 %** on the ≤ 4-core regimes and ≈ 0 at 64.
+>
+> Two regimes are **re-classified** by this pass's ablations: `c_single_core` is
+> **sync/dispatch-dominated** (`no_dm` = 64 % of runtime), not "DM-bound" as Phase 0 recorded; and on
+> `d_tall_narrow` the exposed DM term is the **write** (1 256 ns), not the 32 reads (**10 ns** — the
+> read payload is 100 % hidden), which is why R1c's two levers could only ever act on issue cost. Six
+> of `op_design.md`'s 24 pre-classifications are overturned with measurement, five of them the same
+> error (a lever estimated on the grid-filling square whose sign depends on work-per-core).
+>
+> Zero regressions across all **201** bench rows (186 carried, whole-set mean **1.0020**, sd
+> **0.0078**); the six rows > +2 % are the two known-noisiest arms and a `g_*` regime-level session
+> band reproduced in a third session. Non-regression is also **structural**: the entire production diff
+> is 35 additive lines whose only executable part is `elif CORE_ORDER_OVERRIDE is not None`, asserted
+> `None` in production. Golden 126/126 (240 passed / 0 failed); `test_translated.py` 275; unit suite
+> **479/479** in both modes; no hangs. Full ledger: `changelog.md` § "Refinement 5".
 
 **Goal**: the one deliberately non-capability entry in this queue — the `/perf-ceiling-dm` **Mode D**
 completeness audit over the **full** lever list (`ttnn/ttnn/operations/examples/master.md` Part 1
