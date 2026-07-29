@@ -24,7 +24,6 @@ class KDAWeights:
     decay_bias_flat: ttnn.Tensor
     norm: ttnn.Tensor
     convolution_taps: tuple[ttnn.Tensor, ...]
-    convolution_weight: ttnn.Tensor
     tensor_parallel_size: int
 
 
@@ -120,7 +119,6 @@ def load_kda_weights(
     decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
     decay_bias_flat = decay_bias.reshape(1, 1, config.q_dim)
     convolution_taps = []
-    grouped_convolution_taps = []
     for tap in range(config.conv_kernel_size):
         fused_tap = torch.cat(
             (
@@ -135,14 +133,7 @@ def load_kda_weights(
                 state_dict["k_conv1d.weight"][:, 0, tap],
                 state_dict["v_conv1d.weight"][:, 0, tap],
             ).reshape(1, 1, -1)
-        grouped_convolution_taps.append(fused_tap.reshape(-1))
         convolution_taps.append(device_tensor(fused_tap, f"conv_tap_{tap}", shard_dim=-1))
-
-    convolution_weight = torch.stack(grouped_convolution_taps, dim=-1).reshape(
-        config.q_dim + config.k_dim + config.v_dim,
-        1,
-        config.conv_kernel_size,
-    )
 
     return KDAWeights(
         input_projection=device_tensor(input_projection, "input_projection_head_major", shard_dim=-1),
@@ -160,19 +151,5 @@ def load_kda_weights(
         decay_bias_flat=device_tensor(decay_bias_flat, "decay_bias_flat", shard_dim=-1),
         norm=device_tensor(state_dict["o_norm.weight"], "norm"),
         convolution_taps=tuple(convolution_taps),
-        convolution_weight=ttnn.from_torch(
-            convolution_weight,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=(
-                ttnn.ShardTensor2dMesh(
-                    device,
-                    dims=tuple(0 if axis == tensor_parallel_axis else None for axis in range(2)),
-                    mesh_shape=mesh_shape,
-                )
-                if tensor_parallel_size > 1
-                else None
-            ),
-        ),
         tensor_parallel_size=tensor_parallel_size,
     )

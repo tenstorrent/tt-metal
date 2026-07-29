@@ -150,10 +150,17 @@ def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice, tensor_parallel_
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device,tensor_parallel_axis",
+    [((1, 8), 1), ((2, 4), 1), ((2, 4), 0), ((1, 8), 0)],
+    indirect=["mesh_device"],
+    ids=["SP1xTP8", "SP2xTP4", "SP4xTP2", "SP8xTP1"],
+)
 @pytest.mark.parametrize("weight_source", ["random", "real"])
-def test_kimi_k3_layer_1_device_perf(mesh_device: ttnn.MeshDevice, weight_source: str) -> None:
-    """Compare TP8 device time for matched K3 geometry with random and layer-1 weights."""
+def test_kimi_k3_layer_1_device_perf(
+    mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int, weight_source: str
+) -> None:
+    """Compare K3 device time across SP/TP layouts with random and layer-1 weights."""
     checkpoint_value = os.getenv("KIMI_K3_CKPT")
     if checkpoint_value is None:
         pytest.skip("set KIMI_K3_CKPT to the pinned Kimi-K3 checkpoint subset")
@@ -181,7 +188,7 @@ def test_kimi_k3_layer_1_device_perf(mesh_device: ttnn.MeshDevice, weight_source
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(1, None),
+            dims=tuple(1 if axis == 1 - tensor_parallel_axis else None for axis in range(2)),
             mesh_shape=tuple(mesh_device.shape),
         ),
     )
@@ -191,7 +198,7 @@ def test_kimi_k3_layer_1_device_perf(mesh_device: ttnn.MeshDevice, weight_source
         state_dict,
         tensor_cache_path=tensor_cache_path,
         tt_ccl=TT_CCL(mesh_device),
-        tensor_parallel_axis=1,
+        tensor_parallel_axis=tensor_parallel_axis,
         program_config=kimi_k3_program_config(),
     )
     layer.reset_state(batch_size=1)
@@ -208,7 +215,10 @@ def test_kimi_k3_layer_1_device_perf(mesh_device: ttnn.MeshDevice, weight_source
         wall_seconds = _profile_trace(mesh_device, layer, hidden_tt, repetitions)
     else:
         wall_seconds = _profile_eager(mesh_device, layer, hidden_tt, repetitions)
+    sp_axis = 1 - tensor_parallel_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
+    tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
     print(
-        f"Kimi-K3 KDA layer 1 weights={weight_source} TP8 B=1 T={sequence}: "
+        f"Kimi-K3 KDA layer 1 weights={weight_source} SP{sp_size}xTP{tp_size} B=1 T={sequence}: "
         f"wall={wall_seconds * 1e3:.3f} ms/replay over {repetitions} replays"
     )

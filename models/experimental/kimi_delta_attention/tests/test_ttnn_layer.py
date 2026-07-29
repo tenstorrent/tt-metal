@@ -89,6 +89,21 @@ def test_non_tile_aligned_sequence_is_rejected(device: ttnn.Device, expect_error
         _forward(layer, hidden)
 
 
+def test_batch_greater_than_one_is_rejected_by_specialized_convolution(device: ttnn.Device, expect_error) -> None:
+    config = make_config()
+    hidden = torch.randn(
+        2,
+        32,
+        config.hidden_size,
+        generator=torch.Generator().manual_seed(46),
+    ).to(torch.bfloat16)
+    layer = KimiDeltaAttention(device, config, random_weights(config))
+    layer.reset_state(batch_size=2)
+
+    with expect_error(RuntimeError, r"input must be \[1,T,Q\+K\+V\]"):
+        _forward(layer, hidden)
+
+
 def test_segmented_prefill_cache_continuity(device: ttnn.Device) -> None:
     config = make_config()
     weights = random_weights(config)

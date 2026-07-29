@@ -13,7 +13,6 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, build_fused_const_tiles
 from models.demos.blackhole.qwen36.tt.tp_common import matmul_reduce_scatter_prefill
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.experimental.kimi_delta_attention.config import KDAConfig, KDAProgramConfig
 from models.experimental.kimi_delta_attention.tt.recurrence import kda_prefill
 from models.experimental.kimi_delta_attention.tt.weights import KDAWeights, load_kda_weights
@@ -30,8 +29,10 @@ def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
 
 @dataclass(frozen=True)
 class _ProjectedInputs:
-    combined: ttnn.Tensor
     qkv: ttnn.Tensor
+    decay_rank: ttnn.Tensor
+    output_gate: ttnn.Tensor
+    beta: ttnn.Tensor
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,6 @@ class KimiDeltaAttention:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
         self.chunk_const_tiles = build_fused_const_tiles(mesh_device, _FUSED_CHUNK_SIZE)
-        self._prepared_convolution_weights: dict[int, ttnn.Tensor] = {}
         self.recurrent_state: ttnn.Tensor | None = None
         self.convolution_state: ttnn.Tensor | None = None
         self.affine_identity: ttnn.Tensor | None = None
@@ -229,7 +229,7 @@ class KimiDeltaAttention:
             raise ValueError(f"state batch {self.recurrent_state.shape[0]} != input batch {batch}")
         return batch, sequence
 
-    def _causal_conv1d_prefill(
+    def _convolve_qkv(
         self,
         qkv: ttnn.Tensor,
         sequence: int,
@@ -238,7 +238,6 @@ class KimiDeltaAttention:
         assert self.convolution_state is not None
         config = self.config
         channels = self._convolution_width
-        input_length = sequence + config.conv_kernel_size - 1
         qkv_row_major = ttnn.to_layout(
             qkv,
             ttnn.ROW_MAJOR_LAYOUT,
@@ -268,167 +267,59 @@ class KimiDeltaAttention:
                 self.convolution_state.layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        # The generic depthwise conv exceeds Blackhole L1 at K3's 4608 local channels.
-        # Keep the large-width exception local until conv1d gains a suitable sliced config.
-        use_split_convolution = sequence > 640 or channels >= 4608
-        if use_split_convolution:
-            q, k, v = ttnn.transformer.kda_causal_conv1d_split(
-                qkv_row_major,
-                state_row_major,
-                *self.weights.convolution_taps,
-                config.q_dim,
-                config.k_dim,
-                config.v_dim,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_config,
-            )
-            return q, k, v, new_state
-
-        conv_input = ttnn.concat(
-            [state_row_major, qkv_row_major],
-            dim=1,
+        q, k, v = ttnn.transformer.kda_causal_conv1d_split(
+            qkv_row_major,
+            state_row_major,
+            *self.weights.convolution_taps,
+            config.q_dim,
+            config.k_dim,
+            config.v_dim,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
         )
-        conv_input = ttnn.reshape(conv_input, (1, input_length, 1, channels))
-        conv_config = ttnn.Conv1dConfig(
-            weights_dtype=ttnn.bfloat16,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        )
-        if input_length not in self._prepared_convolution_weights:
-            self._prepared_convolution_weights[input_length] = ttnn.prepare_conv_weights(
-                weight_tensor=self.weights.convolution_weight,
-                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                input_layout=ttnn.ROW_MAJOR_LAYOUT,
-                weights_format="OIHW",
-                in_channels=channels,
-                out_channels=channels,
-                batch_size=1,
-                input_height=1,
-                input_width=input_length,
-                kernel_size=(1, config.conv_kernel_size),
-                stride=(1, 1),
-                padding=(0, 0),
-                dilation=(1, 1),
-                has_bias=False,
-                groups=channels,
-                device=self.device,
-                input_dtype=ttnn.bfloat16,
-                conv_config=conv_config,
-                compute_config=self.compute_config,
-            )
-        output = ttnn.conv1d(
-            input_tensor=conv_input,
-            weight_tensor=self._prepared_convolution_weights[input_length],
-            device=self.device,
-            in_channels=channels,
-            out_channels=channels,
-            batch_size=1,
-            input_length=input_length,
-            kernel_size=config.conv_kernel_size,
-            stride=1,
-            padding=0,
-            dilation=1,
-            groups=channels,
-            dtype=ttnn.bfloat16,
-            conv_config=conv_config,
-            compute_config=self.compute_config,
-            slice_config=(
-                ttnn.Conv2dL1FullSliceConfig
-                if sequence <= 640
-                else ttnn.Conv2dSliceConfig(
-                    slice_type=ttnn.Conv2dDRAMSliceWidth,
-                    num_slices=0,
-                )
-            ),
-            return_output_dim=False,
-            return_weights_and_bias=False,
-        )
-        output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.reshape(output, (1, sequence, channels))
-        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.silu(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q = _slice_width(output, 0, config.q_dim)
-        k = _slice_width(output, config.q_dim, config.q_dim + config.k_dim)
-        v = _slice_width(output, config.q_dim + config.k_dim, channels)
         return q, k, v, new_state
 
     def _project_inputs(
         self,
         hidden_states: ttnn.Tensor,
-        *,
-        memory_config: ttnn.MemoryConfig,
     ) -> _ProjectedInputs:
-        """Run the fused input projection and expose its QKV branch."""
+        """Run the fused input projection and split its semantic outputs."""
+        config = self.config
         weights = self.weights
         projected = ttnn.linear(
             hidden_states,
             weights.input_projection,
-            memory_config=memory_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
         )
-        qkv = _slice_width(projected, 0, self._convolution_width)
+        auxiliary_start = self._convolution_width
         return _ProjectedInputs(
-            combined=projected,
-            qkv=qkv,
+            qkv=_slice_width(projected, 0, auxiliary_start),
+            decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
+            output_gate=_slice_width(
+                projected,
+                auxiliary_start + config.head_k_dim,
+                auxiliary_start + config.head_k_dim + config.v_dim,
+            ),
+            beta=_slice_width(
+                projected,
+                auxiliary_start + config.head_k_dim + config.v_dim,
+                auxiliary_start + config.head_k_dim + config.v_dim + config.num_heads,
+            ),
         )
-
-    def _convolve_qkv(
-        self,
-        qkv: ttnn.Tensor,
-        *,
-        batch: int,
-        sequence: int,
-        memory_config: ttnn.MemoryConfig,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """Apply causal convolution and return Q/K/V plus the next convolution state."""
-        config, weights = self.config, self.weights
-        if batch == 1 and sequence >= ttnn.TILE_SIZE:
-            q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
-        else:
-            assert self.convolution_state is not None
-            convolution_state = self.convolution_state
-            if convolution_state.layout != ttnn.TILE_LAYOUT:
-                convolution_state = ttnn.to_layout(
-                    convolution_state,
-                    ttnn.TILE_LAYOUT,
-                    memory_config=memory_config,
-                )
-            qkv, new_convolution_state = _causal_conv1d_fir(
-                qkv,
-                None,
-                None,
-                config.conv_kernel_size,
-                self.device,
-                memory_config=memory_config,
-                conv_state=convolution_state,
-                weight_taps=weights.convolution_taps,
-            )
-            q = _slice_width(qkv, 0, config.q_dim)
-            k = _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim)
-            v = _slice_width(qkv, config.q_dim + config.k_dim, self._convolution_width)
-        return q, k, v, new_convolution_state
 
     def _compute_gates(
         self,
-        projected: _ProjectedInputs,
         q: ttnn.Tensor,
         k: ttnn.Tensor,
         v: ttnn.Tensor,
+        *,
+        beta: ttnn.Tensor,
+        decay_rank: ttnn.Tensor,
+        output_gate: ttnn.Tensor,
     ) -> _KDAInputs:
         """Evaluate decay and write gates while preserving the output gate for the epilogue."""
         config, weights = self.config, self.weights
-        auxiliary_start = self._convolution_width
-        decay_rank = _slice_width(projected.combined, auxiliary_start, auxiliary_start + config.head_k_dim)
-        output_gate = _slice_width(
-            projected.combined,
-            auxiliary_start + config.head_k_dim,
-            auxiliary_start + config.head_k_dim + config.v_dim,
-        )
-        beta = _slice_width(
-            projected.combined,
-            auxiliary_start + config.head_k_dim + config.v_dim,
-            auxiliary_start + config.head_k_dim + config.v_dim + config.num_heads,
-        )
         beta = ttnn.sigmoid(beta, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gate = ttnn.linear(
             decay_rank,
@@ -589,22 +480,18 @@ class KimiDeltaAttention:
     ) -> ttnn.Tensor:
         """Run prefill KDA without any host tensor operation or implicit fallback."""
         batch, sequence = self._validate_forward(hidden_states)
-        memory_config = (
-            ttnn.L1_MEMORY_CONFIG if batch * sequence * self._convolution_width <= 65536 else ttnn.DRAM_MEMORY_CONFIG
-        )
-
-        projected = self._project_inputs(hidden_states, memory_config=memory_config)
+        projected = self._project_inputs(hidden_states)
         q, k, v, new_convolution_state = self._convolve_qkv(
             projected.qkv,
-            batch=batch,
             sequence=sequence,
-            memory_config=memory_config,
         )
         inputs = self._compute_gates(
-            projected,
             q,
             k,
             v,
+            beta=projected.beta,
+            decay_rank=projected.decay_rank,
+            output_gate=projected.output_gate,
         )
         output, new_recurrent_state = self._run_kda_and_norm(
             inputs,
