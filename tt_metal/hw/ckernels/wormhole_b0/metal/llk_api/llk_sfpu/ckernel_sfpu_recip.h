@@ -9,7 +9,6 @@
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_rsqrt_compat.h"
 using namespace sfpi;
 
 namespace ckernel {
@@ -108,16 +107,12 @@ sfpi_inline void sfpu_reciprocal_init() {
     sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
 }
 
-template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
-    if constexpr (legacy_compat) {
-        _calculate_reciprocal_compat_<!is_fp32_dest_acc_en, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
-    } else {
-        _calculate_reciprocal_internal_<is_fp32_dest_acc_en, ITERATIONS>(ITERATIONS);
-    }
+    _calculate_reciprocal_internal_<is_fp32_dest_acc_en, ITERATIONS>(ITERATIONS);
 }
 
-template <bool is_fp32_dest_acc_en, bool legacy_compat = false>
+template <bool is_fp32_dest_acc_en>
 void recip_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its
@@ -126,9 +121,7 @@ void recip_init() {
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<false>();
-    }
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace sfpu

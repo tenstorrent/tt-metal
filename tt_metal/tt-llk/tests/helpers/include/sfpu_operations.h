@@ -617,7 +617,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<is_fp32_dest_acc_en, false /* legacy_compat */>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::sine)
     {
@@ -1003,8 +1003,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, (is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, false /* legacy_compat */), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, (is_fp32_dest_acc_en, ITERATIONS, FAST_MODE), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
@@ -1549,14 +1548,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::sqrt_custom)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sqrt_custom, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
-    }
-    else if constexpr (OPERATION == SfpuType::rsqrt_compat)
-    {
-        // Legacy-compat rsqrt: reciprocal-root method (legacy_compat = true routes
-        // calculate_rsqrt to _calculate_rsqrt_compat_). Distinct from SfpuType::rsqrt,
-        // which exercises the accurate legacy_compat = false path.
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, (is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, true /* legacy_compat */), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::expm1_cw)
     {

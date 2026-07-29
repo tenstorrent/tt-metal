@@ -15,10 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool legacy_compat = false>
-ALWI void rsqrt_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (DST_ACCUM_MODE, legacy_compat)));
-}
+ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (DST_ACCUM_MODE))); }
 
 // clang-format off
 /**

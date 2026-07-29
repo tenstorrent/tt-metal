@@ -894,8 +894,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));
-        // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
+        MATH((recip_tile_first_column(0 /*dst_index*/)));
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_cb);

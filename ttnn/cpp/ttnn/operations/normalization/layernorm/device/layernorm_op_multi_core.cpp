@@ -183,14 +183,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     // Extract program config
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     bool use_welford = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 legacy_reduction = program_config.legacy_reduction;
-                legacy_rsqrt = program_config.legacy_rsqrt;
                 use_welford = program_config.use_welford;
             }
         },

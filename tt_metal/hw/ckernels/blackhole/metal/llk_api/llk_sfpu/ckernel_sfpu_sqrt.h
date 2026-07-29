@@ -8,7 +8,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
 
 using namespace sfpi;
