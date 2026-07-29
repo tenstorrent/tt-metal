@@ -4,13 +4,6 @@
 # time-budget choice only, not an arch/platform split -- any system can run either (or both):
 #   - short time budget:  --filter 'name.*_short'
 #   - long time budget:   run the whole file with no filter (short + long)
-#
-# Notes:
-#   - No `allocation_policies` block on purpose: dynamic allocation is on by default in
-#     test_tt_fabric and any `allocation_policies:` here would disable it. Let it size dynamically.
-#   - Deterministic all_to_all stability uses a single loop dimension (top_level_iterations).
-#     Pattern-level `iterations` is for randomized patterns and would double-loop here, so it is
-#     omitted.
 Tests:
   - name: "LinearLooped_short"
     fabric_setup:
