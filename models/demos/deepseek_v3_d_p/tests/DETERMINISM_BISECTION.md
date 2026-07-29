@@ -48,6 +48,38 @@ matmul* fail, readback+eltwise pass -> the matmul (FPU) path.
 core_locality block index invariant -> one Tensix core. Hardware. RMA or harvest.
 ```
 
+## Reference: b07u08 (a good box), 2026-07-29
+
+```
+27 passed, 3 warnings in 1098.09s (0:18:18)
+```
+
+Every local test logs `chips=[]` at every iteration:
+
+```
+local matmul chain, no CCL: 10 iterations, seq_local=3200
+  iter 1..9: BIT-EXACT ndiff=0/734003200 maxabs=0.000e+00 chips=[]
+local readback bit-exact across 8 iterations and all 32 chips
+local eltwise  bit-exact across 8 iterations and all 32 chips
+local matmul1  bit-exact across 8 iterations and all 32 chips
+local matmul2  bit-exact across 8 iterations and all 32 chips
+matmul 3200x7168 @ 7168x4608 -> output 100x144 tiles: bit-exact, 6 iterations, all 32 chips
+matmul 3200x7168 @ 7168x2304 -> output 100x72  tiles: bit-exact, 6 iterations, all 32 chips
+matmul 1600x7168 @ 7168x4608 -> output 50x144  tiles: bit-exact, 6 iterations, all 32 chips
+```
+
+Same mesh mapping as b06u02, so the two boxes are directly comparable — row 5 is shards
+20-23 -> devices [10, 14, 22, 18] on both. That is the row that fails on b06u02 and passes
+here, which rules out anything mapping- or topology-shaped.
+
+**A box can also fail this suite for a reason that has nothing to do with determinism.** On
+first contact b07u08 errored all 27 tests in 22 s with `MMIO per-op timeout: 4B load took
+55632 us (budget=2 ms)` at `ttnn/ttnn/distributed/distributed.py:671`, and `tt-smi -ls` itself
+reported `Read 0xffffffff over PCIe ID 15: the board should be reset`. That is a wedged board
+at `open_mesh_device`, before any kernel runs — no test result at all, not a failing one.
+`tt-smi -glx_reset_auto` cleared it and the box then passed 27/27. Use `tt-smi -glx_reset_auto`
+on these Galaxy boxes, not `tt-smi -r`.
+
 ## Reference: b06u02 (a bad box), 2026-07-28/29
 
 Excerpts below are from runs on b06u02 over two days; the assertion totals and the
