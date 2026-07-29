@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 
 #include "host_tensor_impl.hpp"
 #include "spec/layout/tensor_layout_impl.hpp"
@@ -22,6 +23,10 @@ HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec) {
         /*context=*/nullptr);
     distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
     return HostTensor(std::move(distributed_buffer), std::move(spec), TensorTopology{});
+}
+
+HostTensor HostTensor::allocate_for_overwrite(const TensorSpec& spec) {
+    return from_buffer(tensor_impl::allocate_host_buffer(spec), spec);
 }
 
 HostTensor::HostTensor(const HostTensor& other) :

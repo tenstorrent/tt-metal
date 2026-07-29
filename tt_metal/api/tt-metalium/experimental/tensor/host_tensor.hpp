@@ -100,6 +100,12 @@ public:
     static HostTensor from_buffer(HostBuffer buffer, TensorSpec spec);
 
     /**
+     * Allocate a single-shard HostTensor whose contents are unspecified and must be overwritten.
+     * Equivalent to `from_buffer(HostBuffer(...), spec)`.
+     */
+    static HostTensor allocate_for_overwrite(const TensorSpec& spec);
+
+    /**
      * Converts a buffer of elements of type `T` to a `Tensor`.
      * Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
      * elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
