@@ -169,18 +169,31 @@ FORCE_INLINE void matmul_phase(
         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
-                tile_regs_acquire();
-
-                uint32_t dst_index = 0;
-                uint32_t in0_index = in0_index_subblock_offset;
-                uint32_t in1_index = in1_index_subblock_offset;
                 // rows [m_subblocks, EFF_M) of cb_in0_down_full are NOT written by the
-                // reader's (bounded) activated mcast, so skip the whole subblock MAC for
-                // them (checked once here, not per K-inner iteration) rather than feed
-                // the down matmul stale/uninitialized L1. The partials reserve/pack/drain
-                // below stay FULL for L1_ACC ring alignment; the skipped rows pack zeros
-                // and the writer discards them via its row<per_core_M / row<count guards.
+                // reader's (bounded) activated mcast, so the whole subblock is skipped for
+                // them (checked once here, not per K-inner iteration) rather than feeding
+                // the down matmul stale/uninitialized L1.
+                //
+                // The ring push/pop counts stay FULL either way — that is what makes the
+                // PACKER_L1_ACC discipline work (see the header comment: push == drain ==
+                // out_block_num_tiles is what wraps the write pointer back onto block 0's
+                // slots so block N+1 accumulates into the same L1). But an OOB row only
+                // needs the pointer to ADVANCE; it does not need a pack. Skipping the
+                // pack (and its tile_regs handshake) is the whole saving: at the small
+                // per_core_M that short sequences run, (per_core_M_max - 1) / per_core_M_max
+                // of the down phase's packer work was spent writing zeros that the writer
+                // then discards via its row < per_core_M guard. Measured ~29 us of the
+                // 51 us down phase at per_core_M = 1.
+                //
+                // Both the MATH and PACK threads evaluate this same branch (m_subblocks is
+                // broadcast to them over the mailbox), so they cannot disagree about
+                // whether a tile_regs handshake happens.
                 if (sb_m < m_subblocks) {
+                    tile_regs_acquire();
+
+                    uint32_t dst_index = 0;
+                    uint32_t in0_index = in0_index_subblock_offset;
+                    uint32_t in1_index = in1_index_subblock_offset;
                     for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
                         matmul_block(
                             in0_cb_id,
@@ -195,14 +208,20 @@ FORCE_INLINE void matmul_phase(
                         in0_index += 1;
                         in1_index += in1_per_core_w;
                     }
-                }
 
-                tile_regs_commit();
-                partials_cb.reserve_back(out_subblock_num_tiles);
-                tile_regs_wait();
-                pack_tile_block(0, partials_cb_id, out_subblock_num_tiles);
-                tile_regs_release();
-                partials_cb.push_back(out_subblock_num_tiles);
+                    tile_regs_commit();
+                    partials_cb.reserve_back(out_subblock_num_tiles);
+                    tile_regs_wait();
+                    pack_tile_block(0, partials_cb_id, out_subblock_num_tiles);
+                    tile_regs_release();
+                    partials_cb.push_back(out_subblock_num_tiles);
+                } else {
+                    // Advance the ring only. The slot keeps whatever was there; it is
+                    // copied out below and dropped by the writer's row guard, exactly as
+                    // the packed zeros were.
+                    partials_cb.reserve_back(out_subblock_num_tiles);
+                    partials_cb.push_back(out_subblock_num_tiles);
+                }
 
                 in1_index_subblock_offset += out_subblock_w;
             }
@@ -260,7 +279,18 @@ FORCE_INLINE void matmul_phase(
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
 #endif
 
+    // Only the first m_subblocks M-rows hold real output; the rest are ring
+    // padding (see the subblock loop above). Drain those from partials without
+    // copying or packing them, and do not push them to final_cb at all — the
+    // writer bounds its cb_out drain by the same runtime per_core_M, so the two
+    // stay in lockstep. At per_core_M = 1 this is 21 of 24 subblocks.
+    const uint32_t real_subblocks = m_subblocks * in1_num_subblocks;
     for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
+        if (sb >= real_subblocks) {
+            partials_cb.wait_front(out_subblock_num_tiles);
+            partials_cb.pop_front(out_subblock_num_tiles);
+            continue;
+        }
         tile_regs_acquire();
         partials_cb.wait_front(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {

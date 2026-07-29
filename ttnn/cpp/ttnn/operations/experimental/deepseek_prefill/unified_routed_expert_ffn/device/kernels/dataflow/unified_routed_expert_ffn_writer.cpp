@@ -246,12 +246,15 @@ void kernel_main() {
         const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
         const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
         const uint32_t col0 = my_nt_d * per_core_N_d;
-        // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
-        // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
-        // rows to keep cb_out balanced — but only WRITE the first per_core_M
-        // (runtime) rows; the rest are MAC-skipped zeros that map onto other
-        // cores' rows and must not be emitted (the sb_m < per_core_M guard below).
-        const uint32_t sb_m_bound = d_in1_num_subblocks_M;
+        // The DOWN matmul cycles the full compile-time-MAX ring through its
+        // PARTIALS CB (L1_ACC needs that to wrap onto block 0's slots), but it
+        // only copies the first per_core_M (runtime) M-rows out to cb_out — the
+        // rest are ring padding it drains and discards. So bound this drain by the
+        // same runtime per_core_M the compute kernel used; both derive it from the
+        // device-side count, so they cannot disagree. (d_out_subblock_h is 1, the
+        // same assumption matmul_phase makes when it compares m_subblocks against
+        // its subblock-row count.)
+        const uint32_t sb_m_bound = per_core_M / d_out_subblock_h;
         for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
                 cb_out_buf.wait_front(d_out_subblock_num_tiles);
