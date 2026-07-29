@@ -63,7 +63,7 @@ def tt_device_lock(lock_path: str = _TT_DEVICE_LOCK_PATH, timeout: float = _TT_D
     Environment variables:
         TT_DEVICE_LOCK_PATH: Override lock file NAME (its basename is anchored under
             the system temp dir; directory/traversal components are stripped)
-        TT_DEVICE_LOCK_TIMEOUT: Override timeout in seconds (default: 300)
+        TT_DEVICE_LOCK_TIMEOUT: Override timeout in seconds (default: 60)
     """
     # Re-sanitize at the sink: guarantee the path reaching the filesystem is
     # confined to the trusted temp dir, regardless of what the caller passed.
