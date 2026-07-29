@@ -38,8 +38,12 @@ FIDELITIES = {
 def _policy(args):
     cfg = OptimizationConfig()
     overrides = {}
+    if args.attention_dtype is not None:
+        overrides["attention_qkv_weight_dtype"] = DTYPES[args.attention_dtype]
+        overrides["attention_o_weight_dtype"] = DTYPES[args.attention_dtype]
     for field, value in (
-        ("attention_weight_dtype", args.attention_dtype),
+        ("attention_qkv_weight_dtype", args.attention_qkv_dtype),
+        ("attention_o_weight_dtype", args.attention_o_dtype),
         ("dense_gate_up_dtype", args.gate_up_dtype),
         ("dense_down_dtype", args.down_dtype),
         ("expert_gate_up_dtype", args.expert_gate_up_dtype),
@@ -50,8 +54,13 @@ def _policy(args):
     ):
         if value is not None:
             overrides[field] = DTYPES[value]
+    if args.attention_fidelity is not None:
+        overrides["attention_qkv_fidelity"] = FIDELITIES[args.attention_fidelity]
+        overrides["attention_o_fidelity"] = FIDELITIES[args.attention_fidelity]
+        overrides["attention_non_matmul_fidelity"] = FIDELITIES[args.attention_fidelity]
     for field, value in (
-        ("attention_fidelity", args.attention_fidelity),
+        ("attention_qkv_fidelity", args.attention_qkv_fidelity),
+        ("attention_o_fidelity", args.attention_o_fidelity),
         ("dense_gate_up_fidelity", args.gate_up_fidelity),
         ("dense_down_fidelity", args.down_fidelity),
         ("expert_gate_up_fidelity", args.expert_gate_up_fidelity),
@@ -68,8 +77,15 @@ def _policy(args):
         "decode_o_in0_block_w",
         "decode_dense_gate_up_in0_block_w",
         "decode_dense_down_in0_block_w",
-        "sparse_gate_up_in0_block_w",
+        "sparse_gate_in0_block_w",
+        "sparse_up_in0_block_w",
         "sparse_down_in0_block_w",
+        "sparse_gate_out_block_w",
+        "sparse_gate_out_subblock_w",
+        "sparse_up_out_block_w",
+        "sparse_up_out_subblock_w",
+        "sparse_down_out_block_w",
+        "sparse_down_out_subblock_w",
         "moe_chunk_size",
         "prefill_moe_chunk_size",
         "serving_decode_qkv_cores",
@@ -157,10 +173,12 @@ def _policy(args):
     if args.dense_expert_prefill_down_transpose_mcast:
         overrides["dense_expert_prefill_down_transpose_mcast"] = True
     if args.sparse_gate_grid_x is not None or args.sparse_gate_grid_y is not None:
-        overrides["sparse_gate_up_grid"] = (
-            args.sparse_gate_grid_x or cfg.sparse_gate_up_grid[0],
-            args.sparse_gate_grid_y or cfg.sparse_gate_up_grid[1],
+        grid = (
+            args.sparse_gate_grid_x or cfg.sparse_gate_grid[0],
+            args.sparse_gate_grid_y or cfg.sparse_gate_grid[1],
         )
+        overrides["sparse_gate_grid"] = grid
+        overrides["sparse_up_grid"] = grid
     if args.sparse_down_grid_x is not None or args.sparse_down_grid_y is not None:
         overrides["sparse_down_grid"] = (
             args.sparse_down_grid_x or cfg.sparse_down_grid[0],
@@ -193,6 +211,8 @@ def main():
     parser.add_argument("--candidate", default="default")
     for name in (
         "attention-dtype",
+        "attention-qkv-dtype",
+        "attention-o-dtype",
         "gate-up-dtype",
         "down-dtype",
         "expert-gate-up-dtype",
@@ -204,6 +224,8 @@ def main():
         parser.add_argument(f"--{name}", choices=tuple(DTYPES))
     for name in (
         "attention-fidelity",
+        "attention-qkv-fidelity",
+        "attention-o-fidelity",
         "gate-up-fidelity",
         "down-fidelity",
         "expert-gate-up-fidelity",
@@ -219,8 +241,15 @@ def main():
         "decode-o-in0-block-w",
         "decode-dense-gate-up-in0-block-w",
         "decode-dense-down-in0-block-w",
-        "sparse-gate-up-in0-block-w",
+        "sparse-gate-in0-block-w",
+        "sparse-up-in0-block-w",
         "sparse-down-in0-block-w",
+        "sparse-gate-out-block-w",
+        "sparse-gate-out-subblock-w",
+        "sparse-up-out-block-w",
+        "sparse-up-out-subblock-w",
+        "sparse-down-out-block-w",
+        "sparse-down-out-subblock-w",
         "moe-chunk-size",
         "prefill-moe-chunk-size",
         "serving-decode-qkv-cores",

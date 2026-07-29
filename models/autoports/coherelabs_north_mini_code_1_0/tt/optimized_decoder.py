@@ -30,7 +30,8 @@ from models.autoports.coherelabs_north_mini_code_1_0.tt.functional_decoder impor
 class OptimizationConfig:
     """Named cumulative optimization contract used by sweeps and final tests."""
 
-    attention_weight_dtype: object = ttnn.bfloat8_b
+    attention_qkv_weight_dtype: object = ttnn.bfloat8_b
+    attention_o_weight_dtype: object = ttnn.bfloat8_b
     dense_gate_up_dtype: object = ttnn.bfloat4_b
     dense_down_dtype: object = ttnn.bfloat4_b
     prefill_dense_gate_up_dtype: object = ttnn.bfloat8_b
@@ -43,7 +44,9 @@ class OptimizationConfig:
     router_dtype: object = ttnn.bfloat16
     router_fidelity: object = ttnn.MathFidelity.HiFi2
     kv_cache_dtype: object = ttnn.bfloat16
-    attention_fidelity: object = ttnn.MathFidelity.LoFi
+    attention_qkv_fidelity: object = ttnn.MathFidelity.LoFi
+    attention_o_fidelity: object = ttnn.MathFidelity.LoFi
+    attention_non_matmul_fidelity: object = ttnn.MathFidelity.LoFi
     dense_gate_up_fidelity: object = ttnn.MathFidelity.LoFi
     dense_down_fidelity: object = ttnn.MathFidelity.LoFi
     prefill_dense_gate_up_fidelity: object = ttnn.MathFidelity.HiFi2
@@ -70,10 +73,18 @@ class OptimizationConfig:
     serving_decode_residual_cores: int = 16
     direct_o_input: bool = False
     direct_down_input: bool = False
-    sparse_gate_up_grid: tuple[int, int] = (8, 3)
-    sparse_down_grid: tuple[int, int] = (8, 8)
-    sparse_gate_up_in0_block_w: int = 16
+    sparse_gate_grid: tuple[int, int] = (6, 2)
+    sparse_up_grid: tuple[int, int] = (6, 2)
+    sparse_down_grid: tuple[int, int] = (8, 4)
+    sparse_gate_in0_block_w: int = 16
+    sparse_up_in0_block_w: int = 16
     sparse_down_in0_block_w: int = 12
+    sparse_gate_out_block_w: int = 2
+    sparse_gate_out_subblock_w: int = 2
+    sparse_up_out_block_w: int = 2
+    sparse_up_out_subblock_w: int = 2
+    sparse_down_out_block_w: int = 2
+    sparse_down_out_subblock_w: int = 2
     moe_chunk_size: int = 4
     sparse_intermediate_dram: bool = False
     batch1_prefill_active_experts: bool = True
@@ -198,17 +209,36 @@ def _prefill_physical_m(batch: int, seq_len: int) -> int:
     return batch * math.ceil(seq_len / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
-def _sparse_program(grid: tuple[int, int], n: int, in0_block_w: int, fused_activation=None):
+def _sparse_program(
+    grid: tuple[int, int],
+    n: int,
+    in0_block_w: int,
+    *,
+    out_block_w: int = 1,
+    out_subblock_w: int = 1,
+    fused_activation=None,
+):
     cores = grid[0] * grid[1]
+    n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+    if n_tiles % cores:
+        raise ValueError(f"sparse N tiles ({n_tiles}) must divide grid cores ({cores})")
+    per_core_n = n_tiles // cores
+    if per_core_n % out_block_w or out_block_w % out_subblock_w:
+        raise ValueError(
+            f"illegal sparse width geometry: per_core_N={per_core_n}, "
+            f"out_block_w={out_block_w}, out_subblock_w={out_subblock_w}"
+        )
+    if out_subblock_w > 8:
+        raise ValueError("sparse output subblock exceeds the eight-tile destination limit")
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
-        out_subblock_w=1,
+        out_subblock_w=out_subblock_w,
         out_block_h=1,
-        out_block_w=1,
+        out_block_w=out_block_w,
         per_core_M=1,
-        per_core_N=math.ceil(n / (ttnn.TILE_SIZE * cores)),
+        per_core_N=per_core_n,
         fuse_batch=False,
         fused_activation=fused_activation,
         mcast_in0=True,
@@ -389,7 +419,11 @@ class OptimizedDecoder(FunctionalDecoder):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        self.attention_compute = _compute_config(cfg.attention_fidelity)
+        # Keep projection precision independent: a QKV candidate must not
+        # silently change O, RMSNorm, or SDPA fidelity (and vice versa).
+        self.attention_qkv_compute = _compute_config(cfg.attention_qkv_fidelity)
+        self.attention_o_compute = _compute_config(cfg.attention_o_fidelity)
+        self.attention_non_matmul_compute = _compute_config(cfg.attention_non_matmul_fidelity)
         self.dense_gate_up_compute = _compute_config(cfg.dense_gate_up_fidelity)
         self.dense_down_compute = _compute_config(cfg.dense_down_fidelity)
         self.prefill_dense_gate_up_compute = _compute_config(cfg.prefill_dense_gate_up_fidelity)
@@ -441,13 +475,13 @@ class OptimizedDecoder(FunctionalDecoder):
             "qkv": _to_device(
                 qkv,
                 mesh_device,
-                dtype=cfg.attention_weight_dtype,
+                dtype=cfg.attention_qkv_weight_dtype,
                 memory_config=_dram_weight_memory_config(mesh_device, hidden_size, qkv.shape[-1]),
             ),
             "o": _to_device(
                 o.transpose(-2, -1),
                 mesh_device,
-                dtype=cfg.attention_weight_dtype,
+                dtype=cfg.attention_o_weight_dtype,
                 memory_config=_dram_weight_memory_config(mesh_device, o.shape[-1], o.shape[-2]),
             ),
             "norm": _to_device(
@@ -464,12 +498,12 @@ class OptimizedDecoder(FunctionalDecoder):
             weights["large_prefill_qkv"] = _to_device(
                 qkv,
                 mesh_device,
-                dtype=cfg.attention_weight_dtype,
+                dtype=cfg.attention_qkv_weight_dtype,
             )
             weights["large_prefill_o"] = _to_device(
                 o.transpose(-2, -1),
                 mesh_device,
-                dtype=cfg.attention_weight_dtype,
+                dtype=cfg.attention_o_weight_dtype,
             )
 
         mlp_type = hf_config.mlp_layer_types[layer_idx]
@@ -582,7 +616,7 @@ class OptimizedDecoder(FunctionalDecoder):
             weight=self.weights["norm"],
             program_config=self.decode_norm_program,
             memory_config=self.residual_memory_config,
-            compute_kernel_config=self.attention_compute,
+            compute_kernel_config=self.attention_non_matmul_compute,
         )
         return x, normalized
 
@@ -608,7 +642,7 @@ class OptimizedDecoder(FunctionalDecoder):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=program,
-            compute_kernel_config=self.attention_compute,
+            compute_kernel_config=self.attention_qkv_compute,
         )
         fused = ttnn.reshape(fused, (batch, seq_len, -1))
         query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -680,7 +714,7 @@ class OptimizedDecoder(FunctionalDecoder):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=program,
-            compute_kernel_config=self.attention_compute,
+            compute_kernel_config=self.attention_o_compute,
         )
         if self.batch > 1:
             projected = ttnn.reshape(projected, (1, self.batch, seq_len, self.hidden_size))
@@ -806,7 +840,7 @@ class OptimizedDecoder(FunctionalDecoder):
                         self.num_heads * self.head_dim,
                         self.hidden_size,
                     ),
-                    compute_kernel_config=self.attention_compute,
+                    compute_kernel_config=self.attention_o_compute,
                 )
             )
         projected = projected_chunks[0] if len(projected_chunks) == 1 else ttnn.concat(projected_chunks, dim=2)
@@ -828,7 +862,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 cfg.decode_qkv_cores,
                 cfg.decode_qkv_in0_block_w,
             ),
-            compute_kernel_config=self.attention_compute,
+            compute_kernel_config=self.attention_qkv_compute,
         )
         fused = ttnn.sharded_to_interleaved(fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
         fused = ttnn.reshape(fused, (1, 1, self.batch, qkv_width))
@@ -898,7 +932,7 @@ class OptimizedDecoder(FunctionalDecoder):
             scale=self.scale,
             sliding_window_size=self.sliding_window,
             program_config=self.decode_sdpa_program if cfg.explicit_sdpa_program else None,
-            compute_kernel_config=self.attention_compute,
+            compute_kernel_config=self.attention_non_matmul_compute,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         attended = ttnn.to_memory_config(attended, self.decode_concat_memory_config)
@@ -923,7 +957,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 cfg.decode_o_cores,
                 cfg.decode_o_in0_block_w,
             ),
-            compute_kernel_config=self.attention_compute,
+            compute_kernel_config=self.attention_o_compute,
         )
         projected = ttnn.slice(projected, (0, 0, 0, 0), (1, 1, self.batch, self.hidden_size))
         return ttnn.to_memory_config(projected, self.residual_memory_config)
@@ -1059,9 +1093,11 @@ class OptimizedDecoder(FunctionalDecoder):
             nnz=None,
             memory_config=projection_memory,
             program_config=_sparse_program(
-                cfg.sparse_gate_up_grid,
+                cfg.sparse_gate_grid,
                 self.intermediate_size,
-                cfg.sparse_gate_up_in0_block_w,
+                cfg.sparse_gate_in0_block_w,
+                out_block_w=cfg.sparse_gate_out_block_w,
+                out_subblock_w=cfg.sparse_gate_out_subblock_w,
             ),
             compute_kernel_config=self.expert_gate_up_compute,
             dtype=cfg.expert_activation_dtype,
@@ -1073,7 +1109,11 @@ class OptimizedDecoder(FunctionalDecoder):
             nnz=None,
             memory_config=projection_memory,
             program_config=_sparse_program(
-                cfg.sparse_gate_up_grid, self.intermediate_size, cfg.sparse_gate_up_in0_block_w
+                cfg.sparse_up_grid,
+                self.intermediate_size,
+                cfg.sparse_up_in0_block_w,
+                out_block_w=cfg.sparse_up_out_block_w,
+                out_subblock_w=cfg.sparse_up_out_subblock_w,
             ),
             compute_kernel_config=self.expert_gate_up_compute,
             dtype=cfg.expert_activation_dtype,
@@ -1090,7 +1130,13 @@ class OptimizedDecoder(FunctionalDecoder):
             is_input_a_sparse=True,
             is_input_b_sparse=False,
             memory_config=down_memory,
-            program_config=_sparse_program(cfg.sparse_down_grid, self.hidden_size, cfg.sparse_down_in0_block_w),
+            program_config=_sparse_program(
+                cfg.sparse_down_grid,
+                self.hidden_size,
+                cfg.sparse_down_in0_block_w,
+                out_block_w=cfg.sparse_down_out_block_w,
+                out_subblock_w=cfg.sparse_down_out_subblock_w,
+            ),
             compute_kernel_config=self.expert_down_compute,
             dtype=cfg.expert_activation_dtype,
         )
@@ -1150,9 +1196,11 @@ class OptimizedDecoder(FunctionalDecoder):
             nnz=None,
             memory_config=projection_memory,
             program_config=_sparse_program(
-                cfg.sparse_gate_up_grid,
+                cfg.sparse_gate_grid,
                 self.intermediate_size,
-                cfg.sparse_gate_up_in0_block_w,
+                cfg.sparse_gate_in0_block_w,
+                out_block_w=cfg.sparse_gate_out_block_w,
+                out_subblock_w=cfg.sparse_gate_out_subblock_w,
             ),
             compute_kernel_config=self.expert_gate_up_compute,
             dtype=cfg.expert_activation_dtype,
@@ -1164,9 +1212,11 @@ class OptimizedDecoder(FunctionalDecoder):
             nnz=None,
             memory_config=projection_memory,
             program_config=_sparse_program(
-                cfg.sparse_gate_up_grid,
+                cfg.sparse_up_grid,
                 self.intermediate_size,
-                cfg.sparse_gate_up_in0_block_w,
+                cfg.sparse_up_in0_block_w,
+                out_block_w=cfg.sparse_up_out_block_w,
+                out_subblock_w=cfg.sparse_up_out_subblock_w,
             ),
             compute_kernel_config=self.expert_gate_up_compute,
             dtype=cfg.expert_activation_dtype,
@@ -1200,6 +1250,8 @@ class OptimizedDecoder(FunctionalDecoder):
                 cfg.sparse_down_grid,
                 self.hidden_size,
                 cfg.sparse_down_in0_block_w,
+                out_block_w=cfg.sparse_down_out_block_w,
+                out_subblock_w=cfg.sparse_down_out_subblock_w,
             ),
             compute_kernel_config=self.expert_down_compute,
             dtype=cfg.expert_activation_dtype,
@@ -1416,7 +1468,7 @@ class OptimizedDecoder(FunctionalDecoder):
             hidden_states,
             epsilon=self.eps,
             weight=self.weights["norm"],
-            compute_kernel_config=self.attention_compute,
+            compute_kernel_config=self.attention_non_matmul_compute,
         )
         attention = self._attention_prefill(
             normalized,

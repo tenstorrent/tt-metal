@@ -613,3 +613,46 @@ run reproduced the authentic batch-32 packed-prefill PCCs
 0.99799467/0.99723433, non-aligned active-expert prefill, paged-cache slot
 updates, all representative layer kinds, and repeated traced determinism.
 `artifacts/current_full.xml` records the gate. No commit was pushed.
+
+The same full suite was then run separately with `TT_METAL_WATCHER=10` and a
+fresh log root:
+
+```text
+TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=.../watcher/current_full \
+pytest -q -s --timeout=900 \
+  --junitxml=.../doc/optimized_decoder/artifacts/current_watcher.xml \
+  .../tests/test_optimized_decoder.py \
+  .../tests/test_optimized_decoder_prefill_geometry.py
+```
+
+Result: `38 passed, 16 skipped in 414.59s`. The 3,247-line watcher log contains
+no fatal, invalid-NoC, CB-bounds, overflow, sanitizer, timeout, hang, tripped,
+kernel-error, watcher-error, or assert signature. Post-run `tt-smi 6.0.0`
+reports all four p300c boards with live heartbeats, healthy DRAM, zero
+corrected/uncorrected GDDR errors, and zero thermal trips. Watcher and profiler
+evidence remain separate.
+
+## Current stage-review remediation
+
+Fresh review returned three P1 findings (`STAGE_REVIEW_CURRENT.md`). AutoFix
+closed the attention and sparse-subblock findings. Final-topology,
+real-checkpoint BFP4 QKV/O crossings all failed PCC, while selected BFP8/LoFi
+passed b1/b32 prefill-to-traced-decode. Legal 1x2 sparse subblocks improved b1
+traced decode by 8.37% and seq128 prefill by 3.19%, passed authentic
+layer-1/layer-4 decode, and were promoted.
+
+Commands and exact values are in `AUTOFIX_CURRENT.md`; machine-readable rows
+are under `candidates/review_attention_precision/` and
+`candidates/sparse_subblock_*`.
+
+The remaining batch-32 finding cannot be repaired within the authorized model
+files: the fast routed-MoE primitive exposes a rolling buffer and its complete
+consumer requires fabric. `ROUTED_MOE_HYPOTHESIS.md` records the exhausted
+model-local alternatives and the required shared-TTNN local-combine API.
+
+Final promoted-source gates both collected 56 cases and produced 40 passes
+plus the 16 expected opt-in DRAM-candidate skips: normal 381.98 s and watcher
+run approximately 419 s. The final watcher log has 3,247 lines and no fatal,
+invalid-NoC, CB-bounds/overflow, sanitizer, timeout, hang, trip, kernel-error,
+watcher-error, or assert signature. Post-run device telemetry again showed
+four live p300c boards, healthy DRAM, zero GDDR errors, and zero thermal trips.

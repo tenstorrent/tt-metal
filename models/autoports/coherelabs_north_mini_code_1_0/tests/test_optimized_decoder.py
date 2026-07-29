@@ -76,6 +76,24 @@ def _expert_sweep_policy():
     name = os.environ.get("NORTH_MINI_EXPERT_POLICY", "selected")
     if name == "selected":
         return OptimizationConfig()
+    sparse_candidates = {
+        "gate_g12_b2_s2": dict(sparse_gate_grid=(6, 2), sparse_gate_out_block_w=2, sparse_gate_out_subblock_w=2),
+        "up_g12_b2_s2": dict(sparse_up_grid=(6, 2), sparse_up_out_block_w=2, sparse_up_out_subblock_w=2),
+        "down_g32_b2_s2": dict(sparse_down_grid=(8, 4), sparse_down_out_block_w=2, sparse_down_out_subblock_w=2),
+        "gate_up_down_s2": dict(
+            sparse_gate_grid=(6, 2),
+            sparse_gate_out_block_w=2,
+            sparse_gate_out_subblock_w=2,
+            sparse_up_grid=(6, 2),
+            sparse_up_out_block_w=2,
+            sparse_up_out_subblock_w=2,
+            sparse_down_grid=(8, 4),
+            sparse_down_out_block_w=2,
+            sparse_down_out_subblock_w=2,
+        ),
+    }
+    if name in sparse_candidates:
+        return replace(OptimizationConfig(), **sparse_candidates[name])
     if name == "bfp8_lofi":
         return OptimizationConfig(
             expert_gate_up_dtype=ttnn.bfloat8_b,
@@ -231,6 +249,8 @@ def _real_hidden_at_layer(layer_idx, config, *, sequence=1, token_id=123):
 def test_optimized_path_audit():
     assert issubclass(OptimizedDecoder, FunctionalDecoder)
     policy = OptimizationConfig()
+    assert policy.attention_qkv_weight_dtype == policy.attention_o_weight_dtype == ttnn.bfloat8_b
+    assert policy.attention_qkv_fidelity == policy.attention_o_fidelity == ttnn.MathFidelity.LoFi
     assert policy.expert_gate_up_dtype == policy.expert_down_dtype == ttnn.bfloat8_b
     assert policy.dense_expert_gate_up_dtype == policy.dense_expert_down_dtype == ttnn.bfloat4_b
     assert policy.expert_gate_up_fidelity == policy.expert_down_fidelity == ttnn.MathFidelity.LoFi
@@ -1375,6 +1395,176 @@ def test_optimized_nonzero_positions_update_permuted_paged_cache(mesh_device):
         )
 
 
+_ATTENTION_PRECISION_POLICIES = {
+    "selected": {},
+    "bfp4_qkv_lofi": {
+        "attention_qkv_weight_dtype": ttnn.bfloat4_b,
+        "attention_qkv_fidelity": ttnn.MathFidelity.LoFi,
+    },
+    "bfp4_qkv_hifi2": {
+        "attention_qkv_weight_dtype": ttnn.bfloat4_b,
+        "attention_qkv_fidelity": ttnn.MathFidelity.HiFi2,
+    },
+    "bfp4_o_lofi": {
+        "attention_o_weight_dtype": ttnn.bfloat4_b,
+        "attention_o_fidelity": ttnn.MathFidelity.LoFi,
+    },
+    "bfp4_o_hifi2": {
+        "attention_o_weight_dtype": ttnn.bfloat4_b,
+        "attention_o_fidelity": ttnn.MathFidelity.HiFi2,
+    },
+    "bfp4_qkv_o_lofi": {
+        "attention_qkv_weight_dtype": ttnn.bfloat4_b,
+        "attention_o_weight_dtype": ttnn.bfloat4_b,
+        "attention_qkv_fidelity": ttnn.MathFidelity.LoFi,
+        "attention_o_fidelity": ttnn.MathFidelity.LoFi,
+    },
+    "bfp4_qkv_lofi_o_hifi2": {
+        "attention_qkv_weight_dtype": ttnn.bfloat4_b,
+        "attention_o_weight_dtype": ttnn.bfloat4_b,
+        "attention_qkv_fidelity": ttnn.MathFidelity.LoFi,
+        "attention_o_fidelity": ttnn.MathFidelity.HiFi2,
+    },
+    "bfp4_qkv_hifi2_o_lofi": {
+        "attention_qkv_weight_dtype": ttnn.bfloat4_b,
+        "attention_o_weight_dtype": ttnn.bfloat4_b,
+        "attention_qkv_fidelity": ttnn.MathFidelity.HiFi2,
+        "attention_o_fidelity": ttnn.MathFidelity.LoFi,
+    },
+    "bfp4_qkv_o_hifi2": {
+        "attention_qkv_weight_dtype": ttnn.bfloat4_b,
+        "attention_o_weight_dtype": ttnn.bfloat4_b,
+        "attention_qkv_fidelity": ttnn.MathFidelity.HiFi2,
+        "attention_o_fidelity": ttnn.MathFidelity.HiFi2,
+    },
+}
+
+
+def _requested_attention_precision_policies():
+    requested = os.environ.get("NORTH_MINI_ATTENTION_PRECISION_POLICIES", "selected")
+    names = tuple(_ATTENTION_PRECISION_POLICIES) if requested == "all" else tuple(requested.split(","))
+    unknown = set(names) - set(_ATTENTION_PRECISION_POLICIES)
+    if unknown:
+        raise ValueError(f"unknown NORTH_MINI_ATTENTION_PRECISION_POLICIES entries: {sorted(unknown)}")
+    return names
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("batch", [1, 32])
+@pytest.mark.parametrize("policy_name", _requested_attention_precision_policies())
+def test_optimized_real_checkpoint_attention_precision_prefill_and_cache_consuming_traced_decode(
+    mesh_device, batch, policy_name
+):
+    """Cross QKV/O precision on checkpoint activations without changing MLP/cache policy."""
+    config = _config()
+    state = _real_layer_zero_state()
+    policy = replace(OptimizationConfig(), **_ATTENTION_PRECISION_POLICIES[policy_name])
+    decoder = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=0,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=64,
+        optimization_config=policy,
+    )
+    assert decoder.weights["qkv"].dtype == policy.attention_qkv_weight_dtype
+    assert decoder.weights["o"].dtype == policy.attention_o_weight_dtype
+    assert policy.decode_qkv_cores == policy.decode_o_cores == 16
+    assert policy.decode_qkv_in0_block_w == 4
+    assert policy.decode_o_in0_block_w == 8
+
+    # These are exact checkpoint embedding outputs, not random activations.
+    # Repeating the same propagated row set isolates the b1 versus b32 TT path.
+    sequence = 34
+    hidden = _real_embedding_hidden(token_id=512, sequence=sequence)
+    prefix, decode_hidden = hidden[:, :-1], hidden[:, -1:]
+    prefix_positions = torch.arange(sequence - 1).reshape(1, -1)
+    reference_prefill, reference_cache = _dense_reference(prefix, prefix_positions, state, config)
+    decode_positions = torch.full((1, 1), sequence - 1, dtype=torch.long)
+    reference_decode, _ = _dense_reference(
+        decode_hidden,
+        decode_positions,
+        state,
+        config,
+        cache=reference_cache,
+    )
+    prefix = prefix.repeat(batch, 1, 1)
+    decode_hidden = decode_hidden.repeat(batch, 1, 1)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    page_table = _to_tt(_page_table(batch, 2), mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    cos, sin = decoder.build_rope_rows(prefix_positions.squeeze(0), hf_config=config)
+    actual_prefill = decoder.prefill_forward(
+        _to_tt(prefix.unsqueeze(0), mesh_device),
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        position_cos=_to_tt(cos, mesh_device),
+        position_sin=_to_tt(sin, mesh_device),
+    )
+    actual_prefill_host = ttnn.to_torch(actual_prefill).squeeze(0)
+
+    hidden_tt = _to_tt(decode_hidden.unsqueeze(0), mesh_device)
+    current, cos, sin = _decode_inputs(decoder, config, mesh_device, [sequence - 1] * batch)
+    kwargs = dict(
+        key_cache=key_cache,
+        value_cache=value_cache,
+        page_table=page_table,
+        current_positions=current,
+        position_cos=cos,
+        position_sin=sin,
+    )
+    decoder.decode_forward(hidden_tt, **kwargs)
+    ttnn.synchronize_device(mesh_device)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    actual_decode = decoder.decode_forward(hidden_tt, **kwargs)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        warmups = int(os.environ.get("NORTH_MINI_ATTENTION_PRECISION_WARMUPS", "1"))
+        iterations = int(os.environ.get("NORTH_MINI_ATTENTION_PRECISION_ITERATIONS", "1"))
+        if warmups < 1 or iterations < 1:
+            raise ValueError("attention precision warmups and iterations must be positive")
+        for _ in range(warmups):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter()
+        for _ in range(iterations):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        latency_ms = (time.perf_counter() - start) * 1000 / iterations
+        print(
+            "NORTH_MINI_ATTENTION_PRECISION_RESULT="
+            + json.dumps(
+                {
+                    "policy": policy_name,
+                    "batch": batch,
+                    "prefill_sequence": sequence - 1,
+                    "decode_ms": latency_ms,
+                    "decode_is_trace_replay": True,
+                    "qkv_weight_dtype": str(policy.attention_qkv_weight_dtype),
+                    "o_weight_dtype": str(policy.attention_o_weight_dtype),
+                    "qkv_fidelity": str(policy.attention_qkv_fidelity),
+                    "o_fidelity": str(policy.attention_o_fidelity),
+                    "weights_source": "checkpoint",
+                    "activations_source": "checkpoint_embedding_output",
+                },
+                sort_keys=True,
+            )
+        )
+        _assert_pcc(
+            f"optimized-real-checkpoint-attention-{policy_name}-prefill-to-traced-decode-b{batch}",
+            reference_decode.repeat(batch, 1, 1),
+            ttnn.to_torch(actual_decode).squeeze(0),
+        )
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+    _assert_pcc(
+        f"optimized-real-checkpoint-attention-{policy_name}-prefill-b{batch}",
+        reference_prefill.repeat(batch, 1, 1),
+        actual_prefill_host,
+    )
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("mode", ["decode", "prefill"])
 def test_optimized_real_weight_dense_precision_policy(mesh_device, mode):
@@ -1384,12 +1574,14 @@ def test_optimized_real_weight_dense_precision_policy(mesh_device, mode):
     policies = {
         "selected": OptimizationConfig(),
         "all_bfp4_lofi": OptimizationConfig(
-            attention_weight_dtype=ttnn.bfloat4_b,
+            attention_qkv_weight_dtype=ttnn.bfloat4_b,
+            attention_o_weight_dtype=ttnn.bfloat4_b,
             dense_gate_up_dtype=ttnn.bfloat4_b,
             dense_down_dtype=ttnn.bfloat4_b,
             prefill_dense_gate_up_dtype=ttnn.bfloat4_b,
             prefill_dense_down_dtype=ttnn.bfloat4_b,
-            attention_fidelity=ttnn.MathFidelity.LoFi,
+            attention_qkv_fidelity=ttnn.MathFidelity.LoFi,
+            attention_o_fidelity=ttnn.MathFidelity.LoFi,
             dense_gate_up_fidelity=ttnn.MathFidelity.LoFi,
             dense_down_fidelity=ttnn.MathFidelity.LoFi,
             prefill_dense_gate_up_fidelity=ttnn.MathFidelity.LoFi,
@@ -1398,7 +1590,8 @@ def test_optimized_real_weight_dense_precision_policy(mesh_device, mode):
         "bfp8_attention_bfp4_mlp_lofi": OptimizationConfig(
             dense_gate_up_dtype=ttnn.bfloat4_b,
             dense_down_dtype=ttnn.bfloat4_b,
-            attention_fidelity=ttnn.MathFidelity.LoFi,
+            attention_qkv_fidelity=ttnn.MathFidelity.LoFi,
+            attention_o_fidelity=ttnn.MathFidelity.LoFi,
             dense_gate_up_fidelity=ttnn.MathFidelity.LoFi,
             dense_down_fidelity=ttnn.MathFidelity.LoFi,
         ),

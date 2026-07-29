@@ -66,6 +66,14 @@ requires a manually derived and measured layout seed; it does not contain the
 historical OPT-015 shard-advisor gate discussed in the retained review-5
 history.
 
+The full current-arm suite also passes under `TT_METAL_WATCHER=10`:
+`38 passed, 16 skipped in 414.59s` (`artifacts/current_watcher.xml`).
+`watcher/current_full/generated/watcher/watcher.log` has 3,247 lines and no
+fatal, invalid-NoC, CB-bounds, overflow, sanitizer, timeout, hang, tripped,
+kernel-error, watcher-error, or assert signature. Post-run `tt-smi 6.0.0`
+reports four live p300c boards, healthy DRAM, zero corrected or uncorrected
+GDDR errors, and zero thermal trips.
+
 | Check | Final evidence |
 |---|---:|
 | authentic layer-1 prefill b1 / b32 | PCC 0.999428 / 0.999428 |
@@ -235,3 +243,9 @@ DRAM healthy, live heartbeats, zero GDDR errors, and zero thermal trips.
 - `watcher/review3_final/generated/watcher/watcher.log`: watcher evidence.
 - `AUTODEBUG_REVIEW3.md` and `STAGE_REVIEW_3.md`: diagnosis and review record.
 - `work_log.md`: full experiment, checklist, commands, and commit ledger.
+- `AUTODEBUG_CURRENT.md` / `AUTOFIX_CURRENT.md`: current-arm diagnosis,
+  authentic final-topology attention matrix, sparse-subblock promotion, and
+  the remaining shared-TTNN routed-output blocker.
+- `SPARSE_SUBBLOCK_HYPOTHESIS.md`: legal role-specific output-subblock matrix.
+- `ROUTED_MOE_HYPOTHESIS.md`: exhaustive model-local batch-32 routed-MoE
+  blocker analysis.
