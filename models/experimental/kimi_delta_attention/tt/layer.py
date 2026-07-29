@@ -8,8 +8,6 @@ import os
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
-
 import torch
 
 import ttnn
@@ -17,7 +15,7 @@ from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, 
 from models.demos.blackhole.qwen36.tt.tp_common import matmul_reduce_scatter_prefill
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.experimental.kimi_delta_attention.config import KDAConfig, KDAProgramConfig
-from models.experimental.kimi_delta_attention.tt.recurrence import chunk_kda_recurrence, fused_kda_recurrence
+from models.experimental.kimi_delta_attention.tt.recurrence import kda_prefill
 from models.experimental.kimi_delta_attention.tt.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 
@@ -193,35 +191,22 @@ class KimiDeltaAttention:
     def _validate_forward(
         self,
         hidden_states: ttnn.Tensor,
-        mode: Literal["recurrent", "chunk"],
-        chunk_size: int | None,
-        valid_len: int | None,
     ) -> tuple[int, int]:
-        if mode not in ("recurrent", "chunk"):
-            raise ValueError(f"unsupported KDA mode: {mode}")
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
                 f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{self.config.hidden_size}]"
             )
         batch = hidden_states.shape[0]
         sequence = hidden_states.shape[1]
-        if self.sequence_parallel_size > 1 and mode == "recurrent":
-            raise NotImplementedError("recurrent mode is not supported when sequence parallelism is enabled")
-        if mode == "recurrent" and sequence != 1:
-            raise ValueError(f"recurrent mode requires T=1, got T={sequence}")
-        if self.sequence_parallel_size > 1 and mode == "chunk":
+        if self.sequence_parallel_size > 1:
             if sequence % ttnn.TILE_SIZE != 0:
-                raise ValueError(f"sequence-parallel chunk KDA requires local T divisible by 32, got T={sequence}")
+                raise ValueError(f"sequence-parallel KDA prefill requires local T divisible by 32, got T={sequence}")
             local_chunks = sequence // ttnn.TILE_SIZE
             if local_chunks % self.summary_group_chunks != 0:
                 raise ValueError(
                     f"local chunk count {local_chunks} must be divisible by "
                     f"summary_group_chunks {self.summary_group_chunks}"
                 )
-        if mode == "chunk" and chunk_size not in (None, 32):
-            raise ValueError(f"chunk KDA currently requires chunk_size=32, got {chunk_size}")
-        if valid_len is not None and valid_len != sequence:
-            raise NotImplementedError(f"composed KDA currently requires valid_len == T, got {valid_len} != {sequence}")
         if self.recurrent_state is None or self.convolution_state is None:
             raise RuntimeError("KDA state is uninitialized; call reset_state(batch_size) first")
         if self.recurrent_state.shape[0] != batch:
@@ -354,14 +339,11 @@ class KimiDeltaAttention:
     def forward(
         self,
         hidden_states: ttnn.Tensor,
-        mode: Literal["recurrent", "chunk"] = "recurrent",
-        chunk_size: int | None = None,
-        valid_len: int | None = None,
     ) -> ttnn.Tensor:
-        """Run KDA without any host tensor operation or implicit fallback."""
-        batch, sequence = self._validate_forward(hidden_states, mode, chunk_size, valid_len)
+        """Run prefill KDA without any host tensor operation or implicit fallback."""
+        batch, sequence = self._validate_forward(hidden_states)
         config, weights = self.config, self.weights
-        head_major = mode == "chunk" and sequence % ttnn.TILE_SIZE == 0
+        head_major = sequence % ttnn.TILE_SIZE == 0
         memory_config = (
             ttnn.L1_MEMORY_CONFIG if batch * sequence * self._convolution_width <= 65536 else ttnn.DRAM_MEMORY_CONFIG
         )
@@ -375,7 +357,7 @@ class KimiDeltaAttention:
         qkv = _slice_width(projected, 0, self._convolution_width)
         output_gate_width = config.v_dim if head_major or weights.output_gate_is_direct else config.head_v_dim
         auxiliary_start = self._convolution_width
-        if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
+        if batch == 1 and sequence >= ttnn.TILE_SIZE:
             q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
         else:
             convolution_state = self.convolution_state
@@ -398,7 +380,7 @@ class KimiDeltaAttention:
             q = _slice_width(qkv, 0, config.q_dim)
             k = _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim)
             v = _slice_width(qkv, config.q_dim + config.k_dim, self._convolution_width)
-        if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:
+        if sequence % ttnn.TILE_SIZE != 0:
             q = ttnn.reshape(q, (batch, sequence, config.num_heads, config.head_k_dim))
             k = ttnn.reshape(k, (batch, sequence, config.num_heads, config.head_k_dim))
             v = ttnn.reshape(v, (batch, sequence, config.num_heads, config.head_v_dim))
@@ -459,36 +441,28 @@ class KimiDeltaAttention:
         # after regrouping instead of asking the serial scan for a fused RMS tensor.
         use_group_prefix = (
             head_major
-            and mode != "recurrent"
             and (self.sequence_parallel_size > 1 or (sequence >= 5120 and sequence % 256 == 0))
             and os.getenv("QWEN_KDA_SERIAL_SCAN") is None
         )
         fuse_scan_rms = (
-            head_major
-            and mode != "recurrent"
-            and sequence > 640
-            and os.getenv("QWEN_KDA_GROUP_PREFIX") is None
-            and not use_group_prefix
+            head_major and sequence > 640 and os.getenv("QWEN_KDA_GROUP_PREFIX") is None and not use_group_prefix
         )
-        if mode == "recurrent":
-            output, new_recurrent_state = fused_kda_recurrence(q, k, v, gate, beta, self.recurrent_state)
-        else:
-            output, new_recurrent_state = chunk_kda_recurrence(
-                q,
-                k,
-                v,
-                gate,
-                beta,
-                self.recurrent_state,
-                self.chunk_const_tiles,
-                rms_gate=output_gate_rank if fuse_scan_rms else None,
-                rms_weight=weights.norm if fuse_scan_rms else None,
-                rms_epsilon=config.norm_eps,
-                summary_group_chunks=self.summary_group_chunks,
-                sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
-                affine_identity=self.affine_identity,
-                affine_zero=self.affine_zero,
-            )
+        output, new_recurrent_state = kda_prefill(
+            q,
+            k,
+            v,
+            gate,
+            beta,
+            self.recurrent_state,
+            self.chunk_const_tiles,
+            rms_gate=output_gate_rank if fuse_scan_rms else None,
+            rms_weight=weights.norm if fuse_scan_rms else None,
+            rms_epsilon=config.norm_eps,
+            summary_group_chunks=self.summary_group_chunks,
+            sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
+            affine_identity=self.affine_identity,
+            affine_zero=self.affine_zero,
+        )
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
         if head_major:
@@ -529,10 +503,8 @@ class KimiDeltaAttention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
-        fused_output_collective = (
-            self.tensor_parallel_size > 1
-            and mode == "chunk"
-            and (self.sequence_parallel_size > 1 or config.v_dim >= 8 * ttnn.TILE_SIZE)
+        fused_output_collective = self.tensor_parallel_size > 1 and (
+            self.sequence_parallel_size > 1 or config.v_dim >= 8 * ttnn.TILE_SIZE
         )
         if fused_output_collective:
             assert self.tt_ccl is not None

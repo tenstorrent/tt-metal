@@ -155,7 +155,7 @@ def test_sp_layer_matches_serial_reference(
     layer.reset_state(batch_size=1)
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output_tt = layer.forward(hidden_tt, mode="chunk")
+        output_tt = layer.forward(hidden_tt)
 
     actual_output = _sp_tp_tensor(
         output_tt,
@@ -237,7 +237,7 @@ def test_sp_chunked_prefill_matches_one_shot(
 
     layer.reset_state(batch_size=1)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        one_shot_tt = layer.forward(_to_sp_input(hidden, mesh_device, sp_axis), mode="chunk")
+        one_shot_tt = layer.forward(_to_sp_input(hidden, mesh_device, sp_axis))
     one_shot = _sp_tp_tensor(
         one_shot_tt,
         mesh_device,
@@ -270,7 +270,7 @@ def test_sp_chunked_prefill_matches_one_shot(
     with ttnn.manage_config("throw_exception_on_fallback", True):
         for split in splits:
             stop = start + split
-            output_tt = layer.forward(_to_sp_input(hidden[:, start:stop], mesh_device, sp_axis), mode="chunk")
+            output_tt = layer.forward(_to_sp_input(hidden[:, start:stop], mesh_device, sp_axis))
             outputs.append(
                 _sp_tp_tensor(
                     output_tt,

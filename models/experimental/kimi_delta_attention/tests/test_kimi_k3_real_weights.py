@@ -80,7 +80,7 @@ def test_kimi_k3_layer_1_real_weights_pcc(mesh_device: ttnn.MeshDevice) -> None:
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output = layer.forward(hidden_tt, mode="chunk")
+        output = layer.forward(hidden_tt)
 
     actual_output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     assert layer.recurrent_state is not None

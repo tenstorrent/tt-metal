@@ -53,7 +53,7 @@ def test_kda_layer_device_perf(device: ttnn.Device) -> None:
     assert layer.convolution_state is not None
     layer.set_external_state(layer.recurrent_state, layer.convolution_state)
 
-    warm_output = layer.forward(hidden_tt, mode="chunk")
+    warm_output = layer.forward(hidden_tt)
     ttnn.synchronize_device(device)
     ttnn.deallocate(warm_output)
 
@@ -61,7 +61,7 @@ def test_kda_layer_device_perf(device: ttnn.Device) -> None:
     repetitions = int(os.getenv("PERF_REPS", "3"))
     signpost(header="start")
     for _ in range(repetitions):
-        outputs.append(layer.forward(hidden_tt, mode="chunk"))
+        outputs.append(layer.forward(hidden_tt))
     ttnn.synchronize_device(device)
     signpost(header="stop")
 

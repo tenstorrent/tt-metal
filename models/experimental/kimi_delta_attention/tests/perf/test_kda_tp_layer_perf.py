@@ -51,7 +51,7 @@ def _profile_eager(
     signpost(header="start")
     start = time.perf_counter()
     for _ in range(repetitions):
-        outputs.append(layer.forward(hidden, mode="chunk"))
+        outputs.append(layer.forward(hidden))
     ttnn.synchronize_device(mesh_device)
     elapsed = time.perf_counter() - start
     signpost(header="stop")
@@ -67,7 +67,7 @@ def _profile_trace(
     repetitions: int,
 ) -> float:
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    output = layer.forward(hidden, mode="chunk")
+    output = layer.forward(hidden)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_device)
@@ -132,7 +132,7 @@ def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice, tensor_parallel_
     assert layer.convolution_state is not None
     layer.set_external_state(layer.recurrent_state, layer.convolution_state)
 
-    warm_output = layer.forward(hidden_tt, mode="chunk")
+    warm_output = layer.forward(hidden_tt)
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(warm_output)
 
@@ -199,7 +199,7 @@ def test_kimi_k3_layer_1_device_perf(mesh_device: ttnn.MeshDevice, weight_source
     assert layer.convolution_state is not None
     layer.set_external_state(layer.recurrent_state, layer.convolution_state)
 
-    warm_output = layer.forward(hidden_tt, mode="chunk")
+    warm_output = layer.forward(hidden_tt)
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(warm_output)
 

@@ -42,13 +42,7 @@ class KimiDeltaAttention:
         summary_group_chunks: int = 8,
     ) -> None: ...
 
-    def forward(
-        self,
-        hidden_states: ttnn.Tensor,
-        mode: Literal["recurrent", "chunk"] = "recurrent",
-        chunk_size: int | None = None,
-        valid_len: int | None = None,
-    ) -> ttnn.Tensor: ...
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor: ...
 
     def reset_state(self, batch_size: int | None = None) -> None: ...
 
@@ -60,7 +54,7 @@ class KimiDeltaAttention:
 ```
 
 The package exports only `KDAConfig` and `KimiDeltaAttention`. Recurrence,
-weight-loading, state-lifecycle, decode, prefill, and tensor-parallel helpers
+weight-loading, state-lifecycle, prefill, and tensor-parallel helpers
 remain private implementation details.
 
 ## Tensor contract
@@ -109,8 +103,8 @@ checkpoint loading is out of scope for initial bringup.
 7. Update convolution and recurrent state in place when external state is set;
    otherwise replace internal state after eager execution.
 
-`recurrent` requires `T=1`. `chunk` requires `T>0`; padding to a supported
-chunk boundary must not affect outputs through `valid_len` or the final state.
+`forward` is prefill-only and accepts `T>0`. Padding to the internal 32-token
+chunk boundary must not affect outputs or the final state.
 
 ## State and trace invariants
 
@@ -143,25 +137,24 @@ chunk boundary must not affect outputs through `valid_len` or the final state.
   `B * local_heads * local_groups` must fit the available worker cores.
 - SP requires `K == V` in this implementation. Cross-partition recurrence uses
   a logarithmic distributed affine prefix; no all-gather is used in production.
-- SP supports chunk-prefill only. Recurrent/decode mode is rejected when SP>1.
+- SP supports prefill only.
 - Collective topology/configuration belongs to the caller/model integration;
   this layer accepts the configured CCL handle rather than creating fabric.
 
 ## Errors
 
-- Reject unsupported mode, nonpositive dimensions, head counts not divisible
-  by TP, wrong hidden width, `T != 1` in recurrent mode, recurrent mode with
-  SP>1, `K != V` with SP>1, invalid local group divisibility, insufficient
-  worker cores, invalid `valid_len`, missing weights, and state-shape/dtype mismatch.
+- Reject nonpositive dimensions, head counts not divisible by TP, wrong hidden
+  width, `K != V` with SP>1, invalid local group divisibility, insufficient
+  worker cores, missing weights, and state-shape/dtype mismatch.
 - Error messages include the offending logical shape and expected shape.
 
 ## Correctness gates
 
 - Independent torch reference versus authoritative FLA recurrence.
 - Scalar-over-K degeneration versus trusted GDN.
-- Single-token output and final-state PCC >= 0.98.
+- Single-token prefill output and final-state PCC >= 0.98.
 - Short and multi-chunk prefill output/final-state PCC >= 0.98.
-- Prefill-to-decode cache continuity PCC >= 0.98.
+- Segmented-prefill cache continuity PCC >= 0.98.
 - Single-device and 8-device outputs agree with the same torch reference.
 - Graph/trace inspection proves no host fallback in forward.
 
@@ -171,7 +164,6 @@ chunk boundary must not affect outputs through `valid_len` or the final state.
 - Establish single-device recurrence and full-layer rooflines before tuning.
 - Establish 8-device collective byte/time rooflines before claiming CCL
   utilization.
-- Profile at target Kimi dimensions for decode and representative prefill
-  lengths. The composed recurrence is an oracle, never the final perf path.
+- Profile at target Kimi dimensions for representative prefill lengths.
 - Aspirational targets are approximately 60% measured compute roofline and 40%
   measured CCL roofline; misses are reported as measurements, not redefined.
