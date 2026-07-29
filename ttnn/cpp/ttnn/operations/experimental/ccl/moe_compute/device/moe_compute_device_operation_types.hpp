@@ -18,11 +18,14 @@
 
 namespace ttnn::experimental::prim {
 
-// Mode selector for the moe_compute op. `Full` runs the production pipeline
-// (matmul + fused selective_reduce_combine). `ComputeOnly` bypasses the combine path:
-// no combine cores allocated, no fabric setup, no global semaphores; op emits 5 tensors
-// instead of 6 (matmul_output is the final output).
-enum class MoEComputePath : uint8_t { Full = 0, ComputeOnly = 1 };
+// Mode selector for the moe_compute op.
+// - `FullCcl` runs the production multi-device pipeline (matmul + fused
+//   selective_reduce_combine over fabric). Requires cluster_axis and CCL options.
+// - `FullLocal` runs a single-device fused pipeline (matmul + local combine) with no
+//   CCL/fabric. Used on a 1x1 mesh with cluster_axis=None. Returns 6 tensors like FullCcl.
+// - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
+//   no global semaphores; op emits 5 tensors instead of 6 (matmul_output is the final output).
+enum class MoEComputePath : uint8_t { FullCcl = 0, FullLocal = 2, ComputeOnly = 1 };
 
 struct MoEComputeParams {
     // MoE compute attributes
@@ -37,11 +40,11 @@ struct MoEComputeParams {
     uint32_t num_token_parallel_cores = 0;
     uint32_t num_data_parallel_cores = 0;
 
-    MoEComputePath path = MoEComputePath::Full;
+    MoEComputePath path = MoEComputePath::FullCcl;
 
     // Ring size in matmul cores. On WH this is always 12 (DRAM banks), so keep the
     // field initializer at the WH-neutral default. On BH, invoke() resolves this to
-    // 8, 12, or 16 from the bh_ring_size op kwarg (default 8).
+    // the live DRAM-bank count (7 or 8) from the bh_ring_size op kwarg.
     // num_data_parallel_cores is auto-derived ring-aware (largest d | hidden_tiles
     // with d<=4 and ring_n % d == 0). Stored in attributes() so the program cache
     // distinguishes different ring sizes within the same session.

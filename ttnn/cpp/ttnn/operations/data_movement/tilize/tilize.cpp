@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
+#include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 using namespace tt::tt_metal;
@@ -61,10 +62,25 @@ ttnn::Tensor tilize(
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
     uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / input_tile_height;
 
+    // Fold in the block factory's c_1 staging CB so routing does not pick "fits" when only c_0+c_16 fit.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t staging_bytes_per_tile = input_single_tile_size / input_tile_height;
+    const uint32_t fixed_staging_bytes = 2 * dram_alignment;
+
     bool enough_space_width = ttnn::operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_col,
+        staging_bytes_per_tile,
+        fixed_staging_bytes);
     bool enough_space_height = ttnn::operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        staging_bytes_per_tile,
+        fixed_staging_bytes);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         // Workaround for https://github.com/tenstorrent/tt-metal/issues/45331:

@@ -14,6 +14,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
@@ -648,3 +649,67 @@ def allocate_mla_kvpe_cache(
         num_kvpe_cache_layers=num_layers,
         num_users=num_users,
     )
+
+
+def allocate_dflash_kv_cache(
+    mesh_device: ttnn.MeshDevice,
+    config: DFlashDrafterConfig,
+    cache_seq: int,
+    *,
+    sp_axis: int = 0,
+    tp_axis: int = 1,
+    dtype: ttnn.DataType = ttnn.bfloat8_b,  # align w/ decode KV cache (init_kvpe_cache default is bf8); bf8/TILE
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Allocate the DFlash drafter's separate K and V context caches, owned OUTSIDE the module by the
+    caller (prefill runner / test) and passed into ``TtDFlashDrafter.write_kv_cache`` — the drafter analog
+    of ``allocate_mla_kvpe_cache`` above: one file owns each model's KV layout, and the model module only
+    consumes the cache handed in (like the MLA model's ``forward(..., kvpe_cache=...)``). Keeping ownership
+    with the caller lets it drive cache lifecycle (the migration hand-off to the decode mesh) and dtype
+    (default bf8/``bfloat8_b`` to match the decode KV cache; see ``init_kvpe_cache``).
+
+    Global (logical) shape ``[num_hidden_layers, num_key_value_heads, cache_seq, head_dim]``, TP-sharded on
+    kv-head (dim 1) and SP-sharded on seq (dim 2) so each SP chip owns ``cache_seq/sp`` tokens (the
+    decode/migration layout, no redundant per-SP copies). Allocated + zeroed on device (DRAMZeroFill) with
+    no host tensor / H2D copy. Returns ``(k_cache, v_cache)``.
+
+    NOTE: the interleaved DRAM format here is provisional pending decode alignment — see the
+    ND_DRAM_SHARDED ``TODO`` in the body."""
+    sp = mesh_device.shape[sp_axis]
+    tp = mesh_device.shape[tp_axis]
+    assert (
+        config.num_key_value_heads % tp == 0
+    ), f"num_key_value_heads ({config.num_key_value_heads}) must divide across tp ({tp})"
+    assert cache_seq % sp == 0, f"cache_seq ({cache_seq}) must divide across sp ({sp})"
+
+    # Per-device (post-shard) shape: kv-head split across TP (dim 1), seq split across SP (dim 2).
+    local_shape = ttnn.Shape(
+        [config.num_hidden_layers, config.num_key_value_heads // tp, cache_seq // sp, config.head_dim]
+    )
+    # 2D-shard topology matching ShardTensor2dMesh (seq on sp_axis -> dim 2, kv-head on tp_axis -> dim 1) so
+    # the readback composer (ConcatMesh2dToTensor, read_dims=(2,1)) reconstructs the global cache — the same
+    # layout the old from_torch(mesh_mapper=…) path produced (cf. DRAMZeroFill.allocate_kv_cache_on_device).
+    dist_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    placements = [None, None]
+    placements[sp_axis] = ttnn.PlacementShard(2)  # seq dim across SP
+    placements[tp_axis] = ttnn.PlacementShard(1)  # kv-head dim across TP
+    coords = [
+        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())]) for coord in ttnn.MeshCoordinateRange(dist_shape)
+    ]
+
+    def _alloc_zeroed() -> ttnn.Tensor:
+        # Allocate + zero on device (DRAMZeroFill) instead of a host torch.zeros + H2D copy: the drafter
+        # cache scales with the sequence and the host pack/transfer of the full cache is slow (mirrors
+        # init_kvpe_cache above). The shard topology is stamped after the fill.
+        # TODO: switch this interleaved DRAM (DRAM_MEMORY_CONFIG) to ND_DRAM_SHARDED to align with the
+        # decode-side drafter KV-cache layout for the migration hand-off (cf. init_kvpe_cache's NdShardSpec
+        # + create_kv_chunk_address_table_ds).
+        cache = ttnn.allocate_tensor_on_device(
+            local_shape, dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        DRAMZeroFill.op(cache)
+        cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
+        return cache
+
+    # K and V are independent caches → two separate on-device zero-fills (the old path shared one host
+    # buffer across two from_torch copies).
+    return _alloc_zeroed(), _alloc_zeroed()

@@ -603,6 +603,25 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
+- name: GPT-OSS-120B (disaggregated prefill) unit tests
+  # Single-card PCC units for the gpt_oss_d_p prefill package (standalone: random weights +
+  # a self-contained torch reference, no HF_MODEL). Directory glob so the kv-cache / MoE tests
+  # auto-run as they land in the stacked PRs. Multi-device / EP=32 galaxy coverage is added
+  # separately (blackhole_e2e / galaxy job) once those tests exist.
+  cmd: |
+    pytest --timeout 600 models/demos/gpt_oss_d_p/tests/unit/
+  # Same model as the decode/tt-transformers "GPT-OSS 120B" entry above (prefill + decode + specdecode
+  # are one model); this is just the d_p prefill package's single-card slice. Not a separate model.
+  model: gpt-oss-120b
+  skus:
+    # Blackhole (single card; tests are pinned to a 1x1 mesh)
+    bh_p150:
+      # Suite runs in seconds; 5 min covers cold kernel compile. Keeps team/SKU under time_budget.
+      timeout: 5
+      tier: 2
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+
 - name: Whisper unit tests
   cmd: |
     export TT_METAL_WATCHER=30

@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -577,23 +578,15 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     }
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Converting from {} to Row Major is unsupported.", tensor.layout());
-
-    // Do not pass a non-default tile into ROW_MAJOR PageConfig (deprecation #18536).
-    auto output_spec = TensorSpec(
+    // Construct the new tensor spec first to verify that this is a supported Tensor configuration
+    TensorSpec new_tensor_spec(
         tensor.logical_shape(),
-        TensorLayout(
+        TensorLayout::fromPaddedShape(
             tensor.dtype(),
             PageConfig(Layout::ROW_MAJOR),
-            tensor.memory_config(),
-            tensor.tensor_spec().tensor_layout().get_alignment()));
-
-    TT_FATAL(
-        output_spec.physical_shape() == tensor.tensor_spec().physical_shape(),
-        "to_layout: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
-        "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
-        Layout::ROW_MAJOR,
-        tensor.tensor_spec().physical_shape(),
-        output_spec.physical_shape());
+            MemoryConfig{},
+            tensor.logical_shape(),
+            tensor.padded_shape()));
 
     auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
@@ -606,9 +599,7 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    assert_host_shards_match_packed_size(transformed_buffer, output_spec, "to_row_major_layout");
-
-    return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
+    return HostTensor::from_buffer(std::move(transformed_buffer), new_tensor_spec, tensor.tensor_topology());
 }
 
 template <typename T>

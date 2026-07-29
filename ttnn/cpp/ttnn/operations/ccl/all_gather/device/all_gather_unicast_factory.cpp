@@ -96,16 +96,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     //   antipode       -- on a ring, the device N/2 hops away.
     ////////////////////////////////////////////////////////////////
 
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
-    TT_FATAL(!fabric_is_2d, "all_gather unicast algorithm supports Fabric_1D line/ring only, not Fabric_2D");
+    TT_FATAL(!operation_attributes.is_true_2d(), "all_gather unicast algorithm does not support true 2D topologies");
 
-    uint32_t active_axis = 0;
-    for (uint32_t a = 0; a < 2; ++a) {
-        if (operation_attributes.axis_num_devices[a] > 1) {
-            active_axis = a;
-        }
-    }
-    const uint32_t axis = operation_attributes.cluster_axis.value_or(active_axis);
+    const uint32_t axis = operation_attributes.get_1d_axis();
     const auto topology = operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
