@@ -446,6 +446,7 @@ void RealtimeProfilerReceiver::run_sync(std::stop_token stop) {
 }
 
 void RealtimeProfilerReceiver::resync_all_devices(std::chrono::steady_clock::time_point now) {
+    TTZoneScopedDN(RT_PROFILER, "ResyncAll");
     uint64_t unanswered = 0;
     for (auto& dev_state : devices_) {
         if (!dev_state.clock_sync->resync()) {

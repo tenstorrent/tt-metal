@@ -15,7 +15,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <map>
+#include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -80,66 +83,89 @@ constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 // Quiesce + drain window before unregistering the callback.
 constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 
-// Hard upper bound on the fraction of records the receiver has to discard for having
-// end_timestamp < start_timestamp. Those records are dropped before
-// publication (see RealtimeProfilerReceiver::publish_pages), so a few are tolerated by the live system; this test
-// only flags a *regression* where the corruption rate balloons (e.g. an off-by-one in rt_ring_full leading to
-// systemic slot reuse). Empirically the live system produces ~1 such record per ~4000 launches on Blackhole p100a
-// (rate ≈ 0.025%); 1% gives ~40x headroom over the observed baseline.
-constexpr double kMaxBadTimestampFraction = 0.01;
-
 // How often the long-running tests emit an in-progress stats line.
 constexpr auto kStressReportInterval = std::chrono::seconds(10);
 
-// Record-weighted histogram of per-record clock-sync uncertainty (clock_sync.sync_error_ns) so the stress tests can
-// report p50/p90/p99/max sync accuracy without retaining every record. Updated lock-free from the consumer callback
-// (one atomic add per record); read from the main thread for the periodic and final reports.
-// Named distinctly (Stress*) because this file shares a Unity build TU with test_realtime_profiler_sanity.cpp.
-struct StressSyncErrorHistogram {
-    static constexpr uint64_t kBucketNs = 50;
-    static constexpr size_t kNumBuckets = 8192;  // covers [0, 409.6us); larger errors fall into overflow
-
-    std::array<std::atomic<uint64_t>, kNumBuckets> buckets{};
-    std::atomic<uint64_t> overflow{0};
-    std::atomic<uint64_t> total{0};
-    std::atomic<uint64_t> max_ns{0};
-
-    void add(uint64_t sync_error_ns) {
-        total.fetch_add(1, std::memory_order_relaxed);
-        uint64_t prev_max = max_ns.load(std::memory_order_relaxed);
-        while (sync_error_ns > prev_max &&
-               !max_ns.compare_exchange_weak(prev_max, sync_error_ns, std::memory_order_relaxed)) {
+// One sync-error sample per re-anchor per chip, counted by value. sync_error_ns only changes when the servo
+// re-anchors, so these tests see ~20 samples/s/device -- keeping each one would grow without bound across a soak,
+// while the values themselves span only a handful of nanosecond steps. Counting per value is therefore exact (no
+// bucket edges) at a memory cost set by the spread rather than the runtime. Sampling per anchor also weights each
+// handshake once instead of once per program that happened to dispatch inside its epoch.
+// Named Stress* because this file shares a Unity build TU with test_realtime_profiler_sanity.cpp.
+class StressSyncErrorTally {
+public:
+    // Call only from the record callback: the service gives each registration a single consumer thread, so the
+    // unchanged-anchor fast path needs no synchronization. Only an actual re-anchor takes the lock.
+    void observe(const experimental::ProgramRealtimeRecord& record) {
+        const int64_t offset = record.clock_sync.device_cycle_offset;
+        const auto [it, inserted] = last_offset_.try_emplace(record.chip_id, offset);
+        if (!inserted) {
+            if (it->second == offset) {
+                return;
+            }
+            it->second = offset;
         }
-        const size_t bucket = sync_error_ns / kBucketNs;
-        if (bucket < kNumBuckets) {
-            buckets[bucket].fetch_add(1, std::memory_order_relaxed);
-        } else {
-            overflow.fetch_add(1, std::memory_order_relaxed);
-        }
+        const std::lock_guard lock(mutex_);
+        ++counts_[record.clock_sync.sync_error_ns];
     }
 
-    // Approximate percentile in us (upper edge of the containing bucket). p in [0,1].
-    double percentile_us(double p) const {
-        const uint64_t n = total.load(std::memory_order_relaxed);
-        if (n == 0) {
-            return 0.0;
-        }
-        const uint64_t rank = static_cast<uint64_t>(std::ceil(p * static_cast<double>(n)));
-        const uint64_t observed_max = max_ns.load(std::memory_order_relaxed);
-        uint64_t cum = 0;
-        for (size_t i = 0; i < kNumBuckets; ++i) {
-            cum += buckets[i].load(std::memory_order_relaxed);
-            if (cum >= rank) {
-                // Report the bucket's upper edge, but never above the exact observed max (which the tightly-clustered
-                // case would otherwise exceed, printing p99 > max).
-                return static_cast<double>(std::min((i + 1) * kBucketNs, observed_max)) / 1000.0;
+    // Safe to call while the callback is still running, for in-progress reports.
+    std::map<uint64_t, uint64_t> counts() const {
+        const std::lock_guard lock(mutex_);
+        return counts_;
+    }
+
+private:
+    std::unordered_map<uint32_t, int64_t> last_offset_;  // consumer thread only
+    mutable std::mutex mutex_;
+    std::map<uint64_t, uint64_t> counts_;
+};
+
+struct StressSyncErrorPercentilesUs {
+    double p50 = 0.0;
+    double p90 = 0.0;
+    double p99 = 0.0;
+    double max = 0.0;
+};
+
+// From one snapshot, so an in-progress report cannot mix percentiles taken at different instants. Percentiles
+// interpolate between adjacent ranks; nearest-rank would snap each onto one sample.
+StressSyncErrorPercentilesUs stress_sync_percentiles_us(const StressSyncErrorTally& tally) {
+    const std::map<uint64_t, uint64_t> counts = tally.counts();
+    if (counts.empty()) {
+        return {};
+    }
+    uint64_t total = 0;
+    for (const auto& [value, count] : counts) {
+        total += count;
+    }
+    // The value the sample at flattened position `rank` would have, had every sample been kept in a sorted list.
+    const auto value_at_rank = [&counts](uint64_t rank) {
+        uint64_t cumulative = 0;
+        for (const auto& [value, count] : counts) {
+            cumulative += count;
+            if (rank < cumulative) {
+                return value;
             }
         }
-        return static_cast<double>(observed_max) / 1000.0;
-    }
-
-    double max_us() const { return static_cast<double>(max_ns.load(std::memory_order_relaxed)) / 1000.0; }
-};
+        return counts.rbegin()->first;
+    };
+    const auto pct_us = [&](double p) {
+        const double rank = p * static_cast<double>(total - 1);
+        const auto lo = static_cast<uint64_t>(rank);
+        const uint64_t lo_value = value_at_rank(lo);
+        const uint64_t hi_value = value_at_rank(std::min(lo + 1, total - 1));
+        return (static_cast<double>(lo_value) +
+                (rank - static_cast<double>(lo)) * static_cast<double>(hi_value - lo_value)) /
+               1000.0;
+    };
+    return {
+        .p50 = pct_us(0.50),
+        .p90 = pct_us(0.90),
+        .p99 = pct_us(0.99),
+        .max = static_cast<double>(counts.rbegin()->first) / 1000.0,
+    };
+}
 
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     Program program = CreateProgram();
@@ -205,7 +231,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     uint64_t bad_frequency = 0;
     uint64_t implausible_duration = 0;
     uint64_t max_callback_batch = 0;
-    StressSyncErrorHistogram sync_hist;
+    StressSyncErrorTally sync_errors;
     ProgramRealtimeProfilerCallbackHandle handle =
         RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
             max_callback_batch = std::max<uint64_t>(max_callback_batch, batch.records.size());
@@ -214,7 +240,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                     continue;
                 }
                 ++stress_records;
-                sync_hist.add(rec.clock_sync.sync_error_ns);
+                sync_errors.observe(rec);
                 // The receiver never publishes a record whose end precedes its start, so every delivered record must
                 // form a plausible duration.
                 ASSERT_GE(rec.end_timestamp, rec.start_timestamp)
@@ -260,6 +286,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
             const uint64_t pub_batches = rt->num_published_batches();
             const double mean_batch =
                 pub_batches ? static_cast<double>(rt->num_published_records()) / pub_batches : 0.0;
+            const auto sync_us = stress_sync_percentiles_us(sync_errors);
             log_info(
                 tt::LogTest,
                 "[RT profiler stress] t={}s replays={} published={} peak_fifo={}/{} pages mean_batch={:.1f} | "
@@ -270,10 +297,10 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                 rt->peak_fifo_pages(),
                 rt->host_fifo_capacity_pages(),
                 mean_batch,
-                sync_hist.percentile_us(0.50),
-                sync_hist.percentile_us(0.90),
-                sync_hist.percentile_us(0.99),
-                sync_hist.max_us());
+                sync_us.p50,
+                sync_us.p90,
+                sync_us.p99,
+                sync_us.max);
             last_report = now;
         }
         if (now >= replay_deadline) {
@@ -295,6 +322,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint64_t expected_stress_records =
         static_cast<uint64_t>(kNumProgramsInTrace) * num_replays * num_active_devices;
 
+    const auto sync_us = stress_sync_percentiles_us(sync_errors);
     log_info(
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
@@ -312,10 +340,10 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         rt->num_malformed_records(),
         bad_frequency,
         implausible_duration,
-        sync_hist.percentile_us(0.50),
-        sync_hist.percentile_us(0.90),
-        sync_hist.percentile_us(0.99),
-        sync_hist.max_us());
+        sync_us.p50,
+        sync_us.p90,
+        sync_us.p99,
+        sync_us.max);
 
     ASSERT_GE(stress_records, expected_stress_records)
         << "expected one record per program run: " << kNumProgramsInTrace << " programs per replay x " << num_replays
@@ -328,16 +356,13 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     EXPECT_EQ(ring_full_waits, 0u)
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
-    const uint64_t malformed_records = rt->num_malformed_records();
-    const uint64_t max_allowed_malformed =
-        static_cast<uint64_t>(static_cast<double>(stress_records) * kMaxBadTimestampFraction);
-    EXPECT_LE(malformed_records, max_allowed_malformed)
-        << "the receiver discarded " << malformed_records << " record(s) with a malformed timestamp, exceeding the "
-        << "allowed budget of " << max_allowed_malformed << " (= " << (kMaxBadTimestampFraction * 100.0) << "% of "
-        << stress_records << " stress records). These are torn 64-bit reads or stale-slot residue from BRISC writing "
-        << "the timestamp slot before bumping write_index. A spike here means the corruption rate has become "
-        << "systemic — most likely an off-by-one in the rt_ring_full check or a missing memory barrier between slot "
-        << "write and write_index increment.";
+    // A record whose end precedes its start is a torn timestamp pair: BRISC NOC-reads start and end together out of
+    // dispatch_s's L1, so any of them means that handoff let a read straddle two programs. The pipeline produces none
+    // of these, so the bound is zero rather than a rate.
+    EXPECT_EQ(rt->num_malformed_records(), 0u)
+        << "the receiver discarded " << rt->num_malformed_records() << " record(s) with end_timestamp < "
+        << "start_timestamp across " << stress_records << " stress records; the dispatch_s -> BRISC timestamp handoff "
+        << "is no longer atomic with respect to program boundaries.";
     EXPECT_EQ(bad_frequency, 0u) << bad_frequency << " stress record(s) had a non-positive frequency";
     EXPECT_EQ(implausible_duration, 0u) << implausible_duration
                                         << " stress record(s) reported duration >= " << kMaxStressDurationNs
@@ -564,34 +589,33 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     Counters keeps_up;
     Counters borderline;
     Counters slow;
-    StressSyncErrorHistogram sync_hist;
+    StressSyncErrorTally sync_errors;
 
-    auto make_consumer =
-        [](Counters& c, std::chrono::nanoseconds per_record, StressSyncErrorHistogram* hist = nullptr) {
-            return [&c, per_record, hist, start = std::chrono::steady_clock::time_point{}, paced = uint64_t{0}](
-                       const ProgramRealtimeRecordBatch& batch) mutable {
-                c.received.fetch_add(batch.records.size(), std::memory_order_relaxed);
-                c.dropped.fetch_add(batch.dropped, std::memory_order_relaxed);
-                if (hist != nullptr) {
-                    for (const auto& rec : batch.records) {
-                        hist->add(rec.clock_sync.sync_error_ns);
-                    }
+    auto make_consumer = [](Counters& c, std::chrono::nanoseconds per_record, StressSyncErrorTally* samples = nullptr) {
+        return [&c, per_record, samples, start = std::chrono::steady_clock::time_point{}, paced = uint64_t{0}](
+                   const ProgramRealtimeRecordBatch& batch) mutable {
+            c.received.fetch_add(batch.records.size(), std::memory_order_relaxed);
+            c.dropped.fetch_add(batch.dropped, std::memory_order_relaxed);
+            if (samples != nullptr) {
+                for (const auto& rec : batch.records) {
+                    samples->observe(rec);
                 }
-                if (per_record == std::chrono::nanoseconds::zero()) {
-                    return;
-                }
-                if (paced == 0) {
-                    start = std::chrono::steady_clock::now();
-                }
-                paced += batch.records.size();
-                const auto deadline = start + per_record * paced;
-                while (std::chrono::steady_clock::now() < deadline) {
-                }
-            };
+            }
+            if (per_record == std::chrono::nanoseconds::zero()) {
+                return;
+            }
+            if (paced == 0) {
+                start = std::chrono::steady_clock::now();
+            }
+            paced += batch.records.size();
+            const auto deadline = start + per_record * paced;
+            while (std::chrono::steady_clock::now() < deadline) {
+            }
         };
+    };
 
-    ProgramRealtimeProfilerCallbackHandle h_keeps_up =
-        RegisterProgramRealtimeProfilerCallback(make_consumer(keeps_up, std::chrono::nanoseconds::zero(), &sync_hist));
+    ProgramRealtimeProfilerCallbackHandle h_keeps_up = RegisterProgramRealtimeProfilerCallback(
+        make_consumer(keeps_up, std::chrono::nanoseconds::zero(), &sync_errors));
     ProgramRealtimeProfilerCallbackHandle h_borderline =
         RegisterProgramRealtimeProfilerCallback(make_consumer(borderline, borderline_per_record));
     ProgramRealtimeProfilerCallbackHandle h_slow =
@@ -604,6 +628,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
         const auto now = std::chrono::steady_clock::now();
         if (now - last_report >= kStressReportInterval) {
+            const auto sync_us = stress_sync_percentiles_us(sync_errors);
             log_info(
                 tt::LogTest,
                 "[RT profiler stress] t={}s keeps_up: recv={} drop={} | borderline: recv={} drop={} | slow: recv={} "
@@ -617,10 +642,10 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
                 slow.dropped.load(),
                 rt->peak_fifo_pages(),
                 rt->host_fifo_capacity_pages(),
-                sync_hist.percentile_us(0.50),
-                sync_hist.percentile_us(0.90),
-                sync_hist.percentile_us(0.99),
-                sync_hist.max_us());
+                sync_us.p50,
+                sync_us.p90,
+                sync_us.p99,
+                sync_us.max);
             last_report = now;
         }
         if (now >= run_deadline) {
@@ -661,6 +686,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const uint64_t borderline_total = borderline_received + borderline_dropped;
     const uint64_t slow_total = slow_received + slow_dropped;
 
+    const auto sync_us = stress_sync_percentiles_us(sync_errors);
     log_info(
         tt::LogTest,
         "[RT profiler stress] devices={} total={} peak_fifo={}/{} pages mean_publish_batch={:.1f} | "
@@ -677,10 +703,10 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         slow_received,
         slow_dropped,
         slow_total,
-        sync_hist.percentile_us(0.50),
-        sync_hist.percentile_us(0.90),
-        sync_hist.percentile_us(0.99),
-        sync_hist.max_us());
+        sync_us.p50,
+        sync_us.p90,
+        sync_us.p99,
+        sync_us.max);
 
     UnregisterProgramRealtimeProfilerCallback(h_keeps_up);
     UnregisterProgramRealtimeProfilerCallback(h_borderline);

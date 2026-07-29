@@ -37,6 +37,8 @@
 
 #include <gtest/gtest.h>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -760,9 +762,11 @@ TEST_F(RealtimeProfilerDeviceSanity, FiveProgramsBackToBack) {
 // tail — p50/p90/p99 catch each, unlike a single per-record ceiling.
 TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
     RecordCollector collector;
-    // A fixed runtime_id keeps the kernel source (and its JIT compile) shared across iterations; the 50ms spacing
-    // straddles the resync interval so successive records fall in different re-anchor epochs.
-    constexpr uint32_t kIterations = 40;
+    // A fixed runtime_id keeps the kernel source (and its JIT compile) shared across iterations. Spacing matches the
+    // resync interval: closer together and successive records land in the same re-anchor epoch, which adds records
+    // but not independent observations. So the sample count is the runtime, and a p99 worth reporting needs enough of
+    // them that the 99th percentile is not just the largest value.
+    constexpr uint32_t kIterations = 300;
     for (uint32_t i = 0; i < kIterations; ++i) {
         enqueue_sanity_program(mesh_device_, /*runtime_id=*/1, all_cores());
         std::this_thread::sleep_for(50ms);
@@ -770,27 +774,52 @@ TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
     quiesce_and_settle();
     collector.stop();
 
-    std::vector<uint64_t> sync_errors_ns;
-    for (const auto& record : collector.records()) {
-        sync_errors_ns.push_back(record.clock_sync.sync_error_ns);
+    // One sample per anchor, not per record: a burst of dispatch inside one re-anchor epoch would otherwise move the
+    // percentiles without the handshake having changed at all. Single device here, so a single previous offset
+    // identifies the anchor.
+    std::vector<uint64_t> errors_ns;
+    std::optional<int64_t> last_offset;
+    const auto& records = collector.records();
+    for (const auto& record : records) {
+        if (last_offset != record.clock_sync.device_cycle_offset) {
+            last_offset = record.clock_sync.device_cycle_offset;
+            errors_ns.push_back(record.clock_sync.sync_error_ns);
+        }
     }
-    ASSERT_GE(sync_errors_ns.size(), kIterations / 2)
-        << "too few records (" << sync_errors_ns.size() << ") to characterize the sync-error distribution";
-    std::sort(sync_errors_ns.begin(), sync_errors_ns.end());
-    const auto pct = [&](double p) {
-        const size_t idx = static_cast<size_t>(std::lround(p * static_cast<double>(sync_errors_ns.size() - 1)));
-        return sync_errors_ns[std::min(sync_errors_ns.size() - 1, idx)];
-    };
-    const uint64_t p50 = pct(0.50);
-    const uint64_t p90 = pct(0.90);
-    const uint64_t p99 = pct(0.99);
-    std::cout << "[ SYNC ] sync_error_ns p50=" << p50 << " p90=" << p90 << " p99=" << p99
-              << " ns (n=" << sync_errors_ns.size() << ")" << std::endl;
+    ASSERT_GE(errors_ns.size(), kIterations / 4)
+        << "only " << errors_ns.size() << " distinct anchors across " << records.size()
+        << " records; too few independent samples to characterize the sync-error distribution";
+    std::sort(errors_ns.begin(), errors_ns.end());
 
-    EXPECT_GT(p50, 0u) << "sync_error_ns should be populated by the sync handshake";
-    EXPECT_LT(p50, kSyncErrorP50Ns) << "median sync error too high; the handshake is systematically degraded";
-    EXPECT_LT(p90, kSyncErrorP90Ns) << "p90 sync error too high";
-    EXPECT_LT(p99, kSyncErrorP99Ns) << "tail sync error too high; a bad re-anchor is not being rejected";
+    // Interpolated between adjacent ranks; nearest-rank would snap each percentile onto one sample and report the
+    // neighbouring order statistic instead.
+    const auto pct = [&errors_ns](double p) {
+        const double rank = p * static_cast<double>(errors_ns.size() - 1);
+        const auto lo = static_cast<size_t>(rank);
+        const size_t hi = std::min(lo + 1, errors_ns.size() - 1);
+        return static_cast<double>(errors_ns[lo]) +
+               (rank - static_cast<double>(lo)) * static_cast<double>(errors_ns[hi] - errors_ns[lo]);
+    };
+    std::cout << fmt::format(
+                     "[ SYNC ] sync_error_ns over {} anchors ({} records): min={} p50={:.1f} p75={:.1f} p90={:.1f} "
+                     "p95={:.1f} p99={:.1f} max={}",
+                     errors_ns.size(),
+                     records.size(),
+                     errors_ns.front(),
+                     pct(0.50),
+                     pct(0.75),
+                     pct(0.90),
+                     pct(0.95),
+                     pct(0.99),
+                     errors_ns.back())
+              << std::endl;
+
+    EXPECT_GT(errors_ns.front(), 0u) << "sync_error_ns should be populated by the sync handshake";
+    EXPECT_LT(pct(0.50), static_cast<double>(kSyncErrorP50Ns))
+        << "median sync error too high; the handshake is systematically degraded";
+    EXPECT_LT(pct(0.90), static_cast<double>(kSyncErrorP90Ns)) << "p90 sync error too high";
+    EXPECT_LT(pct(0.99), static_cast<double>(kSyncErrorP99Ns))
+        << "tail sync error too high; a bad re-anchor is not being rejected";
 }
 
 TEST_F(RealtimeProfilerDeviceSanity, CloseDrainsRegisteredCallback) {

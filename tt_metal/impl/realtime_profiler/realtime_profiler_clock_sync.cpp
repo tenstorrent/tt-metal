@@ -39,6 +39,7 @@
 #include "hostdev/realtime_profiler_msgs.h"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
 
@@ -302,6 +303,9 @@ std::optional<std::chrono::nanoseconds> RealtimeProfilerClockSync::measure_rtt(
 }
 
 std::optional<ClockSyncSample> RealtimeProfilerClockSync::probe() {
+    // Opened before host_before is taken, so the zone's own cost stays outside the interval measure_rtt times.
+    // Nothing between that read and the round trip's end may be instrumented for the same reason.
+    TTZoneScopedDN(RT_PROFILER, "Probe");
     const auto host_before = std::chrono::steady_clock::now();
     if (++sync_seq_ == 0) {
         sync_seq_ = 1;
@@ -311,11 +315,13 @@ std::optional<ClockSyncSample> RealtimeProfilerClockSync::probe() {
     if (!rtt.has_value()) {
         return std::nullopt;
     }
+    TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(rtt->count()));
     last_device_time_ = read_device_time();
     return ClockSyncSample{host_before, *rtt, last_device_time_};
 }
 
 bool RealtimeProfilerClockSync::calibrate() {
+    TTZoneScopedDN(RT_PROFILER, "Calibrate");
     // Enough that the fitted slope is dominated by the baseline rather than per-probe noise. At 5ms spacing this is
     // ~0.5s of bring-up per device.
     constexpr uint32_t kFitSamples = 100;
@@ -406,6 +412,8 @@ bool RealtimeProfilerClockSync::resync() {
     if (ack_host_ptr_ == nullptr) {
         return true;
     }
+    // The nested Probe zones are the burst: how deep it went before a round trip matched the standing anchor.
+    TTZoneScopedDN(RT_PROFILER, "Resync");
     try {
         // Keep the tightest round trip so one slow probe cannot set the published bound, but stop as soon as one
         // matches the standing anchor: each probe costs the profiler core two NOC writes and two barriers inside the
