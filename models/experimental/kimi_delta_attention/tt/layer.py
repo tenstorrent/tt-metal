@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 import torch
 
@@ -26,6 +26,22 @@ def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
     begin[-1] = start
     stop[-1] = end
     return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+@dataclass(frozen=True)
+class _ProjectedInputs:
+    combined: ttnn.Tensor
+    qkv: ttnn.Tensor
+
+
+@dataclass(frozen=True)
+class _KDAInputs:
+    q: ttnn.Tensor
+    k: ttnn.Tensor
+    v: ttnn.Tensor
+    decay: ttnn.Tensor
+    beta: ttnn.Tensor
+    output_gate: ttnn.Tensor
 
 
 class KimiDeltaAttention:
@@ -336,18 +352,15 @@ class KimiDeltaAttention:
         v = _slice_width(output, config.q_dim + config.k_dim, channels)
         return q, k, v, new_state
 
-    def forward(
+    def _project_inputs(
         self,
         hidden_states: ttnn.Tensor,
-    ) -> ttnn.Tensor:
-        """Run prefill KDA without any host tensor operation or implicit fallback."""
-        batch, sequence = self._validate_forward(hidden_states)
-        config, weights = self.config, self.weights
-        head_major = sequence % ttnn.TILE_SIZE == 0
-        memory_config = (
-            ttnn.L1_MEMORY_CONFIG if batch * sequence * self._convolution_width <= 65536 else ttnn.DRAM_MEMORY_CONFIG
-        )
-
+        *,
+        head_major: bool,
+        memory_config: ttnn.MemoryConfig,
+    ) -> _ProjectedInputs:
+        """Run the fused input projection and expose its QKV branch."""
+        weights = self.weights
         projected = ttnn.linear(
             hidden_states,
             weights.input_projection_prefill if head_major else weights.input_projection,
@@ -355,11 +368,26 @@ class KimiDeltaAttention:
             compute_kernel_config=self.compute_config,
         )
         qkv = _slice_width(projected, 0, self._convolution_width)
-        output_gate_width = config.v_dim if head_major or weights.output_gate_is_direct else config.head_v_dim
-        auxiliary_start = self._convolution_width
+        return _ProjectedInputs(
+            combined=projected,
+            qkv=qkv,
+        )
+
+    def _convolve_qkv(
+        self,
+        qkv: ttnn.Tensor,
+        *,
+        batch: int,
+        sequence: int,
+        head_major: bool,
+        memory_config: ttnn.MemoryConfig,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Apply causal convolution and return Q/K/V plus the next convolution state."""
+        config, weights = self.config, self.weights
         if batch == 1 and sequence >= ttnn.TILE_SIZE:
             q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
         else:
+            assert self.convolution_state is not None
             convolution_state = self.convolution_state
             if convolution_state.layout != ttnn.TILE_LAYOUT:
                 convolution_state = ttnn.to_layout(
@@ -380,19 +408,35 @@ class KimiDeltaAttention:
             q = _slice_width(qkv, 0, config.q_dim)
             k = _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim)
             v = _slice_width(qkv, config.q_dim + config.k_dim, self._convolution_width)
-        if sequence % ttnn.TILE_SIZE != 0:
+        if not head_major:
             q = ttnn.reshape(q, (batch, sequence, config.num_heads, config.head_k_dim))
             k = ttnn.reshape(k, (batch, sequence, config.num_heads, config.head_k_dim))
             v = ttnn.reshape(v, (batch, sequence, config.num_heads, config.head_v_dim))
+        return q, k, v, new_convolution_state
 
-        decay_rank = _slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim)
-        output_gate_rank = _slice_width(
-            projected,
+    def _compute_gates(
+        self,
+        projected: _ProjectedInputs,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        *,
+        batch: int,
+        sequence: int,
+        head_major: bool,
+    ) -> _KDAInputs:
+        """Evaluate decay and write gates while preserving the output gate for the epilogue."""
+        config, weights = self.config, self.weights
+        output_gate_width = config.v_dim if head_major or weights.output_gate_is_direct else config.head_v_dim
+        auxiliary_start = self._convolution_width
+        decay_rank = _slice_width(projected.combined, auxiliary_start, auxiliary_start + config.head_k_dim)
+        output_gate = _slice_width(
+            projected.combined,
             auxiliary_start + config.head_k_dim,
             auxiliary_start + config.head_k_dim + output_gate_width,
         )
         beta = _slice_width(
-            projected,
+            projected.combined,
             auxiliary_start + config.head_k_dim + output_gate_width,
             auxiliary_start + config.head_k_dim + output_gate_width + config.num_heads,
         )
@@ -435,7 +479,25 @@ class KimiDeltaAttention:
             )
             gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             gate = ttnn.multiply(gate, config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return _KDAInputs(
+            q=q,
+            k=k,
+            v=v,
+            decay=gate,
+            beta=beta,
+            output_gate=output_gate,
+        )
 
+    def _run_kda_and_norm(
+        self,
+        inputs: _KDAInputs,
+        *,
+        batch: int,
+        sequence: int,
+        head_major: bool,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run the recurrence and return normalized heads regardless of kernel fusion."""
+        config, weights = self.config, self.weights
         assert self.recurrent_state is not None
         # The long-context grouped-prefix path returns raw scan output; normalize it
         # after regrouping instead of asking the serial scan for a fused RMS tensor.
@@ -448,14 +510,14 @@ class KimiDeltaAttention:
             head_major and sequence > 640 and os.getenv("QWEN_KDA_GROUP_PREFIX") is None and not use_group_prefix
         )
         output, new_recurrent_state = kda_prefill(
-            q,
-            k,
-            v,
-            gate,
-            beta,
+            inputs.q,
+            inputs.k,
+            inputs.v,
+            inputs.decay,
+            inputs.beta,
             self.recurrent_state,
             self.chunk_const_tiles,
-            rms_gate=output_gate_rank if fuse_scan_rms else None,
+            rms_gate=inputs.output_gate if fuse_scan_rms else None,
             rms_weight=weights.norm if fuse_scan_rms else None,
             rms_epsilon=config.norm_eps,
             summary_group_chunks=self.summary_group_chunks,
@@ -466,13 +528,13 @@ class KimiDeltaAttention:
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
         if head_major:
-            output_gate = output_gate_rank
+            output_gate = inputs.output_gate
         elif weights.output_gate_is_direct:
-            output_gate = ttnn.reshape(output_gate_rank, (batch, sequence, config.num_heads, config.head_v_dim))
+            output_gate = ttnn.reshape(inputs.output_gate, (batch, sequence, config.num_heads, config.head_v_dim))
         else:
             assert weights.output_gate_projection is not None
             output_gate = ttnn.linear(
-                output_gate_rank,
+                inputs.output_gate,
                 weights.output_gate_projection,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_config,
@@ -502,6 +564,17 @@ class KimiDeltaAttention:
                 dtype=ttnn.float32,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+        return output, new_recurrent_state
+
+    def _project_output(
+        self,
+        output: ttnn.Tensor,
+        *,
+        batch: int,
+        sequence: int,
+    ) -> ttnn.Tensor:
+        """Project normalized heads and perform the required TP reduction."""
+        config, weights = self.config, self.weights
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
         fused_output_collective = self.tensor_parallel_size > 1 and (
             self.sequence_parallel_size > 1 or config.v_dim >= 8 * ttnn.TILE_SIZE
@@ -545,7 +618,16 @@ class KimiDeltaAttention:
                 output,
                 (batch, sequence, self.global_config.hidden_size // self.tensor_parallel_size),
             )
+        return output
 
+    def _commit_state(
+        self,
+        new_recurrent_state: ttnn.Tensor,
+        new_convolution_state: ttnn.Tensor,
+    ) -> None:
+        """Commit eager or trace-stable cache updates without exposing the mutation mode."""
+        assert self.recurrent_state is not None
+        assert self.convolution_state is not None
         if self.use_inplace_state:
             ttnn.copy(new_recurrent_state, self.recurrent_state)
             if new_convolution_state.layout != self.convolution_state.layout:
@@ -558,4 +640,41 @@ class KimiDeltaAttention:
         else:
             self.recurrent_state = new_recurrent_state
             self.convolution_state = new_convolution_state
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Run prefill KDA without any host tensor operation or implicit fallback."""
+        batch, sequence = self._validate_forward(hidden_states)
+        head_major = sequence % ttnn.TILE_SIZE == 0
+        memory_config = (
+            ttnn.L1_MEMORY_CONFIG if batch * sequence * self._convolution_width <= 65536 else ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        projected = self._project_inputs(hidden_states, head_major=head_major, memory_config=memory_config)
+        q, k, v, new_convolution_state = self._convolve_qkv(
+            projected.qkv,
+            batch=batch,
+            sequence=sequence,
+            head_major=head_major,
+            memory_config=memory_config,
+        )
+        inputs = self._compute_gates(
+            projected,
+            q,
+            k,
+            v,
+            batch=batch,
+            sequence=sequence,
+            head_major=head_major,
+        )
+        output, new_recurrent_state = self._run_kda_and_norm(
+            inputs,
+            batch=batch,
+            sequence=sequence,
+            head_major=head_major,
+        )
+        output = self._project_output(output, batch=batch, sequence=sequence)
+        self._commit_state(new_recurrent_state, new_convolution_state)
         return output
