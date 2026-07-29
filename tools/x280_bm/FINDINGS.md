@@ -1459,6 +1459,21 @@ it**: caps of 64 / 256 / 1024 / 4096 are indistinguishable at delay 800 and belo
 stalls respectively). So bound reads for MARGIN, not throughput — and the real fix is to bound per-pass
 **time**, not pages, since a page cap stops binding as soon as data is plentiful.
 
+**The UFLD throttling that forced the cap out no longer exists, so 1024 is now the default again.** Those
+24,669 stalls were measured while the Tracy push was still INLINE on the drain thread — the cap was
+multiplying a per-read cost that the BroadcastRing decoupling has since removed. Re-measured 2026-07-29,
+both models with a bit-identical marker count either way:
+
+| model | uncapped | cap 1024 | markers |
+|---|---|---|---|
+| UFLD-v2 | 0 stalls, 97,627 reads, iter 1.880 ms | 0 stalls, 100,595 reads, iter 1.876 ms | 99,187,072 |
+| ResNet-50 trace | 0 stalls, 2,960 reads, iter 1.7056 ms | 0 stalls, 3,569 reads, iter 1.7165 ms | 1,581,952 |
+
+At real-model rates the FIFO rarely holds 1024 pages (64 B/page), so the cap barely binds — near-identical
+read counts. It costs nothing and buys the knee margin. **Lesson: when a tuning decision is justified by a
+measurement, record what else was true at the time — this one was invalidated by an unrelated fix to a
+different stage.**
+
 ### The knee, and what perturbs it
 
 Full grid (110 cores, 550 lanes), 500 iters, cap 1024, ring 32 M records. Sharp: one point wide.

@@ -87,17 +87,41 @@ private:
     // Per-read page cap. 0 = UNCAPPED (take whatever the FIFO holds, bounded only by fifo_pages-1).
     // Overridable at runtime with TT_METAL_PERF_DEBUG_MAX_PAGES.
     //
-    // This was 1024 (64 KB/read), ported from test_x280_realprof's --maxpages default on the theory that
-    // bounding one host turn keeps the read/ack cadence tight. That reasoning is WRONG for high-volume real
-    // models: the fixed per-read cost (socket read + decode + inline Tracy push) dominates, so a small cap
-    // just multiplies it, the FIFO stays full, and the RELAY sits in HOST-WAIT -- which back-pressures the
-    // reader and finally stalls the worker cores. Measured on UFLD-v2 (~99M markers), busier socket:
+    // Max pages pulled per read() (kPageSize = 64 B, so 1024 pages = 64 KB). Override:
+    // TT_METAL_PERF_DEBUG_MAX_PAGES. 0 = uncapped.
+    //
+    // This has been 1024, then 0, and is now 1024 again. Both changes were right for their time, and the
+    // reason it flipped back is worth keeping:
+    //
+    // ERA 1 -- inline Tracy push on the drain thread. A small cap multiplied a huge fixed per-read cost
+    // (socket read + decode + the Tracy push, all on one thread), so the FIFO stayed full and the RELAY sat
+    // in HOST-WAIT, back-pressuring the reader into the worker cores. Measured on UFLD-v2 (~99M markers),
+    // busier socket:
     //     cap 1024 (64 KB)  -> 24,669 producer stall zones, 9,855 reads
     //     cap 16384 (1 MB)  ->  9,223 producer stall zones,   617 reads
     //     cap 0 (uncapped)  ->    783 producer stall zones,    54 reads
-    // Monotonic, so uncapped is the default. Note the ack is issued by read() itself, so a bigger read acks
-    // MORE data sooner rather than later -- the original concern was backwards.
-    static constexpr uint32_t kMaxPagesPerRead = 0;
+    // Monotonic, hence uncapped.
+    //
+    // ERA 2 -- sink decoupled onto the BroadcastRing (the push moved to the consumer thread). That removed
+    // the term the cap was multiplying, and uncapped became the WORSE choice, because it trades a throughput
+    // problem for a LATENCY one: an unbounded read swallows a whole batch and spends ~10 ms in
+    // read+decode+publish+resize with the FIFO never polled, so the relay fills 12 MiB, blocks, and stalls
+    // every producer once. Measured at the knee (test_perf_debug_zones --delay 950, full grid):
+    //     uncapped -> 557 producer stall zones (exactly 1 per lane),   3 reads/socket, decode 6,048 us/pass
+    //     cap 1024 ->   0 producer stall zones,                     1107 reads/socket, decode    17 us/pass
+    // And the ERA-1 cost is gone: re-measured 2026-07-29, BOTH models are clean either way --
+    //     UFLD-v2   uncapped 0 stalls / 97,627 reads   vs cap 1024 0 stalls / 100,595 reads (99,187,072
+    //               markers, bit-identical, 0 drops, iter 1.880 vs 1.876 ms)
+    //     ResNet-50 uncapped 0 stalls /  2,960 reads   vs cap 1024 0 stalls /   3,569 reads (1,581,952
+    //               markers, bit-identical, 0 drops, iter 1.7056 vs 1.7165 ms)
+    // At real-model rates the FIFO rarely holds 1024 pages, so the cap barely binds -- it costs nothing and
+    // buys ~75 delay units of margin at the knee. See FINDINGS SS27.
+    //
+    // KNOWN LIMITATION: a PAGE cap does not bound per-pass TIME. Once data is plentiful every read is a full
+    // cap-sized read, which is why caps of 64 / 256 / 1024 / 4096 are indistinguishable below the knee. The
+    // correct fix is to bound elapsed time per pass; this is the stopgap that behaves well at observed rates.
+    // Note also the ack is issued by read() itself, so a bigger read acks MORE data sooner, not later.
+    static constexpr uint32_t kMaxPagesPerRead = 1024;
     static constexpr uint32_t kPageSize = 64;
     static constexpr uint32_t kNRisc = 5;
 
