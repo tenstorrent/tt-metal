@@ -15,15 +15,12 @@ namespace ttnn::prim {
 
 enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
 
-// Non-tile-aligned H*W (#50682). The two-pass path reduces over the tile-padding rows as if they
-// were data, so two things have to be fixed up: the reduce scaler must divide by the real element
-// count, and the compute kernel must subtract K*E[x]^2 from the variance (pass 2 centers each
-// padding row to 0 - E[x] and squares it). Shared by all three two-pass program factories so the
-// scaler formula has a single definition.
-//
-// The kernels re-derive `active` for themselves from (padded_hw != logical_hw), which is why
-// `kernel_logical_hw` reports padded_hw when the correction is off: otherwise the kernel-side flag
-// could disagree with the CB allocation and hang the compute kernel on cb_k.wait_front.
+// Non-tile-aligned H*W (#50682): the two-pass path reduces over the tile-padding rows as if they
+// were data, so the reduce scaler must divide by the real element count and the compute kernel must
+// subtract K*E[x]^2 from the variance. Shared by all three two-pass factories so the scaler formula
+// has one definition. Kernels re-derive `active` from (padded_hw != logical_hw), which is why
+// `kernel_logical_hw` reports padded_hw when off -- otherwise the kernel flag could disagree with
+// the CB allocation and hang the compute kernel on cb_k.wait_front.
 struct GroupNormPadCorrection {
     bool active = false;
     uint32_t logical_hw = 0;

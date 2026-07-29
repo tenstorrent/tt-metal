@@ -26,19 +26,18 @@ HEIGHT_SHARDED_SHAPES = [
     (1, 320, 32, 32, 16),
 ]
 
-# Non-tile-aligned flattened height (N*H*W not a multiple of 32) for the sharded two-pass
-# path (tt-metal #50682). Single-core height sharding keeps the whole padded height (and its
-# padding tail) on one core. Pre-fix the fused kernel reduced over the padding rows.
+# Non-tile-aligned N*H*W on the sharded two-pass path (#50682). Single-core height sharding keeps
+# the whole padded height, and its padding tail, on one core.
 # (N, C, H, W, num_groups)
 HEIGHT_SHARDED_NON_TILE_ALIGNED_SHAPES = [
     (1, 128, 1, 200, 32),  # H*W=200 -> padded 224 (10.7% padding)
     (1, 256, 1, 100, 32),  # H*W=100 -> padded 128 (21.9% padding)
 ]
 
-# Block-sharded (v2) non-tile-aligned cases (tt-metal #50682). grid_x splits the padded H*W
-# tile count and must divide it; grid_y splits channels. H*W=100 -> padded 128 = 4 tiles, so
-# grid_x in {1, 2, 4} keeps each M-shard tile-aligned. grid_x > 1 exercises the multi-core
-# M-split, where the tile-padding tail lands on the last M-core only.
+# Block-sharded (v2) non-tile-aligned cases (#50682). grid_x splits the padded H*W tile count and
+# must divide it; grid_y splits channels. H*W=100 -> padded 128 = 4 tiles, so grid_x in {1, 2, 4}
+# keeps each M-shard tile-aligned. grid_x > 1 exercises the multi-core M-split, where the padding
+# tail lands on the last M-core only.
 # (N, C, H, W, num_groups, grid_y, grid_x)
 BLOCK_SHARDED_NON_TILE_ALIGNED_CASES = [
     (1, 256, 1, 100, 32, 2, 1),  # channel split only, single M-core
@@ -340,14 +339,11 @@ def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_grou
 def test_group_norm_block_sharded_non_tile_aligned(
     device, N, C, H, W, num_groups, grid_y, grid_x, use_welford, out_row_major
 ):
-    # Regression for tt-metal #50682 on the block-sharded two-pass path with a non-tile-aligned
-    # flattened height. grid_x > 1 splits the padded H*W across M-cores (padding tail on the
-    # last M-core), exercising the multi-core sharded correction. use_welford=True must be routed
-    # to the two-pass path by ttnn::group_norm. out_row_major selects the UNTILIZE_OUT path, which
-    # runs after the corrected rsqrt and so must not change the result.
-    #
-    # negative_mask is deliberately not covered: it requires a ROW_MAJOR input, and a ROW_MAJOR
-    # tensor has padded_shape[2] == logical_shape[2], so the correction is never active for it.
+    # #50682 on the block-sharded two-pass path. grid_x > 1 splits the padded H*W across M-cores
+    # (padding tail on the last), exercising the multi-core correction; use_welford=True must be
+    # routed to the two-pass path; out_row_major selects UNTILIZE_OUT, which runs after the
+    # corrected rsqrt and so must not change the result. negative_mask is not covered: it requires
+    # ROW_MAJOR, where padded_shape[2] == logical_shape[2], so the correction never engages.
     torch.manual_seed(0)
     if device.core_grid.x < grid_x or device.core_grid.y < grid_y:
         pytest.skip(f"device grid too small for {grid_x}x{grid_y}")
@@ -1510,12 +1506,10 @@ def test_group_norm_rejects_non_tile_aligned_spatial(device, expect_error):
 
 
 def test_group_norm_rejects_per_sample_non_tile_aligned_spatial(device, expect_error):
-    # Scope boundary for the tt-metal #50682 correction, which only engages for TILE inputs where
-    # logical_shape[2] < padded_shape[2]. A ROW_MAJOR input keeps the row dim unpadded, so the
-    # correction never applies -- and the N*H*W check above does not catch a PER-SAMPLE H*W that is
-    # not a whole number of tiles: N=2, H*W=80 gives N*H*W=160, a multiple of 32. The device op's
-    # own H*W check is what rejects it, so such shapes fail loudly instead of reducing each sample
-    # over a partial tile.
+    # Scope boundary for #50682, which only engages for TILE inputs with logical_shape[2] <
+    # padded_shape[2]. The N*H*W check above misses a PER-SAMPLE H*W that is not a whole number of
+    # tiles -- N=2, H*W=80 gives N*H*W=160, a multiple of 32 -- so the device op's own H*W check is
+    # what rejects it, and such shapes fail loudly rather than reducing over a partial tile.
     N, C, HW, num_groups = 2, 320, 80, 32
     assert (N * HW) % 32 == 0, "N*H*W must look aligned, so only the per-sample check can reject"
     assert HW % 32 != 0, "per-sample H*W must not be tile-aligned"
