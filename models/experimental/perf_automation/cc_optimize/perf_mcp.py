@@ -3549,6 +3549,46 @@ def _read_throughput() -> dict | None:
         return None
 
 
+def _ceiling_armed(target, rep: dict) -> tuple:
+    """(armed, why). May an IN_BAND verdict END a run? Returns False plus the reason when not.
+
+    IN_BAND overrides every blocking op, so it is the most consequential thing the ceiling feeds. The
+    ceiling itself is now rendered for every model -- which is the point, a reader should always see the
+    bound -- but "shown" and "trustworthy enough to terminate on" are different bars, and only the second
+    one needs evidence:
+
+      * the divisor must be an EXACT param count. The name-derived and file-size fallbacks are estimates,
+        and a divisor that is too large lowers the band under what the model already does, which is the
+        direction that stops a run early.
+      * `bound_by` must match the profile's dominant bucket. XTTS is dispatch-bound at 47 tok/s against a
+        bandwidth ceiling of 1724: the number is arithmetically right and describes a constraint that is
+        not binding, so reaching 60% of it says nothing about being done.
+      * the reading must cover the FULL model. A capped layer window streams a fraction of the bytes, so
+        its ceiling describes a fraction of the work.
+
+    Unarmed is exactly today's no-band behaviour: the run keeps optimizing and terminates on the ladder
+    instead. PERF_MCP_ARM_BAND=0 disables the band stop outright.
+    """
+    if os.environ.get("PERF_MCP_ARM_BAND") == "0":
+        return False, "band stop disabled (PERF_MCP_ARM_BAND=0)"
+    src = str(getattr(target, "bytes_source", "") or "")
+    if "params rule" not in src and "anchored" not in src:
+        return False, "divisor is an estimate (%s), not an exact param count" % (src or "unknown")
+    depth = str((_read_throughput() or {}).get("perf_layers") or "").strip().lower()
+    if depth and depth not in ("all", "0", "none"):
+        return False, "measurement covers a %s-layer window, not the full model" % depth
+    bound = str(getattr(target, "bound_by", "") or "memory").lower()
+    buckets = [b for b in (rep or {}).get("buckets") or [] if isinstance(b, dict)]
+    dom = max(buckets, key=lambda b: b.get("device_ms") or 0.0, default=None)
+    dom_bound = str(((dom or {}).get("tags") or {}).get("bound") or "").lower()
+    dom_id = str((dom or {}).get("id") or "")
+    # host_overhead dominating means the run is dispatch-bound whatever the op tags say.
+    if dom_id == "host_overhead" or dom_bound in ("host", "dispatch"):
+        if bound != "dispatch":
+            return False, "profile is dominated by %s, but the ceiling is %s-bound" % (dom_id or dom_bound, bound)
+    return True, ""
+
+
 @mcp.tool()
 def termination_check() -> dict:
     """THE BINDING STOP GATE and SOLE authority on 'optimize more or not' — you may declare DONE ONLY
@@ -3623,8 +3663,15 @@ def termination_check() -> dict:
     # op: a run could be declared done against a range never derived from the hardware. The fallback
     # now carries no band (status NO_BAND) and the nonzero check keeps it that way.
     _band = (pt_status or {}).get("band") or (0, 0)
+    _armed, _why = _ceiling_armed(_select_perf_target(rep)[0], rep)
     if pt_status and pt_status.get("status") == "IN_BAND" and _band[0] and _band[1]:
-        can_stop = True
+        # ...AND ONLY ON EVIDENCE THAT SUPPORTS ENDING A RUN. See _ceiling_armed: the ceiling is shown for
+        # every model now, but an estimated divisor, a non-binding bound or a truncated window must not
+        # override a blocking op. Unarmed behaves exactly as no-band does -- keep optimizing.
+        if _armed:
+            can_stop = True
+        else:
+            pt_status["band_stop_disarmed"] = _why
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).
     next_target = (

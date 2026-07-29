@@ -2894,15 +2894,16 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     per-expert split cannot be taken from config alone without guessing the FFN shapes. A guessed
     ceiling is worse than the floor fallback, so those models keep the floor.
     """
-    wb = _model_weight_bytes(demo_dir, model_id_hint)
-    if not wb:
-        return None
+    # THE CEILING NEEDS A PARAM COUNT AND NOTHING ELSE. These two gates rejected models over inputs the
+    # formula does not consult: `weight_bytes` is only a fallback divisor now that params drive it, and
+    # `cfg` supplies the KV terms, which are unused unless a seq_len is given. So a model with no HF
+    # config, or whose weights are in a format the byte-sizer cannot read, got NO ceiling at all and its
+    # report fell to the band-less ms floor -- three unrelated-looking symptoms with one cause.
+    wb = _model_weight_bytes(demo_dir, model_id_hint) or 0
     cfg = dict(manifest.get("model_config") or {})
     mid = _resolve_model_id(demo_dir, model_id_hint)
     if mid:
         cfg = {**_hf_cache_dims(mid), **cfg}
-    if not cfg:
-        return None
     experts = cfg.get("num_local_experts") or cfg.get("num_experts") or cfg.get("n_routed_experts")
     src = "checkpoint bytes + HF config"
     analytic_params = 0
@@ -2960,7 +2961,7 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
         except (TypeError, ValueError):
             pass
     facts = {
-        "weight_bytes": int(wb),
+        "weight_bytes": int(wb or 0),
         "dominant_dtype": str(cfg.get("torch_dtype") or "bfloat16"),
         "source": src,
     }
@@ -3003,6 +3004,10 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     for key, val in (("layers", layers), ("kv_heads", kv_heads), ("head_dim", head_dim)):
         if val:
             facts[key] = int(val)
+    # A DIVISOR IS THE ONE THING THAT CANNOT BE MISSING. With neither a param count nor a byte count there
+    # is nothing to divide by, so returning facts would produce a zero ceiling that renders as a real one.
+    if not facts.get("total_params") and not facts.get("active_params") and not facts.get("weight_bytes"):
+        return None
     return facts
 
 

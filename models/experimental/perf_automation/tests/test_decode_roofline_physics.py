@@ -194,14 +194,27 @@ def test_moe_models_are_refused_rather_than_guessed(tmp_path, monkeypatch, moe_k
     assert run._perf_target_inputs(tmp_path, None, {}) is None
 
 
-def test_no_checkpoint_and_no_config_produce_nothing(tmp_path, monkeypatch):
+def test_only_a_missing_divisor_withholds_the_ceiling(tmp_path, monkeypatch):
+    """A DIVISOR is the one input the ceiling cannot do without; a config is not.
+
+    This used to assert that weight bytes WITHOUT an HF config produced nothing, because the producer
+    gated on `cfg`. But the ceiling never reads cfg -- it supplies the KV terms, which are unused unless a
+    seq_len is given -- so that gate rejected models over an input the formula does not consult, and their
+    reports fell to the band-less ms floor. Now only the absence of BOTH a param count and a byte count
+    withholds it, since with neither there is nothing to divide by and a zero ceiling would render as a
+    real one."""
     run = _run_mod()
     monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: None)
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: {})
+    monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
     monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 0)
-    assert run._perf_target_inputs(tmp_path, None, {}) is None
+    assert run._perf_target_inputs(tmp_path, None, {}) is None, "no params and no bytes must withhold"
+
     monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
-    assert run._perf_target_inputs(tmp_path, None, {}) is None
+    facts = run._perf_target_inputs(tmp_path, None, {})
+    assert facts and facts["weight_bytes"] == int(8 * _GB), "bytes alone are a usable divisor"
+    tgt = _pt().compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
+    assert round(tgt.theoretical_rate, 1) == 51.2 and tgt.band[0] > 0
 
 
 def test_the_manifest_config_overrides_the_hf_cache(tmp_path, monkeypatch):

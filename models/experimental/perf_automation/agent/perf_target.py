@@ -348,6 +348,52 @@ def _shared_bytes(mf: dict, dt) -> float:
     return float(mf.get("shared_params", 0)) * _bytes_per_elem(dt)
 
 
+def measured_bytes_per_unit(profile: dict) -> int:
+    """Bytes the PROFILED ops actually read, summed. 0 when the profile carries none.
+
+    The params rule cannot express three shapes, and each fails in a way no byte-width estimate fixes:
+      * MULTI-TOWER -- a token reads the language backbone, not the audio encoder or the vocoder, but the
+        param count is over the whole checkpoint;
+      * CONV-HEAVY -- a weight is reused across every spatial position, so bytes and FLOPs are not
+        proportional to params at all;
+      * ROUTED with no published active count -- only the selected experts stream.
+
+    Summing what the profile RECORDED sidesteps all three, because a tower that did not run has no ops to
+    sum: it stops predicting the read set and adds up the one observed. Deliberately NOT the default --
+    the params rule is the agreed number for dense and MoE LLMs, and this must never quietly override it.
+
+    Partial coverage understates the total, which yields a ceiling that is too HIGH -- the safe direction,
+    since a run then keeps optimizing rather than stopping early. It is still not evidence for ending a
+    run; that is what the arming check is for.
+    """
+    total = 0.0
+    for b in (profile or {}).get("buckets") or []:
+        if not isinstance(b, dict) or b.get("id") == "host_overhead":
+            continue
+        for op in b.get("top_ops") or []:
+            try:
+                v = float((op or {}).get("bytes") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(v) and v > 0:
+                total += v
+    return int(round(total)) if total > 0 else 0
+
+
+def params_rule_expresses(model_facts: dict) -> bool:
+    """Is the xB -> xGB rule a fair statement of THIS model's read set?
+
+    False for a routed model with no active count (total params overstate it) and for a model the caller
+    has flagged as multi-tower or conv-shaped. Nothing here inspects an architecture by name.
+    """
+    mf = model_facts or {}
+    if mf.get("is_moe") and not _scalar(mf.get("active_params", 0), 0):
+        return False
+    if mf.get("multi_tower") or mf.get("weight_reuse_per_unit"):
+        return False
+    return True
+
+
 def compute_target(
     model_facts: dict,
     hw_facts: dict,
@@ -357,6 +403,7 @@ def compute_target(
     seq_len: int = 0,
     bytes_per_unit: float = 0.0,
     tokens_per_unit: int = 1,
+    profile: dict | None = None,
 ) -> PerfTarget:
     """MODEL-LEVEL per-unit ceiling: the LOWER of the bandwidth and compute bounds.
 
@@ -385,6 +432,13 @@ def compute_target(
     """
     mf = model_facts or {}
     ab, src = 0, ""
+    # MEASURED BYTES, only where the params rule cannot express the read set (see params_rule_expresses).
+    # Never an override of the agreed dense/MoE number -- it is consulted before the params fallback ONLY
+    # for the shapes the rule misstates, and after the pinned anchor either way.
+    if not (bytes_per_unit and float(bytes_per_unit) > 0) and not params_rule_expresses(mf):
+        _mb = measured_bytes_per_unit(profile or {})
+        if _mb > 0:
+            ab, src = _mb, "measured per-op bytes (params rule cannot express this read set)"
     if bytes_per_unit and float(bytes_per_unit) > 0:
         ab = int(round(float(bytes_per_unit)))
         src = "anchored baseline bytes"
