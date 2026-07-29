@@ -9,7 +9,7 @@ Kernel wall comes from the device-profiler CSV demuxed by run-host-id, so it is 
 not host wall. Each block is 2 warmup + TIMED timed iterations on resident inputs; multiple blocks in one
 process give an iteration-level stability estimate.
 
-argv: M K N [nblocks]
+argv: M K N [nblocks] [config]   config = "auto" (picker, default) or "Pk,Ns,Sm,kb,nsb"
 Emits one line: SWEEP_JSON {...}
 """
 import csv
@@ -28,6 +28,7 @@ WARMUP, TIMED = 2, 12
 
 M, K, N = (int(x) for x in sys.argv[1:4])
 NBLOCKS = int(sys.argv[4]) if len(sys.argv) > 4 else 2
+CFG = sys.argv[5] if len(sys.argv) > 5 else "auto"
 
 
 def parse_runids():
@@ -70,7 +71,7 @@ def main():
         os.remove(CSV_PATH)
     except OSError:
         pass
-    res = {"M": M, "K": K, "N": N, "outcome": "runtime", "err": ""}
+    res = {"M": M, "K": K, "N": N, "outcome": "runtime", "err": "", "cfg_req": CFG}
     labels = []
     dev = ttnn.open_device(device_id=0)
     ran = False
@@ -82,8 +83,15 @@ def main():
         wc = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, dev)
         a1 = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16, memory_config=wc)
 
+        cfg = None
+        if CFG != "auto":
+            pk, ns, sm, kbt, nst = (int(x) for x in CFG.split(","))
+            cfg = ttnn.RegimeAMatmulConfig(
+                k_slices=pk, n_slices=ns, m_slices=sm, k_block_tiles=kbt, n_subblock_tiles=nst
+            )
+
         def call(label):
-            out = ttnn.experimental.regime_a_matmul(a0, a1)  # config=None => production picker
+            out = ttnn.experimental.regime_a_matmul(a0, a1, config=cfg)  # None => production picker
             labels.append(label)
             return out
 
