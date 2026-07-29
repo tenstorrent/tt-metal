@@ -30,6 +30,11 @@ void kernel_main() {
 
     constexpr uint32_t chunk_wt = get_compile_time_arg_val(0);
     constexpr uint32_t needs_cast = get_compile_time_arg_val(1);
+    // Perf-ablation only (TILIZE_SKIP_COMPUTE=1): drop the tilize LLK payload while
+    // reproducing the helper's exact CB dance (wait chunk_wt / reserve chunk_wt /
+    // push / pop, num_blocks times), so /perf-measure can attribute time to the
+    // compute stage. Never set on a correctness run.
+    constexpr uint32_t skip_compute = get_compile_time_arg_val(2);
 
     using namespace compute_kernel_lib::tilize_config;
 
@@ -44,12 +49,21 @@ void kernel_main() {
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
-    compute_kernel_lib::tilize<
-        chunk_wt,
-        cb_rm_input,
-        cb_tiled_output,
-        InitUninitMode::InitAndUninit,
-        WaitMode::WaitBlock,
-        reconfig_mode,
-        fp32_mode>(num_blocks);
+    if constexpr (skip_compute) {
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            cb_wait_front(cb_rm_input, chunk_wt);
+            cb_reserve_back(cb_tiled_output, chunk_wt);
+            cb_push_back(cb_tiled_output, chunk_wt);
+            cb_pop_front(cb_rm_input, chunk_wt);
+        }
+    } else {
+        compute_kernel_lib::tilize<
+            chunk_wt,
+            cb_rm_input,
+            cb_tiled_output,
+            InitUninitMode::InitAndUninit,
+            WaitMode::WaitBlock,
+            reconfig_mode,
+            fp32_mode>(num_blocks);
+    }
 }

@@ -37,7 +37,11 @@ void kernel_main() {
     constexpr uint32_t row_page_stride = get_compile_time_arg_val(3);
     constexpr uint32_t source_page_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t shard_tiles = get_compile_time_arg_val(5);
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    // Perf-ablation only (TILIZE_SKIP_DM=1): drop the noc_async_read *payload* and
+    // keep every CB op, barrier and loop trip count, so /perf-measure can attribute
+    // time to the read stage. Never set on a correctness run.
+    constexpr uint32_t skip_dm = get_compile_time_arg_val(6);
+    constexpr auto src_args = TensorAccessorArgs<7>();
 
     if constexpr (alias_mode) {
         // Data is already resident at the CB address — just hand it to compute.
@@ -56,7 +60,7 @@ void kernel_main() {
         for (uint32_t c = 0; c < chunk_count; ++c) {
             const uint32_t byte_offset = (chunk_start + c) * chunk_row_bytes;
 
-            if constexpr (row_page_stride == 1) {
+            if constexpr (row_page_stride == 1 && !skip_dm) {
                 dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_input, dataflow_kernel_lib::TilizeGranularity::TILE>(
                     accessor, num_rows, chunk_row_bytes, start_row, byte_offset);
             } else {
@@ -74,7 +78,14 @@ void kernel_main() {
                     for (uint32_t row = 0; row < 32; ++row) {
                         const uint64_t noc_addr =
                             accessor.get_noc_addr((row0 + row) * row_page_stride + page_col, offset_in_page);
-                        noc_async_read(noc_addr, l1_addr, chunk_row_bytes);
+                        if constexpr (skip_dm) {
+                            // Ablation: keep the address-gen observable so dead-code
+                            // elimination cannot delete the loop being timed.
+                            volatile uint32_t sink = static_cast<uint32_t>(noc_addr);
+                            (void)sink;
+                        } else {
+                            noc_async_read(noc_addr, l1_addr, chunk_row_bytes);
+                        }
                         l1_addr += chunk_row_bytes;
                     }
                     noc_async_read_barrier();

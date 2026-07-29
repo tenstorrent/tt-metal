@@ -36,7 +36,9 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t wt = get_compile_time_arg_val(3);
     constexpr uint32_t shard_tiles = get_compile_time_arg_val(4);
-    constexpr auto dst_args = TensorAccessorArgs<5>();
+    // Perf-ablation only (TILIZE_SKIP_DM=1) — see the reader for the contract.
+    constexpr uint32_t skip_dm = get_compile_time_arg_val(5);
+    constexpr auto dst_args = TensorAccessorArgs<6>();
 
     if constexpr (alias_mode) {
         cb_wait_front(cb_tiled_output, shard_tiles);
@@ -59,7 +61,13 @@ void kernel_main() {
                 cb_wait_front(cb_tiled_output, chunk_wt);
                 uint32_t l1_addr = get_read_ptr(cb_tiled_output);
                 for (uint32_t k = 0; k < chunk_wt; ++k) {
-                    noc_async_write(l1_addr, accessor.get_noc_addr(base_page + k), tile_bytes);
+                    const uint64_t noc_addr = accessor.get_noc_addr(base_page + k);
+                    if constexpr (skip_dm) {
+                        volatile uint32_t sink = static_cast<uint32_t>(noc_addr);
+                        (void)sink;
+                    } else {
+                        noc_async_write(l1_addr, noc_addr, tile_bytes);
+                    }
                     l1_addr += tile_bytes;
                 }
                 noc_async_write_barrier();

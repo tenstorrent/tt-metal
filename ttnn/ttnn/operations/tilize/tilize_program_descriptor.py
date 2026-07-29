@@ -29,6 +29,7 @@ with ``chunk_wt <= WT_CHUNK_MAX``, i.e. bounded by a constant in ``W``.
 
 from __future__ import annotations
 
+import os
 from math import gcd, prod
 from pathlib import Path
 
@@ -403,10 +404,25 @@ def _aliased_cb(index, tensor, page_size, num_pages, core_ranges):
 # ---------------------------------------------------------------------------
 
 
+def _ablation_flags():
+    """Perf-ablation compile-time flags (/perf-measure stage attribution).
+
+    ``TILIZE_SKIP_DM=1`` drops the noc_async_read/write payload, ``TILIZE_SKIP_COMPUTE=1``
+    drops the tilize LLK; both keep every CB op, barrier and loop trip count so the
+    synchronization structure — and therefore the timing structure — is unchanged.
+    Output is garbage by design; only ``_bench_tilize.py`` sets these.
+    """
+    return (
+        int(os.environ.get("TILIZE_SKIP_DM", "0")),
+        int(os.environ.get("TILIZE_SKIP_COMPUTE", "0")),
+    )
+
+
 def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.ProgramDescriptor:
     alias = plan["path"] == "alias"
     core_ranges = plan["core_ranges"]
     chunk_wt = plan["chunk_wt"]
+    skip_dm, skip_compute = _ablation_flags()
 
     # ---------------- circular buffers ----------------
     if alias:
@@ -428,6 +444,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["row_page_stride"],
         plan["shard_row_bytes"],
         plan["shard_tiles"],
+        skip_dm,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -438,11 +455,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["tile_out"],
         plan["wt"],
         plan["shard_tiles"],
+        skip_dm,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # ---------------- compute ----------------
-    compute_ct_args = [chunk_wt, plan["needs_cast"]]
+    compute_ct_args = [chunk_wt, plan["needs_cast"], skip_compute]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
