@@ -77,8 +77,12 @@ The required report and final IR exist. An additional batch-1 capture is in
 - [x] watcher-clean and separate final profiler runs
 - [x] context contract updated for BFP8 KV capacity
 - [x] independent stage rereview clean-pass (`stage_review.md`)
-- [ ] local stage commit(s), never push
+- [x] local stage commit(s), never push
 
 ## Commits
 
-Pending final review and local commit.
+- `tt-metal`, branch `skillexp-nofuse-advise`: implementation checkpoint
+  `ba942aefbd9` (`Add optimized Qwen3.6 27B decoder`)
+- Evidence/SHA-log follow-up: this documentation commit (see repository history)
+
+No commit was pushed.
