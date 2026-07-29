@@ -355,11 +355,16 @@ def test_the_legacy_decode_contract_states_its_own_count():
     assert st.items == 1 and st.recurring is True
 
 
-def test_the_headline_stage_is_chosen_by_the_flag_before_the_name():
+def test_the_headline_stage_is_chosen_with_no_name_read_at_all():
+    """The flag used to merely run FIRST, with the name match kept underneath it as a fallback. A
+    fallback that guesses is still a guess -- it just waits its turn -- so there is now no name test
+    on any path: the stage comes from `recurring`, which the pipeline reports, and the unit from
+    headline_unit, which derives it."""
     src = (_PA / "agent" / "trace_replay.py").read_text()
-    i = src.index("_rec = {st.name for st in stages")
-    j = src.index('"decode" in r[0].lower()', i)
-    assert i < j, "the name match runs before the reported flag"
+    body = src[src.index("_rec = {st.name for st in stages") :]
+    body = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+    for guess in ('"decode" in', '"denoise"', '"diffus"', ".lower() for k in"):
+        assert guess not in body, "a name guess survives in the headline selection: %s" % guess
 
 
 def test_a_pipeline_may_declare_its_own_unit():

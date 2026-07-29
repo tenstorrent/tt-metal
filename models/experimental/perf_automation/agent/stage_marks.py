@@ -308,8 +308,11 @@ def _call_preparer(bind, pipe, scope: dict):
     if missing:
         raise TypeError(
             "%s needs %s, which the profiled scope does not contain (it has: %s)"
-            % (getattr(bind, "__name__", "the preparer"), ", ".join(missing),
-               ", ".join(sorted(k for k in scope if not k.startswith("__"))[:12]))
+            % (
+                getattr(bind, "__name__", "the preparer"),
+                ", ".join(missing),
+                ", ".join(sorted(k for k in scope if not k.startswith("__"))[:12]),
+            )
         )
     return bind(*args)
 
@@ -420,7 +423,6 @@ _MARK_PASS_TEMPLATE = """{i}# --- per-stage marks (injected) -------------------
 {i}except Exception as _tt_e2:  # noqa: BLE001
 {i}    print("STAGE_MARKS_SKIPPED=%r" % (_tt_e2,), flush=True)
 """
-
 
 
 def _env_value(node, env: dict):

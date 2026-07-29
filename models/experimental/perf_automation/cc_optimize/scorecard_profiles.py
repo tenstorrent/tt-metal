@@ -133,7 +133,12 @@ def render(model_id, arch, chips, measured, repo_root=None):
         rule,
         "  %-32s %-11s %-11s %-8s %s" % ("metric", "measured", "target", "tol", "within?"),
     ]
-    for k in ("prefill_time_to_first_token", "decode_t/s/u", "decode_t/s"):
+    # WHICH METRICS THE SCORECARD HAS, not a fixed triple. This listed three metric names inline, so
+    # a model_targets.yaml declaring a fourth had it silently dropped -- the table looked complete
+    # while omitting a target the model was being judged against. The rows are now the metrics this
+    # tool can measure plus every further target the scorecard itself declares; one it cannot
+    # measure prints "—" rather than vanishing.
+    for k in list(_MEASURED_KEYS) + [k for k in tgt if k not in _MEASURED_KEYS]:
         m, t, to = meas.get(k), tgt.get(k), tol.get(k)
         verdict = _within(m, t, to) if (m is not None and t is not None and to is not None) else "—"
         lines.append("  %-32s %-11s %-11s %-8s %s" % (k, _fmt(m), _fmt(t), _fmt(to), verdict))

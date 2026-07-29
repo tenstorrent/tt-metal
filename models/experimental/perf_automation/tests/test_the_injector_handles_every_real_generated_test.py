@@ -24,11 +24,9 @@ from pathlib import Path
 
 import pytest
 
-from agent.stage_marks import find_input_preparer, inject_stage_marks, reachable_bare_calls
+from agent.stage_marks import inject_stage_marks, reachable_bare_calls
 
 _CORPUS = sorted((Path(__file__).resolve().parent / "generated_perf_tests").glob("*.py.txt"))
-
-
 
 
 def _any_function_assigning_stage_hooks(src: str, module_level_only: bool = False) -> str:
@@ -129,12 +127,8 @@ def test_the_pass_is_reachable_within_its_function(path):
     out, _ = _marked(path)
     fn = _fn_holding_the_pass(out)
     tree = ast.parse(out)
-    target = next(
-        n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn
-    )
-    call = next(
-        i for i, l in enumerate(out.splitlines(), 1) if "mark_stages_in_scope" in l and target.lineno <= i
-    )
+    target = next(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn)
+    call = next(i for i, l in enumerate(out.splitlines(), 1) if "mark_stages_in_scope" in l and target.lineno <= i)
     for st in target.body:
         if isinstance(st, ast.Return):
             assert call < st.lineno, "%s: the pass sits after `return` and can never run" % path.name
@@ -152,9 +146,7 @@ def test_any_preparer_it_names_is_actually_in_scope(path):
     name = line.split("bind=")[1].split(")")[0].split(",")[0].strip()
     fn = _fn_holding_the_pass(out)
     tree = ast.parse(out)
-    target = next(
-        n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn
-    )
+    target = next(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn)
     visible = {
         n.name
         for n in ast.walk(tree)

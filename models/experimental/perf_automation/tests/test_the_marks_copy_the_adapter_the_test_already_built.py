@@ -20,11 +20,10 @@ import ast
 import sys
 import types
 
-import pytest
 
 from agent.stage_marks import find_pipeline_in_scope, inject_stage_marks
 
-_SHAPE = '''import os
+_SHAPE = """import os
 
 PERF_BATCH = 8
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
@@ -60,7 +59,7 @@ def test_main_perf(device_params, device):
         %(eager)s()
         if _PERF_TRACE:
             _try_traced()
-'''
+"""
 
 
 def _src(eager="_eager_forward", pipe="pipe", build="_build_for_perf", ids="_prompt_ids"):
@@ -211,7 +210,7 @@ def test_an_undecidable_condition_keeps_both_branches():
     """A call that MIGHT run beats one that certainly does not."""
     from agent.stage_marks import reachable_bare_calls
 
-    src = _src().replace('_PERF_TRACE and not _PROFILING', 'some_unknown_flag')
+    src = _src().replace("_PERF_TRACE and not _PROFILING", "some_unknown_flag")
     got = [n for _, _, n in reachable_bare_calls(src)]
     # Both arms of the undecidable branch are kept -- and _try_traced STILL is not, because its own
     # condition (`if _PERF_TRACE:`) remains decidable and false. Undecidable widens the search; it
@@ -230,7 +229,7 @@ def test_a_module_level_flag_is_carried_into_the_function():
 # --- the stage inputs, without asking anyone for a data file -------------------------------------
 
 
-_WITH_PREPARER = '''import os
+_WITH_PREPARER = """import os
 
 PERF_BATCH = 8
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
@@ -256,7 +255,7 @@ def test_main_perf(device_params, device):
         _traced_forward()
     else:
         _eager_forward()
-'''
+"""
 
 
 def _with_preparer(prep="_bind_stage_inputs", hook="_trace_inputs"):
@@ -364,7 +363,7 @@ def test_one_stage_that_cannot_prepare_does_not_cost_the_others():
 # --- and the preparer must be REACHABLE from where the marks run ---------------------------------
 
 
-_NESTED_PREPARER = '''import os
+_NESTED_PREPARER = """import os
 
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
 
@@ -387,7 +386,7 @@ def test_main_perf(device_params, device):
         _traced_forward()
     else:
         _eager_forward()
-'''
+"""
 
 
 def test_a_preparer_nested_in_another_function_is_not_used():

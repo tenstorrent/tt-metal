@@ -5811,6 +5811,10 @@ def _reliable_forward_unit() -> str:
         return ""
 
 
+# Set once the facts rebuild has been attempted in this process -- see _load_perf_target_inputs.
+_PTIN_REBUILD_TRIED = False
+
+
 def _load_perf_target_inputs() -> dict | None:
     """The bandwidth facts, REBUILT if the file is gone.
 
@@ -5833,7 +5837,24 @@ def _load_perf_target_inputs() -> dict | None:
             pass
     # The REBUILD path resolves the same relative "." and so re-adopted the working directory's file
     # even after the direct read was guarded -- one rule, two doors. Both are shut by the same test.
-    if facts is None and _MODEL_ROOT_STATED:
+    # AND REBUILT IF NOBODY WHO KNOWS THE MODEL HAS WRITTEN IT. The condition was `facts is None`
+    # -- the file being GONE. A file that merely cannot answer satisfies that check: the device
+    # census creates perf_target_inputs.json as soon as it has walked the boards, carrying bytes and
+    # nothing else, and stamps no `source` because it is not the facts producer. From then on this
+    # read succeeds, the rebuild never fires, and the producer's keys -- total_params, the per-block
+    # geometry, the layer counts -- never reach the file for the rest of the run.
+    #
+    # `source` is the file's own record of who wrote it, which is exactly the question here: absent,
+    # no producer has ever written, so ask one to. The emit merges rather than replaces, so a file
+    # another writer owns keeps every value it already carries.
+    # ONCE PER PROCESS. The rebuild walks safetensors headers, and when it cannot produce facts (no
+    # reachable checkpoint) it writes nothing -- so the file keeps no `source` and every later read
+    # would pay for the same failed walk again. Retrying a rebuild that already declined to write
+    # cannot succeed on the same inputs, so it is attempted once and the result stands.
+    global _PTIN_REBUILD_TRIED
+    _unproduced = isinstance(facts, dict) and not str(facts.get("source") or "").strip()
+    if (facts is None or (_unproduced and not _PTIN_REBUILD_TRIED)) and _MODEL_ROOT_STATED:
+        _PTIN_REBUILD_TRIED = True
         try:
             import importlib.util as _ilu
 
@@ -5850,7 +5871,12 @@ def _load_perf_target_inputs() -> dict | None:
             _run._emit_perf_target_inputs(_MODEL_ROOT, _MODEL_ROOT, _mid_hint, _MANIFEST)
             facts = json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
         except Exception:  # noqa: BLE001
-            return None
+            # A FAILED REBUILD MUST NOT COST THE FACTS ALREADY READ, AND MUST NOT SKIP THE OVERRIDE.
+            # This returned None -- right while the branch only ran with nothing in hand, but now
+            # that an unproduced file also reaches here it would trade a partial answer for none.
+            # Falling through instead keeps whatever was read (None included, which the single exit
+            # below returns unchanged) and leaves both routes passing through the unit override.
+            pass
     # THE OBSERVED UNIT OVERRIDES THE CACHED GUESS. The file's `unit` came from a table keyed on the
     # HF pipeline_tag, which names the TASK and cannot state whether a model loops: `text-to-speech`
     # covers XTTS, which emits tokens, and Kokoro, which is StyleTTS2 and produces a whole waveform in

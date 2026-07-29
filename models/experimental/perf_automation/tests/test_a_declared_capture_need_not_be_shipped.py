@@ -124,7 +124,9 @@ def test_a_missing_file_with_no_manifest_still_raises(tmp_path):
     d.mkdir(parents=True)
     restore = install()
     try:
-        with pytest.raises(FileNotFoundError):
+        # expect_error lives in the device conftest, which these host-only tests do not load; the
+        # hook documents the same-line marker below for exactly that case.
+        with pytest.raises(FileNotFoundError):  # allow-pytest.raises
             torch.load(d / "args.pt", weights_only=False)
     finally:
         restore()

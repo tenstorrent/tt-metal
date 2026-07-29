@@ -81,8 +81,11 @@ def headline_unit(stage_names, pipeline=None) -> str:
 
     A pipeline exposing decode_step(state) retires ONE TOKEN PER CALL by definition -- that is the
     decode contract PipelineDecodeAdapter requires and raises NotTraceCapable without. It is a fact
-    about the built object, so it is checked first. The name match stays underneath it for
-    stage-adapter pipelines, which expose per-stage hooks rather than the single decode contract.
+    about the built object, so it is checked first. Underneath it a stage-adapter pipeline, which
+    exposes per-stage hooks rather than the single decode contract, is asked what one call retires.
+
+    NOTHING HERE READS A NAME. Every question is put to the object; a stage that answers none of them
+    is counted as retiring a whole inference, which is what an unstated stage is.
 
     Lives here rather than in trace_replay because that module imports ttnn at module scope and so
     cannot be imported, let alone tested, without a device.
@@ -104,11 +107,21 @@ def headline_unit(stage_names, pipeline=None) -> str:
     # keeps no contract, which is the only case left where nothing structural has spoken.
     if pipeline is not None and callable(getattr(pipeline, "decode_step", None)):
         return "token"
-    names = [str(n or "").lower() for n in (stage_names or [])]
-    if any("decode" in n for n in names):
-        return "token"
-    if any(k in n for n in names for k in ("step", "denoise", "diffus")):
-        return "step"
+    # 3. WHAT ONE CALL RETIRES, asked of the stage instead of read off its name. <stage>_trace_items()
+    # is the same optional seam _Stage derives `recurring` from: a stage that states it retires exactly
+    # one item per call IS the recurring one -- that is what recurring means. Absent, it states nothing
+    # and is skipped, so an unstated stage can never be mistaken for a recurring one. What that item is
+    # CALLED -- token, denoising step -- is not a structural fact and is not guessed; a model whose item
+    # is not a token declares PIPELINE_UNIT, which is answered first.
+    for _n in stage_names or []:
+        _items = getattr(pipeline, "%s_trace_items" % _n, None) if pipeline is not None else None
+        if not callable(_items):
+            continue
+        try:
+            if int(_items() or 0) == 1:
+                return "token"
+        except Exception:  # noqa: BLE001 -- a stage that cannot count says nothing; it never breaks a run
+            continue
     return "inference"
 
 

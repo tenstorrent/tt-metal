@@ -962,6 +962,16 @@ def _capacity_bytes():
 _MODEL_ROOT_HINT = None
 
 
+def _facts_params(facts) -> int:
+    """The param count these facts can yield, literal or derived. 0 when they cannot yield one."""
+    try:
+        from agent.perf_target import ceiling_params as _cp
+
+        return int(_cp(facts or {}) or 0)
+    except Exception:  # noqa: BLE001
+        return int((facts or {}).get("total_params") or 0)
+
+
 def _model_facts():
     """perf_target_inputs.json — total_params / layers / weight bytes. None if unobtainable."""
     # the caller's model dir first: it is the only source that is right by construction
@@ -970,7 +980,14 @@ def _model_facts():
             _p = Path(_MODEL_ROOT_HINT) / "perf_target_inputs.json"
             if _p.is_file():
                 f = json.loads(_p.read_text())
-                if isinstance(f, dict) and f.get("total_params"):
+                # ACCEPTED IF IT CAN YIELD A PARAM COUNT, not if it spells one. ceiling_params
+                # derives the count from device_weight_bytes / bytes_per_param when total_params is
+                # absent, so gating on the literal field rejected the model's own facts before that
+                # derivation could run -- and the caller then fell back to a search that does not
+                # know the model root. Measured on voxtral: a census-written file carrying
+                # 10604865536 bytes at 2.0 bytes/param was discarded for lack of their quotient, and
+                # every per-stage compute ceiling printed "no param count" as a result.
+                if isinstance(f, dict) and _facts_params(f):
                     return f
         except Exception:  # noqa: BLE001
             pass
@@ -1240,6 +1257,29 @@ def _stage_units(stage, prompt_tokens) -> int:
 _PROMPT_ROW_LABEL = "prefill"
 
 
+def _unit_word(unit) -> str:
+    """The vocabulary word behind a unit label, via the table in model_bytes that produced it.
+
+    GUARDED LIKE EVERY OTHER `agent.` IMPORT IN THIS FILE. They resolve because the tool puts the
+    perf_automation dir on sys.path (perf_test_mcp.py:21), which an importer that reaches this module
+    another way has not done -- so every such site here degrades instead of raising, and these two
+    did not. An unresolvable table means the unit cannot be read, which is not a token.
+    """
+    for _mod in ("agent.model_bytes", "models.experimental.perf_automation.agent.model_bytes"):
+        try:
+            import importlib
+
+            return importlib.import_module(_mod).unit_word(unit)
+        except Exception:  # noqa: BLE001
+            continue
+    return str(unit or "").strip().lower()
+
+
+def _unit_is_token(unit) -> bool:
+    """Whether the measured unit is one token, asked of the table rather than of the string's spelling."""
+    return _unit_word(unit) == "token"
+
+
 def _unit_work_name(unit) -> str:
     """What one unit of this model's work is called, from the unit the run measured.
 
@@ -1247,15 +1287,20 @@ def _unit_work_name(unit) -> str:
     prints the rate's unit alongside. Used only when the model declared no stages at all, so the one
     aggregate row is not labelled with a stage the model does not have.
     """
-    u = str(unit or "").strip().lower()
-    if u.startswith("tok"):
+    # THE WORD BEHIND THE UNIT, from the table that produced it. This substring-matched its own
+    # keyword list ("tok" / "step" / "denoise" / "diffus"), which was a guess about wording and a
+    # second copy of a question model_bytes already answers by inverting _UNIT_LABEL.
+    w = _unit_word(unit)
+    if w == "token":
         return "decode"
-    if "step" in u or "denoise" in u or "diffus" in u:
+    if w == "step":
         return "step"
     return "inference"
 
 
-def stage_read_bytes(stage, *, model: str = "", task: str = "", measured=None, estimate=None, with_source: bool = False):
+def stage_read_bytes(
+    stage, *, model: str = "", task: str = "", measured=None, estimate=None, with_source: bool = False
+):
     """THE bytes one unit of `stage` reads. Every consumer asks here; nobody derives it again.
 
     Three sources, in this order, and the order is the point:
@@ -1281,6 +1326,7 @@ def stage_read_bytes(stage, *, model: str = "", task: str = "", measured=None, e
     `estimate` is a callable so the fallback is only paid for when the two measurements are absent --
     it prices activations and KV from the model's geometry and is not free.
     """
+
     # WHICH OF THE THREE ANSWERED, reported by the one function that knows. A caller that needs to
     # label the number must not re-run the chain to find out -- that is a second opinion on the same
     # question, and two opinions on this quantity is the defect this function was extracted to end.
@@ -1552,7 +1598,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     #
     # stage_ms is written from the model's own PIPELINE_STAGES by the run that measured them, so it
     # is the authority. Declared order is kept: it is the order the pipeline runs in.
-    _pt = _prompt_tokens() if str(unit or "").strip().lower().startswith("tok") else 0
+    _pt = _prompt_tokens() if _unit_is_token(unit) else 0
     _declared = [str(k) for k in (stage_ms or {}) if k]
     if _declared:
         stages = [(n, _stage_units(n, _pt)) for n in _declared]
@@ -1572,7 +1618,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # beside it already asked _unit_work_name -- which returns exactly "decode" for a token unit,
         # so this is the same output from the one function that owns the question.
         stages = [(_unit_work_name(unit), 1)]
-        if _pt and str(unit or "").strip().lower().startswith("tok"):
+        if _pt and _unit_is_token(unit):
             # The prompt-consuming pass. A model that declared no stages has no name for it, so this
             # label is the tool's own and is not looked up anywhere: _stage_block returns None for it
             # either way. Kept rather than invented from the unit ("decode-prompt") because the label
@@ -1954,9 +2000,7 @@ def _roofline_tables(
     # 39.7% HiFi4, so every stack was priced at LoFi's 702 TFLOPS while encode and prefill run HiFi4
     # at 175.5, a ceiling 4x too generous. The fallback is correct (inventing a per-stage peak would
     # be worse); printing it as though it were three measurements is not.
-    _shared_peak = bool(_in_use) and not any(
-        (_roofs.get(_s) or {}).get("peak_stage") for _s in (_roofs or {})
-    )
+    _shared_peak = bool(_in_use) and not any((_roofs.get(_s) or {}).get("peak_stage") for _s in (_roofs or {}))
 
     # BOTH ROOFS, BOTH STAGES. Only the WINNING floor used to survive `annotate_op`, so compute was
     # the only renderable term and the report printed a compute band over a memory-bound stage. Being
@@ -2586,8 +2630,27 @@ def _roofline_lines(
                         else ""
                     ),
                 )
-            except Exception:  # noqa: BLE001
-                pass  # fall through to the legacy lines rather than losing the section entirely
+            except Exception as _rt_exc:  # noqa: BLE001
+                # SAY THAT IT FELL BACK, AND WHY. This was `pass`, so a table that raised was
+                # indistinguishable from a tool that never had the section: the report quietly
+                # printed the legacy five lines with correct-looking numbers, and the per-stage
+                # ceilings -- the whole reason the stage marks exist -- were simply absent with
+                # nothing to act on. Measured: run 37 marked all three stages, sliced their buckets
+                # (137.6 / 190.1 / 37.8 GFLOP, correctly different) and still reported one aggregate
+                # ceiling, because this line discarded the reason. Two hundred lines above, the same
+                # module already names its missing input rather than rendering nothing; this now
+                # does the same. The fallback still happens -- losing the roofline entirely would be
+                # worse -- but it no longer happens in silence.
+                import traceback as _tb
+
+                print(
+                    "  [summary] per-stage roofline table unavailable (%s: %s); reporting the "
+                    "aggregate ceiling instead" % (type(_rt_exc).__name__, str(_rt_exc)[:160]),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _tb.print_exc(file=sys.stderr)
+                out.append("  per-stage ceilings unavailable: %s: %s" % (type(_rt_exc).__name__, str(_rt_exc)[:120]))
         out.append(f"  theoretical ceiling : {theo:.1f} {_u}{_tag}")
         if band[0] is not None:
             # The percentages are DERIVED from the band, not hardcoded: dense sustains 60-80% of peak

@@ -484,22 +484,17 @@ def measure_adapter(adapter, device) -> float:
     # as one-pass, and one that names any stage `decode` reads as autoregressive whether it loops or
     # not. The decode CONTRACT is the real signal: a pipeline exposing decode_step(state) retires one
     # token per call by definition, which is what PipelineDecodeAdapter already requires and raises
-    # NotTraceCapable without. The name match stays BELOW it, for stage-adapter pipelines that expose
-    # per-stage hooks rather than the single decode contract.
+    # NotTraceCapable without. Below it a stage-adapter pipeline, which exposes per-stage hooks rather
+    # than the single decode contract, is asked what one call retires. No name is read on any path.
     from models.experimental.perf_automation.agent.perf_adapter import headline_unit as _hu
 
     _unit = _hu([r[0] for r in results], getattr(adapter, "_pipe", None))
     # THE RECURRING STAGE, AS THE STAGE ITSELF REPORTED IT. `recurring` is set from the item count
     # the pipeline declares (one item per call is what recurring means) and unconditionally for the
-    # legacy decode contract. The name match below is what this used to do first, and it is a guess
-    # in both directions: a loop called `generate` read as one-pass, and any stage called `decode`
-    # read as the recurring one whether it looped or not.
+    # legacy decode contract. This used to match a name first, and that was a guess in both
+    # directions: a loop called `generate` read as one-pass, and any stage called `decode` read as
+    # the recurring one whether it looped or not.
     _rec = {st.name for st in stages if getattr(st, "recurring", False)}
-    decode = next((r for r in results if r[0] in _rec), None)
-    if decode is None:
-        decode = next((r for r in results if "decode" in r[0].lower()), None)
-    if _unit == "token" and decode is None and results:
-        decode = results[-1]
     # WHICH UNIT OF WORK THE HEADLINE MEASURES. This selection already knew -- a decode stage means
     # the number is per TOKEN, no decode stage means it is one whole pipeline pass -- but it never
     # said so, and the roofline band on the other end assumed "token" unconditionally. A step-unit
@@ -507,11 +502,18 @@ def measure_adapter(adapter, device) -> float:
     # against whatever this printed, silently: the same per-token-vs-per-profile unit mix that once
     # made every module read ABOVE_BAND, on a different axis. Name it here, at the only place that
     # can know, so the band can refuse a mismatch instead of guessing.
-    step = next((r for r in results if any(k in r[0].lower() for k in ("step", "denoise", "diffus"))), None)
-    if decode:
-        headline_ms, headline_path, headline_unit = decode[1], decode[2], "token"
-    elif step:
-        headline_ms, headline_path, headline_unit = step[1], step[2], "step"
+    # THE HEADLINE STAGE FOLLOWS THE UNIT, which headline_unit derived without reading a name. A
+    # per-item unit means one stage recurs and the headline is that stage; an inference unit means
+    # nothing recurs and the headline is the whole pass. Both the stage and its unit therefore come
+    # from what the pipeline stated -- `recurring` from the item count it declares, the unit from
+    # PIPELINE_UNIT or the decode contract -- and neither is inferred from the word a stage is called.
+    _headline = next((r for r in results if r[0] in _rec), None) if _unit != "inference" else None
+    # A pipeline that stated a per-item unit but exposed no per-stage count still has a recurring
+    # stage: it is the last one to run, the loop every earlier stage feeds.
+    if _headline is None and _unit != "inference" and results:
+        _headline = results[-1]
+    if _headline is not None:
+        headline_ms, headline_path, headline_unit = _headline[1], _headline[2], _unit
     else:
         headline_ms, headline_path, headline_unit = pipeline_ms, "trace+pipeline", "inference"
     batch = int(getattr(adapter, "batch", 1) or 1)
@@ -522,7 +524,7 @@ def measure_adapter(adapter, device) -> float:
     print("TRACE_HEADLINE_UNIT=%s" % headline_unit, flush=True)
     print(
         "TRACE_PIPELINE_MS=%.4f TRACE_STAGES=%d%s"
-        % (pipeline_ms, len(results), "" if decode else " (no decode stage: per-token=pipeline sum)"),
+        % (pipeline_ms, len(results), "" if _headline is not None else " (no recurring stage: headline=pipeline sum)"),
         flush=True,
     )
     print(

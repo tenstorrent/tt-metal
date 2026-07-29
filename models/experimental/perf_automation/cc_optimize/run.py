@@ -5740,9 +5740,34 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
                 _prev = json.loads(out.read_text())
             except Exception:  # noqa: BLE001
                 _prev = {}
-            _mine = str((_prev or {}).get("source") or "") == str(facts.get("source") or "")
-            if not (isinstance(_prev, dict) and _mine):
-                return  # hand-tuned (or unreadable): strictly better than what is derived here
+            if not isinstance(_prev, dict):
+                return  # unreadable: strictly better than what is derived here
+            # ADD WHAT IS MISSING, NEVER REPLACE WHAT IS THERE. This refused outright whenever the
+            # file's `source` was not this producer's, to protect a hand-tuned file. It also refused
+            # every file the tool's OWN device census writes, because that writer stamps no source:
+            # the census creates perf_target_inputs.json early carrying device_weight_bytes and
+            # bytes_per_param and nothing else, the producer then reads a source it does not
+            # recognise, treats the tool's own output as someone's careful manual work, and declines
+            # -- so the param count, the per-block geometry and the layer counts never arrive for the
+            # rest of the run. Measured on voxtral run 37: a census file written at 23:46 left every
+            # per-stage compute ceiling, and the entire fidelity ladder, unrenderable to the end of
+            # the run for want of a param count this producer already had.
+            #
+            # Merging key-by-key protects a hand-tuned value exactly as well -- it is present, so it
+            # is kept -- while letting a fact nobody has recorded reach the file. Copying first also
+            # means the divisor guard below can no longer fire on a key the previous file owned.
+            # A HAND-TUNED FILE NAMES ITS AUTHOR; THE CENSUS'S DOES NOT. That is the whole
+            # distinction, and it is recorded in the file rather than inferred: `source` present and
+            # not this producer's means someone stated where those facts came from, and they stay
+            # untouched exactly as before. `source` absent means no producer has ever written here,
+            # which is the census's file, and the keys it lacks are merged in.
+            _mine = str(_prev.get("source") or "") == str(facts.get("source") or "")
+            _unclaimed = not str(_prev.get("source") or "").strip()
+            if not (_mine or _unclaimed):
+                return  # hand-tuned: strictly better than what is derived here
+            # The gap-fill itself runs AFTER the divisor guard below: filling a hole first would
+            # hide the very loss that guard exists to catch -- a regeneration that dropped
+            # weight_bytes would silently inherit the old one and be written anyway.
             if _prev == facts:
                 return
             # A REFRESH MUST NEVER DOWNGRADE. `never overwrites` was crude but it was SAFE: it could
@@ -5793,6 +5818,26 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
                     "lost the divisor describes no model." % ", ".join(_lost),
                     flush=True,
                 )
+                return
+            # NOW fill the gaps: the new facts are known not to have dropped a divisor, so every key
+            # the previous file carries and these do not is added rather than lost to the rewrite.
+            for _k, _v in _prev.items():
+                # `_v not in (None, "", 0, ...)` was wrong for a BOOLEAN: False == 0 in Python, so a
+                # recorded False -- device_census_complete among them -- tested as "no value" and was
+                # dropped, and since this write REPLACES the file the key disappeared entirely. A
+                # bool is a value; only None and the empty string are not.
+                if _v is None or _v == "":
+                    continue
+                _cur = facts.get(_k, None)
+                _held = not (
+                    _k not in facts
+                    or _cur is None
+                    or _cur == ""
+                    or (isinstance(_cur, (int, float)) and not isinstance(_cur, bool) and _cur == 0)
+                )
+                if not _held:
+                    facts[_k] = _v
+            if _prev == facts:
                 return
         out.write_text(json.dumps(facts, indent=2) + "\n")
         _mirror_arch_facts(facts)

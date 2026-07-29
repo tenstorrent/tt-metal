@@ -91,7 +91,11 @@ def for_missing_file(path) -> tuple:
         return None, "%s is not readable (%s)" % (man.name, type(exc).__name__)
     spec = doc.get(p.stem)
     if spec is None:
-        return None, "%s describes %s, not %r" % (man.name, sorted(k for k in doc if k not in ("component", "submodule_path")), p.stem)
+        return None, "%s describes %s, not %r" % (
+            man.name,
+            sorted(k for k in doc if k not in ("component", "submodule_path")),
+            p.stem,
+        )
     try:
         return build(spec), "synthesised %s from %s" % (p.name, man.parent.name + "/" + man.name)
     except Exception as exc:  # noqa: BLE001

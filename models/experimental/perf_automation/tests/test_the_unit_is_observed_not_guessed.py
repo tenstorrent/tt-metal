@@ -109,15 +109,42 @@ def test_no_contract_and_no_matching_name_is_one_pass():
     assert _hu(["encode", "vocode"], None) == "inference"
 
 
-def test_a_denoise_stage_is_a_step_unit():
-    assert _hu(["denoise"], None) == "step"
-    assert _hu(["diffusion_step"], None) == "step"
+def test_a_step_unit_is_declared_not_spelled():
+    """A stage CALLED denoise is told apart from one that IS a denoise step by what the model says.
+
+    This used to read the word: "denoise" or "diffus" anywhere in a stage name returned "step". That
+    is a guess about vocabulary -- it fires on a stage merely named that way and stays silent for a
+    diffusion model whose stage is called anything else. PIPELINE_UNIT is the model stating it.
+    """
+    assert _hu(["denoise"], None) == "inference"
+    assert _hu(["diffusion_step"], None) == "inference"
+
+    class _Declared:
+        PIPELINE_UNIT = "step"
+
+    assert _hu(["anything_at_all"], _Declared()) == "step"
 
 
-def test_the_name_match_still_serves_stage_adapter_pipelines():
-    """They expose per-stage hooks rather than the single decode contract, so the name is all there
-    is -- underneath the structural test, not instead of it."""
-    assert _hu(["prefill", "decode"], None) == "token"
+def test_a_stage_adapter_pipeline_is_served_by_its_item_count():
+    """It exposes per-stage hooks rather than the single decode contract, so it is asked what one
+    call retires -- <stage>_trace_items(), the same seam _Stage derives `recurring` from. The name
+    is not consulted: a stage called `decode` that states nothing says nothing."""
+    assert _hu(["prefill", "decode"], None) == "inference"
+
+    class _Counts:
+        def decode_trace_items(self):
+            return 1
+
+        def prefill_trace_items(self):
+            return 128
+
+    assert _hu(["prefill", "decode"], _Counts()) == "token"
+
+    class _NoneRecur:
+        def encode_trace_items(self):
+            return 1500
+
+    assert _hu(["encode"], _NoneRecur()) == "inference"
 
 
 def test_the_contract_outranks_a_conflicting_name():

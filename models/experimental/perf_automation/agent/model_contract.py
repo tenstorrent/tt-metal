@@ -398,13 +398,18 @@ def _c_decode_contract(src: Source) -> list:
     decode_step reads them and NEVER recomputes. A decode_step that re-derives its KV is not a decode
     step -- it prices a prefill on every token, and tok/s/u is then a number about the wrong work.
     """
-    stages = None
-    for _p, node in src.assigns("PIPELINE_STAGES"):
-        if isinstance(node.value, (ast.List, ast.Tuple)):
-            stages = [e.value for e in node.value.elts if isinstance(e, ast.Constant)]
+    # WHO THIS CHECK IS FOR, derived from what the source states rather than from what a stage is
+    # called. This selected the model by `"decode" in stage_name`, so a per-token loop named
+    # `generate` was never checked for the contract it needs, and a non-autoregressive stage that
+    # merely had `decode` in its name was checked for hooks it should not have.
+    # Two statements can say a model retires one token per call, and both are the model's own:
+    # PIPELINE_UNIT == "token" declares it, and `def decode_step` keeps the contract that means it.
+    _unit = ""
+    for _p, node in src.assigns("PIPELINE_UNIT"):
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            _unit = node.value.value.strip().lower()
             break
-    ar = [s for s in (stages or []) if isinstance(s, str) and "decode" in s.lower()]
-    if not ar and not src.mentions("def decode_step"):
+    if _unit != "token" and not src.mentions("def decode_step"):
         return []
     out = []
     for hook in ("decode_prefill", "decode_step"):

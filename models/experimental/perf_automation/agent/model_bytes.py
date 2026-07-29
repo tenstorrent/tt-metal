@@ -225,6 +225,40 @@ def unit_label(unit: str) -> str:
     return _UNIT_LABEL.get(str(unit or "").strip().lower(), "")
 
 
+def unit_word(unit) -> str:
+    """The vocabulary word -- token / step / inference -- behind a unit, whichever form it arrives in.
+
+    THE INVERSE OF _UNIT_LABEL, AND IT LIVES HERE SO THE TWO CANNOT DRIFT. headline_unit derives the
+    word structurally, unit_label turns it into a rate for the report, and readers downstream then
+    had to get the word back out of that label -- which they each did by pattern-matching their own
+    keyword list ("step"/"denoise"/"diffus" in one file, startswith("tok") in another). Those lists
+    were guesses about wording, they duplicated each other, and neither was derived from the table
+    that produced the label in the first place. This inverts that table instead.
+
+    Accepts the word itself, the exact label, or a rate whose work-noun (the part before the first
+    "/") names one -- so "token", "tok/s/u" and "tokens/s" all answer "token". A unit this tool never
+    produced and cannot match names no recurring work, which is what an inference is.
+    """
+    u = str(unit or "").strip().lower()
+    if u in _UNIT_LABEL:
+        return u
+    for word, label in _UNIT_LABEL.items():
+        if u == label.lower():
+            return word
+    # THE WORK-NOUN, MATCHED EXACTLY AGAINST WHAT EACH WORD CAN BE SPELLED AS: the word itself, its
+    # plural, and the noun its own label uses ("tok" for a token). This compared PREFIXES in both
+    # directions, which is unbounded at the short end -- "s" resolved to a step and "t" to a token
+    # because one letter is a prefix of "steps" and "tok" -- and unbounded at the long end, where
+    # "toked" resolved to a token. Both are the spelling guess this function exists to remove.
+    noun = u.split("/", 1)[0]
+    if noun:
+        for word, label in _UNIT_LABEL.items():
+            spellings = {word, word + "s", label.lower().split("/", 1)[0]}
+            if noun in spellings:
+                return word
+    return "inference"
+
+
 def _headers(path: Path):
     """{tensor_name: {dtype, shape}} from a safetensors file, reading only its header."""
     with path.open("rb") as fh:

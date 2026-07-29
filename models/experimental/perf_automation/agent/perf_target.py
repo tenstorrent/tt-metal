@@ -343,7 +343,21 @@ def ceiling_params(model_facts: dict) -> int:
         if shared > 0 and per_expert > 0 and top_k > 0:
             return int(shared + top_k * per_expert)
         return 0
-    return int(_scalar(mf.get("total_params", 0), 0))
+    _tp = _scalar(mf.get("total_params", 0), 0)
+    if _tp > 0:
+        return int(_tp)
+    # DERIVED FROM THE TWO FIELDS THAT DEFINE IT. A census that walked the device records what it
+    # measured -- device_weight_bytes and the bytes each parameter occupies -- and need not also
+    # state their quotient. Requiring total_params meant such a file had NO param count at all, so
+    # every compute roof read "not measured" and the fidelity ladder said "needs a param count in
+    # perf_target_inputs.json" about a file that already contained one, twice over. Measured on
+    # voxtral: 10604865536 bytes at 2.0 bytes/param is 5.30e9 parameters, and the whole per-stage
+    # compute ceiling was withheld for want of that division.
+    _wb = _scalar(mf.get("device_weight_bytes", 0), 0) or _scalar(mf.get("weight_bytes", 0), 0)
+    _bpp = _scalar(mf.get("bytes_per_param", 0), 0)
+    if _wb > 0 and _bpp > 0:
+        return int(_wb / _bpp)
+    return 0
 
 
 def simple_active_bytes(model_facts: dict) -> int:
