@@ -415,18 +415,37 @@ jobs:
           TTRUN_DIR=/etc/ttop
           WORKER_HOME=/home/user/tt-metal
 
+          # ttop-get-allocation-data dumps the allocation ConfigMap keys here.
+          # Dump what actually landed: an empty/short --hosts makes the script
+          # exit in under a second with a one-line error and no other clue.
+          echo "--- ${TTRUN_DIR} ---"
+          ls -la "$TTRUN_DIR" 2>&1 || true
+          for f in hostfile rankfile; do
+            echo "--- ${f} ---"
+            cat "${TTRUN_DIR}/${f}" 2>&1 || true
+          done
+
           # Host ORDER defines the 32x4 ring: --config 4x32 launches one rank per
           # --hosts entry against a host_topology 4x1 descriptor, and (unlike the Z
           # configs) the script does not reorder them. Take ttop's own rank order
           # from the rankfile -- that is the placement the SC4 fabric test runs
           # with -- and fall back to hostfile order if it can't be parsed.
+          count_hosts() { tr ',' '\n' <<< "$1" | grep -c . || true; }
+
           PIPELINE_HOSTS=$(sed -n 's/^rank[[:space:]]*[0-9]*=\([^[:space:]]*\).*/\1/p' "${TTRUN_DIR}/rankfile" 2>/dev/null \
             | awk '!seen[$0]++' | paste -sd, -)
-          if [ "$(tr -cd ',' <<< "$PIPELINE_HOSTS" | wc -c)" -ne 3 ]; then
-            echo "Could not read 4 hosts from ${TTRUN_DIR}/rankfile; falling back to hostfile order"
-            PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+          NHOSTS=$(count_hosts "$PIPELINE_HOSTS")
+          if [ "${NHOSTS:-0}" -ne 4 ]; then
+            echo "rankfile yielded ${NHOSTS} host(s); falling back to hostfile order"
+            PIPELINE_HOSTS=$(awk 'NF {print $1}' "${TTRUN_DIR}/hostfile" 2>/dev/null \
+              | awk '!seen[$0]++' | paste -sd, -)
+            NHOSTS=$(count_hosts "$PIPELINE_HOSTS")
           fi
-          echo "Ring order: $PIPELINE_HOSTS"
+          echo "Ring order (${NHOSTS} hosts): $PIPELINE_HOSTS"
+          if [ "${NHOSTS:-0}" -ne 4 ]; then
+            echo "::error::Could not determine the 4 quad hosts from ${TTRUN_DIR} (see the dump above)"
+            exit 1
+          fi
 
           set -o pipefail
           ./tools/scaleout/exabox/run_fabric_tests.sh \
