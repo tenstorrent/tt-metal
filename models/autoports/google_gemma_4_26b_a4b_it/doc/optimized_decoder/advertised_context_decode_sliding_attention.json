@@ -1,0 +1,98 @@
+{
+  "advertised_context": 262144,
+  "batch": 1,
+  "cache_bytes_each": 1073741824,
+  "cache_bytes_total": 2147483648,
+  "cache_shape_each": [
+    4096,
+    8,
+    64,
+    256
+  ],
+  "decode_current_position": 262143,
+  "device_dram_bytes": null,
+  "finite_output": true,
+  "history_initialization": {
+    "baseline_position": 262141,
+    "device_readback_verified": true,
+    "key_baseline": 0.0078125,
+    "observed_sentinel_rows": {
+      "0": {
+        "key_mean": 0.125,
+        "value_mean": 4.0
+      },
+      "131071": {
+        "key_mean": -0.25,
+        "value_mean": -8.0
+      },
+      "262142": {
+        "key_mean": 0.5,
+        "value_mean": 16.0
+      }
+    },
+    "preserved_after_trace": 262142,
+    "sentinel_key_values": [
+      0.125,
+      -0.25,
+      0.5
+    ],
+    "sentinel_positions": [
+      0,
+      131071,
+      262142
+    ],
+    "sentinel_values": [
+      4.0,
+      -8.0,
+      16.0
+    ],
+    "value_baseline": -0.015625
+  },
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "page_table_permutation": "roll_by_7",
+  "page_table_shape": [
+    1,
+    4096
+  ],
+  "provenance": {
+    "checkout_git_sha": "dca6a039ed1e45372b798a422f01f975078b81ed",
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_FUNCTIONAL_DECODER_CONTEXT=1 python -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_advertised_context",
+    "hardware": {
+      "arch": "Arch.BLACKHOLE",
+      "device_ids": [
+        3
+      ],
+      "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
+    },
+    "optimized_decoder_sha256": "c350c41c801c01117e76859065096317c48277c202c5785bc2689d76dd2cd787",
+    "optimized_policy": {
+      "advisor_roles": [
+        "qkv_local_w1",
+        "persistent_o_proj",
+        "packed_dense",
+        "dense_down_w3",
+        "expert_gate_grid_w11",
+        "expert_up_w11",
+        "fused_router_scale"
+      ],
+      "attention_fidelity": "functional",
+      "attention_weight_dtype": "bf16",
+      "decode_layout": "advisor_selected_l1_width_sharded",
+      "dense_mlp_fidelity": "functional",
+      "dense_mlp_weight_dtype": "bf16",
+      "expert_fidelity": "functional",
+      "expert_weight_dtype": "bfp8",
+      "name": "shard_advisor_selected_batch1",
+      "prefill_layout": "dram_interleaved",
+      "shard_advisor_seeded": true
+    },
+    "optimized_test_sha256": "3f0a223ab6e1ffaef50f21d9512e04165b359eabe8397668c3e45c5aeae6e228",
+    "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",
+    "ttnn_extension_sha256": "ed2bf1a78109396ab2411c7f7bd0a0fa341c3eb3c8b4f82a40985fadb3dc26a2"
+  },
+  "repeat_replay_pcc": 1.0,
+  "repeat_replay_threshold": 0.9999,
+  "traced_warmed_host_ms": 10.187458246946335
+}
