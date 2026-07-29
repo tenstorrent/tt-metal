@@ -265,4 +265,54 @@ operation at 54.197 us (9.4x). The remaining SP2/SP4 wall gap is 0.320 ms,
 with TP4 output projection/reduce-scatter still the largest adverse stage:
 3.950 ms versus 2.434 ms.
 
+## 2026-07-29: reduce fused output-collective traffic
+
+Verdict: keep. Typecast the output-projection input to BF16 and request a BF16
+output from the fused matmul/reduce-scatter. The change applies to every fused
+KDA output collective and contains no SP/TP-count branch. Matmul accumulation
+remains FP32 through the existing compute-kernel configuration.
+
+Diagnosis: normal `MatmulReduceScatterAsyncDeviceOperation` does not overlap
+the batch-1 projection and reduce-scatter. Its sender publishes readiness only
+after the complete matmul batch, and the linear reduce-scatter consumes
+full-width slices. At the matched task-2 baseline, SP2xTP4 spent a 3.950 ms
+median in this stage versus 2.434 ms for SP4xTP2; endpoint matmul kernels took
+approximately 2.65--2.70 ms, while inner ranks took approximately
+3.93--3.96 ms. This isolates approximately 1.25--1.31 ms of TP4 collective
+tail and supports traffic volume as the limiting factor.
+
+Rejected controls:
+
+- Changing only the MMRS output dtype produced mixed input/output page sizes
+  and corrupted the fused collective (output PCC as low as -0.005 with values
+  near 3e29). The retained path keeps input and output dtypes equal.
+- The existing chunk-ready strided MMRS path is ring-only, while SP2xTP4
+  resolves to the linear collective. Reusing it would not test or improve the
+  target path. A correct chunked linear algorithm would require a new data
+  layout and collective implementation, not a semaphore-only change.
+
+Validation:
+
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_sp_layer.py -q -s`:
+  6 passed, `SAFE_PYTEST_RESULT: PASS`. Both mesh-axis placements, repeat, and
+  trace replay pass. Worst printed serial-reference output PCC is 0.999964;
+  worst chunked-versus-one-shot PCC is 0.999967.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py -q -s`:
+  4 passed, 4 mesh-shape skips, `SAFE_PYTEST_RESULT: PASS`. TP8 layer output
+  PCC is 0.999958; both 2D output placements pass at PCC 0.999994.
+- Real Kimi-K3 layer, real weights, `T=5120`, ten trace replays:
+  SP2xTP4 passes at 11.124 ms/replay
+  (`generated/profiler/reports/2026_07_29_06_50_27`), down from 12.332 ms
+  (9.8%). Its MMRS session-max median falls to 2.737 ms despite the added
+  0.312 ms typecast.
+- The matched SP4xTP2 control passes at 11.548 ms/replay
+  (`generated/profiler/reports/2026_07_29_06_52_23`), down from 12.012 ms
+  (3.9%). Its MMRS median falls to 1.960 ms and its added typecast is also
+  0.312 ms.
+
+SP2xTP4 is now 0.424 ms faster than SP4xTP2, reversing the prior 0.320 ms
+deficit. The larger TP4 benefit is consistent with the traffic hypothesis.
+Across the three general changes, SP2xTP4 improves from 14.605 to 11.124 ms
+(23.8%).
+
 ## Backlog

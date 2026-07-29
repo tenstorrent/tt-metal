@@ -536,6 +536,9 @@ class KimiDeltaAttention:
         )
         if fused_output_collective:
             assert self.tt_ccl is not None
+            # Keep the MMRS input and output dtypes equal: mixed page sizes corrupt the fused collective.
+            # BF16 halves the projection intermediate and reduce-scatter traffic; accumulation remains FP32.
+            output = ttnn.typecast(output, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             output = matmul_reduce_scatter_prefill(
                 output,
                 weights.output_projection,
@@ -543,7 +546,7 @@ class KimiDeltaAttention:
                 self.compute_config,
                 ttnn.Topology.Ring,
                 self.tensor_parallel_size,
-                output.dtype,
+                ttnn.bfloat16,
                 cluster_axis=None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis,
                 out_block_w_cap=self.output_projection_out_block_w,
             )
