@@ -61,6 +61,8 @@ struct RegimeAMatmulParams {
     //                                       factory); this bit forces it for shapes outside the gate.
     //   bit14 (16384) MESH_OFF             - force the mesh OFF, i.e. restore the pre-mesh placement, so the
     //                                       shipped default can be A/B'd
+    //   bit15 (32768) MESH_SPREAD          - mesh variant: when there are fewer slices than grid rows, space
+    //                                       them evenly over all rows instead of packing rows 0..preaders-1
     //   bit12 (4096) PLACE_IN1_OPT         - CROSS placement: put each (bank, noc) reader group in the region
     //                                       downstream of THAT endpoint on THAT NoC instead of one spiral
     //                                       around the NOC_0-optimal core (also supersedes IN1_NEAR pass 1)

@@ -1095,7 +1095,7 @@ void place_in1_optimal(plan::ExecutionPlan& P, IDevice* device, const plan::Geom
 // Layout: cores (bank b, slice p) -> (x=b, y=p) for p < grid.y; overflow slices each take their own column at
 // x >= 8 with the 8 banks down rows 0..7. Collision-free by construction. mm-siblings are consecutive in p,
 // so M-split slaves land adjacent to their reader, which keeps the in1 forward short without a separate pass.
-void place_mesh(plan::ExecutionPlan& P, const plan::Geometry& geo, const CoreCoord& grid) {
+void place_mesh(plan::ExecutionPlan& P, const plan::Geometry& geo, const CoreCoord& grid, bool spread_rows) {
     const uint32_t preaders = geo.num_cores / 8u;
     const uint32_t overflow_cols = (grid.x > 8u) ? (grid.x - 8u) : 0u;
     TT_FATAL(
@@ -1110,7 +1110,11 @@ void place_mesh(plan::ExecutionPlan& P, const plan::Geometry& geo, const CoreCoo
             const uint32_t i = b * preaders + p;
             if (p < grid.y) {
                 P.cores[i].coord.x = b;  // banks along x, slices along y
-                P.cores[i].coord.y = p;
+                // spread_rows: when there are fewer slices than rows, SPACE THEM OUT over all the rows instead
+                // of packing rows 0..preaders-1. Packing is what makes the mesh catastrophic at small
+                // preaders (-48% to -89%): every core ends up in one corner and all the DRAM paths pile onto
+                // the same links. Identity when preaders >= grid.y, so the shipped gate is unaffected.
+                P.cores[i].coord.y = (spread_rows && preaders <= grid.y) ? (p * grid.y) / preaders : p;
             } else {
                 P.cores[i].coord.x = 8u + (p - grid.y);  // one spare column per overflow slice
                 P.cores[i].coord.y = b;
@@ -1226,10 +1230,19 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // required for the Ns>1 case (Pk=3/Ns=4 measured neutral-to-negative).
     // Fitted on the 63-shape corpus at deployed configs: adopts 24/63 shapes, mean +5.06%, best +14.98%,
     // worst -1.27%; every declined shape stays byte-identical to the previous production placement.
+    // Second clause: adopt regardless of the above when the in0 RING simply carries more traffic than the in1
+    // read - at ring >= 2x in1 the ring savings dominate whatever the placement costs the read. On the corpus
+    // exactly 3 shapes clear 2x and all 3 win (+14.64%, +9.09%, +8.70%); the highest-ratio loser is at 1.31x.
+    // This is what lets the two Sm>1 ring-heavy shapes in (256x15360x768, 256x2048x512).
     const uint32_t Ns_gate = cfg.n_slices ? cfg.n_slices : 1u;
-    const bool mesh_gate = (Pk * Ns_gate >= 10u) && (Sm == 1u) && (Ns_gate == 1u || Pk >= 4u);
+    const uint64_t ring_bytes =
+        static_cast<uint64_t>(geo.num_cores) * 7u * geo.W * geo.M_block_capacity * kb * kTileBytesBf16;
+    const uint64_t in1_bytes = static_cast<uint64_t>(geo.Kt) * geo.Nt * kTileBytesBf16;
+    const bool mesh_gate = ((Pk * Ns_gate >= 10u) && (Sm == 1u) && (Ns_gate == 1u || Pk >= 4u)) ||
+                           (ring_bytes >= 2u * in1_bytes);
+    const bool diag_mesh_spread = (diag_mask & 0x8000u) != 0u;  // bit15: even row spacing for few slices
     if ((diag_place_mesh || mesh_gate) && !diag_mesh_off) {
-        place_mesh(P, geo, device->compute_with_storage_grid_size());
+        place_mesh(P, geo, device->compute_with_storage_grid_size(), diag_mesh_spread);
     } else if (diag_place_in1) {
         place_in1_optimal(P, device, geo, device->compute_with_storage_grid_size());
     } else if (Sm > 1u) {
