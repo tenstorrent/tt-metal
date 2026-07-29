@@ -20,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include "context/context_types.hpp"
 #include "fmt/base.h"
@@ -90,7 +91,7 @@ inline bool is_emule_device(const IDevice* device) {
 void validate_buffer_parameters(
     DeviceAddr size,
     DeviceAddr page_size,
-    const BufferType& /*buffer_type*/,
+    const BufferType& buffer_type,
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_spec,
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
@@ -98,6 +99,35 @@ void validate_buffer_parameters(
         TT_FATAL(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
+
+        // DRAM banks are 1D: bank_id == a core's logical x-coordinate and the DRAM grid is a single
+        // row. A shard grid with a core off row 0, or a repeated x, aliases multiple shards onto the
+        // same bank and silently corrupts data (tenstorrent/tt-metal#51503). Covers both the ND
+        // (BufferDistributionSpec) and legacy (ShardSpecBuffer) sharding paths.
+        if (buffer_type == BufferType::DRAM) {
+            std::vector<CoreCoord> shard_cores;
+            if (buffer_distribution_spec.has_value()) {
+                shard_cores = buffer_distribution_spec->cores();
+            } else if (shard_spec.has_value()) {
+                shard_cores = corerange_to_cores(shard_spec->grid());
+            }
+            std::unordered_set<uint32_t> seen_x;
+            seen_x.reserve(shard_cores.size());
+            for (const auto& core : shard_cores) {
+                TT_FATAL(
+                    core.y == 0,
+                    "Invalid DRAM shard grid: shard core ({}, {}) is not on row 0. DRAM banks are 1D "
+                    "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
+                    core.x,
+                    core.y);
+                TT_FATAL(
+                    seen_x.insert(core.x).second,
+                    "Invalid DRAM shard grid: x-coordinate {} is used by more than one shard core. DRAM "
+                    "banks are 1D (bank_id == logical x-coordinate), so a duplicate x aliases multiple "
+                    "shards onto the same bank and corrupts data.",
+                    core.x);
+            }
+        }
     } else {
         TT_FATAL(
             shard_spec == std::nullopt && buffer_distribution_spec == std::nullopt,
