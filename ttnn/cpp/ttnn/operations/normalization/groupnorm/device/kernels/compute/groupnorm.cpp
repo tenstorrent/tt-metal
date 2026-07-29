@@ -158,11 +158,11 @@ void kernel_main() {
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_28;
 
-    // #50682 pad-correction CBs, allocated only when has_pad_correction. cb_k holds K from the
-    // writer; cb_msq / cb_kmsq are single-tile scratch.
-    constexpr uint32_t cb_k_id = tt::CBIndex::c_1;
-    constexpr uint32_t cb_msq_id = tt::CBIndex::c_7;
-    constexpr uint32_t cb_kmsq_id = tt::CBIndex::c_11;
+    // #50682 pad-correction CBs, allocated only when has_pad_correction. dfb_k holds K from the
+    // writer; dfb_msq / dfb_kmsq are single-tile scratch.
+    constexpr uint32_t dfb_k_id = tt::CBIndex::c_1;
+    constexpr uint32_t dfb_msq_id = tt::CBIndex::c_7;
+    constexpr uint32_t dfb_kmsq_id = tt::CBIndex::c_11;
 
     // interm cbs
     constexpr uint32_t dfb_repack_id = tt::CBIndex::c_26;
@@ -251,9 +251,9 @@ void kernel_main() {
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
-    DataflowBuffer cb_k(cb_k_id);
-    DataflowBuffer cb_msq(cb_msq_id);
-    DataflowBuffer cb_kmsq(cb_kmsq_id);
+    DataflowBuffer dfb_k(dfb_k_id);
+    DataflowBuffer dfb_msq(dfb_msq_id);
+    DataflowBuffer dfb_kmsq(dfb_kmsq_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -537,53 +537,53 @@ void kernel_main() {
             dfb_ex2_global.wait_front(1);
             dfb_ex2pe.reserve_back(1);
 
-            // Var := Var - K*E[x]^2, staged through cb_msq so (Var + eps) below is unchanged for
+            // Var := Var - K*E[x]^2, staged through dfb_msq so (Var + eps) below is unchanged for
             // aligned inputs. cb_ex_global still holds E[x] here (it is popped after the output
-            // loop); cb_k holds K. Binary ops read from CBs, hence the round trips.
-            constexpr uint32_t cb_var_src_id = has_pad_correction ? cb_msq_id : dfb_ex2_global_id;
+            // loop); dfb_k holds K. Binary ops read from CBs, hence the round trips.
+            constexpr uint32_t dfb_var_src_id = has_pad_correction ? dfb_msq_id : dfb_ex2_global_id;
             if constexpr (has_pad_correction) {
-                cb_k.wait_front(1);
-                // cb_msq = E[x]^2
-                cb_msq.reserve_back(1);
+                dfb_k.wait_front(1);
+                // dfb_msq = E[x]^2
+                dfb_msq.reserve_back(1);
                 tile_regs_acquire();
                 mul_tiles_init(dfb_ex_global_id, dfb_ex_global_id);
                 mul_tiles(dfb_ex_global_id, dfb_ex_global_id, 0, 0, dst0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(dst0, cb_msq_id);
+                pack_tile(dst0, dfb_msq_id);
                 tile_regs_release();
-                cb_msq.push_back(1);
-                // cb_kmsq = K * E[x]^2
-                cb_msq.wait_front(1);
-                cb_kmsq.reserve_back(1);
+                dfb_msq.push_back(1);
+                // dfb_kmsq = K * E[x]^2
+                dfb_msq.wait_front(1);
+                dfb_kmsq.reserve_back(1);
                 tile_regs_acquire();
-                mul_tiles_init(cb_msq_id, cb_k_id);
-                mul_tiles(cb_msq_id, cb_k_id, 0, 0, dst0);
+                mul_tiles_init(dfb_msq_id, dfb_k_id);
+                mul_tiles(dfb_msq_id, dfb_k_id, 0, 0, dst0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(dst0, cb_kmsq_id);
+                pack_tile(dst0, dfb_kmsq_id);
                 tile_regs_release();
-                cb_msq.pop_front(1);
-                cb_kmsq.push_back(1);
-                // cb_msq (reused) = Var - K * E[x]^2
-                cb_kmsq.wait_front(1);
-                cb_msq.reserve_back(1);
+                dfb_msq.pop_front(1);
+                dfb_kmsq.push_back(1);
+                // dfb_msq (reused) = Var - K * E[x]^2
+                dfb_kmsq.wait_front(1);
+                dfb_msq.reserve_back(1);
                 tile_regs_acquire();
-                sub_tiles_init(dfb_ex2_global_id, cb_kmsq_id);
-                sub_tiles(dfb_ex2_global_id, cb_kmsq_id, 0, 0, dst0);
+                sub_tiles_init(dfb_ex2_global_id, dfb_kmsq_id);
+                sub_tiles(dfb_ex2_global_id, dfb_kmsq_id, 0, 0, dst0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(dst0, cb_msq_id);
+                pack_tile(dst0, dfb_msq_id);
                 tile_regs_release();
-                cb_kmsq.pop_front(1);
-                cb_msq.push_back(1);
-                cb_msq.wait_front(1);
+                dfb_kmsq.pop_front(1);
+                dfb_msq.push_back(1);
+                dfb_msq.wait_front(1);
             }
 
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init(cb_var_src_id, dfb_eps_id);
-            add_tiles(cb_var_src_id, dfb_eps_id, 0, 0, dst0);
+            add_tiles_init(dfb_var_src_id, dfb_eps_id);
+            add_tiles(dfb_var_src_id, dfb_eps_id, 0, 0, dst0);
             tile_regs_wait();
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
@@ -595,7 +595,7 @@ void kernel_main() {
             dfb_ex2pe.push_back(1);
             dfb_ex2_global.pop_front(1);
             if constexpr (has_pad_correction) {
-                cb_msq.pop_front(1);
+                dfb_msq.pop_front(1);
             }
             // End Variance Calc
 

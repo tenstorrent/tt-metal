@@ -50,7 +50,7 @@ void kernel_main() {
     constexpr uint32_t logical_hw = get_named_compile_time_arg_val("logical_hw");
     constexpr uint32_t padded_hw = get_named_compile_time_arg_val("padded_hw");
     constexpr bool has_pad_correction = padded_hw != logical_hw;
-    constexpr uint32_t cb_k_id = tt::CBIndex::c_1;
+    constexpr uint32_t dfb_k_id = tt::CBIndex::c_1;
     constexpr uint32_t pad_scaler_bits = get_named_compile_time_arg_val("pad_scaler_bits");
     constexpr uint32_t pad_k_bits = get_named_compile_time_arg_val("pad_k_bits");
 
@@ -150,7 +150,7 @@ void kernel_main() {
                             dfb_in_2,
                             ckernel::PoolType::AVG,
                             ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
-                        generate_bcast_col_scalar(CircularBuffer(cb_k_id), pad_k_bits);
+                        generate_bcast_col_scalar(CircularBuffer(dfb_k_id), pad_k_bits);
                     } else {
                         constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
                         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
