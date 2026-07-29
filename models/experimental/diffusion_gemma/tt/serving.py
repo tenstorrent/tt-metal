@@ -134,6 +134,23 @@ def _validate_next_block_capacity(
         )
 
 
+def _bind_retry_noise(gumbel_noise_fn, block_idx: int):
+    """Adapt a ``(block_idx, attempt)`` noise factory to the ``(attempt)`` retry contract.
+
+    ``denoise_and_commit_block`` passes only the attempt number, and it refuses any factory that is
+    not marked ``supports_retry`` -- so the marker has to ride along, otherwise binding the block
+    would turn a working retry into a hard error.
+    """
+    if gumbel_noise_fn is None:
+        return None
+
+    def retry_noise_for_attempt(attempt: int):
+        return gumbel_noise_fn(block_idx, attempt)
+
+    retry_noise_for_attempt.supports_retry = getattr(gumbel_noise_fn, "supports_retry", False)
+    return retry_noise_for_attempt
+
+
 def _argmax_gumbel_noise_fn(block_idx: int):
     """Block-level Gumbel hook whose per-step noise is ``None`` → clean argmax.
 
@@ -398,7 +415,13 @@ class BlockDiffusionServingSession:
                 # Both are needed by DG_DEGENERACY_POLICY=retry: the noise factory so a retry can
                 # draw different noise, and the canvas factory because the denoise path consumes
                 # the canvas it is handed.
-                retry_noise_fn=self._gumbel_noise_fn,
+                #
+                # The factory must be bound to THIS block. denoise_and_commit_block calls
+                # retry_noise_fn(attempt) with one positional argument, so passing the raw
+                # gumbel_noise_for_block(block_idx, attempt=0) made the attempt number land on
+                # block_idx while attempt stayed 0 -- and for block_idx == attempt that reproduces the
+                # original draw exactly, i.e. block 1's first retry was a silent no-op.
+                retry_noise_fn=_bind_retry_noise(self._gumbel_noise_fn, block_idx),
                 retry_init_canvas_fn=lambda: self._init_canvas_fn(block_idx, start_pos),
             )
         except DegenerateBlockError as degenerate:

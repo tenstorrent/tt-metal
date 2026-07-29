@@ -209,29 +209,51 @@ def hide_prefill_pads_enabled() -> bool:
     pads restores 20/12/11, i.e. baseline. See ``doc/decision_fidelity/device_gumbel_restored.md``
     section 16.
 
-    Default **ON** since 2026-07-28: the device gate it was waiting for is done, twice.
+    Default **OFF**. It was flipped ON on 2026-07-28 and REVERTED the same day: it repairs the
+    catastrophic block-0 collapses but breaks far more healthy requests than it fixes.
 
-    * doc/decision_fidelity/device_gumbel_restored.md section 18 -- the seven questions that
-      collapse on block 0 all stop collapsing, 7 of 7, and block 0 halts in every case where six of
-      seven previously ran the full 48 steps and committed an unsettled canvas.
-    * Language drift (an English prompt answered in Chinese) on 16 trivial-English probes through the
-      shipped vLLM server: **2/16 -> 0/16, repairing both and breaking none**, matching the A100 CUDA
-      reference's 0/16, at **no latency cost** (24.6 s vs 24.5 s per request). The same A/B rules out
-      the sampler: DG_VLLM_GUMBEL_MODE=host (IID) drifts on the same two prompts as device
-      (2/16, repaired 0) while costing 1.40x per request, so the residual ttnn.rand correlation is
-      NOT what makes TT answer in the wrong language.
+    WHAT IT REPAIRS, measured:
 
-    Still decision-changing for every prompt whose length is not a 32-multiple; prompts that ARE
-    aligned have no pad slots, so the mask is unchanged there. Set
-    DG_DENOISE_HIDE_PREFILL_PADS=0 to get the old maskless behaviour back.
+    * doc/decision_fidelity/device_gumbel_restored.md section 18 -- the seven questions that collapse
+      on block 0 all stop collapsing, 7 of 7, and block 0 halts in every case where six of seven
+      previously ran the full 48 steps and committed an unsettled canvas.
+    * Language drift on 16 trivial-English probes through the shipped vLLM server: 2/16 -> 0/16,
+      matching the A100 CUDA reference's 0/16, at no latency cost (24.6 s vs 24.5 s per request).
+      That A/B also ruled the SAMPLER out: DG_VLLM_GUMBEL_MODE=host (IID) drifted on the same two
+      prompts as device, repairing 0, at 1.40x the cost -- which is why the host mode was deleted.
 
-    NOTE the interaction now reachable by default: combining this with a BOUNDED sliding span
+    WHAT REVERTED IT -- a paired full-workload comparison, 2026-07-28. Same 44 GPQA prompts in the
+    same lm_eval order, same max_model_len 8192 / max_gen_toks 5632, only this flag moved:
+
+        cot_rerun (pads OFF)   guard kills  5/44 = 11%   9.0 blocks/req   1.3% per-block degeneracy
+        pads ON                guard kills 30/44 = 68%   3.2 blocks/req  21.1% per-block degeneracy
+
+    Per request: killed in both 2, killed only with pads OFF 3, killed only with pads ON 28. It
+    repairs 3 and breaks 28, and requests die at ~3 committed blocks instead of ~9.
+
+    The arms that argued FOR the flip were run on a prompt set deliberately ENRICHED with known
+    failures, where the flag does help (5/6 -> 3/6 kills, 27% -> 14% per-block degeneracy, drift
+    3/5 -> 1/6, doc 12 going 612 chars + drift -> 4033 chars of clean English). That does not
+    generalise. Comparing an enriched subset against a population average is the error to avoid here,
+    and so is validating degeneracy at max_tokens=512, which caps generation at 2 canvases and cannot
+    see this failure mode at all.
+
+    The mechanism is not in doubt; the blast radius is the problem. It perturbs every prompt whose
+    length is not a 32-multiple, and most of those were converging fine. A shippable version has to be
+    narrower -- applied only where block 0 actually collapses -- or must stop disturbing prompts that
+    are already converging.
+
+    Decision-changing for every prompt whose length is not a 32-multiple; prompts that ARE aligned
+    have no pad slots, so the mask is unchanged there (verified: doc 47 is byte-identical across both
+    arms). Set DG_DENOISE_HIDE_PREFILL_PADS=1 to opt in.
+
+    NOTE if you opt in: combining this with a BOUNDED sliding span
     (DG_DENOISE_SLIDING_SPAN=1, still default off) raises NotImplementedError in
     _build_reveal_mask_device -- the bounded read is built for (span, lo), so pad slots would have
     to be mapped into that window rather than hidden by absolute position. Enabling the span needs
     that mask first.
     """
-    return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "1").lower() in ("1", "true", "yes", "on")
+    return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "0").lower() in ("1", "true", "yes", "on")
 
 
 def prefill_pad_span(true_prompt_len: int | None, padded_prompt_len: int | None):
@@ -594,7 +616,7 @@ def _denoise_moe_forward(moe, router_input, expert_input):
     # True-sparse token-gather MoE is the DEFAULT (see _sparse_moe_enabled). DG_SPARSE_MOE=0
     # selects the ~5x-slower reference dense-128 path, which fails loud unless
     # DG_ALLOW_DENSE_MOE=1 is set (A/B / PCC baseline only). See tt/sparse_moe.py.
-    # Concat-experts (DG_MOE_CONCAT, default off) replaces the token-gather dispatch entirely:
+    # Concat-experts (DG_MOE_CONCAT, default ON since 2026-07-29) replaces token-gather entirely:
     # at the shipped capacity=256 the gather/combine matmuls add ~89% MACs on top of an expert MAC
     # count already equal to computing every expert. See tt/concat_moe.py for the arithmetic and
     # the ~7.7 GiB weight-duplication cost this trades against.

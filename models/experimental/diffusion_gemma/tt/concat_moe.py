@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Concat-experts MoE for the DiffusionGemma denoise step (``DG_MOE_CONCAT``, default off).
+"""Concat-experts MoE for the DiffusionGemma denoise step (``DG_MOE_CONCAT``, default ON).
 
 ## Why this exists
 
@@ -95,8 +95,22 @@ _RELAYOUT_SAFE_DTYPES = (ttnn.bfloat16, ttnn.float32)
 
 
 def concat_moe_enabled() -> bool:
-    """``DG_MOE_CONCAT`` (default off): run the denoise MoE as concat-experts matmuls."""
-    return os.environ.get("DG_MOE_CONCAT", "0").strip().lower() not in ("0", "false", "no", "off")
+    """``DG_MOE_CONCAT`` (default **ON** since 2026-07-29): denoise MoE as concat-experts matmuls.
+
+    Default ON because the token-gather dispatch it replaces does not let the denoise trajectory
+    converge. Same 2-question smoke, one env var:
+
+        DG_MOE_CONCAT=0   halted  0/9   min halt_entropy_final 0.44021   2 degenerate, 2 guard kills
+        DG_MOE_CONCAT=1   halted 19/19  min halt_entropy_final 0.000588  0 degenerate, 0 kills
+
+    At 0.46 the mean entropy sits ~100x above the 0.005 halt threshold, so the early halt cannot fire,
+    every block runs the full 48 steps and commits an unsettled canvas, and the degeneracy guard ends
+    roughly two thirds of requests. With concat the trajectory reaches ~6e-4 and halts in 8-27 steps.
+    The fold itself is numerically validated at PCC 0.99992 on device (``213ac50f221``).
+
+    Set ``DG_MOE_CONCAT=0`` for the old token-gather dispatch, but expect degenerate output.
+    """
+    return os.environ.get("DG_MOE_CONCAT", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _free_if_distinct(candidate, source) -> None:
