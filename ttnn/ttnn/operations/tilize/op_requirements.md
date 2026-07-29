@@ -426,7 +426,34 @@ Mode-C ledger row per lever.
 
 ---
 
-### [ ] Refinement 3b — `g_dram_to_sharded`'s unattributed 2 340 ns: per-RISC timeline, then the writer-kernel drop
+### [x] Refinement 3b — `g_dram_to_sharded`'s unattributed 2 340 ns: per-RISC timeline, then the writer-kernel drop
+
+> **Outcome (2026-07-29): COMPLETE on the gate's OR clause.** The 1.4× is **not** met
+> (**16 231 ns** vs a 13 517 bar) — and this entry is the proof that it *cannot be* on this
+> regime. **The attribution clause is met in full**: a per-RISC Tracy timeline
+> (`TILIZE_ZONES=1`) assigns every one of the 16 954 cycles to a named term, and the answer is
+> **TRISC0 blocked in `cb_wait_front` 15 592 / 17 316 = 90 %, NCRISC blocked in
+> `cb_reserve_back` 350 / 17 017 = 2 %, BRISC blocked in `cb_wait_front` 17 372 / 17 522 =
+> 99 %** — the reads are the bound, compute never is, the writer is pure overhead. The
+> residual is **dispatch, not kernel**: launch prologue 863 + FW epilogue 580 + **core-to-core
+> skew 1 129** = **2 572 ns (15.2 %)**, plus the reader's own ~1 400 ns prologue; the per-block
+> CB handshake that Refinement 3 folded into its 2 136 ns estimate is only **~600**.
+> **Why 1.4× is unreachable**: the reader kernel *alone* is **14 346 ns**, above the bar,
+> before one cycle of dispatch — and its read leg is at 209 of a 214 GB/s DRAM best, with a
+> 1024 B transaction worth only 2.4 % over the 128 B the shard-shaped split forces. Floor with
+> the reader prologue, both CB stages **and all dispatch at zero**: **12 340 ns = 1.53×**.
+>
+> Both named levers carry their own measured verdict. **Lever 2 (drop the writer kernel on
+> `alias_out`) LANDED** — a fixed **~45 ns/launch**: 0.995 on the small shape (4 sessions, same
+> sign, CV ≤ 0.6 %), 0.999 on the 16 µs one, with the timeline giving the mechanism
+> (**BRISC-FW end −42 cycles**, NCRISC/TRISC unchanged); it ships **two kernels**, keeps
+> program-cache re-binding, and is R4's precedent. **Lever 3 (hoisted interleaved bank table)
+> IMPLEMENTED AND REFUTED** — `dataflow_kernel_lib::InterleavedStickBands` removes **84 of 96**
+> accessor calls per core and is **1.016** against B13 (reproduced 1.009), which reframes B13:
+> what it buys is the **armed command buffer**, not the arithmetic, and the arithmetic is hidden
+> behind DRAM service anyway. Zero regressions across **162** bench rows; golden 126/126
+> (240/240); `test_translated.py` 275; unit suite **359/359** in both modes; no hangs.
+> Full timeline, ledger and both refutations: `changelog.md` § "Refinement 3b".
 
 **Goal**: the remaining half of Refinement 3 — get `g_dram_to_sharded` `[1,1,2048,512]` → BLOCK-sharded
 below **13 517 ns** (the parent's 1.4× gate) from its measured **16 006 ns**. Unlike the parent, this
@@ -519,6 +546,16 @@ Measured decomposition of `f_sharded_small` `[1,1,512,64]` H-sharded, 4 cores: *
   is measured, not assumed.
 
 **Implementation skill**: /perf-measure
+
+> **Precedent from Refinement 3b (2026-07-29)**: the kernel-count reduction is **already done on
+> the one-sided `alias_out` alias** — the writer is not launched, the output base-address runtime
+> arg moved onto the compute kernel, re-binding was re-probed, and the cross-launch CB question is
+> settled (the firmware's `setup_local_cb_read_write_interfaces` sets
+> `tiles_acked_received_init = 0` every launch, so un-popped pages cannot leak forward). It is
+> worth a **fixed ~45 ns**, not the 200-400 ns projected — so on `f_sharded_small` (1 365 ns)
+> expect the *reader's* removal to be the larger half. R3b also prices what B0 is competing with:
+> **2 572 ns of dispatch/firmware** (launch prologue 863 + FW epilogue 580 + core-to-core skew
+> 1 129), of which only the kernel entry/exit is B0's to take.
 
 **Verifier notes**: the trap is CB bookkeeping, not perf. `WaitMode::NoWait` suppresses only
 `wait_front` — `pop_front`, `reserve_back` and `push_back` still execute (`op_design.md` Risk #13), so

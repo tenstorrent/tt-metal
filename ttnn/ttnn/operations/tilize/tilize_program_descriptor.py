@@ -587,19 +587,24 @@ BANK_TABLE_MIN_BLOCKS = 2
 def bank_table_pays(blocks_per_core: int, chunk_row_bytes: int) -> bool:
     """Lever-3 gate: hoist B13's bank table out of the block loop?
 
-    **MEASURED: NO — always False.** Three in-run A/B pairs, 7 rounds x 10
-    launches, CV <= 1.4 %, each against the plan that regime ships today:
+    **MEASURED: NO — always False.** In-run A/B on the regime it was designed for,
+    15 rounds x 10 launches, CV <= 1.7 %:
 
-      regime                         hoisted | B13     | neither
-      -------------------------------|---------|--------|---------
-      `g_dram_to_sharded` (8 blk)    | 16 062  | 15 916 | 16 827
-      `[1,1,4096,64]`     (2 blk)    |  9 528  |  9 417 | --
-      `[1,1,8192,32]`     (4 blk)    | 13 264  | 13 208 | --
+      variant                        |     ns | vs B13
+      -------------------------------|--------|--------
+      hoisted table (this lever)     | 16 483 | 1.016
+      B13 per-band table (shipped)   | 16 231 | 1.000
+      neither                        | 16 719 | 1.030
 
-    The hoist removes **84 of 96** `accessor.get_noc_addr` calls on the first row
-    and is **0.9 % SLOWER**; B13, which removes 160 of 256, is 5.4 % faster than
-    bare. Two facts follow, and together they close the address-generation
-    question this refinement opened:
+    reproduced in a second session at 16 062 / 15 916 / 16 827 (1.009). On the two
+    interleaved multi-block regimes that meet the structural clause it is
+    sign-unstable across sessions (`[1,1,4096,64]` 1.012 then 0.976;
+    `[1,1,8192,32]` 1.004 then 0.997), i.e. inside the noise there.
+
+    The hoist removes **84 of 96** `accessor.get_noc_addr` calls per core and gets
+    NOTHING, while B13 — which removes 160 of 256 — is 3 % faster than bare. Two
+    facts follow, and together they close the address-generation question
+    Refinement 3b opened:
 
       1. `InterleavedAddrGen::get_noc_addr` is already about as cheap as the cached
          table lookup + `bank_page * aligned_page` multiply that replaces it, so
@@ -644,7 +649,28 @@ def bank_table_pays(blocks_per_core: int, chunk_row_bytes: int) -> bool:
 # rebinding` is the probe that catches it — so it is emitted on the compute kernel
 # instead (read by nobody; its job is to exist).
 def drop_writer_pays() -> bool:
-    """Lever-2 gate: is removing the do-nothing writer kernel worth it?"""
+    """Lever-2 gate: is removing the do-nothing writer kernel worth it?
+
+    **MEASURED: YES, and it is a FIXED cost, not a proportional one.** The saving
+    is BRISC's kernel entry/exit — the wait it replaces was already fully
+    overlapped with the TRISCs (the timeline has BRISC-KERNEL ending 52 cycles
+    after pack), so nothing on the critical path moves. Two instruments agree on
+    the size:
+
+      * duration, in-run A/B on the small `alias_out` shape (`[1,1,512,128]`,
+        8 cores), 12-15 rounds x 10 launches, CV 0.3-0.5 %: **6 829 vs 6 864 =
+        0.995**, reproduced in four sessions at -0.51 / -0.69 / -0.71 / -0.72 %,
+        i.e. a stable **~45 ns**;
+      * the per-RISC timeline on the same shape: **BRISC-FW end -42 cycles**, with
+        the NCRISC (-12) and TRISC (0) spans unchanged.
+
+    On the big regime (`[1,1,2048,512]`, 16 µs) the same 45 ns is 0.3 % and is not
+    resolvable against a 0.7-1.4 % CV — which is the expected signature of a fixed
+    per-launch term, not a contradiction. Kept because it is real, it is free (the
+    program ships one kernel FEWER: less dispatch, one less JIT unit, no writer
+    binary in L1), and it is the precondition Refinement 4 needs for the same move
+    on Path B, where the reader must also go.
+    """
     return True
 
 

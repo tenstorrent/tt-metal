@@ -590,6 +590,13 @@ REGIMES = {
         out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
         levers=dict(bt=0, b13=0),
     ),
+    # The lever FORCED at the shipped depth -- the row the ledger's verdict rests on.
+    "x_g_to_sharded_bt_forced": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        levers=dict(bt=2),
+    ),
     # ... and at depth 1, so the ledger can separate the lever from the C16 depth.
     "x_g_to_sharded_bt_d1": dict(
         shape=(1, 1, 2048, 512),

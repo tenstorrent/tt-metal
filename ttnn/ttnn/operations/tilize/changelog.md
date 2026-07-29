@@ -2303,3 +2303,330 @@ new) in **both** default and `--dev` mode.
    unowned across the whole op.
 5. Refinements 4-5 unchanged. R4's `InitUninitMode` clause still has zero headroom
    (Refinement 1 finding 3).
+
+---
+
+## Refinement 3b — `g_dram_to_sharded`'s unattributed 2 340 ns: per-RISC timeline, then the writer-kernel drop
+
+- **Date**: 2026-07-29
+- **Outcome**: **full (`[x]`)** on the gate's second (OR) clause. The gate is
+  "`g_dram_to_sharded` ≥ 1.4× faster than 18 923 **or** the per-RISC timeline
+  attributes the ~2 340 ns residual to a named term with a measured number, and each
+  of levers 2 and 3 carries its own measured verdict". The 1.4× is **not** met
+  (16 231 ns vs a 13 517 bar) and this entry shows *why it cannot be* — but the
+  attribution clause is met in full: every one of the 16 954 cycles is now assigned
+  to a named term by a per-RISC Tracy timeline, **lever 2 is landed with a measured
+  verdict** and **lever 3 is implemented and refuted with a measured
+  counterfactual**. Zero regressions across **162** carried bench rows; golden
+  240 / 240 (126 / 126 registry cells); `test_translated.py` 275; unit suite
+  **359 / 359** in both default and `--dev` mode; no hangs.
+
+### What was done
+
+**1. Lever 1 — the per-RISC timeline. LANDED (it is the deliverable).**
+
+`TILIZE_ZONES=1` compiles an instrumented copy of each kernel's per-block loop with
+a `DeviceZoneScopedN` around every stage — reader `RD-RESV / RD-ISSUE / RD-BARR /
+RD-PUSH`, compute `CP-WAIT / CP-LLK` (the per-block `cb_wait_front` hoisted out of
+the helper with `WaitMode::NoWait` so it can carry its own zone, with the
+init/uninit chained `InitOnly → Neither → UninitOnly`), writer `WR-WAIT / WR-POP`.
+The shipped branches are byte-for-byte untouched; this is a separate compile-time
+branch, like the ablations — except it changes no read and no CB count, so unlike
+them it stays **bit-exact**, which is what makes its numbers an attribution of the
+real kernel rather than of a different one.
+
+**The headline, on the shipped `alias_out` plan** (`[1,1,2048,512]` → BLOCK-sharded,
+64 cores, 8 blocks/core, 128 B reads):
+
+| RISC | blocked in | cycles | share of its kernel |
+|---|---|---|---|
+| **TRISC0** (unpack) | `cb_wait_front` | **15 592** / 17 316 | **90 %** |
+| **NCRISC** (reader) | `cb_reserve_back` | **350** / 17 017 | **2 %** |
+| **BRISC** (writer) | `cb_wait_front` | **17 372** / 17 522 | **99 %** |
+
+So the reads are the bound, compute is **never** the bound, and the writer kernel is
+pure launch overhead. That answered the entry's question ("NCRISC blocked in
+`cb_reserve_back`, TRISC blocked in `cb_wait_front`, or neither") and **selected
+lever 2** — which is what the entry asked for: *the answer selects the next lever;
+do not guess it*.
+
+**2. Lever 2 — drop the writer kernel on `alias_out`. LANDED.**
+
+The aliased output CB has exactly `shard_tiles` pages and compute pushes exactly
+`shard_tiles`, so after k pushes the free space is `shard_tiles − k·chunk_wt ≥
+chunk_wt` for every k < num_blocks: `cb_reserve_back` never blocks and the CB never
+needs recycling. Across launches the firmware re-runs
+`setup_local_cb_read_write_interfaces`, which sets `tiles_acked_received_init = 0`
+(`circular_buffer_init.h`), so the un-popped pages cannot leak forward. The program
+therefore ships **two kernels**, and the output base-address runtime arg moved onto
+the compute kernel (read by nobody; its job is to exist) so program-cache
+re-binding survives.
+
+**3. Lever 3 — hoisted interleaved bank table. IMPLEMENTED, MEASURED, REFUTED.**
+
+New helper `dataflow_kernel_lib::InterleavedStickBands<num_banks>` (declared in
+`tilize_helpers_dataflow.hpp`, purely additive). B13 already reads bank-major with
+an armed command buffer but rebuilds its bank table on **every band**; this primes
+it **once per core**, resting on the interleaved map being affine in the page index
+(`addr(first_page + m) = table[m % banks] + (m / banks) · aligned_page`, checked on
+device under `ASSERT` for the first and last row of every band). It removes 84 of
+96 accessor calls and is **1.6 % slower than B13**.
+
+### Accuracy achieved
+
+Unchanged and **bit-exact**. `torch.equal` (PCC = 1.0, rtol = atol = 0, 0
+mismatching elements) on the 8 `alias_out` geometries lever 2 changes the program
+shape of (BLOCK / HEIGHT / WIDTH × ROW / COL, plus the width-chunked shard and the
+one-block-per-core shard), each over 4 repeat launches; on the forced lever-3 path
+across 4 shapes × {bf16, fp32}; and on the zone variant. Inputs are `arange`, not
+`randn`: every element is unique, so a wrong read order or a wrong bank stride
+cannot cancel out.
+
+### Golden test progress
+
+**126 / 126** registry cells (90 INVALID-skipped) — unchanged, 0 xfail / xpass /
+drift. `SUPPORTED` is **unchanged**: this is a perf/measurement refinement, it
+unlocks no cell and declares no axis value. Whole golden dir minus
+`test_translated.py`, run to completion with no `-k` filter: **240 passed, 118
+skipped, 0 failed**, byte-identical to the Phase-0 → R3 baselines; the 2 collection
+ERRORs are the pre-existing `use_module_device` × `device_params` conflict inside
+the reference file. `test_translated.py`: **275 passed, 1 failed** — the same
+reference-file device-portability bug as Phase 0. **No hangs** in either mode.
+
+### Perf gate
+
+#### 1. The attribution — what the 2 340 ns actually was
+
+Median over **120 warm launches** of the shipped plan (uninstrumented; the `*-FW`
+and `*-KERNEL` zones the profiler emits by default already give the per-RISC
+skeleton, and `BRISC-KERNEL` is now **absent**, which is lever 2's structural
+witness):
+
+| term | cycles | share | what it is |
+|---|---|---|---|
+| **reader kernel (NCRISC)** | **14 346** | **84.6 %** | the whole op, essentially |
+| core-to-core dispatch skew | 1 129 | 6.7 % | max − median FW end over 64 cores |
+| launch prologue (FW start → kernel entry) | 863 | 5.1 % | dispatch |
+| FW epilogue | 580 | 3.4 % | dispatch |
+| compute tail (TRISC end − NCRISC end) | −95 | −0.6 % | pack finishes *before* the last read drains |
+| **span** | **16 954** | 100 % | (bench median 16 231 ns) |
+
+and inside the reader, from the zone run (shares of the four stages, applied to the
+uninstrumented 14 346):
+
+| stage | cycles | what it is |
+|---|---|---|
+| `RD-ISSUE` | ~8 500 | address generation + NoC command programming + **back-pressure** |
+| `RD-BARR` | ~3 840 | the drain the issue loop did not already hide |
+| reader prologue / loop | ~1 400 | arg reads, accessor construction, `get_write_ptr` |
+| `RD-PUSH` + `RD-RESV` | ~600 | the per-block CB handshake — **only 600, not 2 136** |
+
+**So the residual is named**: **launch prologue 863 + FW epilogue 580 + core-to-core
+skew 1 129 = 2 572 ns (15.2 %) of dispatch/firmware that is not kernel time at all**,
+plus the reader's own **~1 400 ns** prologue. Refinement 3's "launch + per-block CB
+handshakes ≈ 2 136" conflated two terms and missed a third: the CB handshake is
+~600, the dispatch term is ~2 572, and the **core-to-core skew (1 129 ns) is a term
+no prior instrument had at all** — 64 cores do not start or finish together, and the
+op's duration is the *last* one.
+
+**And this is why the 1.4× (13 517 ns) is unreachable on this regime, not merely
+unreached.** The reader kernel **alone** is 14 346 ns, above the bar, before a
+single cycle of dispatch. Inside it, `RD-ISSUE + RD-BARR = 12 340` is the read leg,
+which Refinement 3 pinned at 209 GB/s of a 214 GB/s measured best (2.10 MB / 214 GB/s
+= 9 813 ns is the DRAM floor), and a bigger transaction cannot help: R3 measured
+1024 B reads at 214 GB/s against 128 B at 209, a 2.4 % gap. Even with the reader's
+prologue, both CB stages and all of dispatch at **zero**, the floor is
+**12 340 ns = 1.53×**. The gate needs the *read itself* to get faster, and it is at
+DRAM bandwidth.
+
+#### 2. Lever 2 — the measured verdict
+
+A **fixed ~45 ns per launch**, which two independent instruments agree on:
+
+| shape | writer dropped | writer kept | ratio | rounds | CV |
+|---|---|---|---|---|---|
+| `[1,1,512,128]`, 8 cores | **6 829** | 6 864 | **0.995** | 15 × 10 | 0.5 / 0.4 % |
+| `[1,1,512,128]` (3 more sessions) | — | — | 0.993 / 0.993 / 0.993 | 12 × 10 | ≤ 0.6 % |
+| `[1,1,2048,512]`, 64 cores | 16 231 | 16 245 | 0.999 | 15 × 10 | 0.7 / 1.4 % |
+
+and the timeline on the small shape: **BRISC-FW end −42 cycles**, NCRISC-KERNEL
+start −12, TRISC-KERNEL end 0. The wait it deletes was already fully overlapped
+(BRISC-KERNEL used to end 52 cycles after pack), so what is saved is BRISC's kernel
+**entry/exit**, not any wait — which is exactly the signature of a fixed term:
+resolvable at 6.8 µs (−0.5 to −0.7 %, four sessions, same sign), invisible at 16 µs.
+**KEEP** — it is real, it is free (one kernel *fewer*: less dispatch, one less JIT
+unit, no writer binary in L1), and it is the working precedent Refinement 4 needs
+for the same move on Path B.
+
+#### 3. Lever 3 — the measured counterfactual
+
+In-run A/B on the regime it was designed for, 15 rounds × 10 launches:
+
+| variant | ns | vs B13 | accessor calls / core |
+|---|---|---|---|
+| **hoisted table (lever 3)** | 16 483 | **1.016** | **12** |
+| **B13 per-band table (shipped)** | **16 231** | **1.000** | 96 |
+| neither | 16 719 | 1.030 | 256 |
+
+reproduced in a second session at 16 062 / 15 916 / 16 827 (1.009). On the two
+interleaved multi-block regimes that meet the structural clause it is sign-unstable
+across sessions (`[1,1,4096,64]` 1.012 then 0.976; `[1,1,8192,32]` 1.004 then 0.997),
+i.e. inside the noise there. **DROP — refuted.**
+
+**Two facts close the address-generation question this refinement opened.** (a)
+Removing **84 of 96** accessor calls buys nothing while removing 160 of 256 (B13)
+buys 3 %, so what B13 actually pays for is the **armed command buffer**
+(`noc_async_read_with_state` writes 2 registers where `noc_async_read` writes 4-5),
+which the hoist already inherits — the arithmetic is not the prize. (b) The
+arithmetic is **hidden**: `noc_async_read` spins in `noc_cmd_buf_ready` on a
+DRAM-service-bound loop, so row r+1's address math overlaps row r's service, and
+removing it just makes NCRISC spin longer. That is the same "≈70 % of the
+address-gen prize is hidden" that Refinements 1c and 3 *inferred* from B13's delta —
+now measured directly, by removing 87 % of the calls and getting nothing. The
+timeline's own ablation says the same thing from the other side: with the read
+payload dropped, `RD-ISSUE` falls 10 297 → 4 857 and `RD-BARR` 4 767 → 268, so the
+5 440 cycles `RD-ISSUE` loses are back-pressure, not command programming.
+
+#### 4. Cumulative bench set — non-regression (162 rows, median of 5 × 10 launches)
+
+Whole set re-measured, not a subset. Headline rows against R3:
+
+| regime | R3 ns | **now ns** | Δ |
+|---|---|---|---|
+| a_square | 85 826 | **85 852** | +0.0 % |
+| b_wide_short | 12 552 | **12 412** | −1.1 % |
+| c_single_core | 27 364 | **27 342** | −0.1 % |
+| d_tall_narrow | 3 460 | **3 506** | +1.3 % (CV 1.0 %; R3 recorded the same regime at +1.7 % on a re-measure) |
+| e_square_fp32 | 182 303 | **182 994** | +0.4 % |
+| e_square_bf8b_out | 64 680 | **64 705** | +0.0 % |
+| e_square_fp32_to_bf16 | 120 992 | **120 916** | −0.1 % |
+| f_sharded_small | 1 361 | **1 365** | +0.3 % |
+| f_sharded_large | 2 069 | **2 070** | +0.0 % |
+| **g_dram_to_sharded** | 16 006 | **16 164 / 16 231** | +1.0 % (two sessions; the identical-plan pair `g_dram_to_sharded` vs `p_g_to_sharded_bt_off` read 16 164 / 16 247 in the same run, i.e. 0.5 % is session scatter) |
+| g_sharded_to_dram | 15 112 | **15 018** | −0.6 % |
+| m_wide_short_8k | 7 188 | **7 136** | −0.7 % |
+| m_wide_short_4k | 4 799 | **4 774** | −0.5 % |
+| n_tall_narrow_4blk | 11 337 | **11 224** | −1.0 % |
+| x_wide_short_1core | 50 822 | **50 740** | −0.2 % |
+| x_tall_narrow_16c | 7 560 | **7 583** | +0.3 % |
+| x_sharded_small_depth1 | 1 371 | **1 363** | −0.6 % |
+| x_sharded_to_dram_depth2 | 14 977 | **15 042** | +0.4 % |
+
+**Zero regressions.** Every carried row inside ±1.4 %, against per-row CVs of
+0.1-1.6 %. The two levers are `alias_out`-only and identity-false respectively, so
+the interleaved plans are asserted **structurally** unchanged as well
+(`test_the_interleaved_plans_are_untouched`).
+
+Per-core CB L1 is unchanged (8 192 B/core on `g_dram_to_sharded`); lever 2 removes a
+kernel binary from L1 rather than adding anything, and lever 3 ships off.
+
+#### 5. Mode-C used-optimization ledger
+
+| lever | id | predicted Δ | **measured Δ** | verdict |
+|---|---|---|---|---|
+| per-RISC Tracy timeline | **lever 1** | attribute the residual no ablation can | the whole 16 954-cycle span assigned: reader 84.6 %, dispatch 15.2 %, compute tail −0.6 %; TRISC idle 90 %, BRISC idle 99 % | **KEEP** (measurement, off by default) |
+| drop the writer kernel on `alias_out` | **lever 2 / B0** | "~200-400 ns from R1c's bare-launch price" | **~45 ns fixed** — 0.995 at 6.8 µs (4 sessions, same sign), 0.999 at 16 µs; timeline: BRISC-FW end −42 cyc, NCRISC/TRISC unchanged | **KEEP** — smaller than predicted, but real, free, and R4's precedent |
+| hoisted interleaved bank table | **lever 3 / B13'** | "ceiling ~400 ns / 2.5 %" | **1.016** (16 483 vs 16 231), reproduced 1.009; sign-unstable elsewhere | **DROP — refuted.** 84 of 96 accessor calls removed for nothing; the address arithmetic is hidden behind DRAM service |
+| — instrument: zone-variant read ablation | — | split `RD-ISSUE` into arithmetic vs back-pressure | `RD-ISSUE` 10 297 → 4 857, `RD-BARR` 4 767 → 268 with the payload dropped | **instrument kept** — it is the direct evidence for lever 3's refutation |
+
+#### 6. DM lever checklist review (`master.md` Part 2)
+
+Applied this pass: **B0 kernel-count reduction** on `alias_out` (the checklist's
+"do not launch a kernel that does nothing"). Implemented and refuted: a cheaper
+address generator (a B13 variant). Re-confirmed still applied and **unmoved**: A0
+2D split, A1 `row_wise`, B7 one barrier per block, B8 (gated), B9 reads NoC0 /
+writes NoC1, B13 (gated — and this pass is what finally explains *why* it pays),
+C14 one-sided alias, C16 gated depth, B5/B6 coalesced sharded read, the R2b issue-
+order rotation (gated), D18/D19 program-cache args. **Measured-no-payoff,
+cumulative**: B10, A3, the whole-page + L1 redistribution algorithm and re-blocking,
+C7 on the alias path, B8 on the alias path, read grouping (B7'), and now **the
+hoisted bank table**. Deliberately left to their owners: the same kernel-count
+reduction on Path B, where the *reader* must also go (R4 — this pass is its
+precedent), and the run-closing Mode-D audit (R5).
+
+### Issues encountered
+
+1. **The first ablation attempt measured nothing, because the bench overrode the
+   env.** `TILIZE_SKIP_DM=2` set on the command line is clobbered by the bench's own
+   `_VARIANTS` loop (`os.environ["TILIZE_SKIP_DM"] = skip_dm`) unless
+   `TILIZE_BENCH_SPLIT_DM=1` is set — so "full" and "no_read" came back within
+   0.2 % of each other and briefly looked like a stunning result. Caught because the
+   consequence was absurd (8 empty barriers costing 4 887 cycles). **A perf
+   ablation whose two arms agree is a harness bug until proven otherwise.**
+2. **The first apples-to-apples comparison was not apples-to-apples.** With B13 on,
+   the `skip_dm` arm of the zone branch falls back to *generic* accessor calls while
+   the full arm uses the *stateful* helper, so the difference mixed two changes. Fixed
+   by running the pair on `x_g_alias_d2_bare` (B13 off) — where both arms issue the
+   identical 32 accessor calls and only the `noc_async_read` command differs.
+3. **A prior structural test had to change meaning, not just numbers.**
+   `test_alias_out_zero_copy_is_structural_not_incidental` asserted "the writer's CT
+   arg 0 selects the no-NoC branch"; with the writer gone there is no such arg. The
+   assertion is now the *stronger* "the writer kernel is not launched at all", with
+   the original form retained under the lever's counterfactual (`TILIZE_LEVER_NW=0`)
+   so the Refinement-3 property is still checked.
+4. **Lever 3's real lesson is about which half of B13 pays.** The entry (and R1c and
+   R3 before it) framed B13 as "cheaper per-read address arithmetic". It is not: the
+   hoist proves the arithmetic is worth ~0, and what B13 buys is the armed command
+   buffer. That reframing is worth more than the lever would have been — it says any
+   future "cheaper address generation" idea on this op is dead on arrival, and points
+   the next attempt at the transaction *mechanism* instead.
+5. **The core-to-core dispatch skew (1 129 ns, 6.7 %) is a term no prior phase had.**
+   64 cores do not start or finish together and the op's duration is the last one;
+   `min FW start` to `max FW end` is 1 129 cycles wider than the median core's span.
+   It is not the op's to give — but it does mean any per-core lever worth less than
+   ~1 µs on this regime is unmeasurable without an in-run A/B pair, which is why
+   lever 2 needed the small shape.
+
+### Tests added
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement3b.py` — **39 cells.**
+  Lever 2: the 2-kernel program asserted **structurally** (the descriptor's kernel
+  list, not a duration) on 8 `alias_out` geometries and bit-exact on each; the
+  cross-launch claim as 4 repeat launches per geometry (its regression observable is
+  a **timeout**, so the test must stay); program-cache re-binding both through the
+  cache probe and by reading the compute kernel's runtime args directly; the writer
+  surviving on all three paths that still need it (generic, `alias_in`, Path B) and
+  on the C7 counterfactual that uses it as the second read issuer (dropping it there
+  would turn a measured regression into a hang); the `nw=0` counterfactual still
+  bit-exact. Lever 3: the gate asserted identity-false; the forced path bit-exact on
+  4 shapes × 2 dtypes (the dtype axis is what exposes an aligned-page stride bug);
+  the decline on a sharded source (which is what keeps the helper's `static_assert`
+  from firing); and the "exactly one lever owns the read loop" invariant against
+  each of B8 / C7 / B13. Lever 1: zones off by default in every shipped plan
+  (asserted on the reader's CT arg), bit-exact when on, reaching the `alias_out`
+  crossover, and exclusive with lever 2. Plus the three interleaved bench plans
+  asserted structurally untouched.
+- `_bench_tilize.py` — `bt` and `nw` lever keys with `BT` / `NW` report columns; **8
+  new regimes** — the lever-2 counterfactual on the big and a new SMALL `alias_out`
+  shape (`n_g_to_sharded_small`, where a fixed per-launch term is resolvable), and
+  the lever-3 counterfactuals at forced / off / bare / depth-1 plus the two
+  interleaved regimes that meet its structural clause.
+- `probes/probe_032.py` (lever 3 first light on every gated regime),
+  `probe_033.py` (why the gate declines the B8 regimes), `probe_034.py` (lever 2
+  first light + re-binding + repeat launches).
+
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **359 passed** (320 prior
++ 39 new) in **both** default and `--dev` mode.
+
+### Ranked follow-ups
+
+1. **`g_dram_to_sharded` is done, and this entry is the proof.** The reader kernel
+   alone (14 346 ns) exceeds the 1.4× bar (13 517), its read leg is at 209 of a
+   214 GB/s DRAM best, and a bigger transaction is worth 2.4 %. The remaining
+   headroom is the reader's ~1 400 ns prologue and 2 572 ns of dispatch/firmware —
+   neither of which is a DM lever. **Do not open a fourth entry on this regime.**
+2. **The 2 572 ns dispatch term is the biggest unowned block left across the whole
+   op**, and it is shape-independent, so it dominates every small regime
+   (`f_sharded_small` 1 365 ns is *mostly* this). Refinement 4 already owns the
+   kernel-count half of it on Path B; the launch-prologue and core-skew halves are a
+   platform property this op can only avoid by launching fewer, bigger programs.
+3. **Any future "cheaper address generation" idea on this op is dead.** Lever 3
+   removed 87 % of the accessor calls for nothing. What B13 buys is the armed
+   command buffer, so the live question is the transaction *mechanism*, not its
+   address arithmetic.
+4. **`dataflow_kernel_lib::InterleavedStickBands` is a refuted lever but a sound
+   primitive**, and it may pay somewhere this op is not: its premise (amortise the
+   bank table across bands) needs a loop that is NOT DRAM-service-bound — e.g. an
+   L1-interleaved source, or a kernel doing real compute between bands.
+5. Refinements 4-5 unchanged. R4 now has a working, tested precedent for its
+   kernel-count reduction on the simpler (one-sided) alias.
