@@ -2004,6 +2004,45 @@ jobs:
             [ "$username" = "$PR_AUTHOR_LOGIN" ]
           }
 
+          # Helper: from a team's roster (in $TEAM_MEMBERS) pick up to 2 unapproved members at
+          # random, excluding thirdparty-moreh members and the PR author. Echoes a comma-separated
+          # list (0, 1, or 2 logins). Used to ping specific individuals alongside a team's Slack
+          # group so a named person owns the review, not just the alias (issue #51489).
+          select_two_team_owners() {
+            local team="$1"
+            [ -z "$TEAM_MEMBERS" ] && return 0
+            local team_members_entry
+            team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+            [ -z "$team_members_entry" ] && return 0
+            local team_owners
+            team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
+            case "$team_owners" in
+              insufficient-permissions|team-not-found|unauthorized|api-error|no-members|"") return 0 ;;
+            esac
+            local member unapproved=""
+            local -a MEMBERS_ARRAY
+            IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+            for member in "${MEMBERS_ARRAY[@]}"; do
+              [ -z "$member" ] && continue
+              if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then continue; fi
+              if is_moreh_member "$member"; then continue; fi
+              if is_pr_author "$member"; then continue; fi
+              unapproved="$unapproved$member,"
+            done
+            unapproved=$(echo "$unapproved" | sed 's/,$//')
+            [ -z "$unapproved" ] && return 0
+            local -a POOL
+            IFS=',' read -ra POOL <<< "$unapproved"
+            local count=${#POOL[@]}
+            if [ "$count" -eq 1 ]; then
+              echo "${POOL[0]}"
+            else
+              local r1=$((RANDOM % count)) r2=$((RANDOM % count))
+              while [ "$r2" -eq "$r1" ]; do r2=$((RANDOM % count)); done
+              echo "${POOL[$r1]},${POOL[$r2]}"
+            fi
+          }
+
           # GitHub team to Slack group mapping
           get_slack_group_id() {
             local github_team="$1"
@@ -2260,27 +2299,16 @@ jobs:
               if [ -n "$SLACK_GROUP_ID" ]; then
                 echo "Team $team has Slack group: $SLACK_GROUP_ID"
 
-                # Special handling for metalium-developers-eltwise - only ping group if none of the 3 key members approved
-                if [ "$team" = "@tenstorrent/metalium-developers-eltwise" ]; then
-                  ELTWISE_KEY_MEMBERS="dchenTT mateusznowakTT cmaryanTT"
-                  ELTWISE_APPROVED=false
-                  for key_member in $ELTWISE_KEY_MEMBERS; do
-                    if echo "$APPROVED_REVIEWERS" | grep -q "$key_member"; then
-                      echo "✅ Key eltwise member $key_member has approved, skipping group ping"
-                      ELTWISE_APPROVED=true
-                      break
-                    fi
-                  done
+                # Ping the team's Slack group, AND pick up to 2 individual owners from the team so a
+                # named person owns the review rather than just the alias (issue #51489). Team pings
+                # dilute responsibility; individual pings restore it while still notifying the team.
+                SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
+                echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
 
-                  if [ "$ELTWISE_APPROVED" = "false" ]; then
-                    echo "⚠️  No key eltwise member approved yet, adding Slack group ping"
-                    SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
-                    echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
-                  fi
-                else
-                  # Standard behavior for other teams with Slack groups
-                  SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
-                  echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
+                GROUP_INDIVIDUALS=$(select_two_team_owners "$team")
+                if [ -n "$GROUP_INDIVIDUALS" ]; then
+                  TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS$GROUP_INDIVIDUALS,"
+                  echo "Also selected individual owner(s) for $team alongside group ping: $GROUP_INDIVIDUALS"
                 fi
               else
                 echo "Team $team has no Slack group, using individual selection"
