@@ -25,9 +25,8 @@ Current-run warmed latency on one Blackhole p300c:
 | Prefill, batch 32, seq 32 | 26.165 ms | 20.277 ms | -22.5% |
 
 The primary batch-1 decode target beats the best current functional baseline,
-and batch 32 does not regress. The prefill regression is retained because this
-decoder-stage objective prioritizes decode and the selected cumulative path
-preserves correctness and capability.
+batch 32 does not regress, and prefill improves at both measured batches. The
+selected cumulative path preserves correctness and advertised capability.
 
 ## Operation-topology audit
 
@@ -43,7 +42,7 @@ preserves correctness and capability.
 | DRAM geometry | 32-core working shard, blocks 3/8 | 8/16-core phase shards and blocks through 16 | Selected 16 cores: three 200-replay runs were 0.5545-0.5549 ms vs 0.5565-0.5570 ms at 32 cores. An 8-core/block-16 candidate exceeded L1. |
 
 There are no collectives in this single-device stage. The final decode profile
-contains 63 device ops and zero host ops. Remaining movement is localized to
+contains 62 device ops and zero host ops. Remaining movement is localized to
 Phi's 96-wide head/RoPE/cache helper boundaries: one initial
 interleaved-to-sharded conversion, QKV head conversion, cache-update layouts,
 one concat-head reshard, and the MLP working-shard transition.
@@ -131,7 +130,7 @@ an op-factory grid-identity limitation, not an untracked topology change.
 
 The Tracy consoles report profiler buffers full after the measured tests and
 some later markers dropped. The signposted decode window itself parses as one
-complete 63-op replay, and independent unprofiled 200-replay logs reproduce
+complete 62-op replay, and independent unprofiled 200-replay logs reproduce
 the selected latency. Profiler row conclusions are limited to that complete
 window; later dropped markers are not used as evidence.
 
