@@ -1191,3 +1191,41 @@ independently-measured compute floors (diag mask 2101, from the ablation campaig
 The ratio is a consistent 1.22-1.28x (one outlier at 1.58x), i.e. **60-80% FPU efficiency inside the compute
 phase**, the balance being unpack/pack/reconfig overhead. That consistency is the validation: a wrong peak would
 give ratios below 1.0 (physically impossible) or scatter wildly across shapes.
+
+### HEYGEN SHAPES: roofline + regime-A filter, then default-config perf/correctness
+
+23 candidate shapes supplied. Kept only those BOTH memory-bound by roofline AND servable by regime-A; ran the
+survivors at DEFAULTS. Table in `HEYGEN_SWEEP.md`.
+
+**Filter.** Machine balance = 304 TFLOP/s (110 cores x 2.765 TFLOP/s bf16 HiFi2) / 512 GB/s = **594 FLOP/byte**;
+memory-bound iff `MNK/(MK+KN+MN)` < 594. Regime-A structural requirements, all consequences of the 8-bank in0
+ring and 8-bank in1 width shard rather than tunables:
+- Nt wide enough to shard 8 ways: `7*ceil(Nt/8) < Nt`
+- **Kt >= 8** -- the k-slice spans exactly 8 banks, so the minimum slice is 8 tiles and the picker's hard 20%
+  K-waste cap rejects anything smaller
+- M < N -- regime A shards in1 on the assumption it is the big operand; M >= N is regime B
+
+Result: **12 kept, 11 dropped**. Dropped for compute-bound (AI 739-1817, the 2656- and 10560-row shapes),
+Nt too narrow (N=64 -> Nt=2; N=128 -> Nt=4), or M>=N. Of the 12 kept, **32x128x30720 was then rejected by the
+picker at runtime**: Kt=4 < 8 forces >=100% K padding. My pre-filter checked the Nt shard rule but not the Kt>=8
+rule, and the run caught it -- Kt>=8 is now written into the documented filter.
+
+**11 measured, sorted ascending by effective DRAM bandwidth:** median 437 GB/s (85% of peak), 7 of 11 above 80%,
+11/11 PCC >= 0.999 (min 0.99998), median block-to-block spread 0.1%.
+
+Two findings specific to this set:
+
+1. **32x256x512 is far off the roofline: 4.29 us for a 0.6 us DRAM floor, 76 GB/s (15% of peak), only 16 cores.**
+   It is a genuinely tiny problem (Kt=8, Nt=16) and the picker can only field 16 cores on it, so the wall is
+   fixed-overhead-dominated rather than bandwidth-dominated. Nothing in this op's design targets that size; a
+   shape this small wants a different (single-core or small-grid) matmul entirely.
+
+2. **The three 512-row shapes are the closest thing to balanced in this corpus** (AI 394-427 against a 594
+   balance) and they show it: 512x5120x5120 reaches **64.8% FPU utilization on its allocated cores and 47.2% of
+   the whole grid** -- the highest FPU numbers measured anywhere in this campaign, well above the Mt<=16 corpus
+   median of 20.3%. They sit at only 61-67% of peak DRAM because compute, not DRAM, is most of their wall. They
+   are the shapes in this set where further work would have to attack the FPU side.
+
+Also of note: `96x2048x5120` and `96x8192x5120` carry **1.19x schedule padding** (the largest in either sweep),
+i.e. the picked config's capacity exceeds the logical shape by 19%. Both still reach 91-93% of peak DRAM because
+padded positions are never DRAM-read, but the padding is paid in compute and L1.
