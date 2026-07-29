@@ -621,7 +621,7 @@ TTNN ops integrate with the Metal 2.0 host API through the `ttnn::device_operati
 
 - **`ProgramFactoryConcept`** — the oldest; legacy `host_api.hpp` builder-style factories.
 - **`ProgramDescriptorFactoryConcept`** — the intermediate; legacy `ProgramDescriptor`-based factories.
-- **`MetalV2FactoryConcept`** — the Metal 2.0 concept. **This is the concept ops port to.** It returns a `ttnn::device_operation::ProgramArtifacts` (the `ProgramSpec`, its `ProgramRunArgs`, and any op-owned tensors) from `create_program_artifacts()`.
+- **`ProgramSpecFactoryConcept`** — the Metal 2.0 concept. **This is the concept ops port to.** It returns a `ttnn::device_operation::ProgramArtifacts` (the `ProgramSpec`, its `ProgramRunArgs`, and any op-owned tensors) from `create_program_artifacts()`.
 
 A Metal 2.0 program factory has this shape:
 

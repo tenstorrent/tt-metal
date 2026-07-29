@@ -205,14 +205,14 @@ Also check **cross-column invariants** — a violated one means the sheet is int
 
 Once the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite) clears, record the **target** Metal 2.0 factory concept the porter builds toward — a porter heads-up (**FYI-P**), not a gate. The sheet's `Concept` column is the op's *current* concept; the target is derived from it plus `Op-owned tensors?`:
 
-- **`descriptor`** → **`MetalV2FactoryConcept`**. A `descriptor` op has **no** op-owned tensors — the `ProgramDescriptorFactoryConcept` doesn't support them (see below).
-- **`WorkloadDescriptor` + SPMD** → **`MetalV2FactoryConcept`**. The SPMD MeshWorkload collapses to the single-program concept; if the op has **op-owned tensors** (`Op-owned tensors? == "yes"`), `MetalV2FactoryConcept` carries them natively.
+- **`descriptor`** → **`ProgramSpecFactoryConcept`**. A `descriptor` op has **no** op-owned tensors — the `ProgramDescriptorFactoryConcept` doesn't support them (see below).
+- **`WorkloadDescriptor` + SPMD** → **`ProgramSpecFactoryConcept`**. The SPMD MeshWorkload collapses to the single-program concept; if the op has **op-owned tensors** (`Op-owned tensors? == "yes"`), `ProgramSpecFactoryConcept` carries them natively.
 
 **Op-owned tensors force `WorkloadDescriptor`.** The `descriptor` concept (`ProgramDescriptorFactoryConcept`) can't carry op-owned tensors, so an op that needs them must move up to the `WorkloadDescriptorFactoryConcept` — where it is expressed as an SPMD workload *purely* to unlock the op-owned-tensor feature. So **`Op-owned tensors? == "yes"` always co-occurs with `Concept == WorkloadDescriptor` (and SPMD)**; a `descriptor` op with op-owned tensors is not a real state. (A quirky design: every op that needs op-owned tensors is morally single-program, yet has to wear the SPMD-workload shape to get them.)
 
 Code basis for `Op-owned tensors?`: a non-empty `buffers` vector on the returned `WorkloadDescriptor` (the field is named `buffers`, not `tensors` — a historical quirk).
 
-The supported target set is narrow today and will grow; the plain `MetalV2FactoryConcept` (no op-owned tensors) is the common target. If a cleared op maps to none of the above, treat it as a spreadsheet/recipe gap and flag it (per the prerequisite subject's spreadsheet-broken routing) rather than guessing.
+The supported target set is narrow today and will grow; the plain `ProgramSpecFactoryConcept` (no op-owned tensors) is the common target. If a cleared op maps to none of the above, treat it as a spreadsheet/recipe gap and flag it (per the prerequisite subject's spreadsheet-broken routing) rather than guessing.
 
 **Finding role: FYI-P** — surface the target concept in the porter brief; it feeds the port's TTNN ProgramFactory wiring (see [`ttnn_factory.md`](../shared/ttnn_factory.md)).
 
@@ -546,7 +546,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 | *TTNN Readiness* — `override_runtime_arguments` | No / Yes (gate → Metal 2.0 side; not yet supported): `<factory + site>` |
 | *TTNN Readiness* — Pybind `create_descriptor` | No / Yes (gate): `<nanobind site>` |
 | *TTNN Readiness* — Op-owned tensors | No / Yes: `<factory + site>` |
-| *TTNN Readiness* — Target concept | `MetalV2FactoryConcept` (+ op-owned tensors, if any) |
+| *TTNN Readiness* — Target concept | `ProgramSpecFactoryConcept` (+ op-owned tensors, if any) |
 | *Port work* — Offset base pointer | none / **GATE** → ops team (Type 1 raw · Type 2 accessor-fed, flag early) |
 | *Port work* — Tensor bindings (per binding) | clean / Case 1 / Case 2 |
 | *Port work* — TensorParameter relaxation | none / `<relaxation>` |
@@ -632,11 +632,11 @@ Ordered by the porter's workflow: plan → construct → watch-for. Issued only 
 
 ## TTNN factory analysis
 
-These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); the op ports to `MetalV2FactoryConcept`. Carry them forward:
+These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); the op ports to `ProgramSpecFactoryConcept`. Carry them forward:
 
 - **Current concept:** <`descriptor` | `WorkloadDescriptor` (secretly SPMD — collapses to single-program)>
 - **Op-owned tensors:** <none | `<factory + site>` — carried natively by the target concept>
-- **Target concept:** `MetalV2FactoryConcept`<, with op-owned tensors, if any>
+- **Target concept:** `ProgramSpecFactoryConcept`<, with op-owned tensors, if any>
 - **Gate-cleared, confirmed absent** (each would have blocked the brief): custom hash · `get_dynamic_runtime_args` (deprecated hook) · `override_runtime_arguments` (not-yet-supported replacement) · pybind `create_descriptor` — all gate conjuncts — plus **other migration-risky pybind**, which surfaces as a `safe` warning that also fails the gate. All `no` on a cleared op.
 
 ## Construct — to do
