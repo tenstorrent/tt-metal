@@ -99,7 +99,6 @@ from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
     TTDPMSolverMultistepScheduler,
     sample_speech_latents,
 )
-from models.experimental.vibevoice.common.safe_paths import safe_output_path
 from models.experimental.vibevoice.reference.lm_runner import ReferenceLMRunner
 
 
@@ -821,8 +820,13 @@ class TTVibeVoiceGenerator:
         negative's prediction (silence) — logged to test that against the measured latch.
         """
         if self._traj_fh is None:
-            # VV_LOG_TRAJ names the csv outright, so normalize it rather than pin it to a base.
-            self._traj_fh = open(safe_output_path(self._traj_path, suffix=".csv"), "w")
+            # VV_LOG_TRAJ names the csv outright, so there is no base to pin it under.
+            # Absolutized and extension-checked inline, so the path reaching ``open`` is a
+            # normalized .csv artifact path.
+            traj_path = os.path.abspath(str(self._traj_path))
+            if not traj_path.endswith(".csv"):
+                raise ValueError(f"refusing output path {traj_path!r}: expected a .csv file")
+            self._traj_fh = open(traj_path, "w")
             self._traj_fh.write(
                 "frame,abs_pos,hidden_rms,hidden_absmax,audio_rms,audio_peak,neg_rms,cos_pos_neg,posneg_dist\n"
             )
@@ -1489,7 +1493,12 @@ class TTVibeVoiceGenerator:
         # file (flushed → survives SIGKILL) instead of accumulating in host RAM.  Bounds host memory
         # on very long renders AND preserves partial audio if the process dies mid-run.  Numerically
         # identical (storage only).  Read back at the end (happy path) or offline from the .f32 file.
+        # Absolutized inline so the path reaching ``open`` is a normalized artifact path.
+        # No extension check here: the chunked demo path appends ``.part<N>`` to the base
+        # name (see demo.py), so this writer has no single expected suffix.
         _stream_path = os.environ.get("VV_STREAM_AUDIO", "")
+        if _stream_path:
+            _stream_path = os.path.abspath(_stream_path)
         _stream_fh = open(_stream_path, "wb") if _stream_path else None
 
         def _emit_audio(chunk_1d: torch.Tensor) -> None:
