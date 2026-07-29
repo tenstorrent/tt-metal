@@ -33,6 +33,7 @@ from ttnn.operations.tilize import SUPPORTED, tilize, validate
 from ttnn.operations.tilize.tilize_program_descriptor import (
     A0_KNEE_CORES,
     BANDWIDTH_KNEE_CORES,
+    DEPTH1_MAX_BLOCKS_PER_CORE,
     MIN_BLOCKS_FOR_DEPTH2,
     L1_CB_BUDGET_BYTES,
     a0_active_cores,
@@ -141,13 +142,25 @@ def test_use_multicore_false_still_means_exactly_one_core(device):
 
 
 def test_depth2_gate_predicate():
-    """The gate is exactly 'below the bandwidth knee AND something to pipeline'."""
-    assert depth2_pays(1, 16) is True  # c_single_core: measured depth1/depth2 = 1.321
-    assert depth2_pays(1, 32) is True  # x_wide_short_1core: 1.360
-    assert depth2_pays(1, 1) is False  # one block => nothing to overlap
-    assert depth2_pays(64, 4) is False  # a_square: DRAM-saturated, 1.002
-    assert depth2_pays(BANDWIDTH_KNEE_CORES, 8) is False  # at the knee already
+    """Every branch of the gate, pinned to the measurement that set it.
+
+    Numbers are in-run depth1/depth2 ratios (7 rounds, CV <= 1.2 %); > 1 means
+    depth-2 is faster and must be kept.
+    """
+    # 1. nothing to overlap -> depth-1 whatever else is true.
+    assert depth2_pays(1, 1) is False
+    assert depth2_pays(64, 1) is False  # b_wide_short 0.995, g_dram_to_sharded 0.996
+    # 2. below the bandwidth knee -> the core's own NoC issue rate is the bound.
+    assert depth2_pays(1, 16) is True  # c_single_core 1.321
+    assert depth2_pays(1, 32) is True  # x_wide_short_1core 1.360
     assert depth2_pays(BANDWIDTH_KNEE_CORES - 1, MIN_BLOCKS_FOR_DEPTH2) is True
+    # 3. at/above the knee -> depth-1 is free only up to 4 block boundaries.
+    assert depth2_pays(64, 4) is False  # a_square 0.998, e_square_bf8b_out 1.005
+    assert depth2_pays(BANDWIDTH_KNEE_CORES, 4) is False
+    assert depth2_pays(64, 8) is True  # e_square_fp32 1.023, fp32_to_bf16 1.019,
+    assert depth2_pays(64, 64) is True  # g_sharded_to_dram 1.028
+    assert depth2_pays(64, DEPTH1_MAX_BLOCKS_PER_CORE) is False
+    assert depth2_pays(64, DEPTH1_MAX_BLOCKS_PER_CORE + 1) is True
 
 
 def test_gated_default_picks_depth1_when_dram_saturated(device):
@@ -189,6 +202,20 @@ def test_gate_never_changes_the_transaction_shape(device, dtype, shape):
     assert gated["ncores"] == forced2["ncores"]
     assert gated["blocks_per_core"] == forced2["blocks_per_core"]
     assert gated["cb_bytes_per_core"] * 2 == forced2["cb_bytes_per_core"]
+
+
+def test_gated_default_keeps_depth2_past_four_block_boundaries(device):
+    """Clause 3 at the plan level: a grid-filling shape with 8 blocks/core.
+
+    `[1,1,4096,2048]` bf16 gives 64 cores x 8 chunk-blocks. Forcing depth-1 there
+    measured a real ~2 % loss on three independent 8-block regimes
+    (e_square_fp32 1.023, e_square_fp32_to_bf16 1.019, g_sharded_to_dram 1.028),
+    so the gate must NOT take depth-1 here even though DRAM is saturated.
+    """
+    plan = _plan(device, (1, 1, 4096, 2048))
+    assert plan["ncores"] == 64
+    assert plan["blocks_per_core"] > DEPTH1_MAX_BLOCKS_PER_CORE
+    assert plan["depth"] == 2, "past 4 block boundaries the residual overlap still pays"
 
 
 def test_gated_default_keeps_depth2_when_latency_bound(device):

@@ -86,17 +86,31 @@ MAX_BLOCK_WIDTH_TILES = 256
 A0_KNEE_CORES = 64
 
 # --- C16 depth-2 default gate (master.md C16 "but only when it pays") ---------
-# Measured (probes/probe_010.py): depth-2 pays only where a core's reader and
-# writer serialize on that core's own NoC issue rate AND there are blocks to
-# pipeline -- i.e. below the DRAM bandwidth-saturation knee with >= 2 blocks per
-# core (c_single_core depth1/depth2 = 1.321, x_wide_short_1core = 1.360). At or
-# above the knee the binding resource is DRAM aggregate bandwidth, which both
-# depths already reach, so depth-2 is inside the noise floor on every 64-core
-# regime (a_square 1.002, b_wide_short 0.995, e_square_fp32 1.013,
-# g_dram_to_sharded 0.996, g_sharded_to_dram 1.009, n_tiny 1.010) while costing
-# 2x the per-core CB L1.
+# Depth-2 buys read/write overlap across a block boundary. Measured
+# (probes/probe_010.py + the paired in-run `x_*_depth2` bench rows, 7 rounds,
+# CV <= 1.2 %), it pays in exactly two situations and is dead L1 otherwise:
+#
+#  1. **Below the DRAM bandwidth-saturation knee** the binding resource is the
+#     core's OWN NoC issue rate, so overlapping its reader and writer is a large
+#     win: c_single_core depth1/depth2 = **1.321**, x_wide_short_1core = **1.360**.
+#  2. **At or above the knee** DRAM aggregate bandwidth is the binding resource
+#     and both depths already reach it -- but each block boundary still costs one
+#     un-overlapped fill/drain, and those add up with the block count:
+#       blk/core  depth1/depth2   verdict
+#         1       0.995 - 1.010   depth-2 structurally inert (nothing to overlap)
+#         4       0.998 / 1.005   free  (a_square, e_square_bf8b_out)
+#         8       1.019 - 1.028   costs ~2 %  (e_square_fp32, e_square_fp32_to_bf16,
+#                                 g_sharded_to_dram -- 3 independent regimes, same sign)
+#     so depth-1 is the default only up to DEPTH1_MAX_BLOCKS_PER_CORE boundaries.
+#
+# NB this is narrower than the refinement's proposal ("default off once the op is
+# DRAM-saturated with large per-core work"): measurement says *large* per-core
+# work is precisely where the residual overlap still pays. 4 is measured free and
+# 8 measured costly; 5-7 is unmeasured, so the threshold sits at the conservative
+# end of that gap.
 BANDWIDTH_KNEE_CORES = 16
 MIN_BLOCKS_FOR_DEPTH2 = 2
+DEPTH1_MAX_BLOCKS_PER_CORE = 4
 # Sweep hook: probes set this to force a core cap while re-measuring the knee.
 # None => A0_KNEE_CORES decides. Never set in production.
 CORE_CAP_OVERRIDE = None
@@ -139,13 +153,21 @@ def a0_active_cores(grid_cores: int, total_tiles: int) -> int:
 def depth2_pays(ncores: int, blocks_per_core: int) -> bool:
     """C16 gate: is depth-2 worth 2x the per-core CB L1 on this plan?
 
-    True only below the DRAM bandwidth-saturation knee (so the core's own
-    read/write serialization, not DRAM aggregate bandwidth, is the binding
-    resource) *and* with at least ``MIN_BLOCKS_FOR_DEPTH2`` blocks to pipeline
-    (with one block there is nothing to overlap, so depth-2 is pure L1 cost).
-    Measured deltas are in the ``BANDWIDTH_KNEE_CORES`` comment above.
+    Three measured clauses (numbers in the ``BANDWIDTH_KNEE_CORES`` comment):
+
+    1. fewer than ``MIN_BLOCKS_FOR_DEPTH2`` blocks -> **no**: there is no block
+       boundary to overlap, so depth-2 cannot do anything except cost L1.
+    2. below the DRAM bandwidth-saturation knee -> **yes**: the core's own NoC
+       issue rate is the bound and overlapping its reader/writer is worth 1.3x.
+    3. at or above the knee -> **only past ``DEPTH1_MAX_BLOCKS_PER_CORE``**: DRAM
+       aggregate bandwidth is the bound, but each un-overlapped block boundary
+       still costs, and beyond 4 boundaries that reaches ~2 %.
     """
-    return ncores < BANDWIDTH_KNEE_CORES and blocks_per_core >= MIN_BLOCKS_FOR_DEPTH2
+    if blocks_per_core < MIN_BLOCKS_FOR_DEPTH2:
+        return False
+    if ncores < BANDWIDTH_KNEE_CORES:
+        return True
+    return blocks_per_core > DEPTH1_MAX_BLOCKS_PER_CORE
 
 
 def _split_contiguous(total: int, parts: int):

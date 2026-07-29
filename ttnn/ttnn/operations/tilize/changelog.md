@@ -412,3 +412,222 @@ ceiling for the 64-core interleaved regimes is the in-tree measured DRAM→DRAM 
 
 Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **93 passed** (60 + 13 + 20) in **both**
 default and `--dev` mode.
+
+---
+
+## Refinement 1 — Per-core-overhead gating for the low-work-per-core regimes (A0 knee + B0 + depth-2 default)
+
+- **Date**: 2026-07-29
+- **Outcome**: **partial (`[~]`)**. Lever 2 (C16 depth-2 default gating) landed and pays. Lever 1
+  (the A0 bandwidth-knee core cap) was implemented, measured, and **refuted on its own target
+  regime** — it is 2.4× *slower*, so it was not shipped. The refinement's numeric gate
+  (`d_tall_narrow` ≥ 1.5× faster) is therefore **not met** and is shown to be unreachable with
+  this refinement's lever set; the blocker is characterised to the ns below and handed to
+  **Refinement 1b**.
+
+### What was done
+
+**1. A0 bandwidth-knee clause — implemented, measured, DROPPED (negative result).**
+
+The clause proposed capping the grid at the `dram_saturation` knee (~16 cores @ 190.9 GB/s) for
+low-work-per-core shapes, predicting "up to ~2×" on `d_tall_narrow`. Implemented as a
+`distribution_gate` (fire only when each core would own < 4 tiles) and swept on device with the
+kernels byte-identical across every point (`probes/probe_009.py`, `CORE_CAP_OVERRIDE` hook):
+
+| forced cap | cores | blk/core | ns (median 5×10) | vs 64 cores |
+|---|---|---|---|---|
+| **64 (none)** | **64** | **1** | **3 623** | **1.00×** |
+| 32 | 32 | 2 | 5 186 | 0.70× |
+| **16 (the knee)** | **16** | **4** | **8 580** | **0.42×** |
+| 8 | 8 | 8 | 14 780 | 0.25× |
+| 4 | 4 | 16 | 27 950 | 0.13× |
+| 1 | 1 | 64 | 107 561 | 0.03× |
+
+Latency is ~linear in tiles-per-core (`ns ≈ 2060 + 1563 × blocks`), i.e. **capping cores is a
+2.4× regression, not a 2× win**. `n_tall_narrow2` `[1,1,2048,64]` behaves the same (0.74× at the
+knee). Two independently measured reasons the bandwidth knee cannot bind here:
+
+1. **The shape cannot reach the knee's bandwidth at any core count.** A `W=32` bf16 ROW_MAJOR input
+   has **64 B** DRAM pages, so the reader issues 64 B transactions. `noc_estimate` puts 64 B
+   interleaved-DRAM reads at **0.68–1.41 B/cyc/core** = 45–90 GB/s aggregate over 64 cores, so the
+   190.9 GB/s knee — measured on a *large-transaction* copy — is unreachable for this shape. The op
+   is **read-transaction-rate bound, not DRAM-bandwidth bound**, and the knee is a bandwidth
+   phenomenon. Achieved-vs-ceiling recomputed against the *right* bound: the per-core serialized NoC
+   bracket (1 block ⇒ no read/write overlap) is `[1452+1440 … 3021+1440] = [2892 … 4461] ns`, and the
+   measured 3 623 ns **sits inside its own bracket** — there is no core-count headroom to recover.
+   The verifier's "0.38 of the knee" compared this shape to a ceiling its page size forbids.
+2. **The premise "dispatch/sync cost scales with the core count" is false for this op.** The
+   `sync_only` ablation scales with **blocks per core**, not cores (`probe_010.py`):
+   64 c/1 blk **1 202 ns** · 32 c/2 blk 1 818 · 16 c/4 blk 3 079 · 8 c/8 blk 5 615 · 4 c/16 blk
+   10 677 ≈ `590 + 612 × blocks`. Shedding cores *adds* sync cost.
+
+Kept as the declared criterion (`a0_active_cores` = `min(grid, total_tiles, A0_KNEE_CORES)`) with
+`A0_KNEE_CORES = 64` — the measured knee for tilize's transfer shapes is the whole grid. The bench
+assert is **updated to that gated form** (not deleted) and the counterfactual is a permanent bench
+row (`x_tall_narrow_16c`), so the verdict is re-measurable instead of a claim: 8 846 ns vs 3 609 ns
+in the same run.
+
+**2. C16 depth-2 default gating — landed, and it pays.**
+
+`use_double_buffer` default `True` → **`None` = "the planner decides"**. `True`/`False` keep their
+documented force-depth-2 / force-depth-1 meaning, so the public kwarg keeps both values and only the
+*default* is gated; `SUPPORTED["double_buffer"]` is now three-valued (`[False, True, "auto"]`) and
+`validate()` maps `None → "auto"`. Depth-2 buys read/write overlap across a **block boundary**, so
+the gate keys on what that overlap is worth (in-run A/B, 7 rounds, CV ≤ 1.2 %):
+
+| ncores | blk/core | depth1/depth2 | regimes | gate |
+|---|---|---|---|---|
+| any | **1** | 0.995 – 1.010 | b_wide_short, d_tall_narrow, g_dram_to_sharded, n_tiny | **depth-1** (structurally inert — no boundary to overlap) |
+| **1** (< knee) | 16 / 32 | **1.321 / 1.360** | c_single_core, x_wide_short_1core | **depth-2** (the core's own NoC issue rate is the bound) |
+| 64 (≥ knee) | **4** | 0.998 / 1.005 | a_square, e_square_bf8b_out | **depth-1** (free) |
+| 64 (≥ knee) | **8** | **1.019 / 1.023 / 1.028** | e_square_fp32_to_bf16, e_square_fp32, g_sharded_to_dram | **depth-2** (~2 %, 3 independent regimes, same sign) |
+
+⇒ `depth2_pays = blocks ≥ 2 and (ncores < 16 or blocks > 4)`. **This is narrower than the
+refinement proposed** ("default off once the op is DRAM-saturated with large per-core work"):
+measurement says *large* per-core work is exactly where the residual overlap still pays. The first
+implementation used the proposed rule and produced a real +2.0 / +2.3 / +2.4 % regression on those
+three regimes; the blocks-per-core term removes it (all now within ±0.9 %).
+
+The gate also **pins `chunk_wt` to the depth-2 plan's**, so the gated plan differs from the ungated
+one in exactly one way — the CB has half the pages. Letting the freed L1 grow the chunk instead
+changed the reader's transaction size behind the caller's back and measured a **1.3 % loss** on
+`e_square_fp32` (chunk 8 → 16) while saving **zero** L1. Non-regression is now structural, not just
+measured (`test_gate_never_changes_the_transaction_shape`).
+
+### Accuracy achieved
+
+Unchanged and **bit-exact** — this refinement moves no arithmetic. Verified `torch.equal` at the
+gated default and at both forced depths, on a wide and a narrow shape, single- and multi-core, and on
+the aliased zero-copy path: PCC = 1.0, rtol = atol = 0, mismatching elements = 0 on
+`[1,1,64,2048]`, `[1,1,2048,32]`, `[1,1,128,256]`, `[1,1,512,64]` H-sharded. bf8b / narrowing-cast
+tolerances are untouched (see the Phase-0 precision baseline, still 20/20).
+
+### Golden test progress
+
+**126 / 126** registry cells (90 INVALID-skipped) — unchanged, 0 xfail / xpass / drift. Whole golden
+dir minus `test_translated.py`: **240 passed, 118 skipped, 0 failed**, byte-identical to the Phase-0
+non-translated baseline (`test_golden` 126 + `test_regression` 9 + `test_golden_main_tests` 105). The
+2 collection ERRORs are the pre-existing `use_module_device` × `device_params` conflict inside the
+reference file (Phase-0 issue 6's sibling), not an op gap. **No hangs** in either mode.
+
+### Perf gate
+
+Bound classification (re-ablated this phase, `d_tall_narrow`, the target regime): **DM- and
+per-block-sync-bound**, no compute headroom. Decomposition of the 3 609 ns, each term measured by
+subtraction (the address-gen term needed a temporary reader patch, reverted):
+
+| term | ns | share |
+|---|---|---|
+| bare launch + CB handshakes (1 block) | **764** | 21 % |
+| 32 × `accessor.get_noc_addr` | **437** | 12 % |
+| 32 × 64 B `noc_async_read` issue + DRAM service + barrier + 1 × 2048 B write | **1 504** | 42 % |
+| tilize LLK (1 tile) | **931** | 26 % |
+
+Ceiling: per-core serialized NoC bracket `[2892 … 4461] ns` (1 block ⇒ read and write cannot
+overlap); DRAM floor 910 ns. **`op_target` = [2892 … 4461], measured 3 609 ⇒ achieved 0.80 against
+the optimistic end and 1.23 against the contended end — the op sits inside its own bracket.** The
+1.5× gate (≤ 2 439 ns) requires removing 1 197 ns, i.e. *all* of the address-gen plus ~half the read
+issue/service. No lever in this refinement's set (A0 / B0 / C16) touches either term — see
+Refinement 1b.
+
+#### Cumulative bench set — non-regression (median of 7 × 10 launches, WH B0 8×8, AICLK ≈ 985 MHz)
+
+Noise floor: two measurements of the *identical* plan in different sessions differ by 0.85 %
+(`x_square_depth1`), so ±2 % remains the threshold. All CVs ≤ 1.2 %.
+
+| regime | shape | cores | chk | **d** | blk | Phase-0 ns | **now ns** | Δ | Phase-0 cbB | **now cbB** | **L1 saved** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| a_square | `[1,1,2048,2048]` | 64 | 16 | **1** | 4 | 85 417 | **85 535** | +0.1 % | 131 072 | **65 536** | **−65 536** |
+| b_wide_short | `[1,1,32,16384]` | 64 | 8 | **1** | 1 | 13 383 | **13 447** | +0.5 % | 65 536 | **32 768** | **−32 768** |
+| c_single_core | `[1,1,512,512]` | 1 | 16 | 2 | 16 | 30 472 | **30 464** | −0.0 % | 131 072 | 131 072 | 0 |
+| d_tall_narrow | `[1,1,2048,32]` | 64 | 1 | **1** | 1 | 3 658 | **3 609** | **−1.3 %** | 8 192 | **4 096** | **−4 096** |
+| e_square_fp32 | `[1,1,2048,2048]` fp32 | 64 | 8 | 2 | 8 | 182 877 | **181 811** | −0.6 % | 131 072 | 131 072 | 0 |
+| e_square_bf8b_out | `[1,1,2048,2048]`→bf8b | 64 | 16 | **1** | 4 | 64 373 | **64 577** | +0.3 % | 100 352 | **50 176** | **−50 176** |
+| e_square_fp32_to_bf16 | `[1,1,2048,2048]` fp32→bf16 | 64 | 8 | 2 | 8 | 120 813 | **121 032** | +0.2 % | 98 304 | 98 304 | 0 |
+| f_sharded_small | `[1,1,512,64]` H-shard | 4 | 2 | 1 | 4 | 1 382 | **1 376** | −0.4 % | 32 768 | 32 768 | 0 |
+| f_sharded_large | `[1,1,2048,512]` B-shard | 64 | 2 | 1 | 8 | 2 071 | **2 073** | +0.1 % | 65 536 | 65 536 | 0 |
+| g_dram_to_sharded | `[1,1,2048,512]`→B-shard | 64 | 16 | **1** | 1 | 18 923 | **19 072** | +0.8 % | 131 072 | **65 536** | **−65 536** |
+| g_sharded_to_dram | `[1,1,2048,512]` B-shard→ | 64 | 2 | 2 | 8 | 19 780 | **19 615** | −0.8 % | 16 384 | 16 384 | 0 |
+| x_square_depth1 | forced d1 | 64 | 16 | 1 | 4 | 85 806 | **85 656** | −0.2 % | 65 536 | 65 536 | — |
+| x_wide_short_1core | 1 core | 1 | 16 | 2 | 32 | 57 459 | **57 585** | +0.2 % | 131 072 | 131 072 | — |
+| x_sharded_small_depth1 | alias, forced d1 | 4 | 2 | 1 | 4 | 1 364 | **1 367** | +0.2 % | 32 768 | 32 768 | — |
+
+**Zero regressions** — every prior bench shape is within ±1.3 %, well inside the noise floor. Net
+result: **−65 536 B/core of L1 on the two widest interleaved regimes** (a_square, g_dram_to_sharded),
+−50 176 on bf8b, −32 768 on b_wide_short, −4 096 on d_tall_narrow, at no measured perf cost — while
+the four regimes where depth-2 was measured to pay keep it.
+
+New counterfactual rows added to the cumulative set for future phases: `x_square_depth2`,
+`x_tall_narrow_depth2` (3 635 ns — depth-1 is 0.7 % *faster* here), `x_single_core_depth1`
+(40 035 ns — the +32 % that clause 2 protects), `x_square_fp32_depth2`, `x_fp32_to_bf16_depth2`,
+`x_sharded_to_dram_depth2`, `x_square_bf8b_depth2`, `x_tall_narrow_16c` (8 846 ns — the A0 refutation).
+
+#### Mode-C used-optimization ledger (this refinement's two levers)
+
+| lever | id | predicted Δ | **measured Δ** | verdict |
+|---|---|---|---|---|
+| A0 bandwidth-knee core cap on low-work-per-core shapes | A0 | up to **~2×** on `d_tall_narrow` (verifier) | **0.42×** (3 623 → 8 580 ns @ 16 cores); `n_tall_narrow2` 0.74× | **DROP** — refuted. The knee is a *bandwidth* phenomenon; this op is read-transaction-rate bound at 64 B/page and cannot reach the knee's bandwidth at any core count. Kept as the declared `min(grid, total_tiles, knee)` criterion with knee = full grid; counterfactual retained as `x_tall_narrow_16c`. |
+| C16 depth-2 default → gated (`use_double_buffer=None`) | C16 / B0 | "no perf change, −65 536 B/core on wide tensors" | **1 blk: 0.995–1.010 · 4 blk: 0.998/1.005 · 8 blk: 1.019–1.028 · 1 core: 1.321/1.360.** Shipped gate: 0 regressions, **−65 536 B/core** on a_square + g_dram_to_sharded, −50 176 bf8b, −32 768 b_wide_short, −4 096 d_tall_narrow | **KEEP (gated)** — but narrower than proposed: the blocks-per-core term is required, the proposed rule regressed 3 regimes by ~2 %. |
+| — sub-lever: let depth-1 spend the freed L1 on a wider chunk | B5/B6 | bigger transactions ⇒ faster | **0.987×** on `e_square_fp32` (chunk 8→16) with **0 B** L1 saved | **DROP** — chunk pinned instead. |
+
+### Issues encountered
+
+1. **The refinement's lever 1 is wrong, and the way it is wrong is instructive.** Both of its stated
+   premises are individually falsifiable on device: the target regime is not bandwidth-bound (so the
+   bandwidth knee cannot apply), and the sync floor scales with blocks-per-core rather than cores (so
+   shedding cores costs sync time instead of saving it). Implementing it first and measuring it is
+   what surfaced that — the Mode-C counterfactual is the check that caught a lever the queue was
+   confident about.
+2. **The C16 gate as proposed regressed three regimes.** "Default off once the op is DRAM-saturated
+   with large per-core work" is measurably backwards on the *large*-work end: at 8 block boundaries
+   per core depth-2 is still worth ~2 %. Caught only because the non-regression table re-measures the
+   **whole** cumulative set rather than the shape being tuned — `a_square` (4 blocks) is clean and
+   would have hidden it. Resolved with the blocks-per-core term, then re-verified by in-run A/B
+   pairs, since a ~2 % effect is unresolvable against the 0.85 % cross-session scatter.
+3. **`ttnn-static-analyzer` cleared the depth-1 default and corrected two queued assumptions.** Zero
+   correctness defects; both helper guards (`tilize_helpers_dataflow.inl:107`,
+   `tilize_helpers.inl:207/209`) hold with *exact equality* at depth 1, and the reserve/pop cycle has
+   no dependency cycle, on both the generic and the aliased path. It also found that
+   **`InitUninitMode::InitAndUninit` already sits outside the `num_blocks` loop**
+   (`tilize_helpers.inl:179-200`, `:258-272`), so **Refinement 4's "InitUninitMode amortization"
+   lever has zero headroom inside a single `tilize()` call**, and that `tilize_uninit` cannot be
+   dropped (`_llk_unpack_tilize_init_` leaves `tileize_mode=1` + `shift_amount` in `THCON_SEC0`,
+   `llk_unpack_tilize.h:97-108`). Two advisories for the queue: `WaitMode::WaitUpfront` is now a
+   **guaranteed hang** for any core with `num_blocks > 1` at depth 1, and a C7 split reader must not
+   have both NCRISC and BRISC pushing `cb_rm_input` (single-producer violation).
+4. **The 1.5× gate on `d_tall_narrow` is unreachable from this refinement's lever set** — see the
+   decomposition above. Not silenced: the regime stays in the bench at its measured 3 609 ns and
+   Refinement 1b names the exact levers with their priced prizes.
+
+### Tests added
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement1.py` — **26 cells**: the A0 knee
+  term is identity (and *why*, with the sweep in the docstring, so lowering the constant fails here);
+  A0 active-core criterion per regime (tall-narrow / wide-short / wide); `use_multicore=False` is
+  still exactly 1 core; every branch of `depth2_pays` pinned to the ratio that set it; the gate picks
+  depth-1 when DRAM-saturated, depth-2 below the knee, depth-2 past 4 block boundaries, depth-1 at 1
+  block/core; **the gate never changes the transaction shape** (bf16 wide/narrow + the fp32 case that
+  motivated the chunk pin); bit-exactness at the gated default and both forced depths; the gate is
+  inert on the zero-copy path; the axis declares `"auto"`; `validate()` accepts all three requests;
+  per-core CB bytes recorded for a wide and a narrow shape.
+- `_bench_tilize.py` — A0 assert updated to the **gated** criterion `min(grid, total_tiles,
+  A0_KNEE_CORES)` plus a new C16-gate assert (the planner's depth must match the declared gate);
+  `depth` and `blk/core` columns; a `core_cap` spec key driving the planner's sweep hook; 8 new
+  counterfactual regimes (above). The bench now measures the op's **gated default**
+  (`use_double_buffer=None`), i.e. what a caller actually gets.
+- `test_tilize_extended.py::test_tilize_plan_invariants` — A0 assert updated to the gated form.
+- `probes/probe_009.py` (core-cap knee sweep), `probes/probe_010.py` (sync-floor vs core count +
+  depth A/B) — the two measurements the ledger rests on.
+
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **119 passed** (93 prior + 26 new) in
+**both** default and `--dev` mode.
+
+### Ranked follow-ups
+
+1. **Refinement 1b (filed)** — `d_tall_narrow`'s remaining prize, priced: 437 ns of address-gen +
+   part of 1 504 ns of read issue/service.
+2. **Refinement 4's `InitUninitMode` lever has no headroom** (finding 3). Re-scope it before running:
+   the only form left is chaining `InitOnly/Neither/UninitOnly` across *multiple* `tilize()` calls,
+   which this kernel does not have.
+3. **`DEPTH1_MAX_BLOCKS_PER_CORE = 4` is the conservative end of an unmeasured gap** (4 free, 8
+   costs ~2 %; 5–7 unmeasured). Worth 3 bench points if a future phase wants the extra L1 back.

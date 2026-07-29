@@ -129,6 +129,25 @@ REGIMES = {
     "x_square_depth2": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, double_buffer=True),
     "x_tall_narrow_depth2": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, double_buffer=True),
     "x_single_core_depth1": dict(shape=(1, 1, 512, 512), dtype=ttnn.bfloat16, multicore=False, double_buffer=False),
+    # The gate's blocks-per-core term is calibrated on these three: every regime
+    # with >= 8 chunk-blocks per core, where depth-1's loss of read/write overlap
+    # accumulates over the block loop. Paired IN-RUN with the auto rows above
+    # (identical chunk width, so the only difference is the CB page count) --
+    # cross-session comparison cannot resolve a ~2 % delta against the ~0.9 %
+    # run-to-run scatter.
+    "x_square_fp32_depth2": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.float32, double_buffer=True),
+    "x_fp32_to_bf16_depth2": dict(
+        shape=(1, 1, 2048, 2048), dtype=ttnn.float32, out_dtype=ttnn.bfloat16, double_buffer=True
+    ),
+    "x_sharded_to_dram_depth2": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        double_buffer=True,
+    ),
+    "x_square_bf8b_depth2": dict(
+        shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, out_dtype=ttnn.bfloat8_b, double_buffer=True
+    ),
     # A0 counterfactual: force the ~16-core dram_saturation bandwidth knee as a
     # core cap on the regime it was proposed for. Refinement 1 measured this
     # 2.4x SLOWER than the full grid (the op is read-transaction-rate bound, so

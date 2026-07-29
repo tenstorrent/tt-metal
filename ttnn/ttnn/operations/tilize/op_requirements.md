@@ -27,7 +27,9 @@
       *,
       dtype: ttnn.DataType | None = None,              # output dtype (default: the input's)
       use_multicore: bool = True,                      # distribute over the compute grid
-      use_double_buffer: bool = True,                  # depth-2 CBs (overlap, +L1); False = depth-1
+      use_double_buffer: bool | None = None,           # True = depth-2 CBs (overlap, +L1); False =
+                                                       # depth-1; None (default) = the planner gates it
+                                                       # (Refinement 1, lever C16)
   ) -> ttnn.Tensor
   ```
 
@@ -61,7 +63,17 @@
 
 ---
 
-### [ ] Refinement 1 — Per-core-overhead gating for the low-work-per-core regimes (A0 knee + B0 + depth-2 default)
+### [~] Refinement 1 — Per-core-overhead gating for the low-work-per-core regimes (A0 knee + B0 + depth-2 default)
+
+> **Outcome (2026-07-29): PARTIAL.** Lever 2 (C16 depth-2 default gating) landed and pays: zero
+> regressions across the whole cumulative bench set and **−65 536 B/core of L1** on the two widest
+> interleaved regimes. Lever 1 (the A0 bandwidth-knee core cap) was implemented and measured on its
+> own target regime and is **2.4× SLOWER** (`d_tall_narrow` 3 623 → 8 580 ns at the 16-core knee), so
+> it was dropped — the knee is a *bandwidth* phenomenon and this op is read-transaction-rate bound at
+> 64 B/page, unable to reach the knee's bandwidth at any core count. The `d_tall_narrow` ≥ 1.5 % gate
+> is therefore **not met** (measured 3 609 ns = 1.014×) and is shown unreachable from this
+> refinement's lever set; the residual is decomposed to the ns and handed to **Refinement 1b**. Full
+> ledger, sweeps and the corrected C16 predicate: `changelog.md` § "Refinement 1".
 
 **Goal**: move the two named low-work-per-core bench regimes off their measured floor by gating
 per-core overhead on work-per-core instead of applying it globally:
@@ -92,6 +104,66 @@ deleted; no regression beyond noise on `a_square`, `b_wide_short`, `c_single_cor
 `g_*`; per-core CB bytes recorded at the gated default for at least one wide and one narrow shape; a
 Mode-C ledger row (`lever → predicted Δ → measured Δ → keep/drop`) for each of the two levers; golden
 suite still 126/126.
+
+---
+
+### [ ] Refinement 1b — `d_tall_narrow` sub-one-packet read path: B13 `set_state` on the 32 stick reads, then C7 split reader
+
+**Goal**: the remaining half of Refinement 1 — get `d_tall_narrow` `[1,1,2048,32]` below
+**2 439 ns** (the parent's 1.5× gate) from its measured **3 609 ns**. Refinement 1 proved the parent's
+lever (an A0 core cap) is a 2.4× regression here and that the regime already sits **inside its own
+per-core NoC bracket** `[2892 … 4461] ns`, so the win cannot come from work distribution. It must come
+from the two terms that dominate a 1-tile-per-core block, both **measured by subtraction** this pass
+(temporary reader patch, reverted; `changelog.md` § "Refinement 1" → Perf gate):
+
+| term | ns | share | lever |
+|---|---|---|---|
+| bare launch + CB handshakes (1 block) | 764 | 21 % | none in scope (per-launch floor) |
+| **32 × `accessor.get_noc_addr`** | **437** | **12 %** | **B13 `set_state` / `with_state`** |
+| **32 × 64 B `noc_async_read` issue + DRAM service + barrier + 1 × 2048 B write** | **1 504** | **42 %** | **B13 (command programming) + C7 (halve the issue count)** |
+| tilize LLK (1 tile) | 931 | 26 % | none in scope |
+
+Budget: −1 197 ns is needed. B13 can plausibly take most of the 437 ns of address-gen plus a share of
+the per-read command programming inside the 1 504 ns; C7 halves what is left of the issue cost by
+putting the idle BRISC to work. **Neither alone is likely to be enough — this entry is deliberately
+two levers.**
+
+- **B13 `noc_async_read_one_packet_set_state` / `..._with_state`** — the reader issues **32
+  same-shape 64 B reads per block** to varying addresses (`tilize_helpers_dataflow.inl:117-127`),
+  which is exactly this lever's use case: program the command buffer once per block, then per read
+  write only the varying address. At 64 B every read is already on the one-packet path (B6), so the
+  `one_packet` variant is the right family. This subsumes most of the priced 437 ns because the
+  general `TensorAccessor::get_noc_addr` re-runs the rank loop plus a `% / /` by the non-power-of-two
+  bank count (12) per read (`tensor_accessor.h:175-193, 303-311`) for a page sequence whose bank id is
+  a strength-reducible **increment** of `row_page_stride`.
+- **C7 split reader** — with 1 block/core BRISC parks in `cb_wait_front` for the entire read window
+  (~1.5–3 µs) and then does ~1.4 µs of work, so NoC1 issue capacity is the only structurally unused
+  resource on the core (`ttnn-static-analyzer`, this pass). Split the 32 stick reads across NCRISC and
+  BRISC.
+
+**Implementation skill**: /perf-measure, /perf-ceiling-dm
+
+**Verifier notes**: ordered immediately after its parent, and **before Refinement 2** — R2 owns B13
+for `b_wide_short` (512 B reads, 8 tiles/core), but the lever's *payoff* is largest where the reads
+are smallest, so calibrate it on this regime first (master.md B0: counterfactual a per-core-overhead
+lever on the smallest regime it runs in) and let R2 inherit the working code. Two hard constraints
+from this pass's static analysis, both of which silently corrupt rather than fail loudly:
+(a) **a split reader must not have both NCRISC and BRISC `cb_reserve_back`/`cb_push_back` into
+`cb_rm_input`** — that is a single-producer-per-CB violation and corrupts the CB pointers; use two
+input CBs (compute alternating blocks) or a semaphore-ordered handoff; (b) **`WaitMode::WaitUpfront`
+is now a guaranteed hang** for any core with `num_blocks > 1`, because Refinement 1 made depth-1 the
+default (`tilize_helpers.inl:216-219` would wait `chunk_wt * num_blocks` pages on a `chunk_wt`-page
+CB) — `WaitBlock` in `tilize_compute.cpp` is load-bearing. Also do **not** reach for a bigger read
+transaction here: a `W=32` RM input has 64 B DRAM pages and consecutive pages land on *different*
+banks (round-robin), so rows cannot be coalesced without a permutation the tilize LLK cannot consume —
+that is why this entry is about transaction *rate*, not transaction *size*.
+
+**Done when**: `d_tall_narrow` ≥ 1.5× faster than 3 658 ns **or** each of B13 and C7 has a recorded
+measured-no-payoff verdict with its counterfactual number and the re-priced decomposition; the
+address-gen term re-priced after B13 (same subtraction method, so it is comparable to the 437 ns
+baseline); no regression beyond noise on any regime in the cumulative bench set (a, b, c, d, e×3,
+f×2, g×2, x×11); golden suite still 126/126; `tests/ttnn/unit_tests/operations/tilize/` still green in
+both default and `--dev` mode.
 
 ---
 
@@ -185,6 +257,13 @@ Measured decomposition of `f_sharded_small` `[1,1,512,64]` H-sharded, 4 cores: *
   program (the `examples/zero_copy_fold` precedent with `fold=1`).
 - **`InitUninitMode` amortization**: `InitAndUninit` re-issues `tilize_init`/`tilize_uninit` around a
   loop that is often 4–16 blocks on this path.
+  > **Re-scope before running (Refinement 1 finding, `ttnn-static-analyzer`)**: this lever as written
+  > has **zero headroom**. `InitAndUninit` already places init and uninit *outside* the `num_blocks`
+  > loop (`tilize_helpers.inl:179-200`, `:258-272`), so it is 2 config bursts per *kernel*, never per
+  > block; and the `uninit` cannot be dropped — `_llk_unpack_tilize_init_` leaves `tileize_mode=1` +
+  > `shift_amount` in `THCON_SEC0` (`llk_unpack_tilize.h:97-108`) and leaking that to the next program
+  > on the core is a silent-corruption bug. The only remaining form is chaining
+  > `InitOnly/Neither/UninitOnly` across *multiple* `tilize()` calls, which this kernel does not have.
 - **`Fp32Mode::Fast` where it is legal**: the compute kernel picks `Lossless` off the *input* CB format
   alone, so an fp32 → bf16/bf8b cast pays the slow LLK path although the narrower output cannot hold
   the extra precision. Measured **no** cost at grid-filling size (`e_square_fp32_to_bf16` 120 813 ns =
