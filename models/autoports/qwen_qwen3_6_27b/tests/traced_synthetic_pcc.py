@@ -26,6 +26,7 @@ from models.autoports.qwen_qwen3_6_27b.tests.linear_attention_synthetic_pcc impo
 from models.autoports.qwen_qwen3_6_27b.tests.linear_attention_synthetic_pcc import _hf_layer as linear_hf_layer
 from models.autoports.qwen_qwen3_6_27b.tests.linear_attention_synthetic_pcc import _state as linear_state
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, FunctionalDecoder, _to_device
+from models.autoports.qwen_qwen3_6_27b.tt.fused_decoder import FusedDecoder
 from models.common.utility_functions import comp_pcc
 
 
@@ -63,7 +64,7 @@ def _reference_steps(kind, layer, config, tokens):
 
 
 @torch.no_grad()
-def run(kind, batch):
+def run(kind, batch, decoder_kind="functional", perf_iterations=10):
     # Make any Python/host fallback in the measured TTNN path a hard failure.
     ttnn.CONFIG.throw_exception_on_fallback = True
     print("FALLBACK_AUDIT", f"throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
@@ -90,7 +91,9 @@ def run(kind, batch):
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     trace_id = None
     try:
-        decoder = FunctionalDecoder.from_state_dict(
+        decoder_cls = FusedDecoder if decoder_kind == "fused" else FunctionalDecoder
+        print("DECODER_PATH", decoder_cls.__module__, decoder_cls.__name__)
+        decoder = decoder_cls.from_state_dict(
             state,
             hf_config=config,
             layer_idx=layer_idx,
@@ -139,7 +142,6 @@ def run(kind, batch):
 
         actual_steps = []
         replay_times = []
-        signpost("PERF_DECODE")
         for step in (1, 2):
             _copy_host(tokens[step].reshape(1, 1, batch, -1), hidden_device)
             _copy_host(
@@ -161,12 +163,19 @@ def run(kind, batch):
                 message,
             )
             assert passed, message
+        perf_times = []
+        signpost("PERF_DECODE")
+        for _ in range(perf_iterations):
+            started = time.perf_counter()
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+            perf_times.append((time.perf_counter() - started) * 1000)
         signpost("PERF_DECODE_END")
         print(
             f"{kind.upper()}_TRACED_SYNTHETIC_LATENCY",
             f"batch={batch}",
-            f"median_ms={torch.tensor(replay_times).median().item():.6f}",
-            f"min_ms={min(replay_times):.6f}",
+            f"median_ms={torch.tensor(perf_times).median().item():.6f}",
+            f"min_ms={min(perf_times):.6f}",
+            f"iterations={perf_iterations}",
         )
 
         assert not torch.equal(actual_steps[0], actual_steps[1]), "trace output ignored new input"
@@ -183,5 +192,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--kind", choices=("full", "linear"), required=True)
     parser.add_argument("--batch", type=int, choices=(1, 32), required=True)
+    parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
+    parser.add_argument("--perf-iterations", type=int, default=10)
     args = parser.parse_args()
-    run(args.kind, args.batch)
+    run(args.kind, args.batch, args.decoder, args.perf_iterations)

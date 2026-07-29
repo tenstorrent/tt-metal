@@ -7,11 +7,13 @@ import argparse
 import math
 
 import torch
+from tracy import signpost
 from transformers import AutoConfig, DynamicCache
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer
 
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, FunctionalDecoder, _to_device
+from models.autoports.qwen_qwen3_6_27b.tt.fused_decoder import FusedDecoder
 from models.common.utility_functions import comp_pcc
 
 LAYER = 0
@@ -62,14 +64,14 @@ def _hf_layer(config, state):
 
 
 @torch.no_grad()
-def run(mode, sequence, capacity_only=False):
+def run(mode, sequence, capacity_only=False, batch=1, decoder_kind="fused", perf_only=False):
     ttnn.CONFIG.throw_exception_on_fallback = True
     print("FALLBACK_AUDIT", f"throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
     torch.manual_seed(20260729)
     config = AutoConfig.from_pretrained(MODEL_ID).text_config
     state = _state(config)
     logical_sequence = 1 if mode == "decode" else sequence
-    hidden = (torch.randn(1, logical_sequence, config.hidden_size) * 0.2).bfloat16()
+    hidden = (torch.randn(batch, logical_sequence, config.hidden_size) * 0.2).bfloat16()
     reference = None
     if not capacity_only:
         hf_layer = _hf_layer(config, state)
@@ -82,12 +84,14 @@ def run(mode, sequence, capacity_only=False):
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder = FunctionalDecoder.from_state_dict(
+        decoder_cls = FusedDecoder if decoder_kind == "fused" else FunctionalDecoder
+        print("DECODER_PATH", decoder_cls.__module__, decoder_cls.__name__)
+        decoder = decoder_cls.from_state_dict(
             state,
             hf_config=config,
             layer_idx=LAYER,
             mesh_device=mesh,
-            batch=1,
+            batch=batch,
             max_context=max(64, logical_sequence),
             page_size=64,
         )
@@ -99,7 +103,7 @@ def run(mode, sequence, capacity_only=False):
             dtype=ttnn.int32,
         )
         position_values = (
-            torch.tensor([0], dtype=torch.uint32)
+            torch.zeros(batch, dtype=torch.uint32)
             if mode == "decode"
             else torch.arange(logical_sequence, dtype=torch.int64).to(torch.uint32).reshape(1, -1)
         )
@@ -109,19 +113,29 @@ def run(mode, sequence, capacity_only=False):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
         )
-        if mode == "decode":
-            output = decoder.decode_forward(
+
+        def forward():
+            if mode == "decode":
+                return decoder.decode_forward(
+                    hidden_states=hidden_tt,
+                    page_table=unused_page_table,
+                    current_positions=positions,
+                )
+            return decoder.prefill_forward(
                 hidden_states=hidden_tt,
                 page_table=unused_page_table,
                 current_positions=positions,
             )
-        else:
-            output = decoder.prefill_forward(
-                hidden_states=hidden_tt,
-                page_table=unused_page_table,
-                current_positions=positions,
-            )
+
+        output = forward()
         ttnn.synchronize_device(mesh)
+        if perf_only:
+            signpost("PERF_PREFILL")
+            output = forward()
+            ttnn.synchronize_device(mesh)
+            signpost("PERF_PREFILL_END")
+            print("PREFILL_PERF_ONLY", f"batch={batch}", f"sequence={logical_sequence}")
+            return
         actual = ttnn.to_torch(ttnn.get_device_tensors(output)[0]).squeeze(0)
         if capacity_only:
             recurrent = ttnn.to_torch(ttnn.get_device_tensors(decoder.caches["recurrent"])[0])
@@ -137,7 +151,7 @@ def run(mode, sequence, capacity_only=False):
             assert torch.count_nonzero(recurrent).item() > 0
             return
         passed, message = comp_pcc(reference.float(), actual.float(), 0.995)
-        print(f"LINEAR_ATTENTION_SYNTHETIC_PCC mode={mode} sequence={logical_sequence}", message)
+        print(f"LINEAR_ATTENTION_SYNTHETIC_PCC mode={mode} batch={batch} sequence={logical_sequence}", message)
         assert passed, message
     finally:
         ttnn.close_mesh_device(mesh)
@@ -148,5 +162,8 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=("decode", "prefill"), default="decode")
     parser.add_argument("--sequence", type=int, default=5)
     parser.add_argument("--capacity-only", action="store_true")
+    parser.add_argument("--batch", type=int, choices=(1, 32), default=1)
+    parser.add_argument("--decoder", choices=("functional", "fused"), default="fused")
+    parser.add_argument("--perf-only", action="store_true")
     args = parser.parse_args()
-    run(args.mode, args.sequence, args.capacity_only)
+    run(args.mode, args.sequence, args.capacity_only, args.batch, args.decoder, args.perf_only)

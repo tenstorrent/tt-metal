@@ -9,12 +9,15 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedd
 
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tests.full_attention_synthetic_pcc import LAYER, _hf_layer, _state
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, FunctionalDecoder, _to_device
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, _to_device
+from models.autoports.qwen_qwen3_6_27b.tt.fused_decoder import FusedDecoder
 from models.common.utility_functions import comp_pcc
 
 
 @torch.no_grad()
 def run():
+    ttnn.CONFIG.throw_exception_on_fallback = True
+    print("FALLBACK_AUDIT", f"throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
     torch.manual_seed(20260729)
     config = AutoConfig.from_pretrained(MODEL_ID).text_config
     config._attn_implementation = "eager"
@@ -48,7 +51,7 @@ def run():
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder = FunctionalDecoder.from_state_dict(
+        decoder = FusedDecoder.from_state_dict(
             state,
             hf_config=config,
             layer_idx=LAYER,
