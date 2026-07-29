@@ -1091,3 +1091,56 @@ ring-configuration measurement of those shapes from earlier in the session:
 Both inside the historical spread: the initial +2.6% was a low-outlier single-run reference, not a regression.
 **LESSON: never accept a 1-2% delta against a single-run baseline on these small shapes - the noise floor is
 wider than the effect.** 111/111 correctness tests pass.
+
+### COMPREHENSIVE DEFAULT-CONFIGURATION SWEEP (Mt<=16, LTX + FLUX union, 67 shapes)
+
+Everything at DEFAULTS: `config=None` so the production picker chooses, no diagnostic mask, no env override that
+changes behaviour. Corpus = union of the broad Mt<=16 corpus and the canonical FLUX/LTX production shape list
+(the FLUX/LTX set turned out to be almost entirely a subset -- only 1 of its 20 shapes was not already present).
+Device time via the profiler CSV demuxed by run-host-id (op device time, not host wall), 2 warmup + 12 timed
+iterations per block, 2 blocks per shape = 24 timed iterations. Absolute PCC against an FP32 CPU reference.
+
+Full table in `PROD_SWEEP_MT16.md`, sorted ascending by effective DRAM bandwidth. Harness:
+`prod_sweep_worker.py` + `prod_sweep_report.py`.
+
+**Ground-truth configuration.** There is no way to read the auto-selected config from Python, and the host-side
+python mirror of the picker is NOT validated against `auto_select_config` (the only parity test covers
+feasibility, not which config is chosen), so reporting the mirror could silently misreport. Added
+`TT_REGIME_A_LOG_CFG`, an observability-only env var that makes the factory log its own pick, reduction strategy
+and placement once per program-cache miss. Behaviour is unchanged; the table's cfg/reduction/placement columns
+are therefore ground truth.
+
+**Headline results (66 measured / 67):**
+
+| metric | value |
+|---|---|
+| effective DRAM BW | min 247.6, median **436.6**, max 501.3 GB/s (peak 512) |
+| % of peak | median **85%**; 44 of 66 shapes above 80%; only 1 below 50% |
+| correctness | **66/66 PCC >= 0.999**, minimum 0.99997 |
+| stability | median block-to-block spread **0.2%**, worst 1.3% (256x2048x1024); median iteration spread 2.9% |
+| reduction chosen | 14 reduce-scatter / 52 chain |
+| placement chosen | 11 mesh / 9 in1-near / 46 bank-local |
+
+The gate selections match what the campaign predicted exactly: the 14 reduce-scatter shapes are precisely the 14
+the S8/S9 gate was fitted to adopt, and the 11 mesh shapes are all Mt>=8, confirming the S6 `Mt >= 8` fix is
+doing its job in production.
+
+**Where the remaining headroom is.** The bottom of the table is dominated by ONE family: the shallow-K
+(K=2048) M-heavy shapes plus the Mt=16 wide-N shapes. The five worst are 256x2048x512 (48% of peak),
+512x6144x768 (52%), 128x2048x512 (53%), 256x2048x1024 (58%), 256x2048x1536 (58%). Every one of them is small in
+absolute time (10-62 us), so the absolute-slack ranking is unchanged -- this is a low-efficiency-but-cheap
+corner, not the place the wall-clock is. The largest shapes all sit at 85-98% of peak, which is why the earlier
+optimisation rounds found so little left there.
+
+**One hard failure, pre-existing and already known: 512x15360x768.** The picker THROWS rather than returning a
+config: "auto-select found no feasible config for Mt=16 Kt=480 Nt=24"
+(`regime_a_matmul_config.cpp:211`). Diagnosis: the anchor search in step 1 only considers **Sm=1**, and at Sm=1
+this shape cannot fit L1 -- the in0 resident CB alone is 640 tiles = 1280 KB, and the full CB set is 1480 KB at
+N_sub=1 (1680 at N_sub=2, 1880 at N_sub=3) against a 1440 KB budget. It NEEDS M-split, but step 2's M-split
+hysteresis only ever runs as an improvement on an already-valid anchor, so with no anchor it fatals. Sm=2/Pk=6,
+Sm=3/Pk=4 and Sm=4/Pk=3 all fit comfortably (1280-1440 KB for the in0 CB), so a feasible config demonstrably
+exists.
+NOT a regression from this campaign: the earlier corpus snapshot in `regime_a_current_perf.json` already records
+this shape as `cls: "picker_infeasible", cfg: null`. The fix is contained -- fall back to searching Sm>1 in the
+anchor step when no Sm=1 config is feasible -- but it is a picker-coverage fix rather than a perf change, so it
+is left un-implemented pending a decision.

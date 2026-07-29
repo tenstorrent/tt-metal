@@ -1327,7 +1327,28 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                            (((Pk * Ns_gate >= 10u) && (Sm == 1u) && (Ns_gate == 1u || Pk >= 4u)) ||
                             (ring_bytes >= 2u * in1_bytes));
     const bool diag_mesh_spread = (diag_mask & 0x8000u) != 0u;  // bit15: even row spacing for few slices
-    if ((diag_place_mesh || mesh_gate) && !diag_mesh_off) {
+    const bool use_mesh = (diag_place_mesh || mesh_gate) && !diag_mesh_off;
+    // OBSERVABILITY ONLY (TT_REGIME_A_LOG_CFG): report what the picker and the internal gates actually chose.
+    // Runs once per program-cache miss and changes NOTHING about behaviour -- there is no way to read the
+    // auto-selected config from Python otherwise, and reporting a host-side mirror of the picker risks silently
+    // misreporting if the mirror drifts from auto_select_config.
+    if (std::getenv("TT_REGIME_A_LOG_CFG") != nullptr) {
+        log_info(
+            tt::LogOp,
+            "regime_a_cfg M={} K={} N={} pick=({},{},{},{},{}) cores={} reduction={} placement={}",
+            Mt_r * 32u,
+            Kt_r * 32u,
+            Nt_r * 32u,
+            Pk,
+            cfg.n_slices ? cfg.n_slices : 1u,
+            Sm,
+            kb,
+            cfg.n_subblock_tiles,
+            geo.num_cores,
+            rscatter ? "reduce-scatter" : "chain",
+            use_mesh ? "mesh" : (Sm > 1u ? "in1-near" : "bank-local"));
+    }
+    if (use_mesh) {
         place_mesh(P, geo, device->compute_with_storage_grid_size(), diag_mesh_spread);
     } else if (diag_place_in1) {
         place_in1_optimal(P, device, geo, device->compute_with_storage_grid_size());
