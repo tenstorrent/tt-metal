@@ -22,14 +22,6 @@ import torch
 import ttnn
 
 
-_COMPUTE_KERNEL = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=False,
-    fp32_dest_acc_en=True,
-    packer_l1_acc=False,
-)
-
-
 def _ttnn_scalar_mul(x: ttnn.Tensor, scalar: float) -> ttnn.Tensor:
     """Multiply TTNN tensor by a Python float scalar.
 
@@ -313,7 +305,6 @@ def sample_speech_latents(
     scheduler.set_timesteps(num_steps)
 
     sample = initial_latent
-    latent_shape = initial_latent.shape
 
     # The CFG condition is step-INVARIANT (only the noisy latent + timestep change across the
     # num_steps loop), so hoist the condition concat + its Linear projection OUT of the loop:

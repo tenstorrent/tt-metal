@@ -45,11 +45,10 @@ _SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
     exp_approx_mode=False,
 )
 
-# Decode-only program config for the wq/wo 1536x1536 projections (single-token
-# step, Mt=1).  Sweep winner (matmul/test_matmul_32x1536x1536_sweep.py): 1D
-# mcast_in0, 8x3=24 cores, in0_block_w=4, per_core_N=2, out_subblock 1x2,
-# width-sharded output -> 12.25us vs 25.4us auto baseline (2.08x).  per_core_M=1
-# makes it valid ONLY for S==1 decode; prefill (S>1, Mt>1) keeps the auto config.
+# Decode-only program config for the wq/wo 1536x1536 projections (single-token step, Mt=1):
+# 1D mcast_in0, 8x3=24 cores, in0_block_w=4, per_core_N=2, out_subblock 1x2, width-sharded
+# output -> 12.25 µs vs 25.4 µs on the auto config (2.08x).  per_core_M=1 makes it valid only
+# for S==1 decode; prefill (S>1, Mt>1) keeps the auto config.
 _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
     in0_block_w=4,
@@ -67,8 +66,8 @@ _QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED,
 
 # B=2 variant of _QO_DECODE_PROGCFG for the CFG batch-2 fused decode (pos+neg rows folded
 # into M).  Identical in0_block_w / mcast / subblock; per_core_M=2 so it is valid for M=2.
-# Proven byte-identical per row to the per_core_M=1 B=1 config (cfg_batch2_byteident_probe.py:
-# row0 maxabsdiff==0), i.e. the K-reduction order is preserved — long-form-safe.
+# Byte-identical per row to the per_core_M=1 B=1 config (row 0 maxabsdiff==0), i.e. the
+# K-reduction order is preserved — long-form-safe.
 _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
     in0_block_w=4,
@@ -81,11 +80,11 @@ _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     mcast_in0=True,
 )
 
-# Decode-only fused-KV projection (32 x 1536 x 512).  Auto lands on 16 cores / ~22 µs SLOW.
-# Sweep winner: 1D mcast_in0, 8x1=8 cores, in0_block_w=2
-# (matches auto's K-reduction → maxabsdiff==0), per_core_N=2, out_subblock 1x2, width-sharded
-# L1 out + L1 in0 (attn rms_norm) → ~16 µs.  Bias-add then reshard to DRAM for NlpCreateHeads;
-# full q/k/v path stays byte-identical.  Prefill (S>1) keeps auto.
+# Decode-only fused-KV projection (32 x 1536 x 512).  Auto lands this on 16 cores at ~22 µs;
+# 1D mcast_in0 over 8x1=8 cores with in0_block_w=2, per_core_N=2, out_subblock 1x2 and a
+# width-sharded L1 output (plus L1 in0 from the attn rms_norm) reaches ~16 µs.  in0_block_w=2
+# matches auto's K-reduction (maxabsdiff==0), so the whole q/k/v path stays byte-identical.
+# Bias-add then reshard to DRAM for NlpCreateHeads.  Prefill (S>1) keeps auto.
 _WKV_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
     in0_block_w=2,
@@ -110,14 +109,16 @@ _WKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 )
 _WKV_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
-# Decode-only FFN program configs (S==1).  BYTE-IDENTICAL to the auto config (in0_block_w=2 is the
-# K-reduction block auto uses for these shapes — proven maxabsdiff==0 vs
-# auto), so the K-reduction order — hence the bf16 rounding — is
-# preserved.  The win is the cfg-batch-2 weight-read-once pattern extended to the FFN: the cfg-b2
-# LM fusion batched the wq/wo matmuls (per_core_M=2) but left the FFN on auto, which reads each
-# FFN weight matrix TWICE (once per CFG row).  per_core_M=2 folds both rows into M so the weights
-# are read once -> ~1.9x on the down-proj + ~1.85x each on gate/up at B=2, all long-form-safe (Tier-0).
-# per_core_M makes these valid ONLY for S==1 decode; prefill (S>1) keeps auto.
+# Decode-only FFN program configs (S==1), byte-identical to the auto config: in0_block_w=2 is the
+# K-reduction block auto uses for these shapes (maxabsdiff==0), so the reduction order — hence the
+# bf16 rounding — is preserved.
+#
+# These extend the CFG batch-2 weight-read-once pattern to the FFN.  The batch-2 LM fusion batched
+# the wq/wo matmuls (per_core_M=2) but left the FFN on auto, which reads each FFN weight matrix
+# once per CFG row.  per_core_M=2 folds both rows into M so each weight is read once: ~1.9x on the
+# down-proj and ~1.85x each on gate/up at B=2.
+#
+# per_core_M makes these valid only for S==1 decode; prefill (S>1) keeps auto.
 _FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
     in0_block_w=2,
@@ -292,7 +293,7 @@ def preprocess_lm_weights(
 
         # Fuse wk|wv (and biases) on the out dim once at load — decode keeps the fast wq
         # progcfg, while nlp_create_qkv_heads(q, input_kv=kv) drops the runtime concat +
-        # separate K/V matmuls (byte-identical; see fused-KV probe).
+        # separate K/V matmuls, and is byte-identical.
         wk_t = _rope_perm("attention.wk", state_dict[f"{prefix}.attention.wk.weight"])
         wv_t = state_dict[f"{prefix}.attention.wv.weight"]
         wkv_tt = _tile(torch.cat([wk_t, wv_t], dim=0), device)
@@ -578,9 +579,9 @@ class TTVibeVoiceLM:
 
     # KV-cache seq length is rounded up to this multiple so fused SDPA-decode's auto
     # k_chunk_size (largest pow2 divisor of S, cap 512) avoids known kernel hangs.
-    # 256-aligned caches pick k_chunk=256; valid_len=513 → layout 2×256+1 HANGs on
-    # Blackhole (see scripts/vv_sdpa_decode_sweep.py). 1024-aligned → k_chunk=512;
-    # valid_len=513 → 1×512+1 is OK (sweep-verified).
+    # 256-aligned caches pick k_chunk=256, and a valid_len of 513 then lays out as 2x256+1, which
+    # hangs on Blackhole.  1024-aligned caches pick k_chunk=512, so 513 lays out as 1x512+1, which
+    # is safe.
     _KV_ALIGN = 1024
 
     def __init__(self, weights: LMWeights, device):
@@ -614,7 +615,7 @@ class TTVibeVoiceLM:
             # On-device bf16 RoPE tables [max_len, hd] ROW_MAJOR for the llama-style path: the row
             # for a DEVICE position is gathered on-device via ttnn.embedding (bf16-only), so the
             # position can advance on-device (plus_one) with no per-step host RoPE write.  bf16 RoPE
-            # is ~0.9999 PCC vs the fp32 host rows and does not flip greedy tokens (bf16_rope_accuracy.py).
+            # is ~0.9999 PCC vs the fp32 host rows and does not flip greedy tokens.
             self._cos_emb = ttnn.as_tensor(
                 torch.from_numpy(self._cos_np).to(torch.bfloat16),
                 device=device,
@@ -961,19 +962,20 @@ class TTVibeVoiceLM:
         else:  # prefill (S>1) → auto
             gate_pc, down_pc = None, None
         # L1-island for gate/up matmul outputs + silu:
-        # - Decode B==2: explicit progcfg + L1 (ffn_chain_l1_probe.py; ~1.15x, maxabsdiff==0).
-        # - Prefill S>1: auto + L1 interleaved is byte-identical and ~1.13x on the 5-op chain
-        #   (ffn_prefill_l1_chain_probe.py).  Prefill down must keep DRAM in0 — auto+L1-in0
-        #   re-picks K-reduction (maxabsdiff≠0) — so silu→mul stays DRAM below.
-        # - Decode B==1: auto+L1 gate is byte-ident in isolation but the full chain is not faster.
+        # - Decode B==2: explicit progcfg + L1, ~1.15x and maxabsdiff==0.
+        # - Prefill S>1: auto + L1 interleaved is byte-identical and ~1.13x on the 5-op chain.
+        #   Prefill down must keep a DRAM in0 — auto with an L1 in0 re-picks the K-reduction
+        #   (maxabsdiff≠0) — so silu→mul stays in DRAM below.
+        # - Decode B==1: auto + L1 gate is byte-identical in isolation, but the full chain is not
+        #   faster, so it stays in DRAM.
         gateup_mc = ttnn.L1_MEMORY_CONFIG if ((S == 1 and B == 2) or S > 1) else ttnn.DRAM_MEMORY_CONFIG
         gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
         up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
         gate = ttnn.silu(gate, memory_config=gateup_mc)
-        # Place the SwiGLU product (down_proj's in0) in L1 for decode: down_proj is the biggest
-        # LM matmul (K=8960, 24c, ~45% DRAM BW) and reads in0 faster from L1 (B=2 deploy 151->134us,
-        # 1.13x).  Memory placement only, same in0_block_w K-reduction => byte-identical (maxabsdiff==0,
-        # ffn_down_l1_input_probe.py) — Tier-0 long-form-safe.  Prefill (S>1) keeps DRAM.
+        # Place the SwiGLU product (down_proj's in0) in L1 for decode: down_proj is the biggest LM
+        # matmul (K=8960, 24 cores, ~45% DRAM BW) and reads in0 faster from L1 (151 -> 134 µs at
+        # B=2, 1.13x).  Placement only — same in0_block_w K-reduction, so byte-identical
+        # (maxabsdiff==0).  Prefill (S>1) keeps DRAM.
         hidden_mc = ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG
         hidden = ttnn.mul(gate, up, memory_config=hidden_mc)
         out = ttnn.linear(
@@ -1039,7 +1041,6 @@ class TTVibeVoiceLM:
         Returns:
             (logits [B, 1, S, vocab], last_hidden or None)
         """
-        B = inputs_embeds.shape[0]
         S = inputs_embeds.shape[2]
         cfg = self.cfg
 
@@ -1305,9 +1306,8 @@ class TTVibeVoiceLM:
     # their inputs into [2,1,1,H] reads each layer's weights ONCE for both rows.  Only
     # the weight-bound MATMULS are batched (qkv/o/gate/up/down); attention (rope / KV
     # write / sdpa) stays per-row on the two SEPARATE [1,..] caches, i.e. byte-identical
-    # to the current B=1 attention (no batched KV cache, no extra DRAM).  Every batched
-    # op is proven byte-identical per row (cfg_batch2_byteident_probe.py +
-    # cfg_batch2_sdpa_byteident_probe.py) → Tier-0.
+    # to the B=1 attention (no batched KV cache, no extra DRAM).  Every batched op is
+    # byte-identical per row.
     def _attention_decode_traced_b2(
         self,
         x: ttnn.Tensor,  # [2,1,1,H]  row0=pos, row1=neg

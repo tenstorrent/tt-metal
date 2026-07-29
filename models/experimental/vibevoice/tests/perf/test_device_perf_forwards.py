@@ -3,7 +3,7 @@
 
 """Device-perf inference workload: one LM prefill chunk + a few decode steps.
 
-Mirrors Voxtral ``test_voxtral_tts_perf_inference.py``:
+Follows the standard tt-metal device-perf workload shape:
 
   * Weight load / warmup dispatch many device ops and can overflow the Tracy
     DRAM profiler buffer. ``ttnn.ReadDeviceProfiler()`` is called after warmup

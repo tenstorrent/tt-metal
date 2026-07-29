@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 
 VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent
-REFERENCE_DIR = VIBEVOICE_ROOT / "reference"
 RESOURCES_DIR = VIBEVOICE_ROOT / "resources"
 VOICES_DIR = RESOURCES_DIR / "voices"
 TEXT_EXAMPLES_DIR = RESOURCES_DIR / "text"
@@ -26,13 +25,7 @@ MODEL_PATH_ENV_VAR = "VIBEVOICE_MODEL_PATH"
 # Updated at runtime by ensure_model_weights() in tests and entry-point scripts.
 MODEL_PATH = os.environ.get(MODEL_PATH_ENV_VAR, str(DEFAULT_MODEL_PATH))
 
-# Processor loads Qwen tokenizer from HF cache (not bundled in VibeVoice-1.5B weights).
-QWEN_TOKENIZER = "Qwen/Qwen2.5-1.5B"
-
-# transformers>=4.57 changes generate() KV-cache API; pin for reference parity.
-TRANSFORMERS_VERSION = "4.51.3"
-
-DEFAULT_DEVICE = os.environ.get("VIBEVOICE_DEVICE", "cpu")
-
-# Only VibeVoice checkpoint is supported for PCC tests; do not load bare Qwen weights.
-LM_WEIGHT_SOURCE = "vibevoice"
+# The reference processor loads the Qwen/Qwen2.5-1.5B tokenizer from the Hugging Face
+# cache; it is not bundled in the VibeVoice-1.5B checkpoint.
+#
+# Reference parity requires transformers 4.51.3: 4.57 changed the generate() KV-cache API.

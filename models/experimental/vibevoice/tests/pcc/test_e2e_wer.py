@@ -23,8 +23,6 @@ import contextlib
 import json
 import os
 import re
-import sys
-from pathlib import Path
 
 import pytest
 import torch
@@ -32,22 +30,17 @@ import torch
 from models.experimental.vibevoice.common.config import (
     MODEL_PATH,
     TEXT_EXAMPLES_DIR,
+    VIBEVOICE_ROOT,
 )
 from models.experimental.vibevoice.common.resource_utils import build_voice_samples, load_script
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
-
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 CFG_SCALE = 1.3
 NUM_DIFFUSION_STEPS = 10
 SR = 24000  # VibeVoice sample rate
 WHISPER_SR = 16000  # Whisper feature-extractor sample rate
 WHISPER_MODEL = "openai/whisper-medium"
-_OUT_DIR = _VIBEVOICE_ROOT / "output" / "e2e_wer"
+_OUT_DIR = VIBEVOICE_ROOT / "output" / "e2e_wer"
 
 # 4-speaker climate script + voice cloning.
 TF_DEMO_ID = "4p_climate_45min"
@@ -106,10 +99,10 @@ def _wer(ref_words: list[str], hyp_words: list[str]) -> float:
 
 
 def _load_whisper():
+    """Whisper scorer for the generated audio; runs on CPU (host has no GPU)."""
     from transformers import pipeline
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    return pipeline("automatic-speech-recognition", model=WHISPER_MODEL, device=device)
+    return pipeline("automatic-speech-recognition", model=WHISPER_MODEL, device="cpu")
 
 
 def _transcribe(asr, audio_24k: torch.Tensor) -> str:
@@ -144,8 +137,10 @@ def test_e2e_wer_teacher_forced(mesh_device):
     except Exception as exc:
         pytest.skip(f"Whisper ASR unavailable ({WHISPER_MODEL}): {exc}")
 
-    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-    from processor.vibevoice_processor import VibeVoiceProcessor
+    from models.experimental.vibevoice.reference.modular.modeling_vibevoice_inference import (
+        VibeVoiceForConditionalGenerationInference,
+    )
+    from models.experimental.vibevoice.reference.processor.vibevoice_processor import VibeVoiceProcessor
 
     from models.experimental.vibevoice.tt.ttnn_vibevoice_generator import _host_2d_to_embeds
 

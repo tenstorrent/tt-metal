@@ -7,9 +7,6 @@ Loads real prediction_head weights, runs reference PyTorch forward and TT forwar
 asserts numeric metrics (PCC / allclose / Frobenius).
 """
 
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
@@ -25,13 +22,6 @@ from models.experimental.vibevoice.tt.ttnn_diffusion_head import (
     TTDiffusionHead,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import load_vibevoice_model_config
-
-# Need reference module on sys.path
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 
 @pytest.fixture(scope="module")
@@ -57,8 +47,8 @@ def _reference_diffusion_head_forward(
     norm_eps: float = 1e-5,
 ) -> torch.Tensor:
     """Run reference VibeVoiceDiffusionHead forward using loaded weights."""
-    from modular.configuration_vibevoice import VibeVoiceDiffusionHeadConfig
-    from modular.modular_vibevoice_diffusion_head import VibeVoiceDiffusionHead
+    from models.experimental.vibevoice.reference.modular.configuration_vibevoice import VibeVoiceDiffusionHeadConfig
+    from models.experimental.vibevoice.reference.modular.modular_vibevoice_diffusion_head import VibeVoiceDiffusionHead
 
     cfg = VibeVoiceDiffusionHeadConfig(
         hidden_size=hidden_size,
@@ -75,6 +65,7 @@ def _reference_diffusion_head_forward(
     return out
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_diffusion_head_pcc(mesh_device, loaded_weights, vv_config):
     torch.manual_seed(0)
