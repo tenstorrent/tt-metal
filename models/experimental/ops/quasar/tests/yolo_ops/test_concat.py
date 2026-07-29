@@ -76,11 +76,8 @@ _CHANNEL_SITES = [
     # final detect output join dbox+sigmoid(cls), dim=1 (ttnn_yolov8l.py:757) @ 640
     ("detect_out-640", 1, ((1, 4, 8400), (1, _NC, 8400)), (1, 84, 8400)),
     ("detect_out-1280", 1, ((1, 4, 33600), (1, _NC, 33600)), (1, 84, 33600)),
-    # Representative neck channel-concat, dim=-1 (ttnn_yolov8l.py:499 C2f / :1034
-    # sharded_concat).  NOTE: exact channel widths are model-config-specific and not
-    # derivable from the read-only source; 320/640 mirror the detect-head input
-    # widths (ch=(320,640,640), ttnn_yolov8l.py:663) as a stand-in shape only.
-    ("neck_channel-640", -1, ((1, 1, 6400, 320), (1, 1, 6400, 320)), (1, 1, 6400, 640)),
+    # YOLOv8l model.15 input: upsampled 512-channel tensor + 256-channel skip -> 768.
+    ("neck_channel-640", -1, ((1, 1, 6400, 512), (1, 1, 6400, 256)), (1, 1, 6400, 768)),
 ]
 
 
