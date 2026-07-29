@@ -86,6 +86,32 @@
     ],
     "status": "functional_decoder_complete_clean_pass"
   },
+  "optimized_decoder": {
+    "decode_supported_context": 262144,
+    "single_pass_prefill_supported_context": 192511,
+    "supported_context": 262144,
+    "cache_dtype": {
+      "full_attention_key_value": "BFLOAT8_B",
+      "linear_attention_convolution": "BFLOAT16",
+      "linear_attention_recurrent": "FLOAT32"
+    },
+    "decode_batches_tested": [
+      1,
+      32
+    ],
+    "prefill_batches_tested": [
+      1,
+      32
+    ],
+    "non_aligned_prefill_sequences_tested": {
+      "full_attention": 33,
+      "linear_attention": 5
+    },
+    "serving_batch_32_advertised_context_cache_bytes": 17179869184,
+    "capacity_note": "BFP8 paged KV halves full-attention cache bytes versus the functional BF16 cache. The advertised context and evidence-backed single-pass prefill limit are unchanged.",
+    "watcher_interval_seconds": 10,
+    "status": "optimized_decoder_complete_clean_pass"
+  },
   "layer_kinds": {
     "linear_attention": {
       "representative_layer": 0,
