@@ -108,12 +108,44 @@ freedom left to exploit on the mesh; the existing optimiser already picks a mini
 60% of that 17-hop cost is the single wrap-around edge that closes the cycle (10 of 17 hops), which is a
 future target - a two-direction ring using both NoCs would avoid it.
 
+### S3. Gate extension: also adopt when the ring simply carries more traffic than in1
+
+Added a second clause: adopt the mesh whenever ring bytes >= 2x in1 bytes, regardless of slice count. On the
+corpus exactly 3 shapes clear 2x and all 3 win; the highest-ratio loser sits at 1.31x, so the threshold is
+clean. This lets in the two ring-heavy shapes that the slice-count clause excluded because they use M-split:
+
+| shape | shipped | old placement | gain |
+|---|---|---|---|
+| 256x2048x512 | 15.10 | 16.87 | **10.47%** |
+| 256x15360x768 | 88.24 | 95.92 | **8.01%** |
+| declined: 256x6144x4608, 256x2048x2048, 256x6144x1536 | unchanged | unchanged | 0 (noise) |
+
+Gate now adopts 26 of 63 shapes, mean about 5.4% faster.
+
+### F1. FAILED: mesh v2, spreading slices evenly over the rows (bit15, kept as a diagnostic)
+
+Idea: shapes with fewer than 10 slices get packed into the top rows, so space them out over all 10 rows
+instead. It helps a little but nowhere near enough - every one of these shapes is still far worse than
+production:
+
+| shape | production | mesh packed | mesh spread |
+|---|---|---|---|
+| 32x2048x2048 | 20.16 | 29.85 (-48.1%) | 28.36 (-40.7%) |
+| 32x6144x1536 | 41.03 | 49.36 (-20.3%) | 46.54 (-13.4%) |
+| 64x6144x4608 | 119.35 | 144.08 (-20.7%) | 141.13 (-18.2%) |
+| 32x6144x2304 | 60.56 | 114.27 (-88.7%) | 115.97 (-91.5%) |
+| 64x6144x1536 | 45.07 | 77.38 (-71.7%) | 79.48 (-76.3%) |
+
+Why: with few slices there are few cores, so each core reads a LOT of in1 (1.18 MB per core on
+32x6144x2304). Moving those cores off their own DRAM bank multiplies the read latency, and these shapes are
+already at 83-95% of their DRAM floor, so there is nothing to win and everything to lose. Conclusion: the mesh
+belongs only to the many-core, ring-heavy regime, which is what the gate already says. Not pursuing further.
+
 ## Work queue
 
-1. ~~Fit an adoption gate for the mesh and ship it.~~ DONE (S2).
+1. ~~Fit an adoption gate for the mesh and ship it.~~ DONE (S2, S3).
 2. ~~Re-run ring ORDER optimisation on the mesh.~~ CLOSED by analysis (see note above).
-3. Mesh v2: spread slices evenly across rows instead of packing rows 0..preaders-1, so shapes with fewer than
-   10 slices can also use it. Those are 28 of 63 corpus shapes and they currently lose 6-89% with the mesh, so
-   the upside is large. [next]
-4. Revisit the three regressions from S1.
-5. Then keep going where headroom remains.
+3. ~~Mesh v2 (spread slices over rows).~~ FAILED, see F1.
+4. Re-measure where the time now goes on the shipped configuration, then attack the biggest remaining
+   exposure. [next]
+5. Revisit the three regressions from S1.
