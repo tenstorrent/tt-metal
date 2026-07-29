@@ -180,7 +180,12 @@ RouterChannelCounts compute_router_channel_counts(
         (direction == RoutingDirection::Z && has_intermesh_z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto channel_mapping = FabricRouterChannelMapping(
-        topology, downstream_is_tensix_builder, variant, &intermesh_config, has_intermesh_z);
+        topology,
+        downstream_is_tensix_builder,
+        variant,
+        &intermesh_config,
+        has_intermesh_z,
+        control_plane.express_routing_enabled(fabric_node_id.mesh_id));
 
     RouterChannelCounts counts;
     const uint32_t num_vcs = channel_mapping.get_num_virtual_channels();
@@ -284,7 +289,12 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // presence of any Z port.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto channel_mapping = FabricRouterChannelMapping(
-        topology, downstream_is_tensix_builder, variant, &intermesh_config, has_intermesh_z);
+        topology,
+        downstream_is_tensix_builder,
+        variant,
+        &intermesh_config,
+        has_intermesh_z,
+        control_plane.express_routing_enabled(local_node.mesh_id));
 
     // Create connection mapping (Phase 3)
     RouterConnectionMapping connection_mapping;

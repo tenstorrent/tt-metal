@@ -15,12 +15,14 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     bool downstream_is_tensix_builder,
     RouterVariant variant,
     const IntermeshVCConfig* intermesh_config,
-    bool has_z_on_device) :
+    bool has_z_on_device,
+    bool express_routing_enabled) :
     topology_(topology),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     variant_(variant),
     intermesh_vc_config_(intermesh_config),
-    has_z_on_device_(has_z_on_device) {
+    has_z_on_device_(has_z_on_device),
+    express_routing_enabled_(express_routing_enabled) {
     initialize_mappings();
 }
 
@@ -35,16 +37,21 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
 
     if (is_2d) {
         // 2D topology VC0 sender channels:
-        //   Z_ROUTER: 5 channels (0=Worker, 1-4=E/W/N/S)
-        //   MESH: 4 channels (0=Worker, 1-3=mesh directions)
-        auto num_sender_channels = is_z_router() ? builder_config::num_sender_channels_z_router_vc0  // 5 channels
-                                                 : builder_config::num_sender_channels_2d_mesh;      // 4 channels
+        //   Z_ROUTER:       5 channels (0=Worker, 1-4=E/W/N/S)
+        //   MESH, express:  5 channels (0=Worker, 1-3=cardinal ingresses, 4=express)
+        //   MESH:           4 channels (0=Worker, 1-3=mesh directions)
+        //
+        // Taken from the same accessor the rest of the class uses, so the number of entries created
+        // here cannot disagree with the number reported. Its VC0 answer reads only configuration, so
+        // calling it before the maps are populated is safe.
+        auto num_sender_channels = get_num_sender_channels_for_vc(0);
 
         log_debug(
             LogFabric,
-            "initialize_vc0_mappings: variant={}, is_z_router={}, num_sender_channels={}",
+            "initialize_vc0_mappings: variant={}, is_z_router={}, express={}, num_sender_channels={}",
             static_cast<int>(variant_),
             is_z_router(),
+            express_routing_enabled_,
             num_sender_channels);
 
         for (uint32_t i = 0; i < num_sender_channels; ++i) {
@@ -228,6 +235,9 @@ uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc)
             if (is_z_router()) {
                 // Only Z routers have 5 VC0 channels (0=Worker, 1-4=E/W/N/S)
                 return builder_config::num_sender_channels_z_router_vc0;  // 5 channels
+            } else if (express_routing_enabled_ && is_2D_topology(topology_)) {
+                // Express mesh router: 5 VC0 channels (0=Worker, 1-3=cardinal ingresses, 4=express)
+                return builder_config::num_sender_channels_2d_mesh_express;
             } else {
                 // All mesh routers (MESH and MESH_AND_Z_ROUTER) have 4 VC0 channels
                 return builder_config::get_num_used_sender_channel_count(get_topology());  // 4 channels

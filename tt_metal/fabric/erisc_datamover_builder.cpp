@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
@@ -294,7 +295,18 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         }
     }
 
-    if (this->sender_txq_id != this->receiver_txq_id) {
+    {
+        // Reserved unconditionally rather than only for multi-TXQ. Credits can now travel through
+        // these counters for a second reason -- an express router needs stream registers this form
+        // does not consume -- and that reason is not known here: this constructor takes only a
+        // topology, and deliberately so, since it aims for one L1 layout across every config. Always
+        // reserving keeps the layout stable and makes the counter form selectable by compile-time
+        // argument alone, with no way for the address map and that choice to disagree.
+        //
+        // The cost is roughly 192 bytes taken from channel buffering, well under a percent of it, and
+        // the slot options are coarse enough (4/2/1) that crossing a threshold is unlikely. If it ever
+        // does, the protected-receiver slot check reports it rather than letting it pass silently.
+        //
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
         size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
@@ -1122,18 +1134,55 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // --- Stream IDs (increment-on-write registers) ---
     named_args["TO_RECEIVER_0_PKTS_SENT_ID"] = StreamRegAssignments::IncrementOnWrite::to_receiver_0_pkts_sent_id;
     named_args["TO_RECEIVER_1_PKTS_SENT_ID"] = StreamRegAssignments::IncrementOnWrite::to_receiver_1_pkts_sent_id;
-    named_args["TO_SENDER_0_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_0_pkts_acked_id;
-    named_args["TO_SENDER_1_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_1_pkts_acked_id;
-    named_args["TO_SENDER_2_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_2_pkts_acked_id;
-    named_args["TO_SENDER_3_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_3_pkts_acked_id;
-    named_args["TO_SENDER_0_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_0_pkts_completed_id;
-    named_args["TO_SENDER_1_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_1_pkts_completed_id;
-    named_args["TO_SENDER_2_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_2_pkts_completed_id;
-    named_args["TO_SENDER_3_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_3_pkts_completed_id;
-    named_args["TO_SENDER_4_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_4_pkts_completed_id;
-    named_args["TO_SENDER_5_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_5_pkts_completed_id;
-    named_args["TO_SENDER_6_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_6_pkts_completed_id;
-    named_args["TO_SENDER_7_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_7_pkts_completed_id;
+    // --- Credit transport plan: which VCs carry credits in L1 counters ---
+    //
+    // Two independent things: this plan, and the stream-register map it frees up. Kept apart on
+    // purpose, so switching a VC's transport is one decision here rather than an edit spread across
+    // the map.
+    //
+    // Multi-TXQ requires the counter form on every VC. Express routing is a second, narrower reason:
+    // it widens VC0 to five senders, which needs one more ack register than an ethernet core has, and
+    // moving VC1's credits to counters releases its completion registers to cover that.
+    //
+    // Only VC1 moves. VC0 carries the completed bubble-flow-control argument, whose premises are
+    // written against the credit path it uses today, so leaving it untouched means none of them need
+    // revisiting. VC1's flow-control treatment is an open question regardless, which makes it the
+    // cheaper place to change mechanism.
+    //
+    // If the per-VC device paths turn out to be a problem, setting both VCs to counters here collapses
+    // the device containers to a single element type and reproduces today's whole-router behaviour --
+    // no second code path to maintain.
+    const bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
+    const bool express_enabled = control_plane.express_routing_enabled(local_fabric_node_id.mesh_id);
+
+    const bool vc0_uses_counter_credits = multi_txq_enabled;
+    const bool vc1_uses_counter_credits = multi_txq_enabled || express_enabled;
+
+    named_args["VC0_USES_COUNTER_CREDITS"] = vc0_uses_counter_credits ? 1 : 0;
+    named_args["VC1_USES_COUNTER_CREDITS"] = vc1_uses_counter_credits ? 1 : 0;
+
+    // --- Sender-side stream ids, from the declared assignment ---
+    //
+    // These three tables are the ones a credit-transport plan can change, so they come from one place
+    // that records which registers a configuration released and what took them, rather than from a
+    // conditional at each assignment.
+    const CreditTransportPlan credit_plan{
+        .vc0_uses_counters = vc0_uses_counter_credits, .vc1_uses_counters = vc1_uses_counter_credits};
+    const StreamAssignment stream_assignment = make_stream_assignment(
+        credit_plan,
+        StreamAssignmentInputs{
+            .num_vc0_senders = static_cast<uint32_t>(actual_sender_channels_vc0),
+            .num_vc1_senders = static_cast<uint32_t>(actual_sender_channels_vc1),
+            .num_vc2_senders = static_cast<uint32_t>(actual_sender_channels_vc2)});
+
+    // A zero here means the consumer is inactive for this configuration; the device skips initialising
+    // such an entry so it cannot be mistaken for register 0.
+    for (uint32_t ch = 0; ch < 5; ++ch) {
+        named_args[fmt::format("TO_SENDER_{}_PKTS_ACKED_ID", ch)] = stream_assignment.to_sender_acked[ch];
+    }
+    for (uint32_t ch = 0; ch < 8; ++ch) {
+        named_args[fmt::format("TO_SENDER_{}_PKTS_COMPLETED_ID", ch)] = stream_assignment.to_sender_completed[ch];
+    }
     named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
         StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_1;
     named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
@@ -1150,44 +1199,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_3;
     named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
         StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4;
-    named_args["SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_2_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_3_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_3_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_4_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_5_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_6_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_7_free_slots_stream_id;
-    // Channels 8 and 9 are 0 by default (padding). The firmware array
-    // sender_channel_free_slots_stream_ids[] is sized to MAX_NUM_SENDER_CHANNELS (10) but only
-    // indices 0..NUM_SENDER_CHANNELS-1 are accessed at runtime (via is_sender_channel_serviced[] guard).
-    //
-    // Channel layout by router type:
-    //   Non-Z mesh (no VC1):  indices 0-3 = VC0 (IDs 22-25),  index 4 = VC2 (ID 30 when enabled)
-    //   Non-Z mesh (with VC1): indices 0-3 = VC0, 4-6/7 = VC1, last = VC2 (ID 30 when enabled)
-    //   Z-router:              indices 0-4 = VC0, 5-8 = VC1 (mapped but NOT serviced by firmware —
-    //                          Z-routers don't step through VC1 sender channels), index 9 = VC2
-    //
-    // For Z-routers, VC1 sender channels (5-8) exist in the flat index space for layout compatibility
-    // but is_sender_channel_serviced[5..8] is false, so their stream IDs are never read by firmware.
-    // This is why indices 8 and 9 can safely be 0 — they are only accessed when VC2 is enabled,
-    // at which point the override below sets the correct one to stream ID 30.
-    named_args["SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID"] = 0;
-    named_args["SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID"] = 0;
-    // VC2 sender is always the last used channel. Override its stream ID to 30 (VC2 flow control).
-    // The flat index varies by config: non-Z without VC1 = index 4, non-Z with VC1 = index 7/8,
-    // Z-router = index 9.
-    if (actual_sender_channels_vc2 > 0 && num_sender_channels > 0) {
-        named_args[fmt::format("SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", num_sender_channels - 1)] =
-            StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+    // Sender free-slot counters come from the same assignment. It already places VC2's sender on its
+    // dedicated register and takes a released one for any sender the baseline map does not reach.
+    for (uint32_t ch = 0; ch < 10; ++ch) {
+        named_args[fmt::format("SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", ch)] =
+            stream_assignment.sender_free_slots[ch];
     }
     named_args["VC2_RECEIVER_FREE_SLOTS_STREAM_ID"] =
         StreamRegAssignments::IncrementOnWrite::vc2_receiver_free_slots_stream_id;
@@ -1348,16 +1364,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // --- Telemetry ---
     get_telemetry_compile_time_args(risc_id, named_args);
 
-    // --- Multi-TXQ credit counters (always emitted; 0 when inactive) ---
-    bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
+
+    // Addresses are emitted unconditionally because the regions are now always reserved, so the
+    // compile-time selection above cannot disagree with the L1 map.
     named_args["TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR"] =
-        multi_txq_enabled ? static_cast<uint32_t>(config.to_sender_channel_remote_ack_counters_base_addr) : 0;
+        static_cast<uint32_t>(config.to_sender_channel_remote_ack_counters_base_addr);
     named_args["TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR"] =
-        multi_txq_enabled ? static_cast<uint32_t>(config.to_sender_channel_remote_completion_counters_base_addr) : 0;
+        static_cast<uint32_t>(config.to_sender_channel_remote_completion_counters_base_addr);
     named_args["LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR"] =
-        multi_txq_enabled ? static_cast<uint32_t>(config.receiver_channel_remote_ack_counters_base_addr) : 0;
+        static_cast<uint32_t>(config.receiver_channel_remote_ack_counters_base_addr);
     named_args["LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR"] =
-        multi_txq_enabled ? static_cast<uint32_t>(config.receiver_channel_remote_completion_counters_base_addr) : 0;
+        static_cast<uint32_t>(config.receiver_channel_remote_completion_counters_base_addr);
 
     // --- Host signal args (defaults; compute_mesh_router_builder overrides when wait_for_host_signal) ---
     named_args["IS_LOCAL_HANDSHAKE_MASTER"] = 0;

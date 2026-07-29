@@ -67,24 +67,14 @@ void FabricBuilder::discover_channels() {
         // Cache neighbor and channel info
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
 
-        // Classify the edge here so every later decision keyed on capability agrees with one answer,
-        // and so a same-mesh Z on a mesh without validated express intent fails at discovery.
-        const auto capability =
-            classify_fabric_edge(control_plane, local_node_, neighbor_fabric_node_id, direction);
-
-        // The builder cannot wire an express chord yet: there is no VC0/VC1 express sender, no
-        // protected-ring classification to pick its BFC guard, and no 5-wide VC0 to hold it. Routing
-        // generation and the packet codec can already produce express hops, so failing here is what
-        // keeps an express mesh from running half-wired, with the kernel forwarding to a Z downstream
-        // that was never created.
-        TT_FATAL(
-            capability != EdgeCapability::INTRAMESH_EXPRESS,
-            "Intramesh express (Z) link on M{}D{} -> D{} is not yet supported by FabricBuilder. Express "
-            "wiring, sender allocation, and BFC classification are still being implemented; run this mesh "
-            "graph descriptor without express/skip links until that lands.",
-            *local_node_.mesh_id,
-            local_node_.chip_id,
-            neighbor_fabric_node_id.chip_id);
+        // Classify the edge for its validation only. A same-mesh Z on a mesh without validated express
+        // intent means topology intent and the neighbor graph disagree, and catching that at discovery
+        // gives a far better message than whatever fails later. The capability itself is resolved again
+        // where it is used, since each consumer needs it for its own router.
+        //
+        // An express chord needs no rejection here any more: it is wired like any other direction, on
+        // the fifth VC0 sender, with its guard derived from the protected-ring effects.
+        (void)classify_fabric_edge(control_plane, local_node_, neighbor_fabric_node_id, direction);
 
         chip_neighbors_.emplace(direction, neighbor_fabric_node_id);
         channels_by_direction_[direction] = active_eth_chans;

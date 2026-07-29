@@ -326,6 +326,16 @@ static_assert(sender_channel_free_slots_stream_ids[5] == 27);
 static_assert(sender_channel_free_slots_stream_ids[6] == 28);
 static_assert(sender_channel_free_slots_stream_ids[7] == 29);
 
+// A stream id of zero means that consumer is inactive for this configuration -- a VC whose credits
+// travel through L1 counters reads no ack or completion register at all. Register 0 is a real register
+// (the VC0 receiver's packets-sent counter), so initialising a zero entry would clobber it.
+template <uint32_t STREAM_ID>
+FORCE_INLINE void init_stream_reg_if_used(uint32_t value) {
+    if constexpr (STREAM_ID != 0) {
+        init_ptr_val<STREAM_ID>(value);
+    }
+}
+
 // For 2D fabric: maps compact index to downstream direction for each my_direction
 // For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
 constexpr uint32_t MAX_DOWNSTREAM_EDM_COUNT = 4;
@@ -1679,7 +1689,7 @@ FORCE_INLINE
         ReceiverChannelT& remote_receiver_channel,
         bool& channel_connection_established,
         uint32_t sender_channel_free_slots_stream_id,
-        SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
+        auto& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
@@ -1791,7 +1801,7 @@ FORCE_INLINE
         RemoteEthReceiverChannels& remote_receiver_channels,
         std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
         std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
-        std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
+        SenderChannelFromReceiverCredits<NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_sender_channel_serviced[sender_channel_index]) {
@@ -1810,7 +1820,7 @@ FORCE_INLINE
             remote_receiver_channels.template get<VC_RECEIVER_CHANNEL>(),
             channel_connection_established[sender_channel_index],
             local_sender_channel_free_slots_stream_ids[sender_channel_index],
-            sender_channel_from_receiver_credits[sender_channel_index],
+            sender_channel_from_receiver_credits.template get<sender_channel_index>(),
             perf_telemetry_recorder,
             local_fabric_telemetry);
     }
@@ -1835,7 +1845,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
+    auto& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
@@ -2039,7 +2049,7 @@ FORCE_INLINE bool run_receiver_channel_step(
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
+    ReceiverChannelResponseCreditSenders<NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
@@ -2060,7 +2070,7 @@ FORCE_INLINE bool run_receiver_channel_step(
             receiver_channel_pointers,
             receiver_channel_trid_tracker,
             port_direction_table,
-            receiver_channel_response_credit_senders[receiver_channel],
+            receiver_channel_response_credit_senders.template get<receiver_channel>(),
             routing_table,
             local_fabric_telemetry);
     }
@@ -2357,7 +2367,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                             channel_connection_established[0],
                             local_sender_channel_free_slots_stream_ids[0],
-                            sender_channel_from_receiver_credits[0],
+                            sender_channel_from_receiver_credits.template get<0>(),
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
                             local_speedy_sender_state);
@@ -2376,7 +2386,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             receiver_channel_pointers_ch0,
                             receiver_channel_0_trid_tracker,
                             port_direction_table,
-                            receiver_channel_response_credit_senders[0],
+                            receiver_channel_response_credit_senders.template get<0>(),
                             routing_table,
                             local_fabric_telemetry,
                             local_speedy_receiver_state);
@@ -2392,7 +2402,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             receiver_channel_pointers_ch0,
                             receiver_channel_0_trid_tracker,
                             port_direction_table,
-                            receiver_channel_response_credit_senders[0],
+                            receiver_channel_response_credit_senders.template get<0>(),
                             routing_table,
                             local_fabric_telemetry,
                             local_speedy_receiver_state);
@@ -2582,7 +2592,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             remote_receiver_channels.template get<VC2_RECEIVER_CHANNEL>(),
                             channel_connection_established[VC2_SENDER_CHANNEL_START],
                             local_sender_channel_free_slots_stream_ids[VC2_SENDER_CHANNEL_START],
-                            sender_channel_from_receiver_credits[VC2_SENDER_CHANNEL_START],
+                            sender_channel_from_receiver_credits.template get<VC2_SENDER_CHANNEL_START>(),
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
                             local_speedy_sender_state_vc2);
@@ -2600,7 +2610,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             receiver_channel_pointers_ch2,
                             receiver_channel_2_trid_tracker,
                             port_direction_table,
-                            receiver_channel_response_credit_senders[VC2_RECEIVER_CHANNEL],
+                            receiver_channel_response_credit_senders.template get<VC2_RECEIVER_CHANNEL>(),
                             routing_table,
                             local_fabric_telemetry,
                             local_speedy_receiver_state_vc2);
@@ -3073,10 +3083,10 @@ void kernel_main() {
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[0]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[1]>(0);
-    init_ptr_val<to_sender_packets_completed_streams[0]>(0);
-    init_ptr_val<to_sender_packets_completed_streams[1]>(0);
+    init_stream_reg_if_used<to_sender_packets_acked_streams[0]>(0);
+    init_stream_reg_if_used<to_sender_packets_acked_streams[1]>(0);
+    init_stream_reg_if_used<to_sender_packets_completed_streams[0]>(0);
+    init_stream_reg_if_used<to_sender_packets_completed_streams[1]>(0);
     // The first sender channel in the array is always for the transient/worker connection
     init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL WORKER
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);  // Compact index 0
@@ -3093,14 +3103,9 @@ void kernel_main() {
 
     if constexpr (is_2d_fabric) {
         init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
-        init_ptr_val<to_sender_packets_acked_streams[2]>(0);
-        init_ptr_val<to_sender_packets_acked_streams[3]>(0);
-        // 5th VC0 sender channel (intra-mesh Z) first-level-ack stream. Only present (non-zero) on a
-        // 5-wide-VC0 intra-mesh-Z MESH router; other routers leave index 4 == 0 (no first level ack), so
-        // guard on non-zero to avoid clobbering stream register 0 (the VC0 receiver pkts_sent counter).
-        if constexpr (to_sender_packets_acked_streams[4] != 0) {
-            init_ptr_val<to_sender_packets_acked_streams[4]>(0);
-        }
+        init_stream_reg_if_used<to_sender_packets_acked_streams[2]>(0);
+        init_stream_reg_if_used<to_sender_packets_acked_streams[3]>(0);
+        init_stream_reg_if_used<to_sender_packets_acked_streams[4]>(0);
 
         // Initialize completion streams and sender channel free slots for channels 2..MAX-1 using compile-time loop.
         // Index sequence covers Is=0..7 → channels 2..9 (MAX_NUM_SENDER_CHANNELS=10).
@@ -3108,7 +3113,7 @@ void kernel_main() {
         // SENDER_NUM_BUFFERS_ARRAY[] is sized to NUM_SENDER_CHANNELS, which is the number of used sender channels.
         [&]<size_t... Is>(std::index_sequence<Is...>) {
             (([&]() {
-                 init_ptr_val<to_sender_packets_completed_streams[Is + 2]>(0);
+                 init_stream_reg_if_used<to_sender_packets_completed_streams[Is + 2]>(0);
                  if constexpr (NUM_SENDER_CHANNELS > (Is + 2)) {
                      init_ptr_val<sender_channel_free_slots_stream_ids[Is + 2]>(SENDER_NUM_BUFFERS_ARRAY[Is + 2]);
                  }

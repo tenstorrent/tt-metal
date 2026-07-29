@@ -85,7 +85,8 @@ public:
         bool downstream_is_tensix_builder,
         RouterVariant variant,
         const IntermeshVCConfig* intermesh_config,
-        bool has_z_on_device = false);
+        bool has_z_on_device = false,
+        bool express_routing_enabled = false);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -125,6 +126,9 @@ private:
     RouterVariant variant_;
     const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
     bool has_z_on_device_ = false;
+    // This mesh has express chords, so a mesh router's VC0 gains a fifth sender for the express
+    // producer alongside the worker and its cardinal ingresses.
+    bool express_routing_enabled_ = false;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;

@@ -35,6 +35,9 @@ constexpr uint32_t to_sender_0_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_AC
 constexpr uint32_t to_sender_1_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_2_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_2_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_3_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_3_PKTS_ACKED_ID");
+// A five-wide VC0 needs a fifth first-level-ack stream. Zero when the configuration has no such
+// sender, or when VC0 carries its credits in L1 counters and needs no ack register at all.
+constexpr uint32_t to_sender_4_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_4_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_0_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_1_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_2_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_2_PKTS_COMPLETED_ID");
@@ -269,6 +272,52 @@ constexpr bool enable_interrupts = NAMED_CT_ARG("ENABLE_INTERRUPTS") != 0;
 constexpr size_t sender_txq_id = NAMED_CT_ARG("SENDER_TXQ_ID");
 constexpr size_t receiver_txq_id = NAMED_CT_ARG("RECEIVER_TXQ_ID");
 constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
+
+// Whether a VC's receiver-to-sender ack and completion credits travel through L1 counters instead of
+// stream registers.
+//
+// Multi-TXQ requires the counter form on every VC, but it is no longer the only reason to select it:
+// the counter form consumes no stream registers, and an ethernet core has only 32. Express routing
+// widens VC0 to five senders, which needs one more ack register than exists, so moving VC1's credits
+// to counters frees its completion registers to cover the gap.
+//
+// Selected per VC rather than for the whole router so that VC0's stream assignments hold in every
+// configuration and only VC1's change. Reuse of a register is unavoidable at a full budget; keeping it
+// confined to one VC is what keeps the map readable.
+//
+// Decided on host, since the reasons are host-side facts.
+constexpr bool vc0_uses_counter_credits = NAMED_CT_ARG("VC0_USES_COUNTER_CREDITS") != 0;
+constexpr bool vc1_uses_counter_credits = NAMED_CT_ARG("VC1_USES_COUNTER_CREDITS") != 0;
+constexpr bool any_vc_uses_counter_credits = vc0_uses_counter_credits || vc1_uses_counter_credits;
+
+// Flat sender channels are laid out VC0, then VC1, then VC2, so the existing boundaries answer which
+// VC owns a channel without any new state.
+constexpr size_t vc_of_sender_channel(size_t sender_channel) {
+    if (sender_channel < VC1_SENDER_CHANNEL_START) {
+        return 0;
+    }
+    if (sender_channel < VC2_SENDER_CHANNEL_START) {
+        return 1;
+    }
+    return 2;
+}
+
+constexpr bool sender_channel_uses_counter_credits(size_t sender_channel) {
+    switch (vc_of_sender_channel(sender_channel)) {
+        case 0: return vc0_uses_counter_credits;
+        case 1: return vc1_uses_counter_credits;
+        default: return false;  // VC2 keeps stream registers
+    }
+}
+
+// One receiver channel per VC, and credits only ever flow back within the same VC.
+constexpr bool receiver_channel_uses_counter_credits(size_t receiver_channel) {
+    switch (receiver_channel) {
+        case 0: return vc0_uses_counter_credits;
+        case 1: return vc1_uses_counter_credits;
+        default: return false;
+    }
+}
 
 constexpr size_t iterations_between_ctx_switch_and_teardown_checks =
     NAMED_CT_ARG("ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS");
@@ -506,16 +555,16 @@ static_assert(
     "total_number_of_receiver_to_sender_credit_num_bytes must be aligned to ETH_WORD_SIZE_BYTES");
 
 static_assert(
-    !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,
+    !any_vc_uses_counter_credits || to_sender_remote_ack_counters_base_address != 0,
     "to_sender_remote_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || to_sender_remote_completion_counters_base_address != 0,
+    !any_vc_uses_counter_credits || to_sender_remote_completion_counters_base_address != 0,
     "to_sender_remote_completion_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || local_receiver_ack_counters_base_address != 0,
+    !any_vc_uses_counter_credits || local_receiver_ack_counters_base_address != 0,
     "local_receiver_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || local_receiver_completion_counters_base_address != 0,
+    !any_vc_uses_counter_credits || local_receiver_completion_counters_base_address != 0,
     "local_receiver_completion_counters_base_address must be valid");
 
 // ============================================================================
@@ -566,8 +615,9 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_
                                                       to_sender_1_pkts_acked_id,
                                                       to_sender_2_pkts_acked_id,
                                                       to_sender_3_pkts_acked_id,
-                                                      // VC1 (no first level acks)
-                                                      0,
+                                                      // VC0 fifth sender when present; otherwise 0.
+                                                      // VC1 never has first level acks.
+                                                      to_sender_4_pkts_acked_id,
                                                       0,
                                                       0,
                                                       0,

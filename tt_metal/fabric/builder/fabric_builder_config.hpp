@@ -50,6 +50,11 @@ static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
+// Express routing adds a fifth VC0 sender: a mesh router's producers become three cardinal ingresses
+// plus the express chord, alongside the local worker. Applied uniformly to express mesh routers rather
+// than per direction, matching how these counts already work -- a router whose legal transitions do
+// not fill all five simply leaves the extra unserviced, which is an existing concept here.
+static constexpr std::size_t num_sender_channels_2d_mesh_express = 5;
 
 // Z router channel counts
 // VC0: 5 sender channels (mesh→Z: 0=Worker, 1-4=E/W/N/S mesh directions) + 1 receiver
@@ -69,10 +74,13 @@ static constexpr std::size_t num_sender_channels_z_router_with_vc2 =
 static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
 
 static constexpr std::size_t num_sender_channels_1d = 2;
-// VC0: Worker + 3 of [N/E/S/W] = 4 channels
+// VC0: Worker + 3 of [N/E/S/W], plus the express chord when express routing is on = 4 or 5 channels
 // VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels, 1 for Z→mesh
-// Total 2D without VC2: 4 + 3 + 1 = 8 channels (VC2 added dynamically)
-static constexpr std::size_t num_sender_channels_2d = 8;
+// Total 2D without VC2: 5 + 3 + 1 = 9 channels (VC2 added dynamically)
+//
+// Sized for the widest 2D shape so the flat index space is the same whether or not express routing is
+// enabled. num_max_sender_channels is unchanged at 10, since the Z router already reached that.
+static constexpr std::size_t num_sender_channels_2d = 9;
 // Max including VC2 — used only for array sizing
 static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;
 // Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
@@ -132,6 +140,7 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
 uint32_t get_downstream_edm_count(bool is_2D_routing);
 
 uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
+
 
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
 

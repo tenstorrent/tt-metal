@@ -22,6 +22,16 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     std::vector<FabricRouterChannelMapping> possible_mappings;
 
+    // An express mesh router's VC0 is five wide, so the fabric-wide maximum has to account for it or
+    // the shared router config would report fewer sender channels than a router actually maps -- the
+    // variant-to-router channel lookup would then index past its end. Asked across every local mesh
+    // rather than per node, since this maximum is fabric-wide.
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    bool any_mesh_uses_express = false;
+    for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        any_mesh_uses_express = any_mesh_uses_express || control_plane.express_routing_enabled(mesh_id);
+    }
+
     // Always have MESH routers
     bool needs_vc_config = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
     possible_mappings.emplace_back(
@@ -29,7 +39,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
         false,  // no tensix
         RouterVariant::MESH,
         needs_vc_config ? &intermesh_vc_config_ : nullptr,
-        false);
+        false,
+        any_mesh_uses_express);
 
     // If Z routers exist in this fabric, add Z_ROUTER mapping
     if (intermesh_vc_config_.router_type == IntermeshRouterType::Z_INTERMESH) {
