@@ -119,14 +119,18 @@ _KV_FOLD = True
 
 _K_BLOCKS = 2
 _RESHARD_CORES = 2
-# Cap on tiles per kv_sdpa flash K/V chunk. The op's default (128) maximizes chunk size to minimize
-# per-chunk overhead, which at DH=256 (DHt=8) gives 256-tile prefix K/V CBs -- ~272 KB EACH, ~544 KB
-# together. That is fine on a single chip but clashes with the resident denoise weights on the
-# 16-chip path (2-3 layers pinned per chip), which is exactly the
-# "Statically allocated circular buffers ... clash with L1 buffers" failure. 32 gives a prefix chunk
-# of 4 tiles -> ~68 KB per CB (~136 KB together), matching the footprint the 16-chip path was tuned
-# against, at the cost of more (cheaper) chunks.
-_KV_SDPA_MAX_CHUNK_TILES = 32
+# Cap on tiles per kv_sdpa flash K/V chunk (Sk_chunk_t * DHt). kv_sdpa is ~40% of denoise device
+# time, so this is the highest-leverage knob in the block. The op's default (128) maximizes chunk size
+# to minimize per-chunk overhead, but at DH=256 (DHt=8) that gives 256-tile prefix K/V CBs -- ~272 KB
+# EACH -- which clashes with the resident denoise weights on the 16-chip path.
+# Swept at tile-16 (single-layer walltime, PCC 0.9999 throughout):
+#   cap  32 -> prefix chunk  4 (8 chunks): 0.131 ms, ~136 KB of prefix CBs
+#   cap  64 -> prefix chunk  8 (4 chunks): 0.128 ms, ~272 KB   <-- chosen
+#   cap  96 -> prefix chunk  8 (12 is not a divisor of 32, so identical to 64)
+#   cap 128 -> prefix chunk 16 (2 chunks): 0.127 ms, ~544 KB
+# 64 captures essentially all of the gain; 128 buys a further ~0.001 ms (inside run-to-run noise) for
+# double the L1. Chosen for the best perf-per-byte that still fits the 16-chip L1 budget.
+_KV_SDPA_MAX_CHUNK_TILES = 64
 _QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = 40, 32, 32
 
 _LOFI = ttnn.WormholeComputeKernelConfig(
