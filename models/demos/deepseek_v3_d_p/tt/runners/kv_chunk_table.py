@@ -132,7 +132,7 @@ def build_and_serialize_kv_chunk_table(
             mesh_shape=mesh_shape,
             seq_len=seq_len,
             sp_axis=sp_axis,
-            tt_kvpe_cache=primary_cache,
+            kvpe_cache=primary_cache,
             chunk_size_bytes=chunk_size_bytes,
             num_users=num_users,
             first_layer_idx=first_layer_idx,
