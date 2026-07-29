@@ -44,14 +44,33 @@ struct SparseSDPAMsaOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     // Per-device causal start: chunk_start_idx + rank*S along cluster_axis (rank from the coordinate; 0 on a
-    // single device or when non-causal). Shared by create_descriptor at miss and hit time so the two cannot drift.
+    // single device or when non-causal).
     static uint32_t compute_chunk_start_local(
         const operation_attributes_t& attrs,
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 
-    // Cache-hit re-apply of all per-dispatch state (per-core K/V offsets, group strides, causal chunk_start,
-    // buffer addresses), since the hash excludes interleaved K/V T and cache_batch_idx. See the .cpp.
+    // Work split plus every scalar compute_program_hash excludes: interleaved K/V T and batch slots, n_kv,
+    // cache_batch_idx, chunk_start_idx/cluster_axis. Single-sourced so create_descriptor (miss-bake) and
+    // override_runtime_arguments (hit-patch) write the same values and cannot drift.
+    struct DispatchArgs {
+        tt::tt_metal::CoreCoord grid;  // per-core arg order: core i == {i % grid.x, i / grid.x}
+        uint32_t num_cores = 0;
+        uint32_t base_work = 0;  // total_work = S * n_kv over num_cores; the first `extra` cores take one more
+        uint32_t extra = 0;
+        uint32_t k_batch_tile_offset = 0;
+        uint32_t v_batch_tile_offset = 0;
+        uint32_t k_group_tile_stride = 0;
+        uint32_t v_group_tile_stride = 0;
+        uint32_t chunk_start_local = 0;
+    };
+    static DispatchArgs compute_dispatch_args(
+        const operation_attributes_t& attrs,
+        const tensor_args_t& t,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+
+    // Cache-hit re-apply of all per-dispatch state (buffer addresses, per-core K/V offsets, group strides,
+    // causal chunk_start), since the hash excludes interleaved K/V T and cache_batch_idx. See the .cpp.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const operation_attributes_t& attrs,

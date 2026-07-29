@@ -9,8 +9,9 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <algorithm>
 #include <bit>
 
 namespace ttnn::prim {
@@ -246,17 +247,101 @@ uint32_t SparseSDPAMsaOperation::compute_chunk_start_local(
     return attrs.chunk_start_idx.value() + device_index * S;
 }
 
+SparseSDPAMsaOperation::DispatchArgs SparseSDPAMsaOperation::compute_dispatch_args(
+    const SparseSDPAMsaParams& attrs,
+    const SparseSDPAMsaInputs& t,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const uint32_t S = t.q.logical_shape()[2];
+    const uint32_t n_kv = t.k.logical_shape()[1];
+    const uint32_t T = t.k.logical_shape()[2];
+    const uint32_t d = t.q.logical_shape()[3];
+    const uint32_t v_dim = t.v.logical_shape()[3];
+    const uint32_t tiles_per_row = T / tt::constants::TILE_HEIGHT;
+    const uint32_t k_group_tile_stride = tiles_per_row * (d / tt::constants::TILE_WIDTH);
+    const uint32_t v_group_tile_stride = tiles_per_row * (v_dim / tt::constants::TILE_WIDTH);
+    const uint32_t slot = attrs.cache_batch_idx.value_or(0);
+    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
+    const uint32_t num_cores = grid.x * grid.y;
+    const uint32_t total_work = S * n_kv;
+    return DispatchArgs{
+        .grid = grid,
+        .num_cores = num_cores,
+        .base_work = total_work / num_cores,
+        .extra = total_work % num_cores,
+        .k_batch_tile_offset = slot * n_kv * k_group_tile_stride,
+        .v_batch_tile_offset = slot * n_kv * v_group_tile_stride,
+        .k_group_tile_stride = k_group_tile_stride,
+        .v_group_tile_stride = v_group_tile_stride,
+        .chunk_start_local = compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate),
+    };
+}
+
 void SparseSDPAMsaOperation::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const SparseSDPAMsaParams& attrs,
     const SparseSDPAMsaInputs& t,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // Re-derive the descriptor from the single source of truth (create_descriptor, threaded with this device's
-    // coordinate for the per-rank causal chunk_start) and re-apply its per-core args + buffer addresses to the
-    // cached program. No rebuild; supersedes get_dynamic_runtime_args and resolve_bindings.
-    auto desc = SparseSDPAMsaProgramFactory::create_descriptor(attrs, t, tensor_return_value, mesh_dispatch_coordinate);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+    // Patch the cached program in place. Calling create_descriptor() here instead would pay the cache-MISS host
+    // cost on every hit (work split, CoreRangeSet, kernel sources, compute-config arch queries, accessor args,
+    // one heap-allocated arg vector per core) on a grid-wide op with three kernels.
+    //
+    // Every slot written below either holds a buffer address - the override supersedes resolve_bindings, so all
+    // of them are ours to re-apply - or derives from a value compute_program_hash excludes: interleaved K/V T
+    // and batch slots, n_kv, cache_batch_idx, and chunk_start_idx/cluster_axis (patched per coordinate, from
+    // the coordinate this program was built for). Nothing else is dynamic: kernel geometry and CB sizes are
+    // hash-pinned, all CBs are locally allocated (no `.buffer`/`.tensor` backing to re-point), and the only
+    // common runtime args come from the K/V TensorAccessorArgs, which exist solely when K/V are sharded - and
+    // sharded K/V shape and memory config are hashed.
+    //
+    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kComputeKernelIdx = 2;
+
+    const auto dyn = compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
+    const uint32_t q_addr = t.q.buffer()->address();
+    const uint32_t k_addr = t.k.buffer()->address();
+    const uint32_t v_addr = t.v.buffer()->address();
+    const uint32_t idx_addr = t.indices.buffer()->address();
+    const uint32_t out_addr = tensor_return_value.buffer()->address();
+
+    for (uint32_t i = 0; i < dyn.num_cores; ++i) {
+        const tt::tt_metal::CoreCoord core = {i % dyn.grid.x, i / dyn.grid.x};
+        const uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
+        const uint32_t work_count = dyn.base_work + (i < dyn.extra ? 1u : 0u);
+
+        // reader: {q, k, v, idx, work_start, work_count, k_batch_off, v_batch_off, k_stride, v_stride, chunk_start}
+        auto& reader = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
+        reader[0] = q_addr;
+        reader[1] = k_addr;
+        reader[2] = v_addr;
+        reader[3] = idx_addr;
+        reader[4] = work_start;
+        reader[5] = work_count;
+        reader[6] = dyn.k_batch_tile_offset;
+        reader[7] = dyn.v_batch_tile_offset;
+        reader[8] = dyn.k_group_tile_stride;
+        reader[9] = dyn.v_group_tile_stride;
+        reader[10] = dyn.chunk_start_local;
+
+        // writer: {out, work_start, work_count, k, v, k_batch_off, v_batch_off, k_stride, v_stride}
+        auto& writer = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+        writer[0] = out_addr;
+        writer[1] = work_start;
+        writer[2] = work_count;
+        writer[3] = k_addr;
+        writer[4] = v_addr;
+        writer[5] = dyn.k_batch_tile_offset;
+        writer[6] = dyn.v_batch_tile_offset;
+        writer[7] = dyn.k_group_tile_stride;
+        writer[8] = dyn.v_group_tile_stride;
+
+        // compute: {work_start, work_count}
+        auto& compute = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx, core);
+        compute[0] = work_start;
+        compute[1] = work_count;
+    }
 }
 
 Tensor sparse_sdpa_msa(

@@ -96,13 +96,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
-    auto* device = t.q.device();
-    tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
+    // Work split and the hash-excluded per-dispatch scalars (K/V slot offsets, group strides, per-coordinate
+    // causal chunk_start) come from the helper override_runtime_arguments also uses, so the values baked here
+    // and the ones patched on a cache hit cannot drift.
+    const auto dyn = SparseSDPAMsaOperation::compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
+    const tt::tt_metal::CoreCoord grid = dyn.grid;
     auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-    const uint32_t num_cores = grid.x * grid.y;
-    const uint32_t total_work = S * n_kv;
-    const uint32_t base_work = total_work / num_cores;
-    const uint32_t extra = total_work % num_cores;
+    const uint32_t num_cores = dyn.num_cores;
 
     // ---- CBs (fixed order = SparseCB enum) ----
     const auto cb = [&](uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
@@ -285,20 +285,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     auto* v_buf = t.v.buffer();
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
-    const uint32_t cache_batch_idx = attrs.cache_batch_idx.value_or(0);
-    const uint32_t T = t.k.logical_shape()[2];
-    const uint32_t tiles_per_row = T / tt::constants::TILE_HEIGHT;
-    const uint32_t k_group_tile_stride = tiles_per_row * DHt;
-    const uint32_t v_group_tile_stride = tiles_per_row * vDHt;
-    const uint32_t k_batch_tile_offset = cache_batch_idx * n_kv * k_group_tile_stride;
-    const uint32_t v_batch_tile_offset = cache_batch_idx * n_kv * v_group_tile_stride;
-    // Baked per coordinate (one program per device) so each rank masks against its own global position.
-    const uint32_t chunk_start_local =
-        SparseSDPAMsaOperation::compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate);
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        uint32_t work_start = i * base_work + std::min(i, extra);
-        uint32_t work_count = base_work + (i < extra ? 1u : 0u);
+        uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
+        uint32_t work_count = dyn.base_work + (i < dyn.extra ? 1u : 0u);
         // Cache slot offsets are patched on hits because cache_batch_idx is not hashed.
         reader_desc.emplace_runtime_args(
             core,
@@ -308,12 +298,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
              idx_buf,
              work_start,
              work_count,
-             k_batch_tile_offset,
-             v_batch_tile_offset,
-             k_group_tile_stride,
-             v_group_tile_stride,
-             chunk_start_local});  // arg 10: baked per-coordinate; re-applied on cache hits
-                                   // (override_runtime_arguments)
+             dyn.k_batch_tile_offset,
+             dyn.v_batch_tile_offset,
+             dyn.k_group_tile_stride,
+             dyn.v_group_tile_stride,
+             dyn.chunk_start_local});  // arg 10: baked per-coordinate (one program per device, so each rank
+                                       // masks against its own global position); re-applied on cache hits
         // Writer args 5/6 are the K/V cache-slot offsets patched on cache hits.
         writer_desc.emplace_runtime_args(
             core,
@@ -322,10 +312,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
              work_count,
              k_buf,
              v_buf,
-             k_batch_tile_offset,
-             v_batch_tile_offset,
-             k_group_tile_stride,
-             v_group_tile_stride});
+             dyn.k_batch_tile_offset,
+             dyn.v_batch_tile_offset,
+             dyn.k_group_tile_stride,
+             dyn.v_group_tile_stride});
         compute_desc.emplace_runtime_args(core, {work_start, work_count});
     }
 
