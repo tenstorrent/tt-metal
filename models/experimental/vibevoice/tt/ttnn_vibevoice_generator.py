@@ -99,6 +99,7 @@ from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
     TTDPMSolverMultistepScheduler,
     sample_speech_latents,
 )
+from models.experimental.vibevoice.common.safe_paths import safe_output_path
 from models.experimental.vibevoice.reference.lm_runner import ReferenceLMRunner
 
 
@@ -820,7 +821,8 @@ class TTVibeVoiceGenerator:
         negative's prediction (silence) — logged to test that against the measured latch.
         """
         if self._traj_fh is None:
-            self._traj_fh = open(self._traj_path, "w")
+            # VV_LOG_TRAJ names the csv outright, so normalize it rather than pin it to a base.
+            self._traj_fh = open(safe_output_path(self._traj_path, suffix=".csv"), "w")
             self._traj_fh.write(
                 "frame,abs_pos,hidden_rms,hidden_absmax,audio_rms,audio_peak,neg_rms,cos_pos_neg,posneg_dist\n"
             )

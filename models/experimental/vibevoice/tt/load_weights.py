@@ -15,11 +15,18 @@ from typing import Dict
 import torch
 from safetensors.torch import load_file as safetensors_load_file
 
+from models.experimental.vibevoice.common.safe_paths import safe_join
+
 
 def load_vibevoice_state_dict(model_path: str) -> Dict[str, torch.Tensor]:
-    """Load the full VibeVoice model state dict from safetensors (host only)."""
+    """Load the full VibeVoice model state dict from safetensors (host only).
+
+    Every path is pinned under ``model_path`` with ``safe_join``: the checkpoint dir comes
+    from an env var / CLI argument, and the shard filenames come from the checkpoint's own
+    ``weight_map``, so neither is trusted to stay inside the directory on its own.
+    """
     model_path = Path(model_path)
-    index_path = model_path / "model.safetensors.index.json"
+    index_path = safe_join(model_path, "model.safetensors.index.json")
 
     if index_path.exists():
         with open(index_path) as f:
@@ -28,10 +35,10 @@ def load_vibevoice_state_dict(model_path: str) -> Dict[str, torch.Tensor]:
         shard_files = set(weight_map.values())
         state_dict: Dict[str, torch.Tensor] = {}
         for shard_file in shard_files:
-            shard_path = model_path / shard_file
+            shard_path = safe_join(model_path, shard_file)
             state_dict.update(safetensors_load_file(str(shard_path)))
     else:
-        single_path = model_path / "model.safetensors"
+        single_path = safe_join(model_path, "model.safetensors")
         if not single_path.exists():
             raise FileNotFoundError(f"No model.safetensors(.index.json) found in {model_path}")
         state_dict = safetensors_load_file(str(single_path))

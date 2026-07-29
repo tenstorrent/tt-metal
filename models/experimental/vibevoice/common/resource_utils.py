@@ -15,6 +15,7 @@ from typing import Iterable, Optional, Union
 
 from loguru import logger
 
+from models.experimental.vibevoice.common.safe_paths import safe_join, safe_output_path
 from models.experimental.vibevoice.common.config import (
     DEFAULT_TXT_PATH,
     DEFAULT_VOICE_PATH,
@@ -88,7 +89,7 @@ def _download_raw_files(
     downloaded: list[Path] = []
     local_dir.mkdir(parents=True, exist_ok=True)
     for name in filenames:
-        dest = local_dir / name
+        dest = safe_join(local_dir, name)
         if dest.is_file() and dest.stat().st_size > 0:
             continue
         url = _GITHUB_RAW.format(repo=repo, ref=ref, path=f"{repo_path.rstrip('/')}/{name}")
@@ -107,7 +108,11 @@ def _sync_github_tree(
     extensions: Optional[Iterable[str]] = None,
     recursive: bool = False,
 ) -> list[Path]:
-    """Download files under *repo_path* into *local_dir*, preserving basenames."""
+    """Download files under *repo_path* into *local_dir*, preserving basenames.
+
+    Entry names come from the GitHub Contents API response, so every join is pinned under
+    *local_dir* rather than trusted to be a plain basename.
+    """
     downloaded: list[Path] = []
     for entry in _list_github_dir(repo_path, repo=repo, ref=ref):
         name = entry["name"]
@@ -116,7 +121,7 @@ def _sync_github_tree(
             if not recursive:
                 continue
             sub_repo = f"{repo_path.rstrip('/')}/{name}"
-            sub_local = local_dir / name
+            sub_local = safe_join(local_dir, name)
             downloaded.extend(
                 _sync_github_tree(
                     sub_repo,
@@ -136,7 +141,7 @@ def _sync_github_tree(
         if not download_url:
             continue
 
-        dest = local_dir / name
+        dest = safe_join(local_dir, name)
         if dest.is_file() and dest.stat().st_size > 0:
             continue
 
@@ -430,7 +435,7 @@ def build_voice_samples(
 
 def load_script(text_path: Optional[PathLike] = None) -> str:
     """Load and normalize a speaker script (default: upstream 1p_vibevoice.txt)."""
-    path = Path(text_path) if text_path is not None else DEFAULT_TXT_PATH
+    path = safe_output_path(text_path) if text_path is not None else DEFAULT_TXT_PATH
     if not path.is_file():
         raise FileNotFoundError(f"Script not found: {path}. Call ensure_demo_resources() first.")
     with open(path, encoding="utf-8") as handle:
