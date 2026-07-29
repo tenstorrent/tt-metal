@@ -273,6 +273,19 @@ final minima `4.077707 ms` and `13.491884 ms`. This phase split does not
 change allocations, KV dtype, cache layout, or the advertised 500,000-token
 context capacity, so `context_contract.json` is unchanged.
 
+A reviewer flagged that the first independent final seq33 run had a 5.30%
+higher mean despite the matching minimum. A five-warmup, fifty-pair
+same-session alternating comparison resolved it:
+
+| sequence | retained-S2 mean / median | final mean / median | final delta |
+|---:|---:|---:|---:|
+| 33 | 4.147100 / 4.102691 ms | **4.127520 / 4.099534 ms** | -0.47% / -0.08% |
+| 128 | 13.733069 / 13.737201 ms | **13.757862 / 13.804296 ms** | +0.18% / +0.49% |
+
+The final-default distribution is representative and the isolated 5.30%
+difference was host scheduling noise across separate processes. Evidence:
+`candidates/sparse_subblocks/interleaved_prefill{33,128}.json`.
+
 Real-weight layer-1/layer-4 decode PCC is `0.99931071/0.99974180`.
 Non-aligned sequence-33/128 active-expert prefill remains
 `0.99867303–0.99884130`, and ten traced replays are bitwise identical.
@@ -299,3 +312,5 @@ and `watcher/review7_phase_specific/`. The only unresolved optimize gate is
 the batch-32 routed-output capability documented in
 `ROUTED_MOE_HYPOTHESIS.md`: its required shared-TTNN local combine is outside
 the explicitly model-local write scope.
+
+Stage-owned remediation commit: `327a8ffac63` (local only, never pushed).

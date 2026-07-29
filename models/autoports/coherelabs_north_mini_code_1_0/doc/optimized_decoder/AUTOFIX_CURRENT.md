@@ -62,3 +62,11 @@ Authentic checkpoint evidence selected a phase-specific policy:
 Full rows and profiler evidence are recorded in
 `SPARSE_SUBBLOCK_HYPOTHESIS.md`. This closes the sparse rereview finding.
 Batch-32 routed MoE remains the same exhausted shared-TTNN capability blocker.
+
+Final review also flagged a 5.30% seq33 mean discrepancy between two separate
+prefill processes. AutoFix added an alternating same-session harness and ran
+five warmup plus fifty measured pairs at seq33 and seq128. Final versus
+retained-S2 mean/median deltas were -0.47%/-0.08% and +0.18%/+0.49%,
+respectively. The prefill programs are asserted identical, so the earlier
+gap is explained as host scheduling noise. Evidence:
+`candidates/sparse_subblocks/interleaved_prefill{33,128}.json`.

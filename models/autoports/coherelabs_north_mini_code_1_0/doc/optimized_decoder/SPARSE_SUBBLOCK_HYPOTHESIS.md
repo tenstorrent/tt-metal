@@ -197,3 +197,18 @@ legal 1x2, 1x3, and 1x4 alternatives.
 Machine-readable evidence is in
 `candidates/sparse_subblocks/{authentic_decode,authentic_cumulative_decode,final_default_decode}.json`
 and the corresponding XML files.
+
+The first final-default prefill reproduction had an unexplained sequence-33
+mean of 4.316599 ms despite a matching minimum. A follow-up comparison
+alternated the retained-S2 control and final default in one device session,
+with identical prefill program fields, five warmup pairs, and fifty measured
+pairs:
+
+| sequence | retained mean / median | final mean / median | final delta |
+|---:|---:|---:|---:|
+| 33 | 4.147100 / 4.102691 ms | 4.127520 / 4.099534 ms | -0.47% / -0.08% |
+| 128 | 13.733069 / 13.737201 ms | 13.757862 / 13.804296 ms | +0.18% / +0.49% |
+
+The earlier 5.30% mean difference was therefore independent-process host
+scheduling noise, not a persistent prefill regression. Full distributions are
+in `interleaved_prefill{33,128}.json`.

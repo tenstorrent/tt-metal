@@ -7,16 +7,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
+import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
+import torch
 from transformers import AutoConfig
 
 import ttnn
 from models.autoports.coherelabs_north_mini_code_1_0.tests.functional_decoder_perf import _decode, _prefill
 from models.autoports.coherelabs_north_mini_code_1_0.tests.test_functional_decoder import (
     REAL_REVISION,
+    _page_table,
     _synthetic_state,
+    _to_tt,
 )
 from models.autoports.coherelabs_north_mini_code_1_0.tt.optimized_decoder import (
     MODEL_ID,
@@ -220,6 +225,103 @@ def _render_policy(policy):
     return result
 
 
+def _interleaved_prefill_s2(decoder, mesh_device, config, *, sequence, warmups, iterations):
+    """Compare retained-S2 and final-default prefill in one alternating device session."""
+    if decoder.batch != 1:
+        raise ValueError("interleaved S2 comparison is defined for the primary batch-1 prefill path")
+    final_policy = decoder.optimization_config
+    retained_s2 = replace(
+        final_policy,
+        sparse_gate_grid=(6, 2),
+        sparse_up_grid=(6, 2),
+        sparse_down_grid=(8, 4),
+        sparse_gate_out_block_w=2,
+        sparse_gate_out_subblock_w=2,
+        sparse_up_out_block_w=2,
+        sparse_up_out_subblock_w=2,
+        sparse_down_out_block_w=2,
+        sparse_down_out_subblock_w=2,
+    )
+    prefill_fields = (
+        "prefill_sparse_gate_grid",
+        "prefill_sparse_up_grid",
+        "prefill_sparse_down_grid",
+        "prefill_sparse_gate_in0_block_w",
+        "prefill_sparse_up_in0_block_w",
+        "prefill_sparse_down_in0_block_w",
+        "prefill_sparse_gate_out_block_w",
+        "prefill_sparse_gate_out_subblock_w",
+        "prefill_sparse_up_out_block_w",
+        "prefill_sparse_up_out_subblock_w",
+        "prefill_sparse_down_out_block_w",
+        "prefill_sparse_down_out_subblock_w",
+    )
+    assert all(getattr(retained_s2, field) == getattr(final_policy, field) for field in prefill_fields)
+
+    generator = torch.Generator().manual_seed(17001 + sequence)
+    hidden = (torch.randn(1, 1, sequence, config.hidden_size, generator=generator) * 0.02).to(torch.bfloat16)
+    hidden = _to_tt(hidden, mesh_device)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+    blocks = (sequence + decoder.page_size - 1) // decoder.page_size
+    page_table = _to_tt(
+        _page_table(1, blocks),
+        mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
+    kwargs = {
+        "key_cache": key_cache,
+        "value_cache": value_cache,
+        "page_table": page_table,
+        "position_cos": _to_tt(cos, mesh_device),
+        "position_sin": _to_tt(sin, mesh_device),
+    }
+
+    def invoke(policy):
+        decoder.optimization_config = policy
+        start = time.perf_counter()
+        decoder.prefill_forward(hidden, **kwargs)
+        ttnn.synchronize_device(mesh_device)
+        return 1000 * (time.perf_counter() - start)
+
+    for index in range(warmups):
+        pair = (retained_s2, final_policy) if index % 2 == 0 else (final_policy, retained_s2)
+        for policy in pair:
+            invoke(policy)
+
+    samples = {"retained_s2": [], "final_default": []}
+    for index in range(iterations):
+        pair = (
+            (("retained_s2", retained_s2), ("final_default", final_policy))
+            if index % 2 == 0
+            else (("final_default", final_policy), ("retained_s2", retained_s2))
+        )
+        for name, policy in pair:
+            samples[name].append(invoke(policy))
+    decoder.optimization_config = final_policy
+
+    def summarize(values):
+        return {
+            "mean_ms": statistics.fmean(values),
+            "median_ms": statistics.median(values),
+            "min_ms": min(values),
+            "max_ms": max(values),
+            "samples_ms": values,
+        }
+
+    retained_result = summarize(samples["retained_s2"])
+    final_result = summarize(samples["final_default"])
+    return {
+        "retained_s2": retained_result,
+        "final_default": final_result,
+        "final_vs_retained_mean_percent": 100 * (final_result["mean_ms"] / retained_result["mean_ms"] - 1),
+        "final_vs_retained_median_percent": 100 * (final_result["median_ms"] / retained_result["median_ms"] - 1),
+        "interleaved_order": "alternating_each_pair",
+        "prefill_programs_identical": True,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("prefill", "decode"), required=True)
@@ -230,6 +332,7 @@ def main():
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--candidate", default="default")
+    parser.add_argument("--interleaved-prefill-s2", action="store_true")
     for name in (
         "attention-dtype",
         "attention-qkv-dtype",
@@ -372,7 +475,18 @@ def main():
             max_cache_len=max_cache_len,
             optimization_config=policy,
         )
-        if args.mode == "prefill":
+        if args.interleaved_prefill_s2:
+            if args.mode != "prefill":
+                raise ValueError("--interleaved-prefill-s2 requires --mode prefill")
+            result = _interleaved_prefill_s2(
+                decoder,
+                mesh_device,
+                config,
+                sequence=args.sequence,
+                warmups=args.warmups,
+                iterations=args.iterations,
+            )
+        elif args.mode == "prefill":
             result = _prefill(
                 decoder,
                 mesh_device,

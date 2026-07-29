@@ -738,3 +738,37 @@ matmul is much slower, the fast primitive exposes a rolling output, and the
 complete consumer requires fabric. A compact persistent routed output or
 fabric-free local combine must be added in shared TTNN, which the user's
 model-only write scope explicitly excludes.
+
+## Final-review prefill reproducibility remediation
+
+`STAGE_REVIEW_FINAL.md` accepted the sparse search/profile closure but found
+that the independent final seq33 run had a 4.316599-ms mean versus the earlier
+4.099386-ms retained-S2 mean, even though their minima matched. A dedicated
+same-session harness now alternates the two labels every pair, asserts all
+prefill program fields are identical, and reports full samples plus mean,
+median, min, and max.
+
+Command:
+
+```text
+python .../tests/optimized_decoder_perf.py \
+  --mode prefill --batch 1 --layer 1 --sequence <33|128> \
+  --warmups 5 --iterations 50 --interleaved-prefill-s2 \
+  --candidate interleaved_s2_vs_final --json-out <artifact>
+```
+
+Results:
+
+| sequence | retained-S2 mean / median | final mean / median | final delta |
+|---:|---:|---:|---:|
+| 33 | 4.147100 / 4.102691 ms | 4.127520 / 4.099534 ms | -0.47% / -0.08% |
+| 128 | 13.733069 / 13.737201 ms | 13.757862 / 13.804296 ms | +0.18% / +0.49% |
+
+The earlier material-looking mean gap does not persist under controlled
+interleaving. It was host scheduling noise across separate processes, not a
+runtime-policy regression. Machine-readable distributions are in
+`candidates/sparse_subblocks/interleaved_prefill{33,128}.json`.
+
+Commit ledger:
+
+- `327a8ffac63` — Complete North Mini sparse decoder sweep.
