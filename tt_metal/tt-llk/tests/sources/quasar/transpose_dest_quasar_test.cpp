@@ -11,6 +11,7 @@
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -46,12 +47,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
             }
-            else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+            else
             {
-                // L1_TO_L1 leaves UNPACK waiting for DEST ownership. Isolate
-                // modes have no consumer pulse, so clear the persistent wait.
-                volatile std::uint32_t* cfg                      = (volatile std::uint32_t*)TENSIX_CFG_BASE;
-                cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+                // L1_TO_L1 leaves UNPACK waiting for DEST ownership. Other run
+                // types have no unpack-to-dest consumer pulse.
+                set_up_zero_dest_dvalid_handshake_for_unpack();
             }
         }
         else
@@ -109,16 +109,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (!unpack_to_dest)
                 {
-                    _perf_unpack_loop_set_valid<true, false>(TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(TILE_CNT);
                 }
-                _perf_unpack_loop_set_valid<false, true>(TILE_CNT);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(TILE_CNT);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
 
                 if constexpr (unpack_to_dest)
                 {
@@ -226,13 +226,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+        if constexpr (is_fp32_dest_acc_en)
         {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-        else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+            if (pack_src_format == DataFormat::Float32)
+            {
+                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+            }
+            else if (pack_src_format == DataFormat::Int32)
+            {
+                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+            }
+            else
+            {
+                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+            }
         }
         else
         {
@@ -252,18 +259,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (!unpack_to_dest)
                 {
-                    _perf_math_loop_clear_valid<true, false>(TILE_CNT);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(TILE_CNT);
                 }
-                _perf_math_loop_clear_valid<false, true>(TILE_CNT);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(TILE_CNT);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            run_datacopy_transpose_loop<false>(math_format, LOOP_FACTOR, TILE_CNT, num_faces, TEST_FACE_R_DIM, DST_INDEX);
+            run_datacopy_transpose_loop<false /*set_dvalid*/>(math_format, LOOP_FACTOR, TILE_CNT, num_faces, TEST_FACE_R_DIM, DST_INDEX);
         }
         else
         {
-            run_datacopy_transpose_loop<true>(math_format, LOOP_FACTOR, TILE_CNT, num_faces, TEST_FACE_R_DIM, DST_INDEX);
+            run_datacopy_transpose_loop<true /*set_dvalid*/>(math_format, LOOP_FACTOR, TILE_CNT, num_faces, TEST_FACE_R_DIM, DST_INDEX);
         }
         PROFILER_SYNC();
     }
@@ -296,7 +303,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -343,14 +350,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }

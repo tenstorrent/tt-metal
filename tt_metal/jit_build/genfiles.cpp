@@ -14,6 +14,9 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
+// Blaze-only experimental named args (removal tracked by issue #50953): <map>/<set> below
+#include <map>
+#include <set>
 #include <iostream>
 #include <ostream>
 #include <fstream>
@@ -64,13 +67,21 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 
 // Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
 // Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
-string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel) {
+string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool has_blaze_experimental_ct_args) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
     if (is_metal2_kernel) {
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
     }
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Blaze EXPERIMENTAL named blaze_ct_args::/blaze_rt_args:: header — presence-gated, NOT is_metal2-gated.
+    if (has_blaze_experimental_ct_args) {
+        prolog << "#include \"named_args_generated.h\"\n";
+    }
+    ////////////////////////////////////////////////////////////
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
@@ -360,6 +371,88 @@ std::string generate_tt_kernel_shim_if_present(
     return generate_kernel_main_shim(*sig);
 }
 
+////////////////////////////////////////////////////////////
+// Blaze-only experimental named args
+// Removal is tracked by issue #50953
+// Blaze EXPERIMENTAL named args (NOT Metal 2.0):
+// Emits named_args_generated.h with a single blaze_ct_args:: namespace. Each prefix becomes a
+// struct containing both CT values (uint32_t) and RT arg descriptors (blaze_rt_args::Arg /
+// blaze_rt_args::ArrayArg). Gated on named-arg PRESENCE, NOT on is_metal2_kernel(): named_*_namespaces_
+// are set via setters (program.cpp) independent of the Metal 2.0 fence.
+// Returns true if a header was written (i.e. the kernel has named args), so callers can
+// decide whether to add the #include.
+bool write_named_args_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+    // Accumulate RT entries per namespace.
+    std::map<std::string, std::vector<NamedRuntimeArgEntry>> rt_by_ns;
+    settings.process_named_runtime_args([&rt_by_ns](const NamedRuntimeArgNamespaces& namespaces) {
+        for (const auto& [ns, entries] : namespaces) {
+            rt_by_ns[ns].insert(rt_by_ns[ns].end(), entries.begin(), entries.end());
+        }
+    });
+
+    // Accumulate CT entries per namespace.
+    std::map<std::string, std::vector<std::pair<std::string, uint32_t>>> ct_by_ns;
+    settings.process_named_ct_arg_namespaces([&ct_by_ns](const NamedCTArgNamespaces& namespaces) {
+        for (const auto& [ns, entries] : namespaces) {
+            ct_by_ns[ns].insert(ct_by_ns[ns].end(), entries.begin(), entries.end());
+        }
+    });
+
+    // Collect all non-empty namespaces from both CT and RT maps.
+    std::set<std::string> all_ns;
+    for (const auto& [ns, _] : ct_by_ns) {
+        all_ns.insert(ns);
+    }
+    for (const auto& [ns, _] : rt_by_ns) {
+        if (!ns.empty()) {
+            all_ns.insert(ns);
+        }
+    }
+
+    // Emit one struct per namespace containing both CT fields and RT descriptors.
+    std::ostringstream header_ct;
+    for (const auto& ns : all_ns) {
+        if (!ns.empty()) {
+            header_ct << "struct " << ns << " {\n";
+        }
+        // CT fields
+        if (auto it = ct_by_ns.find(ns); it != ct_by_ns.end()) {
+            for (const auto& [field, value] : it->second) {
+                header_ct << "    static constexpr uint32_t " << field << " = " << value << ";\n";
+            }
+        }
+        // RT descriptors
+        if (auto it = rt_by_ns.find(ns); it != rt_by_ns.end()) {
+            for (const auto& entry : it->second) {
+                const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON
+                                               ? "blaze_rt_args::Dispatch::COMMON"
+                                               : "blaze_rt_args::Dispatch::PER_CORE";
+                if (entry.length > 1) {
+                    header_ct << "    static constexpr blaze_rt_args::ArrayArg " << entry.field << " = {" << entry.index
+                              << ", " << entry.length << ", " << dispatch_str << "};\n";
+                } else {
+                    header_ct << "    static constexpr blaze_rt_args::Arg " << entry.field << " = {" << entry.index
+                              << ", " << dispatch_str << "};\n";
+                }
+            }
+        }
+        if (!ns.empty()) {
+            header_ct << "};\n";
+        }
+    }
+
+    auto ct_str = header_ct.str();
+    if (ct_str.empty()) {
+        return false;  // no named args, no header, no #include
+    }
+    std::ostringstream content;
+    content << "#pragma once\n#include \"experimental/blaze_rt_arg.h\"\n\n";
+    content << "namespace blaze_ct_args {\n" << ct_str << "}\n";
+    write_file(out_dir + "named_args_generated.h", content.str());
+    return true;
+}
+////////////////////////////////////////////////////////////
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -379,6 +472,14 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content =
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
     }
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Blaze EXPERIMENTAL named args — presence-gated, independent of is_metal2.
+    if (write_named_args_generated_header(out_dir, settings)) {
+        kernel_header_content += "#include \"named_args_generated.h\"\n";
+    }
+    ////////////////////////////////////////////////////////////
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 
     // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
@@ -403,17 +504,25 @@ void jit_build_genfiles_triscs_src(
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
     }
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Blaze EXPERIMENTAL named args — emitted once per kernel here (was build.cpp per-source loop).
+    const bool has_blaze_experimental_ct_args = write_named_args_generated_header(out_dir, settings);
+    ////////////////////////////////////////////////////////////
 
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
     const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
 
-    // Build prologs for each TRISC
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2);
-    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2);
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2);
-    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2);
+    // Build prologs for each TRISC.
+    // Blaze: the 3rd arg (has_blaze_experimental_ct_args) gates the experimental named_args_generated.h include.
+    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2, has_blaze_experimental_ct_args);
+    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2, has_blaze_experimental_ct_args);
+    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2, has_blaze_experimental_ct_args);
+    const string isolate_sfpu_prolog =
+        build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2, has_blaze_experimental_ct_args);
 
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);

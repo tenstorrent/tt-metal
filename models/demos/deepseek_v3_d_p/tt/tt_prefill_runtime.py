@@ -97,6 +97,11 @@ class TtPrefillRuntime:
         assert config.model_cfg is not None, "TtPrefillRuntimeConfig.model_cfg must be set by the model adapter"
         # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
         self._on_layer_complete = None
+        # Per-layer completion sink (pipelined mode), set by set_layer_completion_sink().
+        # Signature: sink(layer_idx, request_id). prefill() binds the current request_id into
+        # a fresh per-call closure, so there is no shared mutable chunk-index for the callback
+        # to race on (immune even if the threading model changes).
+        self._layer_completion_sink = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -228,6 +233,7 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
+        request_id: int = 0,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -271,11 +277,24 @@ class TtPrefillRuntime:
             actual_start <= actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
+        # Bind this chunk's request_id into a fresh per-call callback. The pipelined sink needs it to
+        # build a globally-dense key (seq = request_id*num_layers + layer_idx); capturing by value per
+        # call means there is no shared mutable chunk-index for the synchronously-fired callback to race
+        # on. Single-host layer-ack mode ignores request_id.
+        if self._layer_completion_sink is not None:
+            sink = self._layer_completion_sink
+
+            def on_layer_complete(layer_idx: int) -> None:
+                sink(layer_idx, request_id)
+
+        else:
+            on_layer_complete = self._on_layer_complete
+
         out = self.model.forward(
             input_tensor,
             kv_caches.kvpe,
             actual_isl=actual_end - actual_start,
-            on_layer_complete=self._on_layer_complete,
+            on_layer_complete=on_layer_complete,
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
@@ -306,20 +325,49 @@ class TtPrefillRuntime:
 
         self._on_layer_complete = on_layer_complete
 
-    def build_kv_chunk_table(self, kv_caches: MlaKvCaches, path: str) -> str:
+    def kv_migration_base_address(self, kv_caches: MlaKvCaches) -> int:
+        """This stage's KV base DRAM address — the engine's per-rank anchor for the migration
+        all-gather (it holds the cache but must not introspect its layout). The pipeline-parallel
+        path migrates the primary KVPE cache, so that is the base; `.kvpe` is an MlaKvCache wrapper
+        rather than a bare tensor, hence `.storage`."""
+        return int(kv_caches.kvpe.storage.buffer_address())
+
+    def build_kv_chunk_table(
+        self,
+        kv_caches: MlaKvCaches,
+        path: str,
+        *,
+        first_layer_idx: int = 0,
+        num_my_layers: Optional[int] = None,
+        stage_layout=None,
+    ) -> str:
         """Build + serialize the KV-chunk address table for the engine-owned `MlaKvCaches` to
         `path` and return it.
 
         The table maps each natural KV position to its true block-cyclic storage chip + offset
         (the MLA chunked-prefill cache layout), so the migration worker copies the right chunks.
         The runner publishes the serialized table to the worker — this method only describes the
-        cache layout; it issues no migration comms. Single-rank only (config.num_layers == the
-        full model).
+        cache layout; it issues no migration comms.
+
+        Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
+        num_my_layers). The runner runs the all-ranks all-gather and passes the merged `stage_layout`
+        so ONLY rank 0 builds the table spanning every stage; the single-rank default (stage_layout
+        None) covers config.num_layers == the full model.
 
         For a sparse/DSA model (``.index`` present) the result is a single MERGED table describing BOTH
         caches — config 0 = the KVPE cache, config 1 = the index-key cache. A dense model (``.index`` None)
-        → the usual single-config table over the KVPE cache alone."""
+        → the usual single-config table over the KVPE cache alone. The index-cache merge is single-rank
+        only; the pipeline-parallel path (stage_layout given) migrates the KVPE cache alone."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+        # PP path migrates the primary (KVPE) cache only; the sparse/DSA index cache isn't wired
+        # through the cross-stage merge yet (port it into _build_and_serialize_merged_kv_chunk_table
+        # to add it) — fail loudly rather than silently drop it.
+        if stage_layout is not None:
+            assert kv_caches.index is None, (
+                "build_kv_chunk_table: index-cache (sparse/DSA) migration is not supported on the "
+                "pipeline-parallel path yet."
+            )
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -332,6 +380,9 @@ class TtPrefillRuntime:
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
             index_kv_cache=kv_caches.index,
+            first_layer_idx=first_layer_idx,
+            num_my_layers=num_my_layers,
+            stage_layout=stage_layout,
         )
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
@@ -342,20 +393,26 @@ class TtPrefillRuntime:
         read-back."""
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
+        # `.kvpe` is an MlaKvCache wrapper, NOT a bare tensor: physical ops use `.storage`, and physical
+        # rows may be packed (SCALED_FP8), so decode them with `unpack_host` to logical [latent || RoPE] —
+        # the same path kv_cache_pcc_check takes. (Using `kvpe` directly here raised
+        # 'MlaKvCache' object has no attribute 'shape'.)
         kvpe = kv_caches.kvpe
-        s = list(kvpe.shape)
+        storage = kvpe.storage
+        s = list(storage.shape)
         sl = ttnn.slice(
-            kvpe,
+            storage,
             [slot * num_layers, 0, 0, 0],
             [(slot + 1) * num_layers, s[1], s[2], s[3]],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        block = ttnn.to_torch(
+        physical = ttnn.to_torch(
             sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-        ).float()[
+        )[
             :, :1
-        ]  # [num_layers, 1, seq_cache, kvpe]
+        ]  # one TP replica: [num_layers, 1, seq_cache, packed_row]
         ttnn.deallocate(sl)
+        block = kvpe.unpack_host(physical).to(torch.float32)  # [num_layers, 1, seq_cache, kvpe_logical]
         return [block]
 
     def kv_cache_pcc_check(
@@ -375,3 +432,19 @@ class TtPrefillRuntime:
             trace_dir=trace_dir,
             first_layer_idx=first_layer_idx,
         )
+
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register a per-layer completion sink for pipelined prefill.
+
+        `sink` is called once per layer as `sink(layer_idx, request_id)` — the
+        global layer index plus the current request/chunk id, which prefill()
+        binds per call (so the sink need not read any mutable runtime state). It
+        replaces the direct counter-channel inject used in single-host mode:
+        instead of bumping a counter, the runner pushes a full completion
+        {seq, source_rank, layer_idx, request_id} into the host-local
+        LayerCompletionQueue, and the LayerCompletionRouter routes it to the
+        master host and re-emits it (in seq order) into the scheduler-facing
+        counter channel (see ttnn._experimental.layer_completion).
+        """
+        assert self.compiled, "Call compile() before set_layer_completion_sink()"
+        self._layer_completion_sink = sink

@@ -154,7 +154,7 @@ void kernel_main() {
                 dfb_partial_obj.reserve_back(2);
                 tile_regs_wait();
                 pack_reconfig_data_format(dfb_partial);
-                pack_tile_block(mean_dst, dfb_partial, 2);
+                pack_block(mean_dst, dfb_partial, 2);
                 tile_regs_release();
                 dfb_partial_obj.push_back(2);
             }

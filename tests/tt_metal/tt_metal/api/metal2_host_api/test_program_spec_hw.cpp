@@ -1101,7 +1101,7 @@ void kernel_main() {
     spec.tensor_parameters = {TensorParameter{
         .unique_id = TensorParamName{"io"},
         .spec = tensor_spec,
-        .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true}}};
+        .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true}}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
