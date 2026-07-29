@@ -623,11 +623,24 @@ class TTSampling(LightweightModule):
         sub-device. Random users (k>1) get boost==0 => their values are bit-identical => their
         sampling is byte-for-byte unchanged. All ops honor self.sub_core_grids.
 
-        This is the guarantee, not the stable top-k kernels: `stable=True` makes the kernels break a
-        tie by the lowest candidate POSITION, which only coincides with the lowest token id because
-        of how the gathered candidates happen to be laid out, and the stable bitonic network itself
-        is still an open LLK issue (tenstorrent/tt-metal#33492). This pass works purely on values,
-        so it holds regardless.
+        WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k is unreliable). Remove this method,
+        `_greedy_col` and `_greedy_col_dims` once that issue is fixed and validated on device.
+
+        With a working stable top-k this pass is redundant, because candidate position and global
+        token id are ordered the same way BY CONSTRUCTION: the gathered buffer is laid out as one
+        contiguous block per device, and `_create_indices_tensors` derives each global id as
+        `local_topk_index + device_id * padded_per_device` from that same layout. Across blocks the
+        two orders therefore agree unconditionally. WITHIN a block they agree only if the per-device
+        top-k emitted its tied maxima in ascending local-index order -- i.e. only if `stable=True`
+        actually works. It currently may not (#33492: `ttnn.sort` rejects `stable=True` outright, the
+        LLK top-k test skips every stable case, and this tree still carries the double-SFPSWAP
+        scheme rather than the index-aware comparator from tt-llk#1340), which is why this exists.
+
+        KNOWN LIMITATION: this picks the lowest global id among the GATHERED candidates. If a single
+        device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k drops
+        all but 32 of them by the same unreliable network, so the true lowest-id token may never
+        reach the gathered set and this pass cannot recover it. Fixing #33492 is the real fix; this
+        only narrows the window.
 
         is_winner = (value == rowmax) AND (global_index == lowest_index_among_maxima)  # exactly one candidate
             lowest_index_among_maxima = min(global_index + (rowmax - value)*LARGE)     # == idx at maxima, huge else
@@ -881,11 +894,13 @@ class TTSampling(LightweightModule):
             sub_core_grids=self._sampling_sub_core_grids,
         )
         # Perform the actual sampling with top-k, top-p, and temperature.
-        # Fix ttnn.sampling's ARRAY-POSITION tie-break (it flips greedy tokens on exact bf16 value ties
-        # because the tie is broken by all_gather/device order): for argmax users (k==1) only, boost the
-        # single lowest-GLOBAL-INDEX tied-max in the sampling INPUT so argmax picks it deterministically.
-        # Random users are byte-for-byte unchanged. Correcting the INPUT (not the RM output buffer) is
-        # required: no ttnn op writes an interleaved ROW_MAJOR tensor in-place on a restricted sub-device.
+        # WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k unreliable), to be removed with it:
+        # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
+        # sampling INPUT so ttnn.sampling's argmax picks it regardless of how the top-k network
+        # ordered the tied candidates. Random users are byte-for-byte unchanged. Correcting the INPUT
+        # (not the RM output buffer) is required: no ttnn op writes an interleaved ROW_MAJOR tensor
+        # in-place on a restricted sub-device. See _adjust_values_for_tiebreak for the full rationale
+        # and its known limitation (>max_top_k maxima tied within one device shard).
         sampling_values = self._adjust_values_for_tiebreak(
             topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
         )
