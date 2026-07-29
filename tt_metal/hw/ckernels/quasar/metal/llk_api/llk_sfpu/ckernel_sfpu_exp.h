@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
@@ -78,18 +80,24 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     r = r * f + 1.0f;
     r = r * f + 1.0f;
 
-    // exp(a) = 2^i * exp(f). Construct 2^i by writing the biased exponent (i + 127) directly into
-    // the IEEE-754 exponent field. This is equivalent to sfpi::setexp on top of a 1.0 seed (setexp
-    // and exexp are correct on Quasar); the int add / shift-left / reinterpret used here are simply
-    // cheaper and keep the whole path in fp32 / two's-complement. Correct across fp32 exp's
-    // representable domain (|a| < ~88); larger-magnitude inputs are the LUT/approx path's concern.
+    // exp(a) = 2^i * exp(f), applied via the result's biased exponent. e is that exponent; the
+    // legal IEEE-754 range is 1..254, and i pushes it outside for |a| beyond ~88. Writing
+    // (i + 127) << 23 directly would wrap into the sign bit there -- Quasar's integer adder is
+    // 32-bit two's complement and SHFT discards the high bits (Quasar/Trinity SFPU MAS), so
+    // a = -100 yields i + 127 = -17 -> 0xF7800000 = -2^112 rather than ~0. Clamp both ends, as
+    // the Blackhole source does; nothing routes large-magnitude inputs away from this path
+    // (calculate_exponential selects purely on EN_32BIT_DEST / APPROXIMATION_MODE).
     //
-    // NB: the Quasar port bug was NOT here. It was the Blackhole kernel's sign-magnitude rounding
-    // (abs(as<vInt>(convert<vSMag16>(x))) + copysgn feeding a two's-complement add), which relies on
-    // Blackhole's integer-format behaviour. _sfpu_round_to_nearest_int32_ above replaces that and is
-    // the actual fix.
-    sfpi::vFloat two_i = sfpi::as<sfpi::vFloat>((i + 127) << 23);
-    return r * two_i;
+    // NB: the earlier Quasar port bug was elsewhere -- the Blackhole kernel's sign-magnitude
+    // rounding (abs(as<vInt>(convert<vSMag16>(x))) + copysgn feeding a two's-complement add),
+    // which relies on Blackhole's integer-format behaviour. _sfpu_round_to_nearest_int32_ above
+    // replaces that.
+    sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
+    sfpi::vFloat y = sfpi::setexp(r, e);
+    v_if(e > 254) { y = std::numeric_limits<float>::infinity(); }  // overflow
+    v_elseif(e < 1) { y = 0.0f; }                                  // underflow, incl. subnormals
+    v_endif;
+    return y;
 }
 
 // Calculates EXP over a full tile. Quasar exposes exactly two implementations:
