@@ -108,7 +108,7 @@ Delete it as part of the port. Do **not** patch it to add `TensorSpec` (that pat
 
 ### 2. Remove pybound legacy factory entry points
 
-When the port causes a legacy factory entry point to vanish (`create_program_descriptor` is the canonical case), any pybind line referencing it must be deleted — leaving it would break the post-port build. This is a *user-visible* API surface change: downstream Python consumers (tests, notebooks, internal tooling) may reference the removed entry point. The exception is narrow — it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op. See [Pattern: Removing pybound legacy factory entry points](port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the procedure, and record the removal in the port report under Handoff points (cite the pybind file, the function name, and what it was for).
+When the port causes a legacy factory entry point to vanish (`create_descriptor` is the canonical case), any pybind line referencing it must be deleted — leaving it would break the post-port build. This is a *user-visible* API surface change: downstream Python consumers (tests, notebooks, internal tooling) may reference the removed entry point. The exception is narrow — it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op. See [Pattern: Removing pybound legacy factory entry points](port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the procedure, and record the removal in the port report under Handoff points (cite the pybind file, the function name, and what it was for).
 
 ### 3. Drop a factory parameter that exists only for a pybind hook
 
