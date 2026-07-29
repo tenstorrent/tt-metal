@@ -2158,9 +2158,18 @@ def _emit_summary(
         _rc = sorted(_runs.rglob("*report*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
         if _rc:
             report_csv = str(_rc[0])
-        _rr = sorted(_runs.rglob("residual_report.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if _rr:
-            residual = json.loads(_rr[0].read_text())
+        # DERIVE THE RESIDUAL, DO NOT LOAD IT. This read the newest residual_report.json by MTIME across
+        # every run directory -- a file NOTHING in the tree writes, so the line it fed was dead, and had
+        # it existed the mtime search could have taken another model's run. Computing it from the profile
+        # this report is already rendering makes it current by construction, so it cannot go stale.
+        try:
+            from agent import roofline as _rl
+
+            _prof = _read_baseline_profile_for_report(repo_root)
+            if _prof:
+                residual = _rl.residual_report(_prof, (manifest or {}).get("env", {}) or {})
+        except Exception:  # noqa: BLE001
+            residual = None
     except Exception:  # noqa: BLE001
         pass
     render_kernel = kernel_log
@@ -2245,12 +2254,10 @@ def _emit_summary(
             _demo = None
         if _demo and str(_demo):
             when = f"Final end-of-run summary: {time.strftime('%Y-%m-%d %H:%M:%S %Z')} (adds committed wins, full-pipeline e2e, roofline residual)"
-            try:
-                from scripts.tt_hw_planner.run_report import refresh_bringup_section
-
-                refresh_bringup_section(_demo)
-            except Exception:
-                pass
+            # BRING-UP IS NOT PART OF OPTIMIZE. This refreshed tt_hw_planner's bring-up section into the
+            # same RUN_REPORT.md on every optimize finalize, so a perf run rewrote a section it does not
+            # own and cannot vouch for. Bring-up has its own report path; optimize owns the optimize
+            # section only.
             _key = os.environ.get("PERF_MCP_REPORT_KEY", "optimize")
             _module = os.environ.get("PERF_MCP_REPORT_MODULE")
             if _module:
@@ -2322,6 +2329,118 @@ def _hitl_watch(repo_root, hitl_dir, stop_event):
                 )
 
 
+def _report_baseline_for_seed(model_name: str, task: str):
+    """The ledger's baseline anchor for this (model, task), or None. Read-only."""
+    try:
+        led = _ledger()
+        row = led.first(led.KIND_EAGER, led.PHASE_BEFORE, model_name, task)
+        v = float((row or {}).get("value_ms"))
+        return v if v > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _read_baseline_profile_for_report(repo_root):
+    """The newest baseline profile JSON for THIS run, or None. Used to derive the roofline residual at
+    render time rather than reading a stale artifact."""
+    try:
+        _runs = repo_root / PERF_DIR / "runs"
+        cands = sorted(_runs.rglob("baseline_profile.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return json.loads(cands[0].read_text()) if cands else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _warn_dirty_model_tree(demo_dir, repo_root) -> list:
+    """Uncommitted edits inside the MODEL dir at start-up. Returns the paths (empty when clean).
+
+    A killed run leaves its half-applied edit in the working tree, and nothing detected that: the
+    restart profiled the partial state and treated it as the starting point, while the ledger's baseline
+    still described the last COMMITTED state. Every later "gain vs base" was then measured against work
+    that was never the baseline.
+
+    This reports rather than reverts. Discarding an edit could throw away a real win the previous run had
+    not yet committed, which is not a decision to make silently -- so the run is told what it inherited
+    and PERF_MCP_REQUIRE_CLEAN=1 turns it into a hard stop for unattended use.
+    """
+    try:
+        from agent import gitio
+
+        dirty = [f for f in gitio.changed_files(repo_root, "HEAD", pathspec=demo_dir) if f.strip()]
+    except Exception:  # noqa: BLE001
+        return []
+    if not dirty:
+        return []
+    print(
+        "  [optimize/cc] WARNING: %d uncommitted file(s) in the model dir at start-up — a previous run "
+        "may have been interrupted mid-attempt:" % len(dirty)
+    )
+    for f in dirty[:10]:
+        print("      %s" % f)
+    if len(dirty) > 10:
+        print("      … and %d more" % (len(dirty) - 10))
+    print(
+        "      The ledger baseline describes the last COMMITTED state, so measurements taken now are "
+        "against different work. Commit or revert before trusting a gain."
+    )
+    if os.environ.get("PERF_MCP_REQUIRE_CLEAN") == "1":
+        raise SystemExit("  [optimize/cc] PERF_MCP_REQUIRE_CLEAN=1 and the model tree is dirty — refusing to start.")
+    return dirty
+
+
+def _seed_ladder_from_cumulative(kernel_log: str, current_baseline_ms=None) -> int:
+    """Start the ladder from what this (model, task) has ALREADY conclusively tried. Returns the count.
+
+    The live log is deleted per pipeline so S2TT's ladder never leaks into T2T -- that isolation is the
+    point, and it is preserved here because the cumulative file is itself keyed per (model, task). What
+    it should NOT mean is amnesia across a RESTART of the same pipeline: a killed run left its verdicts
+    in the cumulative log, and re-walking them costs hours of re-measurement for outcomes already known.
+
+    Only CONCLUSIVE rows seed, and only when they still describe the same work:
+      * `wedged` rows never seed -- a crash is exactly what an interrupted run leaves behind, and the
+        state that caused it is gone;
+      * a row whose `baseline_at_record` differs from the baseline now never seeds, because its verdict
+        was reached against different work (a changed input, seq len or layer depth);
+      * a row with no stamp at all never seeds -- logs written before the stamp cannot be judged, so they
+        re-walk exactly as they do today.
+
+    PERF_MCP_FRESH_LADDER=1 forces the old behaviour.
+    """
+    if os.environ.get("PERF_MCP_FRESH_LADDER") == "1":
+        return 0
+    cum = Path(str(kernel_log) + ".cumulative")
+    try:
+        rows = json.loads(cum.read_text())
+        if not isinstance(rows, list):
+            return 0
+    except Exception:  # noqa: BLE001
+        return 0
+    try:
+        base = round(float(current_baseline_ms), 4) if current_baseline_ms is not None else None
+    except (TypeError, ValueError):
+        base = None
+    keep = []
+    for r in rows:
+        if not isinstance(r, dict) or r.get("wedged"):
+            continue
+        stamp = r.get("baseline_at_record")
+        if stamp is None or base is None or round(float(stamp), 4) != base:
+            continue
+        keep.append(r)
+    if not keep:
+        return 0
+    try:
+        Path(kernel_log).write_text(json.dumps(keep))
+    except OSError:
+        return 0
+    _rungs = sorted({"%s/%s" % (r.get("op_signature"), r.get("kernel_kind")) for r in keep})
+    print(
+        "  [optimize/cc] resuming ladder: %d attempt(s) already conclusive for this baseline, skipping %s"
+        % (len(keep), ", ".join(_rungs[:8]) + (" …" if len(_rungs) > 8 else ""))
+    )
+    return len(keep)
+
+
 def optimize_pipeline(
     repo_root: Path,
     manifest_path: str,
@@ -2341,6 +2460,8 @@ def optimize_pipeline(
     try:
         _fold_cumulative(kernel_log)
         os.path.exists(kernel_log) and os.remove(kernel_log)  # fresh ladder state per pipeline
+        # ...then RESUME from what this pipeline already concluded, if anything still applies.
+        _seed_ladder_from_cumulative(kernel_log, _report_baseline_for_seed(model_name, task))
     except OSError:
         pass
     _capture_board_topology()  # snapshot chip->board reset map while the device is healthy (reset-only)
@@ -3020,6 +3141,7 @@ def run_cc_optimize(
         if _seq:
             os.environ["TT_PERF_SEQ_LEN"] = _seq
             print(f"  [optimize/cc] perf workload seq pinned to {_seq} (baseline shape-retry); propagated to loop")
+    _warn_dirty_model_tree(demo_dir, repo_root)
     _decide_parallelism_route(demo_dir, manifest, repo_root, metric, devices, model_id_hint)
     _emit_perf_target_inputs(demo_dir, demo_dir, model_id_hint, manifest)
     model_rel = os.path.relpath(demo_dir, repo_root)

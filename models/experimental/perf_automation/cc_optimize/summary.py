@@ -1005,11 +1005,24 @@ def render_summary(
     # --- Reproduce these numbers (#6) ---
     lines.append("")
     lines.append("Reproduce:")
-    lines.append(
-        f"  trace+1CQ perf:  python -m pytest {perf_test} -svv"
-        if perf_test
-        else "  trace+1CQ perf:  (node-id not provided)"
-    )
+    # CHECK THE PATH, DO NOT JUST PRINT IT. This node-id is carried from the manifest, and the perf test
+    # is often GENERATED -- regenerating or renaming it leaves a command that cannot run. The demo and
+    # PCC lines below already list their directory at render time, so they self-validate; this one did
+    # not. A command handed over for confirmation must not be one that fails on paste.
+    if perf_test:
+        _pt_file = str(perf_test).split("::")[0]
+        try:
+            # is_file() RAISES on a pathological name (OSError: File name too long, embedded NUL), and a
+            # renderer must never fail on the value it is describing.
+            _pt_missing = bool(_pt_file) and not Path(_pt_file).is_file()
+        except (OSError, ValueError):
+            _pt_missing = False
+        lines.append(
+            f"  trace+1CQ perf:  python -m pytest {perf_test} -svv"
+            + ("   [path no longer exists — perf test regenerated?]" if _pt_missing else "")
+        )
+    else:
+        lines.append("  trace+1CQ perf:  (node-id not provided)")
     # Derive the demo (real input/output) + full-model e2e PCC test from the perf-test path
     # (perf tests live under models/demos/<model>/tests/...); best-effort, pointer only.
     _demo_root = ""

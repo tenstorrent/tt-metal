@@ -2784,6 +2784,10 @@ def _record_committed_win(message: str) -> None:
                 "measured_ms": t.get("measured_ms"),
                 "fullpipe_ms": (_fullpipe_ms_now() or (None, None))[0],
                 "fullpipe_best_ms": (_fullpipe_ms_now() or (None, None))[1],
+                "baseline_at_record": _baseline_at_record(),
+                # The baseline this verdict was reached against, so a resumed run can tell whether it still
+                # applies to the same work before skipping the lever.
+                "baseline_at_record": _baseline_at_record(),
                 "beat_baseline": True,
                 "wedged": False,
                 "kernel_detected_in_source": True,
@@ -2880,6 +2884,27 @@ def _capture_attempt_diff(max_lines: int = 40) -> str:
         return "\n".join(all_lines)
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _baseline_at_record():
+    """The baseline anchor in force right now, or None -- stamped onto every attempt.
+
+    A resumed run may skip a lever it already tried, but only if that verdict was reached against the
+    SAME work. Without this stamp there is no way to tell, so a restart after the baseline changed
+    (different input, seq len, layer depth) would inherit conclusions drawn about something else.
+    """
+    try:
+        led = _ledger()
+        row = led.first(
+            led.KIND_EAGER,
+            led.PHASE_BEFORE,
+            _MODEL_ROOT.name if _MODEL_ROOT else "",
+            os.environ.get("PERF_MCP_TASK", "main"),
+        )
+        v = float((row or {}).get("value_ms"))
+        return round(v, 4) if v > 0 else None
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def _fullpipe_ms_now():
