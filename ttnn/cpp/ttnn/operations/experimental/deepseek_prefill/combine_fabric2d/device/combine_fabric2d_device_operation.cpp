@@ -55,14 +55,11 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
+    TT_FATAL(args.tokens_per_movement >= 1, "tokens_per_movement must be >= 1 (got {})", args.tokens_per_movement);
     TT_FATAL(
-        args.input_tokens_per_movement >= 1,
-        "input_tokens_per_movement must be >= 1 (got {})",
-        args.input_tokens_per_movement);
-    TT_FATAL(
-        args.output_tokens_per_movement >= 1,
-        "output_tokens_per_movement must be >= 1 (got {})",
-        args.output_tokens_per_movement);
+        args.num_l1_slots >= 2,
+        "num_l1_slots must be >= 2 for the reader and producer to overlap (got {})",
+        args.num_l1_slots);
     TT_FATAL(
         args.token_size_bytes % sizeof(uint32_t) == 0,
         "combine_fabric2d: token_size_bytes {} must be a multiple of 4",
@@ -87,7 +84,7 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
             mesh_dims,
             args.device->shape());
         auto& claimed = claimed_out_tokens[m.dst];
-        for (uint32_t t = 0; t < args.output_tokens_per_movement; t++) {
+        for (uint32_t t = 0; t < args.tokens_per_movement; t++) {
             const auto [_, fresh] = claimed.insert(m.out_base_token + t);
             TT_FATAL(
                 fresh,
@@ -104,8 +101,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     uint32_t min_in = 0;
     uint32_t min_out = 0;
     for (const auto& m : args.movements) {
-        min_in = std::max(min_in, m.in_base_token + args.input_tokens_per_movement);
-        min_out = std::max(min_out, m.out_base_token + args.output_tokens_per_movement);
+        min_in = std::max(min_in, m.in_base_token + args.tokens_per_movement);
+        min_out = std::max(min_out, m.out_base_token + args.tokens_per_movement);
     }
     validate_region(tensor_args.input, min_in, args.token_size_bytes, "input");
     validate_region(tensor_args.output, min_out, args.token_size_bytes, "output");
@@ -136,10 +133,10 @@ ttnn::Tensor combine_fabric2d(
     const std::vector<ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dMovement>&
         movements,
     uint32_t num_links,
-    uint32_t input_tokens_per_movement,
-    uint32_t output_tokens_per_movement,
+    uint32_t tokens_per_movement,
     uint32_t token_size_bytes,
     uint32_t axis,
+    uint32_t num_l1_slots,
     uint32_t stall_telemetry,
     tt::tt_fabric::Topology topology) {
     using OperationType =
@@ -148,10 +145,10 @@ ttnn::Tensor combine_fabric2d(
         OperationType::operation_attributes_t{
             .device = device,
             .num_links = num_links,
-            .input_tokens_per_movement = input_tokens_per_movement,
-            .output_tokens_per_movement = output_tokens_per_movement,
+            .tokens_per_movement = tokens_per_movement,
             .token_size_bytes = token_size_bytes,
             .axis = axis,
+            .num_l1_slots = num_l1_slots,
             .stall_telemetry = stall_telemetry,
             .topology = topology,
             .movements = movements},

@@ -32,11 +32,10 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
             nb::arg("dst"),
             nb::arg("out_base_token"),
             R"doc(
-            Move `input_tokens_per_movement` tokens starting at `in_base_token` of device `src`'s input
-            region into `output_tokens_per_movement` tokens starting at `out_base_token` of device
-            `dst`'s output region, cycling the inputs (output token t carries input token
-            t mod input_tokens_per_movement). `src` and `dst` are mesh coordinates; the bases are in
-            TOKENS (= pages), not bytes. `dst` must be a chip `src` has a fabric cable to.
+            Copy `tokens_per_movement` tokens starting at `in_base_token` of device `src`'s input region
+            to `tokens_per_movement` tokens starting at `out_base_token` of device `dst`'s output region,
+            1:1 and in order. `src` and `dst` are mesh coordinates; the bases are in TOKENS (= pages), not
+            bytes. `dst` must be a chip `src` has a fabric cable to.
             )doc")
         .def_rw("src", &CombineFabric2dMovement::src)
         .def_rw("in_base_token", &CombineFabric2dMovement::in_base_token)
@@ -61,18 +60,20 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
 
         The caller supplies two region tensors and a list of `CombineFabric2dMovement` descriptors
         saying what moves where. The op places one producer kernel per fabric eth core (`num_links`
-        toward each neighbour along mesh `axis`, both directions, so 2 * num_links per device), gives
-        each producer one of that device's movements whose `dst` its cable reaches, and each producer
-        then prefills its L1 source ring from its own input region and writes its output region
-        straight to the peer chip's DRAM, one fabric packet per token. There is no receiver kernel and
-        no application-level credit loop; the EDM sender-slot backpressure is the only throttle, so the
-        send window is the link-bounded rate.
+        toward each neighbour along mesh `axis`, both directions, so 2 * num_links per device) plus a
+        reader kernel beside it on the same core, and gives each pair one of that device's movements
+        whose `dst` its cable reaches. The reader streams that movement's tokens out of local DRAM into
+        an L1 ring over NOC_0 while the producer drains the ring to the peer chip's DRAM over NOC_1, one
+        fabric packet per token. The token count is the caller's and is not bounded by L1. There is no
+        receiver kernel and no application-level credit loop; the EDM sender-slot backpressure is the
+        only throttle across the fabric.
 
         `input` and `output` are caller-owned interleaved uint32 ROW_MAJOR DRAM mesh tensors with one
         row per token. Every device needs exactly one movement per fabric cable it has; the op rejects
         a list that does not cover them, that names an unreachable `dst`, or whose output ranges
-        overlap on a destination. Which of the equally-valid producers serves a given movement is an
-        internal detail and deliberately unspecified. Returns `output`.
+        overlap on a destination. Which of the equally-valid producers serves a given movement, and
+        `num_l1_slots` (the ring depth), are internal details: results do not depend on either.
+        Returns `output`.
         )doc",
         &combine_fabric2d,
         nb::arg("device"),
@@ -80,10 +81,10 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("output"),
         nb::arg("movements"),
         nb::arg("num_links") = 2,
-        nb::arg("input_tokens_per_movement") = 32,
-        nb::arg("output_tokens_per_movement") = 100,
+        nb::arg("tokens_per_movement") = 100,
         nb::arg("token_size_bytes") = 14336,
         nb::arg("axis") = 0,
+        nb::arg("num_l1_slots") = 8,
         nb::arg("stall_telemetry") = 0,
         nb::arg("topology") = nb::none());
 
@@ -111,7 +112,9 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
                 d["valid"] = w.valid;
                 d["tokens_sent"] = w.tokens_sent;
                 d["token_size_bytes"] = w.token_size_bytes;
-                d["num_in_tokens"] = w.num_in_tokens;
+                d["num_l1_slots"] = w.num_l1_slots;
+                d["batch"] = w.batch;
+                d["t_start"] = w.t_start;
                 d["t_first_send"] = w.t_first_send;
                 d["t_last_send"] = w.t_last_send;
                 d["t_drained"] = w.t_drained;
@@ -120,6 +123,7 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
                 d["out_base_page"] = w.out_base_page;
                 d["wait_slot_cycles"] = w.wait_slot_cycles;
                 d["issue_cycles"] = w.issue_cycles;
+                d["ring_wait_cycles"] = w.ring_wait_cycles;
                 workers.append(d);
             }
             nb::dict out;

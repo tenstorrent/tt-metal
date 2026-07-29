@@ -34,10 +34,10 @@ ttnn::Tensor combine_fabric2d(
     const std::vector<ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dMovement>&
         movements,
     uint32_t num_links,
-    uint32_t input_tokens_per_movement,
-    uint32_t output_tokens_per_movement,
+    uint32_t tokens_per_movement,
     uint32_t token_size_bytes,
     uint32_t axis,
+    uint32_t num_l1_slots,
     uint32_t stall_telemetry,
     tt::tt_fabric::Topology topology);
 }  // namespace ttnn::prim

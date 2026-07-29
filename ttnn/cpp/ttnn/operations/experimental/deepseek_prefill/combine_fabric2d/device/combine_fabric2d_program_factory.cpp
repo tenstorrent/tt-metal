@@ -41,14 +41,14 @@ constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;  // scratch header for the drain'
 // far chip; nothing ever reads this word, which is exactly the point.
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 // 1 kB of per-worker telemetry, in the gap before the source ring, so it costs the payload nothing.
-// Sized for expansion; the current record is 17 words.
+// Sized for expansion; the current record is 22 words.
 constexpr uint32_t TELEMETRY_OFF = 0x0800;
 constexpr uint32_t TELEMETRY_SIZE = 0x0400;
-constexpr uint32_t PROD_BUF_OFF = 0x1000;  // the producer's L1 source ring
+constexpr uint32_t PROD_BUF_OFF = 0x1000;  // the reader -> producer token ring
 constexpr uint32_t L1_SLACK = 0x1000;      // keep clear of whatever sits at the very top of L1
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
 static_assert(DRAIN_SINK_OFF < TELEMETRY_OFF, "telemetry region overlaps the drain sink");
-static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the source ring");
+static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the token ring");
 
 // Telemetry record word layout, shared with the producer kernel. Kept explicit (rather than a struct)
 // because the kernel writes it by index and the host reads it by index.
@@ -56,27 +56,32 @@ enum TelemetryWord : uint32_t {
     TELEM_MAGIC = 0,  // written LAST by the kernel; zeroed at kernel entry
     TELEM_TOKENS_SENT = 1,
     TELEM_TOKEN_SIZE = 2,
-    TELEM_NUM_IN_TOKENS = 3,
-    TELEM_T_FIRST_SEND_LO = 4,
-    TELEM_T_FIRST_SEND_HI = 5,
-    TELEM_T_LAST_SEND_LO = 6,
-    TELEM_T_LAST_SEND_HI = 7,
-    TELEM_T_DRAINED_LO = 8,  // when the EDM drain proved every packet reached the far chip
-    TELEM_T_DRAINED_HI = 9,
-    TELEM_EDM_SLOTS = 10,      // EDM sender-channel buffer slots (the send pipeline's depth)
-    TELEM_DRAIN_PACKETS = 11,  // header-only fillers the drain pushed (= edm_slots - 1)
-    TELEM_OUT_BASE_PAGE = 12,  // first page written in the PEER chip's output region
-    // Stall attribution: where the producer's cycles actually go. Two disjoint buckets measured with the
-    // same wall clock as the timestamps above, so they are directly comparable to the send window.
-    TELEM_WAIT_SLOT_CY_LO = 13,  // blocked in wait_for_empty_write_slot => the eth side is the limiter
-    TELEM_WAIT_SLOT_CY_HI = 14,
-    TELEM_ISSUE_CY_LO = 15,  // issuing the payload: header stamp + 2 NoC writes
-    TELEM_ISSUE_CY_HI = 16,
-    TELEM_NUM_WORDS = 17,
+    TELEM_NUM_L1_SLOTS = 3,
+    TELEM_T_START_LO = 4,  // written by the READER at its first DRAM read: the effective-BW window opens
+    TELEM_T_START_HI = 5,
+    TELEM_T_FIRST_SEND_LO = 6,
+    TELEM_T_FIRST_SEND_HI = 7,
+    TELEM_T_LAST_SEND_LO = 8,
+    TELEM_T_LAST_SEND_HI = 9,
+    TELEM_T_DRAINED_LO = 10,  // when the EDM drain proved every packet reached the far chip
+    TELEM_T_DRAINED_HI = 11,
+    TELEM_EDM_SLOTS = 12,      // EDM sender-channel buffer slots (the send pipeline's depth)
+    TELEM_DRAIN_PACKETS = 13,  // header-only fillers the drain pushed (= edm_slots - 1)
+    TELEM_OUT_BASE_PAGE = 14,  // first page written in the PEER chip's output region
+    TELEM_BATCH = 15,          // ring slots claimed/released per trip
+    // Stall attribution: where the producer's cycles actually go. Three disjoint buckets on the same wall
+    // clock as the timestamps above, so they are directly comparable to the send window.
+    TELEM_WAIT_SLOT_CY_LO = 16,  // blocked in wait_for_empty_write_slot => the eth side is the limiter
+    TELEM_WAIT_SLOT_CY_HI = 17,
+    TELEM_ISSUE_CY_LO = 18,  // issuing the payload: header stamp + 2 NoC writes
+    TELEM_ISSUE_CY_HI = 19,
+    TELEM_RING_WAIT_CY_LO = 20,  // blocked on the reader => the DRAM read side is the limiter
+    TELEM_RING_WAIT_CY_HI = 21,
+    TELEM_NUM_WORDS = 22,
 };
 // Bumped whenever the record layout changes, so a stale record from an older kernel reads as invalid
 // instead of being misparsed.
-constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0004u;
+constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0005u;
 
 // ---------------------------------------------------------------------------------------------
 // Physical-column geometry
@@ -298,8 +303,8 @@ struct L1Layout {
     uint32_t pkt_hdr_drain;
     uint32_t drain_sink;
     uint32_t telemetry;
-    uint32_t prod_buf;
-    uint32_t pkt_hdr_ring;  // num_in_tokens prebuilt payload headers
+    uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the producer
+    uint32_t pkt_hdr_ring;  // one prebuilt payload header per ring slot
 };
 
 // The telemetry address depends only on the L1 base, so the readback path can resolve it without any of
@@ -309,28 +314,28 @@ uint32_t telemetry_addr(ttnn::MeshDevice* mesh) {
            TELEMETRY_OFF;
 }
 
-L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t num_in_tokens, uint32_t token_size_bytes) {
+L1Layout compute_l1_layout(
+    ttnn::MeshDevice* mesh, uint32_t num_l1_slots, uint32_t token_size_bytes, uint32_t sem_floor) {
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.telemetry = base + TELEMETRY_OFF;
-    l.prod_buf = base + PROD_BUF_OFF;
+    l.ring = base + PROD_BUF_OFF;
     // One prebuilt header per ring slot, past the ring itself.
-    l.pkt_hdr_ring = l.prod_buf + num_in_tokens * token_size_bytes;
+    l.pkt_hdr_ring = l.ring + num_l1_slots * token_size_bytes;
     const uint32_t hdr_ring_bytes =
-        num_in_tokens * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+        num_l1_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     const uint32_t end = l.pkt_hdr_ring + hdr_ring_bytes;
-    const uint32_t l1_size = static_cast<uint32_t>(mesh->get_devices().front()->l1_size_per_core());
     TT_FATAL(
-        end + L1_SLACK <= l1_size,
-        "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the core has only {} B of L1. "
-        "Reduce num_in_tokens ({}) or token_size_bytes ({}).",
+        end + L1_SLACK <= sem_floor,
+        "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at "
+        "0x{:x}. Reduce num_l1_slots ({}) or token_size_bytes ({}).",
         end - base,
         end,
-        l1_size,
-        num_in_tokens,
+        sem_floor,
+        num_l1_slots,
         token_size_bytes);
     return l;
 }
@@ -355,6 +360,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     PlacementCache& placements,
     const std::map<uint32_t, ttnn::MeshCoordinate>& chip_to_coord,
     const L1Layout& l1,
+    uint32_t batch,
+    uint32_t ring_filled_addr,
+    uint32_t ring_freed_addr,
     tt::tt_metal::Buffer* dram_out_buf,
     tt::tt_metal::Buffer* dram_in_buf) {
     tt::tt_metal::ProgramDescriptor desc;
@@ -451,6 +459,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         const CombineFabric2dMovement& mv = *bucket->second.back();
         bucket->second.pop_back();
 
+        // ---- Producer (writer RISC, NOC_1): drains the L1 ring to the peer chip's DRAM over fabric.
         tt::tt_metal::KernelDescriptor prod;
         prod.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
@@ -458,28 +467,29 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         prod.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         prod.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
         prod.compile_time_args = {
-            args.output_tokens_per_movement,
-            args.input_tokens_per_movement,
+            args.tokens_per_movement,
+            args.num_l1_slots,
             args.token_size_bytes,
             static_cast<uint32_t>(wp.peer_node.chip_id),
             *wp.peer_node.mesh_id,
             static_cast<uint32_t>(peer_virtual.x),
             static_cast<uint32_t>(peer_virtual.y),
-            l1.prod_buf,
+            l1.ring,
             l1.pkt_hdr_ring,
             l1.pkt_hdr_drain,
             l1.drain_sink,
             l1.telemetry,
             args.stall_telemetry,
-            mv.in_base_token,
             mv.out_base_token,
             dram_out_addr,
-            dram_in_addr,
+            batch,
+            ring_filled_addr,
+            ring_freed_addr,
+            static_cast<uint32_t>(wp.worker_virtual.x),
+            static_cast<uint32_t>(wp.worker_virtual.y),
         };
-        // 17+: TensorAccessorArgs for the interleaved output buffer, then the input buffer (both
-        // compile-time config).
+        // 20+: TensorAccessorArgs for the interleaved output buffer (compile-time config).
         tt::tt_metal::TensorAccessorArgs(dram_out_buf).append_to(prod.compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(dram_in_buf).append_to(prod.compile_time_args);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -487,6 +497,36 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         };
         auto prod_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(prod));
+
+        // ---- Reader (reader RISC, NOC_0): streams the movement's tokens from local DRAM into the ring.
+        // Separate NoC from the producer's eth sends, so the two do not contend.
+        tt::tt_metal::KernelDescriptor rdr;
+        rdr.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
+            "reader_combine_fabric2d.cpp";
+        rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        rdr.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
+        rdr.compile_time_args = {
+            args.tokens_per_movement,
+            args.num_l1_slots,
+            args.token_size_bytes,
+            batch,
+            l1.ring,
+            ring_filled_addr,
+            ring_freed_addr,
+            static_cast<uint32_t>(wp.worker_virtual.x),
+            static_cast<uint32_t>(wp.worker_virtual.y),
+            l1.telemetry,
+            mv.in_base_token,
+            dram_in_addr,
+        };
+        // 12+: TensorAccessorArgs for the interleaved input buffer (compile-time config).
+        tt::tt_metal::TensorAccessorArgs(dram_in_buf).append_to(rdr.compile_time_args);
+        rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::NOC_0,
+        };
+        desc.kernels.push_back(std::move(rdr));  // no fabric connection => no rt args
         {
             std::vector<uint32_t> rt_raw;
             rt_raw.push_back(1u);  // num_connections
@@ -516,15 +556,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             peer_virtual.x,
             peer_virtual.y,
             mv.in_base_token,
-            mv.in_base_token + args.input_tokens_per_movement,
+            mv.in_base_token + args.tokens_per_movement,
             far_coord,
             mv.out_base_token,
-            mv.out_base_token + args.output_tokens_per_movement);
+            mv.out_base_token + args.tokens_per_movement);
     }
 
     log_info(
         tt::LogOp,
-        "combine_fabric2d {} {}: {} producer(s): {}",
+        "combine_fabric2d {} {}: {} reader+producer pair(s): {}",
         coord,
         self_node,
         self_placement.by_eth_logical.size(),
@@ -584,7 +624,10 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
                 w.valid = true;
                 w.tokens_sent = words[TELEM_TOKENS_SENT];
                 w.token_size_bytes = words[TELEM_TOKEN_SIZE];
-                w.num_in_tokens = words[TELEM_NUM_IN_TOKENS];
+                w.num_l1_slots = words[TELEM_NUM_L1_SLOTS];
+                w.batch = words[TELEM_BATCH];
+                w.t_start = static_cast<uint64_t>(words[TELEM_T_START_LO]) |
+                            (static_cast<uint64_t>(words[TELEM_T_START_HI]) << 32);
                 w.t_first_send = static_cast<uint64_t>(words[TELEM_T_FIRST_SEND_LO]) |
                                  (static_cast<uint64_t>(words[TELEM_T_FIRST_SEND_HI]) << 32);
                 w.t_last_send = static_cast<uint64_t>(words[TELEM_T_LAST_SEND_LO]) |
@@ -598,6 +641,8 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
                                      (static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_HI]) << 32);
                 w.issue_cycles = static_cast<uint64_t>(words[TELEM_ISSUE_CY_LO]) |
                                  (static_cast<uint64_t>(words[TELEM_ISSUE_CY_HI]) << 32);
+                w.ring_wait_cycles = static_cast<uint64_t>(words[TELEM_RING_WAIT_CY_LO]) |
+                                     (static_cast<uint64_t>(words[TELEM_RING_WAIT_CY_HI]) << 32);
             }
             out.workers.push_back(std::move(w));
         }
@@ -628,15 +673,35 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
         fabric_max_payload);
 
     const auto grid = mesh_device->compute_with_storage_grid_size();
+    // The reader/producer ring handshake is two monotonic single-writer counters. They live in
+    // GlobalSemaphores rather than in the op's own L1 region for one reason: the framework ZEROES them
+    // before launch. Raw L1 keeps whatever the previous program left there, and a stale `freed` underflows
+    // the reader's free-slot arithmetic — which is a silent buffer overwrite, not a clean failure.
+    // Allocated on the full worker grid so the addresses are uniform across the mesh.
+    const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    auto ring_filled_sem =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
+    auto ring_freed_sem =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    const uint32_t ring_filled_addr = static_cast<uint32_t>(ring_filled_sem.address());
+    const uint32_t ring_freed_addr = static_cast<uint32_t>(ring_freed_sem.address());
     const auto l1 = compute_l1_layout(
-        mesh_device, operation_attributes.input_tokens_per_movement, operation_attributes.token_size_bytes);
+        mesh_device,
+        operation_attributes.num_l1_slots,
+        operation_attributes.token_size_bytes,
+        std::min(ring_filled_addr, ring_freed_addr));
+    // Slots move between the reader and the producer in half-ring batches, so one half can be refilled
+    // while the other drains. This is the knob that amortises the ring bookkeeping over several packets.
+    const uint32_t batch = std::max(1u, operation_attributes.num_l1_slots / 2);
     log_info(
         tt::LogOp,
-        "combine_fabric2d L1: prod_buf 0x{:x} hdr_ring 0x{:x} ({} input tokens x {} B), drain_sink 0x{:x}",
-        l1.prod_buf,
-        l1.pkt_hdr_ring,
-        operation_attributes.input_tokens_per_movement,
+        "combine_fabric2d L1: ring 0x{:x} ({} slots x {} B, batch {}) hdr_ring 0x{:x} drain_sink 0x{:x}",
+        l1.ring,
+        operation_attributes.num_l1_slots,
         operation_attributes.token_size_bytes,
+        batch,
+        l1.pkt_hdr_ring,
         l1.drain_sink);
 
     // Physical chip id -> mesh coordinate, to turn a cable's far chip into a placement lookup.
@@ -669,27 +734,38 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     const uint32_t out_pages = static_cast<uint32_t>(dram_out_buf->num_pages());
     for (const auto& m : operation_attributes.movements) {
         TT_FATAL(
-            m.in_base_token + operation_attributes.input_tokens_per_movement <= in_pages,
+            m.in_base_token + operation_attributes.tokens_per_movement <= in_pages,
             "combine_fabric2d: movement src {} reads input tokens [{}, {}) but the input buffer holds {} per device",
             movement_coord_str(m.src),
             m.in_base_token,
-            m.in_base_token + operation_attributes.input_tokens_per_movement,
+            m.in_base_token + operation_attributes.tokens_per_movement,
             in_pages);
         TT_FATAL(
-            m.out_base_token + operation_attributes.output_tokens_per_movement <= out_pages,
+            m.out_base_token + operation_attributes.tokens_per_movement <= out_pages,
             "combine_fabric2d: movement src {} -> dst {} writes output tokens [{}, {}) but the output buffer holds "
             "{} per device",
             movement_coord_str(m.src),
             movement_coord_str(m.dst),
             m.out_base_token,
-            m.out_base_token + operation_attributes.output_tokens_per_movement,
+            m.out_base_token + operation_attributes.tokens_per_movement,
             out_pages);
     }
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    workload_descriptor.semaphores.push_back(ring_filled_sem);
+    workload_descriptor.semaphores.push_back(ring_freed_sem);
     for (const auto& coord : tensor_coords.coords()) {
         auto desc = build_program_for_coord(
-            operation_attributes, coord, placements, chip_to_coord, l1, dram_out_buf, dram_in_buf);
+            operation_attributes,
+            coord,
+            placements,
+            chip_to_coord,
+            l1,
+            batch,
+            ring_filled_addr,
+            ring_freed_addr,
+            dram_out_buf,
+            dram_in_buf);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;
