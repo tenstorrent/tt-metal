@@ -61,7 +61,7 @@
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized
   skus:
     bh_sc4-blitz:
       timeout: 30
@@ -86,7 +86,7 @@
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized
   skus:
     bh_sc4-blitz:
       timeout: 60
@@ -139,7 +139,7 @@
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
         --prompt 'Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts.' \
         --reference-file /mnt/models/ref_data/output1_reference.txt \
         --output-file output1_teacher_forcing_results.json \
@@ -195,7 +195,7 @@
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt 'Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts.' \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
         > \"${RANKLOG_DIR}/rank-\${TT_RUN_RANK}.log\" 2>&1" \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
@@ -248,7 +248,7 @@
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt 'Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts.' \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
         > \"${RANKLOG_DIR}/rank-\${TT_RUN_RANK}.log\" 2>&1" \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
