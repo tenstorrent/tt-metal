@@ -19,6 +19,8 @@
 
 #include <tt_stl/span.hpp>
 
+#include "tensor_impl.hpp"
+
 namespace tt::tt_metal {
 
 // ======================================================================================

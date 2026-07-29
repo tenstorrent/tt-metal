@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 
 #include "tensor_buffer_alloc.hpp"
+#include "tensor_impl.hpp"
 
 #include <vector>
 
