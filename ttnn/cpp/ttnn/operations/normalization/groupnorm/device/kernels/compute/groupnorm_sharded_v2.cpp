@@ -169,7 +169,12 @@ void kernel_main() {
     };
     constexpr auto strided_block_input = [](uint32_t cb) {
         return ckl::input(
-            cb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block, ckl::TileOffset::Strided);
+            cb,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled,
+            ckl::TileOffset::Strided);
     };
     constexpr auto strided_output = [](uint32_t cb) {
         return ckl::output(
@@ -280,13 +285,15 @@ void kernel_main() {
             cb_x.push_back(block_hw);
             // Partial-E[x]
             cb_x.wait_front(block_hw);
+            reconfig_data_format_srcb(cb_input_mask_id, cb_ones_id);
             // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
             // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
             ckl::eltwise_chain(
                 valid_group_shape,
                 ckl::BinaryFpu<
                     strided_block_input(cb_x_id),
-                    ckl::input(cb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                    ckl::input(
+                        cb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::None,
                     ckl::Dst::D0,
@@ -295,7 +302,7 @@ void kernel_main() {
                     cb_ex2pe_id,
                     ckl::ReservePolicy::PerOuter,
                     ckl::PushPolicy::PerOuter,
-                    ckl::DataFormatReconfig::Enabled,
+                    ckl::DataFormatReconfig::Disabled,
                     ckl::PackRelu::Disabled,
                     ckl::L1Accumulation::Disabled,
                     ckl::DestAccumulation::WholeShape)>{});
@@ -329,8 +336,17 @@ void kernel_main() {
                 cb_ex.push_back(1);
             }
             ckl::sub<
-                ckl::input(cb_x_id, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-                ckl::input(cb_ex_global_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+                ckl::input(
+                    cb_x_id,
+                    ckl::WaitPolicy::PerChunk,
+                    ckl::PopPolicy::PerChunk,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_ex_global_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_x_id,
                     ckl::ReservePolicy::PerChunk,
@@ -338,9 +354,20 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled),
                 ckl::BroadcastDim::Scalar>(valid_group_shape);
 
+            reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
             ckl::mul<
-                ckl::input(cb_x_id, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-                ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                ckl::input(
+                    cb_x_id,
+                    ckl::WaitPolicy::PerChunk,
+                    ckl::PopPolicy::PerChunk,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_input_mask_id,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_x_id,
                     ckl::ReservePolicy::PerChunk,
@@ -350,6 +377,7 @@ void kernel_main() {
             cb_input_mask.pop_front(block_w);
             // (x - E[x])^2
             cb_x.wait_front(block_hw);
+            reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
             ckl::eltwise_chain(
                 valid_group_shape,
                 ckl::BinaryFpu<
@@ -364,7 +392,7 @@ void kernel_main() {
                     cb_ex2pe_id,
                     ckl::ReservePolicy::PerOuter,
                     ckl::PushPolicy::PerOuter,
-                    ckl::DataFormatReconfig::Enabled,
+                    ckl::DataFormatReconfig::Disabled,
                     ckl::PackRelu::Disabled,
                     ckl::L1Accumulation::Disabled,
                     ckl::DestAccumulation::WholeShape)>{});
@@ -396,8 +424,13 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
-                    ckl::input(cb_ex_global_id),
-                    ckl::input(cb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(
+                        cb_ex_global_id,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        cb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                     ckl::BinaryFpuOp::Add,
                     ckl::BroadcastDim::None>{},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
@@ -407,8 +440,14 @@ void kernel_main() {
                     ckl::PushPolicy::PerTile,
                     ckl::DataFormatReconfig::Disabled)>{});
             ckl::mul<
-                ckl::input(cb_x_id, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
-                ckl::input(cb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+                ckl::input(
+                    cb_x_id,
+                    ckl::WaitPolicy::PerChunk,
+                    ckl::PopPolicy::PerChunk,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_x_id,
                     ckl::ReservePolicy::PerChunk,
@@ -463,12 +502,17 @@ void kernel_main() {
                 // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
                 cb_in_negative_mask.wait_front(block_w);
                 const ckl::StridedTileRange output_range{index_b_offset + index_g_offset, per_core_N};
+                reconfig_data_format_srcb(cb_x_id, cb_in_negative_mask_id);
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::grid(block_h, block_w_curr),
                     ckl::BinaryFpu<
                         strided_block_input(cb_in_id),
                         ckl::input(
-                            cb_in_negative_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                            cb_in_negative_mask_id,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::OperandKind::Row,
+                            ckl::DataFormatReconfig::Disabled),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::None>{output_range},
                     ckl::PackTile<strided_output(cb_in_id)>{output_range});
@@ -476,6 +520,7 @@ void kernel_main() {
                 // data in cb_x_id has valid data only for current group
                 // cb_in_id has cleared data for that group
                 // just add them together
+                reconfig_data_format_srcb(cb_in_negative_mask_id, cb_x_id);
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::grid(block_h, block_w_curr),
                     ckl::BinaryFpu<
@@ -540,8 +585,18 @@ void kernel_main() {
     if constexpr (do_gamma) {
         if constexpr (use_negative_mask == false) {
             ckl::mul<
-                ckl::input(cb_out_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(cb_gamma_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                ckl::input(
+                    cb_out_id,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_gamma_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_outgamma_id,
                     ckl::ReservePolicy::Upfront,
@@ -551,8 +606,14 @@ void kernel_main() {
             cb_outgamma.wait_front(per_core_MN);
         } else {
             ckl::mul<
-                ckl::input(cb_in_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::PerTile),
-                ckl::input(cb_gamma_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                ckl::input(
+                    cb_in_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_gamma_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_in_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
@@ -562,8 +623,18 @@ void kernel_main() {
     if constexpr (do_beta) {
         if constexpr (use_negative_mask == false) {
             ckl::add<
-                ckl::input(cb_inbeta_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(cb_beta_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                ckl::input(
+                    cb_inbeta_id,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_beta_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_outbeta_id,
                     ckl::ReservePolicy::Upfront,
@@ -573,8 +644,14 @@ void kernel_main() {
             cb_outbeta.wait_front(per_core_MN);
         } else {
             ckl::add<
-                ckl::input(cb_in_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::PerTile),
-                ckl::input(cb_beta_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                ckl::input(
+                    cb_in_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_beta_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     cb_in_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));

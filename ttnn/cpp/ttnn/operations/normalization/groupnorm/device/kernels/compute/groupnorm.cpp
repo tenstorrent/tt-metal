@@ -331,11 +331,26 @@ void kernel_main() {
                 reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
                 ckl::mul<
 #ifdef TILIZE_IN
-                    ckl::input(cb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(
+                        cb_in_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        ckl::DataFormatReconfig::Disabled),
 #else
-                    ckl::input(cb_in0_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(
+                        cb_in0_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        ckl::DataFormatReconfig::Disabled),
 #endif
-                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::input(
+                        cb_input_mask_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::OperandKind::Row,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         cb_x_id,
                         ckl::ReservePolicy::Upfront,
@@ -401,8 +416,16 @@ void kernel_main() {
                 cb_in0.wait_front(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
                 ckl::sub<
-                    ckl::input(cb_in0_id),
-                    ckl::input(cb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(
+                        cb_in0_id,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        cb_ex_global_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         cb_xmm_id,
                         ckl::ReservePolicy::Upfront,
@@ -419,8 +442,18 @@ void kernel_main() {
 
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
                 ckl::mul<
-                    ckl::input(cb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::input(
+                        cb_xmm_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        cb_input_mask_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::OperandKind::Row,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         cb_x_id,
                         ckl::ReservePolicy::Upfront,
@@ -437,7 +470,12 @@ void kernel_main() {
 
                 reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
                 ckl::square<
-                    ckl::input(cb_x_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(
+                        cb_x_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         cb_xmm_id,
                         ckl::ReservePolicy::Upfront,
@@ -490,8 +528,13 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
-                    ckl::input(cb_ex2_global_id),
-                    ckl::input(cb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(
+                        cb_ex2_global_id,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        cb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                     ckl::BinaryFpuOp::Add,
                     ckl::BroadcastDim::None>{},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
@@ -519,8 +562,16 @@ void kernel_main() {
                 cb_in0.wait_front(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
                 ckl::sub<
-                    ckl::input(cb_in0_id),
-                    ckl::input(cb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(
+                        cb_in0_id,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        cb_ex_global_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         cb_xmm_id,
                         ckl::ReservePolicy::Upfront,
@@ -537,8 +588,18 @@ void kernel_main() {
 
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
                 ckl::mul<
-                    ckl::input(cb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::input(
+                        cb_xmm_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        cb_input_mask_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::OperandKind::Row,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         cb_x_id,
                         ckl::ReservePolicy::Upfront,
@@ -554,9 +615,16 @@ void kernel_main() {
                 }
 
                 cb_ex2pe.wait_front(1);
+                reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
                 ckl::mul<
-                    ckl::input(cb_x_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                    ckl::input(cb_ex2pe_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(
+                        cb_x_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        cb_ex2pe_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         cb_xmm_id,
                         ckl::ReservePolicy::Upfront,
