@@ -36,6 +36,13 @@
 #                  TTDPA_HOSTSRC=1 for the realistic host landing buffer. (A3.3 swaps the bump for real RoCE.)
 #                  Gotcha baked in: the DPA restores an explicit outbox after each window access, else the SQ
 #                  doorbell follows the window config and sends silently fail to egress.
+#   TTDPA_SHMFILE=<path> A3.3a: landing buffer + doorbell live in a file-backed shared mmap that a SEPARATE
+#                  process fills (dpa_ttblast/shm_writer.c stands in for the RoCE responder). Layout:
+#                  [u64 produced @0][landing @4096]. TTDPA_SHMSIZE sets the size (both processes must match).
+#                  Run BOTH as root (fs.protected_regular blocks root O_CREAT on another user's /dev/shm file):
+#                    sudo shm_writer /dev/shm/tt_rehead 16777216 <count> <plen> [chunk] [us]   # producer
+#                    sudo env TTDPA_DOORBELL=1 TTDPA_SHMFILE=/dev/shm/tt_rehead TTDPA_SHMSIZE=16777216 \
+#                         TTDPA_COUNT=<count> TTDPA_PLEN=<plen> TTDPA_NOCRC=1 <bin> mlx5_0                # DPA
 #   TTDPA_DMAC/TTDPA_RKEY tune the frame dst/rkey (see the patch).
 #
 # NOTE (steering): the TX->wire rule matches on dst MAC. Phase C points it at the BH dst MAC (TT_BH_DMAC

@@ -351,7 +351,7 @@
  	while (flexio_dev_cqe_get_owner(app_ctx.rq_cq_ctx.cqe) !=
 --- a/packet_processor/host/flexio_packet_processor_host.c
 +++ b/packet_processor/host/flexio_packet_processor_host.c
-@@ -36,6 +36,12 @@
+@@ -36,6 +36,18 @@
  /* Used for geteuid function. */
  #include <unistd.h>
  
@@ -361,10 +361,16 @@
 +/* TT-RDMA multi-thread fan-out: N host pthreads, each a blocking flexio_process_call driving its own SQ. */
 +#include <pthread.h>
 +
++/* A3.3a: file-backed shared mmap so a SEPARATE process (the RoCE responder) can land payloads + bump the
++ * doorbell that this DPA program drains (cross-program seam). */
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++
  /* Used for host (x86/DPU) memory allocations. */
  #include <malloc.h>
  
-@@ -59,6 +65,12 @@
+@@ -59,6 +71,12 @@
  
  /* Flex IO packet processor device (DPA) side function stub. */
  extern flexio_func_t flexio_pp_dev;
@@ -377,7 +383,7 @@
  
  /* Application context struct holding necessary host side variables. */
  struct app_context {
-@@ -122,6 +134,31 @@
+@@ -122,6 +140,31 @@
  	 * information struct.
  	 */
  	flexio_uintptr_t app_data_daddr;
@@ -409,7 +415,7 @@
  };
  
  /* Open ibv device
-@@ -178,8 +215,8 @@
+@@ -178,8 +221,8 @@
  /* Number of entries in each RQ/SQ/CQ is 2^LOG_Q_DEPTH. */
  #define LOG_Q_DEPTH 7
  #define Q_DEPTH L2V(LOG_Q_DEPTH)
@@ -420,7 +426,7 @@
  /* SQ/RQ data entry byte size log to value. */
  #define Q_DATA_ENTRY_BSIZE L2V(LOG_Q_DATA_ENTRY_BSIZE)
  /* SQ/RQ DATA byte size is queue depth times entry byte size. */
-@@ -217,6 +254,9 @@
+@@ -217,6 +260,9 @@
  
  /* Source MAC address to match for incoming packets. */
  #define SMAC 0x02427e7feb02
@@ -430,7 +436,7 @@
  /* Creates steering rules for application.
   * Returns 0 on success and -1 if the allocation was failed.
   * app_ctx - pointer to app_context structure.
-@@ -255,15 +295,17 @@
+@@ -255,15 +301,17 @@
  			return -1;
  		}
  
@@ -451,7 +457,7 @@
  		if (!app_ctx->tx_rule_vport) {
  			fprintf(stderr, "Failed to create TX vport steering rule\n");
  			return -1;
-@@ -686,6 +728,165 @@
+@@ -686,6 +734,165 @@
  	return 0;
  }
  
@@ -617,7 +623,7 @@
  /* Copy application information to DPA.
   * DPA side needs queue information in order to process the packets.
   * The DPA heap memory address will be passed as the event handler argument.
-@@ -716,6 +917,18 @@
+@@ -716,6 +923,18 @@
  	h2d_data->rq_cq_transf = app_ctx->rq_cq_transf;
  	/* Set RQ's information. */
  	h2d_data->rq_transf = app_ctx->rq_transf;
@@ -636,7 +642,7 @@
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -887,6 +1100,442 @@
+@@ -887,6 +1106,492 @@
  /* dev msg stream buffer built from chunks of 2^FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE each */
  #define MSG_HOST_BUFF_BSIZE (512 * L2V(FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE))
  
@@ -784,38 +790,80 @@
 +	uint64_t ret = 0;
 +	uint32_t total, plen;
 +	int preset, have_thread = 0, rc = 0;
++	/* A3.3a cross-program seam: landing buffer + doorbell in a file-backed shared mmap the RoCE responder fills. */
++	const char *shmfile = getenv("TTDPA_SHMFILE");
++	struct ibv_mr *shmmr = NULL;
++	void *shmbase = NULL;
++	size_t shmsz = 0;
 +
 +	total = tt_fill_hdr_params(&h);
 +	if (!total)
 +		return -1;
 +	plen = h.tt_plen;
-+	if (tt_create_src(app_ctx, plen))
-+		fprintf(stderr, "doorbell: source setup failed\n");
-+	h.tt_src_daddr = app_ctx->tt_src_daddr;
-+	h.tt_src_mkey = app_ctx->tt_src_mkey;
++
++	if (shmfile) {
++		/* Cross-program seam: [u64 produced @0][pad][landing buffer @4096] in a file-backed shared mmap that
++		 * a SEPARATE process fills. ONE ibv_mr over it on the process PD serves both the DPA gather (landing)
++		 * and the window (doorbell). No internal producer -> the external writer/RoCE responder drives it. */
++		int fd;
++		const size_t off = 4096;
++
++		shmsz = getenv("TTDPA_SHMSIZE") ? strtoul(getenv("TTDPA_SHMSIZE"), NULL, 0) : (16u << 20);
++		fd = open(shmfile, O_RDWR | O_CREAT, 0666);
++		if (fd < 0 || ftruncate(fd, (off_t)shmsz)) {
++			fprintf(stderr, "doorbell: shm open/ftruncate %s failed\n", shmfile);
++			if (fd >= 0)
++				close(fd);
++			return -1;
++		}
++		shmbase = mmap(NULL, shmsz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++		close(fd);
++		if (shmbase == MAP_FAILED) {
++			fprintf(stderr, "doorbell: shm mmap failed\n");
++			return -1;
++		}
++		shmmr = ibv_reg_mr(app_ctx->process_pd, shmbase, shmsz, IBV_ACCESS_LOCAL_WRITE);
++		if (!shmmr) {
++			fprintf(stderr, "doorbell: shm ibv_reg_mr failed\n");
++			munmap(shmbase, shmsz);
++			shmbase = NULL;
++			return -1;
++		}
++		db = (volatile uint64_t *)shmbase;
++		h.tt_src_daddr = (flexio_uintptr_t)(uintptr_t)((char *)shmbase + off); /* landing buffer */
++		h.tt_src_mkey = shmmr->lkey;
++		h.tt_db_mkey = shmmr->lkey;
++		h.tt_db_haddr = (flexio_uintptr_t)(uintptr_t)shmbase; /* produced doorbell @0 */
++	} else {
++		if (tt_create_src(app_ctx, plen))
++			fprintf(stderr, "doorbell: source setup failed\n");
++		h.tt_src_daddr = app_ctx->tt_src_daddr;
++		h.tt_src_mkey = app_ctx->tt_src_mkey;
++
++		if (posix_memalign(&dbpage, 4096, 4096))
++			return -1;
++		memset(dbpage, 0, 4096);
++		db = (volatile uint64_t *)dbpage;
++		dbmr = ibv_reg_mr(app_ctx->process_pd, dbpage, 4096, IBV_ACCESS_LOCAL_WRITE);
++		if (!dbmr) {
++			fprintf(stderr, "doorbell: ibv_reg_mr failed\n");
++			free(dbpage);
++			return -1;
++		}
++		h.tt_db_mkey = dbmr->lkey;
++		h.tt_db_haddr = (flexio_uintptr_t)(uintptr_t)dbpage;
++	}
 +	h.sq_cq_transf = app_ctx->sq_cq_transf; /* reuse the single SQ created in main */
 +	h.sq_transf = app_ctx->sq_transf;
 +	h.rq_cq_transf = app_ctx->rq_cq_transf;
 +	h.rq_transf = app_ctx->rq_transf;
 +
-+	if (posix_memalign(&dbpage, 4096, 4096))
-+		return -1;
-+	memset(dbpage, 0, 4096);
-+	db = (volatile uint64_t *)dbpage;
-+	dbmr = ibv_reg_mr(app_ctx->process_pd, dbpage, 4096, IBV_ACCESS_LOCAL_WRITE);
-+	if (!dbmr) {
-+		fprintf(stderr, "doorbell: ibv_reg_mr failed\n");
-+		free(dbpage);
-+		return -1;
-+	}
 +	if (flexio_window_create(app_ctx->flexio_process, app_ctx->process_pd, &win)) {
 +		fprintf(stderr, "doorbell: flexio_window_create failed\n");
 +		rc = -1;
 +		goto out;
 +	}
 +	h.tt_win_id = flexio_window_get_id(win);
-+	h.tt_db_mkey = dbmr->lkey;
-+	h.tt_db_haddr = (flexio_uintptr_t)(uintptr_t)dbpage;
 +
 +	/* Explicit outbox over the process UAR: the DPA restores this after each window access so SQ doorbells
 +	 * still reach the (process-UAR) SQ. Without it, window access leaves the doorbell pointing at the window. */
@@ -834,10 +882,14 @@
 +
 +	preset = getenv("TTDPA_DB_PRESET") && strtoul(getenv("TTDPA_DB_PRESET"), NULL, 0) > 0;
 +	printf("A3.2 DOORBELL: total=%u plen=%u %s src=%s\n", total, plen,
-+	       preset ? "PRESET(produced=total)" : "ARRIVAL-DRIVEN(bump thread)",
-+	       app_ctx->tt_src_ibv_mr ? "HOST-MEM" : (app_ctx->tt_src_mkey ? "DPA-heap-gather" : "none"));
++	       shmfile ? "EXTERNAL(shm producer)" : (preset ? "PRESET(produced=total)" : "ARRIVAL-DRIVEN(bump thread)"),
++	       shmfile ? "SHM-MEM" : (app_ctx->tt_src_ibv_mr ? "HOST-MEM" : (app_ctx->tt_src_mkey ? "DPA-heap-gather" : "none")));
 +
-+	if (preset) {
++	if (shmfile) {
++		/* External process (writer / RoCE responder) drives `produced`; the DPA drain waits on the doorbell.
++		 * Don't touch *db here (the writer owns it). */
++		printf("A3.3a: waiting on external producer via %s (produced now=%lu)\n", shmfile, (unsigned long)*db);
++	} else if (preset) {
 +		*db = total;
 +		__sync_synchronize();
 +	} else {
@@ -881,6 +933,10 @@
 +	if (dbmr)
 +		ibv_dereg_mr(dbmr);
 +	free(dbpage);
++	if (shmmr)
++		ibv_dereg_mr(shmmr);
++	if (shmbase)
++		munmap(shmbase, shmsz);
 +	return rc;
 +}
 +
@@ -1079,7 +1135,7 @@
  /* Application name in string format for Flex IO app get. */
  #define DEV_APP_NAME_STR(_app_name) #_app_name
  #define DEV_APP_NAME_XSTR(_app_name) DEV_APP_NAME_STR(_app_name)
-@@ -1068,20 +1717,63 @@
+@@ -1068,20 +1773,63 @@
  
  	printf("Ready to receive messages\n");
  
@@ -1095,19 +1151,19 @@
 +	if (getenv("TTDPA_WINTEST") && strtoul(getenv("TTDPA_WINTEST"), NULL, 0) > 0) {
 +		if (tt_run_wintest(&app_ctx))
 +			err = -1;
-+		goto cleanup;
-+	}
-+
-+	/* A3.2 full doorbell datapath: DPA drains a host doorbell + gather-egresses each landed frame, then exit. */
-+	if (getenv("TTDPA_DOORBELL") && strtoul(getenv("TTDPA_DOORBELL"), NULL, 0) > 0) {
-+		if (tt_run_doorbell(&app_ctx))
-+			err = -1;
  		goto cleanup;
  	}
  
 -	/* Wait for Enter - the DPA sample is running in the meanwhile */
 -	if (!fread(buf, 1, 1, stdin)) {
 -		fprintf(stderr, "Failed in fread\n");
++	/* A3.2 full doorbell datapath: DPA drains a host doorbell + gather-egresses each landed frame, then exit. */
++	if (getenv("TTDPA_DOORBELL") && strtoul(getenv("TTDPA_DOORBELL"), NULL, 0) > 0) {
++		if (tt_run_doorbell(&app_ctx))
++			err = -1;
++		goto cleanup;
++	}
++
 +	/* TT-RDMA A1: if a blast count was requested, drive the DPA blast SYNCHRONOUSLY via flexio_process_call
 +	 * (an event handler only fires on an RX CQE, which a pure TX blast never gets). Otherwise fall back to the
 +	 * original event-handler RX-reflect demo. */
@@ -1154,7 +1210,7 @@
  	}
  
  cleanup:
-@@ -1096,6 +1788,20 @@
+@@ -1096,6 +1844,20 @@
  		err = -1;
  	}
  
