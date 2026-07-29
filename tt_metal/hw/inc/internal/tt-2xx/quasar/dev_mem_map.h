@@ -147,19 +147,22 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_CONNECTION_LOCK_BASE + MEM_FABRIC_CONNECTION_LOCK_SIZE)
-#define MEM_ROUTING_TABLE_SIZE 2576  // struct layout: base(516) + union(1024) + exit(1024) + pad(12)
+#define MEM_ROUTING_TABLE_SIZE 2576  // struct layout: base(516) + union(1028) + exit(1024) + pad(8)
 #define MEM_OFFSET_OF_ROUTING_PATHS 516
-#define MEM_ROUTING_TABLE_PADDING 12
+// Tail padding of routing_l1_info_t: 8 B since the 2D union slot grew 1024 -> 1028 (indexed vectors).
+// Must match routing_l1_info_t::padding in hostdevcommon/fabric_common.h.
+#define MEM_ROUTING_TABLE_PADDING 8
 
 #define ROUTING_PATH_SIZE_1D 1024  // Was 256 (64 chips × 16 bytes)
 // 2D uncompressed size is too large to fit in L1 memory
 #define COMPRESSED_ROUTING_PATH_SIZE_1D 0     // sizeof(intra_mesh_routing_path_t<1, true>)
-#define COMPRESSED_ROUTING_PATH_SIZE_2D 1024  // sizeof(intra_mesh_routing_path_t<2, true>)
+#define COMPRESSED_ROUTING_PATH_SIZE_2D \
+    1028  // 2D union slot: max(legacy compressed 1024, indexed_route_vectors_t 1028)
 // Union: 1D and 2D routing tables share the same offset
 #define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 516
 #define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // 516
-#define MEM_TENSIX_ROUTING_PATH_SIZE 1024                             // max(1024, 1024)
+#define MEM_TENSIX_ROUTING_PATH_SIZE 1028                             // union slot: max(1D 1024, 2D 1028)
 
 #define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
 #define MEM_EXIT_NODE_TABLE_SIZE 1024  // sizeof(exit_node_table_t)
