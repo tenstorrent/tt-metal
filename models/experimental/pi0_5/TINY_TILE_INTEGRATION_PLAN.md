@@ -894,3 +894,92 @@ timeline (`tracy_profile_log_host.tracy`) or raw per-op device timestamps in `pr
 which show when each op actually starts and ends on device rather than summing durations. Until something
 in that view explains the 30 us, further optimization is unguided -- as the four attempts above
 demonstrate empirically.
+
+---
+
+# BREAKTHROUGH (methodological): 17% of the single-layer metric was HOST round-trip
+
+The device timeline finally explains the gap, and it is not a device effect at all.
+
+## The device timeline
+
+Built from `DEVICE FW START/END CYCLE` (1350 cycles/us on BH), rebased and converted, two iterations:
+
+```
+  op                                      start     end     dur   gap_before
+  MatmulDecodeDeviceOperation             133.94  148.90   14.97      -2.63
+  InterleavedToShardedDeviceOperation     170.63  171.67    1.05     +21.72   <-- DEAD
+  LayerNormDeviceOperation                174.91  179.94    5.03      +3.23
+  MatmulDecodeDeviceOperation             182.61  189.63    7.02      +2.67
+  NlpCreateQkvHeadsRopeDeviceOperation    190.40  196.81    6.41      +0.77
+  KvSdpaDeviceOperation                   197.48  227.63   30.16      +0.67
+  MatmulDecodeDeviceOperation             207.17  237.33   30.16     -20.46
+```
+
+Iteration period ~121.5 us. There is ONE contiguous window per iteration -- 17.4 / 21.7 / 21.5 us across
+three iterations -- with **no op active at all**. Other inter-op gaps sum ~10 us. Note also that FW
+windows OVERLAP (negative gaps), which is the direct confirmation that `fw - kernel` is stall time.
+
+## The dead window is the timing harness, not the model
+
+`_time_replay` did `execute_trace` + `synchronize_device` **per sample**, so every sample paid a host
+round-trip. Replaying back-to-back with ONE sync at the end:
+
+| metric | value | spread over 3 runs |
+|---|---|---|
+| per-sample median (used for every decision this session) | 0.1167 / 0.1213 / 0.1188 ms | **+-4%** |
+| back-to-back, sync amortised | **0.0969 / 0.0972 / 0.0972 ms** | **+-0.3%** |
+
+So **~20 us (17%) of the old number was host round-trip**, matching the dead window exactly. Real
+steady-state device time is **97 us**, not 116.5. `_time_replay` now reports the b2b figure (`PI05_B2B`,
+default on) and prints both.
+
+**The bigger deal is precision: ~15x better.** Every tuning decision in this pipeline is a 1-4% effect,
+and they were all being made against +-4% noise. That is the single most useful outcome of the session.
+
+## Re-sweeping the tuned constants at +-0.3%: the existing config IS optimal
+
+| config | cores | b2b (ms) |
+|---|---|---|
+| **K=4, n=16/16/16 (current)** | 64 | **0.0975** |
+| K=4, n=20/16/16 | 80 | 0.0978 |
+| K=4, n=8/8/8 | 32 | 0.1005 |
+| K=2, n=40/32/32 | 80 | 0.1012 |
+| K=8, n=10/8/8 | 80 | 0.1153 |
+| `_RESHARD_CORES` = 2 / 4 / 8 | | **0.0974** / 0.0998 / 0.1105 |
+
+Confirmed, not noise-luck. The scalar config space is genuinely exhausted.
+
+## Where the 97 us actually goes
+
+| | us | share |
+|---|---|---|
+| `KvSdpa` (8 cores) | 28.5 | **29%** |
+| `MatmulDecode` x3 (64+bbox cores) | 24.7 | 25% |
+| `GateUpMatmulDecode` | 12.0 | 12% |
+| `LayerNorm` x2 (8 cores) | 8.0 | 8% |
+| `NlpCreateQkvHeadsRope` (10 cores) | 5.8 | 6% |
+| `InterleavedToSharded` x2 | 1.3 | 1% |
+| sum of kernel time | 82.9 | 85% |
+| inter-op gaps (device-side, dependent ops) | ~14 | 14% |
+
+## Remaining candidates, and one dead end closed
+
+**Closed:** shrinking the ~6 bounding-box padding cores per matmul op. `all_compute_cores.bounding_box()`
+is load-bearing -- the A-gather multicast needs a RECTANGULAR core range (`mcast_bbox` at
+partial_width_sharded_program_factory.cpp:409), so the padding cores must exist to receive the mcast.
+
+**Best remaining:**
+1. **`kv_sdpa`, 29% of device time on 8 cores.** Splitting is closed (negative at single-layer AND e2e).
+   The only lever left is the flash inner loop itself. Note bf4 prefix changed nothing, so it is
+   compute-bound, not bandwidth-bound; and the chunk-count sweep is flat, so per-chunk overhead is
+   already small. This needs LLK-level attention (the QK^T and QK@V matmuls have M = 1 tile of 16 rows,
+   so a 32-row DEST may be half-idle), not op-level restructuring.
+2. **Re-measure the norm fusion with the b2b metric.** It was judged at +-4% noise. Its profile showed
+   ~7.5 us of prologue against ~4.6 us of kernel removed, but the value of removing 2 ops from the
+   inter-op gap chain (~14 us total) was never cleanly measured. If op-removal is worth ~2-3 us/op, the
+   fusion is close to break-even, and making the prologue cheaper (compute the row statistic ONCE and
+   multicast it, instead of all 64 cores squaring+reducing the full row) could push it positive.
+3. **The ~14 us of device-side inter-op gaps** (notably 3.2 us i2s->LayerNorm, 2.7 us LayerNorm->matmul).
+   Now that the metric is precise, this is worth attacking directly -- it is 14% and is pure latency
+   between dependent ops.
