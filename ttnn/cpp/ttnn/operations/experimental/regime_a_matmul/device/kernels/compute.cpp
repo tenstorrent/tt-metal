@@ -98,6 +98,84 @@ void reduce_add_block(uint32_t a_cb, uint32_t b_cb, uint32_t out_cb, uint32_t M_
     }
 }
 
+#if defined(RSCATTER) && defined(RS_STRIPED)
+// Striped owner-gather reduce. An owner sums, for its own stripe only:
+//   its OWN partial, read in place from the fp32 intermediate CB (no loopback NoC copy), plus
+//   one bf16 partial per other group member, at recv_cb tile (sender_pos * slot_stride + i).
+//
+// Accumulation happens in FP32 DST, so this costs ONE pack per output tile rather than one per source. DST holds
+// at most kDstTiles tiles, so a stripe longer than that is processed in successive DST-sized groups
+// ("incremental where practical" on the compute side); each group pays 2 inits, not 2 per source.
+void rss_reduce_stripe(
+    uint32_t acc_cb,       // fp32 intermediate holding this core's whole sub-block partial
+    uint32_t acc_beg,      // first tile of MY stripe within that partial
+    uint32_t ntiles,       // tiles in my stripe
+    uint32_t recv_cb,      // bf16 peer partials, slot-major
+    uint32_t slot_stride,  // tiles per slot
+    uint32_t nslots,       // Pk (slot my_pos is skipped)
+    uint32_t skip_slot,    // my own position: nothing was sent to us for it
+    uint32_t out_cb) {
+    constexpr uint32_t kDstTiles = 4;  // fp32 DST capacity
+    for (uint32_t base = 0; base < ntiles; base += kDstTiles) {
+        const uint32_t n = (ntiles - base < kDstTiles) ? (ntiles - base) : kDstTiles;
+        acquire_dst();
+        copy_tile_to_dst_init_short(acc_cb);
+        reconfig_data_format_srca(acc_cb);
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(acc_cb, acc_beg + base + i, i);  // seed DST with our own partial
+        }
+        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(recv_cb);
+        for (uint32_t s = 0; s < nslots; ++s) {
+            if (s == skip_slot) {
+                continue;
+            }
+            for (uint32_t i = 0; i < n; ++i) {
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    recv_cb, s * slot_stride + base + i, i);
+            }
+        }
+        pack_reconfig_data_format(out_cb);
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, out_cb);
+        }
+        release_dst();
+    }
+}
+#endif
+
+#if defined(RSCATTER) && defined(RS_DIRECT)
+// Direct-exchange reduce-scatter: sum `nsrc` partials of the SAME chunk, one per source slot in recv_cb, into
+// out_cb. Slot s holds that source's partial at recv_cb tile (s * slot_stride + i).
+//
+// The whole chunk is held in fp32 DST while every partial is accumulated into it, so this costs ONE pack per
+// output tile and TWO inits for the chunk -- where the ring pays a pack and an init per ROUND per tile. The
+// accumulation uses binary_dest_reuse_tiles<ELWADD, DEST_TO_SRCB>, which reads DST[i] back into SRCB, adds the
+// CB tile, and writes the result back to DST[i]. Requires n_tiles <= the fp32 DST limit (4), enforced by the
+// factory's max_chunk <= 4 gate.
+void rsd_reduce_slots(uint32_t recv_cb, uint32_t slot_stride, uint32_t nsrc, uint32_t out_cb, uint32_t n_tiles) {
+    acquire_dst();
+    // seed DST from source slot 0
+    copy_tile_to_dst_init_short(recv_cb);
+    reconfig_data_format_srca(recv_cb);
+    for (uint32_t i = 0; i < n_tiles; ++i) {
+        copy_tile(recv_cb, i, i);
+    }
+    // accumulate the remaining sources in place
+    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(recv_cb);
+    for (uint32_t s = 1; s < nsrc; ++s) {
+        for (uint32_t i = 0; i < n_tiles; ++i) {
+            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                recv_cb, s * slot_stride + i, i);
+        }
+    }
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t i = 0; i < n_tiles; ++i) {
+        pack_tile(i, out_cb);
+    }
+    release_dst();
+}
+#endif
+
 #ifdef RSCATTER
 // Ring reduce-scatter helpers. rs_copy_chunk: copy n_tiles from in_cb starting at tile in_tile_off -> out_cb,
 // used to SEED the ring with this core's own chunk. No cb push/pop (the caller manages both CBs).
@@ -439,6 +517,11 @@ void kernel_main() {
     const uint32_t rs_ring_pos = get_arg_val<uint32_t>(argidx++);
     const uint32_t rs_P = get_arg_val<uint32_t>(argidx++);
     const uint32_t rs_T = get_arg_val<uint32_t>(argidx++);  // tiles per sub-block (== out_block_num_tiles)
+#if defined(RS_STRIPED)
+    const uint32_t rs_S_arg = get_arg_val<uint32_t>(argidx++);      // stripe count S
+    const uint32_t rs_my_stripe = get_arg_val<uint32_t>(argidx++);  // owned stripe, or S if not an owner
+    const uint32_t rs_na_arg = get_arg_val<uint32_t>(argidx++);     // A/B arrival split point
+#endif
 #endif
 
 // Any fusion active => the reduction ROOT (is_top) applies bias/activation/addcmul exactly once after the
@@ -561,7 +644,64 @@ void kernel_main() {
             cb_push_back(intermediate_cb, out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-#ifdef RSCATTER
+#if defined(RSCATTER) && defined(RS_STRIPED)
+            // ---- S-WAY STRIPED OWNER-GATHER. Every core packs its whole partial once into cb_send (the writer
+            // scatters stripe j of it to owner j). Only the S owners then reduce: they sum their own fp32 stripe
+            // in place plus one bf16 partial per peer, entirely in DST. Non-owners produce no output at all.
+            {
+                const uint32_t P = rs_P;
+                const uint32_t S = rs_S_arg;
+                const uint32_t stripe_tiles = (rs_T + S - 1u) / S;
+                constexpr uint32_t cb_send_cb = tt::CBIndex::c_4;
+                constexpr uint32_t cb_recv_cb = tt::CBIndex::c_5;
+                cb_wait_front(intermediate_cb, out_block_num_tiles);
+                cb_reserve_back(cb_send_cb, out_block_num_tiles);
+                rs_copy_chunk(intermediate_cb, 0, cb_send_cb, out_block_num_tiles);
+                cb_push_back(cb_send_cb, out_block_num_tiles);
+                if (rs_my_stripe < S) {
+                    const uint32_t beg = rs_my_stripe * stripe_tiles;
+                    const uint32_t end = (beg + stripe_tiles < rs_T) ? (beg + stripe_tiles) : rs_T;
+                    // The writer releases the A half of the arrivals first, so waiting on it separately lets the
+                    // unpacker start touching peer data before the B half has landed.
+                    cb_wait_front(cb_recv_cb, rs_na_arg * stripe_tiles);
+                    cb_wait_front(cb_recv_cb, P * stripe_tiles);
+                    cb_reserve_back(out_cb, stripe_tiles);
+                    rss_reduce_stripe(
+                        intermediate_cb, beg, end - beg, cb_recv_cb, stripe_tiles, P, rs_ring_pos, out_cb);
+                    cb_pop_front(cb_recv_cb, P * stripe_tiles);
+                    cb_push_back(out_cb, stripe_tiles);
+                }
+                cb_pop_front(intermediate_cb, out_block_num_tiles);
+            }
+#elif defined(RSCATTER) && defined(RS_DIRECT)
+            // ---- DIRECT-EXCHANGE reduce-scatter. Two steps, no per-round loop:
+            //   1. pack the WHOLE sub-block partial once into cb_send as bf16 (one init, rs_T packs). The writer
+            //      then sends slice q of that image to the core at position q -- so there is no per-peer compute
+            //      cost, unlike a scheme that copies each peer's slice separately.
+            //   2. once all P partials for OUR chunk have landed in cb_recv, reduce them in DST and pack once.
+            {
+                const uint32_t P = rs_P;
+                const uint32_t cbase = rs_T / P;
+                const uint32_t crem = rs_T - cbase * P;
+                const uint32_t max_chunk = cbase + (crem ? 1u : 0u);
+                const uint32_t own = cbase + (rs_ring_pos < crem ? 1u : 0u);  // tiles in MY chunk
+                constexpr uint32_t cb_send_cb = tt::CBIndex::c_4;
+                constexpr uint32_t cb_recv_cb = tt::CBIndex::c_5;
+                cb_wait_front(intermediate_cb, out_block_num_tiles);
+                cb_reserve_back(cb_send_cb, out_block_num_tiles);
+                rs_copy_chunk(intermediate_cb, 0, cb_send_cb, out_block_num_tiles);  // whole partial, one pass
+                cb_push_back(cb_send_cb, out_block_num_tiles);
+                cb_pop_front(intermediate_cb, out_block_num_tiles);
+                // Reduce every source's partial for our chunk. Pop cb_recv BEFORE publishing out_cb: the writer
+                // credits its peers only after consuming out_cb, so this ordering guarantees no peer can start
+                // writing the next sub-block into cb_recv while we are still reading it.
+                cb_wait_front(cb_recv_cb, P * max_chunk);
+                cb_reserve_back(out_cb, max_chunk);
+                rsd_reduce_slots(cb_recv_cb, max_chunk, P, out_cb, own);
+                cb_pop_front(cb_recv_cb, P * max_chunk);
+                cb_push_back(out_cb, max_chunk);
+            }
+#elif defined(RSCATTER)
             // ---- Ring REDUCE-SCATTER. intermediate_cb (FP32, resident) is my matmul partial for the whole
             // sub-block, row-major, partitioned into P=Pk contiguous chunks whose sizes differ by at most one
             // tile (the first rs_T%P chunks take one extra), so any rs_T >= P works. Seed cb_send with MY OWN

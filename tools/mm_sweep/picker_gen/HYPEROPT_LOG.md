@@ -259,7 +259,34 @@ offline model so future analysis matches. 111/111 correctness tests pass.
 
 This shape is now **17.4% faster than at the start of the log** (92.2 -> 76.16 us).
 
-### TOP REMAINING LEVER (measured, specified, not yet built): the reduction chain is 9-14% deep
+### F6. FAILED and INSTRUCTIVE: the reduction chain's cost is WORK, not depth
+
+Built the meet-in-the-middle chain described below (bit20): bands below the middle flow up, bands above flow
+down, meeting at a root in the middle, so the critical path drops from 11 hops to 6. It is correct (PCC
+1.000001 to 1.000134, no hangs, 111/111 tests) and gives **no speedup at all**:
+
+| shape | linear chain | meet-in-the-middle | change |
+|---|---|---|---|
+| 512x6144x4608 | 180.60 | 180.46 | +0.08% |
+| 256x2048x6144 | 76.23 | 76.12 | +0.15% |
+| 32x6144x1536 | 40.69 | 40.58 | +0.28% |
+| 512x6144x2304 | 109.75 | 110.16 | -0.38% |
+| 256x2048x2048 | 39.38 | 39.56 | -0.46% |
+
+Why the hypothesis was wrong: halving the DEPTH does not reduce the WORK. Whatever the topology, each of the
+Pk-1 non-root bands still performs exactly one full-block add and one full-block transfer. Meet-in-the-middle
+only shortens how long the LAST partial takes to arrive, and that latency was evidently already hidden. So the
+14.3% is real arithmetic and real traffic, not a serial tail.
+
+That also rules out a fan-in-2 tree for the same reason - it changes depth, not work - and reduce-scatter does
+not help either: it spreads the same total number of adds differently. To reduce this cost you would have to
+reduce the NUMBER of partial sums, i.e. use a smaller Pk, which the picker already trades off against
+parallelism. **Treating the reduction as closed.**
+
+Kept the implementation behind bit20 as a documented negative (default off; it also required a second receive
+semaphore, so the op now creates 6 instead of 5, well under the 16 available).
+
+### Original sizing of the reduction chain (kept for the record)
 
 We could never size the split-K reduction before, because deleting it makes every band write its own copy of
 the output (Pk times the output traffic) and that artefact swamped the result. Comparing "skip reduction AND
@@ -465,6 +492,62 @@ compute tail, reduction and latencies, with no single stage responsible - comput
 Resolving that specific residual is the only remaining lever, and it needs per-RISC timeline zones, since every
 knob (config, buffer depths, placement, ring order, reduction topology, subblock shape) has now been measured
 and closed.
+
+## CORRECTION: four experiments were invalid (diagnostic cache aliasing)
+
+The env-var parse silently DROPPED any mask above 0x1FFFF (131071): `if (v > 0 && v <= 0x1FFFF)` left
+`diag_mask` at 0. Several later knobs (placement targets, CB depths, reduction topology) are ALSO read from the
+same env var inside the planner, so those still changed the program while the hashed `diag_mask` - and hence
+the program-cache key - stayed 0. Two different masks therefore aliased onto ONE cached program, and the second
+arm of each A/B silently re-ran the first arm.
+
+All bits up to 16 are unaffected, so **everything shipped and every stage ablation is valid** (max mask used
+there was 65536). The four experiments using bits 17-21 were not:
+
+| experiment | masks | was it valid? |
+|---|---|---|
+| mesh + gate fits, subblock, all stage ablations, in1 placement, ring order, D1 | <= 65536 | VALID |
+| F4 placement targets | 131072 | invalid |
+| F5 reduction-CB depth | 262144 / 524288 | invalid |
+| F6 meet-in-the-middle reduction | 1048576 | invalid |
+| F7 M-split forward | 2097152 | invalid |
+
+Fixed by making an out-of-range mask a hard error instead of a silent clamp - verified it now rejects
+99999999 - so this class of mistake cannot recur.
+
+### Re-run results
+
+**F4 (placement targets) - the conclusion CHANGES.** It is not neutral. Using the NOC_0 assignment for both
+NoCs, which is what ships, is clearly better on one shape and mildly better on others:
+
+| shape | shipped (opt0 both) | true per-NoC | shipped is |
+|---|---|---|---|
+| 128x6144x4608 | 125.05 | 146.96 | **14.9% faster** |
+| 32x6144x1536 | 40.53 | 41.09 | 1.4% faster |
+| 512x6144x2304 | 109.72 | 110.14 | 0.4% faster |
+| 256x2048x2048 | 39.04 | 39.09 | 0.1% faster |
+| 256x6144x4608 | 143.59 | 143.40 | 0.1% slower |
+
+So the shipped choice is right and now actually justified by data, for the reason predicted: a NOC_1 read
+response leaving a DRAM column wraps most of the way round the torus, so the API's NOC_1 "optimal" worker is a
+poor target.
+
+**F5 (reduction-CB depth) - conclusion unchanged.** Depth 4 and 8 give +0.1% to +0.5% (noise). Buffering is
+still not the reduction's cost.
+
+**F7 (M-split forward) - conclusion essentially unchanged.** The forward payload costs -0.0%, +1.4%, -0.6%.
+Still not worth a read-ahead redesign.
+
+**F6 (meet-in-the-middle reduction) - conclusion REVERSED, and it is worse than useless.** With the bit
+actually taking effect, the topology **deadlocks**: it hung the device twice and needed a `tt-smi -r` both
+times. So the earlier "correct, zero gain" claim was an artifact of the bit never taking effect. Two attempts
+at the credit/slot protocol both hung, so the path is now hard-disabled with an explicit throw rather than
+left as a trap. What we know remains true is only the SIZING (from valid masks 32/48): the reduction chain
+costs 14.3% on 512x6144x2304 and 9.2% on 512x6144x4608. Whether shortening its depth helps is **unknown and
+untested** - the fan-in-2 tree and reduce-scatter reasoning I wrote off on the basis of F6 should be treated as
+OPEN again.
+
+111/111 correctness tests pass after all of this.
 
 ## Total progress this session
 
@@ -763,3 +846,98 @@ Kept behind default-off diagnostic bits (both compile out entirely at mask 0): b
 IN1_ONE_PACKET. The shared per-block read sequence was factored into one `issue_block_reads` lambda used by all
 three policies - measured neutral (every mask-0 wall reproduces its pre-refactor value within noise) and 111/111
 correctness tests pass.
+
+### F12. DIRECT-EXCHANGE reduce-scatter (bit26): fixes the serialization, still loses to the chain at Pk=12
+
+F9/S9 showed the ring reduce-scatter loses badly at Pk=12 because it takes Pk-1 SEQUENTIAL rounds, each paying a
+semaphore round-trip plus its own add setup (measured 0.22-0.30 us per round). Direct exchange removes that
+serialization: every core writes its partial for chunk q straight to the core that owns chunk q, all Pk writes
+issued back to back, then ONE wait for all arrivals. The reduce accumulates every incoming partial in fp32 DST
+(binary_dest_reuse_tiles) so it costs one pack per output tile instead of one per round.
+
+Three-way measurement, 2 relaunches with the mask order reversed:
+
+| shape | Pk | ring rounds | chain | ring | direct | ring vs chain | direct vs chain | direct vs ring |
+|---|---|---|---|---|---|---|---|---|
+| 512x6144x4608 | 12 | 198 | 180.11 | 240.40 | 217.48 | +33.5% | +20.7% | **-9.5%** |
+| 512x6144x2304 | 12 | 99 | 110.21 | 131.83 | 121.32 | +19.6% | +10.1% | **-8.0%** |
+| 256x6144x6144 | 6 | 60 | 194.89 | 187.09 | 190.10 | -4.0% | -2.5% | +1.6% |
+| 256x15360x1536 | 6 | 5 | 141.48 | 136.15 | 136.93 | -3.8% | -3.2% | +0.6% |
+| 256x2048x1024 | 4 | 3 | 23.46 | 19.79 | 20.07 | -15.6% | -14.4% | +1.4% |
+
+**The hypothesis was right in direction.** Direct beats the ring by 8-9.5% on exactly the two shapes with the
+most sequential rounds, and is neutral-to-slightly-worse where rounds are already few - the signature of a
+serialization fix. PCC 0.9999-1.0001.
+
+**But it still loses to the chain at Pk=12, and the reason is MESSAGE COUNT, not serialization.**
+
+| per core, per sub-block | chain | direct exchange |
+|---|---|---|
+| payload writes | 1 (whole block) | Pk = 12 |
+| arrival atomics | 1 | 12 |
+| credit atomics | 1 | 12 |
+| **NoC transactions** | **3** | **36** |
+
+On 512x6144x4608 that is 18 x 36 = **648 transactions against 54**. The accounting closes: the serialization
+saving is real (critical-path transfer per sub-block falls from 11 x 32 KB to ~4 KB, about 52 us over the shape)
+but roughly 90 us of per-message issue + remote-atomic cost swamps it, netting the +37 us measured.
+
+**So reduce-scatter's trade at high Pk is fewer serialized BYTES for Pk x more MESSAGES.** With a 32 KB
+sub-block there are not enough bytes on the critical path to pay for 12x the messages, and NO topology change
+fixes that - only cutting messages would. The visible next lever: 24 of the 36 transactions are semaphore
+atomics carrying identical values to a fixed peer set, so they are multicastable (36 -> ~14). Payloads are not
+multicastable (different data per destination). That would likely close about half the remaining gap on
+512x6144x2304 and probably not all of it on 512x6144x4608.
+
+No production change - the gate still selects the RING, which is better on all 14 adopted shapes. bit26 is
+default-off. Also stopped allocating the chain's cb7 running-sum CB when reduce-scatter is active (it is never
+touched there). 111/111 correctness tests pass.
+
+### F13. S-WAY STRIPED OWNER-GATHER (bits 27-28): implemented, DEADLOCKS, NO measurement obtained
+
+Requested design, all of it implemented: S in {2,3,4} owners per group instead of S=Pk; direct writes to
+physically optimised owners; no loopback NoC traffic; FP32 DST accumulation per stripe; double-buffered receive;
+incremental (two-stage) reduction; and separate profiler zones for payload / arrival-A / arrival-B / credit-wait
+/ credit-send / reduce-wait / output-write.
+
+**Status: the protocol still deadlocks and I did not get a single performance number. Two device resets were
+needed. Production is untouched and verified (111/111 after the final reset).**
+
+The rationale for trying it: the group sends S(Pk-1) messages instead of the full exchange's Pk(Pk-1) -- Pk/S
+fewer -- while moving the SAME total bytes. F12 showed the residual cost of full direct exchange is message
+COUNT (36 NoC transactions per core per sub-block vs the chain's 3), so cutting messages Pk/S-fold is the right
+target.
+
+What was built:
+- **Owner selection is provably optimal, not a search.** Every member writes to every owner, so total hop cost
+  is separable: sum over owners of (sum over senders of dist(sender->owner)). Ranking candidates by INBOUND cost
+  and taking the S cheapest is therefore exact. Distance is on the sender's writer NoC (asymmetric on the torus).
+- **No loopback:** an owner keeps its own stripe where it already is, in the fp32 intermediate CB, and seeds DST
+  from it. Nothing is written to self.
+- **Incremental reduction:** arrivals are split across two semaphores by sender position, so the writer releases
+  the first half of the partials to compute while the second half is still in flight.
+- **DST accumulation** chunked to the 4-tile fp32 DST limit (a stripe of rs_T/S tiles exceeds DST for S<4), so
+  each DST group costs 2 inits and one pack per output tile rather than one per source.
+
+**Bug found and fixed (real, would have bitten any variant):** an owner credits every group member EXCEPT
+itself, so an owner receives S-1 credits per sub-block while a non-owner receives S. The wait threshold assumed
+S for everyone, which deadlocks every owner from sub-block 2 onward. Fixed with a role-dependent
+`cred_per_sb = S - (is_owner ? 1 : 0)`.
+
+**A second deadlock remains unisolated.** After that fix, S=2 on 512x6144x4608 still hangs (all 96 workers time
+out), and it wedges the board hard enough that the following runs fail at device init - which is what destroyed
+the S=3/S=4 data points too. Candidates I ruled out by inspection: arrival counts (exp_a/exp_b correctly exclude
+self), semaphore addressing, cb_send depth, non-owner CB usage, and the credit arithmetic above. Candidates NOT
+ruled out: the cb_recv reserve/push accounting across the two-stage push against a 2-generation buffer, and the
+interaction between an owner holding intermediate_cb (a single-slot CB) across the whole exchange and the next
+sub-block's matmul needing to reserve it.
+
+**Process lessons worth keeping:**
+1. My first three masks were WRONG - I wrote 150994944 for "S=3" but that is bit27+bit24 (S=2 plus the TRID
+   pipeline), so an early "PCC=1.000000" was a different configuration entirely. Multi-bit encoded fields need
+   the mask arithmetic checked, not eyeballed.
+2. `tt-smi -r` chained after `pkill` in one compound command never ran (the whole command was killed), so the
+   board stayed wedged and the next three runs failed at init for a reason unrelated to the code under test.
+   Reset must be its own command - the same lesson already recorded once in this log.
+
+Kept behind default-off diagnostic bits so it can be picked up later; nothing in the production path changed.
