@@ -91,12 +91,9 @@ inline constexpr bool is_trig_op(SfpuType op)
  * @brief Run the per-operation init step for a Quasar unary SFPU op.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
- * @tparam APPROX Whether operations with approximate and accurate paths use the approximate path.
- * @tparam is_fp32_dest_acc_en 32-bit Dest; ops whose init depends on the Dest width read it (gelu).
- * @note Pair with @ref call_unary_sfpu_operation_quasar for the calculate step, which takes the same
- *       two bools in the OPPOSITE order (is_fp32_dest_acc_en first).
+ * @note Pair with @ref call_unary_sfpu_operation_quasar for the calculate step.
  */
-template <SfpuType OPERATION, bool APPROX = false, bool is_fp32_dest_acc_en = false>
+template <SfpuType OPERATION, bool is_fp32_dest_acc_en, bool APPROX = false>
 void init_unary_sfpu_operation_quasar()
 {
     if constexpr (OPERATION == SfpuType::gelu)
@@ -198,9 +195,7 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format; only the comp family reads it (see
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
- * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op, which takes the same
- *       two bools in the OPPOSITE order (APPROX first). Both are bool, so transposing them compiles and
- *       silently selects the wrong variant -- copy the order from the signature, not from the init.
+ * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <SfpuType OPERATION, DstSync DST_SYNC, bool is_fp32_dest_acc_en, bool APPROX = false, int ITERATIONS = SFPU_ITERATIONS>
 void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32)

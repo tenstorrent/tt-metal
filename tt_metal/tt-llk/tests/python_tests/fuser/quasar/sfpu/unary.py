@@ -91,7 +91,7 @@ class UnarySfpu(Sfpu):
         return (
             f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
             f"    _llk_math_eltwise_sfpu_init_();\n"
-            f"    test_utils::init_unary_sfpu_operation_quasar<{op}, false, {en_32bit_dest}>();\n"
+            f"    test_utils::init_unary_sfpu_operation_quasar<{op}, {en_32bit_dest}, false>();\n"
         )
 
     def calculate(
